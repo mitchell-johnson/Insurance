@@ -29,5 +29,6 @@ mod transfer;
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
 pub use ids::*;
+pub use lifecycle::quote;
 pub use machine::{Applied, CoreState, Reject, APPLY_BUDGET};
 pub use policy::*;

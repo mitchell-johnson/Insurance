@@ -114,7 +114,12 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
     let mut members: Vec<LifeId> = Vec::new();
     let mut next_member = 0u32;
     let new_member = |rng: &mut StdRng, next: &mut u32| {
-        let m = member(&format!("m{:06}", *next), NaiveDate::from_ymd_opt(rng.gen_range(1962..=2004), rng.gen_range(1..=12), rng.gen_range(1..=28)).unwrap_or(NaiveDate::MIN), if rng.gen_bool(0.1) { "executive" } else { "staff" }, rng.gen_range(55..=240) * 1_000_00);
+        let m = member(
+            &format!("m{:06}", *next),
+            NaiveDate::from_ymd_opt(rng.gen_range(1962..=2004), rng.gen_range(1..=12), rng.gen_range(1..=28)).unwrap_or(NaiveDate::MIN),
+            if rng.gen_bool(0.1) { "executive" } else { "staff" },
+            rng.gen_range(55..=240) * 1_000_00,
+        );
         *next += 1;
         m
     };
@@ -123,16 +128,30 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
     if cfg.scheme_members > 0 {
         let first: Vec<_> = (0..cfg.scheme_members.min(100)).map(|_| new_member(&mut rng, &mut next_member)).collect();
         members.extend(first.iter().map(|m| m.id.clone()));
-        c.submit(scheme_partition, "new-business", issue_command(group_scheme(scheme_n, cfg.start, first))).map_err(|e| e.to_string())?;
+        c.submit(scheme_partition, "new-business", issue_command(group_scheme(scheme_n, cfg.start, first)))
+            .map_err(|e| e.to_string())?;
         report.policies_issued += 1;
         while next_member < cfg.scheme_members {
-            let changes: Vec<_> = (0..(cfg.scheme_members - next_member).min(100)).map(|_| MemberChange::Joined { life: new_member(&mut rng, &mut next_member), effective: cfg.start }).collect();
+            let changes: Vec<_> = (0..(cfg.scheme_members - next_member).min(100))
+                .map(|_| MemberChange::Joined {
+                    life: new_member(&mut rng, &mut next_member),
+                    effective: cfg.start,
+                })
+                .collect();
             members.extend(changes.iter().filter_map(|c| match c {
                 MemberChange::Joined { life, .. } => Some(life.id.clone()),
                 _ => None,
             }));
             report.membership_changes += changes.len() as u64;
-            c.submit(scheme_partition, "group-admin", Command::ApplyMembership { policy: scheme_id.clone(), changes }).map_err(|e| e.to_string())?;
+            c.submit(
+                scheme_partition,
+                "group-admin",
+                Command::ApplyMembership {
+                    policy: scheme_id.clone(),
+                    changes,
+                },
+            )
+            .map_err(|e| e.to_string())?;
         }
     }
 
@@ -141,14 +160,26 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
         let today = c.business_date().ok_or("no business date")?;
 
         // --- new business, spread over the first weeks ---
-        let due_today = if day < issue_window { cfg.retail_policies * (day as u64 + 1) / issue_window as u64 - cfg.retail_policies * day as u64 / issue_window as u64 } else { 0 };
+        let due_today = if day < issue_window {
+            cfg.retail_policies * (day as u64 + 1) / issue_window as u64 - cfg.retail_policies * day as u64 / issue_window as u64
+        } else {
+            0
+        };
         for _ in 0..due_today {
             let n = payers.len() as u64 + 1;
             let persona = random_persona(&mut rng, n, today);
             let p = c.partition_of(&persona.group);
-            c.submit(p, "new-business", issue_command(persona.issue.clone())).map_err(|e| format!("issue {}: {e}", persona.policy))?;
+            c.submit(p, "new-business", issue_command(persona.issue.clone()))
+                .map_err(|e| format!("issue {}: {e}", persona.policy))?;
             report.policies_issued += 1;
-            payers.push(Payer { persona, payments: 0, bounce: None, bounced: false, paid_ahead: false, done: false });
+            payers.push(Payer {
+                persona,
+                payments: 0,
+                bounce: None,
+                bounced: false,
+                paid_ahead: false,
+                done: false,
+            });
         }
 
         // --- the stream feeds the read models ---
@@ -166,7 +197,9 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
             if let Some((receipt, reverse_on, repay_on)) = payer.bounce.clone() {
                 if today == reverse_on {
                     // The bank returns the direct debit.
-                    if c.submit(partition, "cash-matching", Command::ReverseReceipt { policy: id.clone(), receipt }).is_ok() {
+                    if c.submit(partition, "cash-matching", Command::ReverseReceipt { policy: id.clone(), receipt })
+                        .is_ok()
+                    {
                         report.dishonours += 1;
                     }
                     continue;
@@ -184,9 +217,20 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                             report.cancellations += 1;
                             payer.done = true;
                             // The refund is paid out through the payments module.
-                            let held = c.state(partition).ledger.available(&ic_core::accounts::policy_suspense(id, payer.persona.issue_currency()).id);
+                            let held = c
+                                .state(partition)
+                                .ledger
+                                .available(&ic_core::accounts::policy_suspense(id, payer.persona.issue_currency()).id);
                             if held > 0 {
-                                c.submit(partition, "policy-servicing", Command::RefundSuspense { policy: id.clone(), amount: Money::new(held as i64, payer.persona.issue_currency()) }).map_err(|e| e.to_string())?;
+                                c.submit(
+                                    partition,
+                                    "policy-servicing",
+                                    Command::RefundSuspense {
+                                        policy: id.clone(),
+                                        amount: Money::new(held as i64, payer.persona.issue_currency()),
+                                    },
+                                )
+                                .map_err(|e| e.to_string())?;
                             }
                         }
                         // In flight between groups: try again tomorrow.
@@ -203,9 +247,18 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                                 // Pay the arrears and a few periods more, then ask to come back.
                                 receipt_n += 1;
                                 let amount = lapse.arrears_minor * 3 + 500_00;
-                                c.submit_keyed(partition, &format!("rcpt-{receipt_n}"), "cash-matching", Command::ApplyReceipt { policy: id.clone(), receipt: format!("rcpt-{receipt_n}"), amount: Money::new(amount, payer.persona.issue_currency()) })
-                                    .result
-                                    .map_err(|e| format!("arrears {id}: {e}"))?;
+                                c.submit_keyed(
+                                    partition,
+                                    &format!("rcpt-{receipt_n}"),
+                                    "cash-matching",
+                                    Command::ApplyReceipt {
+                                        policy: id.clone(),
+                                        receipt: format!("rcpt-{receipt_n}"),
+                                        amount: Money::new(amount, payer.persona.issue_currency()),
+                                    },
+                                )
+                                .result
+                                .map_err(|e| format!("arrears {id}: {e}"))?;
                                 report.receipts += 1;
                                 match c.submit(partition, "collections", Command::Reinstate { policy: id.clone() }) {
                                     Ok(()) => {
@@ -239,13 +292,23 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                 receipt_n += 1;
                 // One payment in fifty arrives with no usable reference.
                 let reference = (!rng.gen_ratio(1, 50)).then(|| format!("Premium {}", payer.persona.number));
-                let payment = IncomingPayment { id: format!("rcpt-{receipt_n}"), amount: Money::new(amount, payer.persona.issue_currency()), reference, payer_account: None, received_on: today };
+                let payment = IncomingPayment {
+                    id: format!("rcpt-{receipt_n}"),
+                    amount: Money::new(amount, payer.persona.issue_currency()),
+                    reference,
+                    payer_account: None,
+                    received_on: today,
+                };
                 let command = match matcher.match_payment(&view, &payment) {
                     Outcome::Apply { command, .. } => command,
                     Outcome::Exception { .. } => {
                         // The collections team works the exception item and allocates it by hand.
                         report.cash_exceptions += 1;
-                        Command::ApplyReceipt { policy: id.clone(), receipt: payment.id.clone(), amount: payment.amount }
+                        Command::ApplyReceipt {
+                            policy: id.clone(),
+                            receipt: payment.id.clone(),
+                            amount: payment.amount,
+                        }
                     }
                 };
                 match c.submit_keyed(partition, &payment.id, "cash-matching", command).result {
@@ -265,10 +328,19 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
 
         // --- the employer pays its invoice ten days after it falls due ---
         if cfg.scheme_members > 0 {
-            if let Some(b) = view.billing(&scheme_id).filter(|b| b.outstanding_minor > 0 && b.oldest_unpaid_due.is_some_and(|d| today >= d + Days::new(10))) {
+            if let Some(b) = view
+                .billing(&scheme_id)
+                .filter(|b| b.outstanding_minor > 0 && b.oldest_unpaid_due.is_some_and(|d| today >= d + Days::new(10)))
+            {
                 receipt_n += 1;
-                let cmd = Command::ApplyReceipt { policy: scheme_id.clone(), receipt: format!("rcpt-{receipt_n}"), amount: Money::new(b.outstanding_minor, ic_money::Currency::NZD) };
-                c.submit_keyed(scheme_partition, &format!("rcpt-{receipt_n}"), "cash-matching", cmd).result.map_err(|e| format!("scheme receipt: {e}"))?;
+                let cmd = Command::ApplyReceipt {
+                    policy: scheme_id.clone(),
+                    receipt: format!("rcpt-{receipt_n}"),
+                    amount: Money::new(b.outstanding_minor, ic_money::Currency::NZD),
+                };
+                c.submit_keyed(scheme_partition, &format!("rcpt-{receipt_n}"), "cash-matching", cmd)
+                    .result
+                    .map_err(|e| format!("scheme receipt: {e}"))?;
                 report.receipts += 1;
             }
             // --- the monthly membership file, with late notifications ---
@@ -278,19 +350,47 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                     let back = rng.gen_range(5..=40);
                     let effective = (today - Days::new(back)).max(cfg.start);
                     let i = rng.gen_range(0..members.len());
-                    changes.push(MemberChange::Left { life: members.swap_remove(i), effective });
+                    changes.push(MemberChange::Left {
+                        life: members.swap_remove(i),
+                        effective,
+                    });
                     let joiner = new_member(&mut rng, &mut next_member);
                     members.push(joiner.id.clone());
-                    changes.push(MemberChange::Joined { life: joiner, effective: (today - Days::new(rng.gen_range(0..=20))).max(cfg.start) });
+                    changes.push(MemberChange::Joined {
+                        life: joiner,
+                        effective: (today - Days::new(rng.gen_range(0..=20))).max(cfg.start),
+                    });
                     let who = members[rng.gen_range(0..members.len() - 1)].clone();
                     let effective = (today - Days::new(rng.gen_range(0..=35))).max(cfg.start);
-                    if let Some(f) = c.state(scheme_partition).policies.get(&scheme_id).and_then(|p| p.lives.get(&who)).filter(|l| l.in_force_on(effective)).and_then(|l| l.factors.as_of(effective)) {
-                        changes.push(MemberChange::Changed { life: who, effective, factors: LifeFactors { salary_minor: f.salary_minor.map(|s| s + 5_000_00), ..f.clone() } });
+                    if let Some(f) = c
+                        .state(scheme_partition)
+                        .policies
+                        .get(&scheme_id)
+                        .and_then(|p| p.lives.get(&who))
+                        .filter(|l| l.in_force_on(effective))
+                        .and_then(|l| l.factors.as_of(effective))
+                    {
+                        changes.push(MemberChange::Changed {
+                            life: who,
+                            effective,
+                            factors: LifeFactors {
+                                salary_minor: f.salary_minor.map(|s| s + 5_000_00),
+                                ..f.clone()
+                            },
+                        });
                     }
                 }
                 for chunk in changes.chunks(60) {
                     report.membership_changes += chunk.len() as u64;
-                    c.submit(scheme_partition, "group-admin", Command::ApplyMembership { policy: scheme_id.clone(), changes: chunk.to_vec() }).map_err(|e| format!("membership file on {today}: {e}"))?;
+                    c.submit(
+                        scheme_partition,
+                        "group-admin",
+                        Command::ApplyMembership {
+                            policy: scheme_id.clone(),
+                            changes: chunk.to_vec(),
+                        },
+                    )
+                    .map_err(|e| format!("membership file on {today}: {e}"))?;
                 }
             }
         }
@@ -302,7 +402,16 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                 transfer_n += 1;
                 let target_group = GroupId(format!("grp-moved-{transfer_n:05}"));
                 let target_partition = c.partition_of(&target_group);
-                let _ = c.submit(entry.partition, "transfer", Command::BeginTransfer { policy: pick.clone(), transfer_id: format!("xfer-{transfer_n:05}"), target_group, target_partition });
+                let _ = c.submit(
+                    entry.partition,
+                    "transfer",
+                    Command::BeginTransfer {
+                        policy: pick.clone(),
+                        transfer_id: format!("xfer-{transfer_n:05}"),
+                        target_group,
+                        target_partition,
+                    },
+                );
             }
         }
         // The relay is unreliable on purpose: messages are delayed and duplicated.
@@ -362,11 +471,18 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
         }
         // The read models followed every partition without a gap.
         if view.checkpoint(*p) != node.state().last_event_seq() {
-            return fail(format!("partition {p}: read model is at {}, stream at {}", view.checkpoint(*p), node.state().last_event_seq()));
+            return fail(format!(
+                "partition {p}: read model is at {}, stream at {}",
+                view.checkpoint(*p),
+                node.state().last_event_seq()
+            ));
         }
     }
     if report.max_work_units > APPLY_BUDGET {
-        return fail(format!("a command used {} work units; the apply budget is {APPLY_BUDGET}", report.max_work_units));
+        return fail(format!(
+            "a command used {} work units; the apply budget is {APPLY_BUDGET}",
+            report.max_work_units
+        ));
     }
     // The policy directory agrees with where every policy really is.
     for payer in &payers {

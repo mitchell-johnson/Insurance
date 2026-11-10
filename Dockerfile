@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # --- build and test -------------------------------------------------------
-FROM rust:1-bookworm AS build
+FROM rust:1.97-bookworm AS build
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends clang && rm -rf /var/lib/apt/lists/*
 COPY . .
@@ -15,7 +15,9 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM build AS test
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo test --release --workspace --locked
+    cargo fmt --all --check \
+    && cargo clippy --release --workspace --all-targets --locked -- -D warnings \
+    && cargo test --release --workspace --locked
 
 # --- runtime ----------------------------------------------------------------
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime

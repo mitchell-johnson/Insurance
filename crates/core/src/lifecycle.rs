@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::Days;
+use chrono::{Days, NaiveDate};
 use ic_ledger::{Dimensions, Ledger};
 use ic_money::{round_to_money, AccrualAmount, Dec, FINE_PER_MINOR};
 use ic_product::schedule::{age_on, anniversary, period_start};
@@ -54,13 +54,11 @@ pub(crate) fn layer_infos(policy: &Policy) -> Vec<LayerInfo> {
         .collect()
 }
 
-pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) -> Result<(), Reject> {
-    if state.policies.contains_key(&cmd.policy) {
-        return Err(Reject::new("policy_exists", format!("policy {} already exists", cmd.policy)));
-    }
-    if cmd.inception > ctx.date
-        || ctx
-            .date
+/// Build a policy from an application, validating it against the product.
+/// Shared by issue and by quotes, so the two can never disagree.
+pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate, index: u64) -> Result<(Policy, ProductDefinition), Reject> {
+    if cmd.inception > today
+        || today
             .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))
             .is_some_and(|limit| cmd.inception < limit)
     {
@@ -69,8 +67,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
             "inception must be on or before the business date and inside the backdating limit",
         ));
     }
-    let product = state
-        .catalog
+    let product = catalog
         .product_on(&cmd.product_code, cmd.inception)
         .ok_or_else(|| Reject::new("unknown_product", format!("no version of {} is active for {}", cmd.product_code, cmd.inception)))?
         .clone();
@@ -91,7 +88,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         let rec = LifeRecord {
             id: l.id.clone(),
             kind: l.kind,
-            factors: Bitemporal::new(cmd.inception, ctx.date, ctx.index, l.factors),
+            factors: Bitemporal::new(cmd.inception, today, index, l.factors),
             joined: cmd.inception,
             left: None,
         };
@@ -107,8 +104,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         let mut bindings = Vec::new();
         for id in &def.definitions {
             bindings.push(
-                state
-                    .catalog
+                catalog
                     .bind_definition(id, cmd.inception)
                     .ok_or_else(|| Reject::new("unknown_definition", format!("definition {id} has no version in force on {}", cmd.inception)))?,
             );
@@ -145,7 +141,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
             });
         }
     }
-    let mut policy = Policy {
+    let policy = Policy {
         id: cmd.policy.clone(),
         number: cmd.number,
         group: cmd.group,
@@ -171,6 +167,28 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         transfer_out: None,
         history: vec![],
     };
+    Ok((policy, product))
+}
+
+/// A dry run: the premium a policy would be billed for its first period.
+/// Never goes through the log.
+pub fn quote(catalog: &Catalog, application: IssuePolicy, today: NaiveDate) -> Result<ic_product::rating::ModalPremium, Reject> {
+    let (policy, product) = build_policy(catalog, application, today, 0)?;
+    let mut work = 0;
+    let mut premium = retail_period_premium(catalog, &product, &policy, policy.inception, &mut work)?;
+    if policy.covers.values().any(|c| c.formula_driven) {
+        for life in policy.lives.values() {
+            crate::premium::add_premium(&mut premium, &member_period_premium(catalog, &product, &policy, life, policy.inception)?)?;
+        }
+    }
+    Ok(premium)
+}
+
+pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) -> Result<(), Reject> {
+    if state.policies.contains_key(&cmd.policy) {
+        return Err(Reject::new("policy_exists", format!("policy {} already exists", cmd.policy)));
+    }
+    let (mut policy, product) = build_policy(&state.catalog, cmd, ctx.date, ctx.index)?;
     // Rate everything before anything is written, so a policy that cannot be
     // priced is refused whole.
     retail_period_premium(&state.catalog, &product, &policy, policy.inception, &mut ctx.work)?;
