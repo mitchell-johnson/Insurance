@@ -1,0 +1,20 @@
+[package]
+name = "ic-product"
+description = "Insurance products as code: Starlark modules validated into typed definitions, rate tables, definitions library and the pure premium function"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-money.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+starlark.workspace = true
+
+[lints]
+workspace = true

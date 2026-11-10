@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/money",
+    "crates/ledger",
+    "crates/log",
+    "crates/product",
+    "crates/core",
+    "crates/readmodel",
+    "crates/cashmatch",
+    "crates/sim",
+    "crates/azure",
+    "crates/api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "UNLICENSED"
+publish = false
+
+[workspace.dependencies]
+ic-money = { path = "crates/money" }
+ic-ledger = { path = "crates/ledger" }
+ic-log = { path = "crates/log" }
+ic-product = { path = "crates/product" }
+ic-core = { path = "crates/core" }
+ic-readmodel = { path = "crates/readmodel" }
+ic-cashmatch = { path = "crates/cashmatch" }
+ic-sim = { path = "crates/sim" }
+ic-azure = { path = "crates/azure" }
+
+fastnum = { version = "=0.7.5", features = ["serde"] }
+starlark = "=0.14.2"
+cedar-policy = "4.14"
+chrono = { version = "0.4", default-features = false, features = ["std", "serde"] }
+chrono-tz = "0.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hex = "0.4"
+thiserror = "2"
+anyhow = "1"
+rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "fs", "signal"] }
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+base64 = "0.22"
+jsonwebtoken = "9"
+tower = "0.5"
+http-body-util = "0.1"
+proptest = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+# Amounts in minor units are written dollars_cents, for example 500_000_00.
+inconsistent_digit_grouping = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

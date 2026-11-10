@@ -1,0 +1,18 @@
+[package]
+name = "ic-money"
+description = "Money, fine-unit accrual amounts, fund units and decimal rounding for the insurance core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+fastnum.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

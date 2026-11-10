@@ -1,0 +1,19 @@
+[package]
+name = "ic-readmodel"
+description = "Read models built from the event stream: policy directory, life index, billing view, and audience scoping with Cedar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-ledger.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+cedar-policy.workspace = true
+
+[lints]
+workspace = true

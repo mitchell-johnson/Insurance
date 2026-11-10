@@ -1,0 +1,16 @@
+[package]
+name = "ic-log"
+description = "The consensus seam: an ordered durable log per partition, with local implementations"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
