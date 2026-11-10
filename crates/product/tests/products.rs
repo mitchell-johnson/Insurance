@@ -103,3 +103,185 @@ fn bad_products_are_rejected() {
     assert!(load_product("x", &TERM.replace("line = \"life\"", "line = \"pets\"")).is_err());
     assert!(load_product("x", "PRODUCT = {'code': 'x', 'surprise': 1}").is_err());
 }
+
+/// Purpose: every validation rule in the product loader refuses the product that breaks
+/// it, and says which rule was broken.
+/// Why it matters: a product file is code review's last line of defence before a product
+/// is activated. Each rule here stops a class of mistake (a duplicate cover, a negative
+/// fee, a discount over 100%) that would otherwise surface as wrong premiums in production.
+#[test]
+fn each_product_rule_refuses_the_file_that_breaks_it() {
+    let cases: [(&str, &str, &str); 12] = [
+        ("version = 1,", "version = 0,", "version of at least 1"),
+        ("code = \"term-life\"", "code = \"\"", "needs a code"),
+        ("code = \"trauma\"", "code = \"life\"", "duplicate cover code"),
+        (
+            "rating = stepped(\"life-base\")",
+            "rating = {\"premium_type\": \"level\", \"table\": \"life-base\", \"basis\": \"per_thousand\"}",
+            "level premium needs level_to_age",
+        ),
+        (
+            "rating = stepped(\"life-base\")",
+            "rating = group_unit_rate(\"life-base\")",
+            "need benefit categories",
+        ),
+        ("expiry_age = 100,", "expiry_age = 100, gst_rate = \"1.5\",", "gst_rate must be a fraction"),
+        (
+            "min_sum_insured = dollars(50000),",
+            "min_sum_insured = dollars(9000000),",
+            "limits are inconsistent",
+        ),
+        ("benefit = lump_sum(),", "benefit = investment_account([]),", "needs a fund menu"),
+        ("earning(),", "earning(), earning(),", "declared twice"),
+        (
+            "frequencies = [\"fortnightly\", \"monthly\", \"yearly\"]",
+            "frequencies = []",
+            "offers no frequency",
+        ),
+        ("policy_fee_annual = \"72.00\"", "policy_fee_annual = \"-1\"", "policy fee is negative"),
+        ("percent = \"5\"", "percent = \"101\"", "discount percent out of range"),
+    ];
+    for (from, to, expected) in cases {
+        assert!(TERM.contains(from), "the shipped product no longer contains {from:?}");
+        let err = load_product("bad.star", &TERM.replace(from, to)).expect_err(expected).to_string();
+        assert!(err.contains(expected), "{to}: got {err}");
+        assert!(err.contains("bad.star"), "the error names the file: {err}");
+    }
+    // A product with no covers at all.
+    let none = "PRODUCT = product(code = 'x', name = 'x', version = 1, effective_from = '2027-01-01', line = 'life', currency = 'NZD', statutory_fund = 'SF1', covers = [], features = [])";
+    assert!(load_product("bad.star", none).unwrap_err().to_string().contains("offers no covers"));
+}
+
+/// Purpose: a file that does not define the expected symbol, or is not valid Starlark,
+/// fails with an error that says so.
+/// Why it matters: the commonest authoring mistakes are a typo in the symbol name and a
+/// syntax error. The author needs to be told which, not shown a schema error.
+#[test]
+fn a_missing_symbol_or_a_syntax_error_is_reported_as_such() {
+    let missing = load_product("empty.star", "X = 1").unwrap_err().to_string();
+    assert!(missing.contains("PRODUCT") && missing.contains("empty.star"), "{missing}");
+    assert!(load_product("broken.star", "PRODUCT = (").is_err());
+    assert!(load_rate_table("empty.star", "X = 1").is_err());
+    assert!(load_definitions("empty.star", "X = 1").is_err());
+}
+
+/// Purpose: rate tables and definitions are validated: a table needs an id, a version and
+/// rows; an age band cannot be inverted; a rate cannot be negative; a definition needs
+/// wording and a unique id and version.
+/// Why it matters: rate data and policy wordings are frozen onto covers for decades. A
+/// table that cannot rate anyone, or two wordings claiming the same version, must be
+/// stopped before activation because they cannot be corrected on policies already bound.
+#[test]
+fn bad_rate_tables_and_definitions_are_refused() {
+    let table = |body: &str| format!("RATE_TABLE = rate_table(id = 't', version = 1, effective_from = '2027-01-01', rows = [{body}])");
+    assert!(load_rate_table("t", &table("rate('1.0', age_from = 18, age_to = 30)")).is_ok());
+    assert!(load_rate_table("t", &table("")).unwrap_err().to_string().contains("at least one row"));
+    assert!(load_rate_table("t", &table("rate('1.0', age_from = 40, age_to = 30)"))
+        .unwrap_err()
+        .to_string()
+        .contains("inverted age band"));
+    assert!(load_rate_table("t", &table("rate('-1.0')")).unwrap_err().to_string().contains("negative rate"));
+    assert!(load_rate_table("t", &table("rate('1.0')").replace("version = 1", "version = 0")).is_err());
+
+    let defs = |body: &str| format!("DEFINITIONS = [{body}]");
+    let one = "definition('death', 1, '2027-01-01', 'Death', 'wording')";
+    assert_eq!(load_definitions("d", &defs(one)).unwrap()[0].text_hash.len(), 64);
+    assert!(load_definitions("d", &defs(&format!("{one}, {one}")))
+        .unwrap_err()
+        .to_string()
+        .contains("declared twice"));
+    assert!(load_definitions("d", &defs("definition('death', 1, '2027-01-01', 'Death', '')"))
+        .unwrap_err()
+        .to_string()
+        .contains("no wording"));
+}
+
+/// Purpose: a rate row that leaves the upper age open covers every age.
+/// Why it matters: per-life and group tables omit the band; if the default were zero
+/// instead of the maximum age, those tables would rate nobody.
+#[test]
+fn a_rate_row_without_an_upper_age_covers_every_age() {
+    let t = load_rate_table(
+        "t",
+        "RATE_TABLE = {'id': 't', 'version': 1, 'effective_from': '2027-01-01', 'rows': [{'age_from': 0, 'annual_rate': '2.0'}]}",
+    )
+    .unwrap();
+    assert_eq!(t.rows[0].age_to, 150);
+}
+
+/// Purpose: rating fails with a named error when no row fits the life, when the sum
+/// insured is outside the cover's limits, when the frequency is not offered, and when an
+/// annual premium names a cover the product does not have.
+/// Why it matters: each of these is a business refusal the caller must be able to explain
+/// to a customer or adviser. None may fall through to a zero premium.
+#[test]
+fn rating_refuses_what_it_cannot_price() {
+    use ic_product::rating::{check_sum_insured, RatingError};
+    let p = load_product("term_life.star", TERM).unwrap();
+    let life = load_rate_table("life", LIFE_RATES).unwrap();
+    let child = RatingFactors {
+        age: 5,
+        sex: Some(Sex::Female),
+        smoker: Some(false),
+        category: None,
+        loadings: vec![],
+    };
+    assert!(matches!(
+        cover_premium(p.cover("life").unwrap(), &life, &child, 500_000_00),
+        Err(RatingError::NoRate { .. })
+    ));
+
+    let cover = p.cover("life").unwrap();
+    assert!(check_sum_insured(cover, 50_000_00).is_ok());
+    assert!(matches!(check_sum_insured(cover, 49_999_99), Err(RatingError::SumInsuredOutOfRange)));
+    assert!(matches!(check_sum_insured(cover, 5_000_000_01), Err(RatingError::SumInsuredOutOfRange)));
+
+    let mut annual = BTreeMap::new();
+    annual.insert("life".to_string(), ic_money::dec("600").unwrap());
+    assert!(matches!(
+        modal_premium(&p, &annual, Frequency::Quarterly),
+        Err(RatingError::FrequencyNotOffered)
+    ));
+    annual.insert("pets".to_string(), ic_money::dec("1").unwrap());
+    assert!(matches!(modal_premium(&p, &annual, Frequency::Monthly), Err(RatingError::UnknownCover(_))));
+}
+
+/// Purpose: levies are charged on the rounded premium, per levy code, and summed across
+/// covers that carry the same levy.
+/// Why it matters: a levy is money collected for someone else (a fire service or
+/// regulator). It is rounded per cover and remitted in total, so the per-code sum must
+/// equal what was billed line by line.
+#[test]
+fn levies_are_charged_per_cover_and_summed_per_code() {
+    let with_levies = TERM
+        .replace("expiry_age = 100,", "expiry_age = 100, levies = [levy(\"fsl\", \"0.10\")],")
+        .replace("expiry_age = 70,", "expiry_age = 70, levies = [levy(\"fsl\", \"0.10\")],");
+    let p = load_product("levied.star", &with_levies).unwrap();
+    let mut annual = BTreeMap::new();
+    annual.insert("life".to_string(), ic_money::dec("1200").unwrap());
+    annual.insert("trauma".to_string(), ic_money::dec("600").unwrap());
+    let m = modal_premium(&p, &annual, Frequency::Yearly).unwrap();
+    // Two covers: 5% discount. 1140.00 and 570.00, each levied at 10%.
+    assert_eq!(m.by_cover["life"].minor, 1140_00);
+    assert_eq!(m.levies["fsl"].minor, 114_00 + 57_00);
+    assert_eq!(m.total(), 1140_00 + 570_00 + 72_00 + 171_00);
+}
+
+/// Purpose: every billing frequency reports its periods per year and its configuration key.
+/// Why it matters: these two tables drive the modal premium and the lookup of the modal
+/// loading. A wrong count for a frequency no shipped product uses yet would go unseen.
+#[test]
+fn every_frequency_has_its_period_count_and_key() {
+    let expected = [
+        (Frequency::Fortnightly, 26, "fortnightly"),
+        (Frequency::Monthly, 12, "monthly"),
+        (Frequency::Quarterly, 4, "quarterly"),
+        (Frequency::HalfYearly, 2, "half_yearly"),
+        (Frequency::Yearly, 1, "yearly"),
+    ];
+    for (f, periods, key) in expected {
+        assert_eq!(f.periods_per_year(), periods);
+        assert_eq!(f.key(), key);
+        assert_eq!(serde_json::to_value(f).unwrap(), key);
+    }
+}

@@ -263,4 +263,85 @@ mod tests {
         assert!(matches!(FileLog::open(&path), Err(LogError::Corrupt(2))));
         let _ = std::fs::remove_dir_all(&dir);
     }
+    fn temp_log(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("ic-log-test-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("p0.log")
+    }
+
+    /// Purpose: a boxed log behaves exactly like the log inside it, and recovery hands
+    /// every replayed output to the host in order.
+    /// Why it matters: the API host holds its logs as trait objects so it can choose file
+    /// or memory at start-up, and rebuilds its outbox from replayed outputs. If the box
+    /// dropped a call or replay skipped an output, events would be lost on every restart.
+    #[test]
+    fn a_boxed_log_replays_every_output_to_the_host() {
+        let boxed: Box<dyn OrderedLog + Send> = Box::new(MemoryLog::new());
+        let mut r = Replica::recover(boxed, Sum::default()).unwrap();
+        for i in 1..=4 {
+            r.propose(i).unwrap();
+        }
+        assert_eq!(r.log.last_index(), 4);
+        assert_eq!(r.log.read(3, 10).unwrap().len(), 2);
+        let mut seen = Vec::new();
+        let again = Replica::recover_with(r.log, Sum::default(), |index, out| seen.push((index, out))).unwrap();
+        assert_eq!(seen, vec![(1, 1), (2, 3), (3, 6), (4, 10)]);
+        assert_eq!(again.applied(), 4);
+    }
+
+    /// Purpose: reads honour the starting index and the maximum count on both log kinds,
+    /// and the last index tracks appends.
+    /// Why it matters: catch-up reads the log in batches. An off-by-one in either bound
+    /// would apply a command twice or skip one, and replicas would diverge.
+    #[test]
+    fn reads_honour_the_start_index_and_the_batch_limit() {
+        let path = temp_log("reads");
+        let mut file = FileLog::open(&path).unwrap();
+        let mut memory = MemoryLog::new();
+        assert_eq!((file.last_index(), memory.last_index()), (0, 0));
+        for rec in [b"a", b"b", b"c"] {
+            file.append(rec).unwrap();
+            memory.append(rec).unwrap();
+        }
+        assert_eq!((file.last_index(), memory.last_index()), (3, 3));
+        for log in [&file as &dyn OrderedLog, &memory] {
+            assert_eq!(log.read(2, 1).unwrap(), vec![(2, b"b".to_vec())]);
+            assert_eq!(log.read(2, 10).unwrap().len(), 2);
+            assert!(log.read(4, 10).unwrap().is_empty());
+        }
+    }
+
+    /// Purpose: a record cut short by a crash mid-write is reported as corruption at its
+    /// index, and a record that is not a valid command stops recovery with an error.
+    /// Why it matters: a torn tail must never be applied as if it were complete, and a
+    /// replica must stop instead of guessing when it cannot decode what the log holds.
+    #[test]
+    fn a_torn_or_undecodable_record_stops_recovery() {
+        let path = temp_log("torn");
+        {
+            let mut log = FileLog::open(&path).unwrap();
+            log.append(b"1").unwrap();
+            log.append(b"22").unwrap();
+        }
+        let whole = std::fs::read(&path).unwrap();
+        // Cut inside the second record's body, then inside its checksum.
+        std::fs::write(&path, &whole[..whole.len() - 1]).unwrap();
+        assert!(matches!(FileLog::open(&path), Err(LogError::Corrupt(2))));
+        std::fs::write(&path, &whole[..13 + 6]).unwrap();
+        assert!(matches!(FileLog::open(&path), Err(LogError::Corrupt(2))));
+
+        let mut junk = MemoryLog::new();
+        junk.append(b"not a number").unwrap();
+        assert!(matches!(Replica::recover(junk, Sum::default()), Err(LogError::Encoding(_))));
+    }
+
+    /// Purpose: a log file that cannot be opened is an I/O error, not a panic or an empty log.
+    /// Why it matters: a missing volume must stop the partition. Starting empty would
+    /// silently fork history.
+    #[test]
+    fn an_unopenable_log_is_an_error_not_an_empty_log() {
+        let missing = std::env::temp_dir().join("ic-log-test-no-such-dir").join("deeper").join("p0.log");
+        assert!(matches!(FileLog::open(missing), Err(LogError::Io(_))));
+    }
 }

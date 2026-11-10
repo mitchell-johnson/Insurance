@@ -815,6 +815,165 @@ mod tests {
         assert_ne!(a, merkle_root(d(2027, 1, 1), &heads));
     }
 
+    fn post_one(l: &mut Ledger, minor: i64, salt: &str) -> JournalEntry {
+        let m = Money::new(minor, NZD);
+        l.post(
+            draft(vec![
+                Posting::debit(AccountId("recv".into()), m),
+                Posting::credit(AccountId("unearned".into()), m.to_fine()),
+            ]),
+            d(2027, 1, 1),
+            salt,
+        )
+        .unwrap()
+    }
+
+    /// Purpose: reopening an account with the same definition is harmless; reopening it
+    /// with a different unit, class or role is refused.
+    /// Why it matters: handlers open accounts lazily on every command. That must be safe
+    /// to repeat, but an account must never change meaning once money has been posted to it.
+    #[test]
+    fn an_account_cannot_be_redefined() {
+        let mut l = ledger();
+        let recv = acct("recv", AccountUnit::Minor(NZD), AccountClass::Asset);
+        l.open_account(recv.clone()).unwrap();
+        assert_eq!(l.account(&recv.id), Some(&recv));
+        assert!(l.account(&AccountId("nope".into())).is_none());
+        let changed = acct("recv", AccountUnit::Minor(NZD), AccountClass::Liability);
+        assert!(matches!(l.open_account(changed), Err(LedgerError::AccountConflict(_))));
+    }
+
+    /// Purpose: an entry with no postings, a zero or negative posting, or an unknown
+    /// account is refused and leaves the chain where it was.
+    /// Why it matters: direction is carried by debit or credit, never by sign. A negative
+    /// amount would let a caller reverse the meaning of a posting and still balance.
+    #[test]
+    fn empty_entries_non_positive_amounts_and_unknown_accounts_are_refused() {
+        let mut l = ledger();
+        let head = l.head();
+        assert!(matches!(l.post(draft(vec![]), d(2027, 1, 1), "s"), Err(LedgerError::Empty)));
+        let zero = Money::new(0, NZD);
+        let bad = draft(vec![
+            Posting::debit(AccountId("recv".into()), zero),
+            Posting::credit(AccountId("unearned".into()), zero.to_fine()),
+        ]);
+        assert!(matches!(l.post(bad, d(2027, 1, 1), "s"), Err(LedgerError::NonPositive)));
+        let m = Money::new(5, NZD);
+        let unknown = draft(vec![
+            Posting::debit(AccountId("ghost".into()), m),
+            Posting::credit(AccountId("unearned".into()), m.to_fine()),
+        ]);
+        assert!(matches!(l.post(unknown, d(2027, 1, 1), "s"), Err(LedgerError::UnknownAccount(_))));
+        assert_eq!(l.head(), head);
+        assert_eq!(l.entry_count(), 0);
+    }
+
+    /// Purpose: a hold must be new, positive, on a known account and within the available
+    /// balance; releasing an unknown hold is an error.
+    /// Why it matters: holds are how money is reserved for a pending payment. A duplicate
+    /// or oversize hold would let the same dollar be promised twice.
+    #[test]
+    fn holds_are_validated_before_they_are_placed() {
+        let mut l = ledger();
+        post_one(&mut l, 1000, "s");
+        let hold = |id: &str, account: &str, amount: i128| Hold {
+            id: id.into(),
+            account: AccountId(account.into()),
+            amount,
+            expires_on: None,
+        };
+        l.place_hold(hold("h1", "recv", 100)).unwrap();
+        assert!(matches!(l.place_hold(hold("h1", "recv", 100)), Err(LedgerError::DuplicateHold(_))));
+        assert!(matches!(l.place_hold(hold("h2", "recv", 0)), Err(LedgerError::NonPositive)));
+        assert!(matches!(l.place_hold(hold("h3", "recv", 901)), Err(LedgerError::InsufficientAvailable(_))));
+        assert!(l.place_hold(hold("h4", "ghost", 1)).is_err());
+        assert!(matches!(l.release_hold("never"), Err(LedgerError::UnknownHold(_))));
+        // A hold with no expiry never appears in the expiry sweep.
+        assert!(l.expired_holds(d(2099, 1, 1)).is_empty());
+    }
+
+    /// Purpose: the state digest changes when a hold is placed, although no entry was posted.
+    /// Why it matters: replicas compare digests to prove they hold the same state. A hold
+    /// changes what can be spent, so two replicas that disagree about holds must not match.
+    #[test]
+    fn the_state_digest_covers_holds_as_well_as_balances() {
+        let mut l = ledger();
+        post_one(&mut l, 1000, "s");
+        let before = l.digest();
+        l.place_hold(Hold {
+            id: "h".into(),
+            account: AccountId("recv".into()),
+            amount: 1,
+            expires_on: None,
+        })
+        .unwrap();
+        assert_ne!(l.digest(), before);
+        l.release_hold("h").unwrap();
+        assert_eq!(l.digest(), before);
+    }
+
+    /// Purpose: chain verification catches each kind of break separately: an entry out of
+    /// order, a changed salt (commitment no longer matches), and a changed stored hash.
+    /// Why it matters: the tamper test above changes a payload only. An attacker who can
+    /// rewrite storage could instead reorder, re-salt or re-hash, and each must be caught.
+    #[test]
+    fn the_chain_catches_reordering_resalting_and_rehashing() {
+        let mut l = ledger();
+        let entries: Vec<JournalEntry> = (1..=3).map(|i| post_one(&mut l, 100 * i, &format!("salt{i}"))).collect();
+        assert_eq!(verify_chain(3, &entries).unwrap(), l.head());
+
+        let mut reordered = entries.clone();
+        reordered.swap(0, 1);
+        assert!(matches!(verify_chain(3, &reordered), Err(LedgerError::ChainBroken(_))));
+
+        let mut resalted = entries.clone();
+        resalted[1].salt = "other".into();
+        assert!(matches!(verify_chain(3, &resalted), Err(LedgerError::ChainBroken(id)) if id.seq == 2));
+
+        let mut rehashed = entries.clone();
+        rehashed[2].hash = Hash32::ZERO;
+        assert!(matches!(verify_chain(3, &rehashed), Err(LedgerError::ChainBroken(id)) if id.seq == 3));
+
+        // The same entries do not verify as another partition's chain.
+        assert!(verify_chain(4, &entries).is_err());
+    }
+
+    /// Purpose: the Merkle root is defined for no partitions and for an odd number of them,
+    /// and is bound to the business date.
+    /// Why it matters: the published root is the insurer's daily proof of its books. It
+    /// must be well defined at every cluster size, and a root for one day must not be
+    /// replayable as the root for another.
+    #[test]
+    fn the_merkle_root_is_defined_for_any_number_of_partitions_and_bound_to_the_date() {
+        let none = BTreeMap::new();
+        assert_ne!(merkle_root(d(2027, 1, 1), &none), merkle_root(d(2027, 1, 2), &none));
+        let mut heads = BTreeMap::new();
+        for p in 0..3u16 {
+            heads.insert(p, Ledger::genesis(p));
+        }
+        let three = merkle_root(d(2027, 1, 1), &heads);
+        assert_ne!(three, merkle_root(d(2027, 1, 2), &heads));
+        heads.insert(3, Ledger::genesis(3));
+        assert_ne!(three, merkle_root(d(2027, 1, 1), &heads));
+    }
+
+    /// Purpose: hashes and account identifiers print as the text operators see in logs
+    /// and reports, and analytical dimensions travel with the posting.
+    /// Why it matters: support staff quote these values back when tracing an entry; the
+    /// hex form must be the same one the published root uses.
+    #[test]
+    fn hashes_and_account_ids_print_as_operators_see_them() {
+        assert_eq!(Hash32::ZERO.to_string(), "0".repeat(64));
+        assert_eq!(Hash32::ZERO.to_string(), Hash32::ZERO.to_hex());
+        assert_eq!(AccountId("recv".into()).to_string(), "recv");
+        let dims = Dimensions {
+            cover_type: Some("life".into()),
+            ..Dimensions::default()
+        };
+        let p = Posting::debit(AccountId("recv".into()), Money::new(1, NZD)).with_dims(dims.clone());
+        assert_eq!(p.dims, dims);
+    }
+
     proptest! {
         #[test]
         fn ledger_always_nets_to_zero(amounts in proptest::collection::vec(1i64..10_000_000, 1..50)) {

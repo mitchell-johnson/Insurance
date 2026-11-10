@@ -71,4 +71,25 @@ mod tests {
         assert_eq!(age_on(d(1990, 6, 15), d(2027, 6, 14)), 36);
         assert_eq!(age_on(d(1990, 6, 15), d(2027, 6, 15)), 37);
     }
+    /// Purpose: quarterly and half-yearly periods step by three and six months from the
+    /// anchor, and fortnightly by fourteen days.
+    /// Why it matters: no shipped product bills quarterly or half-yearly yet, so nothing
+    /// else exercises these arms. A wrong step would bill a customer on the wrong day.
+    #[test]
+    fn every_frequency_steps_by_its_own_period() {
+        let anchor = d(2027, 1, 31);
+        assert_eq!(period_start(anchor, Frequency::Quarterly, 1), Some(d(2027, 4, 30)));
+        assert_eq!(period_start(anchor, Frequency::HalfYearly, 1), Some(d(2027, 7, 31)));
+        assert_eq!(period_start(anchor, Frequency::Fortnightly, 2), Some(d(2027, 2, 28)));
+        assert_eq!(period_start(anchor, Frequency::Yearly, 1), Some(d(2028, 1, 31)));
+    }
+
+    /// Purpose: a date before inception is policy year zero, not a negative or wrapped number.
+    /// Why it matters: quotes are priced before the policy starts. An underflow here would
+    /// turn into a rate lookup at an absurd age.
+    #[test]
+    fn a_date_before_inception_is_policy_year_zero() {
+        assert_eq!(policy_year(d(2027, 6, 1), d(2027, 5, 31)), 0);
+        assert_eq!(age_on(d(2030, 1, 1), d(2027, 1, 1)), 0);
+    }
 }

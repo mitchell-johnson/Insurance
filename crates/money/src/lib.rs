@@ -313,6 +313,109 @@ mod tests {
         assert_eq!(v.minor, 309); // 2.5 * 1.2345 = 3.08625
     }
 
+    /// Purpose: currency codes round-trip through text, and an unknown code is refused.
+    /// Why it matters: codes arrive as text in product files and commands; a code we do
+    /// not support must fail loudly at the edge instead of defaulting to NZD.
+    #[test]
+    fn currency_codes_round_trip_and_unknown_codes_are_refused() {
+        for c in [Currency::NZD, Currency::AUD, Currency::USD] {
+            assert_eq!(c.to_string().parse::<Currency>().unwrap(), c);
+            assert_eq!(c.code(), c.to_string());
+        }
+        assert_eq!("EUR".parse::<Currency>(), Err(MoneyError::UnknownCurrency("EUR".to_string())));
+    }
+
+    /// Purpose: subtraction, negation and `min` on money give exact integer results.
+    /// Why it matters: refunds, reversals and "pay the lesser of suspense and the bill"
+    /// are built from these three operations; an error here misstates a customer's balance.
+    #[test]
+    fn money_subtracts_negates_and_takes_the_lesser() {
+        let ten = Money::new(1000, Currency::NZD);
+        let three = Money::new(300, Currency::NZD);
+        assert_eq!(ten.checked_sub(three).unwrap(), Money::new(700, Currency::NZD));
+        assert_eq!(ten.neg(), Money::new(-1000, Currency::NZD));
+        assert_eq!(ten.min(three), three);
+        assert_eq!(three.min(ten), three);
+        assert_eq!(Money::zero(Currency::AUD).minor, 0);
+    }
+
+    /// Purpose: arithmetic that would exceed the integer range, or mix currencies, is an error.
+    /// Why it matters: money must never wrap around or silently add dollars of different
+    /// countries; both would corrupt the ledger without tripping the zero-sum check.
+    #[test]
+    fn overflow_and_mixed_currencies_are_errors_not_wraparound() {
+        let max = Money::new(i64::MAX, Currency::NZD);
+        let one = Money::new(1, Currency::NZD);
+        assert_eq!(max.checked_add(one), Err(MoneyError::Overflow));
+        assert_eq!(Money::new(i64::MIN, Currency::NZD).checked_sub(one), Err(MoneyError::Overflow));
+        assert!(one.checked_sub(Money::new(1, Currency::USD)).is_err());
+
+        let fine_max = AccrualAmount::new(i128::MAX, Currency::NZD);
+        assert_eq!(fine_max.checked_add(AccrualAmount::new(1, Currency::NZD)), Err(MoneyError::Overflow));
+        assert!(AccrualAmount::zero(Currency::NZD).checked_add(AccrualAmount::zero(Currency::AUD)).is_err());
+        // An amount too large for cents is refused when it is rounded to money.
+        assert_eq!(fine_max.round_to_money(RoundingMode::HalfEven).map(|(m, _)| m), Err(MoneyError::Overflow));
+        assert_eq!(
+            round_to_money(dec("1e30").unwrap(), Currency::NZD, RoundingMode::HalfUp),
+            Err(MoneyError::Overflow)
+        );
+    }
+
+    /// Purpose: accrual amounts add and subtract exactly in fine units.
+    /// Why it matters: daily earning is a running sum of fine units; any loss here shows up
+    /// as unearned premium that never reaches zero at the end of a period.
+    #[test]
+    fn accrual_amounts_add_and_subtract_exactly() {
+        let a = AccrualAmount::new(1_500_000, Currency::NZD);
+        let b = AccrualAmount::new(333_333, Currency::NZD);
+        assert_eq!(a.checked_add(b).unwrap().fine, 1_833_333);
+        assert_eq!(a.checked_sub(b).unwrap().fine, 1_166_667);
+        assert_eq!(Money::new(7, Currency::NZD).to_fine().fine, 7 * FINE_PER_MINOR);
+    }
+
+    /// Purpose: rounding up always moves away from zero toward the next cent.
+    /// Why it matters: `Up` is the one mode the other rounding test does not exercise, and a
+    /// product that rounds levies up would under-collect if it behaved like `Down`.
+    #[test]
+    fn rounding_up_goes_to_the_next_cent() {
+        assert_eq!(round_to_money(dec("12.341").unwrap(), Currency::NZD, RoundingMode::Up).unwrap().minor, 1235);
+    }
+
+    /// Purpose: text that is not a finite decimal is refused wherever a decimal is parsed.
+    /// Why it matters: rates and loadings arrive as strings in configuration and commands.
+    /// A NaN or infinity that got through would poison every premium computed from it.
+    #[test]
+    fn only_finite_decimals_are_accepted() {
+        assert!(dec("twelve").is_err());
+        assert!(DecStr::parse("0.125").is_ok());
+        assert!(DecStr::parse("NaN").is_err());
+        assert!(DecStr::parse("Infinity").is_err());
+        assert!(DecStr::parse("abc").is_err());
+    }
+
+    /// Purpose: a decimal string keeps its exact text through JSON, and bad text fails to decode.
+    /// Why it matters: commands are hashed into the chain as JSON. "0.50" and "0.5" must stay
+    /// distinct strings so a replayed log produces identical bytes.
+    #[test]
+    fn decimal_strings_keep_their_exact_text_through_json() {
+        let d = DecStr::parse("0.50").unwrap();
+        assert_eq!(d.as_str(), "0.50");
+        assert_eq!(d.get(), dec("0.5").unwrap());
+        let json = serde_json::to_string(&d).unwrap();
+        assert_eq!(json, "\"0.50\"");
+        assert_eq!(serde_json::from_str::<DecStr>(&json).unwrap(), d);
+        assert!(serde_json::from_str::<DecStr>("\"oops\"").is_err());
+    }
+
+    /// Purpose: any 128-bit integer converts to a decimal without loss.
+    /// Why it matters: fine-unit balances are i128 and the decimal library has no direct
+    /// conversion; this guards the string-based bridge at its extremes.
+    #[test]
+    fn large_integers_convert_to_decimals_exactly() {
+        assert_eq!(dec_i128(i128::MAX).to_string(), i128::MAX.to_string());
+        assert_eq!(dec_i128(-42).to_string(), "-42");
+    }
+
     proptest! {
         #[test]
         fn round_to_money_remainder_is_exact(fine in -10_000_000_000_000i128..10_000_000_000_000i128) {
