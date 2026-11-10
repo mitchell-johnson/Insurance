@@ -180,10 +180,10 @@ impl CoreState {
             &self.idempotency,
             &self.transfers_seen,
         );
-        match serde_json::to_vec(&rest) {
-            Ok(bytes) => h.update(bytes),
-            Err(_) => h.update(b"unencodable"),
-        }
+        // Every type in the state has string or integer map keys, so this
+        // cannot fail; a test holds that true by proving the hash moves with
+        // state that is not in the ledger.
+        h.update(serde_json::to_vec(&rest).unwrap_or_else(|_| b"unencodable".to_vec()));
         Hash32(h.finalize().into())
     }
 
@@ -395,6 +395,11 @@ impl CoreState {
             .clone();
         lifecycle::anniversaries(&self.catalog, &product, policy, ctx)?;
         if policy.status != PolicyStatus::InForce {
+            // The policy expired at this anniversary. The day just closed was
+            // still a day of cover, so it is earned before the policy rests.
+            if let Some(closed_day) = ctx.date.pred_opt() {
+                earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
+            }
             return Ok(());
         }
         billing::bill_due_periods(&mut self.ledger, &self.catalog, &product, policy, ctx)?;

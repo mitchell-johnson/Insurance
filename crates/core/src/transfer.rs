@@ -71,10 +71,7 @@ impl TransferRecord {
             &self.balances,
             &self.scoped_tables,
         );
-        match serde_json::to_vec(&body) {
-            Ok(b) => h.update(b),
-            Err(_) => h.update(b"unencodable"),
-        }
+        h.update(serde_json::to_vec(&body).unwrap_or_else(|_| b"unencodable".to_vec()));
         hex::encode(h.finalize())
     }
 }

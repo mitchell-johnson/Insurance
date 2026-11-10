@@ -17,6 +17,7 @@ pub struct Catalog {
     /// Product versions by content hash.
     products: BTreeMap<String, ProductDefinition>,
     /// Product code -> (effective_from, version) -> content hash.
+    #[serde(with = "versions_as_pairs")]
     product_versions: BTreeMap<String, BTreeMap<(NaiveDate, u32), String>>,
     /// Rate tables by ID and version.
     rate_tables: BTreeMap<String, BTreeMap<u32, RateTable>>,
@@ -109,13 +110,26 @@ impl Catalog {
     pub fn index_rate_on(&self, code: &str, on: NaiveDate) -> Option<&DecStr> {
         self.index_rates.get(code)?.range(..=on).next_back().map(|(_, r)| r)
     }
+}
 
-    /// Number of configuration objects held: measured per partition, because
-    /// configuration state grows slowly and never shrinks.
-    pub fn size(&self) -> usize {
-        self.products.len()
-            + self.rate_tables.values().map(BTreeMap::len).sum::<usize>()
-            + self.definitions.values().map(BTreeMap::len).sum::<usize>()
-            + self.index_rates.values().map(BTreeMap::len).sum::<usize>()
+/// JSON object keys must be strings, and this map is keyed by a pair. It is
+/// encoded as a list of entries so the catalog can be part of the state hash
+/// and of a snapshot.
+mod versions_as_pairs {
+    use std::collections::BTreeMap;
+
+    use chrono::NaiveDate;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    type Versions = BTreeMap<String, BTreeMap<(NaiveDate, u32), String>>;
+
+    pub fn serialize<S: Serializer>(map: &Versions, s: S) -> Result<S::Ok, S::Error> {
+        let pairs: BTreeMap<&String, Vec<(&(NaiveDate, u32), &String)>> = map.iter().map(|(code, versions)| (code, versions.iter().collect())).collect();
+        pairs.serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Versions, D::Error> {
+        let pairs: BTreeMap<String, Vec<((NaiveDate, u32), String)>> = Deserialize::deserialize(d)?;
+        Ok(pairs.into_iter().map(|(code, versions)| (code, versions.into_iter().collect())).collect())
     }
 }

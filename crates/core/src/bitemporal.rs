@@ -59,10 +59,6 @@ impl<T> Bitemporal<T> {
             .max_by_key(|v| v.recorded_at)
             .map(|v| &v.value)
     }
-
-    pub fn versions(&self) -> &[Version<T>] {
-        &self.versions
-    }
 }
 
 #[cfg(test)]

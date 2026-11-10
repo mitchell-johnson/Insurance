@@ -66,8 +66,10 @@ impl PostingSet {
 }
 
 /// `n / d` rounded half to even, exact in integers.
+/// A negative divisor is normal: a credit adjustment has a negative total.
 pub(crate) fn div_half_even(n: i128, d: i128) -> i128 {
-    debug_assert!(d > 0);
+    debug_assert!(d != 0);
+    let (n, d) = if d < 0 { (-n, -d) } else { (n, d) };
     let q = n.div_euclid(d);
     let r = n.rem_euclid(d);
     match (2 * r).cmp(&d) {
@@ -94,5 +96,9 @@ mod tests {
         assert_eq!(div_half_even(-7, 2), -4);
         assert_eq!(div_half_even(10, 3), 3);
         assert_eq!(div_half_even(-10, 3), -3);
+        // A credit adjustment divides by a negative total: same answers, sign carried.
+        assert_eq!(div_half_even(-5, -2), 2);
+        assert_eq!(div_half_even(5, -2), -2);
+        assert_eq!(div_half_even(7, -2), -4);
     }
 }
