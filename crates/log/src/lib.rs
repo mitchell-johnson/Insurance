@@ -33,6 +33,18 @@ pub trait OrderedLog {
     fn last_index(&self) -> u64;
 }
 
+impl OrderedLog for Box<dyn OrderedLog + Send> {
+    fn append(&mut self, record: &[u8]) -> Result<u64, LogError> {
+        (**self).append(record)
+    }
+    fn read(&self, from: u64, max: usize) -> Result<Vec<(u64, Vec<u8>)>, LogError> {
+        (**self).read(from, max)
+    }
+    fn last_index(&self) -> u64 {
+        (**self).last_index()
+    }
+}
+
 /// In-memory log for tests and simulation.
 #[derive(Debug, Default, Clone)]
 pub struct MemoryLog {
@@ -162,8 +174,14 @@ pub struct Replica<L: OrderedLog, S: StateMachine> {
 impl<L: OrderedLog, S: StateMachine> Replica<L, S> {
     /// Build a replica and replay whatever the log already holds.
     pub fn recover(log: L, state: S) -> Result<Self, LogError> {
+        Self::recover_with(log, state, |_, _| {})
+    }
+
+    /// Like [`Self::recover`], handing each replayed output to `on_output`,
+    /// so a host can rebuild what it derives from outputs (its outbox).
+    pub fn recover_with(log: L, state: S, mut on_output: impl FnMut(u64, S::Output)) -> Result<Self, LogError> {
         let mut r = Self { log, state, applied: 0 };
-        r.catch_up()?;
+        r.catch_up(&mut on_output)?;
         Ok(r)
     }
 
@@ -183,7 +201,7 @@ impl<L: OrderedLog, S: StateMachine> Replica<L, S> {
         Ok((index, out))
     }
 
-    fn catch_up(&mut self) -> Result<(), LogError> {
+    fn catch_up(&mut self, on_output: &mut impl FnMut(u64, S::Output)) -> Result<(), LogError> {
         loop {
             let batch = self.log.read(self.applied + 1, 1024)?;
             if batch.is_empty() {
@@ -191,7 +209,8 @@ impl<L: OrderedLog, S: StateMachine> Replica<L, S> {
             }
             for (index, bytes) in batch {
                 let cmd: S::Command = serde_json::from_slice(&bytes).map_err(|e| LogError::Encoding(e.to_string()))?;
-                self.state.apply(index, cmd);
+                let out = self.state.apply(index, cmd);
+                on_output(index, out);
                 self.applied = index;
             }
         }

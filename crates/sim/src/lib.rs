@@ -83,14 +83,21 @@ impl<L: OrderedLog> Cluster<L> {
     pub fn recover(logs: BTreeMap<PartitionId, L>, seed: u64) -> Result<Self, LogError> {
         let mut nodes = BTreeMap::new();
         for (p, log) in logs {
-            let replica = Replica::recover(log, CoreState::new(p))?;
+            // Replaying rebuilds the outbox: read models and the relay start
+            // from the beginning and de-duplicate, as they would in production.
+            let mut outbox = VecDeque::new();
+            let mut messages = VecDeque::new();
+            let replica = Replica::recover_with(log, CoreState::new(p), |_, a: Applied| {
+                outbox.extend(a.events);
+                messages.extend(a.messages);
+            })?;
             nodes.insert(
                 p,
                 Node {
                     replica,
                     journal: vec![],
-                    outbox: VecDeque::new(),
-                    messages: VecDeque::new(),
+                    outbox,
+                    messages,
                     max_work_units: 0,
                     commands: 0,
                     entries: 0,

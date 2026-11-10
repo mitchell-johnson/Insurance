@@ -25,3 +25,7 @@ chrono-tz.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "ic-simulate"
+path = "src/main.rs"
