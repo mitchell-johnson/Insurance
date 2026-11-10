@@ -7,6 +7,7 @@
 //! reconciliation and Merkle root.
 
 pub mod config;
+pub mod cutoff;
 pub mod persona;
 pub mod year;
 

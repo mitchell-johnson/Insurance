@@ -212,3 +212,10 @@ pub fn random_persona(rng: &mut StdRng, n: u64, inception: NaiveDate) -> Persona
         issue,
     }
 }
+
+impl Persona {
+    /// Every shipped product is in New Zealand dollars.
+    pub fn issue_currency(&self) -> ic_money::Currency {
+        ic_money::Currency::NZD
+    }
+}
