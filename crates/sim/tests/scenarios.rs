@@ -304,9 +304,7 @@ fn anniversary_indexes_cover_and_re_rates_stepped_premium() {
     pay(&mut c, p, &id, "year", 13 * MONTHLY);
     days(&mut c, 366); // 2028 is a leap year
     assert_eq!(c.business_date(), Some(d(2028, 11, 15)));
-    for e in c.nodes[&p].outbox.iter().filter(|e| matches!(e.event, Event::PolicyException { .. })) {
-        panic!("{e:?}");
-    }
+    assert!(!c.nodes[&p].outbox.iter().any(|e| matches!(e.event, Event::PolicyException { .. })));
     let pol = &c.state(p).policies[&id];
     assert_eq!(pol.anniversaries_processed, 1);
     let cover = &pol.covers["life"];
