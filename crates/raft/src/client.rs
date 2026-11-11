@@ -153,7 +153,8 @@ impl ClusterClient {
     /// One pass over the cluster: the last known leader first, then every
     /// node, following a redirect when a follower gives one.
     async fn sweep<T: DeserializeOwned>(&self, partition: PartitionId, build: impl Fn(&str) -> reqwest::RequestBuilder) -> Result<T, ClientError> {
-        let mut queue: Vec<String> = self.hint(partition).into_iter().chain(self.nodes.iter().cloned()).collect();
+        // A stack: the last known leader is on top, then the nodes in the order given.
+        let mut queue: Vec<String> = self.nodes.iter().rev().cloned().chain(self.hint(partition)).collect();
         let mut tried = Vec::new();
         let mut detail = "no nodes configured".to_string();
         while let Some(addr) = queue.pop() {

@@ -680,10 +680,11 @@ async fn a_node_admits_only_callers_with_the_cluster_token() {
     }
     assert!(outsider.status(&fleet.addrs[&leader]).await.is_err());
 
-    // Nothing the intruders sent reached the log.
+    // Nothing the intruders sent changed the ledger. (The log itself may
+    // have grown: the leader's own housekeeping goes through it.)
     let after = fleet.settle().await;
     assert_eq!(after[0].state_hash, before[0].state_hash);
-    assert_eq!(after[0].last_log_index, before[0].last_log_index);
+    assert_eq!(after[0].ledger_entries, before[0].ledger_entries);
     assert_eq!(after[0].business_date, Some(start_date()));
 }
 

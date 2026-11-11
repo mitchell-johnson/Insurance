@@ -9,6 +9,7 @@
 //! log, and production, where this process is a stateless gateway in front
 //! of the partitions' Raft groups on the ledger nodes. See [`backend`].
 
+pub mod admin;
 pub mod auth;
 pub mod backend;
 pub mod engine;

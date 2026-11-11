@@ -1,18 +1,33 @@
 # syntax=docker/dockerfile:1.7
 
-# --- build and test -------------------------------------------------------
+# One image holds every binary: ic-node (a ledger node), ic-api (the public
+# API, as a gateway to the nodes or as the single-process insurance in a
+# box), ic-worker (the end-of-day worker) and ic-admin (the operator's
+# command). The deployment chooses the command.
+
+# --- build ------------------------------------------------------------------
 FROM rust:1.97-bookworm AS build
 WORKDIR /src
-RUN apt-get update && apt-get install -y --no-install-recommends clang && rm -rf /var/lib/apt/lists/*
+# clang for the Starlark and crypto builds; protoc for the Temporal SDK.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends clang protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo build --release --workspace --locked \
-    && mkdir -p /out \
-    && find target/release -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/ \;
+    && mkdir -p /out/bin /out/state/data /out/state/cold /out/state/roots \
+    && find target/release -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/bin/ \;
 
-# `docker build --target test .` runs the whole test suite in the image.
+# --- test -------------------------------------------------------------------
+# `docker build --target test .` runs formatting, lints and the whole test
+# suite in the image, including the end-of-day workflow on a real Temporal
+# dev server, which the Temporal SDK's test support fetches. Pass
+# `--build-arg IC_SKIP_TEMPORAL_TESTS=1` where that download is not possible;
+# the test then says in its output that it did not run.
 FROM build AS test
+ARG IC_SKIP_TEMPORAL_TESTS=
+ENV IC_SKIP_TEMPORAL_TESTS=${IC_SKIP_TEMPORAL_TESTS}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     cargo fmt --all --check \
@@ -20,8 +35,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && cargo test --release --workspace --locked
 
 # --- runtime ----------------------------------------------------------------
+# Distroless: no shell, no package manager, not root.
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
-COPY --from=build /out/ /usr/local/bin/
+COPY --from=build /out/bin/ /usr/local/bin/
+# Mount points the non-root user can write, for volumes created from them.
+COPY --from=build --chown=nonroot:nonroot /out/state/ /var/lib/ic/
 USER nonroot
-EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/ic-api"]
+EXPOSE 8080 7000
+CMD ["/usr/local/bin/ic-api"]

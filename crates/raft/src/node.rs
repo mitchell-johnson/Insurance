@@ -173,6 +173,16 @@ impl Node {
         self.write(Proposal::Housekeeping(done)).await.map(|_| ())
     }
 
+    /// The leader this member follows and where it listens, as the group's
+    /// own membership records it. A member added after this node was
+    /// configured is therefore found too.
+    pub fn leader_hint(&self) -> (Option<NodeId>, Option<String>) {
+        let metrics = self.raft.metrics().borrow_watched().clone();
+        let leader = metrics.current_leader;
+        let addr = leader.and_then(|l| metrics.membership_config.nodes().find(|(id, _)| **id == l).map(|(_, n)| n.addr.clone()));
+        (leader, addr)
+    }
+
     pub fn status(&self) -> NodeStatus {
         let metrics = self.raft.metrics().borrow_watched().clone();
         let role = match metrics.state {

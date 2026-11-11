@@ -406,9 +406,8 @@ async fn read_as_leader<T: serde::Serialize>(host: &Host, partition: PartitionId
     match member.raft.ensure_linearizable(ReadPolicy::ReadIndex).await {
         Ok(_) => Json(read(member)).into_response(),
         Err(_) => {
-            let status = member.status();
-            let addr = status.leader.and_then(|l| host.peers.get(&l).cloned());
-            refusal(ProposeError::NotLeader { leader: status.leader, addr })
+            let (leader, addr) = member.leader_hint();
+            refusal(ProposeError::NotLeader { leader, addr })
         }
     }
 }

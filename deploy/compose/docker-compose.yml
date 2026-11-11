@@ -1,0 +1,152 @@
+# The production arrangement on one machine: three ledger nodes replicating
+# four partitions with Raft, a Temporal server, two end-of-day workers and
+# the API as a gateway. For development and for the chaos test beside this
+# file; production runs the same binaries on AKS (see deploy/k8s).
+#
+#   docker compose -f deploy/compose/docker-compose.yml up --build -d
+#   curl -s localhost:8080/readyz
+#
+# Not for production: callers are trusted by header (IC_AUTH=dev), the
+# cluster token is the one written here, events are discarded, the cold tier
+# and the published roots are local volumes, and Temporal is its in-memory
+# development server.
+
+name: insurance-core
+
+x-image: &image
+  image: insurance-core:dev
+  build:
+    context: ../..
+    target: runtime
+
+x-cluster: &cluster
+  IC_NODES: node-1:7000,node-2:7000,node-3:7000,node-4:7000
+  IC_CLUSTER_TOKEN: compose-only-cluster-token-0123456789abcdef
+  RUST_LOG: ${RUST_LOG:-info}
+
+x-node: &node
+  <<: *image
+  command: ["/usr/local/bin/ic-node"]
+  restart: unless-stopped
+  stop_grace_period: 20s
+
+x-node-env: &node-env
+  <<: *cluster
+  IC_NODE_PEERS: 1=node-1:7000,2=node-2:7000,3=node-3:7000
+  IC_NODE_DATA_DIR: /var/lib/ic/data
+  IC_PARTITIONS: "4"
+  IC_COLD_DIR: /var/lib/ic/cold
+  IC_EVENT_SINK: discard
+  IC_SEGMENT_ENTRIES: "100"
+  IC_RAFT_SNAPSHOT_EVERY: "500"
+
+x-worker: &worker
+  <<: *image
+  command: ["/usr/local/bin/ic-worker"]
+  # A worker exits if Temporal is not up yet; it is started again.
+  restart: unless-stopped
+  depends_on: [temporal]
+  environment: &worker-env
+    <<: *cluster
+    TEMPORAL_ADDRESS: temporal:7233
+    TEMPORAL_NAMESPACE: default
+    IC_ROOT_DIR: /var/lib/ic/roots
+    # Short, so a killed worker's step is handed on within seconds.
+    IC_STEP_PATIENCE_SECS: "5"
+    IC_STEP_TIMEOUT_SECS: "15"
+  volumes:
+    - roots:/var/lib/ic/roots
+
+services:
+  node-1:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "1"
+      IC_NODE_BOOTSTRAP: "true"
+    volumes: ["node-1:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  node-2:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "2"
+    volumes: ["node-2:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  node-3:
+    <<: *node
+    environment:
+      <<: *node-env
+      IC_NODE_ID: "3"
+    volumes: ["node-3:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  # The machine that replaces a node whose disk was lost. It is not part of
+  # the cluster until `ic-admin members` makes it so. See chaos.sh.
+  node-4:
+    <<: *node
+    profiles: [replacement]
+    environment:
+      <<: *node-env
+      IC_NODE_PEERS: 1=node-1:7000,2=node-2:7000,3=node-3:7000,4=node-4:7000
+      IC_NODE_ID: "4"
+    volumes: ["node-4:/var/lib/ic/data", "cold:/var/lib/ic/cold"]
+
+  # Open the book and activate the shipped products. Both are safe to repeat.
+  open:
+    <<: *image
+    command: ["/usr/local/bin/ic-admin", "open", "${OPENING_DATE:-2027-11-15}"]
+    restart: on-failure
+    depends_on: [node-1, node-2, node-3]
+    environment: *cluster
+
+  configure:
+    <<: *image
+    command: ["/usr/local/bin/ic-admin", "activate-shipped"]
+    restart: on-failure
+    depends_on:
+      open:
+        condition: service_completed_successfully
+    environment: *cluster
+
+  temporal:
+    image: temporalio/temporal:1.10.0
+    command: ["server", "start-dev", "--ip", "0.0.0.0"]
+    ports: ["7233:7233", "8233:8233"]
+
+  worker-1: *worker
+  worker-2: *worker
+
+  api:
+    <<: *image
+    command: ["/usr/local/bin/ic-api"]
+    restart: unless-stopped
+    depends_on:
+      configure:
+        condition: service_completed_successfully
+    environment:
+      <<: *cluster
+      IC_PARTITIONS: "4"
+      IC_AUTH: dev
+    ports: ["8080:8080"]
+
+  # One-off commands: `docker compose run --rm admin status`,
+  # `docker compose run --rm close close 2027-11-15 4`.
+  admin:
+    <<: *image
+    profiles: [tools]
+    entrypoint: ["/usr/local/bin/ic-admin"]
+    environment: *cluster
+
+  close:
+    <<: *image
+    profiles: [tools]
+    entrypoint: ["/usr/local/bin/ic-worker"]
+    environment: *worker-env
+
+volumes:
+  node-1:
+  node-2:
+  node-3:
+  node-4:
+  cold:
+  roots:

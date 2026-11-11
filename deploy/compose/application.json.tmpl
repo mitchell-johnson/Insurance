@@ -1,0 +1,34 @@
+{
+  "policy": "pol-@N@",
+  "number": "KTL@N@",
+  "group": "grp-@N@",
+  "policyholder": "party-@N@",
+  "product_code": "term-life",
+  "inception": "@DATE@",
+  "frequency": "monthly",
+  "lives": [
+    {
+      "id": "life-1",
+      "kind": {
+        "kind": "named",
+        "party": "party-@N@"
+      },
+      "factors": {
+        "date_of_birth": "1990-03-10",
+        "sex": "female",
+        "smoker": false,
+        "category": null,
+        "salary_minor": null
+      }
+    }
+  ],
+  "covers": [
+    {
+      "code": "life",
+      "life": "life-1",
+      "sum_insured_minor": 50000000,
+      "loadings": [],
+      "exclusions": []
+    }
+  ]
+}
