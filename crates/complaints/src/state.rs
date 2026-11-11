@@ -555,6 +555,8 @@ impl ComplaintsState {
         }
         c.acknowledged_on = Some(today);
         c.acknowledgement = Some(document);
+        // The first update is counted from the acknowledgement.
+        c.escalated.remove(&Timer::Update);
         ctx.events.push(Event::Acknowledged { complaint: id.to_string() });
         Ok(())
     }
