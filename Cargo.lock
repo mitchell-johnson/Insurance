@@ -1867,6 +1867,7 @@ dependencies = [
  "base64 0.22.1",
  "cedar-policy",
  "chrono",
+ "futures",
  "hex",
  "http-body-util",
  "ic-api",
@@ -1979,6 +1980,20 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "ic-payments"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-log",
+ "ic-money",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
