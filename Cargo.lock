@@ -2138,6 +2138,7 @@ dependencies = [
  "ic-channels",
  "ic-documents",
  "ic-group",
+ "ic-payments-service",
  "ic-raft",
  "ic-underwriting",
  "serde_json",

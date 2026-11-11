@@ -915,3 +915,61 @@ async fn the_services_small_parts_do_what_they_say() {
     let other = ic_core::Command::OpenBusinessDate { date: d(2027, 1, 1) };
     assert!(policy_of(&other).is_none());
 }
+
+/// Purpose: the pump's settings name what is missing, refuse a grace period
+/// short enough to be dangerous, and have no fallback to an unsigned or
+/// unrecorded submission; the binary started with nothing says what it needs.
+/// Why it matters: a pump that started on defaults could send a bank a file
+/// with no real signature and no evidence, or declare lost a file another
+/// pump was still sending.
+#[test]
+fn the_pump_does_not_start_half_configured() {
+    use ic_payments_service::settings::PumpSettings;
+    let full: BTreeMap<&str, &str> = BTreeMap::from([
+        ("IC_NODES", "node-1:7000,node-2:7000"),
+        ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef"),
+        ("IC_REGION", "syd"),
+        ("HOSTNAME", "pump-0"),
+        ("IC_BANK_SECRETS_DIR", "/mnt/bank"),
+        ("IC_KEY_VAULT_URL", "https://kv.vault.azure.net"),
+        ("IC_BLOB_ENDPOINT", "https://st.blob.core.windows.net"),
+    ]);
+    let load = |env: &BTreeMap<&str, &str>| PumpSettings::from_lookup(|key| env.get(key).map(|v| v.to_string()));
+    let settings = load(&full).unwrap();
+    assert_eq!(
+        (settings.region.as_str(), settings.instance.as_str(), settings.container.as_str()),
+        ("syd", "pump-0", "payments-evidence")
+    );
+    assert_eq!((settings.nodes.len(), settings.interval.as_secs(), settings.grace.num_minutes()), (2, 15, 10));
+    for key in [
+        "IC_NODES",
+        "IC_REGION",
+        "HOSTNAME",
+        "IC_BANK_SECRETS_DIR",
+        "IC_KEY_VAULT_URL",
+        "IC_BLOB_ENDPOINT",
+        "IC_CLUSTER_TOKEN",
+    ] {
+        let mut env = full.clone();
+        env.remove(key);
+        assert!(load(&env).is_err(), "started without {key}");
+    }
+    let with = |key: &'static str, value: &'static str| {
+        let mut env = full.clone();
+        env.insert(key, value);
+        load(&env)
+    };
+    assert!(with("IC_PUMP_GRACE_MINUTES", "1").unwrap_err().contains("at least 2"));
+    assert!(with("IC_PUMP_INTERVAL_SECS", "0").is_err());
+    assert!(with("IC_PUMP_INTERVAL_SECS", "soon").unwrap_err().contains("IC_PUMP_INTERVAL_SECS"));
+    assert_eq!(with("IC_PAYMENTS_INSTANCE", "x").unwrap().instance, "x");
+    assert_eq!(with("IC_PAYMENTS_CONTAINER", "c").unwrap().container, "c");
+
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ic-payments-pump")).env_clear().output().unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("IC_CLUSTER"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

@@ -12,6 +12,7 @@ pub mod bank;
 pub mod fake;
 pub mod ports;
 pub mod pump;
+pub mod settings;
 
 use ic_raft::{hosted_reading, ModuleSpec, ModuleState};
 
