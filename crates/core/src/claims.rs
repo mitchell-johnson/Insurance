@@ -125,7 +125,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     let product = state.catalog.product(&p.product_hash);
     let life_id = life
         .map(|l| LifeId(l.to_string()))
-        .or_else(|| Some(p.lives.keys().next()?.clone()).filter(|_| p.lives.len() == 1));
+        .or_else(|| p.lives.keys().next().filter(|_| p.lives.len() == 1).cloned());
     let record = life_id.as_ref().and_then(|l| p.lives.get(l));
     let life_on_policy = record.is_some_and(|r| r.in_force_on(on));
     let life_party = record.and_then(|r| match &r.kind {
