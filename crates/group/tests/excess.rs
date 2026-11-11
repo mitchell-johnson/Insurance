@@ -1,0 +1,325 @@
+//! Cover above the automatic amount: asking underwriting, writing the
+//! decision to the core as a layer, keeping it in line with the formula as
+//! salaries move, and the ceiling reinsurance can ask for.
+
+mod common;
+
+use common::*;
+use ic_core::Reject;
+use ic_group::command::{caller, ExcessDecision, GroupCommand};
+use ic_group::event::{ExceptionKind, GroupEvent};
+use ic_group::mapping::FileKind;
+use ic_group::record::RowChange;
+use ic_group::state::CaseStatus;
+use ic_group::terms::ExcessLoading;
+use ic_money::DecStr;
+
+fn code(r: Result<(), Reject>) -> String {
+    r.unwrap_err().code
+}
+
+/// The founder, one staff member and an executive on 240,000, whose formula
+/// cover of 960,000 is 210,000 above the automatic 750,000.
+fn with_executive(t: ic_group::terms::SchemeTerms) -> (Harness, u64) {
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E003", attrs("staff", 90_000_00, "akl")),
+            row(3, "E004", attrs("executive", 240_000_00, "wlg")),
+        ],
+    );
+    let case = h.requests[0].case;
+    (h, case)
+}
+
+fn accept(minor: i64, loading: Option<&str>, consent: bool) -> ExcessDecision {
+    ExcessDecision::Accepted {
+        sum_insured_minor: minor,
+        loadings: loading.map(|l| DecStr::parse(l).unwrap()).into_iter().collect(),
+        exclusions: vec![],
+        member_consents_to_itemising: consent,
+    }
+}
+
+fn status(h: &Harness, case: u64) -> CaseStatus {
+    h.scheme().cases[&case].status
+}
+
+/// Purpose: an accepted decision becomes a layer in the core for exactly the accepted
+/// amount from the day the member joined, the employer learns only that it is in place,
+/// and when the member's salary falls the layer ends from that day.
+/// Why it matters: until the layer is in the core the member is not covered above the
+/// automatic amount whatever underwriting said; and a layer that outlives the salary that
+/// justified it is cover nobody is entitled to and the employer is billed for.
+#[test]
+fn an_accepted_decision_becomes_a_layer_and_ends_when_the_formula_no_longer_supports_it() {
+    let (mut h, case) = with_executive(terms());
+    assert_eq!(status(&h, case), CaseStatus::Requested);
+    assert!(h.excess_layers("E004").is_empty());
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessUnderwritingRequested { excess_minor: 210_000_00, .. })));
+
+    // Only underwriting decides, and only within what was asked.
+    let decide = GroupCommand::RecordExcessDecision {
+        scheme: SCHEME.into(),
+        case,
+        decision: accept(210_000_00, None, false),
+    };
+    assert_eq!(code(h.send_as(caller::STAFF, "staff-ana", decide)), "caller_not_allowed");
+    assert_eq!(code(h.underwriting(case, accept(0, None, false))), "invalid_amount");
+    assert_eq!(code(h.underwriting(case, accept(210_000_01, None, false))), "invalid_amount");
+    assert_eq!(code(h.underwriting(999, accept(1, None, false))), "case_closed");
+
+    h.underwriting(case, accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(status(&h, case), CaseStatus::Accepted);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
+    assert!(
+        h.scheme().cases[&case].layer.is_some(),
+        "the core's number for the layer is learned from its event"
+    );
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverDecided { in_place: true, .. })));
+    assert_eq!(code(h.underwriting(case, ExcessDecision::Declined)), "case_closed");
+    // Nothing the module publishes says what the terms were.
+    let published = serde_json::to_string(&h.published).unwrap();
+    assert!(!published.contains("loading") && !published.contains("0.5"), "{published}");
+
+    // Salary falls to 180,000: four times is 720,000, inside the automatic amount.
+    h.days(40);
+    let today = h.today();
+    h.salary("f2", "E004", "executive", 180_000_00);
+    assert_eq!(status(&h, case), CaseStatus::Ended);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, Some(today))]);
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverEnded { .. })));
+    assert_eq!(h.requests.len(), 1, "nothing new to underwrite");
+}
+
+/// Purpose: a declined or abandoned case leaves the member on the automatic amount with
+/// no layer, and a partial acceptance is topped up or cut back as the salary moves, newest
+/// request first.
+/// Why it matters: the member's cover above the automatic amount must always be what
+/// underwriting accepted and no more than the formula gives. Each of these paths is a
+/// place where the two can drift apart.
+#[test]
+fn declined_abandoned_and_partial_decisions_keep_cover_within_the_formula() {
+    let (mut h, case) = with_executive(terms());
+    h.underwriting(case, ExcessDecision::Declined).unwrap();
+    assert_eq!(status(&h, case), CaseStatus::Declined);
+    assert!(h.excess_layers("E004").is_empty());
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverDecided { in_place: false, .. })));
+
+    // A pay rise asks again for the whole excess, now 250,000; underwriting accepts 100,000.
+    h.salary("f2", "E004", "executive", 250_000_00);
+    let second = h.requests[1].case;
+    assert_eq!(h.requests[1].excess_minor, 250_000_00);
+    h.underwriting(second, accept(100_000_00, None, false)).unwrap();
+    assert_eq!(h.excess_layers("E004"), vec![(100_000_00, None)]);
+
+    // Another rise: only the part not already held is asked for.
+    h.salary("f3", "E004", "executive", 300_000_00);
+    let third = h.requests[2].case;
+    assert_eq!(h.requests[2].excess_minor, 350_000_00);
+    assert_eq!(status(&h, third), CaseStatus::Requested);
+
+    // A cut to 200,000 leaves 50,000 above automatic: the open request is withdrawn, the
+    // 100,000 layer ends, and 50,000 is asked for afresh.
+    h.salary("f4", "E004", "executive", 200_000_00);
+    assert_eq!(status(&h, third), CaseStatus::NotProceeded);
+    assert_eq!(status(&h, second), CaseStatus::Ended);
+    assert_eq!(h.requests[3].excess_minor, 50_000_00);
+    let fourth = h.requests[3].case;
+    h.underwriting(fourth, ExcessDecision::NotProceeded).unwrap();
+    assert_eq!(status(&h, fourth), CaseStatus::NotProceeded);
+    assert!(h.excess_layers("E004").iter().all(|(_, end)| end.is_some()));
+}
+
+/// Purpose: on a scheme that itemises loadings, a loaded decision is refused without the
+/// member's recorded consent, and with it the core's layer is marked for itemising; on a
+/// scheme that bills loadings as one total, consent is not asked and nothing is itemised.
+/// Why it matters: a loaded premium on a member's own invoice line tells the employer
+/// that the member has a health condition. That may happen only with the member's consent.
+#[test]
+fn a_loading_is_itemised_to_the_employer_only_with_the_members_consent() {
+    let mut t = terms();
+    t.excess_loading = ExcessLoading::EmployerItemised;
+    let (mut h, case) = with_executive(t);
+    assert_eq!(code(h.underwriting(case, accept(210_000_00, Some("0.5"), false))), "consent_required");
+    assert_eq!(status(&h, case), CaseStatus::Requested);
+    h.underwriting(case, accept(210_000_00, Some("0.5"), true)).unwrap();
+    let itemised = |h: &Harness| {
+        h.c.state(h.p).policies[&h.policy]
+            .covers
+            .values()
+            .flat_map(|c| c.layers.iter())
+            .filter(|l| l.life == life("E004"))
+            .any(|l| l.loading_itemised)
+    };
+    assert!(itemised(&h));
+
+    let (mut h, case) = with_executive(terms());
+    h.underwriting(case, accept(210_000_00, Some("0.5"), true)).unwrap();
+    assert!(!itemised(&h), "consent alone does not itemise on a scheme that bills one total");
+}
+
+/// Purpose: when reinsurance says part of a member's automatic cover must be underwritten,
+/// the member's automatic cover is capped in the core from that day and the part above
+/// the cap goes to underwriting under reinsurance's reference.
+/// Why it matters: this is the group half of one life on two policies. Without the cap
+/// the insurer carries more on one life than its retention the moment a member turns out
+/// to hold a retail policy too.
+#[test]
+fn reinsurance_can_require_part_of_automatic_cover_to_be_underwritten() {
+    let (mut h, _) = with_executive(terms());
+    let cover = h.requests[0].cover.clone();
+    let require = |h: &mut Harness, policy: &ic_core::PolicyId, who: &str, cover: &str, excess_minor: i64| {
+        let r = h.send_as(
+            caller::REINSURANCE,
+            "reinsurance",
+            GroupCommand::RequireUnderwrittenExcess {
+                policy: policy.clone(),
+                life: life(who),
+                cover: cover.to_string(),
+                excess_minor,
+                reference: "ri-accum-7".into(),
+            },
+        );
+        h.settle();
+        r
+    };
+    let policy = h.policy.clone();
+    assert_eq!(code(require(&mut h, &ic_core::PolicyId("nope".into()), "E003", &cover, 1)), "unknown_policy");
+    assert_eq!(code(require(&mut h, &policy, "E999", &cover, 1)), "unknown_member");
+    assert_eq!(code(require(&mut h, &policy, "E003", "dental", 1)), "unknown_cover");
+    assert_eq!(code(require(&mut h, &policy, "E003", &cover, 0)), "invalid_amount");
+    assert_eq!(code(require(&mut h, &policy, "E003", &cover, 180_000_01)), "invalid_amount");
+
+    // E003 has 180,000 automatic. 80,000 of it must be underwritten.
+    require(&mut h, &policy, "E003", &cover, 80_000_00).unwrap();
+    assert_eq!(h.scheme().membership.active("E003").unwrap().auto_cap_minor, Some(100_000_00));
+    let cap_in_core = |h: &Harness| {
+        let core = &h.c.state(h.p).policies[&h.policy].lives[&life("E003")];
+        core.factors.as_of(h.today()).unwrap().auto_cover_cap_minor
+    };
+    assert_eq!(cap_in_core(&h), Some(100_000_00));
+    let request = h.requests.last().unwrap();
+    assert_eq!((request.life.clone(), request.excess_minor), (life("E003"), 80_000_00));
+    assert_eq!(request.reference.as_deref(), Some("ri-accum-7"));
+    h.underwriting(request.case, accept(80_000_00, None, false)).unwrap();
+    assert_eq!(h.excess_layers("E003"), vec![(80_000_00, None)]);
+    // A later salary change keeps the cap.
+    h.salary("f2", "E003", "staff", 95_000_00);
+    assert_eq!(cap_in_core(&h), Some(100_000_00));
+    assert_eq!(h.requests.last().unwrap().excess_minor, 10_000_00);
+}
+
+/// Purpose: a member who leaves loses the layer with the membership and any open request
+/// is dropped; put back after a removal in error, the layer is back as it was with no gap.
+/// Why it matters: runbook 3 (an employer file removed people in error) promises cover
+/// "as if they had never left". Underwritten cover is the part a member cannot get back
+/// by rejoining, because rejoining would mean underwriting again.
+#[test]
+fn a_layer_follows_the_member_out_and_back() {
+    let (mut h, case) = with_executive(terms());
+    h.underwriting(case, accept(210_000_00, None, false)).unwrap();
+    h.salary("f2", "E003", "executive", 200_000_00);
+    let open_request = h.requests.last().unwrap().case;
+    h.days(5);
+    let today = h.today();
+    h.apply(
+        "f3",
+        FileKind::Changes,
+        vec![
+            change(1, "E004", RowChange::Leave, today, attrs("executive", 240_000_00, "wlg")),
+            change(2, "E003", RowChange::Leave, today, attrs("executive", 200_000_00, "wlg")),
+        ],
+    );
+    assert_eq!(status(&h, case), CaseStatus::Ended);
+    assert_eq!(status(&h, open_request), CaseStatus::NotProceeded);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, Some(today))]);
+    assert!(h.scheme().offers.values().any(|o| o.employee_id == "E004"));
+
+    h.days(3);
+    let reinstate = |h: &mut Harness, ids: &[&str]| {
+        h.staff(GroupCommand::Reinstate {
+            scheme: SCHEME.into(),
+            employee_ids: ids.iter().map(|s| s.to_string()).collect(),
+            reason: "file f3 removed them in error".into(),
+        })
+    };
+    assert_eq!(code(reinstate(&mut h, &[])), "nothing_to_do");
+    assert_eq!(code(reinstate(&mut h, &["E004", "E001"])), "not_left");
+    reinstate(&mut h, &["E004"]).unwrap();
+    assert!(h.scheme().membership.active("E004").is_some());
+    assert_eq!(status(&h, case), CaseStatus::Accepted);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
+    assert!(h.core_lives().contains(&"E004".to_string()));
+    assert!(h.saw(|e| matches!(e, GroupEvent::MembersReinstated { count: 1, .. })));
+    assert!(h.saw(|e| matches!(e, GroupEvent::ContinuationExpired { .. })), "there is nothing to continue");
+    assert!(h.scheme().membership.active("E003").is_none());
+}
+
+/// Purpose: if the core refuses to write an accepted layer the case is closed as not in
+/// place and raised to staff; and a layer whose end is already due when the core accepts
+/// it is ended whichever of the core's answer and the core's event arrives first.
+/// Why it matters: "accepted" on the underwriter's screen with no layer in the core is a
+/// member who believes they are covered and is not, so it must be loud. And the order of
+/// answer and event is not guaranteed between two replicated groups.
+#[test]
+fn a_refused_layer_is_loud_and_a_due_ending_survives_either_order() {
+    let (mut h, case) = with_executive(terms());
+    h.core_faults.push_back(Some("exceeds_maximum".into()));
+    h.underwriting(case, accept(210_000_00, None, false)).unwrap();
+    assert_eq!(status(&h, case), CaseStatus::NotProceeded);
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverDecided { in_place: false, .. })));
+    assert!(h
+        .g
+        .exceptions
+        .values()
+        .any(|e| e.kind == ExceptionKind::RowRefused && e.subject == format!("case:{case}")));
+
+    for events_first in [false, true] {
+        let (mut h, case) = with_executive(terms());
+        h.days(10);
+        let today = h.today();
+        // A salary cut is on its way to the core when underwriting's acceptance arrives.
+        h.upload(
+            "f2",
+            FileKind::Changes,
+            vec![change(1, "E004", RowChange::Change, today, attrs("executive", 180_000_00, "wlg"))],
+        )
+        .unwrap();
+        let approve = GroupCommand::ApproveFile {
+            scheme: SCHEME.into(),
+            file: "f2".into(),
+        };
+        h.send_as(caller::EMPLOYER, "admin-bo", approve).unwrap();
+        h.send_as(
+            caller::UNDERWRITING,
+            "underwriter-di",
+            GroupCommand::RecordExcessDecision {
+                scheme: SCHEME.into(),
+                case,
+                decision: accept(210_000_00, None, false),
+            },
+        )
+        .unwrap();
+        assert_eq!(status(&h, case), CaseStatus::Writing);
+        if events_first {
+            h.core_events_before_answer();
+            assert_eq!(h.scheme().cases[&case].end_from, Some(today));
+            h.core_events_before_answer();
+        }
+        h.settle();
+        assert_eq!(status(&h, case), CaseStatus::Ended, "events first: {events_first}");
+        assert_eq!(h.excess_layers("E004"), vec![(210_000_00, Some(today))]);
+    }
+
+    // Ending a layer the core no longer has closes the case all the same.
+    let (mut h, case) = with_executive(terms());
+    h.underwriting(case, accept(210_000_00, None, false)).unwrap();
+    h.core_faults.push_back(None);
+    h.core_faults.push_back(Some("unknown_layer".into()));
+    h.salary("f2", "E004", "executive", 180_000_00);
+    assert_eq!(status(&h, case), CaseStatus::Ended);
+}
