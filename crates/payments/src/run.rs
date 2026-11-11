@@ -416,7 +416,7 @@ impl PaymentsState {
     /// What the account will hold once everything already on its way has
     /// passed through: the last statement, what has settled since, and what
     /// is with the bank.
-    pub(crate) fn available(&self, account: &str) -> Option<i64> {
+    pub fn available(&self, account: &str) -> Option<i64> {
         let book = self.books.get(account)?;
         book.statement_date?;
         let settled: i64 = book.expected.values().map(|e| e.amount_minor).sum();
@@ -770,11 +770,6 @@ impl PaymentsState {
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }
-            if let (true, Counterparty::Authority(a)) = (inbound, &n.counterparty) {
-                if let Some(authority) = self.authorities.get_mut(a) {
-                    authority.dishonours = 0;
-                }
-            }
             if let Some(policy) = n.policy.clone() {
                 let amount = Money::new(n.amount_minor, currency);
                 let (caller, command) = match n.payable {
@@ -857,6 +852,10 @@ impl PaymentsState {
             item.status = ItemStatus::Returned(reason.clone());
         }
         self.free_item(&n);
+        // A second presentment that came back is the end of it.
+        if let Some(first) = &n.represents {
+            self.represent.remove(first);
+        }
         if was_settled {
             // The core heard it settle, so the core hears it come back, and
             // the statement will show the money moving the other way.
@@ -963,6 +962,22 @@ impl PaymentsState {
                 "run_not_finished",
                 format!("item {item} is neither settled, returned nor rejected"),
             ));
+        }
+        // A collection that is still settled when its run closes was
+        // honoured: the authority's run of dishonours is over.
+        let honoured: Vec<Id> = run
+            .items
+            .values()
+            .filter(|i| run.run_type.inbound() && i.status == ItemStatus::Settled)
+            .filter_map(|i| match &i.new.counterparty {
+                Counterparty::Authority(a) => Some(a.clone()),
+                Counterparty::Payee(_) => None,
+            })
+            .collect();
+        for a in honoured {
+            if let Some(authority) = self.authorities.get_mut(&a) {
+                authority.dishonours = 0;
+            }
         }
         if let Some(run) = self.runs.get_mut(id) {
             run.status = RunStatus::Closed;

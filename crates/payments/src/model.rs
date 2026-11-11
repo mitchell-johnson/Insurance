@@ -85,7 +85,8 @@ pub struct Authority {
     pub status: AuthorityStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Dishonours in a row. A settled collection resets it.
+    /// Dishonours in a row. A collection still settled when its run closes
+    /// resets it.
     pub dishonours: u32,
 }
 
