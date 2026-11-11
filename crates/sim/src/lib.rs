@@ -277,15 +277,8 @@ impl<L: OrderedLog> Cluster<L> {
                 }
                 // A scheme invoice still being built, or a policy catching up
                 // several periods, needs another step.
-                let state = self.state(p);
-                todo.retain(|id| {
-                    state.policies.get(id).is_some_and(|pol| {
-                        pol.status == ic_core::PolicyStatus::InForce
-                            && !pol.is_frozen()
-                            && (pol.pending_invoice.is_some()
-                                || ic_product::schedule::period_start(pol.inception, pol.frequency, pol.periods_billed).is_some_and(|s| s <= next))
-                    })
-                });
+                let unfinished = self.state(p).end_of_day_unfinished();
+                todo.retain(|id| unfinished.contains(id));
                 if todo.is_empty() {
                     break;
                 }

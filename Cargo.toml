@@ -11,6 +11,7 @@ members = [
     "crates/sim",
     "crates/azure",
     "crates/api",
+    "crates/raft",
 ]
 
 [workspace.package]
@@ -30,6 +31,7 @@ ic-readmodel = { path = "crates/readmodel" }
 ic-cashmatch = { path = "crates/cashmatch" }
 ic-sim = { path = "crates/sim" }
 ic-azure = { path = "crates/azure" }
+ic-raft = { path = "crates/raft" }
 
 fastnum = { version = "=0.7.5", features = ["serde"] }
 starlark = "=0.14.2"
@@ -68,3 +70,10 @@ too_many_arguments = "allow"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Smaller, faster debug builds: line numbers for backtraces, nothing more.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"

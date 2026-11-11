@@ -145,6 +145,17 @@ pub struct CoreState {
     idempotency: BTreeMap<String, StoredResult>,
     /// Transfers this partition has already landed or refused.
     pub(crate) transfers_seen: BTreeSet<String>,
+    /// The last day the cutoff closed, with the ledger head at that moment.
+    /// The end-of-day orchestration reads it to build the day's Merkle root,
+    /// however many times it has to retry.
+    pub last_close: Option<ClosedDay>,
+}
+
+/// A closed business day and the head of the ledger chain when it closed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClosedDay {
+    pub date: NaiveDate,
+    pub closing_head: Hash32,
 }
 
 impl CoreState {
@@ -158,6 +169,7 @@ impl CoreState {
             next_event_seq: 1,
             idempotency: BTreeMap::new(),
             transfers_seen: BTreeSet::new(),
+            last_close: None,
         }
     }
 
@@ -179,6 +191,7 @@ impl CoreState {
             self.next_event_seq,
             &self.idempotency,
             &self.transfers_seen,
+            &self.last_close,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -192,6 +205,25 @@ impl CoreState {
         self.policies
             .values()
             .filter(|p| matches!(p.status, PolicyStatus::InForce | PolicyStatus::Lapsed))
+            .map(|p| p.id.clone())
+            .collect()
+    }
+
+    /// Policies the current day's end-of-day run has not finished with: a
+    /// scheme invoice still being built, or a policy with a period still to
+    /// bill. Empty once the run is complete.
+    pub fn end_of_day_unfinished(&self) -> Vec<PolicyId> {
+        let Some(today) = self.business_date else {
+            return vec![];
+        };
+        self.policies
+            .values()
+            .filter(|p| {
+                p.status == PolicyStatus::InForce
+                    && !p.is_frozen()
+                    && (p.pending_invoice.is_some()
+                        || ic_product::schedule::period_start(p.inception, p.frequency, p.periods_billed).is_some_and(|s| s <= today))
+            })
             .map(|p| p.id.clone())
             .collect()
     }
@@ -242,10 +274,12 @@ impl CoreState {
                     ));
                 }
                 self.business_date = Some(to);
+                let closing_head = self.ledger.head();
+                self.last_close = Some(ClosedDay { date: from, closing_head });
                 ctx.emit(Event::BusinessDateAdvanced {
                     from: Some(from),
                     to,
-                    closing_head: self.ledger.head(),
+                    closing_head,
                 });
                 Ok(())
             }
