@@ -29,8 +29,8 @@ rand.workspace = true
 sha2.workspace = true
 
 [[bin]]
-name = "ic-node"
-path = "src/bin/ic-node.rs"
+name = "ic-core-node"
+path = "src/bin/ic-core-node.rs"
 
 [dev-dependencies]
 ic-azure = { workspace = true, features = ["testing"] }

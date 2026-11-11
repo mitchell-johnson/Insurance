@@ -1962,6 +1962,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-node"
+version = "0.1.0"
+dependencies = [
+ "ic-channels",
+ "ic-raft",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ic-payments"
 version = "0.1.0"
 dependencies = [
