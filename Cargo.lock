@@ -1876,6 +1876,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-group"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-readmodel",
+ "ic-sim",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-ledger"
 version = "0.1.0"
 dependencies = [
