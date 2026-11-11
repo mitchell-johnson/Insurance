@@ -35,12 +35,11 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
             .map(|(kind, purpose)| trigger(record, policy, kind, Some(purpose)))
             .into_iter()
             .collect(),
-        Event::PolicyStatusChanged { policy, to, .. } => match to {
-            PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured => {
-                vec![trigger(record, policy, DocumentKind::GeneralCorrespondence, None)]
-            }
-            _ => vec![],
-        },
+        Event::PolicyStatusChanged {
+            policy,
+            to: PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured,
+            ..
+        } => vec![trigger(record, policy, DocumentKind::GeneralCorrespondence, None)],
         Event::ReceiptApplied { policy, .. } => vec![trigger(record, policy, DocumentKind::PremiumReceipt, None)],
         _ => vec![],
     }
