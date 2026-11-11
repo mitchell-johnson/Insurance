@@ -192,10 +192,16 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 d.identity
                     .check_proof_hashed(party, &p.device, &p.proof, at, &p.method, &p.path, &p.body_sha256)
             });
+            // A device that was enrolled to this person and no longer is must wipe what it holds.
+            let revoked = device
+                .as_ref()
+                .and_then(|p| d.identity.devices.get(&p.device))
+                .is_some_and(|known| &known.party == party && known.revoked.is_some());
             json!({
                 "known": true,
                 "party": party,
                 "valid": valid,
+                "device_revoked": revoked,
                 "assurance": if proved { Assurance::Device } else { Assurance::Token },
                 "device": device.filter(|_| proved).map(|p| p.device),
                 "staff": !d.staff.templates_of(party, at).is_empty(),
@@ -284,7 +290,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             purpose,
             at,
         } => {
-            let (request, decision) = staff_check(
+            let (request, mut decision) = staff_check(
                 state,
                 &staff,
                 "policy.view",
@@ -294,6 +300,18 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 purpose,
                 at,
             );
+            // Nobody handles their own policy or that of someone they are
+            // connected to, whatever their role and path say.
+            let on = state.today(at);
+            let related = |who: &PartyId| !d.directory.relationships(&d.view, who, &policy, on).is_empty();
+            let is_staff = decision.denied != Some(crate::staff::Denial::NotStaff);
+            if is_staff && (related(&staff) || d.staff.connections.get(&staff).is_some_and(|c| c.iter().any(related))) {
+                decision = crate::staff::Decision {
+                    allowed: false,
+                    denied: Some(crate::staff::Denial::Personal),
+                    ..decision
+                };
+            }
             if !decision.allowed {
                 return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }

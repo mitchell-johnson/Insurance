@@ -307,3 +307,69 @@ fn a_challenge_for_a_device_since_revoked_is_refused() {
     };
     assert_eq!(code(s.apply(T0 + 2, redeem)), "unknown_device");
 }
+
+/// Purpose: a person with a device cannot be given another by verification alone; a recovery after fresh verification enrols the new device,
+/// revokes every device they had, cancels challenges in flight and closes their sessions.
+/// Why it matters: a lost or stolen phone that stayed enrolled beside its replacement could still read offline data and sign changes.
+/// Recovery has to end the old device in the same step that starts the new one.
+#[test]
+fn a_lost_phone_is_recovered_by_fresh_verification() {
+    let (mut s, old_key) = enrolled();
+    let hash = action_hash(&serde_json::json!({ "kind": "x" }));
+    s.apply(T0, issue("c1", "phone", &hash, 60)).unwrap();
+    let new_key = Key::new();
+
+    assert_eq!(code(s.apply(T0 + 1, enrol("new", "kiri", &new_key, verified()))), "already_enrolled");
+    let blank = Enrolment::Recovery { reference: " ".into() };
+    assert_eq!(code(s.apply(T0 + 1, enrol("new", "kiri", &new_key, blank))), "unverified");
+
+    let recovery = Enrolment::Recovery { reference: "idv-2".into() };
+    let events = s.apply(T0 + 10, enrol("new", "kiri", &new_key, recovery)).unwrap();
+    assert_eq!(
+        events,
+        vec![
+            IdentityEvent::DeviceRevoked {
+                device: "phone".into(),
+                party: p("kiri")
+            },
+            IdentityEvent::SessionsRevoked { party: p("kiri") },
+            IdentityEvent::DeviceEnrolled {
+                device: "new".into(),
+                party: p("kiri")
+            },
+        ]
+    );
+    assert!(s.active_device("phone", &p("kiri")).is_none());
+    assert!(s.active_device("new", &p("kiri")).is_some());
+    assert!(s.challenges.is_empty());
+    assert!(!s.session_valid(&p("kiri"), T0 + 10));
+    assert!(s.session_valid(&p("kiri"), T0 + 11));
+    // The old key proves nothing any more; the new one does.
+    let message = proof_message(T0 + 12, "GET", "/app/v1/sync", b"");
+    assert!(!s.check_proof(
+        &p("kiri"),
+        "phone",
+        &format!("{}.{}", T0 + 12, old_key.sign(&message)),
+        T0 + 12,
+        "GET",
+        "/app/v1/sync",
+        b""
+    ));
+    assert!(s.check_proof(
+        &p("kiri"),
+        "new",
+        &format!("{}.{}", T0 + 12, new_key.sign(&message)),
+        T0 + 12,
+        "GET",
+        "/app/v1/sync",
+        b""
+    ));
+
+    // Someone with no device left is simply verified again, and a recovery with nothing to revoke is an ordinary enrolment.
+    s.apply(T0 + 20, IdentityCommand::RevokeDevice { device: "new".into() }).unwrap();
+    s.apply(T0 + 21, enrol("third", "kiri", &Key::new(), verified())).unwrap();
+    let events = s
+        .apply(T0 + 22, enrol("first", "moana", &Key::new(), Enrolment::Recovery { reference: "idv-3".into() }))
+        .unwrap();
+    assert_eq!(events.len(), 2);
+}

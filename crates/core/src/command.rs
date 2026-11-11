@@ -345,6 +345,10 @@ pub enum Command {
         policy: PolicyId,
         transfer_id: String,
     },
+
+    // --- counterparties: commission payees, reinsurers, employers, debtors ---
+    /// Post one balanced entry to counterparty accounts on this partition.
+    PostCounterparty(Box<crate::counterparty::CounterpartyPosting>),
 }
 
 impl Command {
@@ -377,6 +381,7 @@ impl Command {
                 &["payments"]
             }
             Command::BeginTransfer { .. } | Command::LandTransfer { .. } | Command::CompleteTransfer { .. } | Command::AbortTransfer { .. } => &["transfer"],
+            Command::PostCounterparty(_) => &["distribution", "counterparty-finance"],
         }
     }
 
@@ -417,6 +422,7 @@ impl Command {
             Command::LandTransfer { .. } => "land_transfer",
             Command::CompleteTransfer { .. } => "complete_transfer",
             Command::AbortTransfer { .. } => "abort_transfer",
+            Command::PostCounterparty(_) => "post_counterparty",
         }
     }
 }
