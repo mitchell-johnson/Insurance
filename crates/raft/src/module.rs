@@ -12,16 +12,26 @@
 //! questions as JSON and can save and load itself. [`hosted`] wraps any
 //! [`ic_log::StateMachine`] that serialises, which is what the modules are.
 //!
+//! A module that reads the core's events says so, and the host feeds it:
+//! the module group's leader fetches each partition's events after the
+//! group's own checkpoint and proposes them through the group's log, so every
+//! member sees each event once, in sequence, and the checkpoint is part of
+//! the replicated state. Each partition keeps its events until every module
+//! that reads them has them.
+//!
 //! Delivery is at least once, as it is for a partition: a caller that does
 //! not hear back offers the command again. A module's commands therefore
 //! carry their own idempotency key and the module answers a repeat with the
 //! original result.
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use futures::{Stream, TryStreamExt};
+use ic_core::EventRecord;
+use ic_ledger::PartitionId;
 use ic_log::StateMachine;
 use openraft::alias::{LogIdOf, SnapshotMetaOf, SnapshotOf, StoredMembershipOf};
 use openraft::async_runtime::WatchReceiver;
@@ -53,6 +63,10 @@ pub trait ModuleState: Send + 'static {
     /// Apply the command at log index `index`. `Err` is a refusal: the
     /// command was understood to be wrong and the state is unchanged.
     fn apply(&mut self, index: u64, command: Value) -> Result<Value, String>;
+    /// Take in one event of a partition. Called once for each event, in
+    /// the partition's sequence, on every member. A module that reads no
+    /// events leaves this as it is.
+    fn on_event(&mut self, _index: u64, _event: &EventRecord) {}
     /// Answer a question from the state as it stands. Never changes it.
     fn query(&self, question: Value) -> Result<Value, String>;
     /// The whole state, for a snapshot and for the state hash.
@@ -61,9 +75,11 @@ pub trait ModuleState: Send + 'static {
     fn load(&mut self, saved: Value) -> Result<(), String>;
 }
 
-struct Hosted<S> {
+struct Hosted<S: StateMachine> {
     state: S,
     query: fn(&S, Value) -> Result<Value, String>,
+    /// The commands an event becomes, if the module reads events.
+    react: Option<fn(&EventRecord) -> Vec<S::Command>>,
 }
 
 impl<S> ModuleState for Hosted<S>
@@ -74,6 +90,12 @@ where
     fn apply(&mut self, index: u64, command: Value) -> Result<Value, String> {
         let command: S::Command = serde_json::from_value(command).map_err(|e| format!("not a command of this module: {e}"))?;
         serde_json::to_value(self.state.apply(index, command)).map_err(|e| e.to_string())
+    }
+
+    fn on_event(&mut self, index: u64, event: &EventRecord) {
+        for command in self.react.map(|react| react(event)).unwrap_or_default() {
+            self.state.apply(index, command);
+        }
     }
 
     fn query(&self, question: Value) -> Result<Value, String> {
@@ -98,7 +120,24 @@ where
     S: StateMachine + Serialize + DeserializeOwned + Send + 'static,
     S::Output: Serialize,
 {
-    Box::new(Hosted { state, query })
+    Box::new(Hosted { state, query, react: None })
+}
+
+/// As [`hosted`], for a module that reads the core's events. `react` turns
+/// an event into the module's own commands, which are applied in order. It
+/// must be a pure function of the event. Declare the module with
+/// [`ModuleSpec::reading_events`] so the host feeds it.
+pub fn hosted_reading<S>(state: S, query: fn(&S, Value) -> Result<Value, String>, react: fn(&EventRecord) -> Vec<S::Command>) -> Box<dyn ModuleState>
+where
+    S: StateMachine + Serialize + DeserializeOwned + Send + 'static,
+    S::Output: Serialize,
+    S::Command: 'static,
+{
+    Box::new(Hosted {
+        state,
+        query,
+        react: Some(react),
+    })
 }
 
 /// A module a node hosts: its name and how to make its empty state.
@@ -108,6 +147,9 @@ pub struct ModuleSpec {
     /// directory on disk and its routes, so it never changes.
     pub name: String,
     pub make: fn() -> Box<dyn ModuleState>,
+    /// The module reads every partition's events: the host feeds them to
+    /// its group and each partition keeps them until the group has them.
+    pub events: bool,
 }
 
 impl ModuleSpec {
@@ -116,7 +158,17 @@ impl ModuleSpec {
         if !valid {
             return Err(format!("a module's name is lower-case letters, digits and hyphens, not {name:?}"));
         }
-        Ok(Self { name: name.to_string(), make })
+        Ok(Self {
+            name: name.to_string(),
+            make,
+            events: false,
+        })
+    }
+
+    /// Feed this module every partition's events.
+    pub fn reading_events(mut self) -> Self {
+        self.events = true;
+        self
     }
 }
 
@@ -146,6 +198,9 @@ pub struct ModuleStatus {
     pub voters: Vec<NodeId>,
     /// The first log entry still held; earlier ones are behind a snapshot.
     pub first_log_index: Option<u64>,
+    /// The last event taken in from each partition.
+    #[serde(default)]
+    pub cursors: BTreeMap<PartitionId, u64>,
 }
 
 /// A snapshot of a module's group, as written to disk and sent to a member
@@ -156,6 +211,17 @@ struct Saved {
     last_applied: Option<LogIdOf<TypeConfig>>,
     membership: StoredMembershipOf<TypeConfig>,
     state: Value,
+    /// The last event taken in from each partition.
+    #[serde(default)]
+    cursors: BTreeMap<PartitionId, u64>,
+}
+
+/// What a snapshot restores.
+struct Restored {
+    state: Box<dyn ModuleState>,
+    last_applied: Option<LogIdOf<TypeConfig>>,
+    membership: StoredMembershipOf<TypeConfig>,
+    cursors: BTreeMap<PartitionId, u64>,
 }
 
 struct Inner {
@@ -163,6 +229,7 @@ struct Inner {
     state: Box<dyn ModuleState>,
     last_applied: Option<LogIdOf<TypeConfig>>,
     membership: StoredMembershipOf<TypeConfig>,
+    cursors: BTreeMap<PartitionId, u64>,
     dir: PathBuf,
 }
 
@@ -196,7 +263,7 @@ fn read_snapshot(dir: &Path) -> io::Result<Option<(Vec<u8>, Saved)>> {
 }
 
 /// Make the module's state from a snapshot, refusing another module's.
-fn restore(spec: &ModuleSpec, saved: Saved) -> io::Result<(Box<dyn ModuleState>, Option<LogIdOf<TypeConfig>>, StoredMembershipOf<TypeConfig>)> {
+fn restore(spec: &ModuleSpec, saved: Saved) -> io::Result<Restored> {
     if saved.module != spec.name {
         return Err(invalid(format!("the snapshot is of module {}, not {}", saved.module, spec.name)));
     }
@@ -204,7 +271,43 @@ fn restore(spec: &ModuleSpec, saved: Saved) -> io::Result<(Box<dyn ModuleState>,
     state
         .load(saved.state)
         .map_err(|e| invalid(format!("module {} cannot load its snapshot: {e}", spec.name)))?;
-    Ok((state, saved.last_applied, saved.membership))
+    Ok(Restored {
+        state,
+        last_applied: saved.last_applied,
+        membership: saved.membership,
+        cursors: saved.cursors,
+    })
+}
+
+impl Inner {
+    /// Take in a run of a partition's events. Events already taken in are
+    /// passed over, so a run offered twice counts once. A run that would
+    /// leave a gap is refused whole: the feeder asks again from the
+    /// checkpoint. The first run from a partition sets where it starts.
+    fn feed(&mut self, index: u64, partition: PartitionId, after: u64, events: &[EventRecord]) -> Result<Value, String> {
+        let mut cursor = *self.cursors.get(&partition).unwrap_or(&after);
+        if after > cursor {
+            return Err(format!(
+                "events of partition {partition} after {after} would leave a gap: this group has them through {cursor}"
+            ));
+        }
+        let mut expected = after;
+        for event in events {
+            expected += 1;
+            if event.partition != partition || event.seq != expected {
+                return Err(format!(
+                    "event {} is not number {expected} of partition {partition}: the run is not in sequence",
+                    event.id
+                ));
+            }
+        }
+        for event in events.iter().filter(|e| e.seq > cursor) {
+            self.state.on_event(index, event);
+        }
+        cursor = cursor.max(expected);
+        self.cursors.insert(partition, cursor);
+        Ok(serde_json::json!({ "through": cursor }))
+    }
 }
 
 impl ModuleMachine {
@@ -213,16 +316,22 @@ impl ModuleMachine {
     pub fn open(spec: ModuleSpec, dir: impl AsRef<Path>) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
         std::fs::create_dir_all(&dir)?;
-        let (state, last_applied, membership) = match read_snapshot(&dir)? {
+        let restored = match read_snapshot(&dir)? {
             Some((_, saved)) => restore(&spec, saved)?,
-            None => ((spec.make)(), None, StoredMembershipOf::<TypeConfig>::default()),
+            None => Restored {
+                state: (spec.make)(),
+                last_applied: None,
+                membership: StoredMembershipOf::<TypeConfig>::default(),
+                cursors: BTreeMap::new(),
+            },
         };
         Ok(Self {
             inner: Arc::new(Mutex::new(Inner {
                 spec,
-                state,
-                last_applied,
-                membership,
+                state: restored.state,
+                last_applied: restored.last_applied,
+                membership: restored.membership,
+                cursors: restored.cursors,
                 dir,
             })),
         })
@@ -242,9 +351,17 @@ impl ModuleMachine {
         self.lock().last_applied.as_ref().map(|l| l.index())
     }
 
-    /// Hash of the saved state, in hex.
+    /// The last event taken in from each partition.
+    pub fn cursors(&self) -> BTreeMap<PartitionId, u64> {
+        self.lock().cursors.clone()
+    }
+
+    /// Hash of the saved state and the event checkpoints, in hex.
     pub fn state_hash(&self) -> String {
-        let saved = self.lock().state.save();
+        let saved = {
+            let inner = self.lock();
+            inner.state.save().map(|state| (state, inner.cursors.clone()))
+        };
         // A state that cannot be saved has no hash to agree on; say so in
         // the place the hashes are compared.
         let bytes = match saved.and_then(|v| serde_json::to_vec(&v).map_err(|e| e.to_string())) {
@@ -261,6 +378,7 @@ impl ModuleMachine {
             last_applied: inner.last_applied,
             membership: inner.membership.clone(),
             state: inner.state.save().map_err(invalid)?,
+            cursors: inner.cursors.clone(),
         };
         Ok((saved, inner.dir.clone()))
     }
@@ -313,6 +431,11 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
                         module: Some(inner.state.apply(log_index, command)),
                         ..Reply::default()
                     },
+                    EntryPayload::Normal(Proposal::Feed { partition, after, events }) => Reply {
+                        log_index,
+                        module: Some(inner.feed(log_index, partition, after, &events)),
+                        ..Reply::default()
+                    },
                     // A partition's entry has no meaning to a module. The
                     // node never proposes one here; a log that holds one is
                     // applied the same way by every member: as nothing.
@@ -343,11 +466,12 @@ impl RaftStateMachine<TypeConfig> for ModuleMachine {
         let mut inner = self.lock();
         // Build the new state apart, write it to disk, then switch: a
         // snapshot that cannot be loaded leaves this member as it was.
-        let (state, last_applied, membership) = restore(&inner.spec, saved)?;
+        let restored = restore(&inner.spec, saved)?;
         write_atomic(&inner.dir.join(SNAPSHOT_FILE), &snapshot)?;
-        inner.state = state;
-        inner.last_applied = last_applied;
-        inner.membership = membership;
+        inner.state = restored.state;
+        inner.last_applied = restored.last_applied;
+        inner.membership = restored.membership;
+        inner.cursors = restored.cursors;
         tracing::info!(module = %inner.spec.name, through = ?meta.last_log_id.map(|l| l.index()), bytes = snapshot.len(), "module snapshot installed from the leader");
         Ok(())
     }
@@ -395,7 +519,7 @@ impl ModuleGroup {
     }
 
     /// Form a new group. Calling it on a group that already exists changes nothing.
-    pub async fn initialize(&self, members: std::collections::BTreeMap<NodeId, BasicNode>) -> Result<(), String> {
+    pub async fn initialize(&self, members: BTreeMap<NodeId, BasicNode>) -> Result<(), String> {
         if self.raft.is_initialized().await.map_err(|e| e.to_string())? {
             return Ok(());
         }
@@ -412,6 +536,15 @@ impl ModuleGroup {
         })
     }
 
+    /// Replicate a run of a partition's events and take them in. `after`
+    /// is the sequence number the run follows. Returns how far the group
+    /// then has that partition's events.
+    pub async fn feed(&self, partition: PartitionId, after: u64, events: Vec<EventRecord>) -> Result<Result<u64, String>, ProposeError> {
+        let reply = group::write(&self.raft, Proposal::Feed { partition, after, events }).await?;
+        let taken = reply.module.unwrap_or_else(|| Err("the group did not take in the events".to_string()));
+        Ok(taken.map(|v| v["through"].as_u64().unwrap_or(after)))
+    }
+
     /// Confirm with a majority that this member still leads, then answer.
     /// A deposed leader therefore never answers from a stale state.
     pub async fn query(&self, question: Value) -> Result<Result<Value, String>, ProposeError> {
@@ -425,7 +558,7 @@ impl ModuleGroup {
     }
 
     /// Change who the group's voters are. See [`crate::Node::set_members`].
-    pub async fn set_members(&self, members: std::collections::BTreeMap<NodeId, String>) -> Result<(), ProposeError> {
+    pub async fn set_members(&self, members: BTreeMap<NodeId, String>) -> Result<(), ProposeError> {
         group::set_members(&self.raft, members).await
     }
 
@@ -446,6 +579,7 @@ impl ModuleGroup {
             state_hash: self.machine.state_hash(),
             voters: self.raft.voter_ids().collect(),
             first_log_index: self.log.first_index(),
+            cursors: self.machine.cursors(),
         }
     }
 

@@ -7,12 +7,17 @@ mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use common::scratch;
+use common::{d, scratch, start_date};
+use ic_core::{Command, Envelope, EventRecord};
 use ic_log::StateMachine;
+use ic_product::{Frequency, Sex};
+use ic_raft::client::fresh_salt;
 use ic_raft::client::ClientError;
 use ic_raft::module::{ModuleMachine, ModuleStatus};
 use ic_raft::server::{self, ColdTarget, EventTarget, Running, Settings};
-use ic_raft::{hosted, ClusterAuth, ClusterClient, ModuleSpec, ModuleState, NodeId, Proposal};
+use ic_raft::{hosted, hosted_reading, ClusterAuth, ClusterClient, ModuleSpec, ModuleState, NodeId, Proposal};
+use ic_sim::config::shipped_activations;
+use ic_sim::persona::{issue_command, term_life};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -59,6 +64,51 @@ fn tally() -> Box<dyn ModuleState> {
 
 fn other() -> Box<dyn ModuleState> {
     hosted(Tally::default(), ask)
+}
+
+/// A module that reads the core's events and keeps the sequence numbers it
+/// was shown, in the order it was shown them.
+#[derive(Default, Serialize, Deserialize)]
+struct Watch {
+    seen: BTreeMap<u16, Vec<u64>>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Seen {
+    partition: u16,
+    seq: u64,
+}
+
+impl StateMachine for Watch {
+    type Command = Seen;
+    type Output = ();
+
+    fn apply(&mut self, _index: u64, seen: Seen) {
+        self.seen.entry(seen.partition).or_default().push(seen.seq);
+    }
+}
+
+fn shown(watch: &Watch, question: Value) -> Result<Value, String> {
+    let partition = question["partition"].as_u64().ok_or("ask for a partition")?;
+    Ok(json!(watch.seen.get(&(partition as u16)).cloned().unwrap_or_default()))
+}
+
+fn react(event: &EventRecord) -> Vec<Seen> {
+    vec![Seen {
+        partition: event.partition,
+        seq: event.seq,
+    }]
+}
+
+fn watch() -> Box<dyn ModuleState> {
+    hosted_reading(Watch::default(), shown, react)
+}
+
+fn specs() -> Vec<ModuleSpec> {
+    vec![
+        ModuleSpec::new("tally", tally).unwrap(),
+        ModuleSpec::new("watch", watch).unwrap().reading_events(),
+    ]
 }
 
 struct Cluster {
@@ -115,8 +165,7 @@ impl Cluster {
     }
 
     async fn boot(&mut self, id: NodeId) {
-        let modules = vec![ModuleSpec::new("tally", tally).unwrap()];
-        self.running.insert(id, server::start_with(self.settings(id), modules).await.unwrap());
+        self.running.insert(id, server::start_with(self.settings(id), specs()).await.unwrap());
     }
 
     async fn kill(&mut self, id: NodeId) {
@@ -144,6 +193,71 @@ impl Cluster {
 
     async fn status(&self, id: NodeId) -> ModuleStatus {
         self.client.module_status(&self.peers[&id]).await.unwrap().remove(0)
+    }
+
+    async fn watch_status(&self, id: NodeId) -> ModuleStatus {
+        self.client.module_status(&self.peers[&id]).await.unwrap().remove(1)
+    }
+
+    /// Run a command on partition 0 and insist it was accepted.
+    async fn run(&self, key: &str, caller: &str, command: Command) {
+        let envelope = Envelope {
+            key: key.to_string(),
+            caller: caller.to_string(),
+            salt: fresh_salt(),
+            traceparent: None,
+            command,
+        };
+        let reply = self.client.propose_until(0, &envelope, Duration::from_secs(30)).await.unwrap();
+        assert_eq!(reply.rejected, None);
+    }
+
+    async fn issue(&self, n: u64) {
+        let application = term_life(n, start_date(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+        self.run(&format!("issue-{n}"), "new-business", issue_command(application)).await;
+    }
+
+    /// The partition's last event number and how many events its leader still holds.
+    async fn partition_events(&self) -> (u64, u64) {
+        for _ in 0..100 {
+            for id in self.running.keys() {
+                let status = self.client.status(&self.peers[id]).await.unwrap().remove(0);
+                if status.role == "leader" {
+                    let last = self.running[id].host.groups[&0].machine.read(|s| s.last_event_seq());
+                    return (last, status.backlog.events);
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("partition 0 elected no leader");
+    }
+
+    /// What the watching module was shown of partition 0, once it has
+    /// been shown everything up to `last`.
+    async fn watched(&self, last: u64) -> Vec<u64> {
+        let mut seen = Vec::new();
+        for _ in 0..300 {
+            if let Ok(Ok(answer)) = self.client.query_module("watch", &json!({ "partition": 0 })).await {
+                seen = serde_json::from_value(answer).unwrap();
+                if seen.last() == Some(&last) {
+                    return seen;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the module was not shown events through {last}; it has {:?}", seen.last());
+    }
+
+    async fn watch_leader(&self) -> NodeId {
+        for _ in 0..100 {
+            for id in self.running.keys() {
+                if self.watch_status(*id).await.role == "leader" {
+                    return *id;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        panic!("the watching module's group elected no leader");
     }
 
     async fn leader(&self) -> NodeId {
@@ -407,4 +521,138 @@ async fn a_module_refuses_state_that_is_not_its_own() {
     assert!(opened.query(json!({ "account": "x" })).unwrap().as_i64().unwrap() >= 5);
     assert!(opened.last_applied_index().is_some());
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Purpose: a module that reads the core's events is shown every event of a partition
+/// exactly once and in sequence, on every member, including across the loss of the node
+/// feeding it; the partition keeps its events until the module has them and lets them go
+/// afterwards; a reader outside the cluster can register, read from its own checkpoint,
+/// acknowledge and unsubscribe; and a run of events that would leave a gap, is out of
+/// sequence or belongs to another partition is refused whole.
+/// Why it matters: commission, reinsurance accumulation and the finance ledger are built
+/// from these events. One event missed is a premium with no cession or a sale with no
+/// commission; one event seen twice is the same money counted twice. Neither would show
+/// up as an error anywhere, only as balances that drift from the ledger.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_module_is_shown_every_event_once_and_in_order() {
+    let mut cluster = Cluster::start("module-events", 1000).await;
+    cluster.run("open", "leader", Command::OpenBusinessDate { date: start_date() }).await;
+    for (n, activation) in shipped_activations().unwrap().into_iter().enumerate() {
+        cluster.run(&format!("activate-{n}"), "config", activation).await;
+    }
+    for n in 1..=5 {
+        cluster.issue(n).await;
+    }
+    let (last, _) = cluster.partition_events().await;
+    assert!(last >= 5, "five policies were issued and {last} events produced");
+    let everything = |last: u64| (1..=last).collect::<Vec<u64>>();
+    assert_eq!(cluster.watched(last).await, everything(last));
+
+    // The node feeding the module is lost part-way through more work.
+    let feeder = cluster.watch_leader().await;
+    cluster.issue(6).await;
+    cluster.kill(feeder).await;
+    for n in 7..=10 {
+        cluster.issue(n).await;
+    }
+    let (last, _) = cluster.partition_events().await;
+    assert_eq!(
+        cluster.watched(last).await,
+        everything(last),
+        "an event was missed or shown twice across the loss of the feeder"
+    );
+    cluster.boot(feeder).await;
+
+    // Every member of the module's group holds the same checkpoint and state.
+    let mut level = false;
+    for _ in 0..300 {
+        let (a, b, c) = (cluster.watch_status(1).await, cluster.watch_status(2).await, cluster.watch_status(3).await);
+        if a.state_hash == b.state_hash && b.state_hash == c.state_hash && a.cursors.get(&0) == Some(&last) {
+            level = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(level, "the module's members did not come level at event {last}");
+    // Once the module has acknowledged them, the partition holds no events back.
+    let mut released = false;
+    for _ in 0..100 {
+        if cluster.partition_events().await.1 == 0 {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(released, "the partition still holds events the module has acknowledged");
+
+    // A reader outside the cluster. Registering makes the partition keep events for it.
+    let client = &cluster.client;
+    assert_eq!(client.events(0, "outside", None, 10).await.unwrap().acknowledged, None);
+    client.acknowledge_events(0, "outside", 0).await.unwrap();
+    let registered = client.events(0, "outside", None, 10).await.unwrap();
+    assert_eq!((registered.after, registered.acknowledged, registered.events.len()), (last, Some(last), 0));
+    cluster.issue(11).await;
+    let (newest, _) = cluster.partition_events().await;
+    cluster.watched(newest).await;
+    let page = client.events(0, "outside", None, 500).await.unwrap();
+    assert_eq!(page.events.iter().map(|e| e.seq).collect::<Vec<_>>(), ((last + 1)..=newest).collect::<Vec<_>>());
+    assert_eq!(client.events(0, "outside", Some(newest - 1), 500).await.unwrap().events.len(), 1);
+    assert_eq!(client.events(0, "outside", Some(last), 1).await.unwrap().events.len(), 1);
+    // The module has them and the stream has them, but the outside reader does not: kept.
+    assert!(cluster.partition_events().await.1 >= newest - last);
+    // An acknowledgement beyond what exists is held to what exists.
+    client.acknowledge_events(0, "outside", newest + 50).await.unwrap();
+    assert_eq!(client.events(0, "outside", None, 10).await.unwrap().acknowledged, Some(newest));
+    cluster.issue(12).await;
+    let (newest, _) = cluster.partition_events().await;
+    cluster.watched(newest).await;
+    assert!(cluster.partition_events().await.1 >= 1);
+    client.unsubscribe(0, "outside").await.unwrap();
+    let mut released = false;
+    for _ in 0..100 {
+        if cluster.partition_events().await.1 == 0 {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(released, "events were kept for a reader that had unsubscribed");
+    assert!(client.acknowledge_events(7, "outside", 1).await.is_err());
+    assert!(client.unsubscribe(7, "outside").await.is_err());
+    assert!(client.events(7, "outside", None, 1).await.is_err());
+
+    // Runs the group must refuse, offered straight to its leader.
+    let leader = cluster.watch_leader().await;
+    let group = &cluster.running[&leader].host.modules["watch"];
+    let before = group.status().state_hash;
+    let event = |partition: u16, seq: u64| {
+        let mut event = page.events[0].clone();
+        event.partition = partition;
+        event.seq = seq;
+        event
+    };
+    let gap = group.feed(0, newest + 3, vec![event(0, newest + 4)]).await.unwrap();
+    assert!(gap.as_ref().is_err_and(|e| e.contains("would leave a gap")), "{gap:?}");
+    let jumbled = group.feed(0, newest, vec![event(0, newest + 2)]).await.unwrap();
+    assert!(jumbled.as_ref().is_err_and(|e| e.contains("not in sequence")), "{jumbled:?}");
+    let foreign = group.feed(0, newest, vec![event(1, newest + 1)]).await.unwrap();
+    assert!(foreign.as_ref().is_err_and(|e| e.contains("not in sequence")), "{foreign:?}");
+    // A run it already has is taken as read and changes nothing.
+    assert_eq!(group.feed(0, newest - 1, vec![event(0, newest)]).await.unwrap(), Ok(newest));
+    assert_eq!(group.status().state_hash, before);
+    // A partition it has never heard from starts where its first run starts.
+    assert_eq!(group.feed(9, 40, vec![event(9, 41)]).await.unwrap(), Ok(41));
+    assert_eq!(group.machine.cursors().get(&9), Some(&41));
+    // A partition's own log answers a run of events as not its business.
+    let partition = &cluster.running[&leader].host.groups[&0];
+    let stray = Proposal::Feed {
+        partition: 0,
+        after: 0,
+        events: vec![],
+    };
+    assert_eq!(stray.to_string(), "0 events of partition 0 after 0");
+    if let Ok(reply) = partition.raft.client_write(stray).await {
+        assert!(reply.data.module.is_some_and(|m| m.is_err()));
+    }
+    cluster.stop().await;
 }

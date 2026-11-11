@@ -20,6 +20,13 @@ pub enum Proposal {
     /// A command for a module's own group (see [`crate::module`]), as the
     /// module's JSON. A partition's group ignores it.
     Module(serde_json::Value),
+    /// A run of one partition's events for a module's group, in sequence.
+    /// `after` is the sequence number the run follows.
+    Feed {
+        partition: ic_ledger::PartitionId,
+        after: u64,
+        events: Vec<EventRecord>,
+    },
 }
 
 /// Outputs of applied commands are held by every member until the leader's
@@ -33,6 +40,12 @@ pub enum Housekeeping {
     Sealed { through_seq: u64 },
     /// Events up to this sequence number are on the event stream.
     Published { through_seq: u64 },
+    /// A consumer of the partition's events (a module's group) holds them up
+    /// to this sequence number. The first one from a consumer registers it:
+    /// from then on events are kept until it has them too.
+    Consumed { consumer: String, through_seq: u64 },
+    /// A consumer no longer reads this partition: nothing is kept for it.
+    Unsubscribed { consumer: String },
 }
 
 impl fmt::Display for Proposal {
@@ -43,7 +56,10 @@ impl fmt::Display for Proposal {
             Proposal::Housekeeping(Housekeeping::Delivered { ids }) => write!(f, "delivered {} messages", ids.len()),
             Proposal::Housekeeping(Housekeeping::Sealed { through_seq }) => write!(f, "sealed journal through {through_seq}"),
             Proposal::Housekeeping(Housekeeping::Published { through_seq }) => write!(f, "published events through {through_seq}"),
+            Proposal::Housekeeping(Housekeeping::Consumed { consumer, through_seq }) => write!(f, "{consumer} holds events through {through_seq}"),
+            Proposal::Housekeeping(Housekeeping::Unsubscribed { consumer }) => write!(f, "{consumer} no longer reads events"),
             Proposal::Module(_) => write!(f, "a module command"),
+            Proposal::Feed { partition, after, events } => write!(f, "{} events of partition {partition} after {after}", events.len()),
         }
     }
 }
