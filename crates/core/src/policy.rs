@@ -357,6 +357,10 @@ pub struct Policy {
     /// bank sends back can be reversed exactly.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payments: BTreeMap<String, PaymentRecord>,
+    /// The cession recorded on each layer or member cover, by
+    /// `cover/layer/life`, as the reinsurance module worked it out.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub cessions: BTreeMap<String, Vec<crate::reinsurance::CessionSegment>>,
 }
 
 /// A period in which a choice made on a defective notice can be made again.

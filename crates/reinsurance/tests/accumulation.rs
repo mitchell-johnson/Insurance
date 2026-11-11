@@ -8,7 +8,7 @@ use ic_core::event::{Event, LifeInfo};
 use ic_core::{GroupId, LifeId, PartyId, PolicyId, PolicyStatus, UnwindCause};
 use ic_reinsurance::cession::UnplacedReason;
 use ic_reinsurance::treaty::ExcessPath;
-use ic_reinsurance::{Command, InstructionBody, LifeKey, Notice};
+use ic_reinsurance::{Command, Instruction, InstructionBody, LifeKey, Notice};
 
 fn party(id: &str) -> LifeKey {
     LifeKey::Party(PartyId::from(id))
@@ -268,7 +268,34 @@ fn a_transfer_between_partitions_keeps_the_cessions() {
     let applied = landed(&mut b, "P1", vec![]);
     b.feed(3, vec![status("P1", PolicyStatus::Transferred)]);
     assert_eq!(b.ri.cession_record(&k), &before[..]);
-    assert!(applied.instructions.is_empty());
+    // The whole record is sent to the new partition, in case a change sent to the old
+    // one while the policy was moving was refused there. Nothing else is issued.
+    assert_eq!(applied.instructions.len(), 1);
+    assert!(matches!(
+        &applied.instructions[0],
+        Instruction { partition: 8, body: InstructionBody::RecordCession { key, from, segments }, .. }
+            if *key == k && *from == d(2027, 2, 1) && segments[..] == before[..]
+    ));
+    // The same happens where a policy stays put because its transfer was abandoned.
+    let aborted = b.feed(
+        8,
+        vec![Event::TransferAborted {
+            policy: PolicyId::from("P1"),
+            transfer_id: "T2".into(),
+        }],
+    );
+    assert_eq!(
+        aborted.instructions,
+        applied
+            .instructions
+            .iter()
+            .cloned()
+            .map(|i| Instruction {
+                id: aborted.instructions[0].id.clone(),
+                ..i
+            })
+            .collect::<Vec<_>>()
+    );
     // A later change is recorded on the new partition.
     let added = b.add_layer(8, "P1", layer("life", "life", 2, "L1", 100 * K, d(2027, 5, 1)));
     assert!(added.instructions.iter().all(|i| i.partition == 8));
