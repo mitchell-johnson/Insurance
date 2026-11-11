@@ -14,6 +14,8 @@
 //! * [`close`]: the period close: declared checks, waivers, sign-off.
 //! * [`report`]: trial balance, movements with prior-period items, and the
 //!   close dashboard, as read models of the books.
+//! * [`tables`]: the validation suite an actuarial table must pass before
+//!   it can be activated.
 //!
 //! Like the core, the state machines here never read a clock, randomness or
 //! the network. Everything arrives as a logged command.
@@ -24,6 +26,7 @@ pub mod close;
 pub mod config;
 pub mod period;
 pub mod report;
+pub mod tables;
 
 pub use books::{FinApplied, FinCommand, FinEnvelope, FinEvent, FinanceState};
 pub use chart::Chart;
