@@ -21,6 +21,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+ic-sim.workspace = true
+ic-product.workspace = true
 
 [lints]
 workspace = true

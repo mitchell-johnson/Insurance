@@ -22,7 +22,7 @@ pub mod structure;
 pub mod workbench;
 
 mod commission;
-mod config;
+pub mod config;
 mod statement;
 
 use std::fmt;
