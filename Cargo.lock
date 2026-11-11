@@ -1867,6 +1867,7 @@ dependencies = [
  "base64 0.22.1",
  "cedar-policy",
  "chrono",
+ "futures",
  "hex",
  "http-body-util",
  "ic-api",
