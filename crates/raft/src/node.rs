@@ -3,7 +3,6 @@
 use openraft::async_runtime::WatchReceiver;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
 
 use chrono::NaiveDate;
 use ic_core::Envelope;
@@ -217,18 +216,6 @@ impl Node {
             first_log_index: self.log.first_index(),
             backlog: self.machine.backlog(),
         }
-    }
-
-    /// Wait until this member has applied at least `index`, or time out.
-    pub async fn wait_applied(&self, index: u64, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
-        while self.machine.last_applied_index().is_none_or(|i| i < index) {
-            if tokio::time::Instant::now() >= deadline {
-                return false;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        true
     }
 
     /// Stop the member. Its log stays where it is.

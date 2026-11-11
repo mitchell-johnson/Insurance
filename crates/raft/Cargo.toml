@@ -33,6 +33,7 @@ name = "ic-node"
 path = "src/bin/ic-node.rs"
 
 [dev-dependencies]
+ic-azure = { workspace = true, features = ["testing"] }
 ic-sim.workspace = true
 ic-money.workspace = true
 

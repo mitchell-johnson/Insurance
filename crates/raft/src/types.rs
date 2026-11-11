@@ -72,13 +72,6 @@ impl Reply {
             work_units: a.work_units,
         }
     }
-
-    pub fn result(&self) -> Result<(), Reject> {
-        match &self.rejected {
-            Some(r) => Err(r.clone()),
-            None => Ok(()),
-        }
-    }
 }
 
 openraft::declare_raft_types!(

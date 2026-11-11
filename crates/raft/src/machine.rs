@@ -54,7 +54,7 @@ struct Replicated {
 struct Inner {
     state: Replicated,
     /// Where snapshots are kept. `None` keeps none: the log is never dropped.
-    dir: Option<PathBuf>,
+    dir: PathBuf,
 }
 
 /// One member's copy of a partition's state. Clones share the same state.
@@ -95,11 +95,6 @@ fn meta_of(state: &Replicated) -> SnapshotMetaOf<TypeConfig> {
 }
 
 impl Machine {
-    /// A member with no disk: nothing is snapshotted.
-    pub fn in_memory(partition: PartitionId) -> Self {
-        Self::with(partition, None, None)
-    }
-
     /// A member that keeps its snapshot in `dir`. If a snapshot is there, the
     /// member starts from it.
     pub fn open(partition: PartitionId, dir: impl AsRef<Path>) -> io::Result<Self> {
@@ -115,10 +110,10 @@ impl Machine {
                 )));
             }
         }
-        Ok(Self::with(partition, Some(dir), restored))
+        Ok(Self::with(partition, dir, restored))
     }
 
-    fn with(partition: PartitionId, dir: Option<PathBuf>, restored: Option<Replicated>) -> Self {
+    fn with(partition: PartitionId, dir: PathBuf, restored: Option<Replicated>) -> Self {
         let state = restored.unwrap_or_else(|| Replicated {
             core: CoreState::new(partition),
             last_applied: None,
@@ -204,9 +199,7 @@ impl Machine {
     fn adopt(&self, bytes: &[u8]) -> io::Result<()> {
         let state: Replicated = serde_json::from_slice(bytes).map_err(invalid)?;
         let mut inner = self.lock();
-        if let Some(dir) = &inner.dir {
-            write_atomic(&dir.join(SNAPSHOT_FILE), bytes)?;
-        }
+        write_atomic(&inner.dir.join(SNAPSHOT_FILE), bytes)?;
         inner.state = state;
         Ok(())
     }
@@ -225,9 +218,7 @@ impl RaftSnapshotBuilder<TypeConfig> for Machine {
         let bytes = serde_json::to_vec(&state).map_err(invalid)?;
         // Durable before Raft is told: the log behind a snapshot is dropped
         // only once the snapshot can be read back.
-        if let Some(dir) = dir {
-            write_atomic(&dir.join(SNAPSHOT_FILE), &bytes)?;
-        }
+        write_atomic(&dir.join(SNAPSHOT_FILE), &bytes)?;
         tracing::info!(partition = state.core.partition, through = ?state.last_applied.map(|l| l.index()), bytes = bytes.len(), "snapshot written");
         Ok(SnapshotOf::<TypeConfig, Vec<u8>> {
             meta: meta_of(&state),
@@ -305,9 +296,7 @@ impl RaftStateMachine<TypeConfig> for Machine {
     }
 
     async fn get_current_snapshot(&mut self) -> Result<Option<SnapshotOf<TypeConfig, Vec<u8>>>, io::Error> {
-        let Some(dir) = self.lock().dir.clone() else {
-            return Ok(None);
-        };
+        let dir = self.lock().dir.clone();
         Ok(read_snapshot(&dir)?.map(|(bytes, state)| SnapshotOf::<TypeConfig, Vec<u8>> {
             meta: meta_of(&state),
             snapshot: bytes,

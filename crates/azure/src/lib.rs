@@ -17,6 +17,8 @@ pub mod credential;
 pub mod eventhubs;
 pub mod keyvault;
 pub mod merkle;
+#[cfg(feature = "testing")]
+pub mod testing;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AzureError {

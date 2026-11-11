@@ -1832,6 +1832,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-money",

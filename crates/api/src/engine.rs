@@ -114,6 +114,10 @@ pub struct Engine {
     /// Events applied to the read models but not yet accepted by the sink,
     /// per partition. The relay retries until the sink takes them.
     unpublished: BTreeMap<PartitionId, Vec<EventRecord>>,
+    /// The last sequence the sink accepted, per partition, and the file
+    /// beside the logs where that is kept across restarts.
+    published: BTreeMap<PartitionId, u64>,
+    published_file: Option<PathBuf>,
 }
 
 impl Engine {
@@ -134,14 +138,6 @@ impl Engine {
             .map_or(0, |d| d.as_nanos() as u64);
         let mut cluster = Cluster::recover(logs, seed).map_err(|e| e.to_string())?;
         cluster.keep_journal = false;
-        if cluster.business_date().is_none() {
-            cluster.open(cfg.opening_date).map_err(|e| e.to_string())?;
-            if cfg.load_shipped_config {
-                for cmd in ic_sim::config::shipped_activations().map_err(|e| e.to_string())? {
-                    cluster.activate_everywhere(cmd).map_err(|e| e.to_string())?;
-                }
-            }
-        }
         let credential = || AzureCredential::from_env().map_err(|e| e.to_string());
         let a = &cfg.azure;
         let store = match &a.blob_endpoint {
@@ -164,12 +160,35 @@ impl Engine {
             signer,
             sink,
             unpublished: BTreeMap::new(),
+            published: BTreeMap::new(),
+            published_file: cfg.data_dir.as_ref().map(|dir| dir.join("published.json")),
         };
-        // Rebuild the read models from the replayed stream. Events replayed
-        // from an existing log were published before the restart, so only
-        // events from now on go to the sink; consumers de-duplicate anyway.
+        // Rebuild the read models from the replayed stream. What the sink
+        // had accepted before the restart is on record beside the logs;
+        // anything after that record is sent again. Consumers de-duplicate
+        // on (partition, sequence).
+        if let Some(file) = &engine.published_file {
+            match std::fs::read(file) {
+                Ok(bytes) => engine.published = serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", file.display()))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(format!("{}: {e}", file.display())),
+            }
+        }
         engine.project();
-        engine.unpublished.clear();
+        let published = &engine.published;
+        for (partition, events) in &mut engine.unpublished {
+            let through = published.get(partition).copied().unwrap_or(0);
+            events.retain(|e| e.seq > through);
+        }
+        if engine.cluster.business_date().is_none() {
+            engine.cluster.open(cfg.opening_date).map_err(|e| e.to_string())?;
+            if cfg.load_shipped_config {
+                for cmd in ic_sim::config::shipped_activations().map_err(|e| e.to_string())? {
+                    engine.cluster.activate_everywhere(cmd).map_err(|e| e.to_string())?;
+                }
+            }
+            engine.project();
+        }
         Ok(engine)
     }
 
@@ -189,10 +208,34 @@ impl Engine {
             if events.is_empty() {
                 continue;
             }
-            if let Err(err) = self.sink.publish(partition, &events).await {
-                tracing::warn!(partition, error = %err, "event relay failed; will retry");
-                self.unpublished.insert(partition, events);
+            match self.sink.publish(partition, &events).await {
+                Ok(()) => {
+                    if let Some(last) = events.last() {
+                        self.published.insert(partition, last.seq);
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(partition, error = %err, "event relay failed; will retry");
+                    self.unpublished.insert(partition, events);
+                }
             }
+        }
+        self.record_published();
+    }
+
+    /// Keep the relay's position beside the logs. If this fails the events
+    /// are sent again after a restart, which consumers tolerate.
+    fn record_published(&self) {
+        let Some(file) = &self.published_file else {
+            return;
+        };
+        let tmp = file.with_extension("tmp");
+        let written = serde_json::to_vec(&self.published)
+            .map_err(std::io::Error::other)
+            .and_then(|bytes| std::fs::write(&tmp, bytes))
+            .and_then(|()| std::fs::rename(&tmp, file));
+        if let Err(error) = written {
+            tracing::warn!(%error, "the event relay's position was not saved");
         }
     }
 

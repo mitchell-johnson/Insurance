@@ -1,7 +1,6 @@
 //! The durable Raft log of one node.
 //!
-//! Entries live in memory for reads and, when the store has a directory, in
-//! an append-only journal on disk. A truncation (a follower discarding
+//! Entries live in memory for reads and in an append-only journal on disk. A truncation (a follower discarding
 //! entries a new leader never committed) is itself a journal record, so the
 //! file is only ever appended to. An append is acknowledged after `fsync`.
 //!
@@ -46,8 +45,8 @@ struct Inner {
     vote: Option<Vote>,
     committed: Option<LogId>,
     purged: Option<LogId>,
-    dir: Option<PathBuf>,
-    journal: Option<File>,
+    dir: PathBuf,
+    journal: File,
 }
 
 /// A node's Raft log. Cheap to clone: clones share the same log.
@@ -78,20 +77,6 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path) -> io::Result<Option<T>>
 }
 
 impl LogStore {
-    /// A log held only in memory: lost when the node stops.
-    pub fn in_memory() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(Inner {
-                entries: BTreeMap::new(),
-                vote: None,
-                committed: None,
-                purged: None,
-                dir: None,
-                journal: None,
-            })),
-        }
-    }
-
     /// Open, or create, a durable log in `dir`, replaying its journal.
     pub fn open(dir: impl AsRef<Path>) -> io::Result<Self> {
         let dir = dir.as_ref().to_path_buf();
@@ -142,8 +127,8 @@ impl LogStore {
                 vote,
                 committed,
                 purged,
-                dir: Some(dir),
-                journal: Some(journal),
+                dir,
+                journal,
             })),
         })
     }
@@ -183,16 +168,13 @@ impl LogStore {
 
 impl Inner {
     fn journal(&mut self, records: &[Record]) -> io::Result<()> {
-        let Some(file) = self.journal.as_mut() else {
-            return Ok(());
-        };
         let mut buf = Vec::new();
         for r in records {
             serde_json::to_writer(&mut buf, r).map_err(invalid)?;
             buf.push(b'\n');
         }
-        file.write_all(&buf)?;
-        file.sync_data()
+        self.journal.write_all(&buf)?;
+        self.journal.sync_data()
     }
 }
 
@@ -223,18 +205,14 @@ impl RaftLogStorage<TypeConfig> for LogStore {
 
     async fn save_vote(&mut self, vote: &Vote) -> Result<(), io::Error> {
         let mut inner = self.lock();
-        if let Some(dir) = &inner.dir {
-            write_atomic(&dir.join("vote.json"), &serde_json::to_vec(vote).map_err(invalid)?)?;
-        }
+        write_atomic(&inner.dir.join("vote.json"), &serde_json::to_vec(vote).map_err(invalid)?)?;
         inner.vote = Some(*vote);
         Ok(())
     }
 
     async fn save_committed(&mut self, committed: Option<LogId>) -> Result<(), io::Error> {
         let mut inner = self.lock();
-        if let Some(dir) = &inner.dir {
-            write_atomic(&dir.join("committed.json"), &serde_json::to_vec(&committed).map_err(invalid)?)?;
-        }
+        write_atomic(&inner.dir.join("committed.json"), &serde_json::to_vec(&committed).map_err(invalid)?)?;
         inner.committed = committed;
         Ok(())
     }
@@ -290,16 +268,14 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         // Rewrite the journal with only what is kept, beside the old one,
         // and swap it in. A crash before the swap leaves the old journal,
         // whose extra entries a snapshot already covers; after it, the new.
-        if let Some(dir) = inner.dir.clone() {
-            let mut buf = Vec::new();
-            for record in std::iter::once(Record::Purged(log_id)).chain(keep.values().cloned().map(Record::Append)) {
-                serde_json::to_writer(&mut buf, &record).map_err(invalid)?;
-                buf.push(b'\n');
-            }
-            let path = dir.join("log.jsonl");
-            write_atomic(&path, &buf)?;
-            inner.journal = Some(OpenOptions::new().append(true).open(&path)?);
+        let mut buf = Vec::new();
+        for record in std::iter::once(Record::Purged(log_id)).chain(keep.values().cloned().map(Record::Append)) {
+            serde_json::to_writer(&mut buf, &record).map_err(invalid)?;
+            buf.push(b'\n');
         }
+        let path = inner.dir.join("log.jsonl");
+        write_atomic(&path, &buf)?;
+        inner.journal = OpenOptions::new().append(true).open(&path)?;
         inner.entries = keep;
         inner.purged = Some(log_id);
         Ok(())

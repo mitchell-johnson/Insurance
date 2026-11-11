@@ -19,8 +19,14 @@ reqwest.workspace = true
 tokio.workspace = true
 base64.workspace = true
 tracing.workspace = true
+axum = { workspace = true, optional = true }
+
+[features]
+# A local stand-in for the Azure endpoints, for this workspace's tests.
+testing = ["dep:axum"]
 
 [dev-dependencies]
+ic-azure = { path = ".", features = ["testing"] }
 axum.workspace = true
 ic-sim.workspace = true
 ic-money.workspace = true
