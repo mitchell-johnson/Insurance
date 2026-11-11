@@ -330,6 +330,10 @@ pub struct Submission {
     /// The region whose endpoint the driver used.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region: Option<String>,
+    /// When the driver took it. A submission that has been with a driver
+    /// for long is one whose fate has to be asked of the bank.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub begun_at: Option<NaiveDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
