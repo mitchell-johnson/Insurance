@@ -41,8 +41,11 @@ pub struct PolicyView {
     pub business_date: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// What a query is answered with. On the wire an answer is just its value:
+/// the question decides the type, and [`crate::ClusterClient`] has one typed
+/// method per question, so a caller cannot mistake one answer for another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
 pub enum Answer {
     BusinessDate(Option<NaiveDate>),
     /// `None` until the partition's business date is open.

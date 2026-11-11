@@ -5,9 +5,14 @@
 //!   business date, or attaches to it if it is already running, waits for it
 //!   and prints its report.
 //!
+//! - `ic-worker close-due` is what the schedule runs: it closes every business
+//!   date whose midnight in New Zealand has passed, oldest first, and does
+//!   nothing if none has. See [`ic_workflows::due`].
+//!
 //! See [`ic_workflows::settings::WorkerSettings`] for the environment.
 
 use chrono::NaiveDate;
+use ic_workflows::due::{is_due, ledger_day};
 use ic_workflows::settings::WorkerSettings;
 use ic_workflows::temporal::{close_day, run_worker};
 use ic_workflows::EndOfDayInput;
@@ -76,6 +81,34 @@ async fn main() -> Result<(), String> {
                 Err(format!("{} reconciliation breaks", report.breaks.len()))
             }
         }
-        Some((other, _)) => Err(format!("unknown command {other:?}; expected no command or `close`")),
+        Some((command, [])) if command == "close-due" => {
+            let ledger = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
+            let temporal = connect().await?;
+            let mut closed = Vec::new();
+            loop {
+                let day = ledger_day(&ledger, settings.patience).await?;
+                if !is_due(day.business_date, chrono::Utc::now()) {
+                    println!("{}", serde_json::json!({ "closed": closed, "business_date": day.business_date }));
+                    return Ok(());
+                }
+                let input = EndOfDayInput {
+                    closing: day.business_date,
+                    partitions: day.partitions,
+                    step_timeout_secs: settings.step_timeout.as_secs(),
+                };
+                let report = close_day(&temporal, &settings.task_queue, input).await?;
+                if !report.breaks.is_empty() {
+                    // The next day is not started over books that do not reconcile.
+                    return Err(format!(
+                        "{} closed with {} reconciliation breaks: {:?}",
+                        report.closed,
+                        report.breaks.len(),
+                        report.breaks
+                    ));
+                }
+                closed.push(report.closed);
+            }
+        }
+        Some((other, _)) => Err(format!("unknown command {other:?}; expected no command, `close` or `close-due`")),
     }
 }

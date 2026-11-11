@@ -127,7 +127,35 @@ pub struct Ledger {
 }
 
 impl Ledger {
+    /// A cluster with the standard business on its books.
     pub async fn start(name: &str, size: u64, partitions: PartitionId) -> Self {
+        let ledger = Self::start_empty(name, size, partitions).await;
+        for (n, (partition, caller, command)) in business(partitions).into_iter().enumerate() {
+            ledger.run(partition, &format!("setup-{n}"), caller, command).await;
+        }
+        ledger
+    }
+
+    pub async fn run(&self, partition: PartitionId, key: &str, caller: &str, command: Command) {
+        let envelope = Envelope {
+            key: key.to_string(),
+            caller: caller.to_string(),
+            salt: fresh_salt(),
+            traceparent: None,
+            command,
+        };
+        let reply = self.client.propose_until(partition, &envelope, PATIENCE).await.unwrap();
+        assert_eq!(reply.rejected, None, "{key}");
+    }
+
+    /// Move one partition's business date on, as the cutoff step does.
+    pub async fn advance(&self, partition: PartitionId, to: NaiveDate) {
+        self.run(partition, &format!("advance-{partition}-{to}"), "leader", Command::AdvanceBusinessDate { to })
+            .await;
+    }
+
+    /// A cluster nobody has opened.
+    pub async fn start_empty(name: &str, size: u64, partitions: PartitionId) -> Self {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=size).map(|id| (id, format!("127.0.0.1:{}", free_port()))).collect();
         let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
@@ -163,17 +191,6 @@ impl Ledger {
         };
         for id in 1..=size {
             ledger.boot(id).await;
-        }
-        for (n, (partition, caller, command)) in business(partitions).into_iter().enumerate() {
-            let envelope = Envelope {
-                key: format!("setup-{n}"),
-                caller: caller.to_string(),
-                salt: fresh_salt(),
-                traceparent: None,
-                command,
-            };
-            let reply = ledger.client.propose_until(partition, &envelope, PATIENCE).await.unwrap();
-            assert_eq!(reply.rejected, None);
         }
         ledger
     }

@@ -350,3 +350,61 @@ async fn outages_are_retryable_and_a_conflicting_root_is_not() {
     assert_eq!(ledger.books().await, simulated(1, 3));
     ledger.stop().await;
 }
+
+/// Purpose: a business date is due to close from the midnight that ends it in New Zealand
+/// and not a second before, through both daylight saving changes; and the scheduled job's
+/// reading of the ledger gives the partition count and the earliest date any partition is
+/// on, or says the ledger is not open.
+/// Why it matters: this decides when the insurer's day ends. The job that runs it may fire
+/// early, late or twice. It must never close a day still in progress, which would put the
+/// evening's payments on the wrong day, and after an outage it must close the oldest open
+/// day first, which is the day a half-finished close left behind.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_day_is_due_only_after_its_midnight_in_new_zealand() {
+    use chrono::{TimeZone, Utc};
+    use ic_workflows::due::{cutoff_utc, is_due, ledger_day, LedgerDay};
+
+    // Summer: New Zealand is thirteen hours ahead of UTC.
+    let summer = common::d(2027, 12, 31);
+    assert_eq!(cutoff_utc(summer), Some(Utc.with_ymd_and_hms(2027, 12, 31, 11, 0, 0).unwrap()));
+    assert!(!is_due(summer, Utc.with_ymd_and_hms(2027, 12, 31, 10, 59, 59).unwrap()));
+    assert!(is_due(summer, Utc.with_ymd_and_hms(2027, 12, 31, 11, 0, 0).unwrap()));
+    // Winter: twelve.
+    let winter = common::d(2028, 6, 30);
+    assert!(!is_due(winter, Utc.with_ymd_and_hms(2028, 6, 30, 11, 59, 59).unwrap()));
+    assert!(is_due(winter, Utc.with_ymd_and_hms(2028, 6, 30, 12, 0, 0).unwrap()));
+    // The 25-hour day when daylight saving ends, and the 23-hour day when it starts.
+    let long = cutoff_utc(common::d(2028, 4, 2)).unwrap() - cutoff_utc(common::d(2028, 4, 1)).unwrap();
+    let short = cutoff_utc(common::d(2028, 9, 24)).unwrap() - cutoff_utc(common::d(2028, 9, 23)).unwrap();
+    assert_eq!((long.num_hours(), short.num_hours()), (25, 23));
+    // A date with no day after it is never due, rather than a panic.
+    assert_eq!(cutoff_utc(chrono::NaiveDate::MAX), None);
+    assert!(!is_due(chrono::NaiveDate::MAX, Utc::now()));
+    // A day that ended long ago is due; the days of this test's ledger are years away.
+    assert!(is_due(common::d(2020, 1, 1), Utc::now()));
+
+    let ledger = Ledger::start("due", 1, 2).await;
+    let patience = Duration::from_secs(20);
+    let day = ledger_day(&ledger.client, patience).await.unwrap();
+    assert_eq!(
+        day,
+        LedgerDay {
+            business_date: common::opening(),
+            partitions: 2
+        }
+    );
+    // Part way through a close, one partition is a day ahead: the day still
+    // to close is the earlier one.
+    ledger.advance(1, common::day(1)).await;
+    assert_eq!(ledger_day(&ledger.client, patience).await.unwrap().business_date, common::opening());
+    ledger.stop().await;
+
+    // A ledger nobody has opened, and one nobody can reach.
+    let unopened = Ledger::start_empty("due-unopened", 1, 1).await;
+    let error = ledger_day(&unopened.client, patience).await.unwrap_err();
+    assert!(error.contains("ic-admin open"), "{error}");
+    let client = unopened.client.clone();
+    unopened.stop().await;
+    let error = ledger_day(&client, Duration::from_millis(300)).await.unwrap_err();
+    assert!(error.contains("no ledger node answered"), "{error}");
+}

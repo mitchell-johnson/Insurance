@@ -9,15 +9,19 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::NaiveDate;
+use ic_cashmatch::{Candidates, IncomingPayment, Matcher};
+use ic_core::command::IssuePolicy;
 use ic_core::machine::ClosedDay;
-use ic_core::{Envelope, PolicyId};
+use ic_core::{Envelope, PolicyId, Reject};
 use ic_ledger::PartitionId;
+use ic_product::rating::ModalPremium;
+use ic_readmodel::DirectoryEntry;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ClusterAuth;
 use crate::node::{NodeStatus, ProposeError};
-use crate::query::{Answer, Query};
+use crate::query::{PolicyView, Query};
 use crate::types::Reply;
 
 /// A reconciliation break, as reported over the wire.
@@ -206,12 +210,46 @@ impl ClusterClient {
             .await
     }
 
-    /// Ask a partition's leader a question. One pass.
-    pub async fn query(&self, partition: PartitionId, query: &Query) -> Result<Answer, ClientError> {
+    /// Ask a partition's leader a question. One pass. The answer's type is
+    /// the question's; an answer of another shape is a failed attempt.
+    async fn ask<T: DeserializeOwned>(&self, partition: PartitionId, query: &Query) -> Result<T, ClientError> {
         self.sweep(partition, |addr| {
             self.http.post(format!("http://{addr}/v1/partitions/{partition}/query")).json(query)
         })
         .await
+    }
+
+    /// The partition's business date, if it has been opened.
+    pub async fn business_date(&self, partition: PartitionId) -> Result<Option<NaiveDate>, ClientError> {
+        self.ask(partition, &Query::BusinessDate).await
+    }
+
+    /// A dry run of an application on the partition its group lives on.
+    /// `None` while the partition's business date is not open.
+    pub async fn quote(&self, partition: PartitionId, application: IssuePolicy) -> Result<Option<Result<ModalPremium, Reject>>, ClientError> {
+        let query = Query::Quote {
+            application: Box::new(application),
+        };
+        self.ask(partition, &query).await
+    }
+
+    /// A policy by its number, if this partition holds it.
+    pub async fn policy_by_number(&self, partition: PartitionId, number: &str) -> Result<Option<PolicyView>, ClientError> {
+        self.ask(partition, &Query::PolicyByNumber { number: number.to_string() }).await
+    }
+
+    /// The partition's directory entry for a policy, if it holds it.
+    pub async fn locate(&self, partition: PartitionId, policy: &PolicyId) -> Result<Option<DirectoryEntry>, ClientError> {
+        self.ask(partition, &Query::Locate { policy: policy.clone() }).await
+    }
+
+    /// What this partition's policies offer as matches for a payment.
+    pub async fn payment_candidates(&self, partition: PartitionId, matcher: &Matcher, payment: &IncomingPayment) -> Result<Candidates, ClientError> {
+        let query = Query::PaymentCandidates {
+            matcher: matcher.clone(),
+            payment: payment.clone(),
+        };
+        self.ask(partition, &query).await
     }
 
     /// Set the voters of a partition's group: `id -> host:port`. Members
@@ -236,6 +274,41 @@ impl ClusterClient {
             .await
             .map_err(|e| e.to_string())?;
         response.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())
+    }
+
+    /// How many partitions the ledger has, as the nodes report it. Waits up
+    /// to `patience` for a node to answer; nodes that disagree are an error.
+    pub async fn partitions(&self, patience: Duration) -> Result<PartitionId, String> {
+        let deadline = tokio::time::Instant::now() + patience;
+        loop {
+            let mut counts = Vec::new();
+            for addr in self.nodes.iter() {
+                if let Ok(status) = self.status(addr).await {
+                    counts.push(status.len());
+                }
+            }
+            match counts.as_slice() {
+                [] if tokio::time::Instant::now() >= deadline => return Err("no ledger node answered".to_string()),
+                [] => tokio::time::sleep(Duration::from_millis(250)).await,
+                [first, rest @ ..] if rest.iter().all(|c| c == first) => {
+                    return PartitionId::try_from(*first).map_err(|e| format!("partition count: {e}"));
+                }
+                _ => return Err(format!("the nodes disagree about how many partitions there are: {counts:?}")),
+            }
+        }
+    }
+
+    /// Ask one node to form every partition's group from its configured
+    /// peers. A group that already exists is left as it is.
+    pub async fn init(&self, addr: &str) -> Result<(), String> {
+        let response = self
+            .auth
+            .sign(self.http.post(format!("http://{addr}/v1/init")))
+            .timeout(self.attempt_timeout)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        response.error_for_status().map(|_| ()).map_err(|e| e.to_string())
     }
 
     pub fn nodes(&self) -> &[String] {

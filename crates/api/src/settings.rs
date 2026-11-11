@@ -17,14 +17,14 @@ pub enum Identity {
     /// Trust the caller's own headers. For a laptop only.
     Dev,
     /// Microsoft Entra ID access tokens for this tenant and audience.
-    Entra { tenant: String, audience: String },
+    Entra { authority: String, tenant: String, audience: String },
 }
 
 impl Identity {
     pub fn auth(&self) -> Auth {
         match self {
             Identity::Dev => Auth::Dev,
-            Identity::Entra { tenant, audience } => Auth::entra(tenant, audience),
+            Identity::Entra { authority, tenant, audience } => Auth::entra_at(authority, tenant, audience),
         }
     }
 }
@@ -65,6 +65,8 @@ impl ApiSettings {
     /// - `IC_LISTEN`: default `0.0.0.0:8080`.
     /// - `IC_PARTITIONS`: how many partitions the ledger has. Default 64.
     /// - `IC_ENTRA_TENANT_ID`, `IC_ENTRA_AUDIENCE`: validate Entra ID tokens.
+    /// - `IC_ENTRA_AUTHORITY`: default `https://login.microsoftonline.com`;
+    ///   set it for a sovereign cloud.
     /// - `IC_AUTH=dev`: trust caller headers instead. Refused in Kubernetes
     ///   and whenever an Azure endpoint is configured.
     ///
@@ -109,7 +111,11 @@ impl ApiSettings {
             (Some("dev"), _, _) if on_azure => return Err("IC_AUTH=dev is refused when any Azure endpoint is configured".to_string()),
             (Some("dev"), _, _) if in_kubernetes => return Err("IC_AUTH=dev is refused in Kubernetes: callers must present Entra ID tokens".to_string()),
             (Some("dev"), _, _) => Identity::Dev,
-            (None | Some("entra"), Some(tenant), Some(audience)) => Identity::Entra { tenant, audience },
+            (None | Some("entra"), Some(tenant), Some(audience)) => Identity::Entra {
+                authority: get("IC_ENTRA_AUTHORITY").unwrap_or_else(|| crate::auth::ENTRA_AUTHORITY.to_string()),
+                tenant,
+                audience,
+            },
             _ => return Err("set IC_ENTRA_TENANT_ID and IC_ENTRA_AUDIENCE, or IC_AUTH=dev for the insurance in a box".to_string()),
         };
         let mode = match get("IC_NODES") {

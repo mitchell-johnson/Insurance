@@ -17,7 +17,8 @@ use ic_core::{home_partition, Command, Envelope, GroupId, PolicyId, Reject};
 use ic_ledger::PartitionId;
 use ic_product::rating::ModalPremium;
 use ic_raft::client::fresh_salt;
-use ic_raft::{Answer, ClusterClient, PolicyView, Query};
+use ic_raft::client::ClientError;
+use ic_raft::{ClusterClient, PolicyView};
 use ic_readmodel::DirectoryEntry;
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
@@ -105,10 +106,14 @@ impl Gateway {
         }
     }
 
-    async fn ask(&self, partition: PartitionId, query: &Query) -> Result<Answer, Unavailable> {
+    /// Keep asking the cluster until it answers or patience runs out.
+    async fn retrying<T, F>(&self, ask: impl Fn() -> F) -> Result<T, Unavailable>
+    where
+        F: std::future::Future<Output = Result<T, ClientError>>,
+    {
         let deadline = tokio::time::Instant::now() + self.patience;
         loop {
-            match self.client.query(partition, query).await {
+            match ask().await {
                 Ok(answer) => return Ok(answer),
                 Err(e) if tokio::time::Instant::now() >= deadline => return Err(Unavailable(e.to_string())),
                 Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -119,24 +124,19 @@ impl Gateway {
     /// Ask every partition at once. One partition that cannot answer fails
     /// the question: a partial answer about a policy number or a payment
     /// would be a wrong answer.
-    async fn ask_all(&self, query: &Query) -> Result<Vec<Answer>, Unavailable> {
-        join_all((0..self.partitions).map(|p| self.ask(p, query))).await.into_iter().collect()
+    async fn every_partition<T, F>(&self, ask: impl Fn(PartitionId) -> F) -> Result<Vec<T>, Unavailable>
+    where
+        F: std::future::Future<Output = Result<T, ClientError>>,
+    {
+        let ask = &ask;
+        join_all((0..self.partitions).map(|p| self.retrying(move || ask(p))))
+            .await
+            .into_iter()
+            .collect()
     }
 
     async fn reconciliation(&self) -> Result<Reconciliation, Unavailable> {
-        let views = join_all((0..self.partitions).map(|p| async move {
-            let deadline = tokio::time::Instant::now() + self.patience;
-            loop {
-                match self.client.end_of_day_view(p).await {
-                    Ok(view) => return Ok(view),
-                    Err(e) if tokio::time::Instant::now() >= deadline => return Err(Unavailable(e.to_string())),
-                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
-                }
-            }
-        }))
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()?;
+        let views = self.every_partition(|p| self.client.end_of_day_view(p)).await?;
         let mut breaks: Vec<Value> = views
             .iter()
             .flat_map(|v| {
@@ -166,10 +166,6 @@ impl Gateway {
             breaks,
         })
     }
-}
-
-fn unexpected(answer: &Answer) -> Unavailable {
-    Unavailable(format!("a node answered a different question: {answer:?}"))
 }
 
 pub enum Backend {
@@ -205,16 +201,9 @@ impl Backend {
         match self {
             Self::Single(engine) => Ok(engine.lock().await.cluster.business_date()),
             Self::Cluster(gateway) => {
-                let mut dates = Vec::new();
-                for answer in gateway.ask_all(&Query::BusinessDate).await? {
-                    match answer {
-                        Answer::BusinessDate(Some(date)) => dates.push(date),
-                        // Not ready until every partition is open.
-                        Answer::BusinessDate(None) => return Ok(None),
-                        other => return Err(unexpected(&other)),
-                    }
-                }
-                Ok(dates.into_iter().min())
+                let dates = gateway.every_partition(|p| gateway.client.business_date(p)).await?;
+                // Not ready until every partition is open.
+                Ok(dates.into_iter().collect::<Option<Vec<_>>>().and_then(|d| d.into_iter().min()))
             }
         }
     }
@@ -230,15 +219,7 @@ impl Backend {
                     .business_date()
                     .map(|today| ic_core::quote(&engine.cluster.state(partition).catalog, application, today)))
             }
-            Self::Cluster(gateway) => {
-                let query = Query::Quote {
-                    application: Box::new(application),
-                };
-                match gateway.ask(partition, &query).await? {
-                    Answer::Quote(quote) => Ok(quote),
-                    other => Err(unexpected(&other)),
-                }
-            }
+            Self::Cluster(gateway) => gateway.retrying(|| gateway.client.quote(partition, application.clone())).await,
         }
     }
 
@@ -282,15 +263,8 @@ impl Backend {
         match self {
             Self::Single(engine) => Ok(engine.lock().await.view.policy(policy).cloned()),
             Self::Cluster(gateway) => {
-                let query = Query::Locate { policy: policy.clone() };
-                for answer in gateway.ask_all(&query).await? {
-                    match answer {
-                        Answer::Located(Some(entry)) => return Ok(Some(entry)),
-                        Answer::Located(None) => {}
-                        other => return Err(unexpected(&other)),
-                    }
-                }
-                Ok(None)
+                let found = gateway.every_partition(|p| gateway.client.locate(p, policy)).await?;
+                Ok(found.into_iter().flatten().next())
             }
         }
     }
@@ -303,17 +277,10 @@ impl Backend {
                 Ok(engine.matcher.match_payment(&engine.view, payment))
             }
             Self::Cluster(gateway) => {
-                let query = Query::PaymentCandidates {
-                    matcher: gateway.matcher.clone(),
-                    payment: payment.clone(),
-                };
-                let mut all = Candidates::default();
-                for answer in gateway.ask_all(&query).await? {
-                    match answer {
-                        Answer::Candidates(candidates) => all = all.merge(candidates),
-                        other => return Err(unexpected(&other)),
-                    }
-                }
+                let candidates = gateway
+                    .every_partition(|p| gateway.client.payment_candidates(p, &gateway.matcher, payment))
+                    .await?;
+                let all = candidates.into_iter().fold(Candidates::default(), Candidates::merge);
                 Ok(gateway.matcher.decide(all, payment))
             }
         }
@@ -336,15 +303,8 @@ impl Backend {
                 }))
             }
             Self::Cluster(gateway) => {
-                let query = Query::PolicyByNumber { number: number.to_string() };
-                for answer in gateway.ask_all(&query).await? {
-                    match answer {
-                        Answer::Policy(Some(view)) => return Ok(Some(*view)),
-                        Answer::Policy(None) => {}
-                        other => return Err(unexpected(&other)),
-                    }
-                }
-                Ok(None)
+                let found = gateway.every_partition(|p| gateway.client.policy_by_number(p, number)).await?;
+                Ok(found.into_iter().flatten().next())
             }
         }
     }

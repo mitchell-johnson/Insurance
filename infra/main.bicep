@@ -20,9 +20,8 @@ param name string
 @allowed(['dev', 'test', 'prod'])
 param environment string = 'dev'
 
-@description('Kubernetes namespace and service account the core runs as. The federated credential trusts exactly this pair.')
+@description('Kubernetes namespace the core runs in. The service accounts are ic-node, ic-worker and ic-api (see deploy/k8s); each federated credential trusts exactly one of them in this namespace.')
 param workloadNamespace string = 'insurance-core'
-param workloadServiceAccount string = 'ic-api'
 
 @description('Days a Merkle root or sealed segment cannot be changed or deleted. Seven years plus a margin by default.')
 param retentionDays int = 2920
@@ -31,7 +30,7 @@ param retentionDays int = 2920
 param nodeVmSize string = 'Standard_D4ds_v5'
 param nodeCount int = 3
 
-@description('Deploy PostgreSQL Flexible Server for durable read models. Off by default: this phase keeps read models in memory and rebuilds them from the log.')
+@description('Deploy PostgreSQL Flexible Server. Off by default: the ledger does not use it. It is the persistence store for a self-hosted Temporal, if Temporal Cloud is not chosen; see docs/decisions.md.')
 param deployPostgres bool = false
 
 @description('Object ID of the Entra group that administers PostgreSQL. Required when deployPostgres is true.')
@@ -49,6 +48,7 @@ var roles = {
   blobDataContributor: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
   keyVaultCryptoUser: '12338af0-0e69-4776-bea7-57ae8d297424'
   eventHubsDataSender: '2b629674-e913-4c01-ae53-ef4638d8f975'
+  keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
 }
 
 // --- observability ----------------------------------------------------------
@@ -76,20 +76,56 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
 
 // --- identity ---------------------------------------------------------------
 
-// The one identity the core runs as. Pods get it through workload identity
-// federation: no secret is ever issued for it.
-resource coreIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
-  name: '${name}-core'
+// One identity per kind of process, each with only what that process needs:
+//   ic-node    seals journal segments and publishes events
+//   ic-worker  signs and publishes the day's Merkle root
+//   ic-api     the gateway; reaches nothing in Azure but the cluster token
+// Pods get their identity through workload identity federation: no secret is
+// ever issued for any of them.
+resource nodeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-node'
   location: location
   tags: tags
 }
 
-resource coreFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
-  parent: coreIdentity
-  name: 'aks-${workloadNamespace}-${workloadServiceAccount}'
+resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-worker'
+  location: location
+  tags: tags
+}
+
+resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-api'
+  location: location
+  tags: tags
+}
+
+resource nodeFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: nodeIdentity
+  name: 'aks-${workloadNamespace}-ic-node'
   properties: {
     issuer: aks.properties.oidcIssuerProfile.issuerURL
-    subject: 'system:serviceaccount:${workloadNamespace}:${workloadServiceAccount}'
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-node'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource workerFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: workerIdentity
+  name: 'aks-${workloadNamespace}-ic-worker'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-worker'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource apiFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: apiIdentity
+  name: 'aks-${workloadNamespace}-ic-api'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-api'
     audiences: ['api://AzureADTokenExchange']
   }
 }
@@ -149,6 +185,15 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
       }
     ]
     addonProfiles: {
+      // Mounts the cluster token from Key Vault into the pods and follows
+      // its rotation.
+      azureKeyvaultSecretsProvider: {
+        enabled: true
+        config: {
+          enableSecretRotation: 'true'
+          rotationPollInterval: '2m'
+        }
+      }
       omsagent: {
         enabled: true
         config: { logAnalyticsWorkspaceResourceID: logs.id }
@@ -260,11 +305,24 @@ resource lifecycle 'Microsoft.Storage/storageAccounts/managementPolicies@2023-05
   }
 }
 
-resource coreBlobs 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: storage
-  name: guid(storage.id, coreIdentity.id, roles.blobDataContributor)
+// Nodes write sealed segments; workers write Merkle roots. Neither can
+// write the other's container, and the retention policy stops both from
+// changing or deleting what is written.
+resource nodeCold 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: coldSegments
+  name: guid(coldSegments.id, nodeIdentity.id, roles.blobDataContributor)
   properties: {
-    principalId: coreIdentity.properties.principalId
+    principalId: nodeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+  }
+}
+
+resource workerRoots 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: merkleRoots
+  name: guid(merkleRoots.id, workerIdentity.id, roles.blobDataContributor)
+  properties: {
+    principalId: workerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
   }
@@ -300,14 +358,51 @@ resource merkleKey 'Microsoft.KeyVault/vaults/keys@2023-07-01' = {
   }
 }
 
-// Sign and verify with the key. The core cannot read, export or delete it.
-resource coreSigning 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, coreIdentity.id, roles.keyVaultCryptoUser)
+// Sign and verify with the key. The worker cannot read, export or delete it.
+resource workerSigning 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: merkleKey
+  name: guid(merkleKey.id, workerIdentity.id, roles.keyVaultCryptoUser)
   properties: {
-    principalId: coreIdentity.properties.principalId
+    principalId: workerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultCryptoUser)
+  }
+}
+
+// The cluster token: the shared secret every caller of a ledger node
+// presents. Its value is set by an operator, never by this template, so it
+// is in no deployment history:
+//   az keyvault secret set --vault-name <vault> --name cluster-token --value "$(openssl rand -hex 32)"
+// To rotate, store the new and the old token on separate lines, new first;
+// see docs/runbooks.md. Each process may read this one secret and no other.
+// The vault holds this secret and the signing key and nothing else.
+resource nodeToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, nodeIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: nodeIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+resource workerToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, workerIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+resource apiToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, apiIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: apiIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
   }
 }
 
@@ -340,11 +435,11 @@ resource policyEvents 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
   }
 }
 
-resource coreEvents 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource nodeEvents 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: policyEvents
-  name: guid(policyEvents.id, coreIdentity.id, roles.eventHubsDataSender)
+  name: guid(policyEvents.id, nodeIdentity.id, roles.eventHubsDataSender)
   properties: {
-    principalId: coreIdentity.properties.principalId
+    principalId: nodeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.eventHubsDataSender)
   }
@@ -385,7 +480,10 @@ resource postgresAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators
 
 output aksName string = aks.name
 output registryLoginServer string = registry.properties.loginServer
-output workloadClientId string = coreIdentity.properties.clientId
+output nodeClientId string = nodeIdentity.properties.clientId
+output workerClientId string = workerIdentity.properties.clientId
+output apiClientId string = apiIdentity.properties.clientId
+output keyVaultName string = vault.name
 output tenantId string = subscription().tenantId
 output blobEndpoint string = storage.properties.primaryEndpoints.blob
 output keyVaultUrl string = vault.properties.vaultUri

@@ -13,7 +13,7 @@ use crate::bitemporal::Bitemporal;
 use crate::catalog::Catalog;
 use crate::command::MemberChange;
 use crate::event::Event;
-use crate::lifecycle::BACKDATING_LIMIT_DAYS;
+use crate::lifecycle::{member_covers, BACKDATING_LIMIT_DAYS};
 use crate::machine::{Ctx, Reject, APPLY_BUDGET, SCHEME_BILLING_CHUNK};
 use crate::policy::{LifeFactors, LifeKind, LifeRecord, PendingInvoice, Policy, PolicyStatus, ReceivableKind};
 use crate::premium::{add_premium, member_period_premium, member_premium_with, zero_premium};
@@ -231,20 +231,22 @@ pub(crate) fn apply_membership(
             MemberChange::Left { life, effective } | MemberChange::Changed { life, effective, .. } => (life.clone(), *effective),
         };
         ctx.emit(match &change {
-            MemberChange::Joined { .. } => Event::MemberJoined {
+            MemberChange::Joined { life, .. } => Event::MemberJoined {
                 policy: policy.id.clone(),
                 life: life_id.clone(),
                 effective,
+                covers: member_covers(&product, policy, &life_id, &life.factors),
             },
             MemberChange::Left { .. } => Event::MemberLeft {
                 policy: policy.id.clone(),
                 life: life_id.clone(),
                 effective,
             },
-            MemberChange::Changed { .. } => Event::MemberChanged {
+            MemberChange::Changed { factors, .. } => Event::MemberChanged {
                 policy: policy.id.clone(),
                 life: life_id.clone(),
                 effective,
+                covers: member_covers(&product, policy, &life_id, factors),
             },
         });
         for (period, delta) in adjustments {

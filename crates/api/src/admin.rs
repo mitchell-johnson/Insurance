@@ -12,12 +12,14 @@ use chrono::NaiveDate;
 use ic_core::{Command, Envelope};
 use ic_ledger::PartitionId;
 use ic_raft::client::fresh_salt;
-use ic_raft::{Answer, ClusterAuth, ClusterClient, NodeId, NodeStatus, Query};
+use ic_raft::{ClusterAuth, ClusterClient, NodeId, NodeStatus};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdminCommand {
+    /// Form every partition's Raft group from the nodes' configured peers.
+    Init,
     /// Every node's view of every partition.
     Status,
     /// Open the business date on every partition of an empty ledger.
@@ -32,7 +34,8 @@ pub enum AdminCommand {
     },
 }
 
-pub const USAGE: &str = "usage: ic-admin status
+pub const USAGE: &str = "usage: ic-admin init
+       ic-admin status
        ic-admin open <YYYY-MM-DD>
        ic-admin activate-shipped
        ic-admin members <partition|all> <id=host:port,id=host:port,...>";
@@ -42,6 +45,7 @@ impl AdminCommand {
     pub fn parse(args: &[String]) -> Result<Self, String> {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         match args.as_slice() {
+            ["init"] => Ok(Self::Init),
             ["status"] => Ok(Self::Status),
             ["open", date] => Ok(Self::Open {
                 date: NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| format!("date: {e}"))?,
@@ -125,20 +129,27 @@ impl Admin {
         out
     }
 
-    /// How many partitions the ledger has, as the nodes report it. Waits for
-    /// a node to answer; nodes that disagree are an error.
+    /// How many partitions the ledger has, as the nodes report it.
     pub async fn partitions(&self) -> Result<PartitionId, String> {
+        self.client.partitions(self.patience).await
+    }
+
+    /// Form every partition's group, by asking the first node that answers.
+    /// Run once when a cluster is created; running it again changes nothing.
+    pub async fn init(&self) -> Result<Value, String> {
         let deadline = tokio::time::Instant::now() + self.patience;
+        let mut last = "no nodes configured".to_string();
         loop {
-            let counts: Vec<usize> = self.status().await.into_values().filter_map(Result::ok).map(|s| s.len()).collect();
-            match counts.as_slice() {
-                [] if tokio::time::Instant::now() >= deadline => return Err("no ledger node answered".to_string()),
-                [] => tokio::time::sleep(Duration::from_millis(250)).await,
-                [first, rest @ ..] if rest.iter().all(|c| c == first) => {
-                    return PartitionId::try_from(*first).map_err(|e| format!("partition count: {e}"));
+            for addr in self.client.nodes() {
+                match self.client.init(addr).await {
+                    Ok(()) => return Ok(json!({ "formed_by": addr })),
+                    Err(e) => last = format!("{addr}: {e}"),
                 }
-                _ => return Err(format!("the nodes disagree about how many partitions there are: {counts:?}")),
             }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!("no ledger node answered: {last}"));
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
         }
     }
 
@@ -156,9 +167,8 @@ impl Admin {
     async fn business_date(&self, partition: PartitionId) -> Result<Option<NaiveDate>, String> {
         let deadline = tokio::time::Instant::now() + self.patience;
         loop {
-            match self.client.query(partition, &Query::BusinessDate).await {
-                Ok(Answer::BusinessDate(date)) => return Ok(date),
-                Ok(other) => return Err(format!("a node answered a different question: {other:?}")),
+            match self.client.business_date(partition).await {
+                Ok(date) => return Ok(date),
                 Err(e) if tokio::time::Instant::now() >= deadline => return Err(e.to_string()),
                 Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
             }
@@ -242,6 +252,7 @@ impl Admin {
     /// Carry out a command and describe what happened.
     pub async fn run(&self, command: AdminCommand) -> Result<Value, String> {
         match command {
+            AdminCommand::Init => self.init().await,
             AdminCommand::Status => {
                 let status = self.status().await;
                 if status.values().all(Result::is_err) {

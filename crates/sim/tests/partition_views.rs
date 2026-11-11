@@ -289,3 +289,260 @@ fn merged_partition_candidates_decide_as_one_read_model_does() {
     assert_eq!(short.clone().merge(long.clone()).reference, long.reference);
     assert_eq!(long.clone().merge(short).reference, long.reference);
 }
+
+/// Purpose: the life index follows one person across a retail policy and a group scheme
+/// through everything that changes what they are covered for: identification as a scheme
+/// member, a cover expiring at its age limit, indexation adding a layer, layers merging,
+/// and the scheme lapsing unpaid. At each point the sum at risk on the person equals what
+/// the policies themselves say. A gap in the event sequence is an error, not a guess.
+/// Why it matters: sum at risk per person is what reinsurance cessions and the underwriting
+/// check on existing cover are computed from. Counting an expired or lapsed cover overstates
+/// the insurer's exposure; missing a scheme member's cover understates it, and the first
+/// anyone hears of that is a claim larger than the retention.
+#[test]
+fn the_life_index_follows_a_person_across_policies() {
+    use ic_core::{LifeId, PartyId};
+    use ic_readmodel::ProjectionError;
+    use ic_sim::persona::{group_scheme, member};
+
+    let mut cluster = Cluster::in_memory(1, 5);
+    cluster.open(open()).unwrap();
+    for activation in shipped_activations().unwrap() {
+        cluster.activate_everywhere(activation).unwrap();
+    }
+    let mut view = Projections::new();
+    let feed = |cluster: &mut Cluster, view: &mut Projections| {
+        for event in cluster.take_events() {
+            view.apply(&event).unwrap();
+        }
+    };
+    let person = PartyId("party-00000001".to_string());
+
+    // Aged 69 at issue: trauma cover (expiry age 70) has a year left.
+    let retail = term_life(
+        1,
+        open(),
+        d(1958, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        Some(100_000_00),
+        Frequency::Yearly,
+        None,
+    );
+    let retail_id = retail.policy.clone();
+    cluster.submit(0, "new-business", issue_command(retail)).unwrap();
+    let scheme = group_scheme(2, open(), vec![member("m1", d(1958, 3, 10), "staff", 80_000_00)]);
+    let scheme_id = scheme.policy.clone();
+    cluster.submit(0, "new-business", issue_command(scheme)).unwrap();
+    feed(&mut cluster, &mut view);
+
+    // The scheme member is not yet known to be this person.
+    assert_eq!(
+        view.sum_at_risk(&person),
+        BTreeMap::from([("life".to_string(), 500_000_00), ("trauma".to_string(), 100_000_00)])
+    );
+    assert_eq!(view.party_of(&scheme_id, &LifeId("m1".to_string())), None);
+    assert_eq!(view.layers_on_party(&person).len(), 2);
+
+    cluster
+        .submit(
+            0,
+            "claims",
+            Command::IdentifyMember {
+                policy: scheme_id.clone(),
+                life: LifeId("m1".to_string()),
+                party: person.clone(),
+            },
+        )
+        .unwrap();
+    feed(&mut cluster, &mut view);
+    assert_eq!(view.party_of(&scheme_id, &LifeId("m1".to_string())), Some(&person));
+    let scheme_rows = view.layers_on_policy(&scheme_id);
+    assert_eq!(scheme_rows.len(), 1);
+    let (scheme_type, scheme_cover) = (scheme_rows[0].cover_type.clone(), scheme_rows[0].sum_insured_minor);
+    assert_eq!(scheme_cover, 160_000_00, "twice an 80,000 salary");
+    let mut expected = BTreeMap::from([("life".to_string(), 500_000_00), ("trauma".to_string(), 100_000_00)]);
+    *expected.entry(scheme_type).or_insert(0) += scheme_cover;
+    assert_eq!(view.sum_at_risk(&person), expected);
+
+    // A year on: the retail policy is paid, the scheme never was and has
+    // lapsed, trauma has expired and life cover has been indexed.
+    cluster
+        .submit(
+            0,
+            "cash-matching",
+            Command::ApplyReceipt {
+                policy: retail_id.clone(),
+                receipt: "ahead".to_string(),
+                amount: Money::new(500_000_00, NZD),
+            },
+        )
+        .unwrap();
+    for _ in 0..366 {
+        assert!(cluster.end_of_day().unwrap().breaks.is_empty());
+    }
+    feed(&mut cluster, &mut view);
+    assert_eq!(view.policy(&scheme_id).unwrap().status, ic_core::PolicyStatus::Lapsed);
+    assert!(view.layers_on_policy(&scheme_id).iter().all(|r| !r.in_force));
+    assert_eq!(view.sum_at_risk(&person), BTreeMap::from([("life".to_string(), 512_500_00)]));
+    assert!(
+        view.layers_on_policy(&retail_id).iter().all(|r| r.cover == "life"),
+        "the expired cover is still indexed"
+    );
+
+    // Two more anniversaries, then the old layers are merged: fewer rows, the same cover.
+    for _ in 0..800 {
+        assert!(cluster.end_of_day().unwrap().breaks.is_empty());
+    }
+    feed(&mut cluster, &mut view);
+    let today = cluster.business_date().unwrap();
+    let covered = |cluster: &Cluster| cluster.state(0).policies[&retail_id].covers["life"].sum_insured_on(today);
+    let rows_before = view.layers_on_policy(&retail_id).len();
+    assert_eq!(view.sum_at_risk(&person)["life"], covered(&cluster));
+    cluster
+        .submit(
+            0,
+            "policy-servicing",
+            Command::MergeLayers {
+                policy: retail_id.clone(),
+                cover: "life".to_string(),
+            },
+        )
+        .unwrap();
+    feed(&mut cluster, &mut view);
+    assert!(view.layers_on_policy(&retail_id).len() < rows_before);
+    assert_eq!(
+        view.layers_on_policy(&retail_id).len(),
+        cluster.state(0).policies[&retail_id].covers["life"].layers.len()
+    );
+    assert_eq!(view.sum_at_risk(&person)["life"], covered(&cluster));
+
+    // An event that skips ahead is refused and changes nothing.
+    cluster
+        .submit(
+            0,
+            "policy-servicing",
+            Command::DeclineIndexation {
+                policy: retail_id,
+                declined: true,
+            },
+        )
+        .unwrap();
+    let mut next = cluster.take_events();
+    let at = view.checkpoint(0);
+    let mut skipped = next.remove(0);
+    skipped.seq += 1;
+    assert_eq!(
+        view.apply(&skipped),
+        Err(ProjectionError::Gap {
+            partition: 0,
+            expected: at + 1,
+            got: at + 2
+        })
+    );
+    assert_eq!(view.checkpoint(0), at);
+}
+
+/// Purpose: a scheme member's cover in the life index follows the membership file. A
+/// joiner appears with the formula's sum insured, a salary change replaces it, a leaver
+/// disappears, the other members are untouched throughout, and the index with members in
+/// it survives being saved and loaded.
+/// Why it matters: scheme cover is a formula over member details, not layers on the
+/// policy, so it reaches the index only through membership events. An index that kept a
+/// leaver's cover, or the cover on an old salary, would feed the wrong sum at risk into
+/// reinsurance accumulation for every employee of every scheme.
+#[test]
+fn scheme_members_cover_follows_the_membership_file() {
+    use ic_core::command::MemberChange;
+    use ic_core::policy::LifeFactors;
+    use ic_core::{LifeId, PartyId};
+    use ic_sim::persona::{group_scheme, member};
+
+    let mut cluster = Cluster::in_memory(1, 5);
+    cluster.open(open()).unwrap();
+    for activation in shipped_activations().unwrap() {
+        cluster.activate_everywhere(activation).unwrap();
+    }
+    let mut view = Projections::new();
+    let feed = |cluster: &mut Cluster, view: &mut Projections| {
+        for event in cluster.take_events() {
+            view.apply(&event).unwrap();
+        }
+    };
+    let scheme = group_scheme(1, open(), vec![member("m1", d(1980, 1, 1), "staff", 80_000_00)]);
+    let scheme_id = scheme.policy.clone();
+    cluster.submit(0, "new-business", issue_command(scheme)).unwrap();
+    let membership = |cluster: &mut Cluster, change: MemberChange| {
+        let command = Command::ApplyMembership {
+            policy: scheme_id.clone(),
+            changes: vec![change],
+        };
+        cluster.submit(0, "group-admin", command).unwrap();
+    };
+    let cover_of = |view: &Projections, life: &str| -> Vec<i64> {
+        let rows = view.layers_on_policy(&scheme_id);
+        rows.iter()
+            .filter(|r| r.life == LifeId(life.to_string()))
+            .map(|r| r.sum_insured_minor)
+            .collect()
+    };
+
+    membership(
+        &mut cluster,
+        MemberChange::Joined {
+            life: member("m2", d(1990, 6, 1), "staff", 50_000_00),
+            effective: open(),
+        },
+    );
+    feed(&mut cluster, &mut view);
+    assert_eq!(cover_of(&view, "m1"), vec![160_000_00]);
+    assert_eq!(cover_of(&view, "m2"), vec![100_000_00], "twice a 50,000 salary");
+
+    // Identified, the joiner's cover counts against the person.
+    let person = PartyId("party-00000042".to_string());
+    let identify = Command::IdentifyMember {
+        policy: scheme_id.clone(),
+        life: LifeId("m2".to_string()),
+        party: person.clone(),
+    };
+    cluster.submit(0, "claims", identify).unwrap();
+    feed(&mut cluster, &mut view);
+    assert_eq!(view.sum_at_risk(&person).values().sum::<i64>(), 100_000_00);
+
+    membership(
+        &mut cluster,
+        MemberChange::Changed {
+            life: LifeId("m2".to_string()),
+            effective: open(),
+            factors: LifeFactors {
+                date_of_birth: Some(d(1990, 6, 1)),
+                sex: None,
+                smoker: None,
+                category: Some("staff".to_string()),
+                salary_minor: Some(60_000_00),
+            },
+        },
+    );
+    feed(&mut cluster, &mut view);
+    assert_eq!(cover_of(&view, "m2"), vec![120_000_00], "the old salary's cover is replaced, not added to");
+    assert_eq!(view.sum_at_risk(&person).values().sum::<i64>(), 120_000_00);
+    assert_eq!(cover_of(&view, "m1"), vec![160_000_00]);
+
+    let saved = serde_json::to_string(&view).unwrap();
+    let loaded: Projections = serde_json::from_str(&saved).unwrap();
+    assert_eq!(loaded, view);
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), saved);
+
+    membership(
+        &mut cluster,
+        MemberChange::Left {
+            life: LifeId("m2".to_string()),
+            effective: open(),
+        },
+    );
+    feed(&mut cluster, &mut view);
+    assert_eq!(cover_of(&view, "m2"), Vec::<i64>::new());
+    assert!(view.sum_at_risk(&person).is_empty());
+    assert_eq!(cover_of(&view, "m1"), vec![160_000_00]);
+}

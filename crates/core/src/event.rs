@@ -36,6 +36,17 @@ pub struct LayerInfo {
     pub start: NaiveDate,
 }
 
+/// What a scheme member is covered for under a formula-driven cover: the
+/// formula's result on the member's latest notified details. Scheme cover is
+/// not held as layers, so this is how it reaches the life index.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberCover {
+    pub cover: String,
+    pub cover_type: String,
+    pub life: LifeId,
+    pub sum_insured_minor: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LifeInfo {
     pub life: LifeId,
@@ -87,6 +98,9 @@ pub enum Event {
         inception: NaiveDate,
         lives: Vec<LifeInfo>,
         layers: Vec<LayerInfo>,
+        /// Formula-driven cover on each member of a scheme.
+        #[serde(default)]
+        members: Vec<MemberCover>,
     },
     PolicyStatusChanged {
         policy: PolicyId,
@@ -194,6 +208,9 @@ pub enum Event {
         policy: PolicyId,
         life: LifeId,
         effective: NaiveDate,
+        /// The member's cover on the details just notified.
+        #[serde(default)]
+        covers: Vec<MemberCover>,
     },
     MemberLeft {
         policy: PolicyId,
@@ -204,6 +221,9 @@ pub enum Event {
         policy: PolicyId,
         life: LifeId,
         effective: NaiveDate,
+        /// The member's cover on the details just notified.
+        #[serde(default)]
+        covers: Vec<MemberCover>,
     },
     MemberIdentified {
         policy: PolicyId,
@@ -224,6 +244,8 @@ pub enum Event {
         from_partition: PartitionId,
         lives: Vec<LifeInfo>,
         layers: Vec<LayerInfo>,
+        #[serde(default)]
+        members: Vec<MemberCover>,
         number: String,
         /// What a directory that first meets the policy here needs to list it.
         product_code: String,

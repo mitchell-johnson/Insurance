@@ -28,7 +28,7 @@ use sha2::{Digest, Sha256};
 use crate::accounts;
 use crate::catalog::Catalog;
 use crate::event::{Event, MessageBody, OutboundMessage};
-use crate::lifecycle::{layer_infos, life_infos};
+use crate::lifecycle::{layer_infos, life_infos, scheme_member_covers};
 use crate::machine::{CoreState, Ctx, Reject};
 use crate::policy::{Policy, PolicyStatus, TransferOut};
 use crate::postings::PostingSet;
@@ -215,6 +215,11 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
     if !postings.is_empty() {
         ctx.post(&mut state.ledger, "transfer_in", Some(&policy), ctx.date, postings, detail)?;
     }
+    let members = state
+        .catalog
+        .product(&policy.product_hash)
+        .map(|product| scheme_member_covers(product, &policy))
+        .unwrap_or_default();
     ctx.emit(Event::TransferLanded {
         policy: id.clone(),
         transfer_id: record.transfer_id.clone(),
@@ -222,6 +227,7 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
         from_partition: record.source_partition,
         lives: life_infos(&policy),
         layers: layer_infos(&policy),
+        members,
         number: policy.number.clone(),
         product_code: policy.product_code.clone(),
         status: policy.status,

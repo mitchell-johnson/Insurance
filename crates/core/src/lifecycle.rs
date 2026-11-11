@@ -12,12 +12,12 @@ use crate::accounts::{self, dims};
 use crate::bitemporal::Bitemporal;
 use crate::catalog::Catalog;
 use crate::command::IssuePolicy;
-use crate::event::{Event, LayerInfo, LifeInfo};
+use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::machine::{CoreState, Ctx, Reject, MAX_MEMBERSHIP_CHUNK};
-use crate::policy::{Cover, CoverStatus, Layer, LayerOrigin, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
+use crate::policy::{Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
 use crate::postings::{div_half_even, PostingSet};
-use crate::premium::{member_period_premium, retail_period_premium};
-use crate::{arrears, billing, cash, earning};
+use crate::premium::{member_period_premium, member_sum_insured, retail_period_premium};
+use crate::{arrears, billing, cash, earning, LifeId};
 
 /// How far back a policy may be incepted or a change backdated.
 pub(crate) const BACKDATING_LIMIT_DAYS: u64 = 400;
@@ -51,6 +51,38 @@ pub(crate) fn layer_infos(policy: &Policy) -> Vec<LayerInfo> {
                 start: l.start,
             })
         })
+        .collect()
+}
+
+/// A scheme member's cover under each formula-driven cover, on the given
+/// details.
+pub(crate) fn member_covers(product: &ProductDefinition, policy: &Policy, life: &LifeId, factors: &LifeFactors) -> Vec<MemberCover> {
+    policy
+        .covers
+        .values()
+        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce)
+        .filter_map(|c| {
+            let def = product.cover(&c.code)?;
+            let sum_insured_minor = member_sum_insured(def, factors, life, product.rounding, product.currency).ok()?;
+            Some(MemberCover {
+                cover: c.code.clone(),
+                cover_type: c.cover_type.clone(),
+                life: life.clone(),
+                sum_insured_minor,
+            })
+        })
+        .collect()
+}
+
+/// Formula-driven cover on every current member of a scheme, on each
+/// member's latest notified details. Empty for a retail policy.
+pub(crate) fn scheme_member_covers(product: &ProductDefinition, policy: &Policy) -> Vec<MemberCover> {
+    policy
+        .lives
+        .values()
+        .filter(|l| l.left.is_none() && !matches!(l.kind, LifeKind::Pool { .. }))
+        .filter_map(|l| Some(member_covers(product, policy, &l.id, l.factors.as_of(NaiveDate::MAX)?)))
+        .flatten()
         .collect()
 }
 
@@ -211,6 +243,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         inception: policy.inception,
         lives: life_infos(&policy),
         layers: layer_infos(&policy),
+        members: scheme_member_covers(&product, &policy),
     });
     // Premium is in advance: the first period is due at issue.
     let r = billing::bill_due_periods(&mut state.ledger, &state.catalog, &product, &mut policy, ctx);

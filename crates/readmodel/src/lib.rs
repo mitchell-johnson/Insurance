@@ -7,7 +7,7 @@ pub mod scope;
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo};
+use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
 use ic_core::{GroupId, LifeId, PartyId, PolicyId, PolicyStatus, Standing};
 use ic_ledger::PartitionId;
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,11 @@ pub struct Projections {
     /// policy -> (cover, layer) -> row.
     #[serde(with = "layers_as_rows")]
     layers: BTreeMap<PolicyId, BTreeMap<(String, u32), LifeIndexRow>>,
+    /// policy -> (life, cover) -> row, for scheme members. Their cover comes
+    /// from a formula over the member's details and is not held as layers;
+    /// the row follows the details as notified. Layer is zero.
+    #[serde(default, with = "members_as_rows")]
+    members: BTreeMap<PolicyId, BTreeMap<(LifeId, String), LifeIndexRow>>,
 }
 
 impl Projections {
@@ -103,6 +108,7 @@ impl Projections {
         }
         self.billing.remove(policy);
         self.layers.remove(policy);
+        self.members.remove(policy);
         self.life_party.retain(|(p, _), _| p != policy);
     }
 
@@ -115,10 +121,41 @@ impl Projections {
     }
 
     fn set_layers(&mut self, policy: &PolicyId, partition: PartitionId, layers: &[LayerInfo]) {
-        let rows = self.layers.entry(policy.clone()).or_default();
-        rows.clear();
-        for l in layers {
-            rows.insert((l.cover.clone(), l.layer), row(policy, partition, l));
+        // A policy with no layers has no entry: an empty one would not
+        // survive being saved and loaded.
+        self.layers.remove(policy);
+        if !layers.is_empty() {
+            let rows = layers.iter().map(|l| ((l.cover.clone(), l.layer), row(policy, partition, l))).collect();
+            self.layers.insert(policy.clone(), rows);
+        }
+    }
+
+    /// Replace what the index holds for the members these covers are on.
+    fn set_member_covers(&mut self, policy: &PolicyId, partition: PartitionId, life: Option<&LifeId>, covers: &[MemberCover]) {
+        let in_force = self.directory.get(policy).is_none_or(|e| e.status == PolicyStatus::InForce);
+        let rows = self.members.entry(policy.clone()).or_default();
+        match life {
+            Some(life) => rows.retain(|(l, _), _| l != life),
+            None => rows.clear(),
+        }
+        if rows.is_empty() && covers.is_empty() {
+            self.members.remove(policy);
+            return;
+        }
+        for c in covers {
+            rows.insert(
+                (c.life.clone(), c.cover.clone()),
+                LifeIndexRow {
+                    policy: policy.clone(),
+                    partition,
+                    cover: c.cover.clone(),
+                    cover_type: c.cover_type.clone(),
+                    layer: 0,
+                    life: c.life.clone(),
+                    sum_insured_minor: c.sum_insured_minor,
+                    in_force,
+                },
+            );
         }
     }
 
@@ -131,6 +168,7 @@ impl Projections {
                 product_code,
                 lives,
                 layers,
+                members,
                 ..
             } => {
                 self.directory.insert(
@@ -148,12 +186,14 @@ impl Projections {
                 self.by_number.insert(number.clone(), policy.clone());
                 self.set_lives(policy, lives);
                 self.set_layers(policy, partition, layers);
+                self.set_member_covers(policy, partition, None, members);
             }
             Event::TransferLanded {
                 policy,
                 group,
                 lives,
                 layers,
+                members,
                 number,
                 product_code,
                 status,
@@ -177,6 +217,7 @@ impl Projections {
                 self.by_number.insert(number.clone(), policy.clone());
                 self.set_lives(policy, lives);
                 self.set_layers(policy, partition, layers);
+                self.set_member_covers(policy, partition, None, members);
             }
             Event::PolicyStatusChanged { policy, to, .. } => {
                 if *to == PolicyStatus::Transferred {
@@ -196,10 +237,10 @@ impl Projections {
                     }
                 }
                 let in_force = *to == PolicyStatus::InForce;
-                if let Some(rows) = self.layers.get_mut(policy) {
-                    for r in rows.values_mut() {
-                        r.in_force = in_force;
-                    }
+                let layers = self.layers.get_mut(policy).into_iter().flat_map(BTreeMap::values_mut);
+                let members = self.members.get_mut(policy).into_iter().flat_map(BTreeMap::values_mut);
+                for r in layers.chain(members) {
+                    r.in_force = in_force;
                 }
             }
             Event::StandingChanged { policy, to, .. } => {
@@ -247,9 +288,19 @@ impl Projections {
                 }
             }
             Event::CoverExpired { policy, cover, .. } => {
-                if let Some(rows) = self.layers.get_mut(policy) {
+                let emptied = self.layers.get_mut(policy).is_some_and(|rows| {
                     rows.retain(|(c, _), _| c != cover);
+                    rows.is_empty()
+                });
+                if emptied {
+                    self.layers.remove(policy);
                 }
+            }
+            Event::MemberJoined { policy, life, covers, .. } | Event::MemberChanged { policy, life, covers, .. } => {
+                self.set_member_covers(policy, partition, Some(life), covers);
+            }
+            Event::MemberLeft { policy, life, .. } => {
+                self.set_member_covers(policy, partition, Some(life), &[]);
             }
             Event::MemberIdentified { policy, life, party } => {
                 self.life_party.insert((policy.clone(), life.clone()), party.clone());
@@ -280,14 +331,14 @@ impl Projections {
 
     // --- life index ---
 
-    /// Every policy, cover and layer on a person, across all partitions.
+    /// Every policy, cover and layer on a person, across all partitions:
+    /// retail layers and cover as a member of a scheme alike.
     pub fn layers_on_party(&self, party: &PartyId) -> Vec<&LifeIndexRow> {
-        self.layers
-            .iter()
-            .flat_map(|(policy, rows)| {
-                rows.values()
-                    .filter(move |r| self.life_party.get(&(policy.clone(), r.life.clone())) == Some(party))
-            })
+        let layers = self.layers.values().flat_map(BTreeMap::values);
+        let members = self.members.values().flat_map(BTreeMap::values);
+        layers
+            .chain(members)
+            .filter(|r| self.life_party.get(&(r.policy.clone(), r.life.clone())) == Some(party))
             .collect()
     }
 
@@ -302,7 +353,9 @@ impl Projections {
     }
 
     pub fn layers_on_policy(&self, policy: &PolicyId) -> Vec<&LifeIndexRow> {
-        self.layers.get(policy).map(|r| r.values().collect()).unwrap_or_default()
+        let layers = self.layers.get(policy).into_iter().flat_map(BTreeMap::values);
+        let members = self.members.get(policy).into_iter().flat_map(BTreeMap::values);
+        layers.chain(members).collect()
     }
 
     pub fn party_of(&self, policy: &PolicyId, life: &LifeId) -> Option<&PartyId> {
@@ -336,6 +389,33 @@ mod as_pairs {
 
     pub fn deserialize<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<K, V>, D::Error> {
         Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
+}
+
+/// Scheme members' cover is written as its rows, like the layers.
+mod members_as_rows {
+    use std::collections::BTreeMap;
+
+    use ic_core::{LifeId, PolicyId};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::LifeIndexRow;
+
+    type Members = BTreeMap<PolicyId, BTreeMap<(LifeId, String), LifeIndexRow>>;
+
+    pub fn serialize<S: Serializer>(members: &Members, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(members.values().flat_map(BTreeMap::values))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Members, D::Error> {
+        let mut members = Members::new();
+        for row in Vec::<LifeIndexRow>::deserialize(d)? {
+            members
+                .entry(row.policy.clone())
+                .or_default()
+                .insert((row.life.clone(), row.cover.clone()), row);
+        }
+        Ok(members)
     }
 }
 

@@ -68,6 +68,9 @@ struct Jwk {
     e: String,
 }
 
+/// Where Entra ID issues tokens and publishes its signing keys.
+pub const ENTRA_AUTHORITY: &str = "https://login.microsoftonline.com";
+
 #[derive(Clone)]
 pub enum Auth {
     /// Identity from `x-dev-subject`, `x-dev-roles` and `x-dev-relationships`.
@@ -84,11 +87,19 @@ pub struct Entra {
 }
 
 impl Auth {
+    /// Validate tokens issued by `tenant` at the global Entra ID authority.
     pub fn entra(tenant: &str, audience: &str) -> Self {
+        Self::entra_at(ENTRA_AUTHORITY, tenant, audience)
+    }
+
+    /// Validate tokens issued by `tenant` at another authority: a sovereign
+    /// cloud's, such as `https://login.microsoftonline.us`.
+    pub fn entra_at(authority: &str, tenant: &str, audience: &str) -> Self {
+        let authority = authority.trim_end_matches('/');
         Auth::Entra(Arc::new(Entra {
-            issuer: format!("https://login.microsoftonline.com/{tenant}/v2.0"),
+            issuer: format!("{authority}/{tenant}/v2.0"),
             audience: audience.to_string(),
-            jwks_url: format!("https://login.microsoftonline.com/{tenant}/discovery/v2.0/keys"),
+            jwks_url: format!("{authority}/{tenant}/discovery/v2.0/keys"),
             http: reqwest::Client::new(),
             keys: RwLock::new((BTreeMap::new(), None)),
         }))

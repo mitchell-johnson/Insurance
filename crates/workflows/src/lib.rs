@@ -12,6 +12,7 @@
 //! - [`temporal`]: the workflow, its activities and the worker.
 //! - [`settings`]: the worker's configuration.
 
+pub mod due;
 pub mod eod;
 pub mod settings;
 pub mod steps;

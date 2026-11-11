@@ -73,6 +73,12 @@ lto = "thin"
 codegen-units = 1
 
 # Smaller, faster debug builds: line numbers for backtraces, nothing more.
+# Test-only RSA key generation is unusably slow unoptimised.
+[profile.dev.package.rsa]
+opt-level = 3
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
 [profile.dev]
 debug = "line-tables-only"
 incremental = false

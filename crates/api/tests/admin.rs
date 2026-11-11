@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use common::{d, Ledger, TOKEN};
 use ic_api::admin::{Admin, AdminCommand, AdminSettings, USAGE};
-use ic_raft::{Answer, Query};
 use serde_json::json;
 
 fn admin(ledger: &Ledger, patience: Duration) -> Admin {
@@ -35,6 +34,9 @@ async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
     let ledger = Ledger::start("admin", 3, 2).await;
     let admin = admin(&ledger, Duration::from_secs(20));
     assert_eq!(admin.partitions().await, Ok(2));
+    // Forming groups that already exist changes nothing.
+    let formed = admin.run(AdminCommand::Init).await.unwrap();
+    assert!(formed["formed_by"].is_string(), "{formed}");
 
     let date = d(2027, 11, 15);
     let opened = admin.run(AdminCommand::Open { date }).await.unwrap();
@@ -44,10 +46,7 @@ async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
     let error = admin.run(AdminCommand::Open { date: d(2027, 11, 16) }).await.unwrap_err();
     assert!(error.contains("is on 2027-11-15, not 2027-11-16"), "{error}");
     for partition in 0..2 {
-        assert_eq!(
-            ledger.client.query(partition, &Query::BusinessDate).await.unwrap(),
-            Answer::BusinessDate(Some(date))
-        );
+        assert_eq!(ledger.client.business_date(partition).await.unwrap(), Some(date));
     }
 
     let first = admin.run(AdminCommand::ActivateShipped).await.unwrap();
@@ -71,12 +70,11 @@ async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
             None,
         );
         let partition = ic_core::home_partition(&application.group) % 2;
-        let query = Query::Quote {
-            application: Box::new(application),
-        };
-        let Answer::Quote(Some(Ok(_))) = ledger.client.query(partition, &query).await.unwrap() else {
-            panic!("partition {partition} could not price with the shipped configuration");
-        };
+        let quote = ledger.client.quote(partition, application).await.unwrap();
+        assert!(
+            matches!(quote, Some(Ok(_))),
+            "partition {partition} could not price with the shipped configuration: {quote:?}"
+        );
     }
 
     let status = admin.run(AdminCommand::Status).await.unwrap();
@@ -118,7 +116,12 @@ async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
         auth,
         patience: Duration::from_millis(300),
     });
-    for command in [AdminCommand::Status, AdminCommand::Open { date }, AdminCommand::ActivateShipped] {
+    for command in [
+        AdminCommand::Init,
+        AdminCommand::Status,
+        AdminCommand::Open { date },
+        AdminCommand::ActivateShipped,
+    ] {
         let error = gone.run(command.clone()).await.unwrap_err();
         assert!(error.contains("no ledger node answered"), "{command:?}: {error}");
     }
@@ -133,6 +136,7 @@ async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
 #[test]
 fn the_command_line_is_read_strictly() {
     assert_eq!(AdminCommand::parse(&args("status")), Ok(AdminCommand::Status));
+    assert_eq!(AdminCommand::parse(&args("init")), Ok(AdminCommand::Init));
     assert_eq!(AdminCommand::parse(&args("open 2027-11-15")), Ok(AdminCommand::Open { date: d(2027, 11, 15) }));
     assert_eq!(AdminCommand::parse(&args("activate-shipped")), Ok(AdminCommand::ActivateShipped));
     let members: BTreeMap<u64, String> = [(1, "a:7000".to_string()), (4, "d:7000".to_string())].into();
@@ -188,6 +192,7 @@ fn the_binary_fails_loudly() {
     let run = |args: &[&str], env: &[(&str, &str)]| {
         let output = Process::new(env!("CARGO_BIN_EXE_ic-admin"))
             .env_clear()
+            .envs(std::env::vars().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
             .envs(env.iter().copied())
             .args(args)
             .output()
@@ -195,7 +200,7 @@ fn the_binary_fails_loudly() {
         (output.status.success(), String::from_utf8_lossy(&output.stderr).into_owned())
     };
     let (ok, stderr) = run(&["reopen"], &[]);
-    assert!(!ok && stderr.contains("usage: ic-admin status"), "{stderr}");
+    assert!(!ok && stderr.contains("usage: ic-admin init"), "{stderr}");
     let (ok, stderr) = run(&["status"], &[("IC_CLUSTER_AUTH", "open")]);
     assert!(!ok && stderr.contains("IC_NODES is required"), "{stderr}");
     let unreachable = [("IC_NODES", "127.0.0.1:1"), ("IC_CLUSTER_AUTH", "open"), ("IC_LEDGER_PATIENCE_SECS", "0")];

@@ -59,6 +59,7 @@ impl Fleet {
         let mut command = Process::new(WORKER);
         command
             .env_clear()
+            .envs(std::env::vars().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
             .env("TEMPORAL_ADDRESS", &self.temporal)
             .env("TEMPORAL_NAMESPACE", "default")
             .env("IC_NODES", nodes)
@@ -206,7 +207,13 @@ async fn the_workflow_survives_workers_dying() {
 }
 
 fn run(args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
-    let output = Process::new(WORKER).env_clear().envs(env.iter().copied()).args(args).output().unwrap();
+    let output = Process::new(WORKER)
+        .env_clear()
+        .envs(std::env::vars().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
+        .envs(env.iter().copied())
+        .args(args)
+        .output()
+        .unwrap();
     (output.status.success(), String::from_utf8_lossy(&output.stderr).into_owned())
 }
 

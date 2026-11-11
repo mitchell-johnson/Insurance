@@ -76,10 +76,18 @@ fn without_nodes_the_api_is_the_insurance_in_a_box() {
     assert_eq!(
         settings.identity,
         Identity::Entra {
+            authority: "https://login.microsoftonline.com".to_string(),
             tenant: "tenant".to_string(),
             audience: "api://core".to_string()
         }
     );
+    let sovereign = read(&[
+        ("IC_ENTRA_TENANT_ID", "tenant"),
+        ("IC_ENTRA_AUDIENCE", "api://core"),
+        ("IC_ENTRA_AUTHORITY", "https://login.microsoftonline.us"),
+    ])
+    .unwrap();
+    assert!(matches!(sovereign.identity, Identity::Entra { authority, .. } if authority == "https://login.microsoftonline.us"));
     let Mode::Single(engine) = settings.mode else {
         panic!("expected the single-process mode");
     };
