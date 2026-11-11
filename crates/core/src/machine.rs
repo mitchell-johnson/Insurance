@@ -112,6 +112,16 @@ impl Ctx<'_> {
             debug_assert!(ledger.has_account(&p.account), "account {} not opened", p.account);
         }
         self.work += postings.len() as u32;
+        // Every line of a policy's entry belongs to the policy's statutory
+        // fund and product, the cash side included, so each fund's trial
+        // balance balances on its own.
+        let mut postings = postings;
+        if let Some(policy) = policy {
+            for posting in &mut postings {
+                posting.dims.statutory_fund.get_or_insert_with(|| policy.statutory_fund.clone());
+                posting.dims.product.get_or_insert_with(|| policy.product_code.clone());
+            }
+        }
         let draft = EntryDraft {
             kind: kind.to_string(),
             value_date,
