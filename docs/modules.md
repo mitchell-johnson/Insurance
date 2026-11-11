@@ -22,7 +22,34 @@ A module reads the core in two ways and writes to it in one:
 ## Where a module's state lives
 
 - **State that belongs to one policy on one partition** (a claim, for example) lives in that partition's replicated state, attached through the core's module port (`CoreState::apply_module`). It is in the partition's snapshot and state hash, counts against the apply budget, and commits or fails together with the core command it issues.
-- **State that spans partitions** (per-life reinsurance accumulation, an adviser's commission account, the finance ledger) lives in the module's own replicated group on the ledger nodes, with the same log, snapshots and failover as a partition, fed from every partition's event stream. The generic host for this is in `ic-raft`. Until a module is attached to it, run the state machine over `ic_log::Replica` with a `FileLog`.
+- **State that spans partitions** (per-life reinsurance accumulation, an adviser's commission account, the finance ledger) lives in the module's own replicated group on the ledger nodes, with the same log, snapshots, membership changes and failover as a partition.
+
+## The module host
+
+`ic_raft::module` hosts a module's group. The host knows nothing about any module; a module hands it a state machine and a name.
+
+```rust
+use ic_raft::{hosted, ModuleSpec, ModuleState};
+
+fn reinsurance() -> Box<dyn ModuleState> {
+    // Any ic_log::StateMachine that is Serialize + DeserializeOwned, plus a
+    // function that answers questions from it.
+    hosted(Accumulation::default(), answer)
+}
+
+let modules = vec![ModuleSpec::new("reinsurance", reinsurance)?];
+ic_raft::server::start_with(settings, modules).await?;
+```
+
+- A command is the JSON of the state machine's `Command`; the reply is the JSON of its `Output`. Send it with `ClusterClient::propose_module(name, &json)` (or `propose_module_until`), which finds the group's leader and follows redirects. `POST /v1/modules/{name}/commands` is the route underneath.
+- Delivery is at least once. Put an idempotency key in the command and answer a repeat with the original result, as the core does.
+- A command the module cannot decode is refused (`ModuleReply.result` is `Err`) and changes nothing. A module that wants to refuse a well-formed command returns its own error in its `Output`.
+- `ClusterClient::query_module(name, &json)` asks the leader, after it has confirmed with a majority that it still leads. Queries never change state.
+- The state is saved as one JSON value for snapshots and hashed for `GET /v1/modules`, where every member reports its state hash. Members that applied the same entries must report the same hash, so keep maps as `BTreeMap`, never `HashMap`, and keep everything a replica holds inside the saved state.
+- The group lives in `<data dir>/module-<name>` on each node. The name is permanent. Every node of a cluster hosts the same modules; `PUT /v1/modules/{name}/members` replaces a failed member exactly as for a partition.
+- A node that is given a directory holding another module's snapshot does not start.
+
+Until a module is attached to the host, run the state machine over `ic_log::Replica` with a `FileLog`; moving it across is the `hosted(...)` line above. The feed of each partition's events into a module's group is the next piece and is not on `main` yet; until then a module's driver reads events itself and proposes them as commands.
 
 ## Changing the core
 

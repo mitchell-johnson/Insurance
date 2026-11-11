@@ -26,6 +26,7 @@ use openraft::BasicNode;
 use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, EndOfDayView, Refusal};
 use crate::machine::Machine;
+use crate::module::{ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus};
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
 use crate::peers::Identity;
@@ -167,6 +168,8 @@ impl Settings {
 pub struct Host {
     pub id: NodeId,
     pub groups: BTreeMap<PartitionId, Node>,
+    /// A member of each hosted module's group, by the module's name.
+    pub modules: BTreeMap<String, ModuleGroup>,
     peers: BTreeMap<NodeId, String>,
     auth: ClusterAuth,
     cold: Cold,
@@ -207,6 +210,26 @@ impl Host {
     /// Open the logs and start every group's member. Existing logs are
     /// replayed, so a restarted node comes back with the state it had.
     pub async fn start(settings: &Settings) -> Result<Arc<Self>, String> {
+        Self::start_with(settings, &[]).await
+    }
+
+    /// As [`Self::start`], and a member of each module's group besides.
+    /// Every node of a cluster hosts the same modules.
+    pub async fn start_with(settings: &Settings, specs: &[ModuleSpec]) -> Result<Arc<Self>, String> {
+        let mut modules = BTreeMap::new();
+        for spec in specs {
+            let group = ModuleGroup::group_name(&spec.name);
+            let dir = settings.data_dir.join(&group);
+            let log = LogStore::open(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let machine = ModuleMachine::open(spec.clone(), &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let config = node::config(&group, settings.heartbeat_ms, settings.snapshot_every)?;
+            let identity = Identity::open(settings.id, &dir).map_err(|e| e.to_string())?;
+            let network = Network::http_group(identity.clone(), group, settings.auth.clone());
+            let member = ModuleGroup::start(identity, &spec.name, log, machine, network, config).await?;
+            if modules.insert(spec.name.clone(), member).is_some() {
+                return Err(format!("module {} is listed twice", spec.name));
+            }
+        }
         let mut groups = BTreeMap::new();
         for partition in 0..settings.partitions {
             let dir = settings.data_dir.join(format!("partition-{partition}"));
@@ -233,6 +256,7 @@ impl Host {
             sink,
             segment_entries: settings.segment_entries,
             groups,
+            modules,
             peers: settings.peers.clone(),
             auth: settings.auth.clone(),
         }))
@@ -245,11 +269,18 @@ impl Host {
         for member in self.groups.values() {
             member.initialize(members.clone()).await?;
         }
+        for member in self.modules.values() {
+            member.initialize(members.clone()).await?;
+        }
         Ok(())
     }
 
     pub fn statuses(&self) -> Vec<NodeStatus> {
         self.groups.values().map(Node::status).collect()
+    }
+
+    pub fn module_statuses(&self) -> Vec<ModuleStatus> {
+        self.modules.values().map(ModuleGroup::status).collect()
     }
 
     fn view(&self, member: &Node) -> EndOfDayView {
@@ -367,6 +398,9 @@ impl Host {
         for member in self.groups.values() {
             member.shutdown().await;
         }
+        for member in self.modules.values() {
+            member.shutdown().await;
+        }
     }
 }
 
@@ -441,6 +475,48 @@ async fn members(State(host): State<Arc<Host>>, Path(partition): Path<PartitionI
     }
 }
 
+fn no_module(module: &str) -> Response {
+    refuse(StatusCode::NOT_FOUND, ProposeError::Unknown(format!("this node hosts no module {module}")))
+}
+
+async fn module_propose(State(host): State<Arc<Host>>, Path(module): Path<String>, Json(command): Json<serde_json::Value>) -> Response {
+    let Some(member) = host.modules.get(&module) else {
+        return no_module(&module);
+    };
+    match member.propose(command).await {
+        Ok(reply) => Json(reply).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn module_query(State(host): State<Arc<Host>>, Path(module): Path<String>, Json(question): Json<serde_json::Value>) -> Response {
+    let Some(member) = host.modules.get(&module) else {
+        return no_module(&module);
+    };
+    match member.query(question).await {
+        Ok(answer) => Json(answer).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+/// Set the voters of a module's group. Asked of the group's leader.
+async fn module_members(State(host): State<Arc<Host>>, Path(module): Path<String>, Json(members): Json<BTreeMap<NodeId, String>>) -> Response {
+    let Some(member) = host.modules.get(&module) else {
+        return no_module(&module);
+    };
+    if members.is_empty() {
+        return refuse(StatusCode::BAD_REQUEST, ProposeError::Unknown("a group needs at least one member".to_string()));
+    }
+    match member.set_members(members).await {
+        Ok(()) => Json(()).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn module_status(State(host): State<Arc<Host>>) -> Json<Vec<ModuleStatus>> {
+    Json(host.module_statuses())
+}
+
 async fn status(State(host): State<Arc<Host>>) -> Json<Vec<NodeStatus>> {
     Json(host.statuses())
 }
@@ -454,9 +530,17 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/v1/partitions/{partition}/end-of-day", get(end_of_day))
         .route("/v1/partitions/{partition}/query", post(query))
         .route("/v1/partitions/{partition}/members", axum::routing::put(members))
+        .route("/v1/modules", get(module_status))
+        .route("/v1/modules/{module}/commands", post(module_propose))
+        .route("/v1/modules/{module}/query", post(module_query))
+        .route("/v1/modules/{module}/members", axum::routing::put(module_members))
         .with_state(host.clone());
     for (partition, member) in &host.groups {
         router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone(), member.identity.clone()));
+    }
+    for (name, member) in &host.modules {
+        let path = format!("/raft/{}", ModuleGroup::group_name(name));
+        router = router.nest(&path, network::routes(member.raft.clone(), member.identity.clone()));
     }
     // Everything above needs the cluster token. The probe does not: the
     // kubelet has no token, and the probe says nothing about the ledger.
@@ -476,7 +560,12 @@ pub struct Running {
 
 /// Start a node: open its logs, join its groups and listen.
 pub async fn start(settings: Settings) -> Result<Running, String> {
-    let host = Host::start(&settings).await?;
+    start_with(settings, Vec::new()).await
+}
+
+/// Start a node that also hosts a member of each module's group.
+pub async fn start_with(settings: Settings, modules: Vec<ModuleSpec>) -> Result<Running, String> {
+    let host = Host::start_with(&settings, &modules).await?;
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
@@ -538,7 +627,12 @@ impl Running {
 
 /// Run a node until `stop` resolves.
 pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
-    let running = start(settings).await?;
+    serve_with(settings, Vec::new(), stop).await
+}
+
+/// Run a node and its modules until `stop` resolves.
+pub async fn serve_with(settings: Settings, modules: Vec<ModuleSpec>, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
+    let running = start_with(settings, modules).await?;
     stop.await;
     tracing::info!("ledger node stopping");
     running.stop().await

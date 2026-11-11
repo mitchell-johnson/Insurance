@@ -272,6 +272,14 @@ impl RaftStateMachine<TypeConfig> for Machine {
                             ..Reply::default()
                         }
                     }
+                    // A module's command has no meaning to a partition. The
+                    // node never proposes one here; a log that holds one is
+                    // applied the same way by every member: as nothing.
+                    EntryPayload::Normal(Proposal::Module(_)) => Reply {
+                        log_index: entry.log_id.index(),
+                        module: Some(Err("this group is a ledger partition, not a module".to_string())),
+                        ..Reply::default()
+                    },
                 }
             };
             if let Some(responder) = responder {
