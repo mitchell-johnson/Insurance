@@ -2,6 +2,12 @@
 
 use ic_sim::year::{run_year, YearConfig};
 
+/// Purpose: a synthetic insurer with retail policies and a group scheme runs a full year of
+/// payments, bounces, lapses, reinstatements, cancellations, anniversaries, transfers and
+/// membership files, reconciling cleanly on every day with no policy exceptions.
+/// Why it matters: the scenario tests check each behaviour alone. This checks that they hold
+/// together over a year of everything happening at once, which is where interactions between them
+/// show.
 #[test]
 fn the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean() {
     let cfg = YearConfig::small(20271115);
@@ -21,6 +27,11 @@ fn the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean() {
     assert_eq!(report.policy_exceptions, 0);
 }
 
+/// Purpose: two runs of the synthetic insurer from the same seed give identical reports and state
+/// hashes, and a different seed gives different ones.
+/// Why it matters: a failure found in a long run can only be investigated if the run can be
+/// repeated exactly. The second half shows the seed really does drive the run, so the first half is
+/// not trivially true.
 #[test]
 fn the_same_seed_gives_the_same_ledger_and_a_different_seed_does_not() {
     let mut cfg = YearConfig::small(7);

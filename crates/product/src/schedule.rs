@@ -49,6 +49,10 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
+    /// Purpose: a policy anchored on the 31st bills on the last day of shorter months and returns
+    /// to the 31st afterwards.
+    /// Why it matters: stepping a month at a time from the previous due date would drift to the
+    /// 28th for good after one February. Billing dates are always worked out from the anchor.
     #[test]
     fn month_end_anchor_does_not_drift() {
         let a = d(2028, 1, 31);
@@ -57,6 +61,10 @@ mod tests {
         assert_eq!(period_start(a, Frequency::Monthly, 13), Some(d(2029, 2, 28)));
     }
 
+    /// Purpose: a policy incepted on 29 February has its anniversary on 28 February in ordinary
+    /// years and 29 February in leap years, and the policy year turns over on that day.
+    /// Why it matters: anniversaries drive indexation and re-rating. A leap-day policy must not
+    /// skip an anniversary or have it a day late three years in four.
     #[test]
     fn leap_day_anniversary() {
         let inc = d(2028, 2, 29);
@@ -66,6 +74,10 @@ mod tests {
         assert_eq!(policy_year(inc, d(2029, 2, 28)), 1);
     }
 
+    /// Purpose: age is the number of birthdays reached: one less on the day before a birthday than
+    /// on the birthday itself.
+    /// Why it matters: stepped premiums are rated by age. An age that turned over a day early or
+    /// late would put the customer in the wrong rate band on a bill.
     #[test]
     fn ages() {
         assert_eq!(age_on(d(1990, 6, 15), d(2027, 6, 14)), 36);

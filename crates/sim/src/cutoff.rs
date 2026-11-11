@@ -36,6 +36,10 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
+    /// Purpose: the business day is 25 hours long when daylight saving ends, 23 when it starts, and
+    /// 24 otherwise, including on a leap day.
+    /// Why it matters: anything scheduled by elapsed hours would run the close an hour off twice a
+    /// year. The day's length is taken from the calendar, not assumed.
     #[test]
     fn clock_changes_make_short_and_long_days() {
         assert_eq!(day_length_hours(d(2028, 3, 15)), Some(24));
@@ -47,6 +51,11 @@ mod tests {
         assert_eq!(day_length_hours(d(2028, 2, 29)), Some(24));
     }
 
+    /// Purpose: the cutoff that ends a business date is midnight in Auckland, which is 11:00 UTC in
+    /// summer and 12:00 UTC in winter.
+    /// Why it matters: the business date is a New Zealand date. A cutoff fixed in UTC would move by
+    /// an hour against customers' clocks at each change and put late-evening payments on the wrong
+    /// day.
     #[test]
     fn cutoff_is_midnight_in_auckland() {
         // NZDT is UTC+13 in summer

@@ -88,6 +88,11 @@ pub(crate) fn scale_map(m: &BTreeMap<String, i64>, num: i128, den: i128) -> BTre
 mod tests {
     use super::div_half_even;
 
+    /// Purpose: integer division rounds halves to the even neighbour, for every combination of
+    /// signs.
+    /// Why it matters: premium is split across covers and periods with this function. Half-even has
+    /// no bias, so splits do not drift in one direction; a sign mistake would show only on refunds
+    /// and credit adjustments, which divide negative amounts.
     #[test]
     fn half_even() {
         assert_eq!(div_half_even(5, 2), 2);

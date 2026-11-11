@@ -60,6 +60,10 @@ async fn issued() -> Router {
     app
 }
 
+/// Purpose: the health probe answers without authentication, and the readiness probe reports the
+/// business date.
+/// Why it matters: Kubernetes restarts a container on the first and sends it traffic on the second.
+/// Readiness tied to the business date keeps callers away from a ledger that has not been opened.
 #[tokio::test]
 async fn health_and_readiness() {
     let app = app();
@@ -69,6 +73,9 @@ async fn health_and_readiness() {
     assert_eq!(body["business_date"], "2027-03-01");
 }
 
+/// Purpose: a quote returns the first period's premium and leaves no policy behind.
+/// Why it matters: quotes are asked for far more often than policies are issued. They must be
+/// priced exactly as a policy would be and must never reach the log.
 #[tokio::test]
 async fn a_quote_prices_without_writing_anything() {
     let app = app();
@@ -82,6 +89,12 @@ async fn a_quote_prices_without_writing_anything() {
     );
 }
 
+/// Purpose: an anonymous caller is refused, a caller without the module's role is forbidden, a
+/// write without an idempotency key is a bad request, and the leader's own commands cannot be sent
+/// through the API whatever roles are claimed.
+/// Why it matters: the API is the boundary other systems cross. Each of these is a way in that must
+/// be closed: no identity, the wrong identity, an unrepeatable write, and a caller reaching for the
+/// commands that move the business date.
 #[tokio::test]
 async fn callers_must_be_known_and_hold_the_module_role() {
     let app = app();
@@ -107,6 +120,10 @@ async fn callers_must_be_known_and_hold_the_module_role() {
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
+/// Purpose: the same application sent twice with one idempotency key is issued once and reported as
+/// a duplicate, and sent under a new key is refused because the policy exists.
+/// Why it matters: callers retry on timeouts. A retry must not issue a second policy, and a genuine
+/// second attempt must be told clearly that the policy is already there.
 #[tokio::test]
 async fn issuing_twice_with_one_key_issues_once() {
     let app = issued().await;
@@ -129,6 +146,11 @@ async fn issuing_twice_with_one_key_issues_once() {
     assert_eq!(body["title"], "policy_exists");
 }
 
+/// Purpose: the same policy read by staff, the policyholder, an adviser, a lender and a stranger
+/// gives each exactly the sections the audience rules allow, and the stranger cannot tell it
+/// exists.
+/// Why it matters: this is the privacy model as callers meet it. An adviser seeing a loading, or a
+/// stranger learning that a policy number is real, is a breach.
 #[tokio::test]
 async fn each_audience_sees_its_own_slice_of_the_policy() {
     let app = issued().await;
@@ -160,6 +182,11 @@ async fn each_audience_sees_its_own_slice_of_the_policy() {
     assert_eq!(Call::new("GET", path).viewer("stranger", "").send(&app).await.0, StatusCode::NOT_FOUND);
 }
 
+/// Purpose: a payment quoting the policy number is matched and applied, the same payment sent again
+/// is a duplicate, the balance goes to zero, and a payment nobody can place becomes an exception
+/// rather than a guess.
+/// Why it matters: payment files are sent twice and references are mistyped. Money must be applied
+/// once to the right policy, or held for a person to decide.
 #[tokio::test]
 async fn a_payment_with_the_policy_number_is_applied_once() {
     let app = issued().await;
@@ -185,6 +212,11 @@ async fn a_payment_with_the_policy_number_is_applied_once() {
     assert_eq!(body["status"], "exception");
 }
 
+/// Purpose: only operations staff can run the close, which advances the business date, reconciles
+/// cleanly and publishes the signed root; afterwards a servicing command addressed by policy alone
+/// is routed to its partition.
+/// Why it matters: the close is the one operation that moves the whole ledger forward. It must be
+/// restricted, report honestly, and leave the system serving requests on the new day.
 #[tokio::test]
 async fn the_close_advances_the_date_reconciles_and_publishes_the_root() {
     let app = issued().await;

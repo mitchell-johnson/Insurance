@@ -69,6 +69,11 @@ mod tests {
         NaiveDate::from_ymd_opt(y, m, day).unwrap()
     }
 
+    /// Purpose: a value recorded late with an earlier effective date is seen from that date when
+    /// asked what was true, and not seen when asked what was known before it was recorded.
+    /// Why it matters: a pay rise learned of in June but effective in March changes group premiums
+    /// from March. Adjusting for it needs both answers: what is true now, and what the earlier
+    /// bills were based on.
     #[test]
     fn backdated_change_is_visible_on_both_timelines() {
         // salary known as 80k from January; in June we learn it rose to 90k in March
@@ -81,6 +86,11 @@ mod tests {
         assert_eq!(b.as_of(d(2026, 12, 1)), None);
     }
 
+    /// Purpose: a correction effective from the very start replaces the original value on the
+    /// timeline of what was true, while the original stays visible as what was known earlier.
+    /// Why it matters: a wrong date of birth is corrected back to inception and premiums re-rated.
+    /// The original must remain on record, because documents and bills were issued in reliance on
+    /// it.
     #[test]
     fn correction_from_the_start_supersedes() {
         let mut b = Bitemporal::new(d(2027, 1, 1), d(2027, 1, 1), 1, "1980-01-01");

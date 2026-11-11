@@ -112,6 +112,13 @@ fn small_ledger() -> Cluster {
     c
 }
 
+/// Purpose: against a stand-in for Azure's HTTP endpoints, the workload identity credential
+/// exchanges its federated token once per scope, Blob Storage writes once and refuses an overwrite,
+/// Key Vault returns a signature naming the key version, and events for ledger partition n go to
+/// hub partition n.
+/// Why it matters: these adapters are the only code that talks to Azure, and no test here can reach
+/// the real services. This pins the requests they make, so a change to a header or a URL is caught
+/// before a deployment finds it.
 #[tokio::test]
 async fn workload_identity_blob_key_vault_and_event_hubs_speak_the_expected_protocols() {
     let (base, fake) = fake_azure().await;
@@ -154,6 +161,11 @@ async fn workload_identity_blob_key_vault_and_event_hubs_speak_the_expected_prot
     let _ = std::fs::remove_file(token_file);
 }
 
+/// Purpose: the day's Merkle root is signed and stored, verifies, can be published again unchanged,
+/// and a different root for the same day is refused.
+/// Why it matters: the published root is the insurer's evidence that a closed day's books have not
+/// changed since. It must be repeatable, because the close can be retried, and impossible to
+/// replace.
 #[tokio::test]
 async fn the_days_merkle_root_is_signed_published_once_and_verifiable() {
     let mut c = small_ledger();
@@ -172,6 +184,12 @@ async fn the_days_merkle_root_is_signed_published_once_and_verifiable() {
     assert_eq!(stored, published);
 }
 
+/// Purpose: journal segments sealed in write-once storage link to each other as entries do, sealing
+/// the same entries again changes nothing, altered content or a gap is refused, and the segments
+/// read back verify as one chain to the ledger's head.
+/// Why it matters: once sealed, entries are dropped from the nodes, so the cold tier is the only
+/// copy of old history. It must be complete, in order, and safe for a new leader to repeat after
+/// the old one died part way.
 #[tokio::test]
 async fn sealed_segments_link_to_the_chain_and_replay_from_the_cold_tier() {
     let mut c = small_ledger();

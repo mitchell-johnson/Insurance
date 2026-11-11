@@ -72,6 +72,11 @@ fn earned_after(n: i128, d: i128) -> i128 {
     he(PREMIUM) + he(FEE)
 }
 
+/// Purpose: issuing a policy bills the first month to the cent, binds the definitions in force,
+/// earns a third of the premium after ten of thirty days and all of it after thirty, to the fine
+/// unit, and bills the next period on its due date.
+/// Why it matters: billing and earning are the core of the general ledger for an insurer. Earned
+/// plus unearned must equal billed on every day of a period, or income is misstated.
 #[test]
 fn issue_bills_the_first_period_and_earns_it_exactly() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -110,6 +115,11 @@ fn issue_bills_the_first_period_and_earns_it_exactly() {
         .all(|e| e.body.product_hash.as_deref() == Some(s.policies[&id].product_hash.as_str())));
 }
 
+/// Purpose: an unpaid policy moves from grace to suspended to lapsed on the days its product sets,
+/// with the books reconciling at each stage, and is reinstated when the arrears are paid within the
+/// window.
+/// Why it matters: these dates decide whether a claim is paid. A policy that lapsed a day early, or
+/// stayed in force unpaid, is a legal and financial error either way.
 #[test]
 fn unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -161,6 +171,10 @@ fn unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates() {
     days(&mut c, 3);
 }
 
+/// Purpose: once the reinstatement window has passed, a lapsed policy cannot be reinstated however
+/// much is paid.
+/// Why it matters: after the window the insurer is entitled to underwrite again. Reinstating
+/// automatically would put a risk back on the books that nobody has assessed.
 #[test]
 fn reinstatement_window_closes() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -170,6 +184,10 @@ fn reinstatement_window_closes() {
     assert_eq!(c.submit(p, "collections", Command::Reinstate { policy: id }).unwrap_err().code, "window_closed");
 }
 
+/// Purpose: when a payment is reversed, the policy's standing is worked out from the original due
+/// date, and the same receipt cannot be reversed twice.
+/// Why it matters: a bounced direct debit means the premium was never paid. If each bounce
+/// restarted the clock, a customer could stay covered indefinitely without paying.
 #[test]
 fn a_dishonour_does_not_reset_the_lapse_clock() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -207,6 +225,10 @@ fn a_dishonour_does_not_reset_the_lapse_clock() {
     assert!(c.reconcile().is_empty());
 }
 
+/// Purpose: money paid beyond what is owed waits in the policy's suspense account, pays later bills
+/// as they fall due, and can be refunded up to the amount held and no further.
+/// Why it matters: overpayments are the customer's money until a bill takes them. They must be
+/// visible, used before the customer is asked to pay again, and impossible to refund twice.
 #[test]
 fn money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -243,6 +265,11 @@ fn money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing() {
     assert!(c.reconcile().is_empty());
 }
 
+/// Purpose: cancelling inside the cooling-off period refunds all premium paid, cancelling later
+/// refunds the unearned part to the cent, and a cancelled policy is never billed again.
+/// Why it matters: the cooling-off refund is a statutory right, and the pro-rata refund is the
+/// customer's money for cover not given. Both must be exact, and a cancelled policy must stay
+/// cancelled.
 #[test]
 fn cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -272,6 +299,11 @@ fn cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part() {
     assert_eq!(c.state(p).policies[&b].periods_billed, 1, "a cancelled policy is never billed again");
 }
 
+/// Purpose: a health policy's bill posts GST to the tax account and premium to unearned, tags every
+/// posting with its statutory fund, and reverses the GST on premium that lapses unpaid.
+/// Why it matters: GST billed is owed to Inland Revenue, and GST on a bill never paid is not.
+/// Statutory fund is how a life insurer keeps each fund's assets apart; a posting without it cannot
+/// be reported.
 #[test]
 fn health_premium_splits_gst_to_the_tax_account() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -297,6 +329,12 @@ fn health_premium_splits_gst_to_the_tax_account() {
     assert!(c.reconcile().is_empty());
 }
 
+/// Purpose: on the anniversary, cover increases by the index as a new layer effective that day, the
+/// stepped premium is re-rated for the new age and cover, and the customer can decline further
+/// indexation.
+/// Why it matters: indexation keeps cover in step with inflation and is how premiums rise each
+/// year. The increase must start on the anniversary, not before, and stop when the customer says
+/// so.
 #[test]
 fn anniversary_indexes_cover_and_re_rates_stepped_premium() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -328,6 +366,12 @@ fn anniversary_indexes_cover_and_re_rates_stepped_premium() {
     .unwrap();
 }
 
+/// Purpose: a scheme of a thousand members is loaded and billed in chunks that each stay within the
+/// work budget of one command, and a leaver notified late has premium credited back to the date
+/// they left.
+/// Why it matters: one command must not stall a partition while it bills a large employer.
+/// Employers always report leavers late, and the scheme is owed back premium charged for people who
+/// had gone.
 #[test]
 fn group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver() {
     let mut c = cluster(1, d(2027, 11, 1));
@@ -447,6 +491,10 @@ fn group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver() {
     );
 }
 
+/// Purpose: a rate table scoped to one scheme prices that scheme, and every other scheme still gets
+/// the standard table.
+/// Why it matters: large schemes negotiate their own rates. One scheme's special terms must never
+/// leak into another's premiums, in either direction.
 #[test]
 fn a_scoped_rate_table_applies_only_to_its_scheme() {
     let mut c = cluster(1, d(2027, 11, 1));
@@ -464,6 +512,12 @@ fn a_scoped_rate_table_applies_only_to_its_scheme() {
     assert_eq!(c.state(0).policies[&idb].outstanding_minor(), 14_67);
 }
 
+/// Purpose: a policy moves to a group on another partition while the relay delays and duplicates
+/// the messages: it is frozen in flight, lands once with its covers, receivables and balances
+/// intact, the books reconcile throughout, and earning missed in flight is caught up.
+/// Why it matters: a transfer is the one operation that spans partitions, and messages between
+/// partitions are delivered at least once in no promised time. Money in transit must never be
+/// counted twice or dropped.
 #[test]
 fn a_policy_transfers_between_groups_under_fault_injection_with_nothing_lost() {
     let mut c = cluster(4, d(2027, 11, 15));
@@ -537,6 +591,10 @@ fn a_policy_transfers_between_groups_under_fault_injection_with_nothing_lost() {
     assert_eq!(earned, MONTHLY as i128 * FINE_PER_MINOR + earned_after(4, 31));
 }
 
+/// Purpose: when the target partition refuses a transfer, the policy is unfrozen where it was, with
+/// its balances as before and the books reconciling.
+/// Why it matters: a transfer can fail for ordinary reasons, such as a product not active on the
+/// target. The policy must come back into service by itself, not sit frozen until someone notices.
 #[test]
 fn a_rejected_transfer_unfreezes_and_nothing_has_moved() {
     let mut c = Cluster::in_memory(2, 7);
@@ -577,6 +635,12 @@ fn a_rejected_transfer_unfreezes_and_nothing_has_moved() {
     assert!(c.reconcile().is_empty());
 }
 
+/// Purpose: a command repeated with the same key is applied once, a command from a module not
+/// allowed to send it is refused, and the business date moves one day at a time and only by the
+/// leader.
+/// Why it matters: every caller retries, so a retry must never post twice. Authorisation in the
+/// core is the second check behind the API: a compromised module still cannot send another module's
+/// commands.
 #[test]
 fn commands_are_idempotent_and_only_accepted_from_the_right_module() {
     let mut c = cluster(1, d(2027, 11, 15));
@@ -599,6 +663,11 @@ fn commands_are_idempotent_and_only_accepted_from_the_right_module() {
     assert!(c.submit(p, "end-of-day", Command::AdvanceBusinessDate { to: d(2027, 11, 16) }).is_err());
 }
 
+/// Purpose: after a hundred days of business, replaying each partition's log gives the same state
+/// hash, the journal's chain verifies, re-summing the journal gives every account's balance, and
+/// the event sequence has no gaps.
+/// Why it matters: determinism is what makes replication and audit possible. Two replicas, or an
+/// auditor a year later, must reach exactly this state from exactly this log.
 #[test]
 fn a_recorded_log_replays_to_an_identical_state_hash_and_the_chain_verifies() {
     let mut c = cluster(2, d(2027, 11, 15));

@@ -232,6 +232,10 @@ mod tests {
         }
     }
 
+    /// Purpose: a state machine recovered from an in-memory log reaches the same state and the same
+    /// applied index as the one that wrote it.
+    /// Why it matters: state is only ever a replay of the log. If replay could differ from the
+    /// first run, a restart would change the books.
     #[test]
     fn memory_replay_matches() {
         let mut r = Replica::recover(MemoryLog::new(), Sum::default()).unwrap();
@@ -243,6 +247,10 @@ mod tests {
         assert_eq!(again.applied(), 10);
     }
 
+    /// Purpose: a file log keeps its entries across a reopen, and a flipped byte is reported as
+    /// corruption at the entry it damaged.
+    /// Why it matters: the single-process ledger's durability rests on this file. A damaged entry
+    /// must stop the process with its position named, never be replayed as if it were a command.
     #[test]
     fn file_log_survives_reopen_and_detects_corruption() {
         let dir = std::env::temp_dir().join(format!("ic-log-test-{}", std::process::id()));

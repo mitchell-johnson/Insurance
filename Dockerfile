@@ -8,9 +8,10 @@
 # --- build ------------------------------------------------------------------
 FROM rust:1.97-bookworm AS build
 WORKDIR /src
-# clang for the Starlark and crypto builds; protoc for the Temporal SDK.
+# clang for the Starlark and crypto builds. The Temporal SDK needs protoc and
+# the well-known .proto files, which Debian ships in libprotobuf-dev.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends clang protobuf-compiler \
+    && apt-get install -y --no-install-recommends clang protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \

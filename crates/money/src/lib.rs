@@ -278,12 +278,21 @@ mod tests {
     use super::*;
     use proptest::prelude::*;
 
+    /// Purpose: money prints as a signed decimal amount with its currency code, including amounts
+    /// under a dollar.
+    /// Why it matters: these strings appear in logs, refusals and reconciliation breaks that people
+    /// act on. "0.5 NZD" for five cents would send someone looking for the wrong amount.
     #[test]
     fn display() {
         assert_eq!(Money::new(-12345, Currency::NZD).to_string(), "-123.45 NZD");
         assert_eq!(Money::new(5, Currency::NZD).to_string(), "0.05 NZD");
     }
 
+    /// Purpose: the same decimal rounds to cents differently under half-up, half-even and down,
+    /// each as its definition says.
+    /// Why it matters: a product names its rounding mode, and the half-cent case is where the modes
+    /// differ. Using the wrong one misprices every premium that lands on a half cent, always in the
+    /// same direction.
     #[test]
     fn rounding_modes() {
         let d = dec("12.345").unwrap();
@@ -292,6 +301,10 @@ mod tests {
         assert_eq!(round_to_money(d, Currency::NZD, RoundingMode::Down).unwrap().minor, 1234);
     }
 
+    /// Purpose: a fraction of a cent is held as fine units, a millionth of a cent, rounded at that
+    /// scale.
+    /// Why it matters: premium is earned daily in amounts smaller than a cent. The fine unit is
+    /// what lets a period's earning add up to exactly the premium billed.
     #[test]
     fn fine_quantisation() {
         // a third of a cent
@@ -299,6 +312,9 @@ mod tests {
         assert_eq!(f.fine, 333_333);
     }
 
+    /// Purpose: adding money in two different currencies is an error.
+    /// Why it matters: a New Zealand dollar and an Australian dollar are not the same thing. Adding
+    /// them would give a number that balances and means nothing.
     #[test]
     fn mismatched_currency() {
         let a = Money::new(1, Currency::NZD);
@@ -306,6 +322,10 @@ mod tests {
         assert!(a.checked_add(b).is_err());
     }
 
+    /// Purpose: a holding of fund units is valued at a unit price and rounded to cents in the mode
+    /// asked for.
+    /// Why it matters: unit-linked balances are shown to customers and paid out at this value; it
+    /// must be the same number wherever it is computed.
     #[test]
     fn unit_value() {
         let u = UnitQty::new(2_500_000, FundId("growth".into()));
@@ -417,6 +437,10 @@ mod tests {
     }
 
     proptest! {
+        /// Purpose: for any accrual amount and every rounding mode, the rounded cents plus the
+        /// remainder equal the original amount exactly, and the remainder is less than a cent.
+        /// Why it matters: rounding is where money goes missing. This property is why a rounding
+        /// difference can always be posted to its own account and the ledger still nets to zero.
         #[test]
         fn round_to_money_remainder_is_exact(fine in -10_000_000_000_000i128..10_000_000_000_000i128) {
             let a = AccrualAmount::new(fine, Currency::NZD);

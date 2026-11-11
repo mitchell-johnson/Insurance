@@ -671,6 +671,10 @@ mod tests {
         }
     }
 
+    /// Purpose: an entry that debits an account held in cents and credits one held in fine units
+    /// balances when the two are the same value.
+    /// Why it matters: billing does exactly this: receivable in cents against unearned premium in
+    /// fine units. If the two scales could not net, the ledger could not record a bill.
     #[test]
     fn cents_and_fine_units_net_together() {
         let mut l = ledger();
@@ -689,6 +693,10 @@ mod tests {
         assert!(l.trial_balance().values().all(|v| *v == 0));
     }
 
+    /// Purpose: an entry whose debits and credits differ by even one fine unit is refused, and the
+    /// ledger is left exactly as it was.
+    /// Why it matters: double entry is the ledger's first defence. A refused entry that still
+    /// changed a balance would be worse than no check at all.
     #[test]
     fn unbalanced_is_rejected_and_changes_nothing() {
         let mut l = ledger();
@@ -705,6 +713,10 @@ mod tests {
         assert_eq!(before, l.digest());
     }
 
+    /// Purpose: a posting in the wrong kind of amount for its account, such as fine units to an
+    /// account held in cents, is refused.
+    /// Why it matters: each account holds one kind of thing. A balance mixing cents and fine units
+    /// would be a number nobody could interpret or reconcile.
     #[test]
     fn unit_types_are_enforced() {
         let mut l = ledger();
@@ -719,6 +731,10 @@ mod tests {
         assert!(matches!(r, Err(LedgerError::UnitMismatch { .. })));
     }
 
+    /// Purpose: fund units balance against fund units, and an entry that tries to balance units
+    /// against currency is refused.
+    /// Why it matters: a unit of a fund is not a dollar. If the two could offset, the ledger would
+    /// net to zero while investors' holdings were wrong.
     #[test]
     fn units_balance_separately_from_currency() {
         let mut l = ledger();
@@ -744,6 +760,11 @@ mod tests {
         assert!(matches!(r, Err(LedgerError::Unbalanced { .. })));
     }
 
+    /// Purpose: the journal's hash chain verifies from the partition's genesis to its head, re-
+    /// summing the entries gives the ledger's balances, and changing one amount in one entry breaks
+    /// verification.
+    /// Why it matters: the chain is what lets an auditor trust a journal handed to them. A change
+    /// to history that still verified would make the published roots worthless.
     #[test]
     fn chain_detects_tampering() {
         let mut l = ledger();
@@ -769,6 +790,11 @@ mod tests {
         assert!(verify_chain(3, &entries).is_err());
     }
 
+    /// Purpose: a hold reduces what is available on an account but not its balance, cannot exceed
+    /// what is available, reports itself when expired, and gives the amount back when released.
+    /// Why it matters: holds reserve money for something in progress, such as a refund being paid.
+    /// Counting held money as available would let it be spent twice; changing the balance would
+    /// break reconciliation.
     #[test]
     fn holds_reduce_available_only() {
         let mut l = ledger();
@@ -804,6 +830,11 @@ mod tests {
         assert_eq!(l.available(&AccountId("recv".into())), 1000);
     }
 
+    /// Purpose: the day's Merkle root over every partition's ledger head changes when any one head
+    /// changes.
+    /// Why it matters: the root is the single value signed and published each day. If one
+    /// partition's history could change without changing it, publishing it would prove nothing
+    /// about that partition.
     #[test]
     fn merkle_root_changes_with_any_head() {
         let mut heads = BTreeMap::new();
@@ -975,6 +1006,10 @@ mod tests {
     }
 
     proptest! {
+        /// Purpose: after any sequence of balanced entries, in cents or fine units and in either
+        /// direction, every unit's trial balance is zero.
+        /// Why it matters: this is the ledger's invariant, checked over random histories rather
+        /// than hand-picked ones. Every reconciliation in the system assumes it.
         #[test]
         fn ledger_always_nets_to_zero(amounts in proptest::collection::vec(1i64..10_000_000, 1..50)) {
             let mut l = ledger();

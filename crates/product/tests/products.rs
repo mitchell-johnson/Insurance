@@ -15,6 +15,10 @@ const HEALTH_RATES: &str = include_str!("../../../products/rates/health_base.sta
 const GROUP_RATES: &str = include_str!("../../../products/rates/group_life_standard.star");
 const DEFS: &str = include_str!("../../../products/definitions/library.star");
 
+/// Purpose: every product, rate table and definition library shipped in the repository loads, with
+/// a content hash and its features in the engine's order.
+/// Why it matters: these files are what a new deployment activates. One that failed to load, or
+/// loaded with features out of order, would stop new business on the first day.
 #[test]
 fn all_shipped_configuration_loads() {
     for (f, s) in [("term_life.star", TERM), ("health_plan.star", HEALTH), ("group_life.star", GROUP)] {
@@ -29,6 +33,10 @@ fn all_shipped_configuration_loads() {
     assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 7);
 }
 
+/// Purpose: a product's content hash changes when a rate in it changes and is the same for the same
+/// content under another file name.
+/// Why it matters: every journal entry carries the hash of the product version that produced it.
+/// The hash must identify what the product said, not what the file was called.
 #[test]
 fn hash_follows_content() {
     let a = load_product("a", TERM).unwrap();
@@ -37,6 +45,10 @@ fn hash_follows_content() {
     assert_eq!(a.content_hash, load_product("c", TERM).unwrap().content_hash);
 }
 
+/// Purpose: the shipped term life product prices a 37 year old non-smoker to the exact cent, and
+/// pricing the same inputs again gives the same answer.
+/// Why it matters: this is the worked example from the rate table, checked by hand. A quote and the
+/// policy issued from it are priced by the same function and must not differ by a cent.
 #[test]
 fn term_life_exact_premium() {
     let p = load_product("term_life.star", TERM).unwrap();
@@ -65,6 +77,9 @@ fn term_life_exact_premium() {
     assert_eq!(m, modal_premium(&p, &annual, Frequency::Monthly).unwrap());
 }
 
+/// Purpose: a 50% underwriting loading multiplies the cover's base premium by exactly 1.5.
+/// Why it matters: loadings are an underwriter's decision about a person's risk. They must scale
+/// the premium of the cover they are on, exactly, and nothing else.
 #[test]
 fn loading_applies_to_base() {
     let p = load_product("term_life.star", TERM).unwrap();
@@ -82,6 +97,11 @@ fn loading_applies_to_base() {
     assert_eq!(loaded, base * ic_money::dec("1.5").unwrap());
 }
 
+/// Purpose: the health plan's premium has 15% GST added per cover, and the total is premium plus
+/// tax.
+/// Why it matters: health insurance carries GST in New Zealand and life insurance does not. The tax
+/// is owed to Inland Revenue from the moment it is billed, so it must be worked out per cover from
+/// the start.
 #[test]
 fn health_premium_carries_gst() {
     let p = load_product("health_plan.star", HEALTH).unwrap();
@@ -96,6 +116,10 @@ fn health_premium_carries_gst() {
     assert_eq!(m.total(), 92_00);
 }
 
+/// Purpose: a product missing its earning feature, with a lapse period shorter than its grace
+/// period, with an unknown line of business, or with an unknown field is refused.
+/// Why it matters: a product file is configuration that behaves like code. A mistake in one must
+/// fail when it is loaded, not when the first policy reaches the day the mistake matters.
 #[test]
 fn bad_products_are_rejected() {
     assert!(load_product("x", &TERM.replace("earning(),", "")).is_err());

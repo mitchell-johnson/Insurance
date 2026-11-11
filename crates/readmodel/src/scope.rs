@@ -115,6 +115,10 @@ mod tests {
         AudienceScope::shipped().unwrap()
     }
 
+    /// Purpose: a policyholder sees the policy's covers, including another adult's, but not that
+    /// adult's underwriting terms; they do see their own when they are also the life insured.
+    /// Why it matters: a loading or exclusion reveals a health condition. Owning the policy does
+    /// not entitle someone to their partner's medical history.
     #[test]
     fn policyholder_sees_policy_but_not_another_adults_health_facts() {
         let s = scope();
@@ -140,6 +144,10 @@ mod tests {
             .unwrap());
     }
 
+    /// Purpose: a life insured who is not the policyholder sees their own cover and terms and
+    /// nothing about anyone else or about billing.
+    /// Why it matters: being covered by a policy is not the same as owning it. Showing an insured
+    /// person the owner's rows or the billing position would disclose someone else's affairs.
     #[test]
     fn life_insured_sees_only_their_own_rows() {
         let s = scope();
@@ -163,6 +171,10 @@ mod tests {
         assert!(!s.may_view("party-partner", &[Relationship::LifeInsured], &billing, true).unwrap());
     }
 
+    /// Purpose: a group scheme member sees their own membership and neither another member's nor
+    /// the employer's invoice.
+    /// Why it matters: a scheme can hold thousands of colleagues. One member's portal must never be
+    /// a way to look up another's cover or what the employer pays.
     #[test]
     fn scheme_member_sees_nothing_else_from_the_scheme() {
         let s = scope();
@@ -186,6 +198,11 @@ mod tests {
         assert!(!s.may_view("party-m1", &[Relationship::Member], &invoice, true).unwrap());
     }
 
+    /// Purpose: an adviser sees cover but not claims, and an employer's administrator sees the
+    /// invoice but neither claims nor an individual's cover.
+    /// Why it matters: advisers and employers have a legitimate interest in the policy and none in
+    /// a person's health. An employer learning of an employee's claim is the disclosure the privacy
+    /// rules exist to prevent.
     #[test]
     fn adviser_and_employer_never_see_sensitive_rows() {
         let s = scope();
@@ -211,6 +228,11 @@ mod tests {
         assert!(!s.may_view("party-hr", &[Relationship::EmployerAdmin], &cover, true).unwrap());
     }
 
+    /// Purpose: a caller with no relationship to a policy sees nothing, and a sensitive row is
+    /// hidden even from its own subject when the relationship data is not known to be current.
+    /// Why it matters: access is granted by relationship and by nothing else, and relationships
+    /// change: a divorce, a new adviser. When they cannot be confirmed as current, the safe answer
+    /// for a sensitive row is no.
     #[test]
     fn no_relationship_no_access_and_stale_data_hides_sensitive_rows() {
         let s = scope();
