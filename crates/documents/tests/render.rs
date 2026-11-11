@@ -40,7 +40,14 @@ fn a_template_renders_values_lists_and_conditions() {
     );
     assert_eq!(render("{{ok}}", json!({"ok": true})).unwrap(), "yes");
     // Each kind of value has its own idea of empty.
-    for (value, shown) in [(json!(0), false), (json!(2), true), (json!(""), false), (json!(null), false), (json!({}), true), (json!(true), true)] {
+    for (value, shown) in [
+        (json!(0), false),
+        (json!(2), true),
+        (json!(""), false),
+        (json!(null), false),
+        (json!({}), true),
+        (json!(true), true),
+    ] {
         assert_eq!(render("{{#if v}}x{{/if}}", json!({ "v": value })).unwrap() == "x", shown);
     }
 }
@@ -54,9 +61,18 @@ fn a_missing_or_mistyped_value_fails_the_render() {
     assert_eq!(render("{{premium|money}}", json!({})), Err(RenderError::Missing("premium".into())));
     assert_eq!(render("{{a.b}}", json!({"a": 3})), Err(RenderError::Missing("a.b".into())));
     assert_eq!(render("{{#each covers}}x{{/each}}", json!({})), Err(RenderError::Missing("covers".into())));
-    assert!(matches!(render("{{#each covers}}x{{/each}}", json!({"covers": 3})), Err(RenderError::WrongType { .. })));
-    assert!(matches!(render("{{premium|money}}", json!({"premium": "12"})), Err(RenderError::WrongType { .. })));
-    assert!(matches!(render("{{start|date}}", json!({"start": "15/11/2027"})), Err(RenderError::WrongType { .. })));
+    assert!(matches!(
+        render("{{#each covers}}x{{/each}}", json!({"covers": 3})),
+        Err(RenderError::WrongType { .. })
+    ));
+    assert!(matches!(
+        render("{{premium|money}}", json!({"premium": "12"})),
+        Err(RenderError::WrongType { .. })
+    ));
+    assert!(matches!(
+        render("{{start|date}}", json!({"start": "15/11/2027"})),
+        Err(RenderError::WrongType { .. })
+    ));
     assert!(matches!(render("{{start|date}}", json!({"start": 5})), Err(RenderError::WrongType { .. })));
     for bad in [json!(null), json!([1]), json!({"x": 1})] {
         let error = render("{{v}}", json!({ "v": bad })).unwrap_err();
@@ -90,7 +106,10 @@ fn malformed_templates_do_not_compile() {
     assert_eq!(compile("{{> clause}}", &none), Err(RenderError::UnknownPart("clause".into())));
     let looped = BTreeMap::from([("a".to_string(), "{{> b}}".to_string()), ("b".to_string(), "{{> a}}".to_string())]);
     assert!(matches!(compile("{{> a}}", &looped), Err(RenderError::IncludeDepth(_))));
-    let nested = BTreeMap::from([("outer".to_string(), "[{{> inner}}]".to_string()), ("inner".to_string(), "{{name}}".to_string())]);
+    let nested = BTreeMap::from([
+        ("outer".to_string(), "[{{> inner}}]".to_string()),
+        ("inner".to_string(), "{{name}}".to_string()),
+    ]);
     assert_eq!(compile("{{> outer}}", &nested).unwrap().render(&json!({"name": "A"})).unwrap(), "[A]");
     assert!(RenderError::Syntax("x".into()).to_string().contains("malformed"));
     assert!(RenderError::IncludeDepth("a".into()).to_string().contains("nested too deeply"));
@@ -111,13 +130,19 @@ fn required_fields_match_the_notation_of_supplied_fields() {
     .unwrap();
     let fields = compiled.fields();
     let required: Vec<&str> = fields.required.iter().map(String::as_str).collect();
-    assert_eq!(required, vec!["covers", "covers[].name", "covers[].terms", "covers[].terms[]", "currency", "name"]);
+    assert_eq!(
+        required,
+        vec!["covers", "covers[].name", "covers[].terms", "covers[].terms[]", "currency", "name"]
+    );
     let optional: Vec<&str> = fields.optional.iter().map(String::as_str).collect();
     assert_eq!(optional, vec!["covers[].loading", "lender", "lender.name", "notes", "notes[].text"]);
 
     let data = json!({"name": "A", "currency": "NZD", "covers": [{"name": "Life", "terms": ["x"]}, {"name": "Trauma", "terms": [], "loading": "50%"}]});
     let have = supplied(&data);
-    assert!(fields.required.iter().filter(|f| *f != "covers[].terms[]").all(|f| have.contains(f)), "{have:?}");
+    assert!(
+        fields.required.iter().filter(|f| *f != "covers[].terms[]").all(|f| have.contains(f)),
+        "{have:?}"
+    );
     assert!(have.contains("covers[].loading"));
     assert_eq!(compiled.prose().matches(" it ").count(), 7);
 }
@@ -149,7 +174,10 @@ fn reading_grade_ranks_plain_words_below_dense_ones() {
     assert!(dense > 200, "{dense}");
     assert_eq!(reading_grade_x10(""), 0);
     assert_eq!(reading_grade_x10("123 456"), 0);
-    assert_eq!(reading_grade_x10("The able people settle here"), reading_grade_x10("The able people settle here"));
+    assert_eq!(
+        reading_grade_x10("The able people settle here"),
+        reading_grade_x10("The able people settle here")
+    );
 }
 
 proptest! {

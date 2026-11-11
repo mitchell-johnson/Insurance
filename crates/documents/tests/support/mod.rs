@@ -40,7 +40,10 @@ pub fn template(id: &str, kind: DocumentKind, body: &str) -> Template {
         version: 1,
         kind,
         title: id.to_string(),
-        products: vec![ProductBinding { code: "term-life".into(), version: 1 }],
+        products: vec![ProductBinding {
+            code: "term-life".into(),
+            version: 1,
+        }],
         definitions_version: Some("defs-2027".into()),
         primary_language: "en".into(),
         bodies: BTreeMap::from([("en".to_string(), body.to_string())]),
@@ -125,14 +128,24 @@ impl Kit {
         let code = applied.result.expect_err("the command should have been refused").code;
         assert!(applied.events.is_empty(), "a refused command produced events");
         // A refusal leaves nothing behind but its stored result.
-        assert!(self.state.documents == documents && self.state.templates == templates && self.state.defects == defects, "a refused command changed state");
+        assert!(
+            self.state.documents == documents && self.state.templates == templates && self.state.defects == defects,
+            "a refused command changed state"
+        );
         code
     }
 
     pub fn approve(&mut self, r: &TemplateRef, roles: &[ApprovalRole]) {
         for role in roles {
             let actor = format!("{role:?}").to_lowercase();
-            self.ok("config", &actor, Command::ApproveTemplate { template: r.clone(), role: *role });
+            self.ok(
+                "config",
+                &actor,
+                Command::ApproveTemplate {
+                    template: r.clone(),
+                    role: *role,
+                },
+            );
         }
     }
 
@@ -155,9 +168,23 @@ impl Kit {
         self.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
         self.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product, ApprovalRole::Compliance]);
         let case = self.case_for(&t, data);
-        self.ok("config", "author", Command::RunRenderingTests { template: r.clone(), cases: vec![case] });
+        self.ok(
+            "config",
+            "author",
+            Command::RunRenderingTests {
+                template: r.clone(),
+                cases: vec![case],
+            },
+        );
         let today = self.today();
-        self.ok("config", "product", Command::ActivateTemplate { template: r.clone(), effective_from: today });
+        self.ok(
+            "config",
+            "product",
+            Command::ActivateTemplate {
+                template: r.clone(),
+                effective_from: today,
+            },
+        );
         r
     }
 
@@ -167,17 +194,45 @@ impl Kit {
         let mut kit = Self::new();
         let data = sample_data();
         kit.activate(template("wording", DocumentKind::PolicyWording, "This policy pays the sum insured."), &data);
-        kit.activate(template("schedule", DocumentKind::PolicySchedule, "Schedule for {{name}}. Premium {{premium|money}}."), &data);
-        let mut renewal = template("renewal", DocumentKind::RenewalNotice, "Dear {{name}}. Your premium will be {{premium|money}} from {{anniversary|date}}.");
+        kit.activate(
+            template("schedule", DocumentKind::PolicySchedule, "Schedule for {{name}}. Premium {{premium|money}}."),
+            &data,
+        );
+        let mut renewal = template(
+            "renewal",
+            DocumentKind::RenewalNotice,
+            "Dear {{name}}. Your premium will be {{premium|money}} from {{anniversary|date}}.",
+        );
         renewal.minimum_notice_days = Some(30);
         kit.activate(renewal, &data);
-        let mut lapse = template("lapse", DocumentKind::LapseNotice, "Dear {{name}}. Your policy will end if the premium is not paid.");
+        let mut lapse = template(
+            "lapse",
+            DocumentKind::LapseNotice,
+            "Dear {{name}}. Your policy will end if the premium is not paid.",
+        );
         lapse.minimum_notice_days = Some(14);
         kit.activate(lapse, &data);
-        kit.activate(template("receipt", DocumentKind::PremiumReceipt, "We received {{premium|money}}. Thank you."), &data);
-        kit.activate(template("decision", DocumentKind::ClaimDecisionLetter, "Dear {{name}}. We have made a decision on your claim."), &data);
+        kit.activate(
+            template("receipt", DocumentKind::PremiumReceipt, "We received {{premium|money}}. Thank you."),
+            &data,
+        );
+        kit.activate(
+            template(
+                "decision",
+                DocumentKind::ClaimDecisionLetter,
+                "Dear {{name}}. We have made a decision on your claim.",
+            ),
+            &data,
+        );
         for p in ["aroha", "ben", "lender"] {
-            kit.ok("documents", "svc", Command::RegisterPartyKey { party: party(p), wrapped_key: format!("wrapped-{p}") });
+            kit.ok(
+                "documents",
+                "svc",
+                Command::RegisterPartyKey {
+                    party: party(p),
+                    wrapped_key: format!("wrapped-{p}"),
+                },
+            );
         }
         kit
     }
@@ -214,7 +269,10 @@ impl Kit {
     pub fn renewal_spec(&self, id: &str) -> Issue {
         let mut issue = self.issue_spec(id, DocumentKind::RenewalNotice, "renewal");
         issue.trigger_event = Some("7-100".into());
-        issue.notice = Some(NoticeSpec { purpose: "renewal".into(), corrects: None });
+        issue.notice = Some(NoticeSpec {
+            purpose: "renewal".into(),
+            corrects: None,
+        });
         issue
     }
 
@@ -241,7 +299,16 @@ impl Kit {
     }
 
     pub fn outcome(&mut self, document: &str, p: &str, channel: Channel, outcome: ic_documents::model::AttemptOutcome) -> Vec<Event> {
-        self.ok("delivery", "svc", Command::RecordOutcome { document: document.into(), party: party(p), channel, outcome })
+        self.ok(
+            "delivery",
+            "svc",
+            Command::RecordOutcome {
+                document: document.into(),
+                party: party(p),
+                channel,
+                outcome,
+            },
+        )
     }
 
     /// Send and confirm on one channel.

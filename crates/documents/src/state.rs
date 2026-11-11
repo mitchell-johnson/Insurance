@@ -65,7 +65,7 @@ struct StoredResult {
 }
 
 /// What applying one command produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Applied {
     pub index: u64,
     pub result: Result<(), Reject>,
@@ -155,6 +155,9 @@ impl StateMachine for DocumentsState {
             actor: env.actor.clone(),
             events: vec![],
         };
+        // Core events are de-duplicated by the checkpoint, so their keys
+        // need not be kept for ever.
+        let remember = !matches!(env.command, Command::ObserveCoreEvents { .. });
         let result = if !env.command.allowed_callers().contains(&env.caller.as_str()) {
             reject("not_allowed", format!("{} may not send {}", env.caller, env.command.name()))
         } else if env.actor.is_empty() {
@@ -183,13 +186,15 @@ impl StateMachine for DocumentsState {
             vec![]
         };
         self.unpublished.extend(events.iter().cloned());
-        self.results.insert(
-            env.key,
-            StoredResult {
-                index,
-                error: result.clone().err(),
-            },
-        );
+        if remember {
+            self.results.insert(
+                env.key,
+                StoredResult {
+                    index,
+                    error: result.clone().err(),
+                },
+            );
+        }
         Applied {
             index,
             result,
@@ -1420,7 +1425,13 @@ impl DocumentsState {
         if records.len() > MAX_CHUNK {
             return reject("invalid", format!("at most {MAX_CHUNK} events at a time"));
         }
-        let checkpoint = self.checkpoints.get(&partition).copied().unwrap_or(0);
+        // A module added to a running cluster starts at the oldest event the
+        // partition still holds: the first event seen sets the checkpoint.
+        let checkpoint = match (self.checkpoints.get(&partition), records.first()) {
+            (Some(seen), _) => *seen,
+            (None, Some(first)) => first.seq.saturating_sub(1),
+            (None, None) => return Ok(()),
+        };
         let mut expected = checkpoint;
         for r in &records {
             if r.partition != partition {

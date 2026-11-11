@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 ic-core.workspace = true
 ic-log.workspace = true
+ic-raft.workspace = true
 ic-azure.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true

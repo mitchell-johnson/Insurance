@@ -13,15 +13,40 @@ use ic_log::{MemoryLog, Replica};
 use support::*;
 
 fn core(seq: u64, on: NaiveDate, event: CoreEvent) -> EventRecord {
-    EventRecord { id: format!("7-{seq}"), partition: 7, seq, business_date: on, log_index: seq, traceparent: None, event }
+    EventRecord {
+        id: format!("7-{seq}"),
+        partition: 7,
+        seq,
+        business_date: on,
+        log_index: seq,
+        traceparent: None,
+        event,
+    }
 }
 
 fn status(seq: u64, on: NaiveDate, to: PolicyStatus) -> EventRecord {
-    core(seq, on, CoreEvent::PolicyStatusChanged { policy: policy("pol-1"), from: PolicyStatus::InForce, to })
+    core(
+        seq,
+        on,
+        CoreEvent::PolicyStatusChanged {
+            policy: policy("pol-1"),
+            from: PolicyStatus::InForce,
+            to,
+        },
+    )
 }
 
 fn standing(seq: u64, on: NaiveDate, to: Option<Standing>) -> EventRecord {
-    core(seq, on, CoreEvent::StandingChanged { policy: policy("pol-1"), from: Some(Standing::Paid), to, oldest_unpaid_due: None })
+    core(
+        seq,
+        on,
+        CoreEvent::StandingChanged {
+            policy: policy("pol-1"),
+            from: Some(Standing::Paid),
+            to,
+            oldest_unpaid_due: None,
+        },
+    )
 }
 
 fn observe(records: Vec<EventRecord>) -> Command {
@@ -29,8 +54,25 @@ fn observe(records: Vec<EventRecord>) -> Command {
 }
 
 fn short_retention(kit: &mut Kit) {
-    let mut rules: BTreeMap<_, _> = DocumentKind::ALL.iter().map(|k| (*k, RetentionRule { basis: RetentionBasis::Issue, days: 30 })).collect();
-    rules.insert(DocumentKind::PolicySchedule, RetentionRule { basis: RetentionBasis::PolicyEnd, days: 60 });
+    let mut rules: BTreeMap<_, _> = DocumentKind::ALL
+        .iter()
+        .map(|k| {
+            (
+                *k,
+                RetentionRule {
+                    basis: RetentionBasis::Issue,
+                    days: 30,
+                },
+            )
+        })
+        .collect();
+    rules.insert(
+        DocumentKind::PolicySchedule,
+        RetentionRule {
+            basis: RetentionBasis::PolicyEnd,
+            days: 60,
+        },
+    );
     kit.ok("config", "ops", Command::ActivateRetention { version: 1, rules });
 }
 
@@ -53,18 +95,46 @@ fn core_events_require_documents_exactly_once() {
     let pol = policy("pol-1");
     let batch = vec![
         standing(1, today, Some(Standing::InGrace)),
-        core(2, today, CoreEvent::ReceiptApplied { policy: pol.clone(), receipt: "rc".into(), allocated_minor: 100, to_suspense_minor: 0 }),
+        core(
+            2,
+            today,
+            CoreEvent::ReceiptApplied {
+                policy: pol.clone(),
+                receipt: "rc".into(),
+                allocated_minor: 100,
+                to_suspense_minor: 0,
+            },
+        ),
         core(3, today, CoreEvent::PolicyReinstated { policy: pol.clone() }),
         standing(4, today, Some(Standing::Paid)),
-        core(5, today, CoreEvent::IndexationChoiceRecorded { policy: pol.clone(), declined: true }),
+        core(
+            5,
+            today,
+            CoreEvent::IndexationChoiceRecorded {
+                policy: pol.clone(),
+                declined: true,
+            },
+        ),
     ];
     let events = kit.ok("relay", "svc", observe(batch.clone()));
     assert_eq!(
         events,
         vec![
-            Event::DocumentRequired { trigger: "7-1:LapseNotice".into(), policy: pol.clone(), kind: DocumentKind::LapseNotice },
-            Event::DocumentRequired { trigger: "7-2:PremiumReceipt".into(), policy: pol.clone(), kind: DocumentKind::PremiumReceipt },
-            Event::DocumentRequired { trigger: "7-3:PolicySchedule".into(), policy: pol.clone(), kind: DocumentKind::PolicySchedule },
+            Event::DocumentRequired {
+                trigger: "7-1:LapseNotice".into(),
+                policy: pol.clone(),
+                kind: DocumentKind::LapseNotice
+            },
+            Event::DocumentRequired {
+                trigger: "7-2:PremiumReceipt".into(),
+                policy: pol.clone(),
+                kind: DocumentKind::PremiumReceipt
+            },
+            Event::DocumentRequired {
+                trigger: "7-3:PolicySchedule".into(),
+                policy: pol.clone(),
+                kind: DocumentKind::PolicySchedule
+            },
         ]
     );
     assert_eq!(kit.state.triggers["7-1:LapseNotice"].purpose.as_deref(), Some("lapse"));
@@ -75,7 +145,14 @@ fn core_events_require_documents_exactly_once() {
     assert!(kit.ok("relay", "svc", observe(batch)).is_empty());
     let overlap = vec![standing(5, today, None), standing(6, today, Some(Standing::Suspended))];
     let events = kit.ok("relay", "svc", observe(overlap));
-    assert_eq!(events, vec![Event::DocumentRequired { trigger: "7-6:SuspensionNotice".into(), policy: pol.clone(), kind: DocumentKind::SuspensionNotice }]);
+    assert_eq!(
+        events,
+        vec![Event::DocumentRequired {
+            trigger: "7-6:SuspensionNotice".into(),
+            policy: pol.clone(),
+            kind: DocumentKind::SuspensionNotice
+        }]
+    );
     assert_eq!(kit.err("relay", "svc", observe(vec![standing(9, today, None)])), "gap");
     let mut other = standing(7, today, None);
     other.partition = 8;
@@ -84,14 +161,25 @@ fn core_events_require_documents_exactly_once() {
 
     let mut notice = kit.issue_spec("l1", DocumentKind::LapseNotice, "lapse");
     notice.trigger_event = Some("7-1".into());
-    notice.notice = Some(ic_documents::command::NoticeSpec { purpose: "lapse".into(), corrects: None });
+    notice.notice = Some(ic_documents::command::NoticeSpec {
+        purpose: "lapse".into(),
+        corrects: None,
+    });
     kit.issue(notice);
     assert!(!kit.state.triggers.contains_key("7-1:LapseNotice"));
 
-    let dismiss = |trigger: &str, reason: &str| Command::DismissTrigger { trigger: trigger.into(), reason: reason.into() };
+    let dismiss = |trigger: &str, reason: &str| Command::DismissTrigger {
+        trigger: trigger.into(),
+        reason: reason.into(),
+    };
     assert_eq!(kit.err("documents", "svc", dismiss("7-2:PremiumReceipt", "")), "no_reason");
     assert_eq!(kit.err("documents", "svc", dismiss("nope", "x")), "unknown_trigger");
-    assert_eq!(kit.ok("documents", "svc", dismiss("7-2:PremiumReceipt", "customer opted out of receipts")), vec![Event::TriggerDismissed { trigger: "7-2:PremiumReceipt".into() }]);
+    assert_eq!(
+        kit.ok("documents", "svc", dismiss("7-2:PremiumReceipt", "customer opted out of receipts")),
+        vec![Event::TriggerDismissed {
+            trigger: "7-2:PremiumReceipt".into()
+        }]
+    );
     assert_eq!(kit.state.triggers.len(), 2);
 }
 
@@ -105,14 +193,37 @@ fn replayed_history_sends_nothing() {
     let mut kit = Kit::ready();
     let old = kit.today() - chrono::Duration::days(8);
     let pol = policy("pol-1");
-    let layer = ic_core::event::LayerInfo { cover: "life".into(), cover_type: "life".into(), layer: 1, life: ic_core::LifeId::from("l1"), sum_insured_minor: 1, start: old };
+    let layer = ic_core::event::LayerInfo {
+        cover: "life".into(),
+        cover_type: "life".into(),
+        layer: 1,
+        life: ic_core::LifeId::from("l1"),
+        sum_insured_minor: 1,
+        start: old,
+    };
     let events = kit.ok(
         "relay",
         "svc",
         observe(vec![
             standing(1, old, Some(Standing::InGrace)),
-            core(2, old, CoreEvent::AnniversaryReached { policy: pol.clone(), number: 1, on: old }),
-            core(3, old, CoreEvent::LayerAdded { policy: pol.clone(), layer, origin: ic_core::LayerOrigin::Indexation }),
+            core(
+                2,
+                old,
+                CoreEvent::AnniversaryReached {
+                    policy: pol.clone(),
+                    number: 1,
+                    on: old,
+                },
+            ),
+            core(
+                3,
+                old,
+                CoreEvent::LayerAdded {
+                    policy: pol.clone(),
+                    layer,
+                    origin: ic_core::LayerOrigin::Indexation,
+                },
+            ),
         ]),
     );
     assert!(events.is_empty());
@@ -120,8 +231,19 @@ fn replayed_history_sends_nothing() {
     assert!(kit.state.triggers.is_empty());
 
     let today = kit.today();
-    let events = kit.ok("relay", "svc", observe(vec![status(4, today, PolicyStatus::Lapsed), status(5, today, PolicyStatus::InForce)]));
-    assert_eq!(events, vec![Event::DocumentRequired { trigger: "7-4:GeneralCorrespondence".into(), policy: pol, kind: DocumentKind::GeneralCorrespondence }]);
+    let events = kit.ok(
+        "relay",
+        "svc",
+        observe(vec![status(4, today, PolicyStatus::Lapsed), status(5, today, PolicyStatus::InForce)]),
+    );
+    assert_eq!(
+        events,
+        vec![Event::DocumentRequired {
+            trigger: "7-4:GeneralCorrespondence".into(),
+            policy: pol,
+            kind: DocumentKind::GeneralCorrespondence
+        }]
+    );
     let too_many: Vec<_> = (6..=206).map(|seq| standing(seq, today, None)).collect();
     assert_eq!(kit.err("relay", "svc", observe(too_many)), "invalid");
 }
@@ -150,9 +272,20 @@ fn retention_runs_from_issue_or_from_the_end_of_the_policy() {
     assert!(doc.wrapped_key.is_none() && doc.destroyed_on == Some(date("2027-12-16")));
     assert_eq!(kit.state.pending_deletes["r1"], "docs/r1");
     assert_eq!(kit.state.inbox(&party("aroha")).len(), 1);
-    assert!(kit.state.pending_sends(10).iter().all(|s| s.document != "r1"), "a destroyed document is not sent");
+    assert!(
+        kit.state.pending_sends(10).iter().all(|s| s.document != "r1"),
+        "a destroyed document is not sent"
+    );
     assert_eq!(
-        kit.err("servicing", "csr", Command::RetryDelivery { document: "r1".into(), party: party("aroha"), channels: vec![Channel::Post] }),
+        kit.err(
+            "servicing",
+            "csr",
+            Command::RetryDelivery {
+                document: "r1".into(),
+                party: party("aroha"),
+                channels: vec![Channel::Post]
+            }
+        ),
         "destroyed"
     );
     kit.ok("retention", "svc", Command::AckDeleted { documents: vec!["r1".into()] });
@@ -162,7 +295,11 @@ fn retention_runs_from_issue_or_from_the_end_of_the_policy() {
     let today = kit.today();
     kit.ok("relay", "svc", observe(vec![status(1, today, PolicyStatus::Lapsed)]));
     assert_eq!(kit.state.documents["s1"].destroy_after, Some(today + chrono::Duration::days(60)));
-    kit.ok("relay", "svc", observe(vec![core(2, today, CoreEvent::PolicyReinstated { policy: policy("pol-1") })]));
+    kit.ok(
+        "relay",
+        "svc",
+        observe(vec![core(2, today, CoreEvent::PolicyReinstated { policy: policy("pol-1") })]),
+    );
     assert_eq!(kit.state.documents["s1"].destroy_after, None);
     kit.advance_days(100);
     assert!(kit.tick().is_empty());
@@ -190,23 +327,60 @@ fn a_legal_hold_blocks_destruction_until_released() {
         kit.issue(kit.issue_spec(id, DocumentKind::PremiumReceipt, "receipt"));
     }
     let hold = |scope| Command::PlaceLegalHold { scope, case: "LIT-9".into() };
-    assert_eq!(kit.err("legal", "counsel", Command::PlaceLegalHold { scope: HoldScope::Document("r1".into()), case: String::new() }), "no_case");
-    assert_eq!(kit.ok("legal", "counsel", hold(HoldScope::Document("r1".into()))), vec![Event::LegalHoldPlaced { case: "LIT-9".into() }]);
+    assert_eq!(
+        kit.err(
+            "legal",
+            "counsel",
+            Command::PlaceLegalHold {
+                scope: HoldScope::Document("r1".into()),
+                case: String::new()
+            }
+        ),
+        "no_case"
+    );
+    assert_eq!(
+        kit.ok("legal", "counsel", hold(HoldScope::Document("r1".into()))),
+        vec![Event::LegalHoldPlaced { case: "LIT-9".into() }]
+    );
     assert!(kit.state.is_held("r1") && !kit.state.is_held("r2") && !kit.state.is_held("ghost"));
     kit.advance_days(31);
     let events = kit.tick();
     assert_eq!(events.len(), 2);
     assert!(kit.state.documents["r1"].destroyed_on.is_none());
 
-    assert_eq!(kit.err("legal", "counsel", Command::ReleaseLegalHold { scope: HoldScope::Policy(policy("pol-1")) }), "no_hold");
-    assert_eq!(kit.ok("legal", "counsel", Command::ReleaseLegalHold { scope: HoldScope::Document("r1".into()) }), vec![Event::LegalHoldReleased]);
+    assert_eq!(
+        kit.err(
+            "legal",
+            "counsel",
+            Command::ReleaseLegalHold {
+                scope: HoldScope::Policy(policy("pol-1"))
+            }
+        ),
+        "no_hold"
+    );
+    assert_eq!(
+        kit.ok(
+            "legal",
+            "counsel",
+            Command::ReleaseLegalHold {
+                scope: HoldScope::Document("r1".into())
+            }
+        ),
+        vec![Event::LegalHoldReleased]
+    );
     assert_eq!(kit.tick(), vec![Event::DocumentDestroyed { document: "r1".into() }]);
 
     // Holds by policy and by party cover every document under them.
     kit.issue(kit.issue_spec("r4", DocumentKind::PremiumReceipt, "receipt"));
     kit.ok("legal", "counsel", hold(HoldScope::Policy(policy("pol-1"))));
     assert!(kit.state.is_held("r4"));
-    kit.ok("legal", "counsel", Command::ReleaseLegalHold { scope: HoldScope::Policy(policy("pol-1")) });
+    kit.ok(
+        "legal",
+        "counsel",
+        Command::ReleaseLegalHold {
+            scope: HoldScope::Policy(policy("pol-1")),
+        },
+    );
     kit.ok("legal", "counsel", hold(HoldScope::Party(party("aroha"))));
     assert!(kit.state.is_held("r4"));
     assert_eq!(kit.err("privacy", "officer", Command::ShredParty { party: party("aroha") }), "legal_hold");
@@ -232,20 +406,48 @@ fn shredding_a_party_keeps_what_must_be_kept_until_its_time() {
 
     assert_eq!(kit.err("privacy", "officer", Command::ShredParty { party: party("nobody") }), "unknown_party");
     let events = kit.ok("privacy", "officer", Command::ShredParty { party: party("aroha") });
-    assert_eq!(events, vec![Event::PartyShredRequested { party: party("aroha") }, Event::DocumentDestroyed { document: "r1".into() }]);
+    assert_eq!(
+        events,
+        vec![
+            Event::PartyShredRequested { party: party("aroha") },
+            Event::DocumentDestroyed { document: "r1".into() }
+        ]
+    );
     assert!(kit.state.party_keys.contains_key(&party("aroha")), "the key stays while documents remain");
     assert!(kit.state.documents["b1"].destroyed_on.is_none());
-    assert_eq!(kit.err("documents", "svc", Command::RegisterPartyKey { party: party("aroha"), wrapped_key: "new".into() }), "shredded");
+    assert_eq!(
+        kit.err(
+            "documents",
+            "svc",
+            Command::RegisterPartyKey {
+                party: party("aroha"),
+                wrapped_key: "new".into()
+            }
+        ),
+        "shredded"
+    );
     // Asking again is harmless.
     assert!(kit.ok("privacy", "officer", Command::ShredParty { party: party("aroha") }).is_empty());
 
     kit.advance_days(31);
-    assert_eq!(kit.tick(), vec![Event::DocumentDestroyed { document: "b1".into() }, Event::DocumentDestroyed { document: "n1".into() }]);
+    assert_eq!(
+        kit.tick(),
+        vec![
+            Event::DocumentDestroyed { document: "b1".into() },
+            Event::DocumentDestroyed { document: "n1".into() }
+        ]
+    );
     let today = kit.today();
     kit.ok("relay", "svc", observe(vec![status(1, today, PolicyStatus::Surrendered)]));
     kit.advance_days(61);
     let events = kit.tick();
-    assert_eq!(events, vec![Event::DocumentDestroyed { document: "s1".into() }, Event::PartyKeyDestroyed { party: party("aroha") }]);
+    assert_eq!(
+        events,
+        vec![
+            Event::DocumentDestroyed { document: "s1".into() },
+            Event::PartyKeyDestroyed { party: party("aroha") }
+        ]
+    );
     assert!(!kit.state.party_keys.contains_key(&party("aroha")));
     assert!(kit.state.party_keys.contains_key(&party("ben")));
     assert!(kit.ok("privacy", "officer", Command::ShredParty { party: party("aroha") }).is_empty());
@@ -258,7 +460,10 @@ fn shredding_a_party_keeps_what_must_be_kept_until_its_time() {
 #[test]
 fn the_first_party_key_stands() {
     let mut kit = Kit::new();
-    let register = |key: &str| Command::RegisterPartyKey { party: party("aroha"), wrapped_key: key.into() };
+    let register = |key: &str| Command::RegisterPartyKey {
+        party: party("aroha"),
+        wrapped_key: key.into(),
+    };
     assert_eq!(kit.err("documents", "svc", register("")), "invalid");
     kit.ok("documents", "svc", register("k1"));
     kit.ok("documents", "svc", register("k1"));

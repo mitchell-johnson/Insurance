@@ -24,7 +24,10 @@ fn raise(kit: &mut Kit, id: &str) {
 }
 
 fn attach(id: &str, notices: &[&str]) -> Command {
-    Command::AttachDefectNotices { defect: id.into(), notices: notices.iter().map(|s| s.to_string()).collect() }
+    Command::AttachDefectNotices {
+        defect: id.into(),
+        notices: notices.iter().map(|s| s.to_string()).collect(),
+    }
 }
 
 fn corrected(kit: &Kit, id: &str, defect: &str, original: &str) -> ic_documents::command::Issue {
@@ -32,7 +35,10 @@ fn corrected(kit: &Kit, id: &str, defect: &str, original: &str) -> ic_documents:
     spec.reason = Some("corrected premium; any earlier decision is set aside".into());
     spec.notice = Some(NoticeSpec {
         purpose: "renewal".into(),
-        corrects: Some(Correction { defect: defect.into(), original: original.into() }),
+        corrects: Some(Correction {
+            defect: defect.into(),
+            original: original.into(),
+        }),
     });
     spec
 }
@@ -56,21 +62,36 @@ fn a_defective_notice_is_voided_corrected_and_its_choices_reopened() {
     let events = kit.ok("remediation", "commander", attach("D1", &["n1"]));
     assert_eq!(
         events,
-        vec![Event::NoticeDefectRaised { defect: "D1".into(), case: "REM-1".into(), notice: "n1".into(), policy: Some(pol.clone()), purpose: "renewal".into() }]
+        vec![Event::NoticeDefectRaised {
+            defect: "D1".into(),
+            case: "REM-1".into(),
+            notice: "n1".into(),
+            policy: Some(pol.clone()),
+            purpose: "renewal".into()
+        }]
     );
     // The original is treated as not given.
     assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-01-01")), Gate::Waiting(Waiting::Defective));
     assert!(kit.state.core_outbox.is_empty());
-    assert!(kit.ok("remediation", "commander", attach("D1", &["n1"])).is_empty(), "attaching twice raises nothing new");
+    assert!(
+        kit.ok("remediation", "commander", attach("D1", &["n1"])).is_empty(),
+        "attaching twice raises nothing new"
+    );
     let report = kit.state.report(date("2027-11-01"), kit.today());
     assert_eq!((report.open_defects, report.defective_notices_outstanding), (1, 1));
 
     let events = kit.issue(corrected(&kit, "n1c", "D1", "n1"));
-    assert!(events.contains(&Event::DocumentSuperseded { document: "n1".into(), by: "n1c".into() }));
+    assert!(events.contains(&Event::DocumentSuperseded {
+        document: "n1".into(),
+        by: "n1c".into()
+    }));
     assert_eq!(kit.state.defects["D1"].notices["n1"], DefectItem::Corrected { by: "n1c".into() });
     assert_eq!(kit.issue_err(corrected(&kit, "n1d", "D1", "n1")), "already_corrected");
     // Issued, not yet proven: the clock has not restarted.
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-06-01")), Gate::Waiting(Waiting::NotYetDelivered));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-06-01")),
+        Gate::Waiting(Waiting::NotYetDelivered)
+    );
 
     kit.advance_days(1);
     let events = kit.deliver("n1c", "aroha", Channel::Email);
@@ -99,11 +120,20 @@ fn a_defective_notice_is_voided_corrected_and_its_choices_reopened() {
     );
     assert_eq!(
         kit.state.core_outbox["reopen:D1:n1:pol-1"],
-        CoreInstruction::OpenReopenWindow { policy: pol.clone(), reopen_reference: "D1:n1".into(), purpose: "renewal".into(), from: delivered, until: date("2028-01-05") }
+        CoreInstruction::OpenReopenWindow {
+            policy: pol.clone(),
+            reopen_reference: "D1:n1".into(),
+            purpose: "renewal".into(),
+            from: delivered,
+            until: date("2028-01-05")
+        }
     );
     assert!(kit.state.core_outbox.contains_key("notice-delivery:n1c:pol-1"));
     // The window extends to give the full minimum period from the corrected notice.
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-01-04")), Gate::Waiting(Waiting::PeriodRunning { until: date("2028-01-05") }));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-01-04")),
+        Gate::Waiting(Waiting::PeriodRunning { until: date("2028-01-05") })
+    );
     // The defective original and its correction are both still in the customer's inbox.
     assert_eq!(kit.state.inbox(&party("aroha")).len(), 2);
 }
@@ -124,7 +154,10 @@ fn a_defect_closes_only_when_every_notice_is_corrected_or_excluded() {
         kit.deliver(id, "aroha", Channel::Email);
     }
     raise(&mut kit, "D1");
-    let close = || Command::CloseNoticeDefect { defect: "D1".into(), control: "adjacent-age monotonicity check on rate tables".into() };
+    let close = || Command::CloseNoticeDefect {
+        defect: "D1".into(),
+        control: "adjacent-age monotonicity check on rate tables".into(),
+    };
     assert_eq!(kit.err("remediation", "reviewer", close()), "empty");
     kit.ok("remediation", "commander", attach("D1", &["n1", "n2", "n3"]));
     assert_eq!(kit.err("remediation", "reviewer", close()), "not_reconciled");
@@ -133,12 +166,22 @@ fn a_defect_closes_only_when_every_notice_is_corrected_or_excluded() {
     c1.policy = Some(policy("pol-n1"));
     kit.issue(c1);
     kit.deliver("c1", "aroha", Channel::Email);
-    let exclude = |notice: &str, reason: &str| Command::ExcludeFromDefect { defect: "D1".into(), notice: notice.into(), reason: reason.into() };
+    let exclude = |notice: &str, reason: &str| Command::ExcludeFromDefect {
+        defect: "D1".into(),
+        notice: notice.into(),
+        reason: reason.into(),
+    };
     assert_eq!(kit.err("remediation", "commander", exclude("n2", "")), "no_reason");
     assert_eq!(kit.err("remediation", "commander", exclude("n9", "x")), "not_in_defect");
     assert_eq!(kit.err("remediation", "commander", exclude("n1", "x")), "already_corrected");
     let events = kit.ok("remediation", "commander", exclude("n2", "policy cancelled before the anniversary"));
-    assert_eq!(events, vec![Event::NoticeExcludedFromDefect { defect: "D1".into(), notice: "n2".into() }]);
+    assert_eq!(
+        events,
+        vec![Event::NoticeExcludedFromDefect {
+            defect: "D1".into(),
+            notice: "n2".into()
+        }]
+    );
     // n3 has a corrected notice issued but not yet proven: still not reconciled.
     let mut c3 = corrected(&kit, "c3", "D1", "n3");
     c3.policy = Some(policy("pol-n3"));
@@ -147,9 +190,26 @@ fn a_defect_closes_only_when_every_notice_is_corrected_or_excluded() {
     kit.deliver("c3", "aroha", Channel::Email);
 
     assert_eq!(kit.err("remediation", "commander", close()), "maker_checker");
-    assert_eq!(kit.err("remediation", "reviewer", Command::CloseNoticeDefect { defect: "D1".into(), control: String::new() }), "no_control");
+    assert_eq!(
+        kit.err(
+            "remediation",
+            "reviewer",
+            Command::CloseNoticeDefect {
+                defect: "D1".into(),
+                control: String::new()
+            }
+        ),
+        "no_control"
+    );
     let events = kit.ok("remediation", "reviewer", close());
-    assert_eq!(events, vec![Event::NoticeDefectClosed { defect: "D1".into(), notices: 3, excluded: 1 }]);
+    assert_eq!(
+        events,
+        vec![Event::NoticeDefectClosed {
+            defect: "D1".into(),
+            notices: 3,
+            excluded: 1
+        }]
+    );
     assert_eq!(kit.state.defects["D1"].closed.as_ref().unwrap().by, "reviewer");
     assert_eq!(kit.err("remediation", "commander", attach("D1", &["n1"])), "defect_closed");
     assert_eq!(kit.issue_err(corrected(&kit, "late", "D1", "n2")), "defect_closed");
@@ -178,10 +238,15 @@ fn an_undeliverable_correction_can_itself_be_replaced() {
 
     let events = kit.issue(corrected(&kit, "c2", "D1", "n1"));
     // The second correction replaces the first, which had replaced the original.
-    assert!(events.contains(&Event::DocumentSuperseded { document: "c1".into(), by: "c2".into() }));
+    assert!(events.contains(&Event::DocumentSuperseded {
+        document: "c1".into(),
+        by: "c2".into()
+    }));
     assert_eq!(kit.state.documents["c2"].supersedes.as_deref(), Some("c1"));
     let events = kit.deliver("c2", "aroha", Channel::Email);
-    assert!(matches!(&events[2], Event::ReopenPeriodOpened { reopen_reference, corrected_notice, .. } if reopen_reference == "D1:n1" && corrected_notice == "c2"));
+    assert!(
+        matches!(&events[2], Event::ReopenPeriodOpened { reopen_reference, corrected_notice, .. } if reopen_reference == "D1:n1" && corrected_notice == "c2")
+    );
     assert!(matches!(&kit.state.defects["D1"].notices["n1"], DefectItem::Reopened { by, .. } if by == "c2"));
 }
 
@@ -216,13 +281,22 @@ fn defects_cover_any_proven_letter_and_notices_still_in_transit() {
     // The defective notice lands after the defect was raised: no clock, no instruction.
     let events = kit.outcome("n1", "aroha", Channel::Email, AttemptOutcome::Delivered);
     assert_eq!(events.len(), 1);
-    assert_eq!(kit.state.notice_gate(&policy("pol-1"), "renewal", date("2029-01-01")), Gate::Waiting(Waiting::Defective));
+    assert_eq!(
+        kit.state.notice_gate(&policy("pol-1"), "renewal", date("2029-01-01")),
+        Gate::Waiting(Waiting::Defective)
+    );
     assert!(kit.state.core_outbox.is_empty());
 
     let mut fix = kit.issue_spec("d1c", DocumentKind::ClaimDecisionLetter, "decision");
     fix.trigger_event = Some("9-4".into());
     fix.reason = Some("corrected wording".into());
-    fix.notice = Some(NoticeSpec { purpose: "claim_decision".into(), corrects: Some(Correction { defect: "D2".into(), original: "d1".into() }) });
+    fix.notice = Some(NoticeSpec {
+        purpose: "claim_decision".into(),
+        corrects: Some(Correction {
+            defect: "D2".into(),
+            original: "d1".into(),
+        }),
+    });
     kit.issue(fix);
     let events = kit.deliver("d1c", "aroha", Channel::Email);
     let today = kit.today();
@@ -253,7 +327,10 @@ fn defect_commands_refuse_bad_input() {
     assert_eq!(kit.err("remediation", "c", raise_with("", "REM", "2027-11-01", "2027-11-30")), "invalid");
     assert_eq!(kit.err("remediation", "c", raise_with("D1", "REM", "2027-12-01", "2027-11-30")), "invalid");
     kit.ok("remediation", "c", raise_with("D1", "REM", "2027-11-01", "2027-11-30"));
-    assert_eq!(kit.err("remediation", "c", raise_with("D1", "REM", "2027-11-01", "2027-11-30")), "defect_exists");
+    assert_eq!(
+        kit.err("remediation", "c", raise_with("D1", "REM", "2027-11-01", "2027-11-30")),
+        "defect_exists"
+    );
     kit.ok("remediation", "c", raise_with("OLD", "REM", "2026-01-01", "2026-01-31"));
     kit.ok("remediation", "c", raise_with("D3", "REM", "2027-11-01", "2027-11-30"));
 
@@ -276,7 +353,17 @@ fn defect_commands_refuse_bad_input() {
     let mut no_reason = corrected(&kit, "c1", "D1", "n1");
     no_reason.reason = None;
     assert_eq!(kit.issue_err(no_reason), "no_reason");
-    assert_eq!(kit.err("remediation", "c", Command::CloseNoticeDefect { defect: "nope".into(), control: "x".into() }), "unknown_defect");
+    assert_eq!(
+        kit.err(
+            "remediation",
+            "c",
+            Command::CloseNoticeDefect {
+                defect: "nope".into(),
+                control: "x".into()
+            }
+        ),
+        "unknown_defect"
+    );
 }
 
 /// Purpose: the population of a defect can be found from the template version and the period.
@@ -291,6 +378,12 @@ fn the_population_is_found_by_template_version_and_period() {
     kit.issue(kit.issue_spec("r1", DocumentKind::PremiumReceipt, "receipt"));
     let found = kit.state.notices_by_template(&tref("renewal", 1), date("2027-11-15"), date("2027-11-17"));
     assert_eq!(found, vec!["n1"]);
-    assert_eq!(kit.state.notices_by_template(&tref("renewal", 1), date("2027-11-01"), date("2027-11-30")).len(), 2);
-    assert!(kit.state.notices_by_template(&tref("receipt", 1), date("2027-11-01"), date("2027-11-30")).is_empty());
+    assert_eq!(
+        kit.state.notices_by_template(&tref("renewal", 1), date("2027-11-01"), date("2027-11-30")).len(),
+        2
+    );
+    assert!(kit
+        .state
+        .notices_by_template(&tref("receipt", 1), date("2027-11-01"), date("2027-11-30"))
+        .is_empty());
 }

@@ -28,7 +28,10 @@ fn a_template_is_approved_tested_and_then_activated() {
     let events = kit.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
     assert!(matches!(&events[0], Event::TemplateSubmitted { content_hash, .. } if content_hash.len() == 64));
     let today = kit.today();
-    let activate = Command::ActivateTemplate { template: r.clone(), effective_from: today };
+    let activate = Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: today,
+    };
 
     assert_eq!(kit.err("config", "product", activate.clone()), "not_approved");
     kit.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product]);
@@ -38,8 +41,22 @@ fn a_template_is_approved_tested_and_then_activated() {
     assert_eq!(kit.err("config", "product", activate.clone()), "not_tested");
 
     let case = kit.case_for(&t, &sample_data());
-    let events = kit.ok("config", "author", Command::RunRenderingTests { template: r.clone(), cases: vec![case] });
-    assert_eq!(events, vec![Event::RenderingTested { template: r.clone(), cases: 1, failures: 0 }]);
+    let events = kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r.clone(),
+            cases: vec![case],
+        },
+    );
+    assert_eq!(
+        events,
+        vec![Event::RenderingTested {
+            template: r.clone(),
+            cases: 1,
+            failures: 0
+        }]
+    );
     let events = kit.ok("config", "product", activate.clone());
     assert!(matches!(&events[0], Event::TemplateActivated { effective_from, .. } if *effective_from == today));
     assert_eq!(kit.state.templates[&r].status, TemplateStatus::Active);
@@ -49,11 +66,34 @@ fn a_template_is_approved_tested_and_then_activated() {
     // Activating again with the same date is the same activation.
     assert!(kit.ok("config", "product", activate).is_empty());
     // An active version is immutable: another date, an approval or a test run is refused.
-    let later = Command::ActivateTemplate { template: r.clone(), effective_from: date("2028-01-01") };
+    let later = Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: date("2028-01-01"),
+    };
     assert_eq!(kit.err("config", "product", later), "config_conflict");
-    assert_eq!(kit.err("config", "legal2", Command::ApproveTemplate { template: r.clone(), role: ApprovalRole::Legal }), "not_draft");
+    assert_eq!(
+        kit.err(
+            "config",
+            "legal2",
+            Command::ApproveTemplate {
+                template: r.clone(),
+                role: ApprovalRole::Legal
+            }
+        ),
+        "not_draft"
+    );
     let case = kit.case_for(&t, &sample_data());
-    assert_eq!(kit.err("config", "author", Command::RunRenderingTests { template: r, cases: vec![case] }), "not_draft");
+    assert_eq!(
+        kit.err(
+            "config",
+            "author",
+            Command::RunRenderingTests {
+                template: r,
+                cases: vec![case]
+            }
+        ),
+        "not_draft"
+    );
 }
 
 /// Purpose: an author cannot approve their own template, one person cannot give two approvals,
@@ -77,7 +117,10 @@ fn approvals_are_by_people_other_than_the_author_and_each_other() {
 }
 
 fn approve_unknown() -> Command {
-    Command::ApproveTemplate { template: tref("nothing", 9), role: ApprovalRole::Legal }
+    Command::ApproveTemplate {
+        template: tref("nothing", 9),
+        role: ApprovalRole::Legal,
+    }
 }
 
 /// Purpose: a rendering run records each failing case (a field the product does not supply, a
@@ -102,14 +145,24 @@ fn a_failing_rendering_run_blocks_activation_and_is_reported() {
     bad_data.data = json!({"name": "Aroha", "premium": "twelve"});
     let run = |cases| Command::RunRenderingTests { template: r.clone(), cases };
     let events = kit.ok("config", "author", run(vec![good.clone(), unsupplied, wrong_output, bad_data]));
-    assert_eq!(events, vec![Event::RenderingTested { template: r.clone(), cases: 4, failures: 3 }]);
+    assert_eq!(
+        events,
+        vec![Event::RenderingTested {
+            template: r.clone(),
+            cases: 4,
+            failures: 3
+        }]
+    );
     let failures = &kit.state.templates[&r].last_run.as_ref().unwrap().failures;
     assert!(failures[0].contains("does not supply `premium`"));
     assert!(failures[1].contains("not the expected one"));
     assert!(failures[2].contains("money"));
 
     let today = kit.today();
-    let activate = Command::ActivateTemplate { template: r.clone(), effective_from: today };
+    let activate = Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: today,
+    };
     assert_eq!(kit.err("config", "product", activate.clone()), "tests_failed");
     assert_eq!(kit.state.report(today, today).rendering_test_failures, 1);
 
@@ -127,17 +180,30 @@ fn a_failing_rendering_run_blocks_activation_and_is_reported() {
 fn every_product_version_and_language_needs_a_passing_case() {
     let mut kit = Kit::new();
     let mut t = template("receipt", DocumentKind::PremiumReceipt, "{{name}} paid {{premium|money}}.");
-    t.products.push(ProductBinding { code: "health".into(), version: 2 });
+    t.products.push(ProductBinding {
+        code: "health".into(),
+        version: 2,
+    });
     t.bodies.insert("mi".into(), "Kua utu a {{name}} i te {{premium|money}}.".into());
     t.controlling_statements.insert("mi".into(), "Ko te reo Ingarihi te mana.".into());
     let r = t.reference();
     kit.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
     kit.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product]);
     let today = kit.today();
-    let activate = Command::ActivateTemplate { template: r.clone(), effective_from: today };
+    let activate = Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: today,
+    };
 
     let en = kit.case_for(&t, &sample_data());
-    kit.ok("config", "author", Command::RunRenderingTests { template: r.clone(), cases: vec![en.clone()] });
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r.clone(),
+            cases: vec![en.clone()],
+        },
+    );
     assert_eq!(kit.err("config", "product", activate.clone()), "not_tested");
 
     let mut cases = vec![];
@@ -169,9 +235,19 @@ fn every_product_version_and_language_needs_a_passing_case() {
     case.language = "en".into();
     let mut failing = case.clone();
     failing.expected_sha256 = "f".repeat(64);
-    let activate = Command::ActivateTemplate { template: o.clone(), effective_from: today };
+    let activate = Command::ActivateTemplate {
+        template: o.clone(),
+        effective_from: today,
+    };
     assert_eq!(kit.err("config", "product", activate.clone()), "not_tested");
-    kit.ok("config", "author", Command::RunRenderingTests { template: o.clone(), cases: vec![case] });
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: o.clone(),
+            cases: vec![case],
+        },
+    );
     kit.ok("config", "product", activate);
 }
 
@@ -206,8 +282,20 @@ fn submission_checks_structure_readability_and_translations() {
                 remain unconditionally enforceable irrespective of subsequent circumstantial modifications.";
     assert_eq!(submit(&mut kit, template("t", DocumentKind::PremiumReceipt, hard)), "invalid_template");
     // The limit is a setting: with a higher one the same wording passes.
-    kit.ok("config", "ops", Command::ActivateSettings(Settings { version: 1, max_reading_grade_x10: 400, ..Settings::default() }));
-    kit.ok("config", "author", Command::SubmitTemplate(Box::new(template("hard", DocumentKind::PremiumReceipt, hard))));
+    kit.ok(
+        "config",
+        "ops",
+        Command::ActivateSettings(Settings {
+            version: 1,
+            max_reading_grade_x10: 400,
+            ..Settings::default()
+        }),
+    );
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(template("hard", DocumentKind::PremiumReceipt, hard))),
+    );
 
     let mut t = base();
     t.bodies.insert("mi".into(), "Kua tae mai te {{amount|money}}.".into());
@@ -217,11 +305,20 @@ fn submission_checks_structure_readability_and_translations() {
     t.bodies.insert("mi".into(), "Kua tae mai te {{premium|money}}.".into());
     assert_eq!(submit(&mut kit, t), "invalid_template");
 
-    assert_eq!(submit(&mut kit, template("t", DocumentKind::PremiumReceipt, "{{> clause}}")), "invalid_template");
+    assert_eq!(
+        submit(&mut kit, template("t", DocumentKind::PremiumReceipt, "{{> clause}}")),
+        "invalid_template"
+    );
     let mut t = template("t", DocumentKind::PremiumReceipt, "{{> clause}}");
-    t.parts.push(PartRef { id: "clause".into(), version: 1 });
+    t.parts.push(PartRef {
+        id: "clause".into(),
+        version: 1,
+    });
     assert_eq!(submit(&mut kit, t), "invalid_template");
-    assert_eq!(submit(&mut kit, template("t", DocumentKind::PremiumReceipt, "{{#if x}} never closed")), "invalid_template");
+    assert_eq!(
+        submit(&mut kit, template("t", DocumentKind::PremiumReceipt, "{{#if x}} never closed")),
+        "invalid_template"
+    );
     assert!(kit.state.templates.len() == 1);
 }
 
@@ -239,19 +336,30 @@ fn a_template_is_composed_from_parts_and_hashed_with_them() {
     };
     let events = kit.ok("config", "author", Command::RegisterPart(part(1, "You may cancel within {{days}} days.")));
     assert!(matches!(&events[0], Event::PartRegistered { version: 1, .. }));
-    assert!(kit.ok("config", "author", Command::RegisterPart(part(1, "You may cancel within {{days}} days."))).is_empty());
+    assert!(kit
+        .ok("config", "author", Command::RegisterPart(part(1, "You may cancel within {{days}} days.")))
+        .is_empty());
     assert_eq!(kit.err("config", "author", Command::RegisterPart(part(1, "Other words."))), "config_conflict");
     assert_eq!(kit.err("config", "author", Command::RegisterPart(part(0, "x"))), "invalid");
     kit.ok("config", "author", Command::RegisterPart(part(2, "You have {{days}} days to cancel.")));
 
     let mut t = template("wording", DocumentKind::PolicyWording, "Welcome {{name}}. {{> cooling-off}}");
-    t.parts.push(PartRef { id: "cooling-off".into(), version: 1 });
+    t.parts.push(PartRef {
+        id: "cooling-off".into(),
+        version: 1,
+    });
     t.bodies.insert("mi".into(), "Nau mai {{name}}. {{> cooling-off}}".into());
     t.controlling_statements.insert("mi".into(), "English controls.".into());
     let data = json!({"name": "Aroha", "days": 14});
-    assert_eq!(t.render(&kit.state.parts, "en", &data).unwrap(), "Welcome Aroha. You may cancel within 14 days.");
+    assert_eq!(
+        t.render(&kit.state.parts, "en", &data).unwrap(),
+        "Welcome Aroha. You may cancel within 14 days."
+    );
     // The part has no Māori version, so the primary language's text is used.
-    assert!(t.render(&kit.state.parts, "mi", &data).unwrap().starts_with("Nau mai Aroha. You may cancel within 14 days."));
+    assert!(t
+        .render(&kit.state.parts, "mi", &data)
+        .unwrap()
+        .starts_with("Nau mai Aroha. You may cancel within 14 days."));
     assert!(t.render(&kit.state.parts, "fr", &data).is_err());
     let v1 = t.content_hash(&kit.state.parts);
     t.parts[0].version = 2;
@@ -271,19 +379,51 @@ fn a_template_is_composed_from_parts_and_hashed_with_them() {
 fn a_disabled_template_issues_nothing_more() {
     let mut kit = Kit::ready();
     let r = tref("renewal", 1);
-    let disable = |reason: &str| Command::DisableTemplate { template: r.clone(), reason: reason.into(), case: "INC-8".into() };
+    let disable = |reason: &str| Command::DisableTemplate {
+        template: r.clone(),
+        reason: reason.into(),
+        case: "INC-8".into(),
+    };
     assert_eq!(kit.err("remediation", "commander", disable("")), "invalid");
     let events = kit.ok("remediation", "commander", disable("wrong premium figure"));
-    assert_eq!(events, vec![Event::TemplateDisabled { template: r.clone(), case: "INC-8".into() }]);
+    assert_eq!(
+        events,
+        vec![Event::TemplateDisabled {
+            template: r.clone(),
+            case: "INC-8".into()
+        }]
+    );
     assert!(kit.ok("remediation", "commander", disable("again")).is_empty());
     let spec = kit.renewal_spec("n1");
     assert_eq!(kit.issue_err(spec), "template_disabled");
     assert!(kit.state.template_for("renewal", kit.today()).is_none());
-    assert_eq!(kit.err("config", "product", Command::ActivateTemplate { template: r, effective_from: kit.today() }), "config_conflict");
-
-    kit.ok("config", "author", Command::SubmitTemplate(Box::new(template("draft", DocumentKind::Reminder, "Hello {{name}}."))));
     assert_eq!(
-        kit.err("config", "ops", Command::DisableTemplate { template: tref("draft", 1), reason: "r".into(), case: "c".into() }),
+        kit.err(
+            "config",
+            "product",
+            Command::ActivateTemplate {
+                template: r,
+                effective_from: kit.today()
+            }
+        ),
+        "config_conflict"
+    );
+
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(template("draft", DocumentKind::Reminder, "Hello {{name}}."))),
+    );
+    assert_eq!(
+        kit.err(
+            "config",
+            "ops",
+            Command::DisableTemplate {
+                template: tref("draft", 1),
+                reason: "r".into(),
+                case: "c".into()
+            }
+        ),
         "not_active"
     );
 }
@@ -297,26 +437,94 @@ fn a_disabled_template_issues_nothing_more() {
 fn settings_and_retention_versions_are_immutable() {
     use ic_documents::model::{RetentionBasis, RetentionRule};
     let mut kit = Kit::new();
-    let v2 = Settings { version: 2, post_deemed_days: 4, ..Settings::default() };
+    let v2 = Settings {
+        version: 2,
+        post_deemed_days: 4,
+        ..Settings::default()
+    };
     assert_eq!(kit.err("config", "ops", Command::ActivateSettings(Settings::default())), "invalid");
-    assert_eq!(kit.ok("config", "ops", Command::ActivateSettings(v2.clone())), vec![Event::SettingsActivated { version: 2 }]);
+    assert_eq!(
+        kit.ok("config", "ops", Command::ActivateSettings(v2.clone())),
+        vec![Event::SettingsActivated { version: 2 }]
+    );
     assert!(kit.ok("config", "ops", Command::ActivateSettings(v2.clone())).is_empty());
-    assert_eq!(kit.err("config", "ops", Command::ActivateSettings(Settings { post_deemed_days: 9, ..v2 })), "config_conflict");
-    assert_eq!(kit.err("config", "ops", Command::ActivateSettings(Settings { version: 1, ..Settings::default() })), "config_conflict");
+    assert_eq!(
+        kit.err("config", "ops", Command::ActivateSettings(Settings { post_deemed_days: 9, ..v2 })),
+        "config_conflict"
+    );
+    assert_eq!(
+        kit.err(
+            "config",
+            "ops",
+            Command::ActivateSettings(Settings {
+                version: 1,
+                ..Settings::default()
+            })
+        ),
+        "config_conflict"
+    );
     assert_eq!(kit.state.settings.post_deemed_days, 4);
 
-    let rule = RetentionRule { basis: RetentionBasis::Issue, days: 10 };
+    let rule = RetentionRule {
+        basis: RetentionBasis::Issue,
+        days: 10,
+    };
     let all: BTreeMap<_, _> = DocumentKind::ALL.iter().map(|k| (*k, rule)).collect();
     let mut partial = all.clone();
     partial.remove(&DocumentKind::Invoice);
     assert_eq!(kit.err("config", "ops", Command::ActivateRetention { version: 1, rules: partial }), "invalid");
-    assert_eq!(kit.ok("config", "ops", Command::ActivateRetention { version: 1, rules: all.clone() }), vec![Event::RetentionActivated { version: 1 }]);
-    assert!(kit.ok("config", "ops", Command::ActivateRetention { version: 1, rules: all.clone() }).is_empty());
+    assert_eq!(
+        kit.ok(
+            "config",
+            "ops",
+            Command::ActivateRetention {
+                version: 1,
+                rules: all.clone()
+            }
+        ),
+        vec![Event::RetentionActivated { version: 1 }]
+    );
+    assert!(kit
+        .ok(
+            "config",
+            "ops",
+            Command::ActivateRetention {
+                version: 1,
+                rules: all.clone()
+            }
+        )
+        .is_empty());
     let mut other = all.clone();
-    other.insert(DocumentKind::Invoice, RetentionRule { basis: RetentionBasis::Issue, days: 99 });
-    assert_eq!(kit.err("config", "ops", Command::ActivateRetention { version: 1, rules: other.clone() }), "config_conflict");
-    kit.ok("config", "ops", Command::ActivateRetention { version: 3, rules: other.clone() });
-    assert_eq!(kit.err("config", "ops", Command::ActivateRetention { version: 2, rules: other }), "config_conflict");
+    other.insert(
+        DocumentKind::Invoice,
+        RetentionRule {
+            basis: RetentionBasis::Issue,
+            days: 99,
+        },
+    );
+    assert_eq!(
+        kit.err(
+            "config",
+            "ops",
+            Command::ActivateRetention {
+                version: 1,
+                rules: other.clone()
+            }
+        ),
+        "config_conflict"
+    );
+    kit.ok(
+        "config",
+        "ops",
+        Command::ActivateRetention {
+            version: 3,
+            rules: other.clone(),
+        },
+    );
+    assert_eq!(
+        kit.err("config", "ops", Command::ActivateRetention { version: 2, rules: other }),
+        "config_conflict"
+    );
     assert_eq!(kit.state.retention_version, 3);
 }
 
@@ -334,8 +542,22 @@ fn a_new_version_takes_over_from_its_effective_date() {
     kit.ok("config", "author", Command::SubmitTemplate(Box::new(v2.clone())));
     kit.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product]);
     let case = kit.case_for(&v2, &sample_data());
-    kit.ok("config", "author", Command::RunRenderingTests { template: r.clone(), cases: vec![case] });
-    kit.ok("config", "product", Command::ActivateTemplate { template: r.clone(), effective_from: date("2027-12-01") });
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r.clone(),
+            cases: vec![case],
+        },
+    );
+    kit.ok(
+        "config",
+        "product",
+        Command::ActivateTemplate {
+            template: r.clone(),
+            effective_from: date("2027-12-01"),
+        },
+    );
     assert_eq!(kit.state.template_for("receipt", date("2027-11-30")).unwrap().template.version, 1);
     assert_eq!(kit.state.template_for("receipt", date("2027-12-01")).unwrap().template.version, 2);
 

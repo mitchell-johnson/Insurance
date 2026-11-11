@@ -8,7 +8,9 @@ use ic_documents::{DocumentKind, Event, Gate, Waiting};
 use support::*;
 
 fn bounced() -> AttemptOutcome {
-    AttemptOutcome::Bounced { reason: "mailbox unknown".into() }
+    AttemptOutcome::Bounced {
+        reason: "mailbox unknown".into(),
+    }
 }
 
 /// Purpose: a renewal notice issued, sent by email and confirmed starts its clock: the notice
@@ -21,9 +23,19 @@ fn proven_delivery_starts_the_notice_clock() {
     let mut kit = Kit::ready();
     let events = kit.issue(kit.renewal_spec("n1"));
     assert!(matches!(&events[0], Event::DocumentIssued { document, kind: DocumentKind::RenewalNotice, .. } if document == "n1"));
-    assert_eq!(events[1], Event::DeliveryRequested { document: "n1".into(), party: party("aroha"), channel: Channel::Email });
+    assert_eq!(
+        events[1],
+        Event::DeliveryRequested {
+            document: "n1".into(),
+            party: party("aroha"),
+            channel: Channel::Email
+        }
+    );
     let pol = policy("pol-1");
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-06-01")), Gate::Waiting(Waiting::NotYetDelivered));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-06-01")),
+        Gate::Waiting(Waiting::NotYetDelivered)
+    );
     assert_eq!(kit.state.notice_gate(&pol, "lapse", date("2028-06-01")), Gate::NoNotice);
     assert_eq!(kit.state.pending_sends(10).len(), 1);
 
@@ -31,16 +43,39 @@ fn proven_delivery_starts_the_notice_clock() {
     let events = kit.deliver("n1", "aroha", Channel::Email);
     let delivered = date("2027-11-16");
     let effect = date("2027-12-16");
-    assert_eq!(events[0], Event::DeliveryConfirmed { document: "n1".into(), party: party("aroha"), channel: Channel::Email, on: delivered });
+    assert_eq!(
+        events[0],
+        Event::DeliveryConfirmed {
+            document: "n1".into(),
+            party: party("aroha"),
+            channel: Channel::Email,
+            on: delivered
+        }
+    );
     assert_eq!(
         events[1],
-        Event::NoticeDelivered { notice: "n1".into(), policy: Some(pol.clone()), purpose: "renewal".into(), delivered_on: delivered, earliest_effect: effect }
+        Event::NoticeDelivered {
+            notice: "n1".into(),
+            policy: Some(pol.clone()),
+            purpose: "renewal".into(),
+            delivered_on: delivered,
+            earliest_effect: effect
+        }
     );
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2027-12-15")), Gate::Waiting(Waiting::PeriodRunning { until: effect }));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2027-12-15")),
+        Gate::Waiting(Waiting::PeriodRunning { until: effect })
+    );
     assert_eq!(kit.state.notice_gate(&pol, "renewal", effect), Gate::Clear { since: effect });
     assert_eq!(
         kit.state.core_outbox["notice-delivery:n1:pol-1"],
-        CoreInstruction::RecordNoticeDelivery { policy: pol, purpose: "renewal".into(), notice: "n1".into(), delivered_on: delivered, earliest_effect: effect }
+        CoreInstruction::RecordNoticeDelivery {
+            policy: pol,
+            purpose: "renewal".into(),
+            notice: "n1".into(),
+            delivered_on: delivered,
+            earliest_effect: effect
+        }
     );
     assert!(kit.state.pending_sends(10).is_empty());
     // The record keeps the masked destination and the provider's reference, nothing more.
@@ -48,7 +83,13 @@ fn proven_delivery_starts_the_notice_clock() {
     assert_eq!(attempt.masked_destination.as_deref(), Some("a***@example.test"));
     assert_eq!(attempt.provider_reference.as_deref(), Some("ref-1"));
 
-    kit.ok("relay", "svc", Command::AckCoreInstructions { ids: vec!["notice-delivery:n1:pol-1".into()] });
+    kit.ok(
+        "relay",
+        "svc",
+        Command::AckCoreInstructions {
+            ids: vec!["notice-delivery:n1:pol-1".into()],
+        },
+    );
     assert!(kit.state.core_outbox.is_empty());
 }
 
@@ -66,9 +107,20 @@ fn a_bounced_notice_falls_back_to_post_and_is_deemed_delivered() {
     assert_eq!(
         events,
         vec![
-            Event::ContactPointBounced { party: party("aroha"), channel: Channel::Email },
-            Event::DeliveryFailed { document: "n1".into(), party: party("aroha"), channel: Channel::Email },
-            Event::DeliveryRequested { document: "n1".into(), party: party("aroha"), channel: Channel::Post },
+            Event::ContactPointBounced {
+                party: party("aroha"),
+                channel: Channel::Email
+            },
+            Event::DeliveryFailed {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Email
+            },
+            Event::DeliveryRequested {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Post
+            },
         ]
     );
     assert_eq!(kit.state.pending_sends(10)[0].channel, Channel::Post);
@@ -78,9 +130,22 @@ fn a_bounced_notice_falls_back_to_post_and_is_deemed_delivered() {
     kit.advance_days(1);
     let events = kit.tick();
     let on = date("2027-11-20");
-    assert_eq!(events[0], Event::DeliveryConfirmed { document: "n1".into(), party: party("aroha"), channel: Channel::Post, on });
-    assert!(matches!(&events[1], Event::NoticeDelivered { delivered_on, earliest_effect, .. } if *delivered_on == on && *earliest_effect == date("2027-12-20")));
-    assert_eq!(kit.state.documents["n1"].deliveries[0].status, DeliveryStatus::Delivered { on, channel: Channel::Post });
+    assert_eq!(
+        events[0],
+        Event::DeliveryConfirmed {
+            document: "n1".into(),
+            party: party("aroha"),
+            channel: Channel::Post,
+            on
+        }
+    );
+    assert!(
+        matches!(&events[1], Event::NoticeDelivered { delivered_on, earliest_effect, .. } if *delivered_on == on && *earliest_effect == date("2027-12-20"))
+    );
+    assert_eq!(
+        kit.state.documents["n1"].deliveries[0].status,
+        DeliveryStatus::Delivered { on, channel: Channel::Post }
+    );
 }
 
 /// Purpose: post that was deemed delivered and then comes back stops the clock: the notice
@@ -102,23 +167,56 @@ fn returned_post_makes_the_notice_undeliverable_until_retried() {
     assert_eq!(kit.state.core_outbox.len(), 1);
 
     let events = kit.outcome("n1", "aroha", Channel::Post, AttemptOutcome::Returned);
-    assert!(events.contains(&Event::DocumentUndeliverable { document: "n1".into(), party: party("aroha") }));
-    assert!(events.contains(&Event::NoticeUndeliverable { notice: "n1".into(), policy: Some(pol.clone()), purpose: "renewal".into() }));
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-06-01")), Gate::Waiting(Waiting::Undeliverable));
+    assert!(events.contains(&Event::DocumentUndeliverable {
+        document: "n1".into(),
+        party: party("aroha")
+    }));
+    assert!(events.contains(&Event::NoticeUndeliverable {
+        notice: "n1".into(),
+        policy: Some(pol.clone()),
+        purpose: "renewal".into()
+    }));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-06-01")),
+        Gate::Waiting(Waiting::Undeliverable)
+    );
     assert!(kit.state.core_outbox.is_empty());
     assert_eq!(kit.state.report(date("2027-11-15"), kit.today()).undeliverable, 1);
     // Nothing more is outstanding, so a second return has nothing to act on.
     assert_eq!(
-        kit.err("delivery", "svc", Command::RecordOutcome { document: "n1".into(), party: party("aroha"), channel: Channel::Post, outcome: AttemptOutcome::Returned }),
+        kit.err(
+            "delivery",
+            "svc",
+            Command::RecordOutcome {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Post,
+                outcome: AttemptOutcome::Returned
+            }
+        ),
         "no_attempt"
     );
 
-    let retry = |channels| Command::RetryDelivery { document: "n1".into(), party: party("aroha"), channels };
+    let retry = |channels| Command::RetryDelivery {
+        document: "n1".into(),
+        party: party("aroha"),
+        channels,
+    };
     assert_eq!(kit.err("servicing", "csr", retry(vec![])), "invalid");
     let events = kit.ok("servicing", "csr", retry(vec![Channel::Sms]));
-    assert_eq!(events, vec![Event::DeliveryRequested { document: "n1".into(), party: party("aroha"), channel: Channel::Sms }]);
+    assert_eq!(
+        events,
+        vec![Event::DeliveryRequested {
+            document: "n1".into(),
+            party: party("aroha"),
+            channel: Channel::Sms
+        }]
+    );
     assert_eq!(kit.err("servicing", "csr", retry(vec![Channel::Sms])), "not_undeliverable");
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-06-01")), Gate::Waiting(Waiting::NotYetDelivered));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-06-01")),
+        Gate::Waiting(Waiting::NotYetDelivered)
+    );
     // The retried chain still ends in post, and every earlier attempt stays on the record.
     let delivery = &kit.state.documents["n1"].deliveries[0];
     assert_eq!(delivery.chain, vec![Channel::Post, Channel::Sms, Channel::Post]);
@@ -151,20 +249,46 @@ fn an_unconfirmed_send_times_out_and_the_chain_runs_to_its_end() {
     assert_eq!(
         events,
         vec![
-            Event::DeliveryFailed { document: "n1".into(), party: party("aroha"), channel: Channel::Push },
-            Event::DeliveryRequested { document: "n1".into(), party: party("aroha"), channel: Channel::Email },
+            Event::DeliveryFailed {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Push
+            },
+            Event::DeliveryRequested {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Email
+            },
         ]
     );
     assert_eq!(kit.state.documents["n1"].deliveries[0].attempts[0].outcome, Some(AttemptOutcome::TimedOut));
     kit.sent("n1", "aroha", Channel::Email);
-    kit.outcome("n1", "aroha", Channel::Email, AttemptOutcome::Failed { reason: "provider error".into() });
+    kit.outcome(
+        "n1",
+        "aroha",
+        Channel::Email,
+        AttemptOutcome::Failed {
+            reason: "provider error".into(),
+        },
+    );
     let events = kit.outcome("n1", "aroha", Channel::Post, AttemptOutcome::NoContactPoint);
     assert_eq!(
         events,
         vec![
-            Event::DeliveryFailed { document: "n1".into(), party: party("aroha"), channel: Channel::Post },
-            Event::DocumentUndeliverable { document: "n1".into(), party: party("aroha") },
-            Event::NoticeUndeliverable { notice: "n1".into(), policy: Some(policy("pol-1")), purpose: "renewal".into() },
+            Event::DeliveryFailed {
+                document: "n1".into(),
+                party: party("aroha"),
+                channel: Channel::Post
+            },
+            Event::DocumentUndeliverable {
+                document: "n1".into(),
+                party: party("aroha")
+            },
+            Event::NoticeUndeliverable {
+                notice: "n1".into(),
+                policy: Some(policy("pol-1")),
+                purpose: "renewal".into()
+            },
         ]
     );
     assert_eq!(kit.state.documents["n1"].deliveries[0].status, DeliveryStatus::Undeliverable);
@@ -211,8 +335,14 @@ fn one_notice_can_cover_several_policies() {
     spec.other_policies = vec![policy("pol-2")];
     kit.issue(spec);
     kit.deliver("n1", "aroha", Channel::Email);
-    assert!(matches!(kit.state.notice_gate(&policy("pol-2"), "renewal", date("2028-06-01")), Gate::Clear { .. }));
-    assert_eq!(kit.state.core_outbox.keys().cloned().collect::<Vec<_>>(), vec!["notice-delivery:n1:pol-1", "notice-delivery:n1:pol-2"]);
+    assert!(matches!(
+        kit.state.notice_gate(&policy("pol-2"), "renewal", date("2028-06-01")),
+        Gate::Clear { .. }
+    ));
+    assert_eq!(
+        kit.state.core_outbox.keys().cloned().collect::<Vec<_>>(),
+        vec!["notice-delivery:n1:pol-1", "notice-delivery:n1:pol-2"]
+    );
     assert_eq!(kit.state.policy_documents(&policy("pol-2")).len(), 1);
 
     let mut bad = kit.renewal_spec("n2");
@@ -232,14 +362,20 @@ fn informational_documents_are_sent_once_unless_proof_is_asked_for() {
     kit.issue(kit.issue_spec("r1", DocumentKind::PremiumReceipt, "receipt"));
     kit.sent("r1", "aroha", Channel::Email);
     let events = kit.outcome("r1", "aroha", Channel::Email, bounced());
-    assert!(events.contains(&Event::DocumentUndeliverable { document: "r1".into(), party: party("aroha") }));
+    assert!(events.contains(&Event::DocumentUndeliverable {
+        document: "r1".into(),
+        party: party("aroha")
+    }));
     assert_eq!(kit.state.documents["r1"].deliveries[0].attempts.len(), 1);
 
     kit.issue(kit.issue_spec("r2", DocumentKind::PremiumReceipt, "receipt"));
     kit.sent("r2", "aroha", Channel::Email);
     kit.advance_hours(72);
     assert!(kit.tick().is_empty());
-    assert!(matches!(kit.state.documents["r2"].deliveries[0].status, DeliveryStatus::Delivered { channel: Channel::Email, .. }));
+    assert!(matches!(
+        kit.state.documents["r2"].deliveries[0].status,
+        DeliveryStatus::Delivered { channel: Channel::Email, .. }
+    ));
 
     let mut spec = kit.issue_spec("r3", DocumentKind::PremiumReceipt, "receipt");
     spec.prove_delivery = true;
@@ -266,18 +402,43 @@ fn delivery_commands_that_match_nothing_are_refused() {
         masked_destination: masked.into(),
         provider_reference: "x".into(),
     };
-    let outcome = |p: &str, channel, outcome| Command::RecordOutcome { document: "n1".into(), party: party(p), channel, outcome };
+    let outcome = |p: &str, channel, outcome| Command::RecordOutcome {
+        document: "n1".into(),
+        party: party(p),
+        channel,
+        outcome,
+    };
     assert_eq!(kit.err("delivery", "svc", send("nope", "aroha", Channel::Email, "m")), "unknown_document");
     assert_eq!(kit.err("delivery", "svc", send("n1", "ben", Channel::Email, "m")), "unknown_recipient");
     assert_eq!(kit.err("delivery", "svc", send("n1", "aroha", Channel::Sms, "m")), "no_attempt");
     assert_eq!(kit.err("delivery", "svc", send("n1", "aroha", Channel::Email, "")), "invalid");
-    assert_eq!(kit.err("delivery", "svc", outcome("aroha", Channel::Sms, AttemptOutcome::Delivered)), "no_attempt");
-    assert_eq!(kit.err("delivery", "svc", outcome("aroha", Channel::Email, AttemptOutcome::Returned)), "invalid");
-    assert_eq!(kit.err("delivery", "svc", outcome("aroha", Channel::Post, AttemptOutcome::Returned)), "no_attempt");
-    kit.deliver("n1", "aroha", Channel::Email);
-    assert_eq!(kit.err("delivery", "svc", outcome("aroha", Channel::Email, AttemptOutcome::Delivered)), "no_attempt");
     assert_eq!(
-        kit.err("servicing", "csr", Command::RetryDelivery { document: "nope".into(), party: party("aroha"), channels: vec![Channel::Post] }),
+        kit.err("delivery", "svc", outcome("aroha", Channel::Sms, AttemptOutcome::Delivered)),
+        "no_attempt"
+    );
+    assert_eq!(
+        kit.err("delivery", "svc", outcome("aroha", Channel::Email, AttemptOutcome::Returned)),
+        "invalid"
+    );
+    assert_eq!(
+        kit.err("delivery", "svc", outcome("aroha", Channel::Post, AttemptOutcome::Returned)),
+        "no_attempt"
+    );
+    kit.deliver("n1", "aroha", Channel::Email);
+    assert_eq!(
+        kit.err("delivery", "svc", outcome("aroha", Channel::Email, AttemptOutcome::Delivered)),
+        "no_attempt"
+    );
+    assert_eq!(
+        kit.err(
+            "servicing",
+            "csr",
+            Command::RetryDelivery {
+                document: "nope".into(),
+                party: party("aroha"),
+                channels: vec![Channel::Post]
+            }
+        ),
         "unknown_document"
     );
 }
@@ -315,7 +476,12 @@ fn issue_refuses_malformed_requests() {
     with("invalid", &|s| s.recipients.push(s.recipients[0].clone()));
     with("no_trigger", &|s| s.trigger_event = None);
     with("no_purpose", &|s| s.notice = None);
-    with("invalid", &|s| s.notice = Some(NoticeSpec { purpose: String::new(), corrects: None }));
+    with("invalid", &|s| {
+        s.notice = Some(NoticeSpec {
+            purpose: String::new(),
+            corrects: None,
+        })
+    });
     with("invalid", &|s| s.policy = None);
     with("unknown_document", &|s| {
         s.supersedes = Some("ghost".into());
@@ -326,7 +492,10 @@ fn issue_refuses_malformed_requests() {
     }
 
     let mut receipt = kit.issue_spec("r1", DocumentKind::PremiumReceipt, "receipt");
-    receipt.notice = Some(NoticeSpec { purpose: "renewal".into(), corrects: None });
+    receipt.notice = Some(NoticeSpec {
+        purpose: "renewal".into(),
+        corrects: None,
+    });
     assert_eq!(kit.issue_err(receipt.clone()), "invalid");
     receipt.notice = None;
     receipt.recipients[0].channels.clear();
@@ -369,7 +538,10 @@ fn a_correction_is_a_new_version_and_the_earlier_one_is_kept() {
     kit.advance_days(1);
     assert_eq!(kit.issue_err(schedule(&kit, "s2", Some("s1"), None)), "no_reason");
     let events = kit.issue(schedule(&kit, "s2", Some("s1"), Some("sum insured increased")));
-    assert!(events.contains(&Event::DocumentSuperseded { document: "s1".into(), by: "s2".into() }));
+    assert!(events.contains(&Event::DocumentSuperseded {
+        document: "s1".into(),
+        by: "s2".into()
+    }));
     assert_eq!(kit.issue_err(schedule(&kit, "s3", Some("s1"), Some("again"))), "already_superseded");
     let mut receipt = kit.issue_spec("r1", DocumentKind::PremiumReceipt, "receipt");
     receipt.supersedes = Some("s2".into());
@@ -402,7 +574,10 @@ fn a_superseded_notice_hands_the_gate_to_its_replacement() {
     spec.supersedes = Some("n1".into());
     spec.reason = Some("offer recomputed after a reduction".into());
     kit.issue(spec);
-    assert_eq!(kit.state.notice_gate(&pol, "renewal", date("2028-01-01")), Gate::Waiting(Waiting::NotYetDelivered));
+    assert_eq!(
+        kit.state.notice_gate(&pol, "renewal", date("2028-01-01")),
+        Gate::Waiting(Waiting::NotYetDelivered)
+    );
 }
 
 /// Purpose: legacy documents are imported as received, with their original dates, no

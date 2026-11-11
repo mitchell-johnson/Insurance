@@ -1953,6 +1953,7 @@ dependencies = [
  "ic-azure",
  "ic-core",
  "ic-log",
+ "ic-raft",
  "proptest",
  "rand 0.8.8",
  "reqwest 0.12.28",
