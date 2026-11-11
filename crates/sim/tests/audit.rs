@@ -45,7 +45,7 @@ fn view_of(events: &[EventRecord]) -> Projections {
 
 /// Purpose: the audit that ends every simulated year passes a sound cluster and names the fault
 /// when shown each one in turn: a journal entry altered after the fact, a journal missing its
-/// last entry, a state that the log does not replay to, a read model that stopped following
+/// last entry, a policy entry with a line outside the policy's statutory fund, a state that the log does not replay to, a read model that stopped following
 /// the stream, a command that broke the apply budget, a directory that does not list a policy
 /// where it really is, and a directory holding the wrong status.
 /// Why it matters: the year-long simulation is the evidence that the ledger, the stream and
@@ -68,6 +68,23 @@ fn the_audit_names_each_kind_of_divergence() {
     assert!(err.starts_with(&format!("partition {partition}: ")), "{err}");
     // The same cluster passes when the journal is not being verified.
     audit(&cluster, &view, &policies, false).unwrap();
+
+    // A policy's entry with a line outside the policy's statutory fund.
+    let (mut cluster, events, policies) = business();
+    let view = view_of(&events);
+    let (partition, node) = cluster
+        .nodes
+        .iter_mut()
+        .find(|(_, n)| n.journal.iter().any(|e| e.body.policy.is_some()))
+        .unwrap();
+    let partition = *partition;
+    let entry = node.journal.iter_mut().find(|e| e.body.policy.is_some()).unwrap();
+    entry.body.postings.last_mut().unwrap().dims.statutory_fund = None;
+    let seq = entry.id.seq;
+    assert_eq!(
+        audit(&cluster, &view, &policies, true).unwrap_err(),
+        format!("partition {partition}: entry {seq} does not sit in one statutory fund")
+    );
 
     // A journal that lost its newest entry: the chain is whole but ends short of the ledger.
     let (mut cluster, events, policies) = business();
