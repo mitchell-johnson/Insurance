@@ -1,0 +1,207 @@
+//! Reconciliation: every bank account, every day. Each statement line is
+//! matched to something the module expected, or becomes an exception with
+//! an owner until someone accountable resolves it.
+
+use std::collections::BTreeSet;
+
+use chrono::NaiveDate;
+
+use crate::machine::{Event, PaymentsState, Tx};
+use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine};
+
+impl PaymentsState {
+    pub(crate) fn open_exception(&mut self, tx: &mut Tx<'_>, id: Id, exception: Exception) {
+        tx.emit(Event::ExceptionOpened {
+            exception: id.clone(),
+            kind: exception.kind,
+            amount_minor: exception.amount_minor,
+        });
+        self.exceptions.insert(id, exception);
+    }
+
+    pub(crate) fn record_statement(
+        &mut self,
+        tx: &mut Tx<'_>,
+        account: &str,
+        date: NaiveDate,
+        opening_minor: i64,
+        closing_minor: i64,
+        lines: Vec<StatementLine>,
+    ) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        let cfg = self.cfg()?;
+        let purpose = cfg
+            .accounts
+            .get(account)
+            .map(|a| a.purpose)
+            .ok_or_else(|| Reject::new("unknown_account", format!("there is no account {account}")))?;
+        let currency = cfg.accounts[account].currency;
+        let book = self.books.get(account).cloned().unwrap_or_default();
+        if book.statement_date.is_some_and(|last| date <= last) {
+            return Err(Reject::new(
+                "statement_out_of_order",
+                format!("a statement for {account} up to {date} has been read"),
+            ));
+        }
+        let movement = lines.iter().try_fold(0i64, |sum, l| sum.checked_add(l.amount_minor));
+        if movement.and_then(|m| opening_minor.checked_add(m)) != Some(closing_minor) {
+            return Err(Reject::new(
+                "statement_does_not_add_up",
+                "opening balance plus the lines is not the closing balance",
+            ));
+        }
+        let mut ids = BTreeSet::new();
+        if lines.iter().any(|l| l.id.is_empty() || !ids.insert(&l.id)) {
+            return Err(Reject::new("duplicate_line", "every statement line has its own ID"));
+        }
+        let today = tx.now.date();
+        let exception = |kind, amount_minor, reference: &str| Exception {
+            kind,
+            account: account.to_string(),
+            amount_minor,
+            reference: reference.to_string(),
+            opened_on: today,
+            owner: None,
+            resolution: None,
+        };
+        if book.statement_date.is_some() && book.closing_minor != opening_minor {
+            let gap = opening_minor - book.closing_minor;
+            self.open_exception(
+                tx,
+                format!("{account}-{date}-opening"),
+                exception(ExceptionKind::BalanceBreak, gap, "opening balance"),
+            );
+        }
+        let (mut matched, mut broken) = (0, 0);
+        for line in &lines {
+            let id = format!("{account}-{date}-{}", line.id);
+            let expected = self.books.get_mut(account).and_then(|b| b.expected.remove(&line.reference));
+            match expected {
+                Some(e) if e.amount_minor == line.amount_minor => {
+                    matched += 1;
+                    continue;
+                }
+                Some(e) => self.open_exception(
+                    tx,
+                    id,
+                    exception(ExceptionKind::AmountMismatch, line.amount_minor - e.amount_minor, &line.reference),
+                ),
+                None if line.amount_minor > 0 && purpose == Purpose::PremiumCollection => {
+                    // A customer paid by direct credit. Cash matching decides
+                    // whose it is; until it does, the money is unidentified.
+                    self.open_exception(
+                        tx,
+                        id.clone(),
+                        exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
+                    );
+                    self.push_outbox(OutboxEntry {
+                        key: format!("match-{id}"),
+                        instruction: Instruction::Match {
+                            exception: id.clone(),
+                            account: account.to_string(),
+                            amount_minor: line.amount_minor,
+                            currency,
+                            reference: line.reference.clone(),
+                            payer_account: line.payer_account.clone(),
+                            received_on: date,
+                        },
+                        about: Some(About::Exception(id)),
+                    });
+                }
+                None if line.amount_minor > 0 => self.open_exception(tx, id, exception(ExceptionKind::UnexplainedCredit, line.amount_minor, &line.reference)),
+                None => self.open_exception(tx, id, exception(ExceptionKind::UnexplainedDebit, line.amount_minor, &line.reference)),
+            }
+            broken += 1;
+        }
+        let book = self.books.entry(account.to_string()).or_default();
+        book.statement_date = Some(date);
+        book.closing_minor = closing_minor;
+        tx.emit(Event::StatementReconciled {
+            account: account.to_string(),
+            date,
+            matched,
+            exceptions: broken,
+        });
+        Ok(())
+    }
+
+    fn open(&mut self, id: &str) -> Result<&mut Exception, Reject> {
+        match self.exceptions.get_mut(id) {
+            Some(e) if e.resolution.is_none() => Ok(e),
+            Some(_) => Err(Reject::new("exception_resolved", format!("exception {id} is already resolved"))),
+            None => Err(Reject::new("unknown_exception", format!("there is no exception {id}"))),
+        }
+    }
+
+    pub(crate) fn assign_exception(&mut self, tx: &mut Tx<'_>, id: &str, owner: String) -> Result<(), Reject> {
+        tx.need(Role::Reconciler)?;
+        if owner.is_empty() {
+            return Err(Reject::new("invalid_owner", "an exception is owned by a named person"));
+        }
+        self.open(id)?.owner = Some(owner.clone());
+        tx.emit(Event::ExceptionAssigned {
+            exception: id.to_string(),
+            owner,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn resolve_exception(&mut self, tx: &mut Tx<'_>, id: &str, resolution: String) -> Result<(), Reject> {
+        tx.need(Role::Reconciler)?;
+        let me = tx.actor.id.clone();
+        let e = self.open(id)?;
+        if e.owner.as_ref() != Some(&me) {
+            return Err(Reject::new("not_owner", "an exception is resolved by the person who owns it"));
+        }
+        if resolution.trim().is_empty() {
+            return Err(Reject::new("invalid_resolution", "a resolution says what was done"));
+        }
+        e.resolution = Some(resolution.clone());
+        tx.emit(Event::ExceptionResolved {
+            exception: id.to_string(),
+            resolution,
+        });
+        Ok(())
+    }
+
+    /// A driver finished an outbox entry, or the other side refused it.
+    pub(crate) fn complete_instruction(&mut self, tx: &mut Tx<'_>, entry: u64, refused: Option<String>) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        let done = self
+            .outbox
+            .remove(&entry)
+            .ok_or_else(|| Reject::new("unknown_instruction", format!("outbox entry {entry} is not waiting")))?;
+        match (done.about, refused) {
+            (Some(About::RefundRaise(id)), refused) => self.refund_raised(tx, &id, refused),
+            (Some(About::RefundRelease(id)), None) => self.refund_released(tx, &id),
+            // Cash matching applied the receipt: it is identified.
+            (Some(About::Exception(id)), None) => {
+                if let Some(e) = self.exceptions.get_mut(&id) {
+                    e.resolution = Some("applied by cash matching".to_string());
+                    tx.emit(Event::ExceptionResolved {
+                        exception: id,
+                        resolution: "applied by cash matching".to_string(),
+                    });
+                }
+            }
+            // Nobody could say whose it is. It stays open for a person.
+            (Some(About::Exception(_)), Some(_)) | (None, _) | (Some(About::Item(_)), None) => {}
+            // The core refused something the bank has already done. The
+            // ledger and the bank now disagree until a person sorts it out.
+            (Some(About::Item(reference) | About::RefundRelease(reference)), Some(code)) => {
+                let exception = Exception {
+                    kind: ExceptionKind::CoreRefused,
+                    account: String::new(),
+                    amount_minor: 0,
+                    reference: format!("{}: {code}", done.key),
+                    opened_on: tx.now.date(),
+                    owner: None,
+                    resolution: None,
+                };
+                self.open_exception(tx, format!("core-{reference}-{entry}"), exception);
+            }
+        }
+        tx.emit(Event::InstructionCompleted { key: done.key });
+        Ok(())
+    }
+}

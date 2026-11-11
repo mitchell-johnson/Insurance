@@ -1,0 +1,20 @@
+[package]
+name = "ic-payments"
+description = "Money in and money out: direct debit authorities, payee accounts, payment runs, bank channels and reconciliation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-log.workspace = true
+ic-money.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
