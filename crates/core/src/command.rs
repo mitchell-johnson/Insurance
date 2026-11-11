@@ -8,7 +8,7 @@ use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LifeFactors, LifeKind, UnwindCause};
+use crate::policy::{LifeFactors, LifeKind, ReopenedChoice, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -180,6 +180,34 @@ pub enum Command {
     /// happened to the policy after the event is unwound first, cover ends
     /// with the day of the event, and premium for every later day is
     /// returned.
+    /// Open a period in which choices the policyholder made on a defective
+    /// notice can be made again. Sent once the corrected notice has proof
+    /// of delivery. The same reference with the same terms changes nothing.
+    OpenReopenWindow {
+        policy: PolicyId,
+        reopen_reference: String,
+        /// What the notice was for: `renewal`, `lapse`, `premium_change`.
+        purpose: String,
+        from: NaiveDate,
+        until: NaiveDate,
+    },
+    /// Record proof that a mandatory notice was delivered. A policy does
+    /// not lapse before the earliest effect of its latest lapse notice.
+    RecordNoticeDelivery {
+        policy: PolicyId,
+        purpose: String,
+        notice: String,
+        delivered_on: NaiveDate,
+        earliest_effect: NaiveDate,
+    },
+    /// Make again a choice that was made on a defective notice. Applied by
+    /// value date at the original effective date, with no fee, no
+    /// underwriting and no waiting period.
+    ReopenChoice {
+        policy: PolicyId,
+        reopen_reference: String,
+        choice: ReopenedChoice,
+    },
     TerminateOnClaim {
         policy: PolicyId,
         event_date: NaiveDate,
@@ -336,6 +364,8 @@ impl Command {
             Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
             Command::Reinstate { .. } => &["policy-servicing", "collections"],
             Command::UnwindAfter { .. } | Command::ResumeAfterUnwind { .. } => &["claims", "remediation"],
+            Command::OpenReopenWindow { .. } | Command::RecordNoticeDelivery { .. } => &["documents"],
+            Command::ReopenChoice { .. } => &["policy-servicing", "remediation"],
             Command::TerminateOnClaim { .. } => &["claims"],
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
@@ -366,6 +396,9 @@ impl Command {
             Command::MergeLayers { .. } => "merge_layers",
             Command::UnwindAfter { .. } => "unwind_after",
             Command::ResumeAfterUnwind { .. } => "resume_after_unwind",
+            Command::OpenReopenWindow { .. } => "open_reopen_window",
+            Command::RecordNoticeDelivery { .. } => "record_notice_delivery",
+            Command::ReopenChoice { .. } => "reopen_choice",
             Command::TerminateOnClaim { .. } => "terminate_on_claim",
             Command::ApplyMembership { .. } => "apply_membership",
             Command::IdentifyMember { .. } => "identify_member",

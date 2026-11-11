@@ -14,7 +14,7 @@ use crate::catalog::Catalog;
 use crate::command::IssuePolicy;
 use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::machine::{CoreState, Ctx, Reject, MAX_MEMBERSHIP_CHUNK};
-use crate::policy::{Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
+use crate::policy::{CancellationRecord, Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
 use crate::postings::{div_half_even, PostingSet};
 use crate::premium::{member_period_premium, member_sum_insured, retail_period_premium};
 use crate::{arrears, billing, cash, earning, LifeId};
@@ -190,6 +190,10 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         lives,
         covers,
         indexation_declined: false,
+        reopen_windows: BTreeMap::new(),
+        notices: BTreeMap::new(),
+        cancellation: None,
+        declined_anniversaries: Vec::new(),
         periods_billed: 0,
         next_receivable_id: 1,
         receivables: vec![],
@@ -302,7 +306,31 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
                 on,
             });
         }
-        if let (Some(code), false) = (product.indexation(), policy.indexation_declined) {
+        if product.indexation().is_some() && policy.indexation_declined {
+            policy.declined_anniversaries.push(n);
+        } else {
+            apply_indexation(catalog, product, policy, ctx, on)?;
+        }
+        policy.anniversaries_processed = n;
+        if policy.covers.values().all(|c| c.status != CoverStatus::InForce) {
+            arrears::set_standing(policy, ctx, None);
+            ctx.emit(Event::PolicyStatusChanged {
+                policy: policy.id.clone(),
+                from: policy.status,
+                to: PolicyStatus::Expired,
+            });
+            policy.status = PolicyStatus::Expired;
+            break;
+        }
+    }
+    Ok(())
+}
+
+/// Add the indexation step of the anniversary on `on` to every cover in
+/// force, as a new layer per life that starts that day.
+pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>, on: NaiveDate) -> Result<(), Reject> {
+    if product.indexation().is_some() {
+        if let Some(code) = product.indexation() {
             if let Some(rate) = catalog.index_rate_on(code, on) {
                 let mut added = Vec::new();
                 for cover in policy.covers.values_mut().filter(|c| c.status == CoverStatus::InForce && !c.formula_driven) {
@@ -362,17 +390,6 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
                     });
                 }
             }
-        }
-        policy.anniversaries_processed = n;
-        if policy.covers.values().all(|c| c.status != CoverStatus::InForce) {
-            arrears::set_standing(policy, ctx, None);
-            ctx.emit(Event::PolicyStatusChanged {
-                policy: policy.id.clone(),
-                from: policy.status,
-                to: PolicyStatus::Expired,
-            });
-            policy.status = PolicyStatus::Expired;
-            break;
         }
     }
     Ok(())
@@ -451,7 +468,21 @@ pub(crate) fn cancel(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy
         }
     }
     let kind = if cooling_off { "cancelled_cooling_off" } else { "cancelled" };
+    let mut record = CancellationRecord {
+        cancelled_on: ctx.date,
+        entry: None,
+        postings: Vec::new(),
+        receivables_before: policy.receivables.clone(),
+        covers_before: policy.covers.clone(),
+        standing_before: policy.standing,
+    };
+    let posted = ctx.entries.len();
     close_out(ledger, &product, policy, ctx, cooling_off, kind, ctx.date, ctx.date, BTreeMap::new())?;
+    if let Some(entry) = ctx.entries.get(posted) {
+        record.entry = Some(entry.id);
+        record.postings = entry.body.postings.clone();
+    }
+    policy.cancellation = Some(record);
     arrears::set_standing(policy, ctx, None);
     ctx.emit(Event::PolicyStatusChanged {
         policy: policy.id.clone(),

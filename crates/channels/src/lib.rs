@@ -20,10 +20,15 @@
 pub mod classes;
 pub mod directory;
 pub mod feed;
+pub mod http;
 pub mod identity;
+pub mod ops;
 pub mod query;
+pub mod serve;
+pub mod settings;
 pub mod staff;
 pub mod state;
+pub mod ui;
 pub mod workbench;
 
 pub use directory::Actor;

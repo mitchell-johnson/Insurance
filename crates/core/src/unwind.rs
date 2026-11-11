@@ -32,6 +32,72 @@ use crate::{arrears, earning, lifecycle};
 /// in the policy's state, only in the journal.
 pub const UNWIND_LIMIT_DAYS: u64 = 365;
 
+/// Reverse the billing of every period that starts after `after`, one entry
+/// per receivable with the period's own value date, and put the billing
+/// clock back so those periods are billed again when the policy carries on.
+/// What was paid on them is the policyholder's money again, in suspense.
+pub(crate) fn reverse_billing_after(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    after: NaiveDate,
+    reference: &str,
+) -> Result<Vec<u32>, Reject> {
+    let c = policy.currency;
+    let mut reversed = Vec::new();
+    for i in 0..policy.receivables.len() {
+        let r = policy.receivables[i].clone();
+        if r.closed || r.period_start <= after {
+            continue;
+        }
+        ctx.work += 1;
+        let mut set = PostingSet::new();
+        for (cover_type, net) in &r.net_fine {
+            let earned = r.earned_fine.get(cover_type).copied().unwrap_or(0);
+            set.debit(
+                accounts::unearned_premium(&policy.id, c),
+                net - earned,
+                dims(policy, Some(cover_type), "unwind"),
+            );
+            set.debit(
+                accounts::earned_premium(&policy.product_code, cover_type, c),
+                earned,
+                dims(policy, Some(cover_type), "unwind"),
+            );
+        }
+        set.debit(accounts::gst_payable(c), r.gst_minor as i128, dims(policy, None, "gst"));
+        for (code, amount) in &r.levies_minor {
+            set.debit(accounts::levy_payable(code, c), *amount as i128, dims(policy, None, "levy"));
+        }
+        // What is still owed is no longer owed; what was paid is the
+        // policyholder's money again.
+        let paid = r.total_minor - r.outstanding_minor;
+        set.credit(
+            accounts::premium_receivable(&policy.id, c),
+            r.outstanding_minor as i128,
+            dims(policy, None, "unwind"),
+        );
+        set.credit(accounts::policy_suspense(&policy.id, c), paid as i128, Dimensions::default());
+        let mut detail = BTreeMap::new();
+        detail.insert("receivable".to_string(), r.id.to_string());
+        detail.insert("reference".to_string(), reference.to_string());
+        if let Some(entry) = r.entry {
+            detail.insert("reverses".to_string(), entry.to_string());
+        }
+        let postings = set.into_postings(ledger)?;
+        ctx.post(ledger, "premium_due_unwound", Some(policy), r.period_start, postings, detail)?;
+        let r = &mut policy.receivables[i];
+        r.outstanding_minor = 0;
+        r.closed = true;
+        reversed.push(r.id);
+    }
+
+    policy.periods_billed = (0..policy.periods_billed)
+        .take_while(|n| period_start(policy.inception, policy.frequency, *n).is_some_and(|start| start <= after))
+        .count() as u32;
+    Ok(reversed)
+}
+
 /// Reverse every effective-dated change after `after` and hold the policy
 /// as at that date.
 pub(crate) fn unwind_after(
@@ -82,56 +148,7 @@ pub(crate) fn unwind_after(
         .clone();
     let keep_indexation = cause == UnwindCause::Claim && product.pays_step_applied_after_event();
 
-    // Billing: every receivable for a period that starts after the date is
-    // reversed in one entry each, with the period's own value date.
-    let c = policy.currency;
-    let mut reversed = Vec::new();
-    for i in 0..policy.receivables.len() {
-        let r = policy.receivables[i].clone();
-        if r.closed || r.period_start <= after {
-            continue;
-        }
-        ctx.work += 1;
-        let mut set = PostingSet::new();
-        for (cover_type, net) in &r.net_fine {
-            let earned = r.earned_fine.get(cover_type).copied().unwrap_or(0);
-            set.debit(
-                accounts::unearned_premium(&policy.id, c),
-                net - earned,
-                dims(policy, Some(cover_type), "unwind"),
-            );
-            set.debit(
-                accounts::earned_premium(&policy.product_code, cover_type, c),
-                earned,
-                dims(policy, Some(cover_type), "unwind"),
-            );
-        }
-        set.debit(accounts::gst_payable(c), r.gst_minor as i128, dims(policy, None, "gst"));
-        for (code, amount) in &r.levies_minor {
-            set.debit(accounts::levy_payable(code, c), *amount as i128, dims(policy, None, "levy"));
-        }
-        // What is still owed is no longer owed; what was paid is the
-        // policyholder's money again.
-        let paid = r.total_minor - r.outstanding_minor;
-        set.credit(
-            accounts::premium_receivable(&policy.id, c),
-            r.outstanding_minor as i128,
-            dims(policy, None, "unwind"),
-        );
-        set.credit(accounts::policy_suspense(&policy.id, c), paid as i128, Dimensions::default());
-        let mut detail = BTreeMap::new();
-        detail.insert("receivable".to_string(), r.id.to_string());
-        detail.insert("reference".to_string(), reference.to_string());
-        if let Some(entry) = r.entry {
-            detail.insert("reverses".to_string(), entry.to_string());
-        }
-        let postings = set.into_postings(ledger)?;
-        ctx.post(ledger, "premium_due_unwound", Some(policy), r.period_start, postings, detail)?;
-        let r = &mut policy.receivables[i];
-        r.outstanding_minor = 0;
-        r.closed = true;
-        reversed.push(r.id);
-    }
+    let reversed = reverse_billing_after(ledger, policy, ctx, after, reference)?;
 
     // Cover: a layer that started after the date never started, and a cover
     // that expired after the date has not expired.
@@ -183,9 +200,6 @@ pub(crate) fn unwind_after(
     // The anniversaries and billing periods after the date have not happened.
     policy.anniversaries_processed = (1..=policy.anniversaries_processed)
         .take_while(|n| anniversary(policy.inception, *n).is_some_and(|on| on <= after))
-        .count() as u32;
-    policy.periods_billed = (0..policy.periods_billed)
-        .take_while(|n| period_start(policy.inception, policy.frequency, *n).is_some_and(|start| start <= after))
         .count() as u32;
     policy.unwind = Some(UnwindHold {
         after,

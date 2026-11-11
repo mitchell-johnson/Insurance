@@ -1,0 +1,10 @@
+# Determinism rule: the state machine never reads a clock, randomness or
+# anything outside the log, and never iterates an unordered collection.
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "state machine must not read the clock" },
+    { path = "std::time::Instant::now", reason = "state machine must not read the clock" },
+]
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "iteration order is not deterministic; use BTreeMap" },
+    { path = "std::collections::HashSet", reason = "iteration order is not deterministic; use BTreeSet" },
+]
