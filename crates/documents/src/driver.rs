@@ -228,7 +228,8 @@ pub struct Driver<M, S, W, C, D> {
     pub directory: D,
     /// The name this process acts under in the record.
     pub actor: String,
-    pub clock: fn() -> DateTime<Utc>,
+    /// The time, as commands will carry it.
+    pub clock: Arc<dyn Fn() -> DateTime<Utc> + Send + Sync>,
     /// How many outstanding items one step takes at a time.
     pub batch: usize,
 }
