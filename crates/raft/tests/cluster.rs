@@ -288,6 +288,36 @@ async fn a_severed_follower_link_is_harmless_and_followers_redirect() {
     g.stop().await;
 }
 
+/// Purpose: a follower cut off from the group for many election timeouts does not raise its
+/// term, and when it returns the same leader leads in the same term and the follower takes
+/// the writes it missed.
+/// Why it matters: a member that campaigns alone comes back with a higher term, and the
+/// first message it answers forces a healthy leader to step down. Every flapping network
+/// link would then cost an election, during which no payment can be confirmed. Asking
+/// before campaigning (pre-vote) makes one member's bad network that member's problem only.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_follower_cut_off_and_returned_does_not_unseat_the_leader() {
+    let mut g = Group::start("prevote", 3).await;
+    g.configure().await;
+    let policy = g.issue(1).await;
+    g.settle().await;
+    let leader = g.leader().await;
+    let term = g.nodes[&leader].status().term;
+    let lonely = g.followers_of(leader)[0];
+
+    g.isolate(lonely);
+    g.run("cash-matching", receipt(&policy, "r-1", 61_84)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(g.nodes[&lonely].status().term, term, "a member that could not win raised the term anyway");
+
+    g.reconnect(lonely);
+    let level = g.settle().await;
+    assert_eq!(g.nodes[&lonely].status().state_hash, level);
+    assert_eq!(g.leader().await, leader);
+    assert_eq!(g.nodes[&leader].status().term, term, "the group held an election it did not need");
+    g.stop().await;
+}
+
 /// Wait until a member has dropped the start of its log behind a snapshot.
 async fn wait_for_purge(g: &Group, id: u64) -> u64 {
     let deadline = tokio::time::Instant::now() + PATIENCE;

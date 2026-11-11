@@ -81,6 +81,9 @@ pub fn config(cluster_name: &str, heartbeat_ms: u64, snapshot_every: u64) -> Res
         max_in_snapshot_log_to_keep: snapshot_every / 5,
         // A snapshot is the whole partition; give it time to cross regions.
         install_snapshot_timeout: 120_000,
+        // A member that was cut off asks whether it could win before it
+        // raises the term, so its return does not unseat a healthy leader.
+        enable_pre_vote: Some(true),
         ..Config::default()
     };
     config.validate().map(Arc::new).map_err(|e| e.to_string())
