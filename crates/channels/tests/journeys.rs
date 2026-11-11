@@ -1059,7 +1059,7 @@ fn replicas_agree_and_retries_are_safe() {
         actor,
         command,
     };
-    let log = vec![
+    let log = [
         envelope("a", t0(), module(EVENT_RELAY), Command::CoreEvents { records }),
         envelope("b", t0() + 1, party("stranger"), submit("r1", Some(&pol), "x", "claims")),
         envelope("b", t0() + 2, party(KIRI), submit("r1", Some(&pol), "x", "claims")),

@@ -699,7 +699,7 @@ impl StaffState {
                     }
                 }
                 // The ceiling is the template's, whatever a grant says.
-                let limit = limit.min(Self::ceiling(&held, &amount.limit).max(base.min(Self::ceiling(&held, &amount.limit))));
+                let limit = limit.min(Self::ceiling(&held, &amount.limit));
                 if amount.value > base && amount.value <= limit {
                     grant = via.or(grant);
                 }
