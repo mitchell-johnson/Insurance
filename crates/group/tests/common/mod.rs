@@ -290,8 +290,9 @@ impl Harness {
             match out {
                 Outbound::Core { key, group, command } => {
                     self.sent.push((key.clone(), (*command).clone()));
-                    let error = match self.core_faults.pop_front() {
-                        Some(fault) => fault,
+                    // A fault stands in for the core's answer; otherwise the core is asked.
+                    let error = match self.core_faults.pop_front().flatten() {
+                        Some(fault) => Some(fault),
                         None => {
                             let partition = self.c.partition_of(&group);
                             self.c.submit_keyed(partition, &key, "group-admin", *command).result.err().map(|e| e.code)
@@ -400,6 +401,10 @@ impl Harness {
     pub fn resolve(&mut self, file: &str, answer: impl Fn(&str) -> Option<Resolution>) {
         let ids: Vec<String> = self.to_resolve.iter().filter(|(f, _)| f == file).flat_map(|(_, ids)| ids.clone()).collect();
         self.to_resolve.retain(|(f, _)| f != file);
+        if ids.is_empty() {
+            // Nobody to ask about: the file went straight to the core.
+            return;
+        }
         let resolutions = ids
             .into_iter()
             .map(|id| {

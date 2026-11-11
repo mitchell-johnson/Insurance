@@ -353,12 +353,6 @@ impl GroupState {
                     items.into_iter().rev().for_each(|i| s.queue.push_front(i));
                     s.waiting = true;
                 }
-                Some(_) if items.len() > 1 => {
-                    // One of these rows is refused: halve the chunk until it
-                    // is alone, so the rest of the file still applies.
-                    s.chunk_limit = (items.len() / 2).max(1);
-                    items.into_iter().rev().for_each(|i| s.queue.push_front(i));
-                }
                 Some(code) => {
                     let continuation = items.iter().any(|i| {
                         matches!(
@@ -370,10 +364,16 @@ impl GroupState {
                         )
                     });
                     if POLICY_LEVEL.contains(&code.as_str()) && !continuation {
+                        // No row is at fault, so there is nothing to search for.
                         items.into_iter().rev().for_each(|i| s.queue.push_front(i));
                         s.blocked = Some(code.clone());
                         st.raise(&s.id, ExceptionKind::SchemeBlocked, &code);
                         st.emit(GroupEvent::SchemeBlocked { scheme: s.id.clone(), code });
+                    } else if items.len() > 1 {
+                        // One of these rows is refused: halve the chunk until it
+                        // is alone, so the rest of the file still applies.
+                        s.chunk_limit = (items.len() / 2).max(1);
+                        items.into_iter().rev().for_each(|i| s.queue.push_front(i));
                     } else {
                         for item in items {
                             st.refuse(s, item, &code);
