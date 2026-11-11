@@ -20,8 +20,18 @@ pub mod command;
 pub mod config;
 pub mod evidence;
 pub mod load;
+pub mod machine;
 pub mod model;
 pub mod questions;
 pub mod rules;
 pub mod shipped;
 pub mod signing;
+pub mod special;
+
+mod casework;
+mod external;
+mod flow;
+mod intake;
+
+pub use machine::UnderwritingState;
+pub use special::{answer, Query};

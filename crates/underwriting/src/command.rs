@@ -749,6 +749,11 @@ pub enum Event {
         owner: String,
         from: Option<String>,
     },
+    /// A case went back to its queue with no owner.
+    CaseReleased {
+        case: String,
+        from: String,
+    },
     CaseEscalated {
         case: String,
         to: Escalation,

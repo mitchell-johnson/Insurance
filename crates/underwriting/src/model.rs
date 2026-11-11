@@ -493,14 +493,40 @@ pub enum AccessEnd {
 }
 
 impl LifeFile {
+    pub fn new(life: LifeId, party: PartyId, factors: LifeFactors, stage: Stage) -> Self {
+        Self {
+            life,
+            party,
+            factors,
+            stage,
+            consents: BTreeMap::new(),
+            existing_cover: None,
+            disclosures: vec![],
+            evidence: vec![],
+            cases: vec![],
+            decisions: vec![],
+            offers: vec![],
+            interviews: vec![],
+            assessments: BTreeMap::new(),
+            rule_set: None,
+            capacity: BTreeMap::new(),
+            reservations_made: 0,
+            adviser_access_ended: None,
+            delegate_file: None,
+        }
+    }
     pub fn current_decision(&self) -> Option<&Decision> {
         self.decisions.iter().rev().find(|d| d.status != DecisionStatus::Superseded)
     }
     pub fn effective_decision(&self) -> Option<&Decision> {
         self.decisions.iter().rev().find(|d| d.status == DecisionStatus::Effective)
     }
+    /// The underwriting case open on the life. A non-disclosure review
+    /// opened from a claim is a separate matter.
     pub fn open_case(&self) -> Option<&Case> {
-        self.cases.iter().find(|c| c.is_open())
+        self.cases
+            .iter()
+            .find(|c| c.is_open() && c.case_type != crate::case::CaseType::NonDisclosureReview)
     }
     pub fn open_offer(&self) -> Option<&Offer> {
         self.offers.iter().find(|o| o.status == OfferStatus::Open)
