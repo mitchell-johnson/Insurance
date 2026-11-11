@@ -14,6 +14,7 @@ pub mod account;
 pub mod capacity;
 pub mod cession;
 pub mod claims;
+pub mod delivery;
 mod feed;
 mod ids;
 pub mod loader;
