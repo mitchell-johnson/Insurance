@@ -212,40 +212,12 @@ pub enum Command {
 }
 
 impl Command {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Command::Ingest(_) => "ingest",
-            Command::PostingRefused { .. } => "posting_refused",
-            Command::AddParty { .. } => "add_party",
-            Command::Relate(_) => "relate",
-            Command::EndRelation { .. } => "end_relation",
-            Command::StartEngagement { .. } => "start_engagement",
-            Command::EndEngagement { .. } => "end_engagement",
-            Command::RecordLicence { .. } => "record_licence",
-            Command::MarkCeased { .. } => "mark_ceased",
-            Command::RegisterPayee { .. } => "register_payee",
-            Command::AddPayeeAccount { .. } => "add_payee_account",
-            Command::SetPaymentHold { .. } => "set_payment_hold",
-            Command::SetAccrualHold { .. } => "set_accrual_hold",
-            Command::AddPaymentInstruction { .. } => "add_payment_instruction",
-            Command::RemovePaymentInstruction { .. } => "remove_payment_instruction",
-            Command::WriteLayer(_) => "write_layer",
-            Command::AppointAdviser { .. } => "appoint_adviser",
-            Command::LinkReplacement { .. } => "link_replacement",
-            Command::ProposeChange { .. } => "propose_change",
-            Command::ApproveChange { .. } => "approve_change",
-            Command::RejectChange { .. } => "reject_change",
-            Command::CutStatement { .. } => "cut_statement",
-            Command::PaymentSettled { .. } => "payment_settled",
-            Command::PaymentReturned { .. } => "payment_returned",
-            Command::ProposeAction { .. } => "propose_action",
-            Command::ApproveAction { .. } => "approve_action",
-            Command::RejectAction { .. } => "reject_action",
-            Command::AttachDocument { .. } => "attach_document",
-            Command::DescribePosition { .. } => "describe_position",
-            Command::RecordDailyControl => "record_daily_control",
-            Command::CompleteTask { .. } => "complete_task",
-            Command::CloseCase { .. } => "close_case",
+    /// The command's name as it appears on the wire.
+    pub fn name(&self) -> String {
+        match serde_json::to_value(self) {
+            Ok(serde_json::Value::Object(fields)) => fields.keys().next().cloned().unwrap_or_default(),
+            Ok(serde_json::Value::String(name)) => name,
+            _ => String::new(),
         }
     }
 
