@@ -335,6 +335,30 @@ pub struct Policy {
     /// beneficiary, never back to the account the money came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refund_with_claim: Option<String>,
+    /// What is still owed on each refund raised to refund payable, by refund ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refunds_raised: BTreeMap<String, i64>,
+    /// Payments settled from a payable, by payment ID, so a payment the
+    /// bank sends back can be reversed exactly.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payments: BTreeMap<String, PaymentRecord>,
+}
+
+/// A payment settled from one of the policy's payable accounts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentRecord {
+    pub payable: crate::payments::PayableKind,
+    /// The refund this payment paid, for a refund payment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refund: Option<String>,
+    pub amount_minor: i64,
+    /// The payments module's code for the bank account the money left.
+    pub bank_account: String,
+    pub settled_on: NaiveDate,
+    /// The entry that settled it: what a return reverses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<EntryId>,
+    pub returned: bool,
 }
 
 impl Policy {
@@ -358,5 +382,6 @@ impl Policy {
         self.receivables
             .retain(|r| r.outstanding_minor != 0 || r.unearned_fine() != 0 || r.period_end > keep_from);
         self.receipts.retain(|_, r| r.received_on > keep_from);
+        self.payments.retain(|_, p| p.settled_on > keep_from);
     }
 }

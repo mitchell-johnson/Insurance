@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -24,13 +24,13 @@ use openraft::raft::ReadPolicy;
 use openraft::BasicNode;
 
 use crate::auth::ClusterAuth;
-use crate::client::{BreakView, ClusterClient, EndOfDayView, Refusal};
+use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, Refusal};
 use crate::machine::Machine;
 use crate::module::{ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus};
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
 use crate::peers::Identity;
-use crate::query::Query;
+use crate::query::Query as Question;
 use crate::store::LogStore;
 use crate::types::{Housekeeping, NodeId};
 
@@ -170,6 +170,9 @@ pub struct Host {
     pub groups: BTreeMap<PartitionId, Node>,
     /// A member of each hosted module's group, by the module's name.
     pub modules: BTreeMap<String, ModuleGroup>,
+    /// The hosted modules that read the partitions' events.
+    readers: Vec<String>,
+    partitions: PartitionId,
     peers: BTreeMap<NodeId, String>,
     auth: ClusterAuth,
     cold: Cold,
@@ -257,6 +260,8 @@ impl Host {
             segment_entries: settings.segment_entries,
             groups,
             modules,
+            readers: specs.iter().filter(|s| s.events).map(|s| s.name.clone()).collect(),
+            partitions: settings.partitions,
             peers: settings.peers.clone(),
             auth: settings.auth.clone(),
         }))
@@ -336,6 +341,39 @@ impl Host {
         Ok(count)
     }
 
+    /// Have a partition keep its events for every module that reads them.
+    /// Done before anything is published, so a module hosted from the
+    /// start misses nothing.
+    async fn register(&self, member: &Node) -> Result<usize, String> {
+        let known = member.machine.consumers();
+        for reader in self.readers.iter().filter(|r| !known.contains_key(*r)) {
+            let registration = Housekeeping::Consumed {
+                consumer: reader.clone(),
+                through_seq: 0,
+            };
+            member.housekeep(registration).await.map_err(|e| e.to_string())?;
+        }
+        Ok(0)
+    }
+
+    /// Bring a module's group up to date with one partition's events, and
+    /// tell the partition how far the group has them. At least once: a run
+    /// offered twice is taken in once, by the group's own checkpoint.
+    async fn feed(&self, module: &ModuleGroup, partition: PartitionId, client: &ClusterClient) -> Result<usize, String> {
+        let have = module.machine.cursors().get(&partition).copied();
+        let page = client.events(partition, &module.name, have, EVENT_BATCH).await.map_err(|e| e.to_string())?;
+        let fed = page.events.len();
+        let through = if fed == 0 {
+            have
+        } else {
+            Some(module.feed(partition, page.after, page.events).await.map_err(|e| e.to_string())??)
+        };
+        if let Some(through) = through.filter(|t| page.acknowledged.is_none_or(|a| a < *t)) {
+            client.acknowledge_events(partition, &module.name, through).await.map_err(|e| e.to_string())?;
+        }
+        Ok(fed)
+    }
+
     /// Publish a partition's waiting events, in order, and record how far.
     async fn publish(&self, member: &Node) -> Result<usize, String> {
         let events = member.machine.pending_events(EVENT_BATCH);
@@ -381,6 +419,7 @@ impl Host {
                 continue;
             }
             for (what, result) in [
+                ("readers", self.register(member).await),
                 ("messages", self.deliver(member, client).await),
                 ("events", self.publish(member).await),
                 ("journal", self.seal(member).await),
@@ -388,6 +427,17 @@ impl Host {
                 match result {
                     Ok(n) => moved += n,
                     Err(error) => tracing::warn!(partition = member.partition, what, %error, "housekeeping did not finish; will retry"),
+                }
+            }
+        }
+        for module in self.modules.values() {
+            if !self.readers.contains(&module.name) || !module.raft.is_leader() {
+                continue;
+            }
+            for partition in 0..self.partitions {
+                match self.feed(module, partition, client).await {
+                    Ok(n) => moved += n,
+                    Err(error) => tracing::warn!(module = %module.name, partition, %error, "events not fed to the module; will retry"),
                 }
             }
         }
@@ -450,7 +500,7 @@ async fn end_of_day(State(host): State<Arc<Host>>, Path(partition): Path<Partiti
     read_as_leader(&host, partition, |member| host.view(member)).await
 }
 
-async fn query(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(query): Json<Query>) -> Response {
+async fn query(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(query): Json<Question>) -> Response {
     read_as_leader(&host, partition, |member| member.machine.query(query)).await
 }
 
@@ -470,6 +520,48 @@ async fn members(State(host): State<Arc<Host>>, Path(partition): Path<PartitionI
         return refuse(StatusCode::BAD_REQUEST, ProposeError::Unknown("a group needs at least one member".to_string()));
     }
     match member.set_members(members).await {
+        Ok(()) => Json(()).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct EventsQuery {
+    consumer: String,
+    after: Option<u64>,
+    max: Option<usize>,
+}
+
+/// A run of the partition's events for a consumer, from the leader.
+async fn events(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Query(asked): Query<EventsQuery>) -> Response {
+    read_as_leader(&host, partition, |member| {
+        let acknowledged = member.machine.consumers().get(&asked.consumer).copied();
+        let after = asked.after.or(acknowledged).unwrap_or(0);
+        EventPage {
+            after,
+            events: member.machine.events_after(after, asked.max.unwrap_or(EVENT_BATCH).min(EVENT_BATCH)),
+            acknowledged,
+        }
+    })
+    .await
+}
+
+async fn consumed(State(host): State<Arc<Host>>, Path((partition, consumer)): Path<(PartitionId, String)>, Json(done): Json<Consumed>) -> Response {
+    let Some(member) = host.groups.get(&partition) else {
+        return no_partition(partition);
+    };
+    let through_seq = done.through_seq;
+    match member.housekeep(Housekeeping::Consumed { consumer, through_seq }).await {
+        Ok(()) => Json(()).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn unsubscribe(State(host): State<Arc<Host>>, Path((partition, consumer)): Path<(PartitionId, String)>) -> Response {
+    let Some(member) = host.groups.get(&partition) else {
+        return no_partition(partition);
+    };
+    match member.housekeep(Housekeeping::Unsubscribed { consumer }).await {
         Ok(()) => Json(()).into_response(),
         Err(e) => refusal(e),
     }
@@ -530,6 +622,11 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/v1/partitions/{partition}/end-of-day", get(end_of_day))
         .route("/v1/partitions/{partition}/query", post(query))
         .route("/v1/partitions/{partition}/members", axum::routing::put(members))
+        .route("/v1/partitions/{partition}/events", get(events))
+        .route(
+            "/v1/partitions/{partition}/consumers/{consumer}",
+            axum::routing::put(consumed).delete(unsubscribe),
+        )
         .route("/v1/modules", get(module_status))
         .route("/v1/modules/{module}/commands", post(module_propose))
         .route("/v1/modules/{module}/query", post(module_query))
