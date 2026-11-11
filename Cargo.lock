@@ -2030,6 +2030,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-distribution"
+version = "0.1.0"
+dependencies = [
+ "cedar-policy",
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-raft",
+ "ic-sim",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-documents"
 version = "0.1.0"
 dependencies = [
@@ -2136,6 +2157,7 @@ name = "ic-node"
 version = "0.1.0"
 dependencies = [
  "ic-channels",
+ "ic-distribution",
  "ic-documents",
  "ic-group",
  "ic-payments-service",
@@ -2208,6 +2230,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "chrono-tz 0.10.4",
  "futures",
  "ic-azure",
  "ic-cashmatch",

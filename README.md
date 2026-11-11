@@ -87,7 +87,9 @@ crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
 crates/api        the HTTP API, the gateway, ic-admin
 crates/sim        in-process cluster and the synthetic insurer
 crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
+crates/channels   the customer app API, adviser and employer portals, staff and operations consoles, the status page (ic-portal)
 crates/underwriting proposals, disclosure, rules, case work and authority, offers, issue, the clinical store
+crates/distribution advisers, licence status, commission, clawback, statements, the held balance workbench
 treaties/         the shipped reinsurance treaties and reinsurer rate tables
 products/         the shipped products, definitions and rate tables
 infra/            the Azure platform (Bicep)
