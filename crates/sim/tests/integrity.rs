@@ -358,6 +358,28 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             amount: Money::new(1, NZD),
             with_claim: None,
         },
+        Command::RaiseRefundPayable {
+            policy: p.clone(),
+            refund: "rf".into(),
+            amount: Money::new(1, NZD),
+            with_claim: None,
+        },
+        Command::ReleaseRefundPayable {
+            policy: p.clone(),
+            refund: "rf".into(),
+        },
+        Command::SettlePayable {
+            policy: p.clone(),
+            payment: "pay".into(),
+            payable: ic_core::PayableKind::Refund,
+            refund: Some("rf".into()),
+            amount: Money::new(1, NZD),
+            bank_account: "nz-main-refunds".into(),
+        },
+        Command::ReturnPayment {
+            policy: p.clone(),
+            payment: "pay".into(),
+        },
         Command::BeginTransfer {
             policy: p.clone(),
             transfer_id: "t".into(),
@@ -385,7 +407,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 20, "{names:?}");
+    assert_eq!(names.len(), 24, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail
