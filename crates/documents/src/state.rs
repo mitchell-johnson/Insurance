@@ -81,7 +81,9 @@ pub struct DocumentsState {
     pub retention_version: u32,
     retention: BTreeMap<DocumentKind, RetentionRule>,
     retention_versions: BTreeMap<u32, String>,
+    #[serde(with = "pairs")]
     pub parts: BTreeMap<PartRef, Part>,
+    #[serde(with = "pairs")]
     pub templates: BTreeMap<TemplateRef, TemplateRecord>,
     pub documents: BTreeMap<String, Document>,
     /// The owner keys, wrapped by the Key Vault key.
@@ -103,6 +105,7 @@ pub struct DocumentsState {
     policy_ended: BTreeMap<PolicyId, NaiveDate>,
     /// Destruction dates and the documents due on them.
     expiry: BTreeMap<NaiveDate, BTreeSet<String>>,
+    #[serde(with = "pairs")]
     holds: BTreeMap<HoldScope, String>,
     shredding: BTreeSet<PartyId>,
     /// Vault objects to delete, by document.
@@ -1697,7 +1700,8 @@ impl DocumentsState {
 
     /// A hash of the whole state. Replicas that applied the same log agree.
     pub fn state_hash(&self) -> String {
-        sha256_hex(&serde_json::to_vec(self).unwrap_or_default())
+        // Every map in the state has keys JSON can carry, so this cannot fail.
+        sha256_hex(&serde_json::to_vec(self).expect("the state is serialisable"))
     }
 }
 
@@ -1738,5 +1742,22 @@ pub(crate) fn standing_notice(to: Option<Standing>) -> Option<(DocumentKind, &'s
         Some(Standing::InGrace) => Some((DocumentKind::LapseNotice, "lapse")),
         Some(Standing::Suspended) => Some((DocumentKind::SuspensionNotice, "suspension")),
         Some(Standing::Paid) | None => None,
+    }
+}
+
+/// Maps whose keys are not plain strings are saved as lists of pairs,
+/// because a JSON object key must be a string.
+mod pairs {
+    use std::collections::BTreeMap;
+
+    use serde::de::DeserializeOwned;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<K: Serialize, V: Serialize, S: Serializer>(map: &BTreeMap<K, V>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K: DeserializeOwned + Ord, V: DeserializeOwned, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<K, V>, D::Error> {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
     }
 }
