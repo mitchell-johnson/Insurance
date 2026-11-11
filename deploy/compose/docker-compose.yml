@@ -129,6 +129,21 @@ services:
       IC_AUTH: dev
     ports: ["8080:8080"]
 
+  # The portal service: the customer app's API, the adviser and employer
+  # portals, the staff and operations consoles and the status page, at
+  # http://localhost:8090. Sign-in here is a typed subject (IC_AUTH=dev).
+  portal:
+    <<: *image
+    command: ["/usr/local/bin/ic-portal"]
+    restart: unless-stopped
+    depends_on:
+      configure:
+        condition: service_completed_successfully
+    environment:
+      <<: *cluster
+      IC_AUTH: dev
+    ports: ["8090:8090"]
+
   # One-off commands: `docker compose run --rm admin status`,
   # `docker compose run --rm close close 2027-11-15 4`.
   admin:

@@ -16,7 +16,9 @@ use ic_ledger::PartitionId;
 use openraft::alias::{SnapshotMetaOf, SnapshotOf, VoteOf};
 use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::RPCOption;
-use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, VoteRequest, VoteResponse};
+use openraft::raft::{
+    AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, TransferLeaderRequest, TransferLeaderResponse, VoteRequest, VoteResponse,
+};
 use openraft::storage::RaftStateMachine;
 use openraft::{AnyError, BasicNode, RaftNetworkFactory, RaftNetworkV2};
 
@@ -237,6 +239,19 @@ impl RaftNetworkV2<TypeConfig> for Connection {
         }
     }
 
+    /// A leader handing over tells every member who is to lead next, so the
+    /// chosen one stands at once and the others do not wait out the lease.
+    async fn transfer_leader(
+        &mut self,
+        rpc: TransferLeaderRequest<TypeConfig>,
+        option: RPCOption,
+    ) -> Result<TransferLeaderResponse<TypeConfig>, RPCError<TypeConfig>> {
+        match &self.transport {
+            Transport::Local(net) => Ok(net.route(&self.from, self.to)?.handle_transfer_leader(rpc).await.map_err(unreachable)?),
+            Transport::Http { client, group, auth } => Ok(self.post(client, auth, group, "transfer-leader", &rpc, &option).await?),
+        }
+    }
+
     async fn full_snapshot(
         &mut self,
         vote: VoteOf<TypeConfig>,
@@ -342,7 +357,17 @@ where
         };
         Json(raft.install_full_snapshot(wire.vote, snapshot).await.map_err(|e| e.to_string()))
     }
+    async fn transfer_leader<SM>(
+        State(raft): State<GroupOf<SM>>,
+        Json(rpc): Json<TransferLeaderRequest<TypeConfig>>,
+    ) -> Json<Wire<TransferLeaderResponse<TypeConfig>>>
+    where
+        SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+    {
+        Json(raft.handle_transfer_leader(rpc).await.map_err(|e| e.to_string()))
+    }
     Router::new()
+        .route("/transfer-leader", post(transfer_leader::<SM>))
         .route("/append", post(append::<SM>))
         .route("/vote", post(vote::<SM>))
         .route("/pre-vote", post(pre_vote::<SM>))

@@ -20,6 +20,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ClusterAuth;
+use crate::failback::FailbackStatus;
 use crate::module::{ModuleReply, ModuleStatus};
 use crate::node::{NodeStatus, ProposeError};
 use crate::query::{PolicyView, Query};
@@ -60,6 +61,12 @@ pub struct EventPage {
     /// How far the partition has recorded this consumer as having its
     /// events. `None` for a consumer the partition keeps nothing for.
     pub acknowledged: Option<u64>,
+}
+
+/// An operator's request to hand a group's leadership to a voter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MoveLeader {
+    pub to: crate::NodeId,
 }
 
 /// What a consumer tells a partition it holds.
@@ -299,6 +306,27 @@ impl ClusterClient {
                 patient.http.put(format!("http://{addr}/v1/modules/{module}/members")).json(members)
             })
             .await
+    }
+
+    /// Hand a partition's leadership to a named voter.
+    pub async fn move_leader(&self, partition: PartitionId, to: crate::NodeId) -> Result<(), ClientError> {
+        self.sweep(partition, |addr| {
+            self.http
+                .post(format!("http://{addr}/v1/partitions/{partition}/leader"))
+                .json(&MoveLeader { to })
+        })
+        .await
+    }
+
+    /// What fail-back is doing on one node. `action` is `None` to look,
+    /// or `pause` or `resume` to tell that node to.
+    pub async fn failback(&self, addr: &str, action: Option<&str>) -> Result<FailbackStatus, String> {
+        let request = match action {
+            Some(action) => self.http.post(format!("http://{addr}/v1/failback/{action}")),
+            None => self.http.get(format!("http://{addr}/v1/failback")),
+        };
+        let response = self.auth.sign(request).timeout(self.attempt_timeout).send().await.map_err(|e| e.to_string())?;
+        response.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())
     }
 
     /// Every hosted module's status as one node sees it.
