@@ -55,7 +55,7 @@ cargo test --workspace --locked
 python3 tools/check_test_docs.py
 ```
 
-The end-of-day workflow test needs a Temporal server. It uses the one at `IC_TEST_TEMPORAL_ADDRESS` if set, otherwise it starts a local dev server. `IC_SKIP_TEMPORAL_TESTS=1` leaves it out, and says so in the output.
+The end-of-day workflow test needs a Temporal server. It uses the one at `IC_TEST_TEMPORAL_ADDRESS` if set, otherwise it starts the dev server executable named by `IC_TEST_TEMPORAL_EXE`; with neither it fails and says what to set. `IC_SKIP_TEMPORAL_TESTS=1` leaves it out, and says so in the output.
 
 The standards the suite is held to, enforced in CI (`.github/workflows/ci.yml`):
 

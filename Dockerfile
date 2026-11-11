@@ -21,22 +21,26 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     && find target/release -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/bin/ \;
 
 # --- test -------------------------------------------------------------------
-# `docker build --target test .` runs formatting, lints and the whole test
-# suite in the image, including the end-of-day workflow on a real Temporal
-# dev server, which the Temporal SDK's test support fetches. Pass
-# `--build-arg IC_SKIP_TEMPORAL_TESTS=1` where that download is not possible;
-# the test then says in its output that it did not run.
+# `docker build --target test .` runs formatting, lints and the test suite in
+# the image. The end-of-day workflow tests need a Temporal server, which an
+# image build cannot reach, so they are left out here and say so in their
+# output; CI runs them against a real server. To include them, pass
+# `--build-arg IC_SKIP_TEMPORAL_TESTS=` and
+# `--build-arg IC_TEST_TEMPORAL_ADDRESS=host:port` with a server the build
+# can reach.
 #
 # The checks build in the development profile, as CI does. The release
 # profile (thin LTO, one codegen unit) needs several gigabytes to link each
 # test binary, more than a laptop's Docker machine has, and the suite does
 # not depend on optimisation.
 FROM build AS test
-ARG IC_SKIP_TEMPORAL_TESTS=
+ARG IC_SKIP_TEMPORAL_TESTS=1
+ARG IC_TEST_TEMPORAL_ADDRESS=
 ENV IC_SKIP_TEMPORAL_TESTS=${IC_SKIP_TEMPORAL_TESTS}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo fmt --all --check \
+    if [ -n "$IC_TEST_TEMPORAL_ADDRESS" ]; then export IC_TEST_TEMPORAL_ADDRESS; else unset IC_TEST_TEMPORAL_ADDRESS; fi \
+    && cargo fmt --all --check \
     && cargo clippy --workspace --all-targets --locked -- -D warnings \
     && cargo test --workspace --locked
 

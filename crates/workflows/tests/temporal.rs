@@ -3,10 +3,12 @@
 //!
 //! The server is the one at `IC_TEST_TEMPORAL_ADDRESS` if that is set (the
 //! Docker Compose cluster and CI set it). Otherwise the Temporal SDK's test
-//! support starts a local dev server, using the executable at
-//! `IC_TEST_TEMPORAL_EXE` or fetching the official one. Set
-//! `IC_SKIP_TEMPORAL_TESTS=1` to leave the server test out on a machine that
-//! can do neither; it is never skipped silently.
+//! support starts the dev server executable named by `IC_TEST_TEMPORAL_EXE`.
+//! With neither set the tests fail and say so: the SDK's own download of a
+//! dev server does not work in this build (its HTTP client has no TLS), and
+//! a test run should not depend on fetching an executable anyway. Set
+//! `IC_SKIP_TEMPORAL_TESTS=1` to leave the server tests out on a machine
+//! that has neither; they are never skipped silently.
 
 mod common;
 
@@ -33,10 +35,10 @@ async fn temporal() -> Temporal {
     }
     let port = free_port();
     let options = LocalWorkflowEnvironmentOptions::builder().port(port).startup_timeout(Duration::from_secs(60));
-    let options = match std::env::var("IC_TEST_TEMPORAL_EXE") {
-        Ok(path) => options.server_executable(EphemeralExe::ExistingPath(path)).build(),
-        Err(_) => options.build(),
-    };
+    let exe = std::env::var("IC_TEST_TEMPORAL_EXE").expect(
+        "no Temporal server: set IC_TEST_TEMPORAL_ADDRESS to a running server, IC_TEST_TEMPORAL_EXE to a dev server executable, or IC_SKIP_TEMPORAL_TESTS=1",
+    );
+    let options = options.server_executable(EphemeralExe::ExistingPath(exe)).build();
     let local = WorkflowEnvironment::start_local(options)
         .await
         .expect("could not start a Temporal dev server; see this file's header");
