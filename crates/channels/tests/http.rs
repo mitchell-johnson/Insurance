@@ -675,6 +675,27 @@ async fn every_staff_read_is_in_the_access_log() {
         .collect();
     assert_eq!(records, ["counterparty:adv-1", "counterparty:adv-1", "counterparty:*"]);
 
+    // Sue is also a customer: she declares her connection to Kiri, and from then on Kiri's policy is not hers to open.
+    portal.clock.fetch_add(1, Ordering::SeqCst);
+    let declare = json!({ "declare_connection": { "party": KIRI } });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", declare).await.0, StatusCode::OK);
+    let (status, problem) = portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-8")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("personal connection"));
+    let log = recent(&portal.get("sub-sue", "/staff/v1/me").await.1);
+    assert_eq!((log.len(), log[0]["flag"].as_str()), (3, Some("personal")));
+    // She cannot take the declaration back herself.
+    let end = json!({ "end_connection": { "staff": "sue", "party": KIRI } });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", end).await.0, StatusCode::FORBIDDEN);
+
+    // Kiri joins the staff. Her own policy is for the customer app, never for the staff console.
+    let employ = json!({ "employ": { "party": KIRI, "team": "ops", "manager": null, "templates": ["service"] } });
+    assert_eq!(portal.write("POST", "sub-alice", "/staff/v1/access", employ).await.0, StatusCode::OK);
+    let (status, _) = portal.get("sub-kiri", &format!("/staff/v1/policies/{policy}?case=case-9")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(recent(&portal.get("sub-kiri", "/staff/v1/me").await.1)[0]["flag"], "personal");
+    assert_eq!(portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::OK);
+
     // Nobody writes the log by hand, not even about themselves.
     let forged = json!({ "record": {
         "request": { "staff": "sue", "action": "policy.view", "class": "personal", "decides": false, "fresh": true, "at": portal.now() },
@@ -682,7 +703,7 @@ async fn every_staff_read_is_in_the_access_log() {
     } });
     let (status, problem) = portal.write("POST", "sub-sue", "/staff/v1/access", forged).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")));
-    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 2);
+    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 3);
 }
 
 /// Purpose: finance staff work the held balance workbench over HTTP: the list, one party, the proof of debt, and prepare then approve by a second person; the console cannot send the commands that belong to the owning modules.

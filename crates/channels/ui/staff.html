@@ -26,7 +26,7 @@
 <p class="muted">Someone else approves it. Large amounts need two approvers and legal. A new account for a party in liquidation or deceased always needs legal.</p></form>
 <p><button class="quiet" id="proof">Proof of debt extract</button></p><div id="bench-msg" aria-live="polite"></div><pre id="proof-out"></pre></section></div>
 
-<div data-panel="access" hidden><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section></div>
+<div data-panel="access" hidden><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section><section><h2>Personal connections</h2><p class="muted">Declare anyone whose records you must not handle: relatives, friends, a former partner. Their policies and your own are then closed to you here. Only a staff administrator can remove a declaration.</p><div id="connections"></div><form id="connect"><div class="row"><div><label for="conn">Customer reference</label><input id="conn" required></div><button>Declare</button></div></form><div id="conn-msg" aria-live="polite"></div></section></div>
 <div data-panel="admin" hidden><section><h2>Grants</h2><div id="grants"></div><div id="admin-msg" aria-live="polite"></div></section><section><h2>Alignment with the entitlement source</h2><pre id="alignment"></pre></section></div>
 </main>
 <script src="/ui/app.js"></script>
@@ -93,8 +93,10 @@ async function access() {
   const me = await api(R, "GET", "/staff/v1/me");
   put($("mine"), table(["Team", "Roles", "Authority profile", "Reach", "Recertification due"], [[me.team || "", (me.templates || []).join(", "), me.profile ? `${me.profile.id} v${me.profile.version}` : "", (me.paths || []).join(", "), me.recertification_due ? new Date(me.recertification_due * 1000).toLocaleDateString() : ""]]),
     h("h2", {}, "Grants"), table(["Grant", "Kind", "State"], (me.grants || []).map((g) => [g.id, words(Object.keys(g.kind || {})[0] || g.kind), words(g.state)])));
-  put($("recent"), table(["When", "Action", "Record", "Allowed"], (me.recent || []).map((r) => [new Date(r.at * 1000).toLocaleString(), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied)])));
+  put($("recent"), table(["When", "Action", "Record", "Allowed", "Flagged"], (me.recent || []).map((r) => [new Date(r.at * 1000).toLocaleString(), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied), r.flag ? words(r.flag) : ""])));
+  put($("connections"), table(["Customer"], (me.connections || []).map((c) => [c])));
 }
+$("connect").addEventListener("submit", run($("conn-msg"), async () => { await api(R, "POST", "/staff/v1/access", { declare_connection: { party: $("conn").value } }); $("conn").value = ""; await access(); return "Declared."; }));
 async function admin() {
   const view = await api(R, "GET", "/staff/v1/admin");
   put($("grants"), table(["Grant", "Holder", "State", ""], view.grants.map((g) => [g.id, g.holder, words(g.state), g.state === "requested" ? h("button", { class: "quiet", on: { click: run($("admin-msg"), async () => { await api(R, "POST", "/staff/v1/access", { approve_grant: { id: g.id } }); await admin(); return "Approved."; }) } }, "Approve") : ""])));
