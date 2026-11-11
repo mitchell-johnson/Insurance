@@ -340,6 +340,20 @@ impl CoreState {
                 })
             }
             Command::IdentifyMember { policy, life, party } => self.with_policy(&policy, true, |_, p| group::identify(p, ctx, &life, party)),
+            Command::AddExcessLayer(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    group::add_excess_layer(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::EndExcessLayer {
+                policy,
+                cover,
+                layer,
+                effective,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                group::end_excess_layer(&mut s.ledger, &s.catalog, p, ctx, &cover, layer, effective)
+            }),
             Command::ApplyReceipt { policy, receipt, amount } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 cash::apply_receipt(&mut s.ledger, &s.catalog, p, ctx, receipt, amount)
             }),

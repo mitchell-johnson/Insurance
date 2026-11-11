@@ -134,6 +134,23 @@ pub enum Event {
         layer: LayerInfo,
         origin: LayerOrigin,
     },
+    /// A layer stopped from a date: an underwritten layer given up, reduced
+    /// or ended because the member left.
+    LayerEnded {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        life: LifeId,
+        effective: NaiveDate,
+        sum_insured_minor: i64,
+    },
+    /// The part of a retrospective adjustment that is underwriting loading.
+    /// It names no member: loadings reach the scheme only in aggregate.
+    LoadingAdjusted {
+        policy: PolicyId,
+        receivable: u32,
+        total_minor: i64,
+    },
     LayersMerged {
         policy: PolicyId,
         cover: String,
@@ -172,6 +189,11 @@ pub enum Event {
         period_index: u32,
         lines: Vec<(LifeId, i64)>,
         complete: bool,
+        /// Underwriting loading billed in this chunk that is not shown on any
+        /// member's line. The lines plus this is what the chunk added to the
+        /// invoice.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        loading_minor: i64,
     },
     PremiumEarned {
         policy: PolicyId,
@@ -301,6 +323,10 @@ pub enum Event {
         /// The member's cover on the details just notified.
         #[serde(default)]
         covers: Vec<MemberCover>,
+        /// The person, where the member joined as a named life or is already
+        /// identified.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        party: Option<PartyId>,
     },
     MemberLeft {
         policy: PolicyId,
@@ -373,4 +399,8 @@ pub enum MessageBody {
     TransferRecord(Box<TransferRecord>),
     TransferLanded { policy: PolicyId, transfer_id: String },
     TransferRejected { policy: PolicyId, transfer_id: String, reason: String },
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
