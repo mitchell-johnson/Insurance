@@ -569,7 +569,8 @@ impl Directory {
                 touched.policies = self.policies_under(&dependents);
             }
         }
-        self.heard = self.heard.max(at);
+        // `heard` is not moved here: only the event stream says the
+        // relationships the core carries are current.
         Ok(touched)
     }
 }

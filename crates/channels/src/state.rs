@@ -160,7 +160,7 @@ pub enum Effect {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
     pub result: Result<Vec<Effect>, Reject>,
     pub duplicate: bool,
@@ -197,6 +197,22 @@ pub struct Data {
 pub struct ChannelState {
     pub data: Data,
     scope: AudienceScope,
+}
+
+// The replicated state is `data`. The audience policy is configuration every
+// replica loads alike, so a saved state is the data alone.
+impl Serialize for ChannelState {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.data.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for ChannelState {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let data = Data::deserialize(deserializer)?;
+        let scope = AudienceScope::shipped().map_err(serde::de::Error::custom)?;
+        Ok(Self { data, scope })
+    }
 }
 
 fn reject(code: &str, message: impl Into<String>) -> Reject {
