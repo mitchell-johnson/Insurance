@@ -14,7 +14,7 @@
 //! the log has grown enough, after which the log before it is dropped; a
 //! restarted member loads the snapshot and replays the log that follows.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -49,6 +49,13 @@ struct Replicated {
     events: VecDeque<EventRecord>,
     /// The partition's read models, fed from every event as it is produced.
     view: Projections,
+    /// Events up to this sequence number are on the stream.
+    #[serde(default)]
+    published_through: u64,
+    /// How far each consumer of this partition's events has them. An event
+    /// is let go once it is on the stream and every consumer has it.
+    #[serde(default)]
+    consumers: BTreeMap<String, u64>,
 }
 
 struct Inner {
@@ -122,6 +129,8 @@ impl Machine {
             journal: VecDeque::new(),
             events: VecDeque::new(),
             view: Projections::new(),
+            published_through: 0,
+            consumers: BTreeMap::new(),
         });
         Self {
             inner: Arc::new(Mutex::new(Inner { state, dir })),
@@ -164,7 +173,20 @@ impl Machine {
 
     /// The oldest events not yet on the stream, at most `limit`.
     pub fn pending_events(&self, limit: usize) -> Vec<EventRecord> {
-        self.lock().state.events.iter().take(limit).cloned().collect()
+        let inner = self.lock();
+        let published = inner.state.published_through;
+        inner.state.events.iter().filter(|e| e.seq > published).take(limit).cloned().collect()
+    }
+
+    /// The events after sequence number `after` that this member still
+    /// holds, oldest first, at most `limit`.
+    pub fn events_after(&self, after: u64, limit: usize) -> Vec<EventRecord> {
+        self.lock().state.events.iter().filter(|e| e.seq > after).take(limit).cloned().collect()
+    }
+
+    /// How far each registered consumer has this partition's events.
+    pub fn consumers(&self) -> BTreeMap<String, u64> {
+        self.lock().state.consumers.clone()
     }
 
     /// The next full cold-tier segment, if enough entries are waiting.
@@ -187,11 +209,23 @@ impl Machine {
                     state.journal.pop_front();
                 }
             }
-            Housekeeping::Published { through_seq } => {
-                while state.events.front().is_some_and(|e| e.seq <= through_seq) {
-                    state.events.pop_front();
-                }
+            Housekeeping::Published { through_seq } => state.published_through = state.published_through.max(through_seq),
+            Housekeeping::Consumed { consumer, through_seq } => {
+                // A consumer first heard of starts at the oldest event still
+                // held: what went before it registered is on the stream only.
+                let floor = state.events.front().map_or(state.core.last_event_seq(), |e| e.seq - 1);
+                let cursor = state.consumers.entry(consumer).or_insert(floor);
+                *cursor = (*cursor).max(through_seq).min(state.core.last_event_seq());
             }
+            Housekeeping::Unsubscribed { consumer } => {
+                state.consumers.remove(&consumer);
+            }
+        }
+        // An event is let go once the stream has it and every consumer has it.
+        let held_for = state.consumers.values().copied().min().unwrap_or(u64::MAX);
+        let through = state.published_through.min(held_for);
+        while state.events.front().is_some_and(|e| e.seq <= through) {
+            state.events.pop_front();
         }
     }
 
@@ -275,7 +309,7 @@ impl RaftStateMachine<TypeConfig> for Machine {
                     // A module's command has no meaning to a partition. The
                     // node never proposes one here; a log that holds one is
                     // applied the same way by every member: as nothing.
-                    EntryPayload::Normal(Proposal::Module(_)) => Reply {
+                    EntryPayload::Normal(Proposal::Module(_) | Proposal::Feed { .. }) => Reply {
                         log_index: entry.log_id.index(),
                         module: Some(Err("this group is a ledger partition, not a module".to_string())),
                         ..Reply::default()

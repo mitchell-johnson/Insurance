@@ -50,6 +50,24 @@ pub struct EndOfDayView {
     pub transfer_in_flight: bool,
 }
 
+/// A run of a partition's events, as its leader holds them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventPage {
+    /// The sequence number the run follows.
+    pub after: u64,
+    /// The events, in sequence. Empty when the reader is level.
+    pub events: Vec<ic_core::EventRecord>,
+    /// How far the partition has recorded this consumer as having its
+    /// events. `None` for a consumer the partition keeps nothing for.
+    pub acknowledged: Option<u64>,
+}
+
+/// What a consumer tells a partition it holds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Consumed {
+    pub through_seq: u64,
+}
+
 /// What a node answers when it cannot serve a request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Refusal {
@@ -203,6 +221,44 @@ impl ClusterClient {
         }
         self.remember(group, None);
         Err(detail)
+    }
+
+    /// A partition's events for a consumer, from its leader: those after
+    /// `after`, or after what the consumer last acknowledged when `after` is
+    /// not given. The partition keeps events for a consumer only once the
+    /// consumer is registered, which its first acknowledgement does.
+    pub async fn events(&self, partition: PartitionId, consumer: &str, after: Option<u64>, max: usize) -> Result<EventPage, ClientError> {
+        self.sweep(partition, |addr| {
+            let request = self
+                .http
+                .get(format!("http://{addr}/v1/partitions/{partition}/events"))
+                .query(&[("consumer", consumer)])
+                .query(&[("max", max)]);
+            match after {
+                Some(after) => request.query(&[("after", after)]),
+                None => request,
+            }
+        })
+        .await
+    }
+
+    /// Record that a consumer holds a partition's events through
+    /// `through_seq`, so the partition can let them go.
+    pub async fn acknowledge_events(&self, partition: PartitionId, consumer: &str, through_seq: u64) -> Result<(), ClientError> {
+        self.sweep(partition, |addr| {
+            self.http
+                .put(format!("http://{addr}/v1/partitions/{partition}/consumers/{consumer}"))
+                .json(&Consumed { through_seq })
+        })
+        .await
+    }
+
+    /// Stop a partition keeping events for a consumer that no longer reads them.
+    pub async fn unsubscribe(&self, partition: PartitionId, consumer: &str) -> Result<(), ClientError> {
+        self.sweep(partition, |addr| {
+            self.http.delete(format!("http://{addr}/v1/partitions/{partition}/consumers/{consumer}"))
+        })
+        .await
     }
 
     /// Offer a command to a module's leader. One pass: the caller decides

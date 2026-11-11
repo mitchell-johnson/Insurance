@@ -43,7 +43,7 @@ pub mod types;
 pub use auth::ClusterAuth;
 pub use client::{ClusterClient, EndOfDayView};
 pub use machine::Machine;
-pub use module::{hosted, ModuleReply, ModuleSpec, ModuleState, ModuleStatus};
+pub use module::{hosted, hosted_reading, ModuleReply, ModuleSpec, ModuleState, ModuleStatus};
 pub use node::{Node, NodeStatus, ProposeError};
 pub use peers::Identity;
 pub use query::{Answer, PolicyView, Query};
