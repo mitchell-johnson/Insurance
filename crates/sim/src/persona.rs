@@ -49,6 +49,7 @@ pub fn named_life(id: &str, party: &str, dob: NaiveDate, sex: Sex, smoker: bool)
             smoker: Some(smoker),
             category: None,
             salary_minor: None,
+            ..Default::default()
         },
     }
 }
@@ -66,6 +67,7 @@ pub fn member(member_ref: &str, dob: NaiveDate, category: &str, salary_minor: i6
             smoker: None,
             category: Some(category.to_string()),
             salary_minor: Some(salary_minor),
+            ..Default::default()
         },
     }
 }

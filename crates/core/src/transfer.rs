@@ -96,7 +96,7 @@ pub(crate) fn begin(
     }
     let mut set = PostingSet::new();
     let mut balances = Vec::new();
-    for account in accounts::policy_accounts(&policy.id, policy.currency) {
+    for account in accounts::transferable_accounts(&policy.id, policy.currency) {
         let balance = ledger.balance(&account.id);
         if ledger.available(&account.id) != ledger.natural_balance(&account.id) {
             return Err(Reject::new("holds_outstanding", "the policy has holds; release them before transferring"));
@@ -202,7 +202,12 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
         state.catalog.activate_rate_table(t);
     }
     let mut set = PostingSet::new();
-    for account in accounts::policy_accounts(&policy.id, policy.currency) {
+    let always = accounts::policy_accounts(&policy.id, policy.currency).len();
+    for (i, account) in accounts::transferable_accounts(&policy.id, policy.currency).into_iter().enumerate() {
+        // Accounts opened on first use arrive only if they carry a balance.
+        if i >= always && !record.balances.iter().any(|b| b.role == account.role) {
+            continue;
+        }
         state.ledger.open_account(account.clone())?;
         if let Some(b) = record.balances.iter().find(|b| b.role == account.role && b.unit == account.unit) {
             set.debit(account.clone(), b.balance, Dimensions::default());
@@ -256,6 +261,8 @@ pub(crate) fn complete(policy: &mut Policy, ctx: &mut Ctx<'_>, transfer_id: &str
     // links to it; the history stays on this partition's chain.
     policy.receivables.clear();
     policy.receipts.clear();
+    policy.refunds_raised.clear();
+    policy.payments.clear();
     policy.lapse = None;
     policy.standing = None;
     ctx.emit(Event::PolicyStatusChanged {

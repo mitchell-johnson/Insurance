@@ -13,6 +13,7 @@ pub mod command;
 pub mod event;
 pub mod ids;
 pub mod machine;
+pub mod payments;
 pub mod policy;
 pub mod premium;
 pub mod recon;
@@ -29,7 +30,9 @@ mod unwind;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
+pub use group::{preview_membership, ChangePreview, MembershipPreview};
 pub use ids::*;
 pub use lifecycle::quote;
 pub use machine::{Applied, CoreState, Reject, APPLY_BUDGET};
+pub use payments::PayableKind;
 pub use policy::*;

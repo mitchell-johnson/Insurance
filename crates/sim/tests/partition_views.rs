@@ -521,6 +521,7 @@ fn scheme_members_cover_follows_the_membership_file() {
                 smoker: None,
                 category: Some("staff".to_string()),
                 salary_minor: Some(60_000_00),
+                ..Default::default()
             },
         },
     );

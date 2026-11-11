@@ -170,6 +170,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
                 origin: LayerOrigin::Original,
                 loadings: spec.loadings,
                 exclusions: spec.exclusions,
+                loading_itemised: false,
             });
         }
     }
@@ -200,6 +201,8 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         history: vec![],
         unwind: None,
         refund_with_claim: None,
+        refunds_raised: BTreeMap::new(),
+        payments: BTreeMap::new(),
     };
     Ok((policy, product))
 }
@@ -338,6 +341,7 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
                             origin: LayerOrigin::Indexation,
                             loadings,
                             exclusions,
+                            loading_itemised: false,
                         });
                         added.push(LayerInfo {
                             cover: cover.code.clone(),

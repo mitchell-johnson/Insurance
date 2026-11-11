@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, earning, group, lifecycle, payments, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -112,6 +112,16 @@ impl Ctx<'_> {
             debug_assert!(ledger.has_account(&p.account), "account {} not opened", p.account);
         }
         self.work += postings.len() as u32;
+        // Every line of a policy's entry belongs to the policy's statutory
+        // fund and product, the cash side included, so each fund's trial
+        // balance balances on its own.
+        let mut postings = postings;
+        if let Some(policy) = policy {
+            for posting in &mut postings {
+                posting.dims.statutory_fund.get_or_insert_with(|| policy.statutory_fund.clone());
+                posting.dims.product.get_or_insert_with(|| policy.product_code.clone());
+            }
+        }
         let draft = EntryDraft {
             kind: kind.to_string(),
             value_date,
@@ -385,6 +395,20 @@ impl CoreState {
                 })
             }
             Command::IdentifyMember { policy, life, party } => self.with_policy(&policy, true, |_, p| group::identify(p, ctx, &life, party)),
+            Command::AddExcessLayer(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    group::add_excess_layer(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::EndExcessLayer {
+                policy,
+                cover,
+                layer,
+                effective,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                group::end_excess_layer(&mut s.ledger, &s.catalog, p, ctx, &cover, layer, effective)
+            }),
             Command::ApplyReceipt { policy, receipt, amount } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 cash::apply_receipt(&mut s.ledger, &s.catalog, p, ctx, receipt, amount)
             }),
@@ -411,6 +435,28 @@ impl CoreState {
             } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 unwind::terminate_on_claim(&mut s.ledger, &s.catalog, p, ctx, event_date, &claim, payer_deceased)
             }),
+            Command::RaiseRefundPayable {
+                policy,
+                refund,
+                amount,
+                with_claim,
+            } => self.with_policy(&policy, true, |s, p| {
+                payments::raise_refund_payable(&mut s.ledger, p, ctx, refund, amount, with_claim)
+            }),
+            Command::ReleaseRefundPayable { policy, refund } => {
+                self.with_policy(&policy, true, |s, p| payments::release_refund_payable(&mut s.ledger, p, ctx, &refund))
+            }
+            Command::SettlePayable {
+                policy,
+                payment,
+                payable,
+                refund,
+                amount,
+                bank_account,
+            } => self.with_policy(&policy, true, |s, p| {
+                payments::settle_payable(&mut s.ledger, p, ctx, payment, payable, refund, amount, bank_account)
+            }),
+            Command::ReturnPayment { policy, payment } => self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment)),
             Command::BeginTransfer {
                 policy,
                 transfer_id,
