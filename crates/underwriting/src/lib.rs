@@ -19,6 +19,7 @@ pub mod codes;
 pub mod command;
 pub mod config;
 pub mod evidence;
+pub mod host;
 pub mod load;
 pub mod machine;
 pub mod model;

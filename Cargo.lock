@@ -2193,6 +2193,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-readmodel",
  "rand 0.8.8",
  "serde",
