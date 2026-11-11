@@ -2130,6 +2130,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-payments-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-azure",
+ "ic-cashmatch",
+ "ic-core",
+ "ic-log",
+ "ic-money",
+ "ic-payments",
+ "ic-payments-service",
+ "ic-product",
+ "ic-raft",
+ "ic-sim",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ic-product"
 version = "0.1.0"
 dependencies = [
