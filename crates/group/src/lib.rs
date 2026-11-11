@@ -19,5 +19,5 @@ pub mod state;
 pub mod terms;
 pub mod work;
 
-pub use host::{answer, react, Question};
+pub use host::{answer, module_spec, react, Question, MODULE};
 pub use state::{GroupState, Outcome};

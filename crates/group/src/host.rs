@@ -1,16 +1,30 @@
 //! What the module host needs from the module: how an event from the core
 //! becomes a command for it, and how questions about its state are answered.
-//! The node hosts the module with
-//! `ic_raft::hosted_reading(GroupState::default(), ic_group::answer, ic_group::react)`.
+//! The deployed node hosts the module from [`module_spec`].
 
 use ic_core::event::Event as CoreEvent;
 use ic_core::{EventRecord, LayerOrigin};
+use ic_raft::{hosted_reading, ModuleSpec, ModuleState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::command::{caller, Envelope, GroupCommand};
 use crate::event::Outbound;
 use crate::state::GroupState;
+
+/// The module's permanent name on the cluster.
+pub const MODULE: &str = "group";
+
+fn make() -> Box<dyn ModuleState> {
+    hosted_reading(GroupState::default(), answer, react)
+}
+
+/// The group scheme module, for a ledger node to host. It reads the core's
+/// events: the business date, scheme invoices and balances, and the layers
+/// the core writes for underwritten cover.
+pub fn module_spec() -> Result<ModuleSpec, String> {
+    Ok(ModuleSpec::new(MODULE, make)?.reading_events())
+}
 
 /// The commands one event from a partition's stream turns into. Most events
 /// are nothing to this module. The key is the event's own ID, so an event

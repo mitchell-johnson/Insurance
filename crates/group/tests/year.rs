@@ -249,7 +249,7 @@ fn a_pool_scheme_is_run_on_declarations() {
     assert!(!h.g.exceptions.values().any(|e| e.kind == ExceptionKind::DeclarationOverdue));
     let pool = |h: &Harness, id: &str| {
         let l = &h.c.state(h.p).policies[&h.policy].lives[&life(id)];
-        l.factors.as_of(h.today()).unwrap().pool.clone().map(|p| (p.headcount, p.total_salary_minor))
+        l.factors.as_of(h.today()).unwrap().pool.map(|p| (p.headcount, p.total_salary_minor))
     };
     assert_eq!(pool(&h, "pool:seed"), Some((40, 2_400_000_00)));
 

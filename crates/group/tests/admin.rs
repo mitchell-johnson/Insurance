@@ -315,3 +315,51 @@ fn the_host_feeds_events_and_asks_questions() {
         .contains("not known"));
     assert!(ask(&h, json!({"ask": "weather"})).unwrap_err().contains("not a question"));
 }
+
+/// Purpose: the module as the node hosts it takes a command as JSON, answers a question
+/// as JSON, is fed the core's events, and comes back from its own snapshot unchanged.
+/// Why it matters: this is the form in which the module actually runs. A command type
+/// that does not survive JSON, or a snapshot that loses a field, would pass every other
+/// test here and fail on the first restart of a deployed node.
+#[test]
+fn the_module_runs_under_the_node_host() {
+    let spec = ic_group::module_spec().unwrap();
+    assert_eq!(spec.name, ic_group::MODULE);
+    let h = Harness::new(terms());
+    // Replay the harness's first commands through the hosted form.
+    let mut hosted = (spec.make)();
+    let register = Envelope {
+        key: "k1".into(),
+        caller: caller::STAFF.into(),
+        actor: "staff-ana".into(),
+        today: h.today(),
+        command: GroupCommand::RegisterScheme {
+            scheme: SCHEME.into(),
+            policy: h.policy.clone(),
+            group: h.group.clone(),
+            employer: party("employer-1"),
+            inception: d(2027, 11, 1),
+            product: Box::new(product()),
+            terms: Box::new(terms()),
+            founding: vec![member("E001")],
+            pools: vec![],
+        },
+    };
+    let out = hosted.apply(1, serde_json::to_value(&register).unwrap()).unwrap();
+    assert_eq!(out["duplicate"].as_bool(), Some(false));
+    assert!(spec.events, "the module is fed the core's events");
+    let mut c = ic_sim::Cluster::in_memory(1, 3);
+    c.open(h.today()).unwrap();
+    c.end_of_day().unwrap();
+    for (i, record) in c.take_events().iter().enumerate() {
+        hosted.on_event(2 + i as u64, record);
+    }
+    let answer = hosted.query(json!({"ask": "scheme", "scheme": SCHEME})).unwrap();
+    assert_eq!(answer["members"].as_u64(), Some(1));
+    assert!(hosted.apply(9, json!({"not": "a command"})).is_err());
+    let saved = hosted.save().unwrap();
+    let mut restored = (spec.make)();
+    restored.load(saved.clone()).unwrap();
+    assert_eq!(restored.query(json!({"ask": "scheme", "scheme": SCHEME})).unwrap(), answer);
+    assert_eq!(restored.save().unwrap(), saved);
+}
