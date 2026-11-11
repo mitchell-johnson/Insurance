@@ -590,7 +590,7 @@ impl ChannelState {
                 }
             }
             Command::Heartbeat => {
-                if actor != Actor::Module(EVENT_RELAY.to_string()) {
+                if !matches!(&actor, Actor::Module(m) if m == EVENT_RELAY || m == GATEWAY) {
                     return Err(reject("forbidden", "only the event relay reports the stream is current"));
                 }
                 self.data.directory.heard = self.data.directory.heard.max(at);
