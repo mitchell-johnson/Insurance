@@ -8,6 +8,13 @@ on:
 permissions:
   contents: read
 
+# Many pushes land on main in a short time. One run at a time per branch, and
+# only the newest waiting run is kept, so the queue never grows and a run that
+# has started always finishes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_TERM_COLOR: always
   # The line coverage the workspace must keep, tests against a real Temporal
