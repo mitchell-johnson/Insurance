@@ -1,0 +1,43 @@
+[package]
+name = "ic-workflows"
+description = "Durable orchestration of the end-of-day run: Temporal workflows over the ledger nodes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-ledger.workspace = true
+ic-raft.workspace = true
+ic-azure.workspace = true
+temporalio-sdk = "=1.2.0"
+temporalio-client = "=1.2.0"
+temporalio-macros = "=1.2.0"
+temporalio-workflow = "=1.2.0"
+temporalio-common = "=1.2.0"
+futures = "0.3"
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[[bin]]
+name = "ic-worker"
+path = "src/bin/ic-worker.rs"
+
+[dev-dependencies]
+ic-sim.workspace = true
+ic-product.workspace = true
+ic-money.workspace = true
+reqwest.workspace = true
+temporalio-sdk = { version = "=1.2.0", features = ["testing"] }
+
+[lints]
+workspace = true

@@ -168,8 +168,9 @@ impl Host {
                 let envelope = Envelope {
                     key: message.id.clone(),
                     caller: "transfer".to_string(),
-                    // Derived from the message so a redelivery is byte-identical.
-                    salt: format!("relay:{}", message.id),
+                    // Drawn fresh for each delivery. Only the first delivery
+                    // is applied, so only its salt is ever used.
+                    salt: crate::client::fresh_salt(),
                     traceparent: None,
                     command,
                 };
@@ -262,13 +263,23 @@ pub fn router(host: Arc<Host>) -> Router {
     router
 }
 
-/// Run a node until `stop` resolves.
-pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = ()> + Send + 'static) -> Result<(), String> {
+/// A node that is up: its groups, its listener and its relay.
+pub struct Running {
+    pub host: Arc<Host>,
+    pub listen: SocketAddr,
+    stop: tokio::sync::oneshot::Sender<()>,
+    server: tokio::task::JoinHandle<Result<(), String>>,
+    relay: tokio::task::JoinHandle<()>,
+}
+
+/// Start a node: open its logs, join its groups and listen.
+pub async fn start(settings: Settings) -> Result<Running, String> {
     let host = Host::start(&settings).await?;
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
-    tracing::info!(node = settings.id, listen = %settings.listen, partitions = settings.partitions, "ledger node listening");
+    let listen = listener.local_addr().map_err(|e| e.to_string())?;
+    tracing::info!(node = settings.id, %listen, partitions = settings.partitions, "ledger node listening");
     if settings.bootstrap {
         host.bootstrap().await?;
     }
@@ -282,11 +293,46 @@ pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = (
             }
         })
     };
-    let served = axum::serve(listener, router(host.clone()))
-        .with_graceful_shutdown(stop)
-        .await
-        .map_err(|e| e.to_string());
-    relay.abort();
-    host.shutdown().await;
-    served
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let app = router(host.clone());
+    let server = tokio::spawn(async move {
+        let graceful = async {
+            let _ = stopped.await;
+        };
+        axum::serve(listener, app).with_graceful_shutdown(graceful).await.map_err(|e| e.to_string())
+    });
+    Ok(Running {
+        host,
+        listen,
+        stop,
+        server,
+        relay,
+    })
+}
+
+impl Running {
+    /// Stop in an orderly way: finish in-flight requests, then leave the groups.
+    pub async fn stop(self) -> Result<(), String> {
+        let _ = self.stop.send(());
+        let served = self.server.await.map_err(|e| e.to_string()).and_then(|r| r);
+        self.relay.abort();
+        self.host.shutdown().await;
+        served
+    }
+
+    /// Stop at once, as a crash would: requests in flight are dropped.
+    /// Only what reached the disk survives.
+    pub async fn kill(self) {
+        self.server.abort();
+        self.relay.abort();
+        self.host.shutdown().await;
+    }
+}
+
+/// Run a node until `stop` resolves.
+pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
+    let running = start(settings).await?;
+    stop.await;
+    tracing::info!("ledger node stopping");
+    running.stop().await
 }

@@ -57,6 +57,13 @@ pub enum ClientError {
     Unavailable { partition: PartitionId, detail: String },
 }
 
+/// A salt for a command's payload commitments, from the operating system's
+/// random source. The proposer draws it; replicas never do.
+pub fn fresh_salt() -> String {
+    let bytes: [u8; 16] = rand::random();
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Clone)]
 pub struct ClusterClient {
     http: reqwest::Client,

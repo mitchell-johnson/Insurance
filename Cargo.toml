@@ -12,6 +12,7 @@ members = [
     "crates/azure",
     "crates/api",
     "crates/raft",
+    "crates/workflows",
 ]
 
 [workspace.package]
