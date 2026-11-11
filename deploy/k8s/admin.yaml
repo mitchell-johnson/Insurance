@@ -1,0 +1,61 @@
+# The operator's command, kept as a suspended CronJob so that it can be run
+# by hand with the right identity, settings and token already in place:
+#
+#   kubectl -n insurance-core create job status-now --from=cronjob/ic-admin
+#
+# It never runs on its schedule. docs/operations.md shows how to run the
+# other ic-admin commands from it.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ic-admin
+spec:
+  suspend: true
+  schedule: "0 0 1 1 *"
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app: ic-bootstrap
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ic-node
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: admin
+              image: insurance-core
+              command: ["/usr/local/bin/ic-admin", "status"]
+              envFrom:
+                - configMapRef:
+                    name: ic-ledger
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: cluster-token
+                  mountPath: /mnt/cluster-token
+                  readOnly: true
+          volumes:
+            - name: cluster-token
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-node-token

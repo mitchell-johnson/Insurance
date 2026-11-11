@@ -1,8 +1,10 @@
 //! Raft replication for one ledger partition.
 //!
-//! Each partition is a Raft group. Production runs five voters per group
-//! across Azure New Zealand North, Australia East and Australia Southeast, so
-//! a zone or a whole region can be lost without losing a committed entry.
+//! Each partition is a Raft group. The shipped deployment runs three voters
+//! per group, one in each availability zone of Azure New Zealand North, so a
+//! zone can be lost without losing a committed entry. Surviving the loss of
+//! the region needs voters in a second and third region, which the software
+//! supports and the infrastructure does not yet provision (docs/decisions.md).
 //!
 //! The pieces:
 //! - [`types`]: what is replicated (a command envelope) and what comes back.

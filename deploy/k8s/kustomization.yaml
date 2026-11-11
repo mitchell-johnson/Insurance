@@ -15,6 +15,7 @@ resources:
   - api.yaml
   - worker.yaml
   - bootstrap.yaml
+  - admin.yaml
   - network.yaml
 images:
   - name: insurance-core
