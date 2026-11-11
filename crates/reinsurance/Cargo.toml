@@ -21,6 +21,7 @@ thiserror.workspace = true
 starlark.workspace = true
 
 [dev-dependencies]
+ic-sim.workspace = true
 proptest.workspace = true
 
 [lints]

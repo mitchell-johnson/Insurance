@@ -1,1 +1,104 @@
-<!doctype html><title>staff</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Staff console</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Staff console</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<nav class="tabs" role="tablist" aria-label="Sections">
+<button role="tab" data-tab="policy" aria-selected="true">Policies</button><button role="tab" data-tab="bench" aria-selected="false">Held balances</button><button role="tab" data-tab="access" aria-selected="false">My access</button><button role="tab" data-tab="admin" aria-selected="false">Access administration</button></nav>
+
+<div data-panel="policy">
+<section><h2>Look up a policy</h2><form id="lookup"><div class="row"><div><label for="pol">Policy ID</label><input id="pol" required></div><div><label for="case">Case or task you are working on</label><input id="case" required></div><div><label for="scope">Queue or team (optional)</label><input id="scope" placeholder="queue:claims-life"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
+<section id="pol-view" hidden><h2>Policy</h2><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
+<h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
+
+<div data-panel="bench" hidden>
+<section><h2>Daily control: held money by age</h2><div id="control"></div></section>
+<section><h2>Parties</h2><div id="parties"></div></section>
+<section id="position" hidden><h2 id="pos-title"></h2><div id="pos-summary"></div><h2>Lines</h2><div id="pos-items"></div><h2>Documents on file</h2><div id="pos-docs"></div><h2>Actions</h2><div id="pos-actions"></div>
+<h2>Prepare an action</h2><form id="prepare"><div class="row">
+<div><label for="act">Action</label><select id="act"><option value="release">Release</option><option value="offset">Offset against a receivable</option><option value="hold_pending">Hold pending review</option><option value="write_off">Write off</option><option value="record_dividend">Record a liquidator's dividend</option></select></div>
+<div><label for="cur">Currency</label><input id="cur" value="NZD" size="4" maxlength="3" required></div>
+<div><label for="amt">Amount</label><input id="amt" type="number" step="0.01" min="0"></div>
+<div><label for="ref">Account, receivable line or legal reference</label><input id="ref"></div>
+<div><label for="newacct">New account?</label><select id="newacct"><option value="false">No</option><option value="true">Yes</option></select></div>
+<div><label for="review">Review date</label><input id="review" type="date"></div>
+<div><label for="reason">Reason code</label><input id="reason" required></div>
+<div><label for="doc">Document reference</label><input id="doc" required></div><button>Prepare</button></div>
+<p class="muted">Someone else approves it. Large amounts need two approvers and legal. A new account for a party in liquidation or deceased always needs legal.</p></form>
+<p><button class="quiet" id="proof">Proof of debt extract</button></p><div id="bench-msg" aria-live="polite"></div><pre id="proof-out"></pre></section></div>
+
+<div data-panel="access" hidden><section><h2>What you can do</h2><div id="mine"></div></section><section><h2>Your recent access</h2><div id="recent"></div></section></div>
+<div data-panel="admin" hidden><section><h2>Grants</h2><div id="grants"></div><div id="admin-msg" aria-live="polite"></div></section><section><h2>Alignment with the entitlement source</h2><pre id="alignment"></pre></section></div>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce";
+let policy = null, party = null;
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const amounts = (m) => Object.entries(m || {}).map(([c, v]) => money(v, c)).join(", ") || "none";
+const loaders = { policy: async () => {}, bench: bench, access: access, admin: admin };
+document.querySelectorAll("[role=tab]").forEach((tab) => tab.addEventListener("click", () => {
+  document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
+  run($("msg"), loaders[tab.dataset.tab])();
+}));
+
+$("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
+  const q = new URLSearchParams({ case: $("case").value }); if ($("scope").value) q.set("scope", $("scope").value);
+  const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent($("pol").value)}?${q}`);
+  policy = $("pol").value; $("pol-view").hidden = false; clear($("lookup-msg"));
+  put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
+  put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", h("pre", {}, JSON.stringify(r.body, null, 1))])));
+  put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
+}));
+$("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
+  await api(R, "POST", "/staff/v1/requests", { id: crypto.randomUUID(), policy, kind: $("ckind").value, module: "policy-servicing", payload: { note: $("cnote").value } });
+  return "Sent to the customer's app for their approval.";
+}));
+
+async function bench() {
+  const view = await api(R, "GET", "/staff/v1/workbench");
+  put($("control"), ...view.control.held.map((c) => h("div", {}, h("p", {}, h("strong", {}, c.currency), ": ", money(c.total_minor, c.currency), " held"), table(c.aged.map((a) => a.days + " days"), [c.aged.map((a) => money(a.minor, c.currency))]))),
+    view.control.reviews_due.length ? h("div", { class: "banner warn" }, "Reviews due: " + view.control.reviews_due.map((r) => `${r.party} (${r.legal_reference})`).join(", ")) : null);
+  put($("parties"), table(["Party", "Status", "Held", "Net position", "Open actions", ""], view.parties.map((p) => [p.party, words(p.status), amounts(p.held), amounts(p.net), p.open_actions, h("button", { class: "quiet", on: { click: run($("msg"), () => position(p.party)) } }, "Open")])));
+}
+async function act(body, done) { await api(R, "POST", "/staff/v1/workbench/actions", body); await position(party); await bench(); return done; }
+async function position(id) {
+  party = id; const p = await api(R, "GET", "/staff/v1/workbench/" + encodeURIComponent(id));
+  $("position").hidden = false; $("pos-title").textContent = `${id}: ${words(p.status)}`; $("proof-out").textContent = "";
+  put($("pos-summary"), h("p", {}, "Held: ", h("strong", {}, amounts(p.held)), ". Net position: ", h("strong", {}, amounts(p.net)), p.review ? `. Review due ${p.review.on} (${p.review.legal_reference}).` : ".",
+    p.cases.length ? " Open cases: " + p.cases.join(", ") + "." : ""));
+  put($("pos-items"), table(["Line", "Kind", "Period", "Book", "Amount", "Reason", "Since", "Owner"], p.items.map((x) => [x.item.id, words(x.item.kind), x.item.period || "", x.item.book || "", money(x.item.amount_minor, x.item.currency), words(x.item.reason), x.item.since, x.module])));
+  put($("pos-docs"), table(["Reference", "Kind", "Filed"], p.documents.map((d) => [d.reference, words(d.kind), d.filed])));
+  put($("pos-actions"), table(["ID", "Action", "Amount", "Reason", "Prepared by", "Needs", "Approved by", "State", ""], p.actions.map((a) => [a.id, words(a.action), a.amount_minor == null ? "" : money(a.amount_minor, a.currency), a.reason_code, a.maker,
+    `${a.needs.approvers} approver(s)${a.needs.legal ? " + legal" : ""}`, a.approvals.map((x) => x.by + (x.legal ? " (legal)" : "")).join(", "), words(a.state),
+    a.state === "awaiting_approval" ? h("span", {},
+      h("button", { class: "quiet", on: { click: run($("bench-msg"), () => act({ approve: { id: a.id, legal: false } }, "Approved.")) } }, "Approve"), " ",
+      a.needs.legal ? h("button", { class: "quiet", on: { click: run($("bench-msg"), () => act({ approve: { id: a.id, legal: true } }, "Approved as legal.")) } }, "Approve as legal") : null, " ",
+      h("button", { class: "quiet", on: { click: run($("bench-msg"), () => { const reason = window.prompt("Reason for declining:"); return reason ? act({ decline: { id: a.id, reason } }, "Declined.") : null; }) } }, "Decline")) : ""])));
+  $("position").scrollIntoView({ behavior: "smooth" });
+}
+$("prepare").addEventListener("submit", run($("bench-msg"), async () => {
+  const minor = Math.round(Number($("amt").value || 0) * 100), ref = $("ref").value, kind = $("act").value;
+  const action = { release: { action: "release", amount_minor: minor, account: ref, new_account: $("newacct").value === "true" }, offset: { action: "offset", amount_minor: minor, receivable: ref },
+    hold_pending: { action: "hold_pending", review_on: $("review").value, legal_reference: ref }, write_off: { action: "write_off", amount_minor: minor }, record_dividend: { action: "record_dividend", receivable: ref, received_minor: minor } }[kind];
+  return act({ prepare: { id: crypto.randomUUID(), party, currency: $("cur").value.toUpperCase(), action, reason_code: $("reason").value, document: $("doc").value } }, "Prepared. It now needs approval by someone else.");
+}));
+$("proof").addEventListener("click", run($("bench-msg"), async () => { $("proof-out").textContent = JSON.stringify(await api(R, "GET", `/staff/v1/workbench/${encodeURIComponent(party)}/proof-of-debt`), null, 2); }));
+
+async function access() {
+  const me = await api(R, "GET", "/staff/v1/me");
+  put($("mine"), table(["Team", "Roles", "Authority profile", "Reach", "Recertification due"], [[me.team || "", (me.templates || []).join(", "), me.profile ? `${me.profile.id} v${me.profile.version}` : "", (me.paths || []).join(", "), me.recertification_due ? new Date(me.recertification_due * 1000).toLocaleDateString() : ""]]),
+    h("h2", {}, "Grants"), table(["Grant", "Kind", "State"], (me.grants || []).map((g) => [g.id, words(Object.keys(g.kind || {})[0] || g.kind), words(g.state)])));
+  put($("recent"), table(["When", "Action", "Record", "Allowed"], (me.recent || []).map((r) => [new Date(r.at * 1000).toLocaleString(), r.action, r.record || "", r.decision.allowed ? "yes" : "no: " + words(r.decision.denied)])));
+}
+async function admin() {
+  const view = await api(R, "GET", "/staff/v1/admin");
+  put($("grants"), table(["Grant", "Holder", "State", ""], view.grants.map((g) => [g.id, g.holder, words(g.state), g.state === "requested" ? h("button", { class: "quiet", on: { click: run($("admin-msg"), async () => { await api(R, "POST", "/staff/v1/access", { approve_grant: { id: g.id } }); await admin(); return "Approved."; }) } }, "Approve") : ""])));
+  $("alignment").textContent = JSON.stringify(view.alignment, null, 2) + (view.external_source_available ? "" : "\nThe entitlement source is unavailable: nothing new is granted from it until it returns.");
+}
+signIn(R).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

@@ -128,6 +128,7 @@ fn a_configuration_with_holes_is_refused() {
     };
     assert_eq!(refused(|c| c.rules.voter_regions.clear()), "invalid_config");
     assert_eq!(refused(|c| c.funds.clear()), "invalid_config");
+    assert_eq!(refused(|c| c.rules.drill_amount_minor = 0), "invalid_config");
     assert_eq!(refused(|c| c.channels.get_mut("anz-api").unwrap().bank = "kiwi".to_string()), "invalid_config");
     assert_eq!(
         refused(|c| {

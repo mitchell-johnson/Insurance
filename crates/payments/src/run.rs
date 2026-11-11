@@ -468,6 +468,7 @@ impl PaymentsState {
                 items,
                 status: SubmissionStatus::Queued,
                 region: None,
+                begun_at: None,
                 content_hash: None,
                 bank_reference: None,
                 settled_on: None,
@@ -653,6 +654,7 @@ impl PaymentsState {
         let s = self.submission_mut(id)?;
         s.status = SubmissionStatus::Sending;
         s.region = Some(region.clone());
+        s.begun_at = Some(tx.now);
         tx.emit(Event::SubmissionBegun {
             submission: id.to_string(),
             region,
