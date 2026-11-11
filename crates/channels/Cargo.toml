@@ -1,0 +1,39 @@
+[package]
+name = "ic-channels"
+description = "The channels: customer app, adviser portal, employer portal, staff console and operations console, with identity, staff authorisation, audience-scoped read models and device sync"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-ledger.workspace = true
+ic-log.workspace = true
+ic-readmodel.workspace = true
+ic-api = { path = "../api" }
+ic-raft.workspace = true
+cedar-policy.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+ring = "0.17"
+axum.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+ic-sim.workspace = true
+ic-product.workspace = true
+ic-money.workspace = true
+tower.workspace = true
+http-body-util.workspace = true
+reqwest.workspace = true
+
+[lints]
+workspace = true
