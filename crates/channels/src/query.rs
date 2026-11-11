@@ -192,10 +192,16 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 d.identity
                     .check_proof_hashed(party, &p.device, &p.proof, at, &p.method, &p.path, &p.body_sha256)
             });
+            // A device that was enrolled to this person and no longer is must wipe what it holds.
+            let revoked = device
+                .as_ref()
+                .and_then(|p| d.identity.devices.get(&p.device))
+                .is_some_and(|known| &known.party == party && known.revoked.is_some());
             json!({
                 "known": true,
                 "party": party,
                 "valid": valid,
+                "device_revoked": revoked,
                 "assurance": if proved { Assurance::Device } else { Assurance::Token },
                 "device": device.filter(|_| proved).map(|p| p.device),
                 "staff": !d.staff.templates_of(party, at).is_empty(),

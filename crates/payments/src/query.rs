@@ -77,6 +77,12 @@ fn found<T: serde::Serialize>(what: Option<T>) -> Result<Value, String> {
 
 /// Answer one question. This is the function the module host calls.
 pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
+    // The fail-back controller's question, asked of every hosted module
+    // before a leader is handed back: is it quiet here? Not while a
+    // submission is queued or with a driver.
+    if question.get("failback_quiet").is_some() {
+        return Ok(json!(!state.submission_in_progress()));
+    }
     match text(&question, "q")? {
         "submission_in_progress" => Ok(json!(state.submission_in_progress())),
         "outbox" => found(Some(&state.outbox)),
