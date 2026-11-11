@@ -24,6 +24,7 @@ use ic_core::event::OutboundMessage;
 use ic_core::{CoreState, EventRecord};
 use ic_ledger::{JournalEntry, PartitionId};
 use ic_log::StateMachine as _;
+use ic_readmodel::Projections;
 use openraft::alias::{LogIdOf, SnapshotMetaOf, SnapshotOf, StoredMembershipOf};
 use openraft::storage::{EntryResponder, RaftSnapshotBuilder, RaftStateMachine};
 use openraft::{EntryPayload, OptionalSend};
@@ -46,6 +47,8 @@ struct Replicated {
     journal: VecDeque<JournalEntry>,
     /// Events not yet on the stream, oldest first.
     events: VecDeque<EventRecord>,
+    /// The partition's read models, fed from every event as it is produced.
+    view: Projections,
 }
 
 struct Inner {
@@ -123,6 +126,7 @@ impl Machine {
             messages: vec![],
             journal: VecDeque::new(),
             events: VecDeque::new(),
+            view: Projections::new(),
         });
         Self {
             inner: Arc::new(Mutex::new(Inner { state, dir })),
@@ -136,6 +140,12 @@ impl Machine {
     /// Read the partition's state. The closure must not block.
     pub fn read<T>(&self, f: impl FnOnce(&CoreState) -> T) -> T {
         f(&self.lock().state.core)
+    }
+
+    /// Answer a question from the state and read models as they stand.
+    pub fn query(&self, query: crate::query::Query) -> crate::query::Answer {
+        let inner = self.lock();
+        crate::query::answer(&inner.state.core, &inner.state.view, query)
     }
 
     /// Raft log index of the last entry applied.
@@ -254,6 +264,13 @@ impl RaftStateMachine<TypeConfig> for Machine {
                         let applied = state.core.apply(entry.log_id.index(), envelope);
                         state.messages.extend(applied.messages.iter().cloned());
                         state.journal.extend(applied.entries.iter().cloned());
+                        for event in &applied.events {
+                            // Events arrive in sequence from the state they
+                            // describe, so a gap here is a defect in the core.
+                            if let Err(error) = state.view.apply(event) {
+                                tracing::error!(%error, "a read model missed an event");
+                            }
+                        }
                         state.events.extend(applied.events.iter().cloned());
                         Reply::from_applied(applied)
                     }

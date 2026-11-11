@@ -38,7 +38,7 @@ pub enum MatchRule {
     AmountAndDate,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Match {
     pub policy: PolicyId,
     pub partition: PartitionId,
@@ -57,7 +57,7 @@ pub enum Outcome {
     Exception { reason: String, suggestion: Option<Match> },
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Matcher {
     /// Matches at or above this confidence are applied without a person.
     pub auto_threshold: u8,
@@ -82,6 +82,50 @@ fn normalise(s: &str) -> String {
     s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect()
 }
 
+/// What one read model offers for a payment under each rule. Where the read
+/// models are kept per partition, each partition's candidates are merged
+/// before the decision, so the answer is the same as over one read model of
+/// everything.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Candidates {
+    /// The policy with the longest number found in the reference, and that length.
+    pub reference: Option<(usize, Match)>,
+    /// The policy the payer's direct debit authority names.
+    pub authority: Option<Match>,
+    /// The first policy that fits by amount and date, and how many fit.
+    pub amount_and_date: Option<Match>,
+    pub amount_and_date_count: u64,
+}
+
+impl Candidates {
+    /// Combine two read models' candidates.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            // The longest number wins; between equals, the first.
+            reference: match (self.reference, other.reference) {
+                (Some(a), Some(b)) if b.0 > a.0 => Some(b),
+                (a, b) => a.or(b),
+            },
+            authority: self.authority.or(other.authority),
+            amount_and_date: self.amount_and_date.or(other.amount_and_date),
+            amount_and_date_count: self.amount_and_date_count + other.amount_and_date_count,
+        }
+    }
+
+    /// The match the rules give, tried in order.
+    fn best(self) -> Option<Match> {
+        if let Some((_, m)) = self.reference {
+            return Some(m);
+        }
+        if self.authority.is_some() {
+            return self.authority;
+        }
+        // Amount and date identify a policy only when exactly one fits.
+        self.amount_and_date.filter(|_| self.amount_and_date_count == 1)
+    }
+}
+
 impl Matcher {
     fn found(&self, view: &Projections, policy: &PolicyId, rule: MatchRule, confidence: u8) -> Option<Match> {
         let e = view.policy(policy)?;
@@ -94,22 +138,23 @@ impl Matcher {
         })
     }
 
-    fn find(&self, view: &Projections, p: &IncomingPayment) -> Option<Match> {
-        if let Some(reference) = &p.reference {
+    /// What this read model offers for the payment under each rule.
+    pub fn candidates(&self, view: &Projections, p: &IncomingPayment) -> Candidates {
+        let reference = p.reference.as_ref().and_then(|reference| {
             let r = normalise(reference);
             // Longest policy number contained in the reference wins.
             let hit = view
                 .directory()
                 .filter(|e| !e.number.is_empty() && r.contains(&normalise(&e.number)))
-                .max_by_key(|e| e.number.len());
-            if let Some(e) = hit {
-                return self.found(view, &e.policy, MatchRule::Reference, 100);
-            }
-        }
-        if let Some(policy) = p.payer_account.as_ref().and_then(|a| self.authorities.get(a)) {
-            return self.found(view, policy, MatchRule::PayerAuthority, 90);
-        }
-        let mut candidates = view.directory().filter(|e| {
+                .max_by_key(|e| e.number.len())?;
+            Some((hit.number.len(), self.found(view, &hit.policy, MatchRule::Reference, 100)?))
+        });
+        let authority = p
+            .payer_account
+            .as_ref()
+            .and_then(|a| self.authorities.get(a))
+            .and_then(|policy| self.found(view, policy, MatchRule::PayerAuthority, 90));
+        let mut fitting = view.directory().filter(|e| {
             view.billing(&e.policy).is_some_and(|b| {
                 (b.outstanding_minor - p.amount.minor).abs() <= self.amount_tolerance_minor
                     && b.outstanding_minor > 0
@@ -117,14 +162,19 @@ impl Matcher {
                         .is_some_and(|d| (p.received_on - d).num_days().abs() <= self.date_tolerance_days)
             })
         });
-        match (candidates.next(), candidates.next()) {
-            (Some(e), None) => self.found(view, &e.policy, MatchRule::AmountAndDate, 60),
-            _ => None,
+        let amount_and_date = fitting.next().and_then(|e| self.found(view, &e.policy, MatchRule::AmountAndDate, 60));
+        let amount_and_date_count = u64::from(amount_and_date.is_some()) + fitting.count() as u64;
+        Candidates {
+            reference,
+            authority,
+            amount_and_date,
+            amount_and_date_count,
         }
     }
 
-    pub fn match_payment(&self, view: &Projections, p: &IncomingPayment) -> Outcome {
-        match self.find(view, p) {
+    /// Decide what to do with a payment given every read model's candidates.
+    pub fn decide(&self, candidates: Candidates, p: &IncomingPayment) -> Outcome {
+        match candidates.best() {
             Some(m) if m.confidence >= self.auto_threshold => {
                 let command = Command::ApplyReceipt {
                     policy: m.policy.clone(),
@@ -142,5 +192,9 @@ impl Matcher {
                 suggestion: None,
             },
         }
+    }
+
+    pub fn match_payment(&self, view: &Projections, p: &IncomingPayment) -> Outcome {
+        self.decide(self.candidates(view, p), p)
     }
 }

@@ -225,6 +225,10 @@ pub enum Event {
         lives: Vec<LifeInfo>,
         layers: Vec<LayerInfo>,
         number: String,
+        /// What a directory that first meets the policy here needs to list it.
+        product_code: String,
+        status: PolicyStatus,
+        standing: Option<Standing>,
     },
     TransferRejected {
         policy: PolicyId,

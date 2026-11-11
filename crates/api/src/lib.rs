@@ -4,13 +4,17 @@
 //! and outcomes arrive as events. Authorisation happens here and again in the
 //! core, which accepts each command only from the module allowed to send it.
 //!
-//! This crate also hosts the insurance in a box: every partition in one
-//! process on a local log. In production the same handlers sit in front of
-//! the partitions' Raft groups.
+//! The same handlers serve two arrangements, chosen by [`settings`]: the
+//! insurance in a box, where every partition is in this process on a local
+//! log, and production, where this process is a stateless gateway in front
+//! of the partitions' Raft groups on the ledger nodes. See [`backend`].
 
 pub mod auth;
+pub mod backend;
 pub mod engine;
 pub mod routes;
+pub mod settings;
 
+pub use backend::{Backend, Gateway};
 pub use engine::{Engine, EngineConfig};
 pub use routes::router;

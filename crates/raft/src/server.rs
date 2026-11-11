@@ -29,6 +29,7 @@ use crate::machine::Machine;
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
 use crate::peers::Identity;
+use crate::query::Query;
 use crate::store::LogStore;
 use crate::types::{Housekeeping, NodeId};
 
@@ -396,20 +397,28 @@ async fn propose(State(host): State<Arc<Host>>, Path(partition): Path<PartitionI
     }
 }
 
-async fn end_of_day(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>) -> Response {
+/// Confirm with a majority that this member still leads, then read. A
+/// deposed leader therefore never answers from a stale state.
+async fn read_as_leader<T: serde::Serialize>(host: &Host, partition: PartitionId, read: impl FnOnce(&Node) -> T) -> Response {
     let Some(member) = host.groups.get(&partition) else {
         return no_partition(partition);
     };
-    // Confirm with a majority that this member still leads before reading,
-    // so a deposed leader never reports a stale day as finished.
     match member.raft.ensure_linearizable(ReadPolicy::ReadIndex).await {
-        Ok(_) => Json(host.view(member)).into_response(),
+        Ok(_) => Json(read(member)).into_response(),
         Err(_) => {
             let status = member.status();
             let addr = status.leader.and_then(|l| host.peers.get(&l).cloned());
             refusal(ProposeError::NotLeader { leader: status.leader, addr })
         }
     }
+}
+
+async fn end_of_day(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>) -> Response {
+    read_as_leader(&host, partition, |member| host.view(member)).await
+}
+
+async fn query(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(query): Json<Query>) -> Response {
+    read_as_leader(&host, partition, |member| member.machine.query(query)).await
 }
 
 async fn init(State(host): State<Arc<Host>>) -> Response {
@@ -444,6 +453,7 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/v1/init", post(init))
         .route("/v1/partitions/{partition}/commands", post(propose))
         .route("/v1/partitions/{partition}/end-of-day", get(end_of_day))
+        .route("/v1/partitions/{partition}/query", post(query))
         .route("/v1/partitions/{partition}/members", axum::routing::put(members))
         .with_state(host.clone());
     for (partition, member) in &host.groups {

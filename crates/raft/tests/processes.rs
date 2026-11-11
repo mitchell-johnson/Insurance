@@ -21,7 +21,7 @@ use ic_ledger::verify_chain;
 use ic_product::{Frequency, Sex};
 use ic_raft::client::ClientError;
 use ic_raft::server::{ColdTarget, EventTarget, Settings};
-use ic_raft::{ClusterAuth, ClusterClient, NodeId, NodeStatus};
+use ic_raft::{Answer, ClusterAuth, ClusterClient, NodeId, NodeStatus, Query};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
 
@@ -360,6 +360,29 @@ async fn a_transfer_between_partitions_survives_a_leader_kill() {
     }
     // The policy takes payments in its new home.
     fleet.run(1, "cash-matching", receipt(&policy, "r-2", 61_84)).await;
+
+    // Each partition's read models followed the policy: the source no longer
+    // lists it, the target lists it under its number and new group.
+    let locate = Query::Locate { policy: policy.clone() };
+    assert_eq!(fleet.client.query(0, &locate).await.unwrap(), Answer::Located(None));
+    let Answer::Located(Some(entry)) = fleet.client.query(1, &locate).await.unwrap() else {
+        panic!("the target partition does not list the policy it holds");
+    };
+    assert_eq!((entry.partition, entry.group.clone()), (1, GroupId("grp-new".to_string())));
+    let by_number = Query::PolicyByNumber { number: entry.number.clone() };
+    assert_eq!(fleet.client.query(0, &by_number).await.unwrap(), Answer::Policy(None));
+    let Answer::Policy(Some(view)) = fleet.client.query(1, &by_number).await.unwrap() else {
+        panic!("the target partition cannot find the policy by its number");
+    };
+    assert_eq!(view.policy.id, policy);
+    assert_eq!(view.business_date, Some(start_date()));
+    assert!(view.billing.is_some(), "the billing position did not follow the policy");
+    assert_eq!(
+        fleet.client.query(1, &Query::BusinessDate).await.unwrap(),
+        Answer::BusinessDate(Some(start_date()))
+    );
+    // A partition no node hosts cannot be asked anything.
+    assert!(fleet.client.query(9, &locate).await.is_err());
 }
 
 /// Purpose: the node's HTTP surface answers the way clients and probes rely on: health,
@@ -621,6 +644,7 @@ async fn a_node_admits_only_callers_with_the_cluster_token() {
     }
     for path in [
         "/v1/partitions/0/commands",
+        "/v1/partitions/0/query",
         "/v1/init",
         "/raft/0/append",
         "/raft/0/vote",

@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo};
 use ic_core::{GroupId, LifeId, PartyId, PolicyId, PolicyStatus, Standing};
 use ic_ledger::PartitionId;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum ProjectionError {
@@ -19,7 +19,7 @@ pub enum ProjectionError {
     Gap { partition: PartitionId, expected: u64, got: u64 },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirectoryEntry {
     pub policy: PolicyId,
     pub number: String,
@@ -30,13 +30,13 @@ pub struct DirectoryEntry {
     pub product_code: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BillingRow {
     pub outstanding_minor: i64,
     pub oldest_unpaid_due: Option<NaiveDate>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LifeIndexRow {
     pub policy: PolicyId,
     pub partition: PartitionId,
@@ -51,15 +51,20 @@ pub struct LifeIndexRow {
 /// The policy directory, the life index and the billing view, fed from every
 /// partition's stream. Delivery is at least once: duplicates are dropped on
 /// the per-partition sequence, and a gap is an error.
-#[derive(Debug, Default)]
+///
+/// A projection can be saved and loaded whole, so a host that keeps one
+/// beside its state need not replay the stream from the beginning.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Projections {
     checkpoints: BTreeMap<PartitionId, u64>,
     directory: BTreeMap<PolicyId, DirectoryEntry>,
     by_number: BTreeMap<String, PolicyId>,
     billing: BTreeMap<PolicyId, BillingRow>,
     /// (policy, life) -> party, where the life is named or identified.
+    #[serde(with = "as_pairs")]
     life_party: BTreeMap<(PolicyId, LifeId), PartyId>,
     /// policy -> (cover, layer) -> row.
+    #[serde(with = "layers_as_rows")]
     layers: BTreeMap<PolicyId, BTreeMap<(String, u32), LifeIndexRow>>,
 }
 
@@ -89,6 +94,16 @@ impl Projections {
         self.checkpoints.insert(rec.partition, rec.seq);
         self.project(rec.partition, &rec.event);
         Ok(true)
+    }
+
+    /// Drop everything known about a policy.
+    fn forget(&mut self, policy: &PolicyId) {
+        if let Some(entry) = self.directory.remove(policy) {
+            self.by_number.remove(&entry.number);
+        }
+        self.billing.remove(policy);
+        self.layers.remove(policy);
+        self.life_party.retain(|(p, _), _| p != policy);
     }
 
     fn set_lives(&mut self, policy: &PolicyId, lives: &[LifeInfo]) {
@@ -135,20 +150,44 @@ impl Projections {
                 self.set_layers(policy, partition, layers);
             }
             Event::TransferLanded {
-                policy, group, lives, layers, ..
+                policy,
+                group,
+                lives,
+                layers,
+                number,
+                product_code,
+                status,
+                standing,
+                ..
             } => {
                 // The directory switches to the target when the policy lands.
-                if let Some(e) = self.directory.get_mut(policy) {
-                    e.group = group.clone();
-                    e.partition = partition;
-                }
+                // A projection of the target partition alone meets the
+                // policy here for the first time.
+                let entry = self.directory.entry(policy.clone()).or_insert_with(|| DirectoryEntry {
+                    policy: policy.clone(),
+                    number: number.clone(),
+                    group: group.clone(),
+                    partition,
+                    status: *status,
+                    standing: *standing,
+                    product_code: product_code.clone(),
+                });
+                entry.group = group.clone();
+                entry.partition = partition;
+                self.by_number.insert(number.clone(), policy.clone());
                 self.set_lives(policy, lives);
                 self.set_layers(policy, partition, layers);
             }
             Event::PolicyStatusChanged { policy, to, .. } => {
-                // The stub left behind on the source says Transferred; the
-                // directory follows the live policy, not the stub.
                 if *to == PolicyStatus::Transferred {
+                    // The stub left behind on the source says Transferred;
+                    // the directory follows the live policy, not the stub.
+                    // If the directory still places the policy here, this
+                    // projection has not seen it land: it is gone from here
+                    // until it does.
+                    if self.directory.get(policy).is_some_and(|e| e.partition == partition) {
+                        self.forget(policy);
+                    }
                     return;
                 }
                 if let Some(e) = self.directory.get_mut(policy) {
@@ -281,5 +320,45 @@ fn row(policy: &PolicyId, partition: PartitionId, l: &LayerInfo) -> LifeIndexRow
         life: l.life.clone(),
         sum_insured_minor: l.sum_insured_minor,
         in_force: true,
+    }
+}
+
+/// JSON object keys are strings, so a map keyed by a pair is written as a
+/// list of entries.
+mod as_pairs {
+    use std::collections::BTreeMap;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<K: Serialize, V: Serialize, S: Serializer>(map: &BTreeMap<K, V>, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K: Deserialize<'de> + Ord, V: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<BTreeMap<K, V>, D::Error> {
+        Ok(Vec::<(K, V)>::deserialize(d)?.into_iter().collect())
+    }
+}
+
+/// The life index is written as its rows: each row carries its own key.
+mod layers_as_rows {
+    use std::collections::BTreeMap;
+
+    use ic_core::PolicyId;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use super::LifeIndexRow;
+
+    type Layers = BTreeMap<PolicyId, BTreeMap<(String, u32), LifeIndexRow>>;
+
+    pub fn serialize<S: Serializer>(layers: &Layers, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_seq(layers.values().flat_map(BTreeMap::values))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Layers, D::Error> {
+        let mut layers = Layers::new();
+        for row in Vec::<LifeIndexRow>::deserialize(d)? {
+            layers.entry(row.policy.clone()).or_default().insert((row.cover.clone(), row.layer), row);
+        }
+        Ok(layers)
     }
 }

@@ -11,6 +11,9 @@ ic-core.workspace = true
 ic-ledger.workspace = true
 ic-log.workspace = true
 ic-azure.workspace = true
+ic-readmodel.workspace = true
+ic-cashmatch.workspace = true
+ic-product.workspace = true
 openraft = { version = "=0.10.0", features = ["serde", "type-alias"] }
 futures = "0.3"
 tokio.workspace = true
@@ -31,7 +34,6 @@ path = "src/bin/ic-node.rs"
 
 [dev-dependencies]
 ic-sim.workspace = true
-ic-product.workspace = true
 ic-money.workspace = true
 
 [lints]

@@ -1,6 +1,6 @@
 [package]
 name = "ic-api"
-description = "The platform API for the insurance core, and the single-node host for the insurance in a box"
+description = "The platform API for the insurance core: a gateway to the ledger nodes, and the single-process insurance in a box"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,8 @@ ic-readmodel.workspace = true
 ic-cashmatch.workspace = true
 ic-sim.workspace = true
 ic-azure.workspace = true
+ic-raft.workspace = true
+futures = "0.3"
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -29,6 +31,7 @@ jsonwebtoken.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
+ic-product.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 

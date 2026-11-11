@@ -223,6 +223,9 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
         lives: life_infos(&policy),
         layers: layer_infos(&policy),
         number: policy.number.clone(),
+        product_code: policy.product_code.clone(),
+        status: policy.status,
+        standing: policy.standing,
     });
     ctx.messages.push(OutboundMessage {
         id: format!("{}:landed", record.transfer_id),

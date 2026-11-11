@@ -3,11 +3,11 @@
 
 use std::sync::Arc;
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+mod common;
+
+use axum::http::StatusCode;
 use axum::Router;
-use chrono::NaiveDate;
-use http_body_util::BodyExt;
+use common::{d, Call};
 use ic_api::auth::Auth;
 use ic_api::engine::{AzureConfig, Engine, EngineConfig};
 use ic_api::routes::{router, AppState};
@@ -15,12 +15,6 @@ use ic_product::{Frequency, Sex};
 use ic_readmodel::scope::AudienceScope;
 use ic_sim::persona::term_life;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
-use tower::ServiceExt;
-
-fn d(y: i32, m: u32, day: u32) -> NaiveDate {
-    NaiveDate::from_ymd_opt(y, m, day).unwrap()
-}
 
 fn app() -> Router {
     let cfg = EngineConfig {
@@ -32,74 +26,10 @@ fn app() -> Router {
     };
     let engine = Engine::start(&cfg).unwrap();
     router(Arc::new(AppState {
-        engine: Mutex::new(engine),
+        backend: ic_api::Backend::single(engine),
         auth: Auth::Dev,
         scope: AudienceScope::shipped().unwrap(),
     }))
-}
-
-struct Call<'a> {
-    method: &'a str,
-    path: &'a str,
-    subject: Option<&'a str>,
-    roles: &'a str,
-    relationships: &'a str,
-    key: Option<&'a str>,
-    body: Option<Value>,
-}
-
-impl<'a> Call<'a> {
-    fn new(method: &'a str, path: &'a str) -> Self {
-        Self {
-            method,
-            path,
-            subject: Some("svc"),
-            roles: "",
-            relationships: "",
-            key: None,
-            body: None,
-        }
-    }
-    fn roles(mut self, r: &'a str) -> Self {
-        self.roles = r;
-        self
-    }
-    fn viewer(mut self, subject: &'a str, relationships: &'a str) -> Self {
-        self.subject = Some(subject);
-        self.relationships = relationships;
-        self
-    }
-    fn anonymous(mut self) -> Self {
-        self.subject = None;
-        self
-    }
-    fn key(mut self, k: &'a str) -> Self {
-        self.key = Some(k);
-        self
-    }
-    fn body(mut self, b: Value) -> Self {
-        self.body = Some(b);
-        self
-    }
-    async fn send(self, app: &Router) -> (StatusCode, Value) {
-        let mut req = Request::builder()
-            .method(self.method)
-            .uri(self.path)
-            .header("content-type", "application/json")
-            .header("x-dev-roles", self.roles)
-            .header("x-dev-relationships", self.relationships);
-        if let Some(s) = self.subject {
-            req = req.header("x-dev-subject", s);
-        }
-        if let Some(k) = self.key {
-            req = req.header("idempotency-key", k);
-        }
-        let body = self.body.map_or_else(Body::empty, |b| Body::from(b.to_string()));
-        let res = app.clone().oneshot(req.body(body).unwrap()).await.unwrap();
-        let status = res.status();
-        let bytes = res.into_body().collect().await.unwrap().to_bytes();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
-    }
 }
 
 fn application() -> Value {

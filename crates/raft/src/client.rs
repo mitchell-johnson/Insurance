@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::auth::ClusterAuth;
 use crate::node::{NodeStatus, ProposeError};
+use crate::query::{Answer, Query};
 use crate::types::Reply;
 
 /// A reconciliation break, as reported over the wire.
@@ -202,6 +203,14 @@ impl ClusterClient {
     pub async fn end_of_day_view(&self, partition: PartitionId) -> Result<EndOfDayView, ClientError> {
         self.sweep(partition, |addr| self.http.get(format!("http://{addr}/v1/partitions/{partition}/end-of-day")))
             .await
+    }
+
+    /// Ask a partition's leader a question. One pass.
+    pub async fn query(&self, partition: PartitionId, query: &Query) -> Result<Answer, ClientError> {
+        self.sweep(partition, |addr| {
+            self.http.post(format!("http://{addr}/v1/partitions/{partition}/query")).json(query)
+        })
+        .await
     }
 
     /// Set the voters of a partition's group: `id -> host:port`. Members

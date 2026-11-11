@@ -11,15 +11,14 @@ use axum::{Json, Router};
 use ic_cashmatch::{IncomingPayment, Outcome};
 use ic_core::command::IssuePolicy;
 use ic_core::policy::LifeKind;
-use ic_core::{Applied, Command, GroupId, PartyId, PolicyId};
+use ic_core::{Command, GroupId, PartyId, PolicyId};
 use ic_ledger::PartitionId;
 use ic_readmodel::scope::{AudienceScope, Relationship, RowScope};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
 
 use crate::auth::{Auth, AuthError, Caller};
-use crate::engine::Engine;
+use crate::backend::{Backend, CloseError, Unavailable, Written};
 
 /// The staff role that may run the close and read reconciliation.
 pub const OPERATIONS: &str = "operations";
@@ -28,7 +27,7 @@ pub const OPERATIONS: &str = "operations";
 const INTERNAL_CALLERS: [&str; 2] = ["leader", "end-of-day"];
 
 pub struct AppState {
-    pub engine: Mutex<Engine>,
+    pub backend: Backend,
     pub auth: Auth,
     pub scope: AudienceScope,
 }
@@ -80,7 +79,11 @@ impl IntoResponse for Problem {
     fn into_response(self) -> Response {
         let body =
             json!({ "type": format!("urn:insurance-core:problem:{}", self.code), "title": self.code, "status": self.status.as_u16(), "detail": self.detail });
-        (self.status, [("content-type", "application/problem+json")], body.to_string()).into_response()
+        let mut response = (self.status, [("content-type", "application/problem+json")], body.to_string()).into_response();
+        if self.status == StatusCode::SERVICE_UNAVAILABLE {
+            response.headers_mut().insert("retry-after", axum::http::HeaderValue::from_static("1"));
+        }
+        response
     }
 }
 
@@ -90,6 +93,15 @@ impl From<AuthError> for Problem {
             AuthError::Keys(_) => Problem::new(StatusCode::SERVICE_UNAVAILABLE, "auth_unavailable", e.to_string()),
             _ => Problem::new(StatusCode::UNAUTHORIZED, "unauthenticated", e.to_string()),
         }
+    }
+}
+
+impl From<Unavailable> for Problem {
+    /// The ledger could not confirm the request in time, for example while
+    /// a partition elects a leader. A write may or may not have been applied:
+    /// the caller repeats it with the same idempotency key.
+    fn from(e: Unavailable) -> Self {
+        Problem::new(StatusCode::SERVICE_UNAVAILABLE, "ledger_unavailable", e.to_string())
     }
 }
 
@@ -117,33 +129,29 @@ fn idempotency_key(headers: &HeaderMap, module: &str) -> Result<String, Problem>
 
 /// What a write returns. The command is in the log; its outcome is here and
 /// on the event stream.
-fn written(partition: PartitionId, applied: &Applied) -> Response {
-    match &applied.result {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({ "status": "applied", "partition": partition, "log_index": applied.index, "duplicate": applied.duplicate, "events": applied.events.len() })))
+fn written(partition: PartitionId, written: &Written) -> Response {
+    match &written.rejected {
+        None => (StatusCode::ACCEPTED, Json(json!({ "status": "applied", "partition": partition, "log_index": written.log_index, "duplicate": written.duplicate, "events": written.events })))
             .into_response(),
-        Err(r) => Problem::new(StatusCode::UNPROCESSABLE_ENTITY, &r.code, r.message.clone()).into_response(),
+        Some(r) => Problem::new(StatusCode::UNPROCESSABLE_ENTITY, &r.code, r.message.clone()).into_response(),
     }
 }
 
 async fn ready(State(s): State<Shared>) -> Response {
-    match s.engine.lock().await.cluster.business_date() {
-        Some(d) => Json(json!({ "business_date": d })).into_response(),
-        None => (StatusCode::SERVICE_UNAVAILABLE, "business date not open").into_response(),
+    match s.backend.business_date().await {
+        Ok(Some(d)) => Json(json!({ "business_date": d })).into_response(),
+        Ok(None) => (StatusCode::SERVICE_UNAVAILABLE, "business date not open").into_response(),
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response(),
     }
 }
 
 /// A dry run of an application: the first period's bill. Never reaches the log.
 async fn quote(State(s): State<Shared>, headers: HeaderMap, Json(application): Json<IssuePolicy>) -> ApiResult {
     s.auth.authenticate(&headers).await?;
-    let engine = s.engine.lock().await;
-    let today = engine
-        .cluster
-        .business_date()
-        .ok_or_else(|| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "business date not open"))?;
-    let partition = engine.cluster.partition_of(&application.group);
-    match ic_core::quote(&engine.cluster.state(partition).catalog, application, today) {
-        Ok(premium) => Ok(Json(premium).into_response()),
-        Err(r) => Err(Problem::new(StatusCode::UNPROCESSABLE_ENTITY, &r.code, r.message)),
+    match s.backend.quote(application).await? {
+        None => Err(Problem::new(StatusCode::SERVICE_UNAVAILABLE, "not_ready", "business date not open")),
+        Some(Ok(premium)) => Ok(Json(premium).into_response()),
+        Some(Err(r)) => Err(Problem::new(StatusCode::UNPROCESSABLE_ENTITY, &r.code, r.message)),
     }
 }
 
@@ -151,11 +159,11 @@ async fn issue(State(s): State<Shared>, headers: HeaderMap, Json(application): J
     let caller = s.auth.authenticate(&headers).await?;
     require(&caller, "new-business")?;
     let key = idempotency_key(&headers, "new-business")?;
-    let mut engine = s.engine.lock().await;
-    let partition = engine.cluster.partition_of(&application.group);
-    let applied = engine
+    let partition = s.backend.partition_of(&application.group).await;
+    let applied = s
+        .backend
         .submit(partition, &key, "new-business", Command::IssuePolicy(Box::new(application)))
-        .await;
+        .await?;
     Ok(written(partition, &applied))
 }
 
@@ -183,13 +191,15 @@ async fn command(State(s): State<Shared>, headers: HeaderMap, Json(req): Json<Co
         .find(|m| !INTERNAL_CALLERS.contains(m) && caller.has_role(m))
         .ok_or_else(|| Problem::forbidden(format!("{} needs one of the roles {allowed:?}", req.command.name())))?;
     let key = idempotency_key(&headers, module)?;
-    let mut engine = s.engine.lock().await;
+    let partitions = s.backend.partitions().await;
     if module == "config" {
-        // Configuration is activated on every partition.
+        // Configuration is activated on every partition. A caller told the
+        // ledger was unavailable part way repeats the request with the same
+        // key: partitions that have it answer as duplicates.
         let mut last = None;
-        for p in 0..engine.cluster.partitions() {
-            let applied = engine.submit(p, &format!("{key}:{p}"), module, req.command.clone()).await;
-            if applied.result.is_err() {
+        for p in 0..partitions {
+            let applied = s.backend.submit(p, &format!("{key}:{p}"), module, req.command.clone()).await?;
+            if applied.rejected.is_some() {
                 return Ok(written(p, &applied));
             }
             last = Some((p, applied));
@@ -197,13 +207,13 @@ async fn command(State(s): State<Shared>, headers: HeaderMap, Json(req): Json<Co
         return last.map(|(p, a)| written(p, &a)).ok_or_else(Problem::not_found);
     }
     let partition = match (req.partition, &req.group, &req.policy) {
-        (Some(p), _, _) if p < engine.cluster.partitions() => p,
+        (Some(p), _, _) if p < partitions => p,
         (Some(p), _, _) => return Err(Problem::bad_request(format!("there is no partition {p}"))),
-        (None, Some(g), _) => engine.cluster.partition_of(g),
-        (None, None, Some(policy)) => engine.view.policy(policy).map(|e| e.partition).ok_or_else(Problem::not_found)?,
+        (None, Some(g), _) => s.backend.partition_of(g).await,
+        (None, None, Some(policy)) => s.backend.locate(policy).await?.map(|e| e.partition).ok_or_else(Problem::not_found)?,
         (None, None, None) => return Err(Problem::bad_request("give a partition, a group or a policy")),
     };
-    let applied = engine.submit(partition, &key, module, req.command).await;
+    let applied = s.backend.submit(partition, &key, module, req.command).await?;
     Ok(written(partition, &applied))
 }
 
@@ -213,18 +223,20 @@ async fn command(State(s): State<Shared>, headers: HeaderMap, Json(req): Json<Co
 async fn payment(State(s): State<Shared>, headers: HeaderMap, Json(p): Json<IncomingPayment>) -> ApiResult {
     let caller = s.auth.authenticate(&headers).await?;
     require(&caller, "cash-matching")?;
-    let mut engine = s.engine.lock().await;
-    match engine.matcher.match_payment(&engine.view, &p) {
+    match s.backend.match_payment(&p).await? {
         Outcome::Apply { matched, command } => {
             // The receipt ID is the idempotency key: a payment file sent twice applies once.
-            let applied = engine.submit(matched.partition, &format!("receipt:{}", p.id), "cash-matching", command).await;
-            match &applied.result {
-                Ok(()) => Ok((
+            let applied = s
+                .backend
+                .submit(matched.partition, &format!("receipt:{}", p.id), "cash-matching", command)
+                .await?;
+            match &applied.rejected {
+                None => Ok((
                     StatusCode::ACCEPTED,
                     Json(json!({ "status": "applied", "match": matched, "duplicate": applied.duplicate })),
                 )
                     .into_response()),
-                Err(r) => Ok((
+                Some(r) => Ok((
                     StatusCode::ACCEPTED,
                     Json(json!({ "status": "exception", "reason": format!("{}: {}", r.code, r.message), "suggestion": matched })),
                 )
@@ -244,11 +256,9 @@ async fn payment(State(s): State<Shared>, headers: HeaderMap, Json(p): Json<Inco
 /// a policy that does not exist.
 async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<String>) -> ApiResult {
     let caller = s.auth.authenticate(&headers).await?;
-    let engine = s.engine.lock().await;
-    let entry = engine.view.by_number(&number).ok_or_else(Problem::not_found)?;
-    let state = engine.cluster.state(entry.partition);
-    let p = state.policies.get(&entry.policy).ok_or_else(Problem::not_found)?;
-    let today = state.business_date.unwrap_or(p.inception);
+    let found = s.backend.policy(&number).await?.ok_or_else(Problem::not_found)?;
+    let p = &found.policy;
+    let today = found.business_date.unwrap_or(p.inception);
 
     // Staff servicing sees the whole policy. Everyone else sees what their
     // relationship to it allows. Relationships come from the customer master;
@@ -274,7 +284,7 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<
         body.insert("policy".into(), json!({ "number": p.number, "product": p.product_code, "status": p.status, "standing": p.standing, "inception": p.inception, "frequency": p.frequency }));
     }
     if may("billing", None, false)? {
-        if let Some(b) = engine.view.billing(&p.id) {
+        if let Some(b) = &found.billing {
             body.insert("billing".into(), json!(b));
         }
     }
@@ -311,20 +321,16 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<
 async fn end_of_day(State(s): State<Shared>, headers: HeaderMap) -> ApiResult {
     let caller = s.auth.authenticate(&headers).await?;
     require(&caller, OPERATIONS)?;
-    let report = s
-        .engine
-        .lock()
-        .await
-        .end_of_day()
-        .await
-        .map_err(|e| Problem::new(StatusCode::CONFLICT, "close_failed", e))?;
-    Ok(Json(report).into_response())
+    match s.backend.end_of_day().await {
+        Ok(report) => Ok(Json(report).into_response()),
+        Err(CloseError::Failed(e)) => Err(Problem::new(StatusCode::CONFLICT, "close_failed", e)),
+        Err(e @ CloseError::RunsAsWorkflow) => Err(Problem::new(StatusCode::CONFLICT, "close_runs_as_workflow", e.to_string())),
+    }
 }
 
 async fn reconciliation(State(s): State<Shared>, headers: HeaderMap) -> ApiResult {
     let caller = s.auth.authenticate(&headers).await?;
     require(&caller, OPERATIONS)?;
-    let engine = s.engine.lock().await;
-    let breaks = engine.cluster.reconcile();
-    Ok(Json(json!({ "business_date": engine.cluster.business_date(), "clean": breaks.is_empty(), "breaks": breaks })).into_response())
+    let recon = s.backend.reconciliation().await?;
+    Ok(Json(json!({ "business_date": recon.business_date, "clean": recon.breaks.is_empty(), "breaks": recon.breaks })).into_response())
 }
