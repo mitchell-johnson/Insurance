@@ -25,6 +25,7 @@ mod earning;
 mod group;
 mod lifecycle;
 mod postings;
+mod reopen;
 mod transfer;
 mod unwind;
 

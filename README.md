@@ -8,7 +8,7 @@ It issues and services policies (retail term life, health, and group schemes), b
 
 | Process | What it does | Runs as |
 | --- | --- | --- |
-| `ic-node` | A ledger node. Holds a replica of every partition's Raft group: the log, the policy state, the ledger and the read models. | StatefulSet of three on AKS |
+| `ic-node` | A ledger node. Holds a replica of every partition's Raft group (the log, the policy state, the ledger and the read models) and of every module's group. | StatefulSet of three on AKS |
 | `ic-api` | The public HTTP API. A stateless gateway that routes each request to the partition that owns the policy. | Deployment |
 | `ic-worker` | Runs the end-of-day close as a Temporal workflow, so a close survives any process dying part-way. | Deployment, plus a nightly CronJob |
 | `ic-admin` | The operator's command: bootstrap, status, membership changes. | Job, or by hand |

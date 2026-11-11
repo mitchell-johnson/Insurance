@@ -1932,6 +1932,7 @@ dependencies = [
  "base64 0.22.1",
  "cedar-policy",
  "chrono",
+ "futures",
  "hex",
  "http-body-util",
  "ic-api",
@@ -1998,6 +1999,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-finance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-sim",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "starlark",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-group"
 version = "0.1.0"
 dependencies = [
@@ -2050,6 +2071,30 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "ic-node"
+version = "0.1.0"
+dependencies = [
+ "ic-channels",
+ "ic-raft",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "ic-payments"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-log",
+ "ic-money",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
