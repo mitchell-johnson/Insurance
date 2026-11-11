@@ -1,0 +1,139 @@
+# The end-of-day workers, and the schedule that closes each business day.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-worker
+spec:
+  # Two, so a close in progress carries on when one dies: Temporal hands the
+  # unfinished step to the other.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-worker
+  template:
+    metadata:
+      labels:
+        app: ic-worker
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-worker
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: worker
+          image: insurance-core
+          command: ["/usr/local/bin/ic-worker"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            - configMapRef:
+                name: ic-azure
+            - configMapRef:
+                name: ic-temporal
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-worker-token
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-worker
+---
+# The cutoff. Five past midnight in New Zealand, every day, daylight saving
+# included: close every business day whose midnight has passed, oldest first.
+# The job only starts the workflow and waits; the workers do the work, and a
+# run that is already in progress is joined, not started twice. If a day's
+# books do not reconcile the job fails and the next day is not opened.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ic-close
+spec:
+  schedule: "5 0 * * *"
+  timeZone: Pacific/Auckland
+  concurrencyPolicy: Forbid
+  # A cutoff missed by up to six hours (a cluster upgrade) still runs. After
+  # that the next night's run closes both days.
+  startingDeadlineSeconds: 21600
+  successfulJobsHistoryLimit: 7
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      activeDeadlineSeconds: 14400
+      template:
+        metadata:
+          labels:
+            app: ic-close
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: ic-worker
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: close
+              image: insurance-core
+              command: ["/usr/local/bin/ic-worker", "close-due"]
+              envFrom:
+                - configMapRef:
+                    name: ic-ledger
+                - configMapRef:
+                    name: ic-azure
+                - configMapRef:
+                    name: ic-temporal
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: cluster-token
+                  mountPath: /mnt/cluster-token
+                  readOnly: true
+          volumes:
+            - name: cluster-token
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-worker-token

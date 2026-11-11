@@ -1,0 +1,135 @@
+# Run once, on a new ledger: form the Raft groups, open the first business
+# date and activate the shipped products. Each step is safe to repeat, so the
+# Job can be retried, and applying it to a ledger that is already open
+# changes nothing.
+#
+# The ledger node role is used because these are ledger operations: the job
+# needs the cluster token and nothing else.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ic-bootstrap
+spec:
+  backoffLimit: 10
+  ttlSecondsAfterFinished: 604800
+  template:
+    metadata:
+      labels:
+        app: ic-bootstrap
+        azure.workload.identity/use: "true"
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: ic-node
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: init
+          image: insurance-core
+          command: ["/usr/local/bin/ic-admin", "init"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+          env:
+            - name: IC_LEDGER_PATIENCE_SECS
+              value: "300"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+        - name: open
+          # The insurer's first business date. It is set once and from then
+          # on moves only by the daily close.
+          image: insurance-core
+          command: ["/usr/local/bin/ic-admin", "open", "REPLACE-first-business-date"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+          env:
+            - name: IC_LEDGER_PATIENCE_SECS
+              value: "300"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+        - name: activate
+          image: insurance-core
+          command: ["/usr/local/bin/ic-admin", "activate-shipped"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+          env:
+            - name: IC_LEDGER_PATIENCE_SECS
+              value: "300"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      containers:
+        - name: status
+          image: insurance-core
+          command: ["/usr/local/bin/ic-admin", "status"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+          env:
+            - name: IC_LEDGER_PATIENCE_SECS
+              value: "300"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-node-token

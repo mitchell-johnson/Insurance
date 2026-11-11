@@ -1,0 +1,22 @@
+# The insurance core on AKS. Render with `kubectl kustomize deploy/k8s`,
+# apply with `kubectl apply -k deploy/k8s`.
+#
+# Before applying, set the values marked REPLACE in settings.yaml,
+# identities.yaml and bootstrap.yaml from the outputs of infra/main.bicep,
+# and the image below. docs/operations.md walks through it.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: insurance-core
+resources:
+  - namespace.yaml
+  - identities.yaml
+  - settings.yaml
+  - node.yaml
+  - api.yaml
+  - worker.yaml
+  - bootstrap.yaml
+  - network.yaml
+images:
+  - name: insurance-core
+    newName: REPLACE-registry.azurecr.io/insurance-core
+    newTag: REPLACE-git-sha

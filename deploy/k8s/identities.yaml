@@ -1,0 +1,78 @@
+# One service account per process, each federated to its own managed identity
+# by infra/main.bicep, so each process holds only its own grants:
+#   ic-node    writes sealed journal segments and events
+#   ic-worker  signs and publishes the daily Merkle root
+#   ic-api     reads the cluster token and nothing else
+# The client IDs are the nodeClientId, workerClientId and apiClientId outputs.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-node
+  annotations:
+    azure.workload.identity/client-id: REPLACE-nodeClientId
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-worker
+  annotations:
+    azure.workload.identity/client-id: REPLACE-workerClientId
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-api
+  annotations:
+    azure.workload.identity/client-id: REPLACE-apiClientId
+---
+# The cluster token is the Key Vault secret `cluster-token`, mounted as a file
+# by the Secrets Store CSI driver under each process's own identity. It never
+# becomes a Kubernetes Secret. One class per identity, because the driver
+# reads Key Vault as the identity the class names.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-node-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-nodeClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-worker-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-workerClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-api-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-apiClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret

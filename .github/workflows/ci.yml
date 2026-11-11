@@ -1,0 +1,98 @@
+name: ci
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The line coverage the workspace must keep, tests against a real Temporal
+  # server included.
+  COVERAGE_FLOOR: "98"
+
+jobs:
+  checks:
+    name: format, lints, test documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang protobuf-compiler libprotobuf-dev
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Every test documents its purpose and why it matters
+        run: python3 tools/check_test_docs.py
+
+  test:
+    name: tests and coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang protobuf-compiler libprotobuf-dev
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+      - name: Start a Temporal server
+        run: |
+          docker run -d --name temporal -p 7233:7233 temporalio/temporal:1.10.0 server start-dev --ip 0.0.0.0
+          for _ in $(seq 1 60); do
+            if (exec 3<>/dev/tcp/127.0.0.1/7233) 2>/dev/null; then exit 0; fi
+            sleep 1
+          done
+          docker logs temporal
+          exit 1
+      - name: Tests, with the coverage floor
+        env:
+          IC_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+        run: |
+          cargo llvm-cov --workspace --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
+      - name: Coverage summary
+        if: always()
+        run: cargo llvm-cov report --summary-only | tee -a "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: lcov.info
+          if-no-files-found: ignore
+
+  resilience:
+    name: image and failure drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the shipped image, starts three ledger nodes, Temporal, two
+      # workers and the API from it, then kills nodes and a worker, destroys
+      # a node's disk and replaces the node, checking the books throughout.
+      - name: Failure drill on the Compose cluster
+        run: deploy/compose/chaos.sh
+      - name: Logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail 200
+
+  infrastructure:
+    name: Azure template and Kubernetes manifests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile the Bicep template
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
+      - name: Compile its parameters
+        run: az bicep build-params --file infra/main.bicepparam --stdout > /dev/null
+      - name: Render the Kubernetes manifests
+        run: kubectl kustomize deploy/k8s > /dev/null

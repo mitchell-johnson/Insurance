@@ -210,7 +210,17 @@ impl Fleet {
 
 impl Drop for Fleet {
     fn drop(&mut self) {
+        // The survivors are asked to stop, as a rollout would ask them, so
+        // that each exits through its shutdown path; one that has not gone
+        // in ten seconds is killed.
+        for child in self.running.values() {
+            let _ = Process::new("kill").args(["-TERM", &child.id().to_string()]).status();
+        }
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
         for child in self.running.values_mut() {
+            while matches!(child.try_wait(), Ok(None)) && std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let _ = child.kill();
             let _ = child.wait();
         }

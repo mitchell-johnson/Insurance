@@ -1,0 +1,115 @@
+# The public API: stateless gateways to the ledger nodes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-api
+spec:
+  selector:
+    app: ic-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-api
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-api
+  template:
+    metadata:
+      labels:
+        app: ic-api
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-api
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-api
+      containers:
+        - name: api
+          image: insurance-core
+          command: ["/usr/local/bin/ic-api"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            - configMapRef:
+                name: ic-identity
+          env:
+            - name: IC_LISTEN
+              value: 0.0.0.0:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          # Ready means every partition answers with a business date; a
+          # gateway that cannot reach the ledger is taken out of the Service
+          # and left running, since restarting it would not help.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-api-token
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-api

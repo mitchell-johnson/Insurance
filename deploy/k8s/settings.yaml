@@ -1,0 +1,44 @@
+# Settings shared by the processes. None of these is a secret.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-ledger
+data:
+  # Fixed for the life of the ledger: a policy's partition is its group's
+  # hash modulo this number.
+  IC_PARTITIONS: "64"
+  # The founding members. A replacement node takes a new number and is added
+  # with `ic-admin members` (docs/operations.md); it is not added here first.
+  IC_NODE_PEERS: "1=ic-node-1.ic-node:7000,2=ic-node-2.ic-node:7000,3=ic-node-3.ic-node:7000"
+  IC_NODES: "ic-node-1.ic-node:7000,ic-node-2.ic-node:7000,ic-node-3.ic-node:7000"
+  IC_CLUSTER_TOKEN_FILE: /mnt/cluster-token/cluster-token
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-azure
+data:
+  # Outputs of infra/main.bicep.
+  IC_BLOB_ENDPOINT: REPLACE-blobEndpoint
+  IC_KEY_VAULT_URL: REPLACE-keyVaultUrl
+  IC_EVENT_HUBS_ENDPOINT: REPLACE-eventHubsEndpoint
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-identity
+data:
+  # Whose tokens the API accepts: the insurer's tenant and the application
+  # ID URI (or client ID) of the API's app registration.
+  IC_ENTRA_TENANT_ID: REPLACE-tenantId
+  IC_ENTRA_AUDIENCE: REPLACE-api-application-id
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-temporal
+data:
+  # Where the Temporal service is. Hosting it is an open decision
+  # (docs/decisions.md); for Temporal Cloud add TEMPORAL_API_KEY from Key Vault.
+  TEMPORAL_ADDRESS: REPLACE-temporal-host:7233
+  TEMPORAL_NAMESPACE: insurance-core

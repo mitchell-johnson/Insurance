@@ -1,0 +1,54 @@
+# Who may talk to whom. Nothing in the namespace accepts a connection that
+# is not listed here.
+#
+# These policies restrict reachability; they do not encrypt. Traffic between
+# pods is plain HTTP carrying the cluster token, so the cluster must encrypt
+# pod-to-pod traffic underneath (docs/decisions.md, "Encryption in transit
+# inside the cluster").
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress"]
+---
+# The ledger nodes hear from each other, the API, the workers, the close job
+# and the bootstrap job, and from nobody else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: ["ic-node", "ic-api", "ic-worker", "ic-close", "ic-bootstrap"]
+      ports:
+        - port: 7000
+---
+# The API hears from the ingress controller's namespace. Label that namespace
+# `insurance-core/ingress: "true"`.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-api
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-api
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              insurance-core/ingress: "true"
+      ports:
+        - port: 8080
