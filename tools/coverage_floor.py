@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Line coverage from an lcov file, with a floor.
 
-Counts each source line once: a line is covered if any test ran it. This is
-the figure coverage services report. The table `cargo llvm-cov` prints counts
-a line once per generic instantiation and once per enclosing closure, so the
-same uncovered line can be counted several times there; that table is still
-printed in CI beside this one.
+Counts each source line once: a line is covered if any test ran it. The
+project's coverage floor is NOT this figure: the floor is the stricter one in
+the table `cargo llvm-cov` prints, which counts a line again for each generic
+instantiation and enclosing closure. This script exists to list which lines
+are uncovered; pass a floor of 0 to list without failing.
 
 Usage: coverage_floor.py LCOV_FILE FLOOR_PERCENT
 Prints the uncovered lines of every file, then the total. Exits 1 below the floor.
