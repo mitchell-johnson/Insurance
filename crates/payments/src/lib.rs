@@ -14,6 +14,7 @@
 mod authority;
 pub mod config;
 mod drill;
+pub mod file;
 pub mod machine;
 pub mod model;
 mod payee;

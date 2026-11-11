@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reopen, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -203,6 +203,9 @@ pub struct CoreState {
     /// hashed with everything else here.
     #[serde(default)]
     pub claims: ic_claims::ClaimsState,
+    /// Counterparty posting references this partition has accepted.
+    #[serde(default)]
+    pub counterparty: crate::counterparty::CounterpartyBook,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -225,6 +228,7 @@ impl CoreState {
             transfers_seen: BTreeSet::new(),
             last_close: None,
             claims: ic_claims::ClaimsState::default(),
+            counterparty: Default::default(),
         }
     }
 
@@ -248,6 +252,7 @@ impl CoreState {
             &self.transfers_seen,
             &self.last_close,
             &self.claims,
+            &self.counterparty,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -500,6 +505,54 @@ impl CoreState {
                 self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment))?;
                 claims::bank_returned(self, ctx, &policy, &payment)
             }
+            Command::RecordCession {
+                policy,
+                cover,
+                layer,
+                life,
+                from,
+                segments,
+            } => self.with_policy(&policy, true, |_, p| reinsurance::record_cession(p, ctx, cover, layer, life, from, segments)),
+            Command::PostReinsurance {
+                kind,
+                treaty,
+                reinsurer,
+                currency,
+                policy,
+                amount_minor,
+                value_date,
+                reference,
+            } => match policy {
+                // The entry touches no policy account, so a policy that is
+                // moving, or has moved, does not stop it: the money is owed
+                // to the reinsurer from the partition that billed it.
+                Some(id) => self.with_policy(&id, false, |s, p| {
+                    reinsurance::post(
+                        &mut s.ledger,
+                        Some(p),
+                        ctx,
+                        kind,
+                        &treaty,
+                        &reinsurer,
+                        currency,
+                        amount_minor,
+                        value_date,
+                        &reference,
+                    )
+                }),
+                None => reinsurance::post(
+                    &mut self.ledger,
+                    None,
+                    ctx,
+                    kind,
+                    &treaty,
+                    &reinsurer,
+                    currency,
+                    amount_minor,
+                    value_date,
+                    &reference,
+                ),
+            },
             Command::BeginTransfer {
                 policy,
                 transfer_id,
@@ -524,6 +577,14 @@ impl CoreState {
             }
             Command::CompleteTransfer { policy, transfer_id } => self.with_policy(&policy, false, |_, p| transfer::complete(p, ctx, &transfer_id)),
             Command::AbortTransfer { policy, transfer_id } => self.with_policy(&policy, false, |s, p| transfer::abort(&mut s.ledger, p, ctx, &transfer_id)),
+            Command::PostCounterparty(posting) => match posting.policy.clone() {
+                // Commission follows a policy wherever it is, so a policy in
+                // transfer is refused like any other command on it.
+                Some(id) => self.with_policy(&id, true, |s, p| {
+                    crate::counterparty::post(&mut s.ledger, &mut s.counterparty, Some(p), ctx, *posting)
+                }),
+                None => crate::counterparty::post(&mut self.ledger, &mut self.counterparty, None, ctx, *posting),
+            },
         }
     }
 

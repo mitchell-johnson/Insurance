@@ -7,7 +7,6 @@ use ic_core::accounts;
 use ic_core::claims_module as claims;
 use ic_core::event::Event;
 use ic_core::{Command, GroupId, PayableKind, PolicyId, PolicyStatus, Reject};
-use ic_ledger::PartitionId;
 use ic_money::{Currency::NZD, Money};
 use ic_product::{load_product, Frequency, Sex};
 use ic_sim::config::shipped_activations;

@@ -285,6 +285,62 @@ fn the_chart_of_accounts_is_frozen() {
             AccountClass::Liability,
             role::FUND_CASH_POSITION,
         ),
+        (
+            accounts::reinsurer_account("retail-life-surplus", "reinsurer-north", NZD),
+            "int/reinsurer/retail-life-surplus/reinsurer-north/NZD",
+            &minor,
+            AccountClass::Liability,
+            role::REINSURER_ACCOUNT,
+        ),
+        (
+            accounts::reinsurance_premium(NZD),
+            "int/reinsurance_premium/NZD",
+            &minor,
+            AccountClass::Expense,
+            role::REINSURANCE_PREMIUM,
+        ),
+        (
+            accounts::reinsurance_commission(NZD),
+            "int/reinsurance_commission/NZD",
+            &minor,
+            AccountClass::Income,
+            role::REINSURANCE_COMMISSION,
+        ),
+        (
+            accounts::reinsurance_recoverable(NZD),
+            "int/reinsurance_recoverable/NZD",
+            &minor,
+            AccountClass::Asset,
+            role::REINSURANCE_RECOVERABLE,
+        ),
+        (
+            accounts::reinsurance_recoveries(NZD),
+            "int/reinsurance_recoveries/NZD",
+            &minor,
+            AccountClass::Income,
+            role::REINSURANCE_RECOVERIES,
+        ),
+        (
+            accounts::reinsurance_profit_commission(NZD),
+            "int/reinsurance_profit_commission/NZD",
+            &minor,
+            AccountClass::Income,
+            role::REINSURANCE_PROFIT_COMMISSION,
+        ),
+        (
+            accounts::reinsurance_settlement_clearing(NZD),
+            "int/reinsurance_settlement_clearing/NZD",
+            &minor,
+            AccountClass::Liability,
+            role::REINSURANCE_SETTLEMENT_CLEARING,
+        ),
+        (
+            accounts::reinsurance_migration_control(NZD),
+            "int/reinsurance_migration_control/NZD",
+            &minor,
+            AccountClass::Asset,
+            role::REINSURANCE_MIGRATION_CONTROL,
+        ),
     ];
     for (account, id, unit, class, role) in chart {
         assert_eq!(account.id.0, id);
@@ -397,6 +453,27 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             policy: p.clone(),
             payment: "pay".into(),
         },
+        Command::RecordCession {
+            policy: p.clone(),
+            cover: "life".into(),
+            layer: 1,
+            life: LifeId::from("life-1"),
+            from: d(2027, 1, 1),
+            segments: vec![ic_core::reinsurance::CessionSegment {
+                from: d(2027, 1, 1),
+                cession: None,
+            }],
+        },
+        Command::PostReinsurance {
+            kind: ic_core::reinsurance::ReinsurancePosting::CededPremium,
+            treaty: "t".into(),
+            reinsurer: "r".into(),
+            currency: NZD,
+            policy: Some(p.clone()),
+            amount_minor: 1,
+            value_date: d(2027, 1, 1),
+            reference: "ref".into(),
+        },
         Command::BeginTransfer {
             policy: p.clone(),
             transfer_id: "t".into(),
@@ -412,6 +489,22 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             transfer_id: "t".into(),
         },
         Command::Claims(Box::new(ic_core::claims_module::Command::DrainDue)),
+        Command::PostCounterparty(Box::new(ic_core::counterparty::CounterpartyPosting {
+            reference: "ce:0-1".into(),
+            kind: "commission_earned".into(),
+            currency: NZD,
+            value_date: None,
+            policy: Some(p.clone()),
+            reverses: None,
+            lines: vec![ic_core::counterparty::CounterpartyLine {
+                account: ic_core::counterparty::CounterpartyAccount::Party {
+                    party: PartyId("payee-1".into()),
+                    ledger: ic_core::counterparty::PartyLedger::CommissionPayable,
+                },
+                amount_minor: -1,
+            }],
+            detail: Default::default(),
+        })),
     ]);
     let mut names = std::collections::BTreeSet::new();
     for command in &all {
@@ -425,7 +518,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 27, "{names:?}");
+    assert_eq!(names.len(), 30, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

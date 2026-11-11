@@ -162,6 +162,12 @@ impl Membership {
         }
     }
 
+    /// Undo a leave: the member is back with no gap. False if the member
+    /// under this ID has not left.
+    pub fn reinstate(&mut self, employee_id: &str) -> bool {
+        self.members.get_mut(employee_id).filter(|m| m.left.is_some()).map(|m| m.left = None).is_some()
+    }
+
     /// Apply a change. Returns false, changing nothing, if the change does
     /// not fit the membership: the member it names is not there, or a join
     /// arrives without the life it joins as.

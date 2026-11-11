@@ -28,7 +28,9 @@ In: commands in an `Envelope` (`key`, `caller`, `at`, `today`, `command`). Calle
 
 Out, on each applied command: events for the audit trail, and `Effect`s, each with a stable key that is its idempotency key at the receiver. Effects are for reinsurance (reserve, release and confirm capacity, record risk factors), the core (issue the policy, issue and end interim cover, apply terms, a non-disclosure remedy), evidence providers (request, chase, cancel), a delegate (send the file) and people (notices).
 
-Queries (`special::Query`, answered by `special::answer`): a proposal, the terms on a policy's cover, the underwriters of a life, a queue with ages, an underwriter's workload, a report over a period, and the exclusion library on a date.
+The reply to a command carries its effects, and the same effects wait, numbered, in a replicated outbox until the driver acknowledges them (`Query::Outbox`, `Command::AcknowledgeEffects` from caller `effects-driver`), so a lost reply loses nothing.
+
+Queries (`special::Query`, answered by `special::answer`): a proposal, the terms on a policy's cover, the underwriters of a life, a queue with ages, an underwriter's workload, a report over a period, the exclusion library on a date, and the outbox.
 
 For claims: `codes::ExclusionLibrary::matches` decides whether an exclusion applies to a coded cause, and `codes::CAUSE_ROOTS` lists the roots cause codes hang from. Claims owns the coding of a cause; this module owns the wordings and the match.
 

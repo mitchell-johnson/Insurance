@@ -208,6 +208,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         claims: BTreeMap::new(),
         refunds_raised: BTreeMap::new(),
         payments: BTreeMap::new(),
+        cessions: BTreeMap::new(),
     };
     Ok((policy, product))
 }

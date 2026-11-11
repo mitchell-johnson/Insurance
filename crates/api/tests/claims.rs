@@ -43,17 +43,43 @@ fn app() -> Router {
 #[tokio::test]
 async fn a_claim_notification_arrives_over_the_command_route() {
     let app = app();
-    let application = serde_json::to_value(term_life(1, d(2027, 3, 1), d(1991, 2, 10), Sex::Female, false, 500_000_00, Some(100_000_00), Frequency::Monthly, None)).unwrap();
-    let (status, body) = Call::new("POST", "/v1/policies").roles("new-business").key("app-1").body(application).send(&app).await;
+    let application = serde_json::to_value(term_life(
+        1,
+        d(2027, 3, 1),
+        d(1991, 2, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        Some(100_000_00),
+        Frequency::Monthly,
+        None,
+    ))
+    .unwrap();
+    let (status, body) = Call::new("POST", "/v1/policies")
+        .roles("new-business")
+        .key("app-1")
+        .body(application)
+        .send(&app)
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
 
     let notify = json!({ "policy": "pol-00000001", "command": { "claims": { "notify": {
         "claim": "clm-1", "policy": "pol-00000001", "cover": "trauma", "life": "life-1", "claim_type": "trauma",
         "event_date": "2027-03-01", "channel": "app", "notifier": "policyholder"
     } } } });
-    let (status, body) = Call::new("POST", "/v1/commands").roles("payments").key("n-0").body(notify.clone()).send(&app).await;
+    let (status, body) = Call::new("POST", "/v1/commands")
+        .roles("payments")
+        .key("n-0")
+        .body(notify.clone())
+        .send(&app)
+        .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-    let (status, body) = Call::new("POST", "/v1/commands").roles("claims").key("n-1").body(notify.clone()).send(&app).await;
+    let (status, body) = Call::new("POST", "/v1/commands")
+        .roles("claims")
+        .key("n-1")
+        .body(notify.clone())
+        .send(&app)
+        .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
     assert_eq!(body["title"], "not_configured", "{body}");
 
@@ -78,17 +104,37 @@ async fn a_claim_notification_arrives_over_the_command_route() {
         ("rules-1", json!({ "claims": { "activate_rules": { "rules": rules } } })),
         ("authority-1", json!({ "claims": { "activate_authority": { "book": book } } })),
     ] {
-        let (status, body) = Call::new("POST", "/v1/commands").roles("claims").key(key).body(json!({ "command": command })).send(&app).await;
+        let (status, body) = Call::new("POST", "/v1/commands")
+            .roles("claims")
+            .key(key)
+            .body(json!({ "command": command }))
+            .send(&app)
+            .await;
         assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
-        let (status, body) = Call::new("POST", "/v1/commands").roles("config").key(key).body(json!({ "command": command })).send(&app).await;
+        let (status, body) = Call::new("POST", "/v1/commands")
+            .roles("config")
+            .key(key)
+            .body(json!({ "command": command }))
+            .send(&app)
+            .await;
         assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     }
 
-    let (status, body) = Call::new("POST", "/v1/commands").roles("claims").key("n-2").body(notify.clone()).send(&app).await;
+    let (status, body) = Call::new("POST", "/v1/commands")
+        .roles("claims")
+        .key("n-2")
+        .body(notify.clone())
+        .send(&app)
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     // The channel retrying under the same key gets the same answer, and a second key is told
     // the claim exists.
-    let (status, _) = Call::new("POST", "/v1/commands").roles("claims").key("n-2").body(notify.clone()).send(&app).await;
+    let (status, _) = Call::new("POST", "/v1/commands")
+        .roles("claims")
+        .key("n-2")
+        .body(notify.clone())
+        .send(&app)
+        .await;
     assert_eq!(status, StatusCode::ACCEPTED);
     let (status, body) = Call::new("POST", "/v1/commands").roles("claims").key("n-3").body(notify).send(&app).await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");

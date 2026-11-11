@@ -40,6 +40,18 @@ pub mod role {
     pub const TRANSFER_IN_TRANSIT: &str = "transfer_in_transit";
     pub const FUND_UNIT_POSITION: &str = "fund_unit_position";
     pub const FUND_CASH_POSITION: &str = "fund_cash_position";
+
+    /// What is owed to, or by, one reinsurer under one treaty.
+    pub const REINSURER_ACCOUNT: &str = "reinsurer_account";
+    pub const REINSURANCE_PREMIUM: &str = "reinsurance_premium";
+    pub const REINSURANCE_COMMISSION: &str = "reinsurance_commission";
+    /// Recoveries expected on claims and not yet due from a reinsurer.
+    pub const REINSURANCE_RECOVERABLE: &str = "reinsurance_recoverable";
+    pub const REINSURANCE_RECOVERIES: &str = "reinsurance_recoveries";
+    pub const REINSURANCE_PROFIT_COMMISSION: &str = "reinsurance_profit_commission";
+    /// Statement balances on their way to or from a reinsurer's bank.
+    pub const REINSURANCE_SETTLEMENT_CLEARING: &str = "reinsurance_settlement_clearing";
+    pub const REINSURANCE_MIGRATION_CONTROL: &str = "reinsurance_migration_control";
 }
 
 fn acct(id: String, unit: AccountUnit, class: AccountClass, role: &str) -> Account {
@@ -241,6 +253,73 @@ pub fn fund_cash_position(fund: &FundId, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::FUND_CASH_POSITION,
+    )
+}
+
+// Reinsurance. One instance per partition; the finance ledger consolidates.
+
+pub fn reinsurer_account(treaty: &str, reinsurer: &str, c: Currency) -> Account {
+    acct(
+        format!("int/reinsurer/{treaty}/{reinsurer}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::REINSURER_ACCOUNT,
+    )
+}
+pub fn reinsurance_premium(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_premium/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::REINSURANCE_PREMIUM,
+    )
+}
+pub fn reinsurance_commission(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_commission/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Income,
+        role::REINSURANCE_COMMISSION,
+    )
+}
+pub fn reinsurance_recoverable(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_recoverable/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::REINSURANCE_RECOVERABLE,
+    )
+}
+pub fn reinsurance_recoveries(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_recoveries/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Income,
+        role::REINSURANCE_RECOVERIES,
+    )
+}
+pub fn reinsurance_profit_commission(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_profit_commission/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Income,
+        role::REINSURANCE_PROFIT_COMMISSION,
+    )
+}
+pub fn reinsurance_settlement_clearing(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_settlement_clearing/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::REINSURANCE_SETTLEMENT_CLEARING,
+    )
+}
+pub fn reinsurance_migration_control(c: Currency) -> Account {
+    acct(
+        format!("int/reinsurance_migration_control/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::REINSURANCE_MIGRATION_CONTROL,
     )
 }
 

@@ -1,0 +1,29 @@
+[package]
+name = "ic-distribution"
+description = "Advisers, commission, counterparty positions and the held balance workbench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-money.workspace = true
+ic-ledger.workspace = true
+ic-log.workspace = true
+ic-core.workspace = true
+ic-raft.workspace = true
+cedar-policy.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+ic-sim.workspace = true
+ic-product.workspace = true
+
+[lints]
+workspace = true

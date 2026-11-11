@@ -385,13 +385,6 @@ impl World {
         self.refused(Self::decide_command(id, who, request, reason))
     }
 
-    pub fn approve(&mut self, id: &str, who: &str) -> Result<(), Reject> {
-        self.run(Command::Approve {
-            claim: id.into(),
-            actor: actor(who),
-        })
-    }
-
     pub fn approved(&mut self, id: &str, who: &str) {
         self.ok(Command::Approve {
             claim: id.into(),

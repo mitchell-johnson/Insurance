@@ -57,6 +57,14 @@ pub struct UnderwritingState {
     pub(crate) delegate_refs: BTreeSet<(String, String)>,
     /// Sums insured standing accepted under each delegated authority.
     pub(crate) delegated_total: BTreeMap<String, i64>,
+    /// Effects not yet acknowledged as delivered, in the order they were
+    /// produced. The reply to a command also carries its effects, but a reply
+    /// can be lost; this cannot.
+    #[serde(default)]
+    pub(crate) outbox: BTreeMap<u64, Effect>,
+    /// The number of the last effect ever put in the outbox.
+    #[serde(default)]
+    pub(crate) outbox_last: u64,
 }
 
 /// What a handler works with: the time the driver read, and what to hand back.
@@ -115,6 +123,10 @@ impl StateMachine for UnderwritingState {
             out: Applied::default(),
         };
         self.dispatch(&mut cx, envelope.command)?;
+        for effect in &cx.out.effects {
+            self.outbox_last += 1;
+            self.outbox.insert(self.outbox_last, effect.clone());
+        }
         self.seen.insert(envelope.key, index);
         self.results.insert(index, cx.out.clone());
         while self.results.len() > RESULTS_KEPT {
@@ -125,6 +137,19 @@ impl StateMachine for UnderwritingState {
 }
 
 impl UnderwritingState {
+    /// Effects waiting to be delivered, oldest first, after `after`.
+    pub fn outbox(&self, after: u64, max: usize) -> Vec<(u64, Effect)> {
+        self.outbox.range(after.saturating_add(1)..).take(max).map(|(n, e)| (*n, e.clone())).collect()
+    }
+
+    fn acknowledge_effects(&mut self, through: u64) -> Result<(), Reject> {
+        if through > self.outbox_last {
+            return reject("unknown_effect", format!("no effect numbered {through} has been produced"));
+        }
+        self.outbox = self.outbox.split_off(&(through + 1));
+        Ok(())
+    }
+
     /// Run `f` on a copy of the proposal and keep the copy only if `f`
     /// succeeds, so a refused command changes nothing.
     pub(crate) fn with<F>(&mut self, id: &ProposalId, cx: &mut Cx, f: F) -> Result<(), Reject>
@@ -408,6 +433,7 @@ impl UnderwritingState {
             IssueRejected { proposal, code } => self.with(&proposal, cx, |_, p, cx| crate::external::issue_rejected(p, cx, code)),
 
             Sweep { after, max } => self.sweep(cx, after, max),
+            AcknowledgeEffects { through } => self.acknowledge_effects(through),
             LicenceChanged {
                 subject,
                 status,
