@@ -34,15 +34,19 @@ pub fn pct(p: f64) -> u32 {
 }
 
 /// A person holding the shipped templates for these roles, assigned to the whole queue.
-pub fn staff(id: &str, roles: &[Role]) -> Actor {
+pub fn person(id: &str, roles: &[Role]) -> Staff {
     let templates = shipped_templates().into_iter().filter(|t| t.roles.iter().any(|r| roles.contains(r))).collect();
-    Actor::Staff(Box::new(Staff {
+    Staff {
         id: party(id),
         templates,
         grants: vec![],
         paths: BTreeSet::from(["*".to_string()]),
         purpose: "case-1".into(),
-    }))
+    }
+}
+
+pub fn staff(id: &str, roles: &[Role]) -> Actor {
+    Actor::Staff(Box::new(person(id, roles)))
 }
 
 pub fn admin() -> Actor {
@@ -458,6 +462,16 @@ impl World {
     }
 }
 
+/// An advised policy in the worked example with its first premium paid.
+/// Returns the world, the policy and the renewal commission the premium earned.
+pub fn advised_in(mut w: World) -> (World, PolicyId, i64) {
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    let renewal = w.payable("a-co") + w.payable("fap-one") + w.held("fap-one") - 1_200_00;
+    (w, policy, renewal)
+}
+
 pub fn code<T: std::fmt::Debug>(r: Result<T, Reject>) -> String {
     r.unwrap_err().code
 }
@@ -544,7 +558,10 @@ pub fn renewal_only(mut line: Line) -> Line {
 /// book pays 75% to A's company and 25% to FAP One, with FAP One bearing
 /// clawback. FAP Two and its engagement exist for the move.
 pub fn worked_example() -> World {
-    let mut w = World::new();
+    worked_example_in(World::new())
+}
+
+pub fn worked_example_in(mut w: World) -> World {
     for (id, kind) in [
         ("adviser-a", PartyKind::Adviser),
         ("a-co", PartyKind::Company),

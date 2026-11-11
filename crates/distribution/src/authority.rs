@@ -294,26 +294,29 @@ impl Authority {
             None,
         )
         .map_err(|e| err(e.to_string()))?;
-        let context = Context::from_json_value(
-            json!({
-                "amount": ask.amount_minor,
-                "limit": limit,
-                "purpose": staff.purpose.trim(),
-                "has_path": has_path,
-                "is_maker": ask.is_maker,
-            }),
-            None,
-        )
-        .map_err(|e| err(e.to_string()))?;
-        let request = Request::new(
-            uid("Staff", &staff.id.0)?,
-            uid("Action", ask.action)?,
-            uid("Record", ask.record)?,
-            context,
-            None,
-        )
-        .map_err(|e| err(e.to_string()))?;
-        if self.authorizer.is_authorized(&request, &self.policies, &entities).decision() == Decision::Allow {
+        let allowed = |amount: i64| -> Result<bool, AuthorityError> {
+            let context = Context::from_json_value(
+                json!({
+                    "amount": amount,
+                    "limit": limit,
+                    "purpose": staff.purpose.trim(),
+                    "has_path": has_path,
+                    "is_maker": ask.is_maker,
+                }),
+                None,
+            )
+            .map_err(|e| err(e.to_string()))?;
+            let request = Request::new(
+                uid("Staff", &staff.id.0)?,
+                uid("Action", ask.action)?,
+                uid("Record", ask.record)?,
+                context,
+                None,
+            )
+            .map_err(|e| err(e.to_string()))?;
+            Ok(self.authorizer.is_authorized(&request, &self.policies, &entities).decision() == Decision::Allow)
+        };
+        if allowed(ask.amount_minor)? {
             return Ok(DecisionRecord {
                 staff: staff.id.clone(),
                 action: ask.action.to_string(),
@@ -331,7 +334,8 @@ impl Authority {
             format!("you have no path to {}", ask.record)
         } else if ask.is_maker {
             "you prepared this, so someone else must approve it".to_string()
-        } else if ask.limit.is_some() && ask.amount_minor > limit {
+        } else if ask.limit.is_some() && ask.amount_minor > limit && allowed(limit)? {
+            // The same action for an amount inside the limit would be allowed.
             format!("the amount {} is above your limit of {limit}", ask.amount_minor)
         } else {
             format!("none of your roles allows {}", ask.action)
