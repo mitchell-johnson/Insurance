@@ -12,7 +12,7 @@ use chrono::{Datelike, NaiveDate, NaiveTime, Weekday};
 use ic_money::Currency;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Id, Purpose, Reject, RunType};
+use crate::model::{AccountDetails, Id, Purpose, Reject, RunType};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -87,6 +87,10 @@ pub struct Rules {
     pub on_call: BTreeSet<String>,
     /// A region is ready only if its last passed drill is this recent.
     pub drill_max_age_days: u32,
+    /// One of the insurer's own accounts, paid a token amount by each
+    /// evacuation drill.
+    pub drill_account: AccountDetails,
+    pub drill_amount_minor: i64,
     /// Every region that can hold leaders.
     pub voter_regions: BTreeSet<String>,
     /// Days the banks are closed, beyond weekends.
@@ -147,6 +151,9 @@ impl Config {
     pub fn validate(&self, today: NaiveDate) -> Result<(), Reject> {
         if self.rules.voter_regions.is_empty() {
             return Err(bad("at least one voter region is needed"));
+        }
+        if self.rules.drill_amount_minor <= 0 || self.rules.drill_account.number.is_empty() {
+            return Err(bad("the evacuation drill needs an account to pay and a token amount"));
         }
         if self.funds.is_empty() {
             return Err(bad("at least one statutory fund is needed"));

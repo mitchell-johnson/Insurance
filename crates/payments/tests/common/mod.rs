@@ -173,6 +173,8 @@ pub fn config() -> Config {
             pre_advice_threshold_minor: 250_000_00,
             on_call: BTreeSet::from(["ari".to_string(), "ben".to_string()]),
             drill_max_age_days: 90,
+            drill_account: account("Insurer Operating", "0100000001"),
+            drill_amount_minor: 1_00,
             voter_regions: REGIONS.iter().map(|r| r.to_string()).collect(),
             holidays: BTreeSet::from([d(2027, 11, 17)]),
         },
