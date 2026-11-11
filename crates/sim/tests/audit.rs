@@ -72,7 +72,11 @@ fn the_audit_names_each_kind_of_divergence() {
     // A policy's entry with a line outside the policy's statutory fund.
     let (mut cluster, events, policies) = business();
     let view = view_of(&events);
-    let (partition, node) = cluster.nodes.iter_mut().find(|(_, n)| n.journal.iter().any(|e| e.body.policy.is_some())).unwrap();
+    let (partition, node) = cluster
+        .nodes
+        .iter_mut()
+        .find(|(_, n)| n.journal.iter().any(|e| e.body.policy.is_some()))
+        .unwrap();
     let partition = *partition;
     let entry = node.journal.iter_mut().find(|e| e.body.policy.is_some()).unwrap();
     entry.body.postings.last_mut().unwrap().dims.statutory_fund = None;
