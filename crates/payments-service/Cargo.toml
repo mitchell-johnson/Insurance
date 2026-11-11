@@ -36,6 +36,7 @@ ic-payments-service = { path = ".", features = ["testing"] }
 ic-sim.workspace = true
 ic-log.workspace = true
 ic-product.workspace = true
+ic-azure = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true
