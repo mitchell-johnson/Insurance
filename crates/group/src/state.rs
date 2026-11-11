@@ -1,0 +1,1007 @@
+//! The module's state and the handling of each command. A deterministic
+//! state machine: the same commands in the same order give the same state on
+//! every replica.
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use chrono::{Days, NaiveDate};
+use ic_core::{GroupId, LifeId, PartyId, PolicyId, Reject};
+use ic_log::StateMachine;
+use ic_product::ProductDefinition;
+use serde::{Deserialize, Serialize};
+
+use crate::command::{Envelope, GroupCommand};
+use crate::diff::{derive, trips_safety_check, Ambiguity, DiffContext};
+use crate::event::{ExceptionKind, FileSummary, GroupEvent, Outbound, ReinsuranceNotice};
+use crate::mapping::{FileKind, FileMapping, RowReject};
+use crate::model::{ChangeKind, Membership, Proposed};
+use crate::record::MemberRow;
+use crate::terms::{MemberBasis, SchemeTerms};
+use crate::work::{Item, Work};
+
+/// Rows accepted in one `SubmitRows` command.
+pub const MAX_ROWS_PER_PART: usize = 2_000;
+/// Idempotency keys and closed files are kept this long.
+pub const RETENTION_DAYS: u64 = 400;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum SchemeStatus {
+    Active,
+    Terminating { effective: NaiveDate },
+    Terminated { effective: NaiveDate },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileStatus {
+    /// Stored, not yet scanned. Nothing has read it.
+    Quarantined,
+    Refused,
+    Scanned,
+    /// Held by the safety check until a person confirms it.
+    Held,
+    AwaitingApproval,
+    AwaitingBackdatingDecision,
+    ResolvingParties,
+    Applying,
+    Applied,
+    Withdrawn,
+}
+
+impl FileStatus {
+    /// Nothing further will happen to the file.
+    pub fn is_closed(self) -> bool {
+        matches!(self, FileStatus::Refused | FileStatus::Applied | FileStatus::Withdrawn)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileRecord {
+    pub id: String,
+    pub content_hash: String,
+    pub status: FileStatus,
+    pub received: NaiveDate,
+    pub uploaded_by: String,
+    #[serde(default)]
+    pub approved_by: Option<String>,
+    #[serde(default)]
+    pub kind: Option<FileKind>,
+    #[serde(default)]
+    pub file_date: Option<NaiveDate>,
+    /// Rows received so far, until the last part arrives.
+    #[serde(default)]
+    pub rows: Vec<MemberRow>,
+    #[serde(default)]
+    pub rejected: Vec<RowReject>,
+    #[serde(default)]
+    pub ambiguities: Vec<Ambiguity>,
+    /// The changes the file would make, until they are queued.
+    #[serde(default)]
+    pub changes: Vec<Proposed>,
+    #[serde(default)]
+    pub summary: FileSummary,
+    /// Joiners still waiting for the customer master's answer.
+    #[serde(default)]
+    pub unresolved: BTreeSet<String>,
+    #[serde(default)]
+    pub resolutions: BTreeMap<String, crate::command::Resolution>,
+    /// Queued changes not yet applied or refused.
+    #[serde(default)]
+    pub remaining: u32,
+    #[serde(default)]
+    pub applied: u32,
+    #[serde(default)]
+    pub refused: u32,
+    #[serde(default)]
+    pub scheduled: u32,
+    #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub stale_flagged: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaseStatus {
+    Requested,
+    /// Accepted by underwriting; the layer is being written to the core.
+    Writing,
+    Accepted,
+    Declined,
+    NotProceeded,
+    Ended,
+}
+
+/// A member's cover above the automatic amount, from request to layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcessCase {
+    pub id: u64,
+    pub employee_id: String,
+    pub life: LifeId,
+    pub cover: String,
+    /// What the formula gives above the automatic amount.
+    pub excess_minor: i64,
+    /// What underwriting accepted.
+    pub accepted_minor: i64,
+    pub status: CaseStatus,
+    pub effective: NaiveDate,
+    /// The core's layer, once its event has been seen.
+    #[serde(default)]
+    pub layer: Option<u32>,
+    /// The layer is to end from this date as soon as its number is known.
+    #[serde(default)]
+    pub end_from: Option<NaiveDate>,
+    #[serde(default)]
+    pub ended_by_leave: bool,
+    #[serde(default)]
+    pub reference: Option<String>,
+}
+
+impl ExcessCase {
+    /// What this case counts for against the member's formula excess.
+    pub fn counts_minor(&self) -> i64 {
+        match self.status {
+            CaseStatus::Requested => self.excess_minor,
+            CaseStatus::Writing | CaseStatus::Accepted if self.end_from.is_none() => self.accepted_minor,
+            _ => 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum OfferStatus {
+    Open,
+    Issuing { policy: PolicyId, group: GroupId },
+    TakenUp { policy: PolicyId },
+    Expired,
+}
+
+/// A leaver's right to an individual policy without evidence of health.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Offer {
+    pub id: u64,
+    pub employee_id: String,
+    pub life: LifeId,
+    /// The first day without scheme cover: the new policy starts here.
+    pub left: NaiveDate,
+    pub expires: NaiveDate,
+    /// The most that can be continued: the automatic cover at leaving.
+    pub max_sum_insured_minor: i64,
+    pub status: OfferStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Renewal {
+    pub opened: NaiveDate,
+    /// Terms for the new year and the rate table agreed, once agreed.
+    #[serde(default)]
+    pub agreed: Option<(SchemeTerms, String)>,
+    #[serde(default)]
+    pub running_on_old_rates: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupLine {
+    pub members: u32,
+    pub total_minor: i64,
+}
+
+/// One scheme invoice as the employer sees it: a schedule by billing group,
+/// retrospective adjustments since the last invoice, and one total for
+/// loadings that are not shown against any member.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Invoice {
+    pub period_index: u32,
+    pub by_group: BTreeMap<String, GroupLine>,
+    pub adjustments_by_group: BTreeMap<String, i64>,
+    pub loading_minor: i64,
+    pub loading_adjustments_minor: i64,
+    /// The scheme terms version in force when it was issued, which says how
+    /// loadings were billed.
+    pub terms_version: u32,
+}
+
+impl Invoice {
+    pub fn total_minor(&self) -> i64 {
+        self.by_group.values().map(|g| g.total_minor).sum::<i64>()
+            + self.adjustments_by_group.values().sum::<i64>()
+            + self.loading_minor
+            + self.loading_adjustments_minor
+    }
+    pub fn members(&self) -> u32 {
+        self.by_group.values().map(|g| g.members).sum()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InFlight {
+    pub key: String,
+    /// The outbox entry carrying the command.
+    pub outbox: u64,
+    pub items: Vec<Item>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scheme {
+    pub id: String,
+    pub policy: PolicyId,
+    pub group: GroupId,
+    pub employer: PartyId,
+    pub inception: NaiveDate,
+    pub product: ProductDefinition,
+    pub terms: SchemeTerms,
+    pub terms_version: u32,
+    pub mapping: Option<FileMapping>,
+    pub status: SchemeStatus,
+    /// The core refused something for a reason no file row explains.
+    /// Nothing more is applied until staff resume the scheme.
+    pub blocked: Option<String>,
+    pub frozen: Option<String>,
+    pub membership: Membership,
+    pub files: BTreeMap<String, FileRecord>,
+    /// The file being worked on. One at a time, so that every file is
+    /// compared with membership as the file before it left it.
+    pub open_file: Option<String>,
+    pub queue: VecDeque<Item>,
+    /// Changes dated in the future, released on their day.
+    pub scheduled: BTreeMap<(NaiveDate, u64), Item>,
+    pub next_item: u64,
+    pub in_flight: Option<InFlight>,
+    /// How many membership changes go to the core in one command. Halved
+    /// when the core refuses a chunk, to find the row it refused.
+    pub chunk_limit: usize,
+    /// The core asked us to retry shortly. Cleared by the next tick.
+    pub waiting: bool,
+    pub core_seq: u64,
+    pub cases: BTreeMap<u64, ExcessCase>,
+    pub possible: BTreeMap<String, Vec<PartyId>>,
+    pub offers: BTreeMap<u64, Offer>,
+    pub pools: BTreeMap<String, NaiveDate>,
+    pub declaration_due: Option<NaiveDate>,
+    pub absence_leaves: BTreeSet<String>,
+    pub renewal: Option<Renewal>,
+    pub building: Option<Invoice>,
+    pub pending_adjustments: BTreeMap<String, i64>,
+    pub pending_loading_adjustments_minor: i64,
+    pub invoices: VecDeque<Invoice>,
+    pub outstanding_minor: i64,
+    pub oldest_unpaid_due: Option<NaiveDate>,
+    pub short_payments: u32,
+    pub joiners_suspended: bool,
+}
+
+impl Scheme {
+    pub fn can_take_files(&self) -> Result<(), Reject> {
+        if let Some(reason) = &self.frozen {
+            return Err(Reject::new("scheme_frozen", format!("files are on hold: {reason}")));
+        }
+        match self.status {
+            SchemeStatus::Active => Ok(()),
+            _ => Err(Reject::new("scheme_ending", "the scheme is ending and takes no more files")),
+        }
+    }
+
+    pub(crate) fn file_mut(&mut self, file: &str, expected: &[FileStatus]) -> Result<&mut FileRecord, Reject> {
+        file_in(&mut self.files, file, expected)
+    }
+}
+
+/// A file of the scheme, if it is in one of the expected states.
+fn file_in<'a>(files: &'a mut BTreeMap<String, FileRecord>, file: &str, expected: &[FileStatus]) -> Result<&'a mut FileRecord, Reject> {
+    let f = files
+        .get_mut(file)
+        .ok_or_else(|| Reject::new("unknown_file", format!("file {file} is not known for this scheme")))?;
+    if !expected.contains(&f.status) {
+        return Err(Reject::new("wrong_file_status", format!("file {file} is {:?}", f.status)));
+    }
+    Ok(f)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Exception {
+    pub scheme: String,
+    pub kind: ExceptionKind,
+    pub subject: String,
+    pub raised: NaiveDate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Stored {
+    on: NaiveDate,
+    error: Option<Reject>,
+}
+
+/// What a command produced. Everything else it did is in the state: the
+/// outbox holds what the driver must now do.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Outcome {
+    pub result: Result<(), Reject>,
+    /// The key had been seen before: this is the original result.
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupState {
+    pub schemes: BTreeMap<String, Scheme>,
+    pub by_policy: BTreeMap<PolicyId, String>,
+    idempotency: BTreeMap<String, Stored>,
+    pub outbox: BTreeMap<u64, Outbound>,
+    next_outbox: u64,
+    next_event_seq: u64,
+    next_id: u64,
+    /// Commands sent to the core and not yet answered: key to scheme.
+    pub core_keys: BTreeMap<String, String>,
+    pub exceptions: BTreeMap<u64, Exception>,
+    /// The business date of the last command, for effects raised without one.
+    today: Option<NaiveDate>,
+}
+
+impl StateMachine for GroupState {
+    type Command = Envelope;
+    type Output = Outcome;
+    fn apply(&mut self, _index: u64, command: Envelope) -> Outcome {
+        self.apply_envelope(command)
+    }
+}
+
+impl GroupState {
+    pub fn apply_envelope(&mut self, env: Envelope) -> Outcome {
+        if let Some(stored) = self.idempotency.get(&env.key) {
+            return Outcome {
+                result: stored.error.clone().map_or(Ok(()), Err),
+                duplicate: true,
+            };
+        }
+        let result = if env.command.allowed_callers().contains(&env.caller.as_str()) {
+            // Every handler checks before it writes, so a refused command
+            // leaves no trace.
+            self.today = Some(env.today);
+            self.dispatch(&env.actor, env.today, env.command)
+        } else {
+            Err(Reject::new("caller_not_allowed", format!("{} may not send {}", env.caller, env.command.name())))
+        };
+        self.idempotency.insert(
+            env.key,
+            Stored {
+                on: env.today,
+                error: result.clone().err(),
+            },
+        );
+        Outcome { result, duplicate: false }
+    }
+
+    /// The business date of the last command applied.
+    pub fn business_date(&self) -> Option<NaiveDate> {
+        self.today
+    }
+
+    pub(crate) fn fresh_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    pub(crate) fn send(&mut self, out: Outbound) -> u64 {
+        self.next_outbox += 1;
+        self.outbox.insert(self.next_outbox, out);
+        self.next_outbox
+    }
+
+    pub(crate) fn emit(&mut self, event: GroupEvent) {
+        self.next_event_seq += 1;
+        let (seq, date) = (self.next_event_seq, self.today.unwrap_or(NaiveDate::MIN));
+        self.send(Outbound::Publish { seq, date, event });
+    }
+
+    pub(crate) fn raise(&mut self, scheme: &str, kind: ExceptionKind, subject: &str) -> u64 {
+        let existing = self
+            .exceptions
+            .iter()
+            .find(|(_, e)| e.scheme == scheme && e.kind == kind && e.subject == subject);
+        if let Some((id, _)) = existing {
+            return *id;
+        }
+        let id = self.fresh_id();
+        self.exceptions.insert(
+            id,
+            Exception {
+                scheme: scheme.to_string(),
+                kind,
+                subject: subject.to_string(),
+                raised: self.today.unwrap_or(NaiveDate::MIN),
+            },
+        );
+        self.emit(GroupEvent::ExceptionRaised {
+            id,
+            scheme: scheme.to_string(),
+            kind,
+            subject: subject.to_string(),
+        });
+        id
+    }
+
+    pub(crate) fn clear(&mut self, scheme: &str, kind: ExceptionKind, subject: Option<&str>) {
+        let ids: Vec<u64> = self
+            .exceptions
+            .iter()
+            .filter(|(_, e)| e.scheme == scheme && e.kind == kind && subject.is_none_or(|s| e.subject == s))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in ids {
+            self.exceptions.remove(&id);
+            self.emit(GroupEvent::ExceptionCleared {
+                id,
+                scheme: scheme.to_string(),
+                kind,
+            });
+        }
+    }
+
+    pub(crate) fn notify_reinsurance(&mut self, notice: ReinsuranceNotice) {
+        let key = format!("grp-ri:{}", self.next_outbox + 1);
+        self.send(Outbound::Reinsurance { key, notice });
+    }
+
+    /// Take a scheme out, work on it with the rest of the state to hand,
+    /// and put it back.
+    pub(crate) fn with_scheme<T>(&mut self, id: &str, f: impl FnOnce(&mut Self, &mut Scheme) -> Result<T, Reject>) -> Result<T, Reject> {
+        let mut scheme = self
+            .schemes
+            .remove(id)
+            .ok_or_else(|| Reject::new("unknown_scheme", format!("scheme {id} is not registered")))?;
+        let r = f(self, &mut scheme);
+        self.schemes.insert(id.to_string(), scheme);
+        r
+    }
+
+    fn dispatch(&mut self, actor: &str, today: NaiveDate, command: GroupCommand) -> Result<(), Reject> {
+        use GroupCommand::*;
+        match command {
+            RegisterScheme {
+                scheme,
+                policy,
+                group,
+                employer,
+                inception,
+                product,
+                terms,
+                founding,
+            } => self.register(scheme, policy, group, employer, inception, *product, *terms, founding),
+            AmendTerms { scheme, terms } => self.with_scheme(&scheme, |st, s| {
+                terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+                s.terms = *terms;
+                s.terms_version += 1;
+                st.emit(GroupEvent::TermsAmended {
+                    scheme: s.id.clone(),
+                    terms_version: s.terms_version,
+                });
+                st.notify_reinsurance(ReinsuranceNotice::SetSchemeTerms {
+                    policy: s.policy.clone(),
+                    excess_path: s.terms.excess_path,
+                    sites: s.terms.sites.clone(),
+                });
+                Ok(())
+            }),
+            SetMapping { scheme, mapping } => self.with_scheme(&scheme, |st, s| {
+                if !mapping.is_sealed() {
+                    return Err(Reject::new("mapping_not_sealed", "the mapping's content hash does not match its content"));
+                }
+                if s.mapping.as_ref().is_some_and(|m| m.version >= mapping.version) {
+                    return Err(Reject::new("mapping_version", "a mapping is replaced only by a later version"));
+                }
+                st.emit(GroupEvent::MappingSet {
+                    scheme: s.id.clone(),
+                    mapping: mapping.id.clone(),
+                    version: mapping.version,
+                    content_hash: mapping.content_hash.clone(),
+                });
+                s.mapping = Some(*mapping);
+                Ok(())
+            }),
+            Freeze { scheme, reason } => self.with_scheme(&scheme, |st, s| {
+                s.frozen = Some(reason.clone());
+                st.emit(GroupEvent::SchemeFrozen { scheme: s.id.clone(), reason });
+                Ok(())
+            }),
+            Unfreeze { scheme } => self.with_scheme(&scheme, |st, s| {
+                if s.frozen.take().is_none() {
+                    return Err(Reject::new("not_frozen", "the scheme is not frozen"));
+                }
+                st.emit(GroupEvent::SchemeUnfrozen { scheme: s.id.clone() });
+                Ok(())
+            }),
+            Resume { scheme } => self.with_scheme(&scheme, |st, s| {
+                if s.blocked.take().is_none() {
+                    return Err(Reject::new("not_blocked", "the scheme is not blocked"));
+                }
+                st.clear(&s.id, ExceptionKind::SchemeBlocked, None);
+                st.emit(GroupEvent::SchemeResumed { scheme: s.id.clone() });
+                st.pump(s);
+                Ok(())
+            }),
+            ReceiveFile { scheme, file, content_hash } => self.with_scheme(&scheme, |st, s| st.receive_file(s, actor, today, file, content_hash)),
+            RecordScan { scheme, file, clean } => self.with_scheme(&scheme, |st, s| {
+                let f = s.file_mut(&file, &[FileStatus::Quarantined])?;
+                if clean {
+                    f.status = FileStatus::Scanned;
+                    st.emit(GroupEvent::FileScanned { scheme: s.id.clone(), file });
+                } else {
+                    st.refuse_file(s, &file, "malware");
+                }
+                Ok(())
+            }),
+            RefuseFile { scheme, file, code } => self.with_scheme(&scheme, |st, s| {
+                s.file_mut(&file, &[FileStatus::Quarantined, FileStatus::Scanned])?;
+                st.refuse_file(s, &file, &code);
+                Ok(())
+            }),
+            SubmitRows {
+                scheme,
+                file,
+                mapping_hash,
+                kind,
+                file_date,
+                rows,
+                rejected,
+                last,
+            } => self.with_scheme(&scheme, |st, s| {
+                st.submit_rows(s, today, &file, &mapping_hash, kind, file_date, rows, rejected, last)
+            }),
+            ConfirmHeld { scheme, file } => self.with_scheme(&scheme, |st, s| {
+                s.file_mut(&file, &[FileStatus::Held])?.status = FileStatus::AwaitingApproval;
+                st.clear(&s.id, ExceptionKind::FileHeld, Some(&file));
+                st.emit(GroupEvent::FileAwaitingApproval { scheme: s.id.clone(), file });
+                Ok(())
+            }),
+            ApproveFile { scheme, file } => self.with_scheme(&scheme, |st, s| st.approve_file(s, actor, today, &file)),
+            DecideBackdating { scheme, file, approve } => self.with_scheme(&scheme, |st, s| {
+                let f = s.file_mut(&file, &[FileStatus::AwaitingBackdatingDecision])?;
+                if approve {
+                    f.changes.iter_mut().for_each(|c| c.needs_backdating_approval = false);
+                } else {
+                    let (keep, drop): (Vec<_>, Vec<_>) = std::mem::take(&mut f.changes).into_iter().partition(|c| !c.needs_backdating_approval);
+                    f.changes = keep;
+                    for c in drop {
+                        f.rejected
+                            .push(RowReject::new(c.row, Some(&c.employee_id), "backdating_declined", Some("effective")));
+                        f.refused += 1;
+                    }
+                }
+                st.start_resolving(s, today, &file);
+                Ok(())
+            }),
+            WithdrawFile { scheme, file } => self.with_scheme(&scheme, |st, s| {
+                let open = [
+                    FileStatus::Quarantined,
+                    FileStatus::Scanned,
+                    FileStatus::Held,
+                    FileStatus::AwaitingApproval,
+                    FileStatus::AwaitingBackdatingDecision,
+                ];
+                let f = s.file_mut(&file, &open)?;
+                f.status = FileStatus::Withdrawn;
+                f.rows.clear();
+                f.changes.clear();
+                st.close_file(s, &file);
+                st.emit(GroupEvent::FileWithdrawn { scheme: s.id.clone(), file });
+                Ok(())
+            }),
+            PartiesResolved {
+                scheme,
+                file,
+                resolutions,
+                last,
+            } => self.with_scheme(&scheme, |st, s| st.parties_resolved(s, today, &file, resolutions, last)),
+            other => self.dispatch_work(actor, today, other),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn register(
+        &mut self,
+        id: String,
+        policy: PolicyId,
+        group: GroupId,
+        employer: PartyId,
+        inception: NaiveDate,
+        product: ProductDefinition,
+        terms: SchemeTerms,
+        founding: Vec<crate::model::Member>,
+    ) -> Result<(), Reject> {
+        if id.is_empty() || id.contains(':') {
+            return Err(Reject::new("invalid_scheme", "a scheme ID is not empty and has no colon"));
+        }
+        if self.schemes.contains_key(&id) || self.by_policy.contains_key(&policy) {
+            return Err(Reject::new("scheme_exists", "the scheme or its policy is already registered"));
+        }
+        terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+        if crate::benefit::formula_covers(&product).next().is_none() {
+            return Err(Reject::new("not_a_scheme", "the product has no cover driven by member data"));
+        }
+        let mut membership = Membership::default();
+        for member in founding {
+            if membership.members.contains_key(&member.employee_id) || membership.by_life(&member.life).is_some() {
+                return Err(Reject::new("duplicate_member", format!("member {} is named twice", member.employee_id)));
+            }
+            membership.insert(member);
+        }
+        self.emit(GroupEvent::SchemeRegistered {
+            scheme: id.clone(),
+            policy: policy.clone(),
+            terms_version: 1,
+        });
+        self.notify_reinsurance(ReinsuranceNotice::SetSchemeTerms {
+            policy: policy.clone(),
+            excess_path: terms.excess_path,
+            sites: terms.sites.clone(),
+        });
+        self.by_policy.insert(policy.clone(), id.clone());
+        self.schemes.insert(
+            id.clone(),
+            Scheme {
+                id,
+                policy,
+                group,
+                employer,
+                inception,
+                product,
+                terms,
+                terms_version: 1,
+                mapping: None,
+                status: SchemeStatus::Active,
+                blocked: None,
+                frozen: None,
+                membership,
+                files: BTreeMap::new(),
+                open_file: None,
+                queue: VecDeque::new(),
+                scheduled: BTreeMap::new(),
+                next_item: 0,
+                in_flight: None,
+                chunk_limit: ic_core::machine::MAX_MEMBERSHIP_CHUNK,
+                waiting: false,
+                core_seq: 0,
+                cases: BTreeMap::new(),
+                possible: BTreeMap::new(),
+                offers: BTreeMap::new(),
+                pools: BTreeMap::new(),
+                declaration_due: None,
+                absence_leaves: BTreeSet::new(),
+                renewal: None,
+                building: None,
+                pending_adjustments: BTreeMap::new(),
+                pending_loading_adjustments_minor: 0,
+                invoices: VecDeque::new(),
+                outstanding_minor: 0,
+                oldest_unpaid_due: None,
+                short_payments: 0,
+                joiners_suspended: false,
+            },
+        );
+        Ok(())
+    }
+
+    fn receive_file(&mut self, s: &mut Scheme, actor: &str, today: NaiveDate, file: String, content_hash: String) -> Result<(), Reject> {
+        s.can_take_files()?;
+        if s.terms.basis == MemberBasis::Pool {
+            return Err(Reject::new("pool_scheme", "a pool scheme declares aggregates; it has no membership files"));
+        }
+        if s.files.contains_key(&file) {
+            return Err(Reject::new("file_exists", format!("file {file} was already received")));
+        }
+        // The same content again is the same file: nothing to do, and the
+        // caller is told which file it was.
+        if let Some(same) = s
+            .files
+            .values()
+            .find(|f| f.content_hash == content_hash && f.status != FileStatus::Refused && f.status != FileStatus::Withdrawn)
+        {
+            return Err(Reject::new("duplicate_file", format!("the same content was received as file {}", same.id)));
+        }
+        if let Some(open) = &s.open_file {
+            return Err(Reject::new("file_in_progress", format!("file {open} is still being worked on")));
+        }
+        s.open_file = Some(file.clone());
+        s.files.insert(
+            file.clone(),
+            FileRecord {
+                id: file.clone(),
+                content_hash,
+                status: FileStatus::Quarantined,
+                received: today,
+                uploaded_by: actor.to_string(),
+                approved_by: None,
+                kind: None,
+                file_date: None,
+                rows: vec![],
+                rejected: vec![],
+                ambiguities: vec![],
+                changes: vec![],
+                summary: FileSummary::default(),
+                unresolved: BTreeSet::new(),
+                resolutions: BTreeMap::new(),
+                remaining: 0,
+                applied: 0,
+                refused: 0,
+                scheduled: 0,
+                code: None,
+                stale_flagged: false,
+            },
+        );
+        self.emit(GroupEvent::FileQuarantined { scheme: s.id.clone(), file });
+        Ok(())
+    }
+
+    fn refuse_file(&mut self, s: &mut Scheme, file: &str, code: &str) {
+        if let Some(f) = s.files.get_mut(file) {
+            f.status = FileStatus::Refused;
+            f.code = Some(code.to_string());
+            f.rows.clear();
+        }
+        self.close_file(s, file);
+        self.emit(GroupEvent::FileRefused {
+            scheme: s.id.clone(),
+            file: file.to_string(),
+            code: code.to_string(),
+        });
+    }
+
+    /// The file is finished with: the next one may start.
+    pub(crate) fn close_file(&mut self, s: &mut Scheme, file: &str) {
+        if s.open_file.as_deref() == Some(file) {
+            s.open_file = None;
+        }
+        self.clear(&s.id, ExceptionKind::FileHeld, Some(file));
+        self.clear(&s.id, ExceptionKind::FileStale, Some(file));
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_rows(
+        &mut self,
+        s: &mut Scheme,
+        today: NaiveDate,
+        file: &str,
+        mapping_hash: &str,
+        kind: FileKind,
+        file_date: NaiveDate,
+        rows: Vec<MemberRow>,
+        rejected: Vec<RowReject>,
+        last: bool,
+    ) -> Result<(), Reject> {
+        if rows.len() > MAX_ROWS_PER_PART {
+            return Err(Reject::new("too_many_rows", format!("at most {MAX_ROWS_PER_PART} rows per part")));
+        }
+        if s.mapping.as_ref().map(|m| m.content_hash.as_str()) != Some(mapping_hash) {
+            return Err(Reject::new("mapping_mismatch", "the rows were not mapped with the scheme's current mapping"));
+        }
+        if file_date > today {
+            return Err(Reject::new("file_date", "a file cannot speak for a date in the future"));
+        }
+        let f = s.file_mut(file, &[FileStatus::Scanned])?;
+        f.kind = Some(kind);
+        f.file_date = Some(file_date);
+        f.rows.extend(rows);
+        f.rejected.extend(rejected);
+        if !last {
+            return Ok(());
+        }
+        let rows = std::mem::take(&mut f.rows);
+        let ctx = DiffContext {
+            terms: &s.terms,
+            product: &s.product,
+            inception: s.inception,
+            today,
+            file_date,
+        };
+        let mut derived = derive(&ctx, &s.membership, kind, &rows);
+        // A scheme that keeps paying short takes no new joiners until it
+        // has paid; its existing members are untouched.
+        if s.joiners_suspended {
+            let (joins, rest): (Vec<_>, Vec<_>) = derived.changes.into_iter().partition(|c| c.kind == ChangeKind::Join);
+            derived.changes = rest;
+            derived
+                .rejected
+                .extend(joins.iter().map(|c| RowReject::new(c.row, Some(&c.employee_id), "joiners_suspended", None)));
+        }
+        let members_before = s.membership.active_count();
+        let leavers = derived.count(&ChangeKind::Leave);
+        let above = derived
+            .changes
+            .iter()
+            .filter(|c| matches!(c.kind, ChangeKind::Join | ChangeKind::Change))
+            .filter(|c| {
+                let cap = s.membership.active(&c.employee_id).and_then(|m| m.auto_cap_minor);
+                crate::benefit::member_cover(&s.product, &c.attrs, cap).iter().any(|a| a.excess_minor() > 0)
+            })
+            .count();
+        let f = file_in(&mut s.files, file, &[FileStatus::Scanned])?;
+        f.rejected.extend(derived.rejected);
+        f.rejected.sort_by_key(|r| r.row);
+        f.ambiguities = derived.ambiguities;
+        f.summary = FileSummary {
+            rows: rows.len() as u32 + f.rejected.iter().filter(|r| !rows.iter().any(|row| row.row == r.row)).count() as u32,
+            joiners: derived.changes.iter().filter(|c| c.kind == ChangeKind::Join).count() as u32,
+            leavers: leavers as u32,
+            changes: derived.changes.iter().filter(|c| c.kind == ChangeKind::Change).count() as u32,
+            absences: derived
+                .changes
+                .iter()
+                .filter(|c| matches!(c.kind, ChangeKind::AbsenceStart | ChangeKind::AbsenceEnd))
+                .count() as u32,
+            rekeys: derived.changes.iter().filter(|c| matches!(c.kind, ChangeKind::Rekey { .. })).count() as u32,
+            rejected: f.rejected.len() as u32,
+            ambiguities: f.ambiguities.len() as u32,
+            needing_backdating_approval: derived.changes.iter().filter(|c| c.needs_backdating_approval).count() as u32,
+            above_automatic_cover: above as u32,
+            members_before: members_before as u32,
+        };
+        f.changes = derived.changes;
+        let held = kind == FileKind::Full && trips_safety_check(&s.terms, members_before, leavers);
+        f.status = if held { FileStatus::Held } else { FileStatus::AwaitingApproval };
+        self.emit(GroupEvent::FileCompared {
+            scheme: s.id.clone(),
+            file: file.to_string(),
+            summary: f.summary.clone(),
+            rejected: f.rejected.clone(),
+            ambiguities: f.ambiguities.clone(),
+        });
+        if held {
+            self.raise(&s.id, ExceptionKind::FileHeld, file);
+            self.emit(GroupEvent::FileHeld {
+                scheme: s.id.clone(),
+                file: file.to_string(),
+                leavers: leavers as u32,
+                members: members_before as u32,
+            });
+        } else {
+            self.emit(GroupEvent::FileAwaitingApproval {
+                scheme: s.id.clone(),
+                file: file.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn approve_file(&mut self, s: &mut Scheme, actor: &str, today: NaiveDate, file: &str) -> Result<(), Reject> {
+        s.can_take_files()?;
+        let second = s.terms.second_approver;
+        let f = file_in(&mut s.files, file, &[FileStatus::AwaitingApproval])?;
+        if second && f.uploaded_by == actor {
+            return Err(Reject::new("second_approver", "this scheme needs approval by someone other than the uploader"));
+        }
+        f.approved_by = Some(actor.to_string());
+        let backdated = f.changes.iter().filter(|c| c.needs_backdating_approval).count() as u32;
+        self.emit(GroupEvent::FileApproved {
+            scheme: s.id.clone(),
+            file: file.to_string(),
+            by: actor.to_string(),
+        });
+        if backdated > 0 {
+            f.status = FileStatus::AwaitingBackdatingDecision;
+            self.emit(GroupEvent::FileAwaitingBackdatingDecision {
+                scheme: s.id.clone(),
+                file: file.to_string(),
+                changes: backdated,
+            });
+            return Ok(());
+        }
+        self.start_resolving(s, today, file);
+        Ok(())
+    }
+
+    /// Ask the customer master who the joiners are, or go straight to
+    /// applying where there is nobody to ask about.
+    fn start_resolving(&mut self, s: &mut Scheme, today: NaiveDate, file: &str) {
+        let named = s.terms.basis == MemberBasis::Named;
+        let Some(f) = s.files.get_mut(file) else { return };
+        let joiners: Vec<String> = f
+            .changes
+            .iter()
+            .filter(|c| named && c.kind == ChangeKind::Join)
+            .map(|c| c.employee_id.clone())
+            .collect();
+        if joiners.is_empty() {
+            self.queue_file(s, today, file);
+            return;
+        }
+        f.status = FileStatus::ResolvingParties;
+        f.unresolved = joiners.iter().cloned().collect();
+        self.send(Outbound::ResolveParties {
+            scheme: s.id.clone(),
+            file: file.to_string(),
+            employee_ids: joiners,
+        });
+    }
+
+    fn parties_resolved(
+        &mut self,
+        s: &mut Scheme,
+        today: NaiveDate,
+        file: &str,
+        resolutions: Vec<(String, crate::command::Resolution)>,
+        last: bool,
+    ) -> Result<(), Reject> {
+        let f = s.file_mut(file, &[FileStatus::ResolvingParties])?;
+        let mut waiting = f.unresolved.clone();
+        if let Some((unknown, _)) = resolutions.iter().find(|(id, _)| !waiting.remove(id)) {
+            return Err(Reject::new("not_waiting", format!("no joiner {unknown} is waiting to be resolved")));
+        }
+        if last && !waiting.is_empty() {
+            return Err(Reject::new("unresolved_joiners", format!("{} joiners have no answer", waiting.len())));
+        }
+        f.unresolved = waiting;
+        f.resolutions.extend(resolutions);
+        if last {
+            self.queue_file(s, today, file);
+        }
+        Ok(())
+    }
+
+    /// Turn an approved file's changes into queued work, in the file's
+    /// order, holding back anything dated in the future.
+    fn queue_file(&mut self, s: &mut Scheme, today: NaiveDate, file: &str) {
+        let Some(f) = s.files.get_mut(file) else { return };
+        f.status = FileStatus::Applying;
+        let changes = std::mem::take(&mut f.changes);
+        let mut resolutions = std::mem::take(&mut f.resolutions);
+        f.remaining = changes.len() as u32;
+        let mut scheduled = 0;
+        for change in changes {
+            let resolution = resolutions.remove(&change.employee_id).filter(|_| change.kind == ChangeKind::Join);
+            let due = change.effective;
+            s.next_item += 1;
+            let item = Item {
+                id: s.next_item,
+                file: Some(file.to_string()),
+                work: Work::Member {
+                    change,
+                    resolution,
+                    life: None,
+                },
+            };
+            if due > today {
+                scheduled += 1;
+                s.scheduled.insert((due, item.id), item);
+            } else {
+                s.queue.push_back(item);
+            }
+        }
+        if let Some(f) = s.files.get_mut(file) {
+            f.scheduled = scheduled;
+            f.remaining -= scheduled;
+        }
+        self.finish_file_if_done(s, file);
+        self.pump(s);
+    }
+
+    /// A file is applied once every change in it has been applied, refused
+    /// or scheduled for its day.
+    pub(crate) fn finish_file_if_done(&mut self, s: &mut Scheme, file: &str) {
+        let Some(f) = s.files.get_mut(file).filter(|f| f.status == FileStatus::Applying && f.remaining == 0) else {
+            return;
+        };
+        f.status = FileStatus::Applied;
+        let (applied, refused, scheduled) = (f.applied, f.refused, f.scheduled);
+        self.close_file(s, file);
+        self.emit(GroupEvent::FileApplied {
+            scheme: s.id.clone(),
+            file: file.to_string(),
+            applied,
+            refused,
+            scheduled,
+        });
+    }
+
+    /// Forget what no longer matters: old idempotency keys and files closed
+    /// long ago.
+    pub(crate) fn prune(&mut self, today: NaiveDate) {
+        let Some(cutoff) = today.checked_sub_days(Days::new(RETENTION_DAYS)) else {
+            return;
+        };
+        self.idempotency.retain(|_, s| s.on >= cutoff);
+        for s in self.schemes.values_mut() {
+            s.files.retain(|_, f| !f.status.is_closed() || f.received >= cutoff);
+        }
+    }
+}
