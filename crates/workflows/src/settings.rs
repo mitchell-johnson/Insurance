@@ -6,7 +6,7 @@ use std::time::Duration;
 use ic_azure::blob::{BlobContainer, MemoryWormStore};
 use ic_azure::credential::AzureCredential;
 use ic_azure::keyvault::{DevSigner, KeyVaultSigner};
-use ic_raft::ClusterClient;
+use ic_raft::{ClusterAuth, ClusterClient};
 
 use crate::steps::LedgerSteps;
 use crate::store::{DirWormStore, Signer, Store};
@@ -32,12 +32,16 @@ pub struct WorkerSettings {
     /// How long Temporal lets one attempt of a step run before it gives the
     /// step to another worker.
     pub step_timeout: Duration,
+    /// The cluster token presented to the ledger nodes.
+    pub auth: ClusterAuth,
 }
 
 impl WorkerSettings {
     /// Read settings through `get`, which is `std::env::var` in production.
     ///
     /// - `IC_NODES`: `host:port,host:port,...` of the ledger nodes. Required.
+    /// - `IC_CLUSTER_TOKEN_FILE`, `IC_CLUSTER_TOKEN`, `IC_CLUSTER_AUTH`: the
+    ///   token the nodes require; see [`ClusterAuth::from_lookup`]. Required.
     /// - `IC_BLOB_ENDPOINT`, `IC_MERKLE_CONTAINER` (default `merkle-roots`):
     ///   publish the root to immutable Blob Storage.
     /// - `IC_ROOT_DIR`: publish the root to a directory instead. Off Azure only.
@@ -51,6 +55,7 @@ impl WorkerSettings {
     /// The Temporal connection is read by the SDK from `TEMPORAL_ADDRESS`,
     /// `TEMPORAL_NAMESPACE` and the other `TEMPORAL_*` variables.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let auth = ClusterAuth::from_lookup(&get, |path| std::fs::read_to_string(path))?;
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         let nodes = ClusterClient::from_list(&get("IC_NODES").ok_or("IC_NODES is required")?)
             .map_err(|e| format!("IC_NODES: {e}"))?
@@ -86,6 +91,7 @@ impl WorkerSettings {
             task_queue: get("IC_TASK_QUEUE").unwrap_or_else(|| crate::temporal::TASK_QUEUE.to_string()),
             patience: Duration::from_secs(patience),
             step_timeout: Duration::from_secs(step_timeout),
+            auth,
         })
     }
 
@@ -101,6 +107,6 @@ impl WorkerSettings {
             Some((url, key)) => Signer::Azure(KeyVaultSigner::new(url, key, credential()?)),
             None => Signer::Dev(DevSigner),
         };
-        Ok(LedgerSteps::new(ClusterClient::new(self.nodes.clone()), signer, store).with_patience(self.patience))
+        Ok(LedgerSteps::new(ClusterClient::new(self.nodes.clone()).with_auth(self.auth.clone()), signer, store).with_patience(self.patience))
     }
 }

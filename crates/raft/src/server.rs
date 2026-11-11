@@ -18,6 +18,7 @@ use ic_ledger::PartitionId;
 use openraft::raft::ReadPolicy;
 use openraft::BasicNode;
 
+use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, EndOfDayView, Refusal};
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
@@ -36,6 +37,8 @@ pub struct Settings {
     /// Form the groups on first start. Set on exactly one node.
     pub bootstrap: bool,
     pub heartbeat_ms: u64,
+    /// The cluster token callers must present, and this node presents.
+    pub auth: ClusterAuth,
 }
 
 impl Settings {
@@ -48,7 +51,10 @@ impl Settings {
     /// - `IC_PARTITIONS`: default 1.
     /// - `IC_NODE_BOOTSTRAP`: `true` on the one node that forms the groups.
     /// - `IC_RAFT_HEARTBEAT_MS`: default 250; raise it for cross-region groups.
+    /// - `IC_CLUSTER_TOKEN_FILE`, `IC_CLUSTER_TOKEN`, `IC_CLUSTER_AUTH`: see
+    ///   [`ClusterAuth::from_lookup`]. One of them is required.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let auth = ClusterAuth::from_lookup(&get, |path| std::fs::read_to_string(path))?;
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         let required = |key: &str| get(key).ok_or_else(|| format!("{key} is required"));
         let id: NodeId = required("IC_NODE_ID")?.parse().map_err(|e| format!("IC_NODE_ID: {e}"))?;
@@ -84,6 +90,7 @@ impl Settings {
             peers,
             bootstrap: get("IC_NODE_BOOTSTRAP").is_some_and(|v| v == "true"),
             heartbeat_ms,
+            auth,
         })
     }
 }
@@ -93,6 +100,7 @@ pub struct Host {
     pub id: NodeId,
     pub groups: BTreeMap<PartitionId, Node>,
     peers: BTreeMap<NodeId, String>,
+    auth: ClusterAuth,
 }
 
 impl Host {
@@ -104,13 +112,21 @@ impl Host {
             let dir = settings.data_dir.join(format!("partition-{partition}"));
             let log = LogStore::open(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
             let config = node::config(&format!("partition-{partition}"), settings.heartbeat_ms)?;
-            let member = Node::start(settings.id, partition, log, Network::http(settings.id, partition), config).await?;
+            let member = Node::start(
+                settings.id,
+                partition,
+                log,
+                Network::http(settings.id, partition, settings.auth.clone()),
+                config,
+            )
+            .await?;
             groups.insert(partition, member);
         }
         Ok(Arc::new(Self {
             id: settings.id,
             groups,
             peers: settings.peers.clone(),
+            auth: settings.auth.clone(),
         }))
     }
 
@@ -251,7 +267,6 @@ async fn status(State(host): State<Arc<Host>>) -> Json<Vec<NodeStatus>> {
 /// The node's HTTP surface: client routes and, per partition, Raft's own.
 pub fn router(host: Arc<Host>) -> Router {
     let mut router = Router::new()
-        .route("/healthz", get(|| async { "ok" }))
         .route("/v1/status", get(status))
         .route("/v1/init", post(init))
         .route("/v1/partitions/{partition}/commands", post(propose))
@@ -260,7 +275,11 @@ pub fn router(host: Arc<Host>) -> Router {
     for (partition, member) in &host.groups {
         router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone()));
     }
+    // Everything above needs the cluster token. The probe does not: the
+    // kubelet has no token, and the probe says nothing about the ledger.
     router
+        .layer(axum::middleware::from_fn_with_state(host.auth.clone(), crate::auth::require))
+        .route("/healthz", get(|| async { "ok" }))
 }
 
 /// A node that is up: its groups, its listener and its relay.
@@ -280,12 +299,17 @@ pub async fn start(settings: Settings) -> Result<Running, String> {
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
     let listen = listener.local_addr().map_err(|e| e.to_string())?;
     tracing::info!(node = settings.id, %listen, partitions = settings.partitions, "ledger node listening");
+    if settings.auth.is_open() {
+        tracing::warn!("cluster authentication is off: any caller that reaches this port can write to the ledger");
+    }
     if settings.bootstrap {
         host.bootstrap().await?;
     }
     let relay = {
         let host = host.clone();
-        let client = ClusterClient::new(settings.peers.values().cloned().collect()).with_attempt_timeout(Duration::from_secs(2));
+        let client = ClusterClient::new(settings.peers.values().cloned().collect())
+            .with_attempt_timeout(Duration::from_secs(2))
+            .with_auth(settings.auth.clone());
         tokio::spawn(async move {
             loop {
                 host.relay_once(&client).await;

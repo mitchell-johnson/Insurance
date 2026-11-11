@@ -11,12 +11,14 @@
 //! - [`network`]: Raft RPCs between nodes, over HTTP or in process.
 //! - [`node`]: one member of a group, with the client-facing propose path.
 //! - [`server`]: a node process hosting a member of every partition's group.
+//! - [`auth`]: the cluster token every caller of a node must present.
 //! - [`client`]: how callers find a partition's leader and retry safely.
 //!
 //! The state machine is held in memory and rebuilt from the durable log on
 //! restart. The log is never compacted in this phase; snapshots are the next
 //! step and are noted in `docs/resilience.md`.
 
+pub mod auth;
 pub mod client;
 pub mod machine;
 pub mod network;
@@ -25,6 +27,7 @@ pub mod server;
 pub mod store;
 pub mod types;
 
+pub use auth::ClusterAuth;
 pub use client::{ClusterClient, EndOfDayView};
 pub use machine::Machine;
 pub use node::{Node, NodeStatus, ProposeError};

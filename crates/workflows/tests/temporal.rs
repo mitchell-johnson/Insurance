@@ -62,6 +62,7 @@ impl Fleet {
             .env("TEMPORAL_ADDRESS", &self.temporal)
             .env("TEMPORAL_NAMESPACE", "default")
             .env("IC_NODES", nodes)
+            .env("IC_CLUSTER_TOKEN", common::TOKEN)
             .env("IC_ROOT_DIR", &self.roots)
             .env("IC_TASK_QUEUE", &self.task_queue)
             // Short, so a stopped worker's step is handed on within seconds.
@@ -216,19 +217,20 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
 /// or start a run for a date nobody meant.
 #[test]
 fn the_worker_binary_names_what_is_wrong() {
-    let nodes = [("IC_NODES", "127.0.0.1:1")];
+    let nodes = [("IC_NODES", "127.0.0.1:1"), ("IC_CLUSTER_AUTH", "open")];
     let failing = |args: &[&str], env: &[(&str, &str)], names: &str| {
         let (ok, stderr) = run(args, env);
         assert!(!ok, "{args:?} should have failed");
         assert!(stderr.contains(names), "{stderr:?} does not mention {names:?}");
     };
-    failing(&[], &[], "IC_NODES is required");
+    failing(&[], &[], "IC_CLUSTER_TOKEN_FILE");
+    failing(&[], &[("IC_CLUSTER_AUTH", "open")], "IC_NODES is required");
     failing(&["reopen"], &nodes, "unknown command");
     failing(&["close"], &nodes, "usage: ic-worker close");
     failing(&["close", "2027-11-15"], &nodes, "usage: ic-worker close");
     failing(&["close", "yesterday", "2"], &nodes, "date:");
     failing(&["close", "2027-11-15", "many"], &nodes, "partitions:");
-    let unreachable = [("IC_NODES", "127.0.0.1:1"), ("TEMPORAL_ADDRESS", "127.0.0.1:1")];
+    let unreachable = [("IC_NODES", "127.0.0.1:1"), ("IC_CLUSTER_AUTH", "open"), ("TEMPORAL_ADDRESS", "127.0.0.1:1")];
     failing(&["close", "2027-11-15", "1"], &unreachable, "temporal:");
     failing(&[], &unreachable, "temporal:");
 }

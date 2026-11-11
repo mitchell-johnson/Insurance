@@ -18,11 +18,13 @@ use ic_core::{Command, Envelope, GroupId, PolicyId};
 use ic_product::{Frequency, Sex};
 use ic_raft::client::ClientError;
 use ic_raft::server::Settings;
-use ic_raft::{ClusterClient, NodeId, NodeStatus};
+use ic_raft::{ClusterAuth, ClusterClient, NodeId, NodeStatus};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
 
 const PATIENCE: Duration = Duration::from_secs(30);
+/// The cluster token of the test fleets.
+const TOKEN: &str = "test-cluster-token-0123456789abcdef";
 
 /// A port for a node to listen on. Taken from below the range the operating
 /// system hands to outgoing connections: a port from that range can be
@@ -52,7 +54,9 @@ struct Fleet {
 impl Fleet {
     async fn start(name: &str, size: u64, partitions: u16) -> Self {
         let addrs: BTreeMap<NodeId, String> = (1..=size).map(|id| (id, format!("127.0.0.1:{}", free_port()))).collect();
-        let client = ClusterClient::new(addrs.values().cloned().collect()).with_attempt_timeout(Duration::from_secs(2));
+        let client = ClusterClient::new(addrs.values().cloned().collect())
+            .with_attempt_timeout(Duration::from_secs(2))
+            .with_auth(ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap());
         let mut fleet = Self {
             dir: scratch(name),
             partitions,
@@ -77,6 +81,7 @@ impl Fleet {
             .env("IC_PARTITIONS", self.partitions.to_string())
             .env("IC_NODE_BOOTSTRAP", if id == 1 { "true" } else { "false" })
             .env("IC_RAFT_HEARTBEAT_MS", "50")
+            .env("IC_CLUSTER_TOKEN", TOKEN)
             .env("RUST_LOG", "info,openraft=warn")
             .stdout(self.log_file(id))
             .stderr(self.log_file(id))
@@ -345,7 +350,7 @@ async fn the_node_api_redirects_refuses_and_reports() {
     let statuses = fleet.settle().await;
     let leader = statuses[0].leader.unwrap();
     let follower = (1..=3).find(|id| *id != leader).unwrap();
-    let http = reqwest::Client::new();
+    let http = authorised();
     let addrs = fleet.addrs.clone();
     let base = |id: NodeId| format!("http://{}", addrs[&id]);
 
@@ -410,6 +415,7 @@ async fn a_node_stops_cleanly_and_refuses_bad_configuration() {
 
     let bad = Process::new(env!("CARGO_BIN_EXE_ic-node"))
         .env_clear()
+        .env("IC_CLUSTER_AUTH", "open")
         .env("IC_NODE_ID", "one")
         .output()
         .unwrap();
@@ -418,6 +424,127 @@ async fn a_node_stops_cleanly_and_refuses_bad_configuration() {
         String::from_utf8_lossy(&bad.stderr).contains("IC_NODE_ID"),
         "the error does not name the setting"
     );
+}
+
+/// An HTTP client that presents the fleet's cluster token.
+fn authorised() -> reqwest::Client {
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(reqwest::header::AUTHORIZATION, format!("Bearer {TOKEN}").parse().unwrap());
+    reqwest::Client::builder().default_headers(headers).build().unwrap()
+}
+
+/// Purpose: a node turns away every caller without the cluster token, on the client routes
+/// and on Raft's own routes alike, while its health probe stays open; a client holding the
+/// wrong token is told so; and a node started with a different token can neither read nor
+/// vote, so it cannot disturb the group.
+/// Why it matters: the node's port is the ledger. Anything in the cluster network that can
+/// reach it could otherwise post journal entries or, worse, cast Raft votes and append log
+/// entries as if it were a member. The token is what stands between a compromised
+/// neighbouring pod and the books.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_node_admits_only_callers_with_the_cluster_token() {
+    let mut fleet = Fleet::start("auth", 3, 1).await;
+    fleet.configure().await;
+    let before = fleet.settle().await;
+    let leader = before[0].leader.unwrap();
+    let base = format!("http://{}", fleet.addrs[&leader]);
+    let envelope = fleet.envelope("intruder", "leader", Command::AdvanceBusinessDate { to: d(2027, 11, 16) });
+
+    let anonymous = reqwest::Client::new();
+    for path in ["/v1/status", "/v1/partitions/0/end-of-day"] {
+        assert_eq!(
+            anonymous.get(format!("{base}{path}")).send().await.unwrap().status(),
+            401,
+            "{path} answered a caller with no token"
+        );
+    }
+    for path in ["/v1/partitions/0/commands", "/v1/init", "/raft/0/append", "/raft/0/vote", "/raft/0/pre-vote"] {
+        let no_token = anonymous.post(format!("{base}{path}")).json(&envelope).send().await.unwrap();
+        assert_eq!(no_token.status(), 401, "{path} answered a caller with no token");
+        assert_eq!(no_token.headers()["www-authenticate"], "Bearer");
+        let wrong = anonymous
+            .post(format!("{base}{path}"))
+            .bearer_auth("x".repeat(40))
+            .json(&envelope)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(wrong.status(), 401, "{path} answered a caller with the wrong token");
+        let basic = anonymous
+            .post(format!("{base}{path}"))
+            .basic_auth(TOKEN, None::<&str>)
+            .json(&envelope)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(basic.status(), 401, "{path} accepted the token in the wrong scheme");
+    }
+    assert_eq!(anonymous.get(format!("{base}/healthz")).send().await.unwrap().text().await.unwrap(), "ok");
+
+    let outsider = ClusterClient::new(fleet.addrs.values().cloned().collect()).with_auth(ClusterAuth::tokens(vec!["y".repeat(40)]).unwrap());
+    match outsider.propose(0, &envelope).await {
+        Err(ClientError::Unavailable { detail, .. }) => assert!(detail.contains("cluster token"), "{detail}"),
+        other => panic!("a client with the wrong token got {other:?}"),
+    }
+    assert!(outsider.status(&fleet.addrs[&leader]).await.is_err());
+
+    // Nothing the intruders sent reached the log.
+    let after = fleet.settle().await;
+    assert_eq!(after[0].state_hash, before[0].state_hash);
+    assert_eq!(after[0].last_log_index, before[0].last_log_index);
+    assert_eq!(after[0].business_date, Some(start_date()));
+}
+
+/// Purpose: the cluster token setting accepts a file or an inline list, supports two
+/// tokens at once for rotation, never prints a token, and refuses a missing, short or
+/// contradictory configuration.
+/// Why it matters: authentication that can be switched off by leaving a variable unset is
+/// not authentication. A node must refuse to start rather than run open by accident, and
+/// rotation must be possible without stopping the ledger.
+#[test]
+fn the_cluster_token_is_required_and_can_be_rotated() {
+    let old = "o".repeat(32);
+    let new = "n".repeat(40);
+    let lookup = |pairs: &[(&str, &str)], file: Option<&str>| {
+        let map: BTreeMap<String, String> = pairs.iter().map(|(k, v)| ((*k).to_string(), (*v).to_string())).collect();
+        let file = file.map(str::to_string);
+        ClusterAuth::from_lookup(
+            |key| map.get(key).cloned(),
+            |_| file.clone().ok_or_else(|| std::io::Error::other("no such file")),
+        )
+    };
+
+    // Rotation: the first token is sent, both are accepted.
+    let rotating = lookup(&[("IC_CLUSTER_TOKEN_FILE", "/secrets/token")], Some(&format!("{new}\n{old}\n"))).unwrap();
+    assert_eq!(rotating.outgoing(), Some(new.as_str()));
+    assert!(rotating.admits(Some(&format!("Bearer {old}"))));
+    assert!(rotating.admits(Some(&format!("Bearer {new}"))));
+    assert!(!rotating.admits(Some(&format!("Bearer {old}x"))));
+    assert!(!rotating.admits(Some(&old)), "a token without the Bearer scheme was accepted");
+    assert!(!rotating.admits(None));
+    assert!(!format!("{rotating:?}").contains(&new), "a token was printed");
+
+    let inline = lookup(&[("IC_CLUSTER_TOKEN", &format!("{old}, {new}")), ("IC_CLUSTER_AUTH", "token")], None).unwrap();
+    assert_eq!(inline.outgoing(), Some(old.as_str()));
+
+    let open = lookup(&[("IC_CLUSTER_AUTH", "open")], None).unwrap();
+    assert!(open.is_open());
+    assert!(open.admits(None));
+    assert_eq!(open.outgoing(), None);
+
+    let refused = |pairs: &[(&str, &str)], file: Option<&str>, names: &str| {
+        let error = lookup(pairs, file).expect_err("the configuration should have been refused");
+        assert!(error.contains(names), "{error:?} does not mention {names:?}");
+    };
+    refused(&[], None, "IC_CLUSTER_TOKEN_FILE");
+    refused(&[("IC_CLUSTER_AUTH", "token")], None, "IC_CLUSTER_TOKEN_FILE");
+    refused(&[("IC_CLUSTER_TOKEN", "short")], None, "too short");
+    refused(&[("IC_CLUSTER_TOKEN", " , ")], None, "no cluster token");
+    refused(&[("IC_CLUSTER_TOKEN_FILE", "/missing")], None, "/missing");
+    refused(&[("IC_CLUSTER_TOKEN_FILE", "/f"), ("IC_CLUSTER_TOKEN", &old)], Some(&old), "not both");
+    refused(&[("IC_CLUSTER_TOKEN", &old), ("IC_CLUSTER_AUTH", "open")], None, "contradicts");
+    refused(&[("IC_CLUSTER_AUTH", "maybe")], None, "token or open");
+    refused(&[("IC_CLUSTER_TOKEN", &old), ("IC_CLUSTER_AUTH", "maybe")], None, "token or open");
 }
 
 fn settings(pairs: &[(&str, &str)]) -> Result<Settings, String> {
@@ -436,8 +563,11 @@ fn node_settings_have_defaults_and_refuse_nonsense() {
         ("IC_NODE_ID", "2"),
         ("IC_NODE_PEERS", "1=a:7000, 2=b:7000 ,3=c:7000"),
         ("IC_NODE_DATA_DIR", "/data"),
+        ("IC_CLUSTER_TOKEN", TOKEN),
     ];
     let s = settings(&base).unwrap();
+    assert!(!s.auth.is_open());
+    assert_eq!(s.auth.outgoing(), Some(TOKEN));
     assert_eq!((s.id, s.partitions, s.bootstrap, s.heartbeat_ms), (2, 1, false, 250));
     assert_eq!(s.listen.to_string(), "0.0.0.0:7000");
     assert_eq!(s.data_dir, PathBuf::from("/data"));

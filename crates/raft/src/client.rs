@@ -15,6 +15,7 @@ use ic_ledger::PartitionId;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::auth::ClusterAuth;
 use crate::node::{NodeStatus, ProposeError};
 use crate::types::Reply;
 
@@ -72,6 +73,7 @@ pub struct ClusterClient {
     /// Where each partition's leader was last seen.
     leaders: Arc<Mutex<BTreeMap<PartitionId, String>>>,
     attempt_timeout: Duration,
+    auth: ClusterAuth,
 }
 
 enum Attempt<T> {
@@ -87,6 +89,7 @@ impl ClusterClient {
             nodes: Arc::new(nodes),
             leaders: Arc::new(Mutex::new(BTreeMap::new())),
             attempt_timeout: Duration::from_secs(5),
+            auth: ClusterAuth::open(),
         }
     }
 
@@ -97,6 +100,12 @@ impl ClusterClient {
             return Err("no node addresses given".to_string());
         }
         Ok(Self::new(nodes))
+    }
+
+    /// Present this cluster token to the nodes.
+    pub fn with_auth(mut self, auth: ClusterAuth) -> Self {
+        self.auth = auth;
+        self
     }
 
     pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
@@ -117,7 +126,7 @@ impl ClusterClient {
     }
 
     async fn attempt<T: DeserializeOwned>(&self, request: reqwest::RequestBuilder) -> Attempt<T> {
-        let response = match request.timeout(self.attempt_timeout).send().await {
+        let response = match self.auth.sign(request).timeout(self.attempt_timeout).send().await {
             Ok(r) => r,
             Err(e) => return Attempt::Failed(e.to_string()),
         };
@@ -127,6 +136,9 @@ impl ClusterClient {
                 Ok(body) => Attempt::Done(body),
                 Err(e) => Attempt::Failed(e.to_string()),
             };
+        }
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Attempt::Failed("the node refused this client's cluster token".to_string());
         }
         match response.json::<Refusal>().await {
             Ok(Refusal {
@@ -195,8 +207,8 @@ impl ClusterClient {
     /// Every partition's status as one node sees it.
     pub async fn status(&self, addr: &str) -> Result<Vec<NodeStatus>, String> {
         let response = self
-            .http
-            .get(format!("http://{addr}/v1/status"))
+            .auth
+            .sign(self.http.get(format!("http://{addr}/v1/status")))
             .timeout(self.attempt_timeout)
             .send()
             .await

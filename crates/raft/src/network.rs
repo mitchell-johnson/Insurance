@@ -19,6 +19,7 @@ use openraft::network::RPCOption;
 use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, VoteRequest, VoteResponse};
 use openraft::{AnyError, BasicNode, RaftNetworkFactory, RaftNetworkV2};
 
+use crate::auth::ClusterAuth;
 use crate::machine::Machine;
 use crate::types::{NodeId, TypeConfig};
 
@@ -89,7 +90,11 @@ fn unreachable(message: impl ToString) -> Unreachable<TypeConfig> {
 #[derive(Clone)]
 enum Transport {
     Local(LocalNet),
-    Http { client: reqwest::Client, partition: PartitionId },
+    Http {
+        client: reqwest::Client,
+        partition: PartitionId,
+        auth: ClusterAuth,
+    },
 }
 
 /// The network factory handed to openraft: it makes one connection per peer.
@@ -108,12 +113,13 @@ impl Network {
     }
 
     /// Peers are reached at `http://{addr}/raft/{partition}/...`.
-    pub fn http(from: NodeId, partition: PartitionId) -> Self {
+    pub fn http(from: NodeId, partition: PartitionId, auth: ClusterAuth) -> Self {
         Self {
             from,
             transport: Transport::Http {
                 client: reqwest::Client::new(),
                 partition,
+                auth,
             },
         }
     }
@@ -147,6 +153,7 @@ impl Connection {
     async fn post<Req, Resp>(
         &self,
         client: &reqwest::Client,
+        auth: &ClusterAuth,
         partition: PartitionId,
         path: &str,
         body: &Req,
@@ -157,7 +164,13 @@ impl Connection {
         Resp: serde::de::DeserializeOwned,
     {
         let url = format!("http://{}/raft/{partition}/{path}", self.addr);
-        let response = client.post(url).timeout(option.soft_ttl()).json(body).send().await.map_err(unreachable)?;
+        let response = auth
+            .sign(client.post(url))
+            .timeout(option.soft_ttl())
+            .json(body)
+            .send()
+            .await
+            .map_err(unreachable)?;
         let wire: Wire<Resp> = response.error_for_status().map_err(unreachable)?.json().await.map_err(unreachable)?;
         // A peer that answered with an error is treated as unreachable so the
         // sender backs off instead of retrying at once.
@@ -171,9 +184,9 @@ impl RaftNetworkV2<TypeConfig> for Connection {
     async fn append_entries(&mut self, rpc: AppendEntriesRequest<TypeConfig>, option: RPCOption) -> Result<AppendResult<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(self.from, self.to)?.append_entries(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition } => {
+            Transport::Http { client, partition, auth } => {
                 let (prev, last) = (rpc.prev_log_id, rpc.last_log_id());
-                let response: AppendEntriesResponse<TypeConfig> = self.post(client, *partition, "append", &rpc, &option).await?;
+                let response: AppendEntriesResponse<TypeConfig> = self.post(client, auth, *partition, "append", &rpc, &option).await?;
                 Ok(response.into_append_result(prev, last))
             }
         }
@@ -182,14 +195,14 @@ impl RaftNetworkV2<TypeConfig> for Connection {
     async fn vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(self.from, self.to)?.vote(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition } => Ok(self.post(client, *partition, "vote", &rpc, &option).await?),
+            Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "vote", &rpc, &option).await?),
         }
     }
 
     async fn pre_vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(self.from, self.to)?.pre_vote(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition } => Ok(self.post(client, *partition, "pre-vote", &rpc, &option).await?),
+            Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "pre-vote", &rpc, &option).await?),
         }
     }
 

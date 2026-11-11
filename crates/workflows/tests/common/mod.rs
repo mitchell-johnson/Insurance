@@ -18,11 +18,14 @@ use ic_money::{Currency::NZD, Money};
 use ic_product::{Frequency, Sex};
 use ic_raft::client::fresh_salt;
 use ic_raft::server::{self, Running, Settings};
-use ic_raft::{ClusterClient, NodeId};
+use ic_raft::{ClusterAuth, ClusterClient, NodeId};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
 use ic_sim::Cluster;
 use ic_workflows::{EndOfDayInput, LedgerSteps};
+
+/// The cluster token of the test ledgers.
+pub const TOKEN: &str = "test-cluster-token-0123456789abcdef";
 
 pub const PATIENCE: Duration = Duration::from_secs(30);
 
@@ -127,6 +130,7 @@ impl Ledger {
     pub async fn start(name: &str, size: u64, partitions: PartitionId) -> Self {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=size).map(|id| (id, format!("127.0.0.1:{}", free_port()))).collect();
+        let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
         let settings = peers
             .iter()
             .map(|(id, addr)| {
@@ -138,11 +142,14 @@ impl Ledger {
                     peers: peers.clone(),
                     bootstrap: *id == 1,
                     heartbeat_ms: 50,
+                    auth: auth.clone(),
                 };
                 (*id, s)
             })
             .collect();
-        let client = ClusterClient::new(peers.values().cloned().collect()).with_attempt_timeout(Duration::from_secs(2));
+        let client = ClusterClient::new(peers.values().cloned().collect())
+            .with_attempt_timeout(Duration::from_secs(2))
+            .with_auth(auth.clone());
         let mut ledger = Self {
             partitions,
             settings,
