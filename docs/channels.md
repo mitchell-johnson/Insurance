@@ -24,6 +24,7 @@ A session ends early when the module says so: staff offboarding, a revoked devic
 
 A customer enrols a phone by its public key (ECDSA P-256, in the phone's secure hardware). The first device needs an identity verification reference; each later one is approved by a device already enrolled.
 
+- **A lost phone.** A person who still has a device adds another from it. One who has none is verified again and the identity service enrols the new device as a recovery: every device they had is revoked and every session closed in the same step. A revoked device that calls again is answered `401 device_revoked`, which is the app's instruction to wipe what it holds.
 - **Proof of device.** A request from the app carries `x-device-id` and `x-device-proof: <timestamp>.<signature>`, signed over the timestamp, method, path and the SHA-256 of the body. Offline data (`/app/v1/sync`) and challenges are given only to a device that proves itself.
 - **Signing a change.** To approve something, the app asks for a challenge for the exact action (`POST /app/v1/challenges`), signs it on the device and sends the signature with the action. A challenge is for one action, one device, used once and short-lived. A signature for one change cannot approve another.
 - **What needs it.** A request an adviser or a member of staff prepares for a customer waits in `awaiting_approval` until the customer signs it. Nobody approves for the customer.
