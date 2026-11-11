@@ -409,6 +409,7 @@ fn offer(p: &mut Proposal, life: &LifeId, cfg: &Config, cx: &mut Cx) -> Result<(
     let f = life_mut(p, life)?;
     f.offers.push(offer);
     f.stage = Stage::OfferOpen;
+    f.reconfirm = false;
     Ok(())
 }
 
@@ -442,12 +443,25 @@ pub(crate) fn make_effective(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: 
             life: Some(life.clone()),
             reasons,
         });
+        dropped_out(p, life);
     } else if d.all_standard() || matches!(d.source, DecisionSource::Migrated { .. }) {
         life_mut(p, life)?.stage = Stage::Accepted;
     } else {
         offer(p, life, cfg, cx)?;
     }
     settle(cfg, p, cx)
+}
+
+/// A life is settled without cover. Every other life applied for a
+/// contract that included it, so each is asked again before issue.
+fn dropped_out(p: &mut Proposal, life: &LifeId) {
+    for f in p
+        .lives
+        .values_mut()
+        .filter(|f| &f.life != life && !matches!(f.stage, Stage::Declined | Stage::OfferDeclined))
+    {
+        f.reconfirm = true;
+    }
 }
 
 /// When every life is settled, the proposal ends: as one command to the
@@ -471,25 +485,17 @@ pub(crate) fn settle(cfg: &Config, p: &mut Proposal, cx: &mut Cx) -> Result<(), 
         end_proposal(p, cx);
         return Ok(());
     }
-    if accepted.len() < p.lives.len() {
-        // The contract is no longer the one applied for: the lives that were
-        // accepted are asked whether they still want it.
-        let mut asked = false;
-        for life in &accepted {
-            let f = life_ref(p, life)?;
-            let reference = f.effective_decision().map(|d| d.reference.clone());
-            if !f
-                .offers
-                .iter()
-                .any(|o| o.status == OfferStatus::Accepted && Some(&o.decision) == reference.as_ref())
-            {
-                offer(p, life, cfg, cx)?;
-                asked = true;
-            }
+    // A life dropped out: the contract is no longer the one applied for,
+    // so each life that was accepted is asked whether they still want it.
+    let mut asked = false;
+    for life in &accepted {
+        if life_ref(p, life)?.reconfirm {
+            offer(p, life, cfg, cx)?;
+            asked = true;
         }
-        if asked {
-            return Ok(());
-        }
+    }
+    if asked {
+        return Ok(());
     }
     issue(p, cx)
 }
@@ -669,5 +675,6 @@ pub(crate) fn offer_not_taken(cfg: &Config, p: &mut Proposal, life: &LifeId, sta
     }
     f.stage = Stage::OfferDeclined;
     release_all(f, "offer_not_taken", cx);
+    dropped_out(p, life);
     settle(cfg, p, cx)
 }

@@ -481,6 +481,10 @@ pub struct LifeFile {
     pub adviser_access_ended: Option<AccessEnd>,
     /// A delegate's file obtained under audit access: vault reference and hash.
     pub delegate_file: Option<(String, String)>,
+    /// Another life on the proposal dropped out after this one applied: the
+    /// contract is no longer the one applied for, and this life is asked
+    /// whether they still want it before anything is issued.
+    pub reconfirm: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -513,6 +517,7 @@ impl LifeFile {
             reservations_made: 0,
             adviser_access_ended: None,
             delegate_file: None,
+            reconfirm: false,
         }
     }
     pub fn current_decision(&self) -> Option<&Decision> {
