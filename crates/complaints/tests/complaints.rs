@@ -43,7 +43,16 @@ fn timers_are_versioned_and_checked() {
     assert_eq!(kit.err("config", "ops", bad(|t| t.decide_days = 50)), "invalid");
     assert_eq!(kit.err("config", "ops", bad(|t| t.acknowledge_days = 30)), "invalid");
     assert_eq!(kit.err("config", "ops", bad(|t| t.front_line_limit_minor = -1)), "invalid");
-    assert_eq!(kit.err("config", "ops", bad(|t| drop(t.ex_gratia_limits_minor.insert(2, -5)))), "invalid");
+    assert_eq!(
+        kit.err(
+            "config",
+            "ops",
+            bad(|t| {
+                t.ex_gratia_limits_minor.insert(2, -5);
+            })
+        ),
+        "invalid"
+    );
     assert_eq!(kit.err("config", "ops", bad(|t| t.cause_codes.clear())), "invalid");
 
     assert_eq!(

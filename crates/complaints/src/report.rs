@@ -334,7 +334,15 @@ impl ComplaintsState {
                 next_due: self.running(c).into_iter().min_by_key(|(_, due)| *due),
             })
             .collect();
-        items.sort_by_key(|i| (!i.needs_trained_handler, i.next_due.map(|(_, due)| due), i.complaint.clone()));
+        // A complaint with nothing due comes after every one that has.
+        items.sort_by_key(|i| {
+            (
+                !i.needs_trained_handler,
+                i.next_due.is_none(),
+                i.next_due.map(|(_, due)| due),
+                i.complaint.clone(),
+            )
+        });
         items.truncate(limit);
         items
     }
