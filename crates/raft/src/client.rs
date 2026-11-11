@@ -204,6 +204,18 @@ impl ClusterClient {
             .await
     }
 
+    /// Set the voters of a partition's group: `id -> host:port`. Members
+    /// being added are caught up before the switch. See [`crate::Node::set_members`].
+    pub async fn set_members(&self, partition: PartitionId, members: &BTreeMap<crate::NodeId, String>) -> Result<(), ClientError> {
+        // Catching a new member up can mean sending it the whole partition.
+        let patient = self.clone().with_attempt_timeout(Duration::from_secs(300));
+        patient
+            .sweep::<()>(partition, |addr| {
+                patient.http.put(format!("http://{addr}/v1/partitions/{partition}/members")).json(members)
+            })
+            .await
+    }
+
     /// Every partition's status as one node sees it.
     pub async fn status(&self, addr: &str) -> Result<Vec<NodeStatus>, String> {
         let response = self

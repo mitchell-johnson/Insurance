@@ -6,6 +6,9 @@
 //! file is only ever appended to. An append is acknowledged after `fsync`.
 //!
 //! The vote and the commit index are small files replaced atomically.
+//!
+//! When a snapshot covers the start of the log, those entries are dropped
+//! and the journal is rewritten without them.
 
 use std::collections::BTreeMap;
 use std::fmt::Debug;
@@ -33,12 +36,16 @@ enum Record {
     Append(Entry),
     /// Discard every entry after this index. `None` discards everything.
     TruncateAfter(Option<u64>),
+    /// Every entry up to and including this one is covered by a snapshot and
+    /// has been dropped.
+    Purged(LogId),
 }
 
 struct Inner {
     entries: BTreeMap<u64, Entry>,
     vote: Option<Vote>,
     committed: Option<LogId>,
+    purged: Option<LogId>,
     dir: Option<PathBuf>,
     journal: Option<File>,
 }
@@ -54,7 +61,7 @@ fn invalid(e: impl ToString) -> io::Error {
 }
 
 /// Replace a small file atomically and durably.
-fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
     let mut f = File::create(&tmp)?;
     f.write_all(bytes)?;
@@ -78,6 +85,7 @@ impl LogStore {
                 entries: BTreeMap::new(),
                 vote: None,
                 committed: None,
+                purged: None,
                 dir: None,
                 journal: None,
             })),
@@ -90,6 +98,7 @@ impl LogStore {
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("log.jsonl");
         let mut entries = BTreeMap::new();
+        let mut purged = None;
         if path.exists() {
             let mut reader = BufReader::new(File::open(&path)?);
             let mut line = String::new();
@@ -114,6 +123,10 @@ impl LogStore {
                         entries.split_off(&(index + 1));
                     }
                     Record::TruncateAfter(None) => entries.clear(),
+                    Record::Purged(upto) => {
+                        entries = entries.split_off(&(upto.index() + 1));
+                        purged = Some(upto);
+                    }
                 }
                 good += n as u64;
             }
@@ -128,6 +141,7 @@ impl LogStore {
                 entries,
                 vote,
                 committed,
+                purged,
                 dir: Some(dir),
                 journal: Some(journal),
             })),
@@ -144,7 +158,14 @@ impl LogStore {
         self.lock().entries.keys().next_back().copied()
     }
 
-    /// The committed command envelopes, in order: what an auditor replays.
+    /// Index of the first entry still held: one past the last one dropped
+    /// behind a snapshot.
+    pub fn first_index(&self) -> Option<u64> {
+        self.lock().entries.keys().next().copied()
+    }
+
+    /// The committed command envelopes still in the log, in order: what an
+    /// auditor replays on top of the snapshot before them.
     pub fn commands(&self) -> Vec<(u64, ic_core::Envelope)> {
         let inner = self.lock();
         let upto = inner.committed.as_ref().map(|c| c.index());
@@ -153,7 +174,7 @@ impl LogStore {
             .values()
             .filter(|e| upto.is_some_and(|u| e.index() <= u))
             .filter_map(|e| match &e.payload {
-                openraft::EntryPayload::Normal(p) => Some((e.index(), p.0.clone())),
+                openraft::EntryPayload::Normal(crate::types::Proposal::Command(envelope)) => Some((e.index(), envelope.clone())),
                 _ => None,
             })
             .collect()
@@ -191,7 +212,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
     async fn get_log_state(&mut self) -> Result<LogState<TypeConfig>, io::Error> {
         let inner = self.lock();
         Ok(LogState {
-            last_purged_log_id: None,
+            last_purged_log_id: inner.purged,
             last_log_id: inner.entries.values().next_back().map(RaftEntry::log_id),
         })
     }
@@ -263,9 +284,24 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         Ok(())
     }
 
-    async fn purge(&mut self, _log_id: LogId) -> Result<(), io::Error> {
-        // The log is the ledger's history and the source the state machine is
-        // rebuilt from. It is not compacted until snapshots exist.
-        Err(io::Error::new(io::ErrorKind::Unsupported, "the ledger log is never purged in this phase"))
+    async fn purge(&mut self, log_id: LogId) -> Result<(), io::Error> {
+        let mut inner = self.lock();
+        let keep = inner.entries.split_off(&(log_id.index() + 1));
+        // Rewrite the journal with only what is kept, beside the old one,
+        // and swap it in. A crash before the swap leaves the old journal,
+        // whose extra entries a snapshot already covers; after it, the new.
+        if let Some(dir) = inner.dir.clone() {
+            let mut buf = Vec::new();
+            for record in std::iter::once(Record::Purged(log_id)).chain(keep.values().cloned().map(Record::Append)) {
+                serde_json::to_writer(&mut buf, &record).map_err(invalid)?;
+                buf.push(b'\n');
+            }
+            let path = dir.join("log.jsonl");
+            write_atomic(&path, &buf)?;
+            inner.journal = Some(OpenOptions::new().append(true).open(&path)?);
+        }
+        inner.entries = keep;
+        inner.purged = Some(log_id);
+        Ok(())
     }
 }

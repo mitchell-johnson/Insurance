@@ -1,7 +1,7 @@
 //! One member of a partition's Raft group.
 
 use openraft::async_runtime::WatchReceiver;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,10 +12,11 @@ use openraft::errors::{ClientWriteError, RaftError};
 use openraft::{BasicNode, Config, ServerState, SnapshotPolicy};
 use serde::{Deserialize, Serialize};
 
-use crate::machine::Machine;
+use crate::machine::{Backlog, Machine};
 use crate::network::{Network, RaftGroup};
+use crate::peers::Identity;
 use crate::store::LogStore;
-use crate::types::{NodeId, Proposal, Reply};
+use crate::types::{Housekeeping, NodeId, Proposal, Reply};
 
 /// Why a proposal was not applied by this member. In every case the command
 /// may be retried with the same idempotency key: the core applies it once.
@@ -48,6 +49,12 @@ pub struct NodeStatus {
     pub ledger_head: String,
     pub ledger_entries: u64,
     pub policies: u64,
+    /// The group's voters as this member knows them.
+    pub voters: Vec<NodeId>,
+    /// The first log entry still held; earlier ones are behind a snapshot.
+    pub first_log_index: Option<u64>,
+    /// Output waiting for the leader's host to move it on.
+    pub backlog: Backlog,
 }
 
 pub struct Node {
@@ -56,19 +63,25 @@ pub struct Node {
     pub raft: RaftGroup,
     pub machine: Machine,
     pub log: LogStore,
+    pub identity: Identity,
 }
 
 /// Timings for a group whose members are a few milliseconds apart. A
 /// cross-region group raises the heartbeat and election timeouts to match
 /// its round-trip times.
-pub fn config(cluster_name: &str, heartbeat_ms: u64) -> Result<Arc<Config>, String> {
+pub fn config(cluster_name: &str, heartbeat_ms: u64, snapshot_every: u64) -> Result<Arc<Config>, String> {
     let config = Config {
         cluster_name: cluster_name.to_string(),
         heartbeat_interval: heartbeat_ms,
         election_timeout_min: heartbeat_ms * 4,
         election_timeout_max: heartbeat_ms * 8,
-        // The log is the ledger's history; it is not compacted in this phase.
-        snapshot_policy: SnapshotPolicy::Never,
+        // A snapshot once the log has grown this much; the log behind it is
+        // then dropped, less a tail kept so a briefly absent member can
+        // catch up from the log instead of being sent the whole state.
+        snapshot_policy: SnapshotPolicy::LogsSinceLast(snapshot_every),
+        max_in_snapshot_log_to_keep: snapshot_every / 5,
+        // A snapshot is the whole partition; give it time to cross regions.
+        install_snapshot_timeout: 120_000,
         ..Config::default()
     };
     config.validate().map(Arc::new).map_err(|e| e.to_string())
@@ -77,8 +90,15 @@ pub fn config(cluster_name: &str, heartbeat_ms: u64) -> Result<Arc<Config>, Stri
 impl Node {
     /// Start a member over its log. An existing log is replayed: the member
     /// comes back with the state it had and rejoins its group.
-    pub async fn start(id: NodeId, partition: PartitionId, log: LogStore, network: Network, config: Arc<Config>) -> Result<Self, String> {
-        let machine = Machine::new(partition);
+    pub async fn start(
+        identity: Identity,
+        partition: PartitionId,
+        log: LogStore,
+        machine: Machine,
+        network: Network,
+        config: Arc<Config>,
+    ) -> Result<Self, String> {
+        let id = identity.id;
         let raft = RaftGroup::new(id, config, network, log.clone(), machine.clone())
             .await
             .map_err(|e| e.to_string())?;
@@ -88,6 +108,7 @@ impl Node {
             raft,
             machine,
             log,
+            identity,
         })
     }
 
@@ -100,18 +121,56 @@ impl Node {
         self.raft.initialize(members).await.map_err(|e| e.to_string())
     }
 
-    /// Replicate a command and apply it. Returns once a majority has it
-    /// durably and this member has applied it.
-    pub async fn propose(&self, envelope: Envelope) -> Result<Reply, ProposeError> {
+    async fn write(&self, proposal: Proposal) -> Result<Reply, ProposeError> {
         let forward = |f: openraft::errors::ForwardToLeader<crate::types::TypeConfig>| ProposeError::NotLeader {
             leader: f.leader_id,
             addr: f.leader_node.map(|n| n.addr),
         };
-        match self.raft.client_write(Proposal(envelope)).await {
+        match self.raft.client_write(proposal).await {
             Ok(response) => Ok(response.data),
             Err(RaftError::APIError(ClientWriteError::ForwardToLeader(f))) => Err(forward(f)),
             Err(e) => Err(ProposeError::Unknown(e.to_string())),
         }
+    }
+
+    /// Replicate a command and apply it. Returns once a majority has it
+    /// durably and this member has applied it.
+    pub async fn propose(&self, envelope: Envelope) -> Result<Reply, ProposeError> {
+        self.write(Proposal::Command(envelope)).await
+    }
+
+    /// Change who the group's voters are. Members being added are first
+    /// brought up to date as learners, so the group never depends on a member
+    /// that is still catching up; then the voter set is switched in one
+    /// logged step. Must be asked of the leader.
+    ///
+    /// This is how a failed node is replaced: start a new node with a new
+    /// number and call this with the old number left out and the new one in.
+    pub async fn set_members(&self, members: BTreeMap<NodeId, String>) -> Result<(), ProposeError> {
+        let forward = |f: openraft::errors::ForwardToLeader<crate::types::TypeConfig>| ProposeError::NotLeader {
+            leader: f.leader_id,
+            addr: f.leader_node.map(|n| n.addr),
+        };
+        let unknown = |e: RaftError<crate::types::TypeConfig, ClientWriteError<crate::types::TypeConfig>>| match e {
+            RaftError::APIError(ClientWriteError::ForwardToLeader(f)) => forward(f),
+            other => ProposeError::Unknown(other.to_string()),
+        };
+        let voters: BTreeSet<NodeId> = self.raft.voter_ids().collect();
+        for (id, addr) in &members {
+            if !voters.contains(id) {
+                self.raft.add_learner(*id, BasicNode::new(addr.clone()), true).await.map_err(unknown)?;
+            }
+        }
+        let wanted: BTreeSet<NodeId> = members.keys().copied().collect();
+        if wanted != voters {
+            self.raft.change_membership(wanted, false).await.map_err(unknown)?;
+        }
+        Ok(())
+    }
+
+    /// Record, through the log, that outputs have left the node.
+    pub async fn housekeep(&self, done: Housekeeping) -> Result<(), ProposeError> {
+        self.write(Proposal::Housekeeping(done)).await.map(|_| ())
     }
 
     pub fn status(&self) -> NodeStatus {
@@ -144,6 +203,9 @@ impl Node {
             ledger_head,
             ledger_entries,
             policies,
+            voters: self.raft.voter_ids().collect(),
+            first_log_index: self.log.first_index(),
+            backlog: self.machine.backlog(),
         }
     }
 

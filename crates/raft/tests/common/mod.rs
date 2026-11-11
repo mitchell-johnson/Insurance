@@ -16,7 +16,7 @@ use ic_log::StateMachine as _;
 use ic_money::{Currency::NZD, Money};
 use ic_product::{Frequency, Sex};
 use ic_raft::network::{LocalNet, Network};
-use ic_raft::{LogStore, Node, NodeId, NodeStatus, Reply};
+use ic_raft::{Identity, LogStore, Machine, Node, NodeId, NodeStatus, Reply};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
 use openraft::{BasicNode, Config};
@@ -58,9 +58,16 @@ pub struct Group {
 impl Group {
     /// Start `size` members with durable logs and form the group.
     pub async fn start(name: &str, size: u64) -> Self {
+        // Far more entries than any test writes: no snapshot is taken.
+        Self::start_snapshotting(name, size, 100_000).await
+    }
+
+    /// Start a group that snapshots, and drops the log behind the snapshot,
+    /// every `snapshot_every` entries.
+    pub async fn start_snapshotting(name: &str, size: u64, snapshot_every: u64) -> Self {
         let mut g = Self {
             net: LocalNet::default(),
-            config: ic_raft::node::config("test", 50).unwrap(),
+            config: ic_raft::node::config("test", 50, snapshot_every).unwrap(),
             dir: scratch(name),
             size,
             nodes: BTreeMap::new(),
@@ -83,10 +90,19 @@ impl Group {
     /// Start a member's process over whatever its disk holds.
     pub async fn boot(&mut self, id: NodeId) {
         let log = LogStore::open(self.disk(id)).unwrap();
-        let node = Node::start(id, PARTITION, log, Network::local(id, self.net.clone()), self.config.clone())
-            .await
-            .unwrap();
-        self.net.register(id, node.raft.clone());
+        let machine = Machine::open(PARTITION, self.disk(id)).unwrap();
+        let identity = Identity::open(id, self.disk(id)).unwrap();
+        let node = Node::start(
+            identity.clone(),
+            PARTITION,
+            log,
+            machine,
+            Network::local(identity, self.net.clone()),
+            self.config.clone(),
+        )
+        .await
+        .unwrap();
+        self.net.register(node.identity.clone(), node.raft.clone());
         self.cut_off.remove(&id);
         self.nodes.insert(id, node);
     }

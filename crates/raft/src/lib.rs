@@ -10,19 +10,24 @@
 //! - [`machine`]: the core's deterministic state machine driven by the log.
 //! - [`network`]: Raft RPCs between nodes, over HTTP or in process.
 //! - [`node`]: one member of a group, with the client-facing propose path.
+//! - [`peers`]: each node's durable identity, so a node that lost its disk
+//!   cannot return under its old number.
 //! - [`server`]: a node process hosting a member of every partition's group.
 //! - [`auth`]: the cluster token every caller of a node must present.
 //! - [`client`]: how callers find a partition's leader and retry safely.
 //!
-//! The state machine is held in memory and rebuilt from the durable log on
-//! restart. The log is never compacted in this phase; snapshots are the next
-//! step and are noted in `docs/resilience.md`.
+//! The state machine is held in memory. It is snapshotted to disk as the log
+//! grows, the log behind a snapshot is dropped, and a restarted member loads
+//! its snapshot and replays the log after it. Journal entries, events and
+//! cross-partition messages stay in the replicated state until the leader
+//! has sealed, published or delivered them.
 
 pub mod auth;
 pub mod client;
 pub mod machine;
 pub mod network;
 pub mod node;
+pub mod peers;
 pub mod server;
 pub mod store;
 pub mod types;
@@ -31,5 +36,6 @@ pub use auth::ClusterAuth;
 pub use client::{ClusterClient, EndOfDayView};
 pub use machine::Machine;
 pub use node::{Node, NodeStatus, ProposeError};
+pub use peers::Identity;
 pub use store::LogStore;
 pub use types::{NodeId, Proposal, Reply, TypeConfig};

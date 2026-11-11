@@ -3,13 +3,13 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use ic_azure::blob::{BlobContainer, MemoryWormStore};
+use ic_azure::blob::{BlobContainer, DirWormStore, MemoryWormStore};
 use ic_azure::credential::AzureCredential;
 use ic_azure::keyvault::{DevSigner, KeyVaultSigner};
 use ic_raft::{ClusterAuth, ClusterClient};
 
 use crate::steps::LedgerSteps;
-use crate::store::{DirWormStore, Signer, Store};
+use crate::store::{Signer, Store};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RootStore {

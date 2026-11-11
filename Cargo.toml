@@ -75,6 +75,8 @@ codegen-units = 1
 # Smaller, faster debug builds: line numbers for backtraces, nothing more.
 [profile.dev]
 debug = "line-tables-only"
+incremental = false
 
 [profile.test]
 debug = "line-tables-only"
+incremental = false

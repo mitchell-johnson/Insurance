@@ -187,8 +187,13 @@ async fn sealed_segments_link_to_the_chain_and_replay_from_the_cold_tier() {
     // segments link to each other exactly as entries do
     assert_eq!(a.last_hash, b.prev_hash);
     assert_eq!(b.last_hash, c.state(0).ledger.head());
-    // sealing the same range twice is refused by the write-once store
-    assert!(seal_segment(&store, &journal[..cut]).await.is_err());
+    // sealing the same entries again changes nothing: a new leader repeats
+    // what a failed one may already have done
+    assert_eq!(seal_segment(&store, &journal[..cut]).await.unwrap(), a);
+    // different content over a sealed range is refused by the write-once store
+    let mut altered = journal[..cut].to_vec();
+    altered[0].salt.push('x');
+    assert!(matches!(seal_segment(&store, &altered).await, Err(AzureError::AlreadyExists(_))));
     // a gap is refused
     assert!(seal_segment(&store, &[journal[0].clone(), journal[2].clone()]).await.is_err());
     // fetched back, the two segments verify as one chain

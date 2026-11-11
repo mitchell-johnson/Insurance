@@ -14,10 +14,13 @@ use std::process::{Child, Command as Process, Stdio};
 use std::time::Duration;
 
 use common::{d, receipt, scratch, start_date};
+use ic_azure::blob::DirWormStore;
+use ic_azure::cold_tier::fetch_segment;
 use ic_core::{Command, Envelope, GroupId, PolicyId};
+use ic_ledger::verify_chain;
 use ic_product::{Frequency, Sex};
 use ic_raft::client::ClientError;
-use ic_raft::server::Settings;
+use ic_raft::server::{ColdTarget, EventTarget, Settings};
 use ic_raft::{ClusterAuth, ClusterClient, NodeId, NodeStatus};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
@@ -49,10 +52,17 @@ struct Fleet {
     running: BTreeMap<NodeId, Child>,
     client: ClusterClient,
     counter: u64,
+    /// Log entries between snapshots.
+    snapshot_every: u64,
 }
 
 impl Fleet {
     async fn start(name: &str, size: u64, partitions: u16) -> Self {
+        // Far more entries than most tests write: no snapshot is taken.
+        Self::start_snapshotting(name, size, partitions, 100_000).await
+    }
+
+    async fn start_snapshotting(name: &str, size: u64, partitions: u16, snapshot_every: u64) -> Self {
         let addrs: BTreeMap<NodeId, String> = (1..=size).map(|id| (id, format!("127.0.0.1:{}", free_port()))).collect();
         let client = ClusterClient::new(addrs.values().cloned().collect())
             .with_attempt_timeout(Duration::from_secs(2))
@@ -64,6 +74,7 @@ impl Fleet {
             running: BTreeMap::new(),
             client,
             counter: 0,
+            snapshot_every,
         };
         for id in 1..=size {
             fleet.spawn(id);
@@ -82,6 +93,10 @@ impl Fleet {
             .env("IC_NODE_BOOTSTRAP", if id == 1 { "true" } else { "false" })
             .env("IC_RAFT_HEARTBEAT_MS", "50")
             .env("IC_CLUSTER_TOKEN", TOKEN)
+            .env("IC_COLD_DIR", self.dir.join("cold"))
+            .env("IC_EVENT_SINK", "discard")
+            .env("IC_SEGMENT_ENTRIES", "20")
+            .env("IC_RAFT_SNAPSHOT_EVERY", self.snapshot_every.to_string())
             .env("RUST_LOG", "info,openraft=warn")
             .stdout(self.log_file(id))
             .stderr(self.log_file(id))
@@ -333,6 +348,16 @@ async fn a_transfer_between_partitions_survives_a_leader_kill() {
         assert!(tokio::time::Instant::now() < deadline, "the transfer did not complete: {source:?} {target:?}");
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    // Every member has let go of the messages once they were confirmed.
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        let statuses = fleet.settle().await;
+        if statuses.iter().all(|p| p.backlog.messages == 0) {
+            break;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "delivered messages were never released: {statuses:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     // The policy takes payments in its new home.
     fleet.run(1, "cash-matching", receipt(&policy, "r-2", 61_84)).await;
 }
@@ -416,6 +441,8 @@ async fn a_node_stops_cleanly_and_refuses_bad_configuration() {
     let bad = Process::new(env!("CARGO_BIN_EXE_ic-node"))
         .env_clear()
         .env("IC_CLUSTER_AUTH", "open")
+        .env("IC_COLD_DIR", "/tmp")
+        .env("IC_EVENT_SINK", "discard")
         .env("IC_NODE_ID", "one")
         .output()
         .unwrap();
@@ -424,6 +451,140 @@ async fn a_node_stops_cleanly_and_refuses_bad_configuration() {
         String::from_utf8_lossy(&bad.stderr).contains("IC_NODE_ID"),
         "the error does not name the setting"
     );
+}
+
+/// Purpose: every full stretch of the journal is sealed into the cold tier exactly once,
+/// as a segment that verifies on its own and links to its neighbours, even though the
+/// leader doing the sealing is killed part-way; and once sealed or published, entries and
+/// events are released by every member, so nothing piles up.
+/// Why it matters: the journal is the legal record and must outlive the nodes. A leader
+/// can die between writing a segment and recording that it did; its successor must be
+/// able to repeat the write without forking the archive, and must not skip a segment
+/// either. Unreleased outputs would otherwise grow every member's memory and snapshot
+/// without bound.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_journal_is_sealed_once_across_a_leader_kill() {
+    const SEGMENT: u64 = 20;
+    let mut fleet = Fleet::start("seal", 3, 1).await;
+    fleet.configure().await;
+    let policy = fleet.issue(0, 1).await;
+    let leader = fleet.leader_of(0).await;
+    for n in 0..60 {
+        if n == 25 {
+            fleet.kill(leader);
+        }
+        fleet
+            .run_keyed(0, &format!("receipt:r-{n}"), "cash-matching", receipt(&policy, &format!("r-{n}"), 1_00))
+            .await;
+    }
+    fleet.spawn(leader);
+
+    // Housekeeping runs a few times a second; wait for it to catch up.
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    let statuses = loop {
+        let statuses = fleet.settle().await;
+        let p = &statuses[0];
+        if p.backlog.journal < SEGMENT && p.backlog.events == 0 {
+            break statuses;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "housekeeping did not catch up: {:?}", p.backlog);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let entries = statuses[0].ledger_entries;
+    assert!(entries > 3 * SEGMENT, "too few entries to exercise sealing");
+    assert_eq!(
+        statuses[0].backlog.journal,
+        entries % SEGMENT,
+        "members hold entries that are sealed, or lost some that are not"
+    );
+    for id in fleet.running.keys() {
+        assert_eq!(
+            fleet.status_of(*id).await.unwrap()[0].backlog,
+            statuses[0].backlog,
+            "node {id} holds a different backlog"
+        );
+    }
+
+    // The archive, read back with no help from the nodes, is one unbroken chain.
+    let cold = DirWormStore::new(fleet.dir.join("cold"));
+    let mut archived = Vec::new();
+    for k in 0..entries / SEGMENT {
+        archived.extend(
+            fetch_segment(&cold, 0, k * SEGMENT + 1, (k + 1) * SEGMENT)
+                .await
+                .expect("a segment is missing or does not verify"),
+        );
+    }
+    assert_eq!(archived.len() as u64, entries - entries % SEGMENT);
+    verify_chain(0, &archived).expect("the archived journal is not one chain");
+    let files = std::fs::read_dir(fleet.dir.join("cold/ledger/p00")).unwrap().count() as u64;
+    assert_eq!(
+        files,
+        2 * (entries / SEGMENT),
+        "the archive holds something other than one segment and one manifest per stretch"
+    );
+}
+
+/// Purpose: a node process restarted on an empty disk under its old number is shut out,
+/// and a new node with a new number, added through the membership API, is sent a snapshot
+/// over HTTP, ends in the same state as the others, and keeps the cluster's memory of
+/// which payments were already applied.
+/// Why it matters: this is the disk-replacement runbook, run for real: processes, sockets,
+/// the snapshot crossing the wire. Without snapshots a replacement would replay the
+/// insurer's whole history; without the identity check the wiped node would rejoin as if
+/// nothing had happened and put committed entries at risk.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_lost_disk_is_shut_out_and_a_new_node_takes_its_place() {
+    let mut fleet = Fleet::start_snapshotting("lost-disk", 3, 1, 30).await;
+    fleet.configure().await;
+    let policy = fleet.issue(0, 1).await;
+    let leader = fleet.leader_of(0).await;
+    let healthy = (1..=3).find(|id| *id != leader).unwrap();
+    let lost = (1..=3).find(|id| *id != leader && *id != healthy).unwrap();
+
+    fleet.kill(lost);
+    std::fs::remove_dir_all(fleet.dir.join(format!("node-{lost}"))).unwrap();
+    fleet.spawn(lost);
+    for n in 0..120 {
+        fleet
+            .run_keyed(0, &format!("receipt:r-{n}"), "cash-matching", receipt(&policy, &format!("r-{n}"), 1_00))
+            .await;
+    }
+    let impostor = &fleet.status_of(lost).await.expect("the wiped node is not running")[0];
+    assert_eq!(impostor.last_applied, None, "a wiped node was fed the log under its old number");
+    assert_eq!(fleet.status_of(leader).await.unwrap()[0].role, "leader", "the wiped node disturbed the leader");
+    fleet.kill(lost);
+
+    let replacement: NodeId = 4;
+    fleet.addrs.insert(replacement, format!("127.0.0.1:{}", free_port()));
+    fleet.spawn(replacement);
+    let members: BTreeMap<NodeId, String> = [leader, healthy, replacement].into_iter().map(|id| (id, fleet.addrs[&id].clone())).collect();
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    while let Err(e) = fleet.client.set_members(0, &members).await {
+        assert!(tokio::time::Instant::now() < deadline, "the membership change did not go through: {e}");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+
+    let healed = fleet.settle().await;
+    let rebuilt = &fleet.status_of(replacement).await.unwrap()[0];
+    assert_eq!(rebuilt.state_hash, healed[0].state_hash);
+    assert_eq!(rebuilt.backlog, healed[0].backlog);
+    assert!(
+        rebuilt.first_log_index.unwrap() > 100,
+        "the new node replayed the whole log instead of taking a snapshot"
+    );
+    assert!(fleet.dir.join(format!("node-{replacement}/partition-0/snapshot.json")).exists());
+    let mut voters = healed[0].voters.clone();
+    voters.sort_unstable();
+    let mut expected = vec![leader, healthy, replacement];
+    expected.sort_unstable();
+    assert_eq!(voters, expected);
+
+    // The idempotency records crossed with the snapshot: with the old leader
+    // gone, an old key is still a duplicate.
+    fleet.kill(leader);
+    let again = fleet.run_keyed(0, "receipt:r-3", "cash-matching", receipt(&policy, "r-3", 1_00)).await;
+    assert!(again.duplicate, "the rebuilt cluster forgot a receipt it had applied");
 }
 
 /// An HTTP client that presents the fleet's cluster token.
@@ -458,7 +619,14 @@ async fn a_node_admits_only_callers_with_the_cluster_token() {
             "{path} answered a caller with no token"
         );
     }
-    for path in ["/v1/partitions/0/commands", "/v1/init", "/raft/0/append", "/raft/0/vote", "/raft/0/pre-vote"] {
+    for path in [
+        "/v1/partitions/0/commands",
+        "/v1/init",
+        "/raft/0/append",
+        "/raft/0/vote",
+        "/raft/0/pre-vote",
+        "/raft/0/snapshot",
+    ] {
         let no_token = anonymous.post(format!("{base}{path}")).json(&envelope).send().await.unwrap();
         assert_eq!(no_token.status(), 401, "{path} answered a caller with no token");
         assert_eq!(no_token.headers()["www-authenticate"], "Bearer");
@@ -564,8 +732,13 @@ fn node_settings_have_defaults_and_refuse_nonsense() {
         ("IC_NODE_PEERS", "1=a:7000, 2=b:7000 ,3=c:7000"),
         ("IC_NODE_DATA_DIR", "/data"),
         ("IC_CLUSTER_TOKEN", TOKEN),
+        ("IC_COLD_DIR", "/cold"),
+        ("IC_EVENT_SINK", "discard"),
     ];
     let s = settings(&base).unwrap();
+    assert_eq!(s.cold, ColdTarget::Dir(PathBuf::from("/cold")));
+    assert_eq!(s.events, EventTarget::Discard);
+    assert_eq!((s.segment_entries, s.snapshot_every), (1000, 5000));
     assert!(!s.auth.is_open());
     assert_eq!(s.auth.outgoing(), Some(TOKEN));
     assert_eq!((s.id, s.partitions, s.bootstrap, s.heartbeat_ms), (2, 1, false, 250));
@@ -606,6 +779,29 @@ fn node_settings_have_defaults_and_refuse_nonsense() {
     refused(&[("IC_RAFT_HEARTBEAT_MS", "0")], "must be positive");
     refused(&[("IC_RAFT_HEARTBEAT_MS", "fast")], "IC_RAFT_HEARTBEAT_MS");
     refused(&[("IC_NODE_LISTEN", "nowhere")], "IC_NODE_LISTEN");
+    refused(&[("IC_COLD_DIR", "")], "the journal must have somewhere to be sealed");
+    refused(&[("IC_BLOB_ENDPOINT", "https://x.blob.core.windows.net")], "not both");
+    refused(&[("IC_EVENT_SINK", "")], "IC_EVENT_HUBS_ENDPOINT");
+    refused(&[("IC_EVENT_SINK", "stdout")], "must be discard");
+    refused(&[("IC_EVENT_HUBS_ENDPOINT", "https://x.servicebus.windows.net")], "not both");
+    refused(&[("IC_SEGMENT_ENTRIES", "0")], "IC_SEGMENT_ENTRIES must be positive");
+    refused(&[("IC_RAFT_SNAPSHOT_EVERY", "often")], "IC_RAFT_SNAPSHOT_EVERY");
+
+    let azure = with(&[
+        ("IC_COLD_DIR", ""),
+        ("IC_BLOB_ENDPOINT", "https://x.blob.core.windows.net"),
+        ("IC_EVENT_SINK", ""),
+        ("IC_EVENT_HUBS_ENDPOINT", "https://x.servicebus.windows.net"),
+    ])
+    .unwrap();
+    assert_eq!(
+        azure.cold,
+        ColdTarget::Azure("https://x.blob.core.windows.net".to_string(), "cold-segments".to_string())
+    );
+    assert_eq!(
+        azure.events,
+        EventTarget::EventHubs("https://x.servicebus.windows.net".to_string(), "policy-events".to_string())
+    );
 }
 
 /// Purpose: the client's address list parses, and an empty list is refused.

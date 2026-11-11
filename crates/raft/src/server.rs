@@ -12,6 +12,11 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use ic_azure::blob::{BlobContainer, DirWormStore, WormStore};
+use ic_azure::cold_tier::seal_segment;
+use ic_azure::credential::AzureCredential;
+use ic_azure::eventhubs::{EventHubsSink, EventSink};
+use ic_azure::AzureError;
 use ic_core::event::MessageBody;
 use ic_core::{recon, Command, Envelope, Policy};
 use ic_ledger::PartitionId;
@@ -20,10 +25,12 @@ use openraft::BasicNode;
 
 use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, EndOfDayView, Refusal};
+use crate::machine::Machine;
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
+use crate::peers::Identity;
 use crate::store::LogStore;
-use crate::types::NodeId;
+use crate::types::{Housekeeping, NodeId};
 
 /// How a node is configured. Read from the environment by the binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +46,34 @@ pub struct Settings {
     pub heartbeat_ms: u64,
     /// The cluster token callers must present, and this node presents.
     pub auth: ClusterAuth,
+    /// Where sealed journal segments go.
+    pub cold: ColdTarget,
+    /// Where events go.
+    pub events: EventTarget,
+    /// Journal entries per cold-tier segment. Never change it on a live
+    /// cluster: segment boundaries are derived from it.
+    pub segment_entries: u64,
+    /// Log entries between snapshots.
+    pub snapshot_every: u64,
+}
+
+/// Where sealed journal segments are written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColdTarget {
+    /// An immutable Blob Storage container: `(endpoint, container)`.
+    Azure(String, String),
+    /// A directory with the same write-once rule. Off Azure only.
+    Dir(PathBuf),
+}
+
+/// Where events are published.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventTarget {
+    /// An Event Hubs namespace and hub: `(endpoint, hub)`.
+    EventHubs(String, String),
+    /// Nowhere: events are dropped once produced. For a cluster with no
+    /// consumers; never for production, where the read models depend on them.
+    Discard,
 }
 
 impl Settings {
@@ -51,6 +86,12 @@ impl Settings {
     /// - `IC_PARTITIONS`: default 1.
     /// - `IC_NODE_BOOTSTRAP`: `true` on the one node that forms the groups.
     /// - `IC_RAFT_HEARTBEAT_MS`: default 250; raise it for cross-region groups.
+    /// - `IC_BLOB_ENDPOINT` with `IC_COLD_CONTAINER` (default `cold-segments`),
+    ///   or `IC_COLD_DIR`: where sealed journal segments go. One is required.
+    /// - `IC_EVENT_HUBS_ENDPOINT` with `IC_EVENT_HUB` (default `policy-events`),
+    ///   or `IC_EVENT_SINK=discard`: where events go. One is required.
+    /// - `IC_SEGMENT_ENTRIES`: default 1000.
+    /// - `IC_RAFT_SNAPSHOT_EVERY`: default 5000 log entries.
     /// - `IC_CLUSTER_TOKEN_FILE`, `IC_CLUSTER_TOKEN`, `IC_CLUSTER_AUTH`: see
     ///   [`ClusterAuth::from_lookup`]. One of them is required.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
@@ -79,6 +120,28 @@ impl Settings {
         if heartbeat_ms == 0 {
             return Err("IC_RAFT_HEARTBEAT_MS must be positive".to_string());
         }
+        let cold = match (get("IC_BLOB_ENDPOINT"), get("IC_COLD_DIR")) {
+            (Some(_), Some(_)) => return Err("set IC_BLOB_ENDPOINT or IC_COLD_DIR, not both".to_string()),
+            (Some(endpoint), None) => ColdTarget::Azure(endpoint, get("IC_COLD_CONTAINER").unwrap_or_else(|| "cold-segments".to_string())),
+            (None, Some(dir)) => ColdTarget::Dir(PathBuf::from(dir)),
+            (None, None) => return Err("set IC_BLOB_ENDPOINT or IC_COLD_DIR: the journal must have somewhere to be sealed".to_string()),
+        };
+        let events = match (get("IC_EVENT_HUBS_ENDPOINT"), get("IC_EVENT_SINK").as_deref()) {
+            (Some(endpoint), None) => EventTarget::EventHubs(endpoint, get("IC_EVENT_HUB").unwrap_or_else(|| "policy-events".to_string())),
+            (None, Some("discard")) => EventTarget::Discard,
+            (Some(_), Some(_)) => return Err("set IC_EVENT_HUBS_ENDPOINT or IC_EVENT_SINK, not both".to_string()),
+            (None, Some(other)) => return Err(format!("IC_EVENT_SINK must be discard, not {other:?}")),
+            (None, None) => return Err("set IC_EVENT_HUBS_ENDPOINT, or IC_EVENT_SINK=discard to drop events".to_string()),
+        };
+        let positive = |key: &str, default: u64| -> Result<u64, String> {
+            let value = get(key).map_or(Ok(default), |v| v.parse().map_err(|e| format!("{key}: {e}")))?;
+            if value == 0 {
+                return Err(format!("{key} must be positive"));
+            }
+            Ok(value)
+        };
+        let segment_entries = positive("IC_SEGMENT_ENTRIES", 1000)?;
+        let snapshot_every = positive("IC_RAFT_SNAPSHOT_EVERY", 5000)?;
         Ok(Self {
             id,
             listen: get("IC_NODE_LISTEN")
@@ -91,6 +154,10 @@ impl Settings {
             bootstrap: get("IC_NODE_BOOTSTRAP").is_some_and(|v| v == "true"),
             heartbeat_ms,
             auth,
+            cold,
+            events,
+            segment_entries,
+            snapshot_every,
         })
     }
 }
@@ -101,7 +168,39 @@ pub struct Host {
     pub groups: BTreeMap<PartitionId, Node>,
     peers: BTreeMap<NodeId, String>,
     auth: ClusterAuth,
+    cold: Cold,
+    sink: Sink,
+    segment_entries: u64,
 }
+
+enum Cold {
+    Azure(BlobContainer),
+    Dir(DirWormStore),
+}
+
+impl WormStore for Cold {
+    async fn put_new(&self, name: &str, content_type: &str, body: Vec<u8>) -> Result<(), AzureError> {
+        match self {
+            Cold::Azure(s) => s.put_new(name, content_type, body).await,
+            Cold::Dir(s) => s.put_new(name, content_type, body).await,
+        }
+    }
+
+    async fn get(&self, name: &str) -> Result<Option<Vec<u8>>, AzureError> {
+        match self {
+            Cold::Azure(s) => s.get(name).await,
+            Cold::Dir(s) => s.get(name).await,
+        }
+    }
+}
+
+enum Sink {
+    EventHubs(EventHubsSink),
+    Discard,
+}
+
+/// Events sent to the stream in one request.
+const EVENT_BATCH: usize = 500;
 
 impl Host {
     /// Open the logs and start every group's member. Existing logs are
@@ -111,19 +210,27 @@ impl Host {
         for partition in 0..settings.partitions {
             let dir = settings.data_dir.join(format!("partition-{partition}"));
             let log = LogStore::open(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            let config = node::config(&format!("partition-{partition}"), settings.heartbeat_ms)?;
-            let member = Node::start(
-                settings.id,
-                partition,
-                log,
-                Network::http(settings.id, partition, settings.auth.clone()),
-                config,
-            )
-            .await?;
+            let machine = Machine::open(partition, &dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            let config = node::config(&format!("partition-{partition}"), settings.heartbeat_ms, settings.snapshot_every)?;
+            let identity = Identity::open(settings.id, &dir).map_err(|e| e.to_string())?;
+            let network = Network::http(identity.clone(), partition, settings.auth.clone());
+            let member = Node::start(identity, partition, log, machine, network, config).await?;
             groups.insert(partition, member);
         }
+        let credential = || AzureCredential::from_env().map_err(|e| e.to_string());
+        let cold = match &settings.cold {
+            ColdTarget::Azure(endpoint, container) => Cold::Azure(BlobContainer::new(endpoint, container, credential()?)),
+            ColdTarget::Dir(dir) => Cold::Dir(DirWormStore::new(dir)),
+        };
+        let sink = match &settings.events {
+            EventTarget::EventHubs(endpoint, hub) => Sink::EventHubs(EventHubsSink::new(endpoint, hub, credential()?)),
+            EventTarget::Discard => Sink::Discard,
+        };
         Ok(Arc::new(Self {
             id: settings.id,
+            cold,
+            sink,
+            segment_entries: settings.segment_entries,
             groups,
             peers: settings.peers.clone(),
             auth: settings.auth.clone(),
@@ -163,44 +270,96 @@ impl Host {
         })
     }
 
-    /// One pass of the cross-partition relay. The leader of a partition
-    /// delivers the messages its commands produced, at least once, with the
-    /// message ID as the receiver's idempotency key. Returns how many were
-    /// delivered.
-    pub async fn relay_once(&self, client: &ClusterClient) -> usize {
-        let mut delivered = 0;
+    /// Deliver a partition's waiting messages to the partitions they are
+    /// for, at least once, with the message ID as the receiver's idempotency
+    /// key, and record which arrived.
+    async fn deliver(&self, member: &Node, client: &ClusterClient) -> Result<usize, String> {
+        let mut delivered = Vec::new();
+        for message in member.machine.pending_messages() {
+            let command = match message.body.clone() {
+                MessageBody::TransferRecord(record) => Command::LandTransfer { record },
+                MessageBody::TransferLanded { policy, transfer_id } => Command::CompleteTransfer { policy, transfer_id },
+                MessageBody::TransferRejected { policy, transfer_id, .. } => Command::AbortTransfer { policy, transfer_id },
+            };
+            let envelope = Envelope {
+                key: message.id.clone(),
+                caller: "transfer".to_string(),
+                // Drawn fresh for each delivery. Only the first delivery
+                // is applied, so only its salt is ever used.
+                salt: crate::client::fresh_salt(),
+                traceparent: None,
+                command,
+            };
+            match client.propose(message.to_partition, &envelope).await {
+                // Applied or refused, the receiver has dealt with it: a
+                // refusal comes back to this partition as its own message.
+                Ok(_) => delivered.push(message.id),
+                Err(e) => tracing::warn!(message = %message.id, error = %e, "message not delivered; will retry"),
+            }
+        }
+        let count = delivered.len();
+        if count > 0 {
+            member.housekeep(Housekeeping::Delivered { ids: delivered }).await.map_err(|e| e.to_string())?;
+        }
+        Ok(count)
+    }
+
+    /// Publish a partition's waiting events, in order, and record how far.
+    async fn publish(&self, member: &Node) -> Result<usize, String> {
+        let events = member.machine.pending_events(EVENT_BATCH);
+        let Some(last) = events.last() else {
+            return Ok(0);
+        };
+        if let Sink::EventHubs(hub) = &self.sink {
+            hub.publish(member.partition, &events).await.map_err(|e| e.to_string())?;
+        }
+        member
+            .housekeep(Housekeeping::Published { through_seq: last.seq })
+            .await
+            .map_err(|e| e.to_string())?;
+        Ok(events.len())
+    }
+
+    /// Seal every full segment of a partition's journal in the cold tier,
+    /// and record how far.
+    async fn seal(&self, member: &Node) -> Result<usize, String> {
+        let mut sealed = 0;
+        while let Some(entries) = member.machine.next_segment(self.segment_entries) {
+            let manifest = seal_segment(&self.cold, &entries).await.map_err(|e| e.to_string())?;
+            member
+                .housekeep(Housekeeping::Sealed {
+                    through_seq: manifest.last_seq,
+                })
+                .await
+                .map_err(|e| e.to_string())?;
+            sealed += entries.len();
+        }
+        Ok(sealed)
+    }
+
+    /// One pass of the leader's housekeeping for every partition this node
+    /// leads: move messages, events and journal entries to where they
+    /// belong. Returns how many items moved. A failure is logged and the
+    /// items stay with every member until a later pass, by this leader or
+    /// the next, succeeds.
+    pub async fn housekeep_once(&self, client: &ClusterClient) -> usize {
+        let mut moved = 0;
         for member in self.groups.values() {
             if !member.raft.is_leader() {
                 continue;
             }
-            let pending = member.machine.take_messages();
-            let mut undelivered = Vec::new();
-            for message in pending {
-                let command = match message.body.clone() {
-                    MessageBody::TransferRecord(record) => Command::LandTransfer { record },
-                    MessageBody::TransferLanded { policy, transfer_id } => Command::CompleteTransfer { policy, transfer_id },
-                    MessageBody::TransferRejected { policy, transfer_id, .. } => Command::AbortTransfer { policy, transfer_id },
-                };
-                let envelope = Envelope {
-                    key: message.id.clone(),
-                    caller: "transfer".to_string(),
-                    // Drawn fresh for each delivery. Only the first delivery
-                    // is applied, so only its salt is ever used.
-                    salt: crate::client::fresh_salt(),
-                    traceparent: None,
-                    command,
-                };
-                match client.propose(message.to_partition, &envelope).await {
-                    Ok(_) => delivered += 1,
-                    Err(e) => {
-                        tracing::warn!(message = %message.id, error = %e, "relay delivery failed; will retry");
-                        undelivered.push(message);
-                    }
+            for (what, result) in [
+                ("messages", self.deliver(member, client).await),
+                ("events", self.publish(member).await),
+                ("journal", self.seal(member).await),
+            ] {
+                match result {
+                    Ok(n) => moved += n,
+                    Err(error) => tracing::warn!(partition = member.partition, what, %error, "housekeeping did not finish; will retry"),
                 }
             }
-            member.machine.return_messages(undelivered);
         }
-        delivered
+        moved
     }
 
     pub async fn shutdown(&self) {
@@ -260,6 +419,20 @@ async fn init(State(host): State<Arc<Host>>) -> Response {
     }
 }
 
+/// Set the voters of a partition's group. Asked of the group's leader.
+async fn members(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(members): Json<BTreeMap<NodeId, String>>) -> Response {
+    let Some(member) = host.groups.get(&partition) else {
+        return no_partition(partition);
+    };
+    if members.is_empty() {
+        return refuse(StatusCode::BAD_REQUEST, ProposeError::Unknown("a group needs at least one member".to_string()));
+    }
+    match member.set_members(members).await {
+        Ok(()) => Json(()).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
 async fn status(State(host): State<Arc<Host>>) -> Json<Vec<NodeStatus>> {
     Json(host.statuses())
 }
@@ -271,9 +444,10 @@ pub fn router(host: Arc<Host>) -> Router {
         .route("/v1/init", post(init))
         .route("/v1/partitions/{partition}/commands", post(propose))
         .route("/v1/partitions/{partition}/end-of-day", get(end_of_day))
+        .route("/v1/partitions/{partition}/members", axum::routing::put(members))
         .with_state(host.clone());
     for (partition, member) in &host.groups {
-        router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone()));
+        router = router.nest(&format!("/raft/{partition}"), network::routes(member.raft.clone(), member.identity.clone()));
     }
     // Everything above needs the cluster token. The probe does not: the
     // kubelet has no token, and the probe says nothing about the ledger.
@@ -312,7 +486,7 @@ pub async fn start(settings: Settings) -> Result<Running, String> {
             .with_auth(settings.auth.clone());
         tokio::spawn(async move {
             loop {
-                host.relay_once(&client).await;
+                host.housekeep_once(&client).await;
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         })

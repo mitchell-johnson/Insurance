@@ -13,7 +13,7 @@ use axum::extract::State;
 use axum::routing::post;
 use axum::{Json, Router};
 use ic_ledger::PartitionId;
-use openraft::alias::{SnapshotOf, VoteOf};
+use openraft::alias::{SnapshotMetaOf, SnapshotOf, VoteOf};
 use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::RPCOption;
 use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, VoteRequest, VoteResponse};
@@ -21,6 +21,7 @@ use openraft::{AnyError, BasicNode, RaftNetworkFactory, RaftNetworkV2};
 
 use crate::auth::ClusterAuth;
 use crate::machine::Machine;
+use crate::peers::{Identity, Impostor, EXPECTS_HEADER, INCARNATION_HEADER, NODE_HEADER};
 use crate::types::{NodeId, TypeConfig};
 
 /// A member's handle on its Raft group.
@@ -28,7 +29,7 @@ pub type RaftGroup = openraft::Raft<TypeConfig, Machine>;
 
 #[derive(Default)]
 struct LocalState {
-    members: BTreeMap<NodeId, RaftGroup>,
+    members: BTreeMap<NodeId, (RaftGroup, Identity)>,
     /// Members that are down: nothing reaches them and they reach nothing.
     down: BTreeSet<NodeId>,
     /// Severed links, stored with the smaller ID first.
@@ -46,9 +47,10 @@ impl LocalNet {
         self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    pub fn register(&self, id: NodeId, raft: RaftGroup) {
+    pub fn register(&self, identity: Identity, raft: RaftGroup) {
         let mut s = self.lock();
-        s.members.insert(id, raft);
+        let id = identity.id;
+        s.members.insert(id, (raft, identity));
         s.down.remove(&id);
     }
 
@@ -73,12 +75,17 @@ impl LocalNet {
         }
     }
 
-    fn route(&self, from: NodeId, to: NodeId) -> Result<RaftGroup, Unreachable<TypeConfig>> {
+    fn route(&self, from: &Identity, to: NodeId) -> Result<RaftGroup, Unreachable<TypeConfig>> {
         let s = self.lock();
-        let blocked = s.down.contains(&from) || s.down.contains(&to) || s.cut.contains(&(from.min(to), from.max(to)));
+        let blocked = s.down.contains(&from.id) || s.down.contains(&to) || s.cut.contains(&(from.id.min(to), from.id.max(to)));
         match s.members.get(&to) {
-            Some(raft) if !blocked => Ok(raft.clone()),
-            _ => Err(unreachable(format!("node {to} is unreachable from node {from}"))),
+            Some((raft, target)) if !blocked => {
+                // Each end checks the other, as the HTTP transport does.
+                target.admit(from.id, &from.incarnation).map_err(unreachable)?;
+                from.admit(to, &target.incarnation).map_err(unreachable)?;
+                Ok(raft.clone())
+            }
+            _ => Err(unreachable(format!("node {to} is unreachable from node {}", from.id))),
         }
     }
 }
@@ -100,12 +107,12 @@ enum Transport {
 /// The network factory handed to openraft: it makes one connection per peer.
 #[derive(Clone)]
 pub struct Network {
-    from: NodeId,
+    from: Identity,
     transport: Transport,
 }
 
 impl Network {
-    pub fn local(from: NodeId, net: LocalNet) -> Self {
+    pub fn local(from: Identity, net: LocalNet) -> Self {
         Self {
             from,
             transport: Transport::Local(net),
@@ -113,7 +120,7 @@ impl Network {
     }
 
     /// Peers are reached at `http://{addr}/raft/{partition}/...`.
-    pub fn http(from: NodeId, partition: PartitionId, auth: ClusterAuth) -> Self {
+    pub fn http(from: Identity, partition: PartitionId, auth: ClusterAuth) -> Self {
         Self {
             from,
             transport: Transport::Http {
@@ -127,7 +134,7 @@ impl Network {
 
 /// A connection from one member to one peer.
 pub struct Connection {
-    from: NodeId,
+    from: Identity,
     to: NodeId,
     addr: String,
     transport: Transport,
@@ -138,7 +145,7 @@ impl RaftNetworkFactory<TypeConfig> for Network {
 
     async fn new_client(&mut self, target: NodeId, node: &BasicNode) -> Connection {
         Connection {
-            from: self.from,
+            from: self.from.clone(),
             to: target,
             addr: node.addr.clone(),
             transport: self.transport.clone(),
@@ -164,13 +171,26 @@ impl Connection {
         Resp: serde::de::DeserializeOwned,
     {
         let url = format!("http://{}/raft/{partition}/{path}", self.addr);
-        let response = auth
+        let mut request = auth
             .sign(client.post(url))
-            .timeout(option.soft_ttl())
-            .json(body)
-            .send()
-            .await
-            .map_err(unreachable)?;
+            .header(NODE_HEADER, self.from.id)
+            .header(INCARNATION_HEADER, &self.from.incarnation);
+        // Say which incarnation of the peer this message is meant for, so a
+        // node that has lost its disk does not act on it before we find out.
+        if let Some(expected) = self.from.known(self.to) {
+            request = request.header(EXPECTS_HEADER, expected);
+        }
+        let response = request.timeout(option.soft_ttl()).json(body).send().await.map_err(unreachable)?;
+        // Nothing a peer says reaches Raft until the peer is known to be the
+        // member it claims to be.
+        let incarnation = response.headers().get(INCARNATION_HEADER).and_then(|v| v.to_str().ok()).map(str::to_string);
+        match incarnation {
+            Some(incarnation) => self.from.admit(self.to, &incarnation).map_err(|impostor| {
+                tracing::error!(peer = self.to, "{impostor}");
+                unreachable(impostor)
+            })?,
+            None => return Err(unreachable(format!("node {} did not identify itself", self.to))),
+        }
         let wire: Wire<Resp> = response.error_for_status().map_err(unreachable)?.json().await.map_err(unreachable)?;
         // A peer that answered with an error is treated as unreachable so the
         // sender backs off instead of retrying at once.
@@ -179,11 +199,11 @@ impl Connection {
 }
 
 impl RaftNetworkV2<TypeConfig> for Connection {
-    type SnapshotData = ();
+    type SnapshotData = Vec<u8>;
 
     async fn append_entries(&mut self, rpc: AppendEntriesRequest<TypeConfig>, option: RPCOption) -> Result<AppendResult<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
-            Transport::Local(net) => Ok(net.route(self.from, self.to)?.append_entries(rpc).await.map_err(unreachable)?),
+            Transport::Local(net) => Ok(net.route(&self.from, self.to)?.append_entries(rpc).await.map_err(unreachable)?),
             Transport::Http { client, partition, auth } => {
                 let (prev, last) = (rpc.prev_log_id, rpc.last_log_id());
                 let response: AppendEntriesResponse<TypeConfig> = self.post(client, auth, *partition, "append", &rpc, &option).await?;
@@ -194,33 +214,92 @@ impl RaftNetworkV2<TypeConfig> for Connection {
 
     async fn vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
-            Transport::Local(net) => Ok(net.route(self.from, self.to)?.vote(rpc).await.map_err(unreachable)?),
+            Transport::Local(net) => Ok(net.route(&self.from, self.to)?.vote(rpc).await.map_err(unreachable)?),
             Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "vote", &rpc, &option).await?),
         }
     }
 
     async fn pre_vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
-            Transport::Local(net) => Ok(net.route(self.from, self.to)?.pre_vote(rpc).await.map_err(unreachable)?),
+            Transport::Local(net) => Ok(net.route(&self.from, self.to)?.pre_vote(rpc).await.map_err(unreachable)?),
             Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "pre-vote", &rpc, &option).await?),
         }
     }
 
     async fn full_snapshot(
         &mut self,
-        _vote: VoteOf<TypeConfig>,
-        _snapshot: SnapshotOf<TypeConfig, ()>,
+        vote: VoteOf<TypeConfig>,
+        snapshot: SnapshotOf<TypeConfig, Vec<u8>>,
         _cancel: impl Future<Output = ReplicationClosed> + Send + 'static,
-        _option: RPCOption,
+        option: RPCOption,
     ) -> Result<SnapshotResponse<TypeConfig>, StreamingError<TypeConfig>> {
-        // The log is never purged, so a member is always caught up from the log.
-        Err(StreamingError::Unreachable(unreachable("snapshots are not used in this phase")))
+        match &self.transport {
+            Transport::Local(net) => Ok(net
+                .route(&self.from, self.to)?
+                .install_full_snapshot(vote, snapshot)
+                .await
+                .map_err(unreachable)?),
+            Transport::Http { client, partition, auth } => {
+                let wire = SnapshotWire {
+                    vote,
+                    meta: snapshot.meta,
+                    state: String::from_utf8(snapshot.snapshot).map_err(unreachable)?,
+                };
+                Ok(self.post(client, auth, *partition, "snapshot", &wire, &option).await?)
+            }
+        }
     }
+}
+
+/// A snapshot on the wire. The state is the snapshot file's own JSON text.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SnapshotWire {
+    vote: VoteOf<TypeConfig>,
+    meta: SnapshotMetaOf<TypeConfig>,
+    state: String,
+}
+
+/// Raft messages carry batches of entries and whole snapshots.
+const MAX_RAFT_BODY: usize = 1 << 30;
+
+/// Check who is calling before a Raft message is handled, and tell the
+/// caller who answered.
+async fn identify(State(me): State<Identity>, request: axum::extract::Request, next: axum::middleware::Next) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let caller = {
+        let header = |name: &str| request.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_string);
+        header(NODE_HEADER).and_then(|id| id.parse::<NodeId>().ok()).zip(header(INCARNATION_HEADER))
+    };
+    let meant_for_another = request
+        .headers()
+        .get(EXPECTS_HEADER)
+        .is_some_and(|expected| expected.as_bytes() != me.incarnation.as_bytes());
+    let mut response = match caller {
+        None => (axum::http::StatusCode::BAD_REQUEST, "Raft callers must identify themselves").into_response(),
+        Some((id, _)) if meant_for_another => {
+            tracing::error!(
+                peer = id,
+                "node {id} knows this node by another incarnation: this disk is not the one the group knows. Replace this node as a new member with a new number."
+            );
+            (axum::http::StatusCode::CONFLICT, "this node is not the member the caller knows").into_response()
+        }
+        Some((id, incarnation)) => match me.admit(id, &incarnation) {
+            Ok(()) => next.run(request).await,
+            Err(impostor @ Impostor { .. }) => {
+                tracing::error!(peer = id, "{impostor}");
+                (axum::http::StatusCode::CONFLICT, impostor.to_string()).into_response()
+            }
+        },
+    };
+    if let Ok(value) = me.incarnation.parse() {
+        response.headers_mut().insert(INCARNATION_HEADER, value);
+    }
+    response
 }
 
 /// The receiving side: routes that hand a peer's RPC to this member's Raft.
 /// Mount under `/raft/{partition}`.
-pub fn routes(raft: RaftGroup) -> Router {
+pub fn routes(raft: RaftGroup, identity: Identity) -> Router {
     async fn append(State(raft): State<RaftGroup>, Json(rpc): Json<AppendEntriesRequest<TypeConfig>>) -> Json<Wire<AppendEntriesResponse<TypeConfig>>> {
         Json(raft.append_entries(rpc).await.map(AppendEntriesResponse::from).map_err(|e| e.to_string()))
     }
@@ -230,9 +309,19 @@ pub fn routes(raft: RaftGroup) -> Router {
     async fn pre_vote(State(raft): State<RaftGroup>, Json(rpc): Json<VoteRequest<TypeConfig>>) -> Json<Wire<VoteResponse<TypeConfig>>> {
         Json(raft.pre_vote(rpc).await.map_err(|e| e.to_string()))
     }
+    async fn snapshot(State(raft): State<RaftGroup>, Json(wire): Json<SnapshotWire>) -> Json<Wire<SnapshotResponse<TypeConfig>>> {
+        let snapshot = SnapshotOf::<TypeConfig, Vec<u8>> {
+            meta: wire.meta,
+            snapshot: wire.state.into_bytes(),
+        };
+        Json(raft.install_full_snapshot(wire.vote, snapshot).await.map_err(|e| e.to_string()))
+    }
     Router::new()
         .route("/append", post(append))
         .route("/vote", post(vote))
         .route("/pre-vote", post(pre_vote))
+        .route("/snapshot", post(snapshot))
+        .layer(axum::extract::DefaultBodyLimit::max(MAX_RAFT_BODY))
+        .layer(axum::middleware::from_fn_with_state(identity, identify))
         .with_state(raft)
 }

@@ -287,3 +287,203 @@ async fn a_severed_follower_link_is_harmless_and_followers_redirect() {
     g.settle().await;
     g.stop().await;
 }
+
+/// Wait until a member has dropped the start of its log behind a snapshot.
+async fn wait_for_purge(g: &Group, id: u64) -> u64 {
+    let deadline = tokio::time::Instant::now() + PATIENCE;
+    loop {
+        match g.nodes[&id].log.first_index() {
+            Some(first) if first > 1 => return first,
+            _ => assert!(tokio::time::Instant::now() < deadline, "node {id} never dropped its log"),
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// Purpose: with snapshots on, every member drops the log behind its snapshot, and a
+/// restart of the whole group from snapshot plus remaining log gives exactly the state it
+/// had, including the record of which idempotency keys were already applied.
+/// Why it matters: the log cannot grow for fifty years. Dropping it is only safe if the
+/// snapshot really is the whole state; a field left out would surface months later as a
+/// replica that disagrees after a restart, or as a retried payment applied twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_restart_from_snapshot_and_log_rebuilds_the_same_state() {
+    let mut g = Group::start_snapshotting("snapshot", 3, 20).await;
+    g.configure().await;
+    let policy = g.issue(1).await;
+    for n in 0..70 {
+        g.run_keyed(&format!("receipt:r-{n}"), "cash-matching", receipt(&policy, &format!("r-{n}"), 1_00))
+            .await;
+    }
+    let before = g.settle().await;
+    for id in 1..=3 {
+        let first = wait_for_purge(&g, id).await;
+        assert!(first > 20, "node {id} kept its log from index {first}");
+        assert!(g.disk(id).join("snapshot.json").exists());
+        let journal = std::fs::read_to_string(g.disk(id).join("log.jsonl")).unwrap();
+        assert!(journal.lines().count() < 60, "node {id} did not shrink its journal file");
+    }
+
+    for id in 1..=3 {
+        g.crash(id).await;
+    }
+    for id in 1..=3 {
+        g.boot(id).await;
+    }
+    assert_eq!(g.settle().await, before);
+    let retry = g.run_keyed("receipt:r-5", "cash-matching", receipt(&policy, "r-5", 1_00)).await;
+    assert!(retry.duplicate, "a receipt applied before the snapshot was applied again after it");
+    g.run_keyed("receipt:r-new", "cash-matching", receipt(&policy, "r-new", 1_00)).await;
+    assert_ne!(g.settle().await, before);
+    g.stop().await;
+}
+
+/// Purpose: a member that was away while the others moved on and dropped their logs is
+/// brought up to date with a snapshot when it returns with its disk intact.
+/// Why it matters: a node can be down for longer than the log is kept: a failed zone, a
+/// long maintenance window. It must rejoin without anyone copying files by hand, and must
+/// not be left permanently behind because the entries it needs no longer exist.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_left_behind_the_log_catches_up_from_a_snapshot() {
+    let mut g = Group::start_snapshotting("behind", 3, 20).await;
+    g.configure().await;
+    let policy = g.issue(1).await;
+    let leader = g.leader().await;
+    let away = g.followers_of(leader)[0];
+    g.crash(away).await;
+    for n in 0..60 {
+        g.run_keyed(&format!("receipt:a-{n}"), "cash-matching", receipt(&policy, &format!("a-{n}"), 1_00))
+            .await;
+    }
+    let first_kept = wait_for_purge(&g, leader).await;
+    assert!(
+        first_kept > g.nodes[&leader].log.last_index().unwrap() - 60,
+        "the leader still holds what the absent member missed"
+    );
+
+    g.boot(away).await;
+    let hash = g.settle().await;
+    let status = g.nodes[&away].status();
+    assert_eq!(status.state_hash, hash);
+    assert!(
+        status.first_log_index.unwrap_or(0) > 20,
+        "the member replayed entries the leader no longer had: no snapshot was used"
+    );
+    g.stop().await;
+}
+
+/// Purpose: a member that returns under its old number with an empty disk is shut out by
+/// every other member, the group carries on without it, and the lost machine is replaced
+/// by a new member with a new number, which is caught up by snapshot and then votes.
+/// Why it matters: a member that has forgotten what it acknowledged can make Raft lose a
+/// committed entry or elect two leaders. On Kubernetes this is one deleted volume claim
+/// away: the pod restarts with the same name and nothing on its disk. The cluster must
+/// refuse it by itself, and there must be a safe, tested way to restore full strength.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_member_that_lost_its_disk_is_shut_out_and_replaced() {
+    let mut g = Group::start_snapshotting("lost-disk", 3, 20).await;
+    g.configure().await;
+    let policy = g.issue(1).await;
+    let leader = g.leader().await;
+    let followers = g.followers_of(leader);
+    let (healthy, lost) = (followers[0], followers[1]);
+    g.settle().await;
+
+    g.crash(lost).await;
+    std::fs::remove_dir_all(g.disk(lost)).unwrap();
+    g.boot(lost).await;
+    for n in 0..40 {
+        g.run_keyed(&format!("receipt:r-{n}"), "cash-matching", receipt(&policy, &format!("r-{n}"), 1_00))
+            .await;
+    }
+    // The impostor is running and connected, and has been given nothing.
+    let impostor = g.nodes[&lost].status();
+    assert_eq!(impostor.last_applied, None, "a member with an empty disk was fed the log under its old number");
+    assert_eq!(impostor.policies, 0);
+    assert_eq!(g.leader().await, leader, "the impostor disturbed the group");
+    g.crash(lost).await;
+
+    // Replace it: a new machine, a new number.
+    let replacement = 4;
+    g.boot(replacement).await;
+    let members = [leader, healthy, replacement].into_iter().map(|id| (id, format!("local-{id}"))).collect();
+    g.nodes[&leader].set_members(members).await.unwrap();
+    let hash = g.settle().await;
+    let status = g.nodes[&replacement].status();
+    assert_eq!(status.state_hash, hash);
+    assert!(status.first_log_index.unwrap_or(0) > 1, "the new member was not caught up by snapshot");
+    let mut voters = g.nodes[&leader].status().voters;
+    voters.sort_unstable();
+    let mut expected = vec![leader, healthy, replacement];
+    expected.sort_unstable();
+    assert_eq!(voters, expected);
+
+    // The new member counts: with the other follower gone, it and the leader are the majority.
+    g.crash(healthy).await;
+    g.run_keyed("receipt:after", "cash-matching", receipt(&policy, "after", 1_00)).await;
+    // Asking for the membership the group already has changes nothing.
+    let same = [leader, healthy, replacement].into_iter().map(|id| (id, format!("local-{id}"))).collect();
+    g.nodes[&leader].set_members(same).await.unwrap();
+    g.stop().await;
+}
+
+/// Purpose: a node refuses to start on a disk that belongs to a different node, keeps the
+/// same incarnation across restarts on its own disk, and remembers across restarts which
+/// incarnation it first met for each peer.
+/// Why it matters: these files are what the impostor check rests on. A mis-mounted volume
+/// must stop the node rather than let it vote as someone else, and the memory of peers
+/// must survive a restart or the check would lapse exactly when a cluster is recovering.
+#[test]
+fn a_node_knows_its_own_disk_and_remembers_its_peers() {
+    let dir = common::scratch("identity");
+    let first = ic_raft::Identity::open(1, &dir).unwrap();
+    assert!(first.admit(2, "aaaa").is_ok());
+    assert!(first.admit(2, "aaaa").is_ok());
+    assert_eq!(first.admit(2, "bbbb").unwrap_err().peer, 2);
+
+    let again = ic_raft::Identity::open(1, &dir).unwrap();
+    assert_eq!(again.incarnation, first.incarnation);
+    assert!(again.admit(2, "aaaa").is_ok(), "a known peer was forgotten over a restart");
+    assert!(again.admit(2, "bbbb").is_err(), "an impostor was admitted after a restart");
+    assert!(again.admit(3, "cccc").is_ok());
+
+    let wrong = ic_raft::Identity::open(2, &dir).err().expect("node 2 started on node 1's disk").to_string();
+    assert!(wrong.contains("wrong disk"), "{wrong}");
+    std::fs::write(dir.join("identity.json"), b"not json").unwrap();
+    assert!(ic_raft::Identity::open(1, &dir).is_err());
+
+    let (a, b) = (ic_raft::Identity::ephemeral(1), ic_raft::Identity::ephemeral(1));
+    assert_ne!(a.incarnation, b.incarnation);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Purpose: a member refuses to start on a snapshot file that is damaged or belongs to
+/// another partition, and says which file.
+/// Why it matters: starting from an empty state instead would look healthy and then have
+/// the member vote and serve reads with no history. Refusing makes the operator replace
+/// the disk, after which the leader sends a good snapshot.
+#[test]
+fn a_damaged_or_foreign_snapshot_stops_the_member() {
+    let dir = common::scratch("bad-snapshot");
+    std::fs::write(dir.join("snapshot.json"), b"{\"core\": tru").unwrap();
+    let error = ic_raft::Machine::open(0, &dir).err().expect("a damaged snapshot was accepted").to_string();
+    assert!(error.contains("snapshot.json"), "{error}");
+
+    // A healthy member's snapshot, offered to a member of another partition.
+    let source = common::scratch("foreign-snapshot");
+    assert!(ic_raft::Machine::open(3, &source).is_ok());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        use openraft::storage::RaftSnapshotBuilder as _;
+        let mut machine = ic_raft::Machine::open(3, &source).unwrap();
+        machine.build_snapshot().await.unwrap();
+    });
+    assert!(ic_raft::Machine::open(3, &source).is_ok(), "a member could not restart from its own snapshot");
+    let error = ic_raft::Machine::open(4, &source)
+        .err()
+        .expect("another partition's snapshot was accepted")
+        .to_string();
+    assert!(error.contains("partition 3"), "{error}");
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(source);
+}

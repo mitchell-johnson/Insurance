@@ -17,7 +17,7 @@ use ic_ledger::PartitionId;
 use ic_money::{Currency::NZD, Money};
 use ic_product::{Frequency, Sex};
 use ic_raft::client::fresh_salt;
-use ic_raft::server::{self, Running, Settings};
+use ic_raft::server::{self, ColdTarget, EventTarget, Running, Settings};
 use ic_raft::{ClusterAuth, ClusterClient, NodeId};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{issue_command, term_life};
@@ -143,6 +143,10 @@ impl Ledger {
                     bootstrap: *id == 1,
                     heartbeat_ms: 50,
                     auth: auth.clone(),
+                    cold: ColdTarget::Dir(dir.join("cold")),
+                    events: EventTarget::Discard,
+                    segment_entries: 50,
+                    snapshot_every: 200,
                 };
                 (*id, s)
             })

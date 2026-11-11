@@ -40,7 +40,25 @@ fn names(partition: PartitionId, first: u64, last: u64) -> (String, String) {
     (format!("{base}.jsonl"), format!("{base}.manifest.json"))
 }
 
-/// Seal a run of consecutive entries. The entries must be in order with no
+/// Write an object, or confirm that the object already there is this one.
+///
+/// Sealing is done by whichever node leads a partition, and a leader can
+/// fail between writing a segment and recording that it did. Its successor
+/// seals the same entries again; that must succeed. A different object under
+/// the same name is never accepted: it would mean two histories.
+async fn put_same(store: &impl WormStore, name: &str, content_type: &str, body: Vec<u8>) -> Result<(), AzureError> {
+    match store.put_new(name, content_type, body.clone()).await {
+        Err(AzureError::AlreadyExists(_)) => match store.get(name).await? {
+            Some(existing) if existing == body => Ok(()),
+            _ => Err(AzureError::AlreadyExists(format!("{name} is already sealed with different content"))),
+        },
+        other => other,
+    }
+}
+
+/// Seal a run of consecutive entries. Sealing the same entries again is a
+/// no-op; sealing different entries over the same range is refused.
+/// The entries must be in order with no
 /// gaps and their chain links intact.
 pub async fn seal_segment(store: &impl WormStore, entries: &[JournalEntry]) -> Result<SegmentManifest, AzureError> {
     let (Some(first), Some(last)) = (entries.first(), entries.last()) else {
@@ -68,14 +86,9 @@ pub async fn seal_segment(store: &impl WormStore, entries: &[JournalEntry]) -> R
         entries: entries.len() as u64,
     };
     let (segment, manifest_name) = names(manifest.partition, manifest.first_seq, manifest.last_seq);
-    store.put_new(&segment, "application/x-ndjson", body).await?;
-    store
-        .put_new(
-            &manifest_name,
-            "application/json",
-            serde_json::to_vec_pretty(&manifest).map_err(|e| AzureError::Response(e.to_string()))?,
-        )
-        .await?;
+    put_same(store, &segment, "application/x-ndjson", body).await?;
+    let manifest_body = serde_json::to_vec_pretty(&manifest).map_err(|e| AzureError::Response(e.to_string()))?;
+    put_same(store, &manifest_name, "application/json", manifest_body).await?;
     Ok(manifest)
 }
 

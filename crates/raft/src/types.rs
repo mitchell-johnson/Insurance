@@ -8,15 +8,39 @@ use serde::{Deserialize, Serialize};
 
 pub type NodeId = u64;
 
-/// One log entry's payload: a command envelope, exactly as the core's own
-/// log would hold it.
+/// One log entry's payload.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Proposal(pub Envelope);
+#[serde(rename_all = "snake_case")]
+pub enum Proposal {
+    /// A command envelope, exactly as the core's own log would hold it.
+    Command(Envelope),
+    /// The leader's host recording that outputs have safely left the node,
+    /// so every member can let go of them.
+    Housekeeping(Housekeeping),
+}
+
+/// Outputs of applied commands are held by every member until the leader's
+/// host has put them where they belong. These entries say it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Housekeeping {
+    /// Cross-partition messages the receiving partition has confirmed.
+    Delivered { ids: Vec<String> },
+    /// Journal entries up to this sequence number are sealed in the cold tier.
+    Sealed { through_seq: u64 },
+    /// Events up to this sequence number are on the event stream.
+    Published { through_seq: u64 },
+}
 
 impl fmt::Display for Proposal {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // The key and the command name only: payloads never go to logs.
-        write!(f, "{} from {} ({})", self.0.command.name(), self.0.caller, self.0.key)
+        match self {
+            // The key and the command name only: payloads never go to logs.
+            Proposal::Command(e) => write!(f, "{} from {} ({})", e.command.name(), e.caller, e.key),
+            Proposal::Housekeeping(Housekeeping::Delivered { ids }) => write!(f, "delivered {} messages", ids.len()),
+            Proposal::Housekeeping(Housekeeping::Sealed { through_seq }) => write!(f, "sealed journal through {through_seq}"),
+            Proposal::Housekeeping(Housekeeping::Published { through_seq }) => write!(f, "published events through {through_seq}"),
+        }
     }
 }
 
