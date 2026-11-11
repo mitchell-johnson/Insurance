@@ -2,6 +2,8 @@
 //! opaque IDs and never personal data. Underwriting terms (loadings and
 //! exclusions) are sensitive and are not in events at all.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use ic_ledger::{AccountClass, AccountUnit, Dimensions, EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
@@ -219,6 +221,10 @@ pub enum Event {
         period_end: NaiveDate,
         total_minor: i64,
         members: Option<u32>,
+        /// The premium for the period by cover type, before tax and levies.
+        /// Reinsurance priced on the original premium reads it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        by_cover_type: BTreeMap<String, i64>,
     },
     PremiumAdjusted {
         policy: PolicyId,
