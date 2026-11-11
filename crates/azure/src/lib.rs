@@ -5,6 +5,7 @@
 //! | Short-lived workload identities | Microsoft Entra Workload ID on AKS, managed identities |
 //! | Write-once storage for Merkle roots and the cold tier | Blob Storage with version-level immutability (WORM) |
 //! | Hardware-backed signing keys | Key Vault Premium or Managed HSM |
+//! | Erasable records under a key per person | Key Vault key wrapping, a Blob container with no retention |
 //! | Event stream (one topic partition per ledger partition) | Event Hubs, 64 partitions, Kafka-compatible |
 //!
 //! Each adapter speaks the service's REST API with a bearer token, so there
@@ -16,7 +17,9 @@ pub mod cold_tier;
 pub mod credential;
 pub mod eventhubs;
 pub mod keyvault;
+pub mod keywrap;
 pub mod merkle;
+pub mod records;
 #[cfg(feature = "testing")]
 pub mod testing;
 

@@ -556,6 +556,8 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
                 frequency: p.frequency,
                 lives,
                 covers,
+                // A proposal carried over mid-flight still becomes a policy written here, today.
+                migrated: false,
             }),
         },
         entry => Effect::ApplyTerms {
@@ -600,6 +602,7 @@ pub(crate) fn interim(cfg: &Config, p: &mut Proposal, cx: &mut Cx) {
                 exclusions: vec![],
             })
             .collect(),
+        migrated: false,
     };
     cx.event(Event::InterimCoverRequested {
         proposal: p.id.clone(),

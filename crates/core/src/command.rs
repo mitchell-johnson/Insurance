@@ -60,6 +60,11 @@ pub struct IssuePolicy {
     pub frequency: Frequency,
     pub lives: Vec<LifeSpec>,
     pub covers: Vec<CoverSpec>,
+    /// The policy was written on another system and is entering through the
+    /// ordinary door, with its original inception. Only the migration load
+    /// may say so, and it must.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migrated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -333,8 +338,10 @@ impl Command {
             Command::RunEndOfDay { .. } => &["end-of-day"],
             // Group administration issues the retail policy of a continuation
             // option and ends a scheme that is terminated.
-            Command::IssuePolicy(_) => &["new-business", "group-admin"],
-            Command::CancelPolicy { .. } => &["policy-servicing", "group-admin"],
+            // The migration load issues policies written on another system.
+            Command::IssuePolicy(_) => &["new-business", "group-admin", "migration"],
+            // Underwriting ends interim cover when the proposal it stood in for ends.
+            Command::CancelPolicy { .. } => &["policy-servicing", "group-admin", "underwriting"],
             Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
             Command::Reinstate { .. } => &["policy-servicing", "collections"],
             Command::UnwindAfter { .. } | Command::ResumeAfterUnwind { .. } => &["claims", "remediation"],

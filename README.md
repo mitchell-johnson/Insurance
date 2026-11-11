@@ -22,6 +22,7 @@ Azure services do the work that should not be ours:
 | Caller identity on the API | Entra ID tokens |
 | Tamper evidence: daily Merkle roots and sealed journal segments | Blob Storage with version-level immutability |
 | Signing the daily root | Key Vault (or Managed HSM) |
+| Clinical records, erasable per person | Key Vault key wrapping, a Blob container with no retention |
 | Events for downstream systems | Event Hubs, one hub partition per ledger partition |
 | The cluster token | Key Vault, mounted through the Secrets Store CSI driver |
 | Logs and metrics | Container Insights and Application Insights (JSON lines on stdout) |
