@@ -581,7 +581,7 @@ impl ClaimsState {
                     cover,
                     payment_ref: payment_ref.clone(),
                     amount_minor: *amount_minor,
-                    payee,
+                    payee: payee.clone(),
                 })?;
                 claim.payments.push(Payment {
                     payment_ref: payment_ref.clone(),
@@ -592,13 +592,7 @@ impl ClaimsState {
                     released_by: signers.first().cloned(),
                     run: None,
                 });
-                let detail = [
-                    ("payment_ref", payment_ref.clone()),
-                    ("amount_minor", amount_minor.to_string()),
-                    ("period_end", String::new()),
-                    ("ex_gratia", "true".into()),
-                ];
-                cx.notify("claim_paid", &id, &detail);
+                cx.paid(&id, payment_ref, *amount_minor, *amount_minor, &payee, None, true);
             }
             Request::EndBenefit { end, reason } => {
                 let cause = if *reason == crate::EndReason::Death {

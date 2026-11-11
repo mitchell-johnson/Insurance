@@ -204,7 +204,8 @@ impl ClaimsState {
         Ok(())
     }
 
-    /// Release a payment from what has been admitted.
+    /// Release a payment from what has been admitted. The money stays in
+    /// benefit payable until the payments module settles it at the bank.
     pub(crate) fn pay(
         &mut self,
         cx: &mut Cx<'_>,
@@ -259,17 +260,17 @@ impl ClaimsState {
             policy: claim.policy.clone(),
             payment_ref: payment_ref.clone(),
             amount_minor,
-            payee,
+            payee: payee.clone(),
             close,
         })?;
         claim.payable_minor -= amount_minor;
-        let mut period_end = String::new();
+        let mut period_end = None;
         match (period, claim.schedule.as_mut()) {
             (Some((start, _)), Some(s)) => {
                 if let Some(p) = s.periods.get_mut(&start) {
                     p.returned = false;
                     p.payment_ref = payment_ref.clone();
-                    period_end = p.end.to_string();
+                    period_end = Some(p.end);
                 }
             }
             _ => claim.payments.push(Payment {
@@ -284,16 +285,7 @@ impl ClaimsState {
         }
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
         note(&mut claim, cx, Some(actor), format!("paid:{payment_ref}"));
-        cx.notify(
-            "claim_paid",
-            id,
-            &[
-                ("payment_ref", payment_ref),
-                ("amount_minor", amount_minor.to_string()),
-                ("period_end", period_end),
-                ("ex_gratia", "false".into()),
-            ],
-        );
+        cx.paid(id, &payment_ref, amount_minor, amount_minor, &payee, period_end, false);
         if close && claim.status == Status::Admitted {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
@@ -615,15 +607,14 @@ impl ClaimsState {
             }
         }
         Self::meet_timer(claim, TimerKind::Payment, cx.today);
-        cx.notify(
-            "claim_paid",
+        cx.paid(
             &claim.id,
-            &[
-                ("payment_ref", payment_ref),
-                ("amount_minor", item.gross_minor.to_string()),
-                ("period_end", item.period_end.to_string()),
-                ("ex_gratia", "false".into()),
-            ],
+            &payment_ref,
+            item.gross_minor,
+            item.net_minor(),
+            &item.payee,
+            Some(item.period_end),
+            false,
         );
         if closed {
             claim.closed_on = Some(cx.today);

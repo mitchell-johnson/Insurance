@@ -91,7 +91,8 @@ pub enum Instruction {
         /// A death claim: end the policy as at the event date, in the same step.
         terminate: Option<Termination>,
     },
-    /// Pay from benefit payable, and close the claim if that was the last of it.
+    /// Release a payment from benefit payable to the payments module, and
+    /// close the claim if that was the last of it.
     Pay {
         claim: String,
         policy: String,

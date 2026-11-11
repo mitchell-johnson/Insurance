@@ -71,6 +71,21 @@ pub(crate) struct Cx<'a> {
 }
 
 impl Cx<'_> {
+    /// A payment was released. This notice is the payments module's
+    /// instruction to pay: it carries the payee and the net amount, and the
+    /// gross amount the reinsurance module recovers against.
+    pub fn paid(&mut self, claim: &str, payment_ref: &str, gross_minor: i64, net_minor: i64, payee: &str, period_end: Option<NaiveDate>, ex_gratia: bool) {
+        let detail = [
+            ("payment_ref", payment_ref.to_string()),
+            ("amount_minor", gross_minor.to_string()),
+            ("net_minor", net_minor.to_string()),
+            ("payee", payee.to_string()),
+            ("period_end", period_end.map(|d| d.to_string()).unwrap_or_default()),
+            ("ex_gratia", ex_gratia.to_string()),
+        ];
+        self.notify("claim_paid", claim, &detail);
+    }
+
     pub fn notify(&mut self, kind: &str, claim: &str, detail: &[(&str, String)]) {
         self.core.notify(kind, claim, detail.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
     }
