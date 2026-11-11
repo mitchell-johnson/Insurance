@@ -132,5 +132,7 @@ pub async fn close_day(client: &Client, task_queue: &str, input: EndOfDayInput) 
         .id_conflict_policy(WorkflowIdConflictPolicy::UseExisting)
         .build();
     let handle = client.start_workflow(EndOfDayWorkflow::run, input, options).await.map_err(|e| e.to_string())?;
-    handle.get_result(WorkflowGetResultOptions::default()).await.map_err(|e| e.to_string())
+    // The debug form: it carries the failed step's own message, which the
+    // display form leaves out.
+    handle.get_result(WorkflowGetResultOptions::default()).await.map_err(|e| format!("{e}: {e:?}"))
 }

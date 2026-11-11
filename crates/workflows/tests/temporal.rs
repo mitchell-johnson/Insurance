@@ -75,13 +75,13 @@ impl Fleet {
     }
 
     fn worker(&self) -> Child {
-        self.command(&self.nodes).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()
+        self.command(&self.nodes).stdout(Stdio::null()).stderr(worker_log()).spawn().unwrap()
     }
 
     /// A worker that can reach Temporal but not the ledger: it takes steps
     /// and never finishes them.
     fn stranded_worker(&self) -> Child {
-        self.command("127.0.0.1:1").stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap()
+        self.command("127.0.0.1:1").stdout(Stdio::null()).stderr(worker_log()).spawn().unwrap()
     }
 
     /// Start `ic-worker close` for a day; it waits for the run to finish.
@@ -93,6 +93,16 @@ impl Fleet {
             .spawn()
             .unwrap()
     }
+}
+
+/// Where the worker processes of this test run write what they log, so a
+/// failure can show it.
+fn worker_log_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("temporal-workers-{}.log", std::process::id()))
+}
+
+fn worker_log() -> Stdio {
+    Stdio::from(std::fs::OpenOptions::new().create(true).append(true).open(worker_log_path()).unwrap())
 }
 
 /// Stop a worker process abruptly, with no chance to finish or report.
@@ -111,7 +121,12 @@ async fn finish(child: Child) -> Output {
 
 async fn report(child: Child) -> EndOfDayReport {
     let output = finish(child).await;
-    assert!(output.status.success(), "the run failed: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "the run failed: {}\nworkers logged:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        std::fs::read_to_string(worker_log_path()).unwrap_or_default()
+    );
     serde_json::from_slice(&output.stdout).expect("the report is not JSON")
 }
 
