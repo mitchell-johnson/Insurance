@@ -231,6 +231,7 @@ impl CoreState {
     fn dispatch(&mut self, ctx: &mut Ctx<'_>, command: Command) -> Result<(), Reject> {
         match command {
             Command::ActivateProduct { product } => {
+                self.catalog.check_product(&product).map_err(config_conflict)?;
                 ctx.emit(Event::ProductActivated {
                     code: product.code.clone(),
                     version: product.version,
@@ -240,6 +241,7 @@ impl CoreState {
                 Ok(())
             }
             Command::ActivateRateTable { table } => {
+                self.catalog.check_rate_table(&table).map_err(config_conflict)?;
                 ctx.emit(Event::RateTableActivated {
                     id: table.id.clone(),
                     version: table.version,
@@ -250,6 +252,7 @@ impl CoreState {
                 Ok(())
             }
             Command::ActivateDefinitions { definitions } => {
+                self.catalog.check_definitions(&definitions).map_err(config_conflict)?;
                 ctx.emit(Event::DefinitionsActivated {
                     count: definitions.len() as u32,
                 });
@@ -257,6 +260,7 @@ impl CoreState {
                 Ok(())
             }
             Command::ActivateIndexRate { code, effective_from, rate } => {
+                self.catalog.check_index_rate(&code, effective_from, &rate, ctx.date).map_err(config_conflict)?;
                 ctx.emit(Event::IndexRateActivated {
                     code: code.clone(),
                     effective_from,
@@ -548,4 +552,9 @@ impl StateMachine for CoreState {
     fn apply(&mut self, index: u64, command: Envelope) -> Applied {
         self.apply_envelope(index, command)
     }
+}
+
+/// Active configuration is immutable; see the checks in the catalog.
+fn config_conflict(message: String) -> Reject {
+    Reject::new("config_conflict", message)
 }

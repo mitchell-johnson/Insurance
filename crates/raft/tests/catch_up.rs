@@ -123,7 +123,17 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
     // It counts again: with one of the others gone, there is still a majority.
     running.remove(&survivor).unwrap().kill().await;
     issue(41).await;
-    assert_eq!(status(3).await.policies, 41);
+    // The write needed node 3's copy to commit. A follower applies an entry when it next
+    // hears the commit point, a heartbeat later.
+    let mut applied = false;
+    for _ in 0..100 {
+        if status(3).await.policies == 41 {
+            applied = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(applied, "node 3 did not apply the write it helped commit: {:?}", status(3).await);
     for (_, node) in running {
         node.stop().await.unwrap();
     }
@@ -133,11 +143,14 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
 /// Purpose: a ledger node's Raft endpoints turn away a caller with the cluster token but no
 /// node identity, a caller that expects this node to be a different incarnation, and a
 /// caller claiming a node number this node already knows under another identity. A caller
-/// with no token is turned away before any of that.
+/// with no token is turned away before any of that. The operator's endpoints refuse an empty
+/// voter set, a partition the node does not host, a membership change asked of a node that
+/// does not lead, and answer a repeated initialisation without forming the group again.
 /// Why it matters: Raft messages decide who leads and what is committed. A node rebuilt on
 /// an empty disk that kept its old number could vote twice in one term; these refusals are
 /// what stop it, and they sit on the network path where the only other test of them is
-/// the container drill.
+/// the container drill. Membership changes are how a failed node is replaced, usually in a
+/// hurry: a mistaken one must be refused with a reason, not leave a group without voters.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn raft_endpoints_refuse_callers_they_cannot_place() {
     let dir = scratch("raft-door");
@@ -190,6 +203,28 @@ async fn raft_endpoints_refuse_callers_they_cannot_place() {
     let (status, said) = vote(vec![("x-ic-node", "2"), ("x-ic-incarnation", "first"), ("x-ic-expects", "not-this-node")], true).await;
     assert_eq!(status, 409);
     assert!(said.contains("not the member"), "{said}");
+
+    // The operator's endpoints on the same node. Its only peer has never answered, so it
+    // leads nothing: it says so instead of accepting a change it cannot commit.
+    let put = |partition: u16, members: serde_json::Value| {
+        let request = http
+            .put(format!("http://{addr}/v1/partitions/{partition}/members"))
+            .bearer_auth(TOKEN)
+            .json(&members);
+        async move {
+            let response = request.send().await.unwrap();
+            (response.status().as_u16(), response.text().await.unwrap())
+        }
+    };
+    let (status, said) = put(0, serde_json::json!({})).await;
+    assert_eq!(status, 400, "{said}");
+    assert!(said.contains("at least one member"), "{said}");
+    assert_eq!(put(7, serde_json::json!({ "1": addr })).await.0, 404);
+    let (status, said) = put(0, serde_json::json!({ "1": addr, "3": "127.0.0.1:1" })).await;
+    assert_eq!(status, 421, "{said}");
+    // A group is initialised once; asking again is answered as done and changes nothing.
+    let again = http.post(format!("http://{addr}/v1/init")).bearer_auth(TOKEN).send().await.unwrap();
+    assert_eq!(again.status().as_u16(), 204);
     node.stop().await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
 }

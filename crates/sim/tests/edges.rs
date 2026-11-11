@@ -743,3 +743,82 @@ fn a_schemes_own_rate_table_moves_with_it() {
     // December is billed on the target at the scheme's own rate, not the standard 14.67.
     assert_eq!(c.state(1).policies[&id].outstanding_minor(), 29_33);
 }
+
+/// Purpose: configuration that is active cannot be rewritten. The same content sent again is
+/// accepted, a new version is accepted, and each way of changing what a version says is refused:
+/// other content under an active product hash, other content under an active product version,
+/// a rate table or a definition changed in place, configuration with no content hash, and an
+/// index rate already in effect given another value. An index rate still in the future can be
+/// amended.
+/// Why it matters: a policy is priced from the product and rate table versions it was issued
+/// under for as long as it lives, and its covers are bound to the wording of a definition by
+/// hash. If a later request could replace what a version says, every policy on it would be
+/// repriced or redefined from the next bill onward, with nothing in the journal to show the
+/// terms had changed.
+#[test]
+fn active_configuration_cannot_be_rewritten() {
+    let mut c = cluster(1);
+    let conflict = |r: Result<(), Reject>| assert_eq!(r.unwrap_err().code, "config_conflict");
+    let hash = c.state(0).catalog.product_on("term-life", start()).unwrap().content_hash.clone();
+    for command in shipped_activations().unwrap() {
+        // Repeating an activation changes nothing and is not an error.
+        c.submit(0, "config", command.clone()).unwrap();
+        match command {
+            Command::ActivateProduct { product } => {
+                let mut same_hash = product.clone();
+                same_hash.statutory_fund.push('x');
+                conflict(c.submit(0, "config", Command::ActivateProduct { product: same_hash }));
+                let mut same_version = product.clone();
+                same_version.statutory_fund.push('x');
+                same_version.content_hash = format!("{:f>64}", product.code);
+                conflict(c.submit(0, "config", Command::ActivateProduct { product: same_version.clone() }));
+                let mut unhashed = product.clone();
+                unhashed.content_hash.clear();
+                conflict(c.submit(0, "config", Command::ActivateProduct { product: unhashed }));
+                // Changed content under a new version and its own hash is how a product changes.
+                same_version.version += 1;
+                c.submit(0, "config", Command::ActivateProduct { product: same_version }).unwrap();
+            }
+            Command::ActivateRateTable { table } => {
+                let mut changed = table.clone();
+                changed.rows[0].annual_rate = ic_money::DecStr::parse("99").unwrap();
+                conflict(c.submit(0, "config", Command::ActivateRateTable { table: changed }));
+                let mut unhashed = table.clone();
+                unhashed.content_hash.clear();
+                conflict(c.submit(0, "config", Command::ActivateRateTable { table: unhashed }));
+            }
+            Command::ActivateDefinitions { definitions } => {
+                let mut reworded = definitions.clone();
+                reworded[0].text_hash = "0".repeat(64);
+                conflict(c.submit(0, "config", Command::ActivateDefinitions { definitions: reworded }));
+                let mut unhashed = definitions.clone();
+                unhashed[0].text_hash.clear();
+                conflict(c.submit(0, "config", Command::ActivateDefinitions { definitions: unhashed }));
+            }
+            Command::ActivateIndexRate { code, effective_from, .. } => {
+                let rate = |r: &str| ic_money::DecStr::parse(r).unwrap();
+                let activate = |code: &str, effective_from, r: &str| Command::ActivateIndexRate {
+                    code: code.to_string(),
+                    effective_from,
+                    rate: rate(r),
+                };
+                conflict(c.submit(0, "config", activate(&code, effective_from, "0.5")));
+                let next_year = d(2028, 1, 1);
+                c.submit(0, "config", activate(&code, next_year, "0.03")).unwrap();
+                c.submit(0, "config", activate(&code, next_year, "0.031")).unwrap();
+                assert_eq!(c.state(0).catalog.index_rate_on(&code, next_year), Some(&rate("0.031")));
+                assert_eq!(
+                    c.state(0).catalog.index_rate_on(&code, start()),
+                    c.state(0).catalog.index_rate_on(&code, effective_from)
+                );
+            }
+            other => panic!("unexpected shipped command {}", other.name()),
+        }
+    }
+    // The refused requests left the product exactly as it was, and the new version is in force.
+    assert!(c.state(0).catalog.product(&hash).is_some_and(|p| !p.statutory_fund.ends_with('x')));
+    assert_eq!(
+        c.state(0).catalog.product_on("term-life", start()).unwrap().content_hash,
+        format!("{:f>64}", "term-life")
+    );
+}

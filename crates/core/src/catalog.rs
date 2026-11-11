@@ -28,6 +28,63 @@ pub struct Catalog {
 }
 
 impl Catalog {
+    /// Whether a product may be activated. A version is immutable once it is
+    /// active: policies are priced from it for as long as they live, so the
+    /// same content may be activated again (a repeated request) and anything
+    /// else under a hash or version already in use is refused.
+    pub fn check_product(&self, p: &ProductDefinition) -> Result<(), String> {
+        if p.content_hash.is_empty() {
+            return Err(format!("product {} carries no content hash; load it from its source", p.code));
+        }
+        if self.products.get(&p.content_hash).is_some_and(|active| active != p) {
+            return Err(format!("another product is active under the content hash of {} version {}", p.code, p.version));
+        }
+        let bound = self.product_versions.get(&p.code).and_then(|v| v.get(&(p.effective_from, p.version)));
+        if bound.is_some_and(|hash| *hash != p.content_hash) {
+            return Err(format!("product {} version {} is already active with other content", p.code, p.version));
+        }
+        Ok(())
+    }
+
+    /// Whether a rate table may be activated: as for products, a version is
+    /// immutable once active.
+    pub fn check_rate_table(&self, t: &RateTable) -> Result<(), String> {
+        if t.content_hash.is_empty() {
+            return Err(format!("rate table {} carries no content hash; load it from its source", t.id));
+        }
+        let active = self.rate_tables.get(&t.id).and_then(|v| v.get(&t.version));
+        if active.is_some_and(|active| active != t) {
+            return Err(format!("rate table {} version {} is already active with other content", t.id, t.version));
+        }
+        Ok(())
+    }
+
+    /// Whether a set of definitions may be activated: covers are bound to a
+    /// version's wording by its hash, so a version cannot change its wording.
+    pub fn check_definitions(&self, defs: &[Definition]) -> Result<(), String> {
+        for d in defs {
+            if d.text_hash.is_empty() {
+                return Err(format!("definition {} carries no hash of its wording; load it from its source", d.id));
+            }
+            let active = self.definitions.get(&d.id).and_then(|v| v.get(&d.version));
+            if active.is_some_and(|a| a.text_hash != d.text_hash || a.effective_from != d.effective_from) {
+                return Err(format!("definition {} version {} is already active with other wording", d.id, d.version));
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether an index rate may be activated. A rate that has taken effect
+    /// has been used to index policies and cannot be changed; a correction
+    /// is a new rate from a later date. A rate still in the future can be.
+    pub fn check_index_rate(&self, code: &str, effective_from: NaiveDate, rate: &DecStr, today: NaiveDate) -> Result<(), String> {
+        let active = self.index_rates.get(code).and_then(|r| r.get(&effective_from));
+        if effective_from <= today && active.is_some_and(|a| a != rate) {
+            return Err(format!("index rate {code} from {effective_from} is already in effect at another value"));
+        }
+        Ok(())
+    }
+
     pub fn activate_product(&mut self, p: ProductDefinition) {
         self.product_versions
             .entry(p.code.clone())

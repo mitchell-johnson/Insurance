@@ -243,3 +243,53 @@ async fn the_close_advances_the_date_reconciles_and_publishes_the_root() {
     let (_, view) = Call::new("GET", "/v1/policies/KTL00000001").roles("policy-servicing").send(&app).await;
     assert_eq!(view["policy"]["status"], "cancelled");
 }
+
+/// Purpose: the less travelled answers of the write routes: a quote for an application the
+/// product refuses is unprocessable with the rule's code; a command with no partition, group or
+/// policy is a bad request; a command addressed by group reaches that group's partition; a
+/// configuration change that conflicts with active configuration is refused with the
+/// ledger's reason; and a payment matched to a policy that has ended is held as an
+/// exception with the match offered as a suggestion.
+/// Why it matters: callers act on these answers. A quote that failed must say why, a command
+/// that cannot be routed must not be guessed onto a partition, a conflicting change to
+/// configuration must come back as a refusal rather than as accepted, and money for an ended policy must stay with
+/// cash matching for a person to decide rather than be reported as applied.
+#[tokio::test]
+async fn refusals_are_reported_as_what_they_are() {
+    let app = issued().await;
+    let mut unknown = application();
+    assert!(unknown["product_code"].is_string(), "{unknown}");
+    unknown["product_code"] = json!("no-such-product");
+    let (status, body) = Call::new("POST", "/v1/quotes").body(unknown).send(&app).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+
+    let cancel = json!({ "cancel_policy": { "policy": "pol-00000001" } });
+    let (status, body) = Call::new("POST", "/v1/commands")
+        .roles("policy-servicing")
+        .key("c-0")
+        .body(json!({ "command": cancel }))
+        .send(&app)
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let rate = json!({ "command": { "activate_index_rate": { "code": "cpi", "effective_from": "2027-01-01", "rate": "0.9" } } });
+    let (status, body) = Call::new("POST", "/v1/commands").roles("config").key("cpi-again").body(rate).send(&app).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    assert_eq!(body["title"], "config_conflict", "{body}");
+
+    let group = application()["group"].clone();
+    let (status, body) = Call::new("POST", "/v1/commands")
+        .roles("policy-servicing")
+        .key("c-1")
+        .body(json!({ "group": group, "command": cancel }))
+        .send(&app)
+        .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+
+    let pay = json!({ "id": "rail-9", "amount": { "minor": 5000, "currency": "NZD" }, "reference": "KTL00000001", "payer_account": null, "received_on": "2027-03-01" });
+    let (status, body) = Call::new("POST", "/v1/payments").roles("cash-matching").body(pay).send(&app).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    assert_eq!(body["status"], "exception", "{body}");
+    assert!(body["reason"].as_str().unwrap().starts_with("policy_ended"), "{body}");
+    assert_eq!(body["suggestion"]["rule"], "reference", "{body}");
+}
