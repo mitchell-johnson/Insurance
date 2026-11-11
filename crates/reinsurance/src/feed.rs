@@ -10,7 +10,7 @@ use ic_core::{PolicyId, PolicyStatus};
 use ic_ledger::PartitionId;
 
 use crate::cession::{Risk, Source};
-use crate::machine::{Ctx, PolicyInfo, Reinsurance, Reject};
+use crate::machine::{Ctx, InstructionBody, PolicyInfo, Reinsurance, Reject};
 use crate::premium::Period;
 use crate::RiskKey;
 
@@ -36,6 +36,21 @@ impl Reinsurance {
             self.project(ctx, rec.partition, rec.business_date, rec.event);
         }
         Ok(())
+    }
+
+    /// Send the whole cession record of a policy's covers to a partition.
+    /// The core refuses a change to a policy that is moving between
+    /// partitions, and a refused command is not applied on a retry with the
+    /// same key. So when a transfer lands, or is abandoned, the record is
+    /// sent again in full to wherever the policy now is; recording the same
+    /// cession twice changes nothing.
+    fn resend_record(&mut self, ctx: &mut Ctx, policy: &PolicyId, partition: PartitionId) {
+        for key in self.policy_risks(policy) {
+            let segments = self.cession_record(&key).to_vec();
+            if let Some((from, _)) = segments.first() {
+                ctx.instruct(partition, InstructionBody::RecordCession { key, from: *from, segments });
+            }
+        }
     }
 
     fn set_lives(&mut self, ctx: &mut Ctx, policy: &PolicyId, lives: &[LifeInfo]) {
@@ -225,7 +240,11 @@ impl Reinsurance {
                         self.set_member(ctx, &policy, partition, &m.life, business_date, std::slice::from_ref(m));
                     }
                 }
+                self.resend_record(ctx, &policy, partition);
             }
+            // The policy stays where it was, and changes refused while it
+            // was frozen have to reach it now.
+            Event::TransferAborted { policy, .. } => self.resend_record(ctx, &policy, partition),
             // The stub a transfer leaves behind says Transferred. The policy
             // itself is still in force where it landed.
             Event::PolicyStatusChanged {
