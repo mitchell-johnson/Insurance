@@ -1,0 +1,28 @@
+[package]
+name = "ic-group"
+description = "Group scheme administration: membership intake, party matching, excess cover, continuation and renewal"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-ledger.workspace = true
+ic-log.workspace = true
+ic-money.workspace = true
+ic-product.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+ic-sim.workspace = true
+ic-readmodel.workspace = true
+proptest.workspace = true
+
+[lints]
+workspace = true
