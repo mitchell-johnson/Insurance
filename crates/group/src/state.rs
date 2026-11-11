@@ -467,7 +467,8 @@ impl GroupState {
                 product,
                 terms,
                 founding,
-            } => self.register(scheme, policy, group, employer, inception, *product, *terms, founding),
+                pools,
+            } => self.register(scheme, policy, group, employer, inception, *product, *terms, founding, pools),
             AmendTerms { scheme, terms } => self.with_scheme(&scheme, |st, s| {
                 terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
                 s.terms = *terms;
@@ -608,6 +609,7 @@ impl GroupState {
         product: ProductDefinition,
         terms: SchemeTerms,
         founding: Vec<crate::model::Member>,
+        pools: Vec<String>,
     ) -> Result<(), Reject> {
         if id.is_empty() || id.contains(':') {
             return Err(Reject::new("invalid_scheme", "a scheme ID is not empty and has no colon"));
@@ -626,6 +628,18 @@ impl GroupState {
             }
             membership.insert(member);
         }
+        let pooled = terms.basis == MemberBasis::Pool;
+        if pooled != membership.members.is_empty() || (!pooled && !pools.is_empty()) {
+            return Err(Reject::new(
+                "invalid_scheme",
+                "a pool scheme has pools and no members; any other has members and no pools",
+            ));
+        }
+        // A pool scheme owes its first declaration from the start.
+        let declaration_due = pooled
+            .then(|| terms.scheme_year_start.checked_add_days(Days::new(u64::from(terms.declaration_due_days))))
+            .flatten();
+        let pools: BTreeMap<String, NaiveDate> = pools.into_iter().map(|p| (p, inception)).collect();
         self.emit(GroupEvent::SchemeRegistered {
             scheme: id.clone(),
             policy: policy.clone(),
@@ -665,8 +679,8 @@ impl GroupState {
                 cases: BTreeMap::new(),
                 possible: BTreeMap::new(),
                 offers: BTreeMap::new(),
-                pools: BTreeMap::new(),
-                declaration_due: None,
+                pools,
+                declaration_due,
                 absence_leaves: BTreeSet::new(),
                 renewal: None,
                 building: None,

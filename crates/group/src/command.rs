@@ -102,6 +102,10 @@ pub enum GroupCommand {
         /// The members the policy was issued with.
         #[serde(default)]
         founding: Vec<crate::model::Member>,
+        /// On a pool scheme, the names of the pools the policy was issued
+        /// with (each is the life `pool:{name}` in the core).
+        #[serde(default)]
+        pools: Vec<String>,
     },
     AmendTerms {
         scheme: String,

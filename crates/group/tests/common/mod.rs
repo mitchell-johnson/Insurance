@@ -176,10 +176,17 @@ impl Harness {
             LifeSpec {
                 id: life("pool:seed"),
                 kind: LifeKind::Pool {
-                    headcount: 0,
-                    total_salary_minor: 0,
+                    headcount: 10,
+                    total_salary_minor: 600_000_00,
                 },
-                factors: LifeFactors::default(),
+                factors: LifeFactors {
+                    category: Some("staff".to_string()),
+                    pool: Some(ic_core::PoolAggregate {
+                        headcount: 10,
+                        total_salary_minor: 600_000_00,
+                    }),
+                    ..LifeFactors::default()
+                },
             }
         } else {
             LifeSpec {
@@ -230,6 +237,7 @@ impl Harness {
             product: Box::new(product()),
             terms: Box::new(terms),
             founding,
+            pools: if pooled { vec!["seed".to_string()] } else { vec![] },
         })
         .unwrap();
         h.staff(GroupCommand::SetMapping {

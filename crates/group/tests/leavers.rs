@@ -70,7 +70,11 @@ fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
     )
     .unwrap();
     h.approve("f1").unwrap();
-    h.resolve("f1", |id| (id == "E003").then(|| Resolution::Possible { candidates: vec![party("party-x")] }));
+    h.resolve("f1", |id| {
+        (id == "E003").then(|| Resolution::Possible {
+            candidates: vec![party("party-x")],
+        })
+    });
     h.days(20);
     let left = h.today();
     h.apply(
@@ -104,7 +108,10 @@ fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
     take_up(&mut h, offer, 1, "term-life", 100_000_00).unwrap();
     assert!(h.saw(|e| matches!(e, GroupEvent::ContinuationRefused { code, .. } if code == "duplicate_policy")));
     assert_eq!(h.scheme().offers[&offer].status, OfferStatus::Open);
-    assert!(h.scheme().blocked.is_none(), "a refusal of the member's new policy says nothing about the scheme");
+    assert!(
+        h.scheme().blocked.is_none(),
+        "a refusal of the member's new policy says nothing about the scheme"
+    );
 
     take_up(&mut h, offer, 2, "term-life", 100_000_00).unwrap();
     let new_policy = PolicyId("pol-cont-2".into());
@@ -124,9 +131,20 @@ fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
 #[test]
 fn an_option_not_taken_up_expires() {
     let mut h = Harness::new(terms());
-    h.apply("f1", FileKind::Full, vec![row(1, "E001", attrs("staff", 60_000_00, "akl")), row(2, "E002", attrs("staff", 60_000_00, "wlg"))]);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", attrs("staff", 60_000_00, "wlg")),
+        ],
+    );
     let left = h.today();
-    h.apply("f2", FileKind::Changes, vec![change(1, "E002", RowChange::Leave, left, attrs("staff", 60_000_00, "wlg"))]);
+    h.apply(
+        "f2",
+        FileKind::Changes,
+        vec![change(1, "E002", RowChange::Leave, left, attrs("staff", 60_000_00, "wlg"))],
+    );
     let offer = offer_for(&h, "E002").unwrap();
 
     // A request dated after the last day, arriving before that day's tick.
@@ -190,7 +208,11 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     assert_eq!(h.sent.len(), 1, "an absence is the scheme's business: the core is not told");
     h.days(10);
     let back = h.today();
-    h.apply("f3", FileKind::Changes, vec![change(1, "E003", RowChange::AbsenceEnd, back, attrs("staff", 90_000_00, "akl"))]);
+    h.apply(
+        "f3",
+        FileKind::Changes,
+        vec![change(1, "E003", RowChange::AbsenceEnd, back, attrs("staff", 90_000_00, "akl"))],
+    );
     assert_eq!(h.scheme().membership.active("E003").unwrap().absence_since, None);
 
     // 1 November plus 30 days is 1 December; cover runs to the end of that month.
