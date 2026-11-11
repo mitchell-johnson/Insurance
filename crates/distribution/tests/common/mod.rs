@@ -5,14 +5,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
-use ic_core::counterparty::PartyLedger;
+use ic_core::counterparty::{CounterpartyAccount, CounterpartyLine, CounterpartyPosting, InternalLedger, PartyLedger};
 use ic_core::{Command as CoreCommand, PartyId, PolicyId, Reject};
 use ic_distribution::authority::{shipped_templates, Role, Staff};
 use ic_distribution::config::Change;
 use ic_distribution::model::{ClawbackStep, InitialEarned, Schedule, ScheduleOption};
 use ic_distribution::rules::{CommissionType, Component, LiabilityLine, Line, Rule, Share, WHOLE};
 use ic_distribution::state::{Settings, WriteLayer};
-use ic_distribution::structure::{Engagement, PartyKind};
+use ic_distribution::structure::{Engagement, LicenceState, PartyKind};
+use ic_distribution::workbench::Action;
 use ic_distribution::{Actor, BookId, Command, DistributionState, EngagementId, Envelope, Event};
 use ic_money::{Currency::NZD, Money};
 use ic_product::{Frequency, Sex};
@@ -87,6 +88,8 @@ pub struct World {
     /// When false, postings stay in the outbox until `deliver` is called.
     pub auto_deliver: bool,
     pub outbox: Vec<(u16, ic_core::counterparty::CounterpartyPosting)>,
+    /// Every envelope applied, in order: what a replica would replay.
+    pub log: Vec<(u64, Envelope)>,
 }
 
 pub const START: (i32, u32, u32) = (2027, 3, 1);
@@ -111,6 +114,7 @@ impl World {
             refused: vec![],
             auto_deliver: true,
             outbox: vec![],
+            log: vec![],
         };
         w.sync();
         w
@@ -129,14 +133,13 @@ impl World {
 
     pub fn send_keyed(&mut self, key: &str, actor: Actor, command: Command) -> Result<Vec<Event>, Reject> {
         self.index += 1;
-        let out = self.dist.apply_envelope(
-            self.index,
-            Envelope {
-                key: key.to_string(),
-                actor,
-                command,
-            },
-        );
+        let envelope = Envelope {
+            key: key.to_string(),
+            actor,
+            command,
+        };
+        self.log.push((self.index, envelope.clone()));
+        let out = self.dist.apply_envelope(self.index, envelope);
         self.events.extend(out.events.iter().cloned());
         self.outbox.extend(out.postings);
         out.result.map(|()| out.events)
@@ -358,6 +361,109 @@ impl World {
             })),
         )
     }
+}
+
+impl World {
+    pub fn status(&self, policy: &PolicyId) -> ic_core::PolicyStatus {
+        let p = self.cluster.locate(policy).unwrap();
+        self.cluster.state(p).policies[policy].status
+    }
+
+    /// Run days until the policy has the status, failing after a year.
+    pub fn until_status(&mut self, policy: &PolicyId, status: ic_core::PolicyStatus) {
+        for _ in 0..366 {
+            if self.status(policy) == status {
+                return;
+            }
+            self.days(1);
+        }
+        panic!("policy never became {status:?}");
+    }
+
+    pub fn licence(&mut self, who: &str, state: LicenceState, effective: NaiveDate) -> Result<Vec<Event>, Reject> {
+        let r = self.send(
+            compliance(),
+            Command::RecordLicence {
+                party: party(who),
+                state,
+                effective,
+                source_ref: format!("notice-{who}-{effective}"),
+            },
+        );
+        self.sync();
+        r
+    }
+
+    /// Prepare a workbench action as counterparty finance.
+    pub fn act(&mut self, id: &str, who: &str, action: Action) -> Result<Vec<Event>, Reject> {
+        self.send(
+            finance(),
+            Command::ProposeAction {
+                id: id.into(),
+                party: party(who),
+                action,
+                reason_code: "reason".into(),
+                document_ref: format!("doc-{id}"),
+            },
+        )
+    }
+
+    pub fn sign(&mut self, id: &str, actor: Actor, as_role: Role) -> Result<Vec<Event>, Reject> {
+        let r = self.send(actor, Command::ApproveAction { id: id.into(), as_role });
+        self.sync();
+        r
+    }
+
+    pub fn cut(&mut self, who: &str) -> Result<Vec<Event>, Reject> {
+        let r = self.send(ops(), Command::CutStatement { payee: party(who) });
+        self.sync();
+        r
+    }
+
+    pub fn settle(&mut self, reference: &str) {
+        self.send(module("payments"), Command::PaymentSettled { reference: reference.into() }).unwrap();
+        self.sync();
+    }
+
+    pub fn statement(&self, who: &str, number: u32) -> &ic_distribution::Statement {
+        &self.dist.statements[&format!("{who}.{number}")]
+    }
+
+    /// Post straight to the core as another module would: a claims
+    /// overpayment, a reinsurance recovery, an employer's arrears.
+    pub fn post_as_finance(&mut self, partition: u16, reference: &str, lines: Vec<(CounterpartyAccount, i64)>) -> Result<(), Reject> {
+        let posting = CounterpartyPosting {
+            reference: reference.into(),
+            kind: "external".into(),
+            currency: NZD,
+            value_date: None,
+            policy: None,
+            reverses: None,
+            lines: lines.into_iter().map(|(account, amount_minor)| CounterpartyLine { account, amount_minor }).collect(),
+            detail: BTreeMap::new(),
+        };
+        let r = self.cluster.submit(partition, "counterparty-finance", CoreCommand::PostCounterparty(Box::new(posting)));
+        self.sync();
+        r
+    }
+
+    /// The net of an internal account across partitions; debit positive.
+    pub fn internal(&self, ledger: InternalLedger) -> i64 {
+        (0..self.cluster.partitions())
+            .map(|p| {
+                let account = ic_core::counterparty::internal_account(&ledger, NZD);
+                self.cluster.state(p).ledger.balance(&account.id) as i64
+            })
+            .sum()
+    }
+}
+
+pub fn code<T: std::fmt::Debug>(r: Result<T, Reject>) -> String {
+    r.unwrap_err().code
+}
+
+pub fn acct(who: &str, ledger: PartyLedger) -> CounterpartyAccount {
+    CounterpartyAccount::Party { party: party(who), ledger }
 }
 
 pub fn schedule() -> Schedule {

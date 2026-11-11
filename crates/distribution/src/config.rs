@@ -839,7 +839,7 @@ impl DistributionState {
                         ],
                         detail,
                     };
-                    self.request(ctx, *partition, posting, Some(set.id.clone()));
+                    self.request(ctx, *partition, posting, Some(format!("change:{}", set.id)));
                 }
                 _ => {}
             }
