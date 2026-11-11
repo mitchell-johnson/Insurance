@@ -119,3 +119,24 @@ Each restart is a rolling one and the cluster stays writable throughout.
 ## Proving a closed day
 
 Each closed day has a blob `merkle-roots/<year>/<date>.json` in the immutable `merkle-roots` container: the ledger head of every partition, their Merkle root, and a Key Vault signature over it. Sealed journal segments are in `cold-segments`. To prove a day's books are unchanged, recompute the root from the ledger heads at that date and verify the signature against the key version named in the blob. Neither container allows a blob to be changed or deleted inside the retention period (eight years by default).
+
+## Fail-back to the preferred region
+
+Set on every ledger node:
+
+| Variable | Meaning | Default |
+| --- | --- | --- |
+| `IC_PREFERRED_NODES` | Node numbers in the preferred region, for example `1,2`. Unset turns fail-back off. | off |
+| `IC_FAILBACK_SHARE_PERCENT` | Share of a node's groups handed back per round. | 20 |
+| `IC_FAILBACK_LATENCY_MS` | How long a moved group may take to answer a majority read. | 2000 |
+| `IC_FAILBACK_SETTLE_SECONDS` | How long a preferred voter must have been level before it is handed a group. | 120 |
+| `IC_FAILBACK_FROZEN` | Periods of the day with no moves, for example `23:30-02:30,06:00-08:00`. | none |
+| `IC_FAILBACK_TIMEZONE` | Time zone of those periods. | `Pacific/Auckland` |
+
+Set the frozen periods from the freeze calendar: end-of-day and the close, the billing peak, and the bank cutoffs.
+
+- **See what it is doing:** `GET /v1/failback` on each node, with the cluster token. `waiting` says why nothing moved; `halted` says why it stopped itself.
+- **Pause or resume:** `POST /v1/failback/pause` or `/resume` on each node that leads groups. Pause is held in memory: a restarted node starts unpaused. Resume also clears a stop.
+- **Move a leader by hand, or reverse a fail-back:** pause first, then `POST /v1/partitions/{n}/leader` with `{"to": <node>}` to any node.
+- **When it stops itself:** the log line `fail-back stopped on this node` carries the reason. Too slow: check the link to the preferred region before resuming. A different state hash at the same log entry: do not resume; that replica must be replaced as a new member and the difference investigated.
+
