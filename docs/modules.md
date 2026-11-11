@@ -49,7 +49,16 @@ ic_raft::server::start_with(settings, modules).await?;
 - The group lives in `<data dir>/module-<name>` on each node. The name is permanent. Every node of a cluster hosts the same modules; `PUT /v1/modules/{name}/members` replaces a failed member exactly as for a partition.
 - A node that is given a directory holding another module's snapshot does not start.
 
-Until a module is attached to the host, run the state machine over `ic_log::Replica` with a `FileLog`; moving it across is the `hosted(...)` line above. The feed of each partition's events into a module's group is the next piece and is not on `main` yet; until then a module's driver reads events itself and proposes them as commands.
+Until a module is attached to the host, run the state machine over `ic_log::Replica` with a `FileLog`; moving it across is the `hosted(...)` line above.
+
+### Reading the core's events
+
+A module that reads events is declared with `hosted_reading(state, query, react)` and `ModuleSpec::new(name, make)?.reading_events()`. `react` is a pure function from an `ic_core::EventRecord` to the module's own commands.
+
+- The node leading the module's group fetches each partition's events after the group's checkpoint and proposes them through the group's log. Every member is shown each event once, in the partition's sequence. The checkpoint per partition is part of the replicated state and of the state hash, so a new leader carries on where the last one stopped, and a run offered twice is taken in once.
+- Each partition keeps its events until they are on the stream and every registered reader has acknowledged them. A module hosted from the first start misses nothing. A module added to a cluster that is already running starts at the oldest event the partition still holds; what came before is on Event Hubs and in the cold tier, and loading a new module from there is not built.
+- `react` sees events only. To change a policy the module's driver sends the core a command, as above.
+- A reader outside the cluster uses the same routes: `ClusterClient::acknowledge_events(partition, consumer, 0)` registers it, `events(partition, consumer, after, max)` reads from its checkpoint, `acknowledge_events` lets the partition release what it has, and `unsubscribe` ends it. A reader that stops acknowledging holds events in every member's state: `backlog.events` in `GET /v1/status` is the figure to watch.
 
 ## Changing the core
 
