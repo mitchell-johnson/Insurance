@@ -176,18 +176,25 @@ pub(crate) fn apply_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut
     Ok(())
 }
 
+/// Refunds go back to where the money came from, unless the payer is the
+/// person a claim is for: then they are paid with that claim and only so.
+pub(crate) fn check_refund_route(policy: &Policy, with_claim: Option<&String>) -> Result<(), Reject> {
+    if policy.refund_with_claim.as_ref() == with_claim {
+        return Ok(());
+    }
+    Err(match &policy.refund_with_claim {
+        Some(claim) => Reject::new(
+            "refund_with_claim",
+            format!("the payer is the person claim {claim} is for; this refund is paid with that claim, not to the source account"),
+        ),
+        None => Reject::new("refund_to_source", "refunds on this policy go back to the source account; no claim takes them"),
+    })
+}
+
 pub(crate) fn refund_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, amount: Money, with_claim: Option<String>) -> Result<(), Reject> {
     // Refunds go back to where the money came from, unless the payer is the
     // person a claim is for: then they are paid with that claim and only so.
-    if policy.refund_with_claim != with_claim {
-        return Err(match &policy.refund_with_claim {
-            Some(claim) => Reject::new(
-                "refund_with_claim",
-                format!("the payer is the person claim {claim} is for; this refund is paid with that claim, not to the source account"),
-            ),
-            None => Reject::new("refund_to_source", "refunds on this policy go back to the source account; no claim takes them"),
-        });
-    }
+    check_refund_route(policy, with_claim.as_ref())?;
     let c = policy.currency;
     if amount.currency != c || amount.minor <= 0 {
         return Err(Reject::new("invalid_amount", "a refund must be a positive amount in the policy's currency"));
