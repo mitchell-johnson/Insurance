@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::command::{Command, Envelope};
+use crate::kinds::DocumentKind;
 use crate::state::DocumentsState;
 use crate::template::TemplateRef;
 
@@ -62,6 +63,14 @@ pub enum Query {
     },
     PendingSends {
         limit: usize,
+    },
+    /// The send in progress that a provider's reference belongs to.
+    SendByReference {
+        reference: String,
+    },
+    /// How long documents of a kind are kept.
+    Retention {
+        kind: DocumentKind,
     },
     PendingEvents {
         limit: usize,
@@ -117,6 +126,8 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         }
         Query::PartyKey { party } => json(state.party_keys.get(&party)),
         Query::PendingSends { limit } => json(state.pending_sends(cap(limit))),
+        Query::SendByReference { reference } => json(state.find_send(&reference)),
+        Query::Retention { kind } => json(state.retention_rule(kind)),
         Query::PendingEvents { limit } => json(state.pending_events(cap(limit))),
         Query::CoreOutbox { limit } => json(state.core_outbox.iter().take(cap(limit)).collect::<Vec<_>>()),
         Query::PendingDeletes { limit } => json(state.pending_deletes.iter().take(cap(limit)).collect::<Vec<_>>()),

@@ -345,7 +345,8 @@ impl DocumentsState {
         Ok(())
     }
 
-    fn retention_rule(&self, kind: DocumentKind) -> RetentionRule {
+    /// How long documents of a kind are kept, and from when.
+    pub fn retention_rule(&self, kind: DocumentKind) -> RetentionRule {
         self.retention.get(&kind).copied().unwrap_or(RetentionRule {
             basis: if kind.class() == DocumentClass::Contractual {
                 RetentionBasis::PolicyEnd
@@ -1703,6 +1704,23 @@ impl DocumentsState {
             .filter(|d| d.template.as_ref() == Some(template) && d.requires_proof() && d.issued_on >= from && d.issued_on <= to)
             .map(|d| d.id.clone())
             .collect()
+    }
+
+    /// The send a provider's reference belongs to, among the deliveries
+    /// still in progress.
+    pub fn find_send(&self, reference: &str) -> Option<PendingSend> {
+        self.open_deliveries.iter().filter_map(|id| self.documents.get(id)).find_map(|doc| {
+            doc.deliveries.iter().find_map(|d| {
+                let attempt = d.attempts.iter().find(|a| a.provider_reference.as_deref() == Some(reference))?;
+                Some(PendingSend {
+                    document: doc.id.clone(),
+                    party: d.recipient.party.clone(),
+                    channel: attempt.channel,
+                    kind: doc.kind,
+                    format: doc.format,
+                })
+            })
+        })
     }
 
     pub fn is_held(&self, document: &str) -> bool {

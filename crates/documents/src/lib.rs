@@ -10,7 +10,10 @@
 //! around it ([`vault`], [`delivery`], [`service`]) render, encrypt, store
 //! and send, and can be retried at any point.
 
+pub mod channels;
 pub mod command;
+pub mod crypto;
+pub mod driver;
 pub mod event;
 pub mod kinds;
 pub mod model;
@@ -20,6 +23,7 @@ pub mod report;
 pub mod state;
 pub mod template;
 pub mod triggers;
+pub mod vault;
 
 pub use command::{Command, Envelope, Settings};
 pub use event::{Event, EventRecord};
