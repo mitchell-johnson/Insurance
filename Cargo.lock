@@ -1860,6 +1860,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-channels"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "cedar-policy",
+ "chrono",
+ "hex",
+ "http-body-util",
+ "ic-api",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-raft",
+ "ic-readmodel",
+ "ic-sim",
+ "reqwest 0.12.28",
+ "ring",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ic-core"
 version = "0.1.0"
 dependencies = [
@@ -2002,6 +2033,25 @@ dependencies = [
  "ic-ledger",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "ic-reinsurance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "starlark",
  "thiserror",
 ]
 

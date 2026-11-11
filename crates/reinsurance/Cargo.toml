@@ -1,0 +1,27 @@
+[package]
+name = "ic-reinsurance"
+description = "Reinsurance: treaties as code, per-life accumulation, cessions, the capacity step, ceded premiums, recoveries, reinsurer statements and settlement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-money.workspace = true
+ic-ledger.workspace = true
+ic-log.workspace = true
+ic-product.workspace = true
+ic-core.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+starlark.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true

@@ -79,6 +79,32 @@ pub enum MemberChange {
         effective: NaiveDate,
         factors: LifeFactors,
     },
+    /// Undo a leave that should not have happened: the member is back from
+    /// the day they were removed, with no gap in cover, and any underwritten
+    /// layer that ended with the leave is restored.
+    Reinstated {
+        life: LifeId,
+    },
+}
+
+/// An underwritten layer above a scheme member's automatic cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcessLayer {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    pub start: NaiveDate,
+    pub sum_insured_minor: i64,
+    /// Underwriting terms. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The member agreed to the employer seeing this layer's loaded premium.
+    #[serde(default)]
+    pub loading_itemised: bool,
+    /// The underwriting decision this layer comes from.
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -176,6 +202,17 @@ pub enum Command {
         life: LifeId,
         party: PartyId,
     },
+    /// Write a member's accepted cover above the automatic amount as its own
+    /// layer on the scheme's cover, billed with the scheme from its start.
+    AddExcessLayer(Box<ExcessLayer>),
+    /// End an underwritten layer from a date (a reduction, or the member
+    /// giving the extra cover up). A leaver's layers end with the leave.
+    EndExcessLayer {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        effective: NaiveDate,
+    },
 
     // --- cash ---
     /// Apply a matched receipt to a policy. Sent by the cash matching service.
@@ -270,13 +307,17 @@ impl Command {
             }
             Command::OpenBusinessDate { .. } | Command::AdvanceBusinessDate { .. } => &["leader"],
             Command::RunEndOfDay { .. } => &["end-of-day"],
-            Command::IssuePolicy(_) => &["new-business"],
-            Command::CancelPolicy { .. } | Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
+            // Group administration issues the retail policy of a continuation
+            // option and ends a scheme that is terminated.
+            Command::IssuePolicy(_) => &["new-business", "group-admin"],
+            Command::CancelPolicy { .. } => &["policy-servicing", "group-admin"],
+            Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
             Command::Reinstate { .. } => &["policy-servicing", "collections"],
             Command::UnwindAfter { .. } | Command::ResumeAfterUnwind { .. } => &["claims", "remediation"],
             Command::TerminateOnClaim { .. } => &["claims"],
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
+            Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -306,6 +347,8 @@ impl Command {
             Command::TerminateOnClaim { .. } => "terminate_on_claim",
             Command::ApplyMembership { .. } => "apply_membership",
             Command::IdentifyMember { .. } => "identify_member",
+            Command::AddExcessLayer(_) => "add_excess_layer",
+            Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
