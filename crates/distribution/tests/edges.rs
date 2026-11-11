@@ -52,10 +52,31 @@ fn a_change_set_restructures_in_one_step_and_refuses_what_cannot_be_carried_out(
         },
     };
     let events = {
-        w.propose("restructure", vec![Change::Relate(relation(RelationKind::Under)), Change::Relate(relation(RelationKind::LicensedBy)), engagement.clone()])
-            .unwrap();
-        w.send(approver(), Command::ApproveChange { id: "restructure".into(), compliance: false }).unwrap();
-        w.send(compliance(), Command::ApproveChange { id: "restructure".into(), compliance: true }).unwrap()
+        w.propose(
+            "restructure",
+            vec![
+                Change::Relate(relation(RelationKind::Under)),
+                Change::Relate(relation(RelationKind::LicensedBy)),
+                engagement.clone(),
+            ],
+        )
+        .unwrap();
+        w.send(
+            approver(),
+            Command::ApproveChange {
+                id: "restructure".into(),
+                compliance: false,
+            },
+        )
+        .unwrap();
+        w.send(
+            compliance(),
+            Command::ApproveChange {
+                id: "restructure".into(),
+                compliance: true,
+            },
+        )
+        .unwrap()
     };
     assert!(events.iter().any(|e| matches!(e, Event::EngagementStarted { .. })));
     assert!(w.dist.config.structure.below(&party("fap-one"), today).contains(&party("adviser-b")));
@@ -79,7 +100,12 @@ fn a_change_set_restructures_in_one_step_and_refuses_what_cannot_be_carried_out(
         lines: vec![],
         liability: vec![],
     });
-    let split = || vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-one", Share::OfRemainder(pct(25.0)), false)];
+    let split = || {
+        vec![
+            base("a-co", Share::OfRemainder(pct(75.0)), true),
+            base("fap-one", Share::OfRemainder(pct(25.0)), false),
+        ]
+    };
     let following = Change::ActivateRule(Rule {
         fragments: vec![FragmentId::from("later")],
         ..rule("a-at-fap-one", 2, today, split(), vec![])
@@ -93,14 +119,43 @@ fn a_change_set_restructures_in_one_step_and_refuses_what_cannot_be_carried_out(
             ..base("fap-one", Share::OfRemainder(1), false)
         });
     }
-    assert_eq!(code(w.propose("many", vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, many, vec![]))])), "invalid_rule");
+    assert_eq!(
+        code(w.propose("many", vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, many, vec![]))])),
+        "invalid_rule"
+    );
 
     let layer = format!("{policy}/life/1");
     let to = vec![(BookId::from("a-at-fap-one"), WHOLE)];
-    w.activate("move", vec![Change::MoveLayers { layers: vec![layer.clone()], to: to.clone(), from: later }]).unwrap();
-    assert_eq!(code(w.propose("before", vec![Change::MoveLayers { layers: vec![layer.clone()], to: to.clone(), from: today }])), "assignment_order");
+    w.activate(
+        "move",
+        vec![Change::MoveLayers {
+            layers: vec![layer.clone()],
+            to: to.clone(),
+            from: later,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        code(w.propose(
+            "before",
+            vec![Change::MoveLayers {
+                layers: vec![layer.clone()],
+                to: to.clone(),
+                from: today
+            }]
+        )),
+        "assignment_order"
+    );
     // The same date again replaces that assignment rather than stacking a second one.
-    w.activate("same-day", vec![Change::MoveLayers { layers: vec![layer.clone()], to, from: later }]).unwrap();
+    w.activate(
+        "same-day",
+        vec![Change::MoveLayers {
+            layers: vec![layer.clone()],
+            to,
+            from: later,
+        }],
+    )
+    .unwrap();
     assert_eq!(w.dist.layers[&layer].assignments.len(), 2);
     let servicing = Change::SetServicing {
         policy,

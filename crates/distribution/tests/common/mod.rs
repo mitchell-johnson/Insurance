@@ -153,7 +153,9 @@ impl World {
     pub fn deliver(&mut self) {
         for (partition, posting) in std::mem::take(&mut self.outbox) {
             let reference = posting.reference.clone();
-            let applied = self.cluster.submit_keyed(partition, &reference, "distribution", CoreCommand::PostCounterparty(Box::new(posting)));
+            let applied = self
+                .cluster
+                .submit_keyed(partition, &reference, "distribution", CoreCommand::PostCounterparty(Box::new(posting)));
             if let Err(e) = applied.result {
                 self.refused.push((reference.clone(), e.code.clone()));
                 self.send(
@@ -266,7 +268,7 @@ impl World {
     /// The reconciliations the design lists, checked against the core's ledgers.
     pub fn assert_reconciled(&self) {
         assert!(self.cluster.reconcile().is_empty(), "{:?}", self.cluster.reconcile());
-        for (who, _) in self.dist.positions.iter() {
+        for who in self.dist.positions.keys() {
             for ledger in [
                 PartyLedger::CommissionPayable,
                 PartyLedger::Held,
@@ -296,8 +298,20 @@ impl World {
     /// Propose a change and take it through both approvals.
     pub fn activate(&mut self, id: &str, changes: Vec<Change>) -> Result<(), Reject> {
         self.propose(id, changes)?;
-        self.send(approver(), Command::ApproveChange { id: id.into(), compliance: false })?;
-        self.send(compliance(), Command::ApproveChange { id: id.into(), compliance: true })?;
+        self.send(
+            approver(),
+            Command::ApproveChange {
+                id: id.into(),
+                compliance: false,
+            },
+        )?;
+        self.send(
+            compliance(),
+            Command::ApproveChange {
+                id: id.into(),
+                compliance: true,
+            },
+        )?;
         self.sync();
         Ok(())
     }
@@ -443,10 +457,15 @@ impl World {
             value_date: None,
             policy: None,
             reverses: None,
-            lines: lines.into_iter().map(|(account, amount_minor)| CounterpartyLine { account, amount_minor }).collect(),
+            lines: lines
+                .into_iter()
+                .map(|(account, amount_minor)| CounterpartyLine { account, amount_minor })
+                .collect(),
             detail: BTreeMap::new(),
         };
-        let r = self.cluster.submit(partition, "counterparty-finance", CoreCommand::PostCounterparty(Box::new(posting)));
+        let r = self
+            .cluster
+            .submit(partition, "counterparty-finance", CoreCommand::PostCounterparty(Box::new(posting)));
         self.sync();
         r
     }
@@ -504,7 +523,13 @@ pub fn schedule() -> Schedule {
                 },
             ),
         ]),
-        clawback: vec![ClawbackStep { months_under: 12, ppm: WHOLE }, ClawbackStep { months_under: 24, ppm: pct(50.0) }],
+        clawback: vec![
+            ClawbackStep { months_under: 12, ppm: WHOLE },
+            ClawbackStep {
+                months_under: 24,
+                ppm: pct(50.0),
+            },
+        ],
         cooling_off_days: 14,
         initial_earned: InitialEarned::FirstPremium,
         initial_on_indexation: false,
@@ -592,7 +617,10 @@ pub fn worked_example_in(mut w: World) -> World {
                 "a-at-fap-one",
                 1,
                 d(START.0, START.1, START.2),
-                vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-one", Share::OfRemainder(pct(25.0)), false)],
+                vec![
+                    base("a-co", Share::OfRemainder(pct(75.0)), true),
+                    base("fap-one", Share::OfRemainder(pct(25.0)), false),
+                ],
                 vec![liable("fap-one")],
             )),
         ],

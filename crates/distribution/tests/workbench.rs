@@ -77,7 +77,10 @@ fn a_backdated_suspension_moves_paid_commission_to_held_and_opens_a_conduct_case
 
     // No new business under the engagement, and no customer can appoint the adviser.
     let (second, _) = w.issue(2, 500_000_00, None);
-    assert_eq!(code(w.write(&second, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00)), "not_authorised_to_advise");
+    assert_eq!(
+        code(w.write(&second, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00)),
+        "not_authorised_to_advise"
+    );
     let appoint = Command::AppointAdviser {
         policy: second,
         engagement: Some("eng-a-one".into()),
@@ -133,11 +136,54 @@ fn licence_history_is_append_only_and_reactivation_does_not_release_held_money()
     assert_eq!(w.held("fap-one"), held);
 
     let case = w.dist.cases.keys().next().unwrap().clone();
-    assert_eq!(code(w.send(ops(), Command::CloseCase { id: case.clone(), outcome: "done".into() })), "not_authorised");
-    assert_eq!(code(w.send(conduct(), Command::CloseCase { id: case.clone(), outcome: " ".into() })), "invalid_case");
-    w.send(conduct(), Command::CloseCase { id: case.clone(), outcome: "customers written to".into() }).unwrap();
-    assert_eq!(code(w.send(conduct(), Command::CloseCase { id: case, outcome: "again".into() })), "invalid_case");
-    assert_eq!(code(w.send(conduct(), Command::CloseCase { id: "ghost".into(), outcome: "x".into() })), "unknown_case");
+    assert_eq!(
+        code(w.send(
+            ops(),
+            Command::CloseCase {
+                id: case.clone(),
+                outcome: "done".into()
+            }
+        )),
+        "not_authorised"
+    );
+    assert_eq!(
+        code(w.send(
+            conduct(),
+            Command::CloseCase {
+                id: case.clone(),
+                outcome: " ".into()
+            }
+        )),
+        "invalid_case"
+    );
+    w.send(
+        conduct(),
+        Command::CloseCase {
+            id: case.clone(),
+            outcome: "customers written to".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        code(w.send(
+            conduct(),
+            Command::CloseCase {
+                id: case,
+                outcome: "again".into()
+            }
+        )),
+        "invalid_case"
+    );
+    assert_eq!(
+        code(w.send(
+            conduct(),
+            Command::CloseCase {
+                id: "ghost".into(),
+                outcome: "x".into()
+            }
+        )),
+        "unknown_case"
+    );
     w.assert_reconciled();
 }
 
@@ -157,7 +203,9 @@ fn a_release_is_prepared_approved_posted_paid_and_only_then_complete() {
     assert_eq!(w.held("fap-one"), held, "nothing moves on a proposal");
 
     let events = w.sign("rel-1", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
-    assert!(events.iter().any(|e| matches!(e, Event::PaymentRequested { reference, account_ref, amount_minor, .. }
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::PaymentRequested { reference, account_ref, amount_minor, .. }
         if reference == "pay:rel-1" && account_ref == "acct-fap-one" && *amount_minor == held)));
     assert_eq!(w.held("fap-one"), 0);
     assert_eq!(w.ledger("fap-one", PartyLedger::Clearing), held);
@@ -225,8 +273,15 @@ fn an_unsafe_release_is_refused_when_proposed_and_again_at_the_last_signature() 
 
     // Held money for a party that is no payee: there is no account to release to.
     w.add_party("estate-1", PartyKind::Counterparty);
-    w.post_as_finance(0, "ext-1", vec![(CounterpartyAccount::Internal(InternalLedger::Settlement), 50_00), (acct("estate-1", PartyLedger::Held), -50_00)])
-        .unwrap();
+    w.post_as_finance(
+        0,
+        "ext-1",
+        vec![
+            (CounterpartyAccount::Internal(InternalLedger::Settlement), 50_00),
+            (acct("estate-1", PartyLedger::Held), -50_00),
+        ],
+    )
+    .unwrap();
     assert_eq!(w.held("estate-1"), 50_00);
     let to_estate = Action::Release {
         amount_minor: 50_00,
@@ -238,7 +293,10 @@ fn an_unsafe_release_is_refused_when_proposed_and_again_at_the_last_signature() 
     w.act("rel-a", "fap-one", release(held)).unwrap();
     w.act("rel-b", "fap-one", release(held)).unwrap();
     w.sign("rel-a", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
-    assert_eq!(code(w.sign("rel-b", finance_approver(), Role::CounterpartyFinanceApprover)), "insufficient_held");
+    assert_eq!(
+        code(w.sign("rel-b", finance_approver(), Role::CounterpartyFinanceApprover)),
+        "insufficient_held"
+    );
     assert_eq!(w.dist.actions["rel-b"].state, ActionState::Proposed);
     w.settle("pay:rel-a");
     w.assert_reconciled();
@@ -291,14 +349,16 @@ fn maker_checker_and_authority_limits_hold_on_every_signature() {
     // A person whose profile stops below the amount.
     let mut junior = person("staff-junior", &[Role::CounterpartyFinance]);
     junior.templates[0].default_profile.limits.insert(LimitKind::Release, 10_00);
-    let propose = |actor: Actor| Command::ProposeAction {
-        id: "second".into(),
-        party: party("fap-one"),
-        action: release(50_00),
-        reason_code: "r".into(),
-        document_ref: "d".into(),
-    }
-    .pipe(|c| (actor, c));
+    let propose = |actor: Actor| {
+        Command::ProposeAction {
+            id: "second".into(),
+            party: party("fap-one"),
+            action: release(50_00),
+            reason_code: "r".into(),
+            document_ref: "d".into(),
+        }
+        .pipe(|c| (actor, c))
+    };
     let (actor, command) = propose(Actor::Staff(Box::new(junior.clone())));
     let denied = w.send(actor, command).unwrap_err();
     assert!(denied.message.contains("above your limit of 1000"), "{}", denied.message);
@@ -365,7 +425,11 @@ fn a_release_to_a_liquidator_needs_the_appointment_account_and_legal() {
         amount_minor: held,
         account_ref: "acct-liquidator".into(),
     };
-    assert_eq!(code(w.act("liq", "fap-one", to_liquidator.clone())), "account_not_verified", "a liquidator's account cools off too");
+    assert_eq!(
+        code(w.act("liq", "fap-one", to_liquidator.clone())),
+        "account_not_verified",
+        "a liquidator's account cools off too"
+    );
     w.days(5);
     w.act("liq", "fap-one", to_liquidator).unwrap();
     assert_eq!(w.dist.actions["liq"].needed, vec![Role::CounterpartyFinanceApprover, Role::Legal]);
@@ -375,7 +439,9 @@ fn a_release_to_a_liquidator_needs_the_appointment_account_and_legal() {
     assert_eq!(w.held("fap-one"), 0);
     w.settle("pay:liq");
     // The statement run never pays to an appointment account on its own.
-    assert!(w.dist.payees[&party("fap-one")].default_account(w.today()).is_some_and(|a| a.account_ref == "acct-fap-one"));
+    assert!(w.dist.payees[&party("fap-one")]
+        .default_account(w.today())
+        .is_some_and(|a| a.account_ref == "acct-fap-one"));
     let position = w.dist.position(&party("fap-one"), w.today());
     assert_eq!(position.ceased, Some((today, CeasedReason::Liquidation)));
     assert_eq!(position.documents.len(), 1);
@@ -397,7 +463,10 @@ fn held_is_offset_against_clawback_debt_and_a_dividend_writes_off_the_rest() {
     let debt = 1_200_00;
     assert_eq!(w.payable("fap-one"), -debt, "clawback is a debt on the commission account");
     let proof = w.dist.proof_of_debt(&party("fap-one"), w.today());
-    assert_eq!((proof.owed_by_party_minor, proof.owed_to_party_minor, proof.net_minor), (debt, held, held - debt));
+    assert_eq!(
+        (proof.owed_by_party_minor, proof.owed_to_party_minor, proof.net_minor),
+        (debt, held, held - debt)
+    );
     assert!(proof.lines.iter().all(|(_, _, _, refs)| !refs.is_empty()));
     assert_eq!(proof.hash, w.dist.proof_of_debt(&party("fap-one"), w.today()).hash);
     assert_eq!(w.dist.proof_of_debt(&party("fap-one"), start().pred_opt().unwrap()).lines.len(), 0);
@@ -449,7 +518,10 @@ fn write_offs_follow_the_floor_the_age_and_the_second_signature() {
         write_off_second_approver_minor: 500_00,
         ..Settings::default()
     });
-    assert_eq!(code(w.act("woh", "fap-one", Action::WriteOffHeld { amount_minor: held })), "write_off_not_allowed");
+    assert_eq!(
+        code(w.act("woh", "fap-one", Action::WriteOffHeld { amount_minor: held })),
+        "write_off_not_allowed"
+    );
     w.until_status(&policy, PolicyStatus::Lapsed);
     let write_off = |amount_minor| Action::WriteOffDebt {
         amount_minor,
@@ -457,7 +529,10 @@ fn write_offs_follow_the_floor_the_age_and_the_second_signature() {
     };
     assert_eq!(code(w.act("wod", "fap-one", write_off(1_200_01))), "insufficient_debt");
     w.act("wod", "fap-one", write_off(1_200_00)).unwrap();
-    assert_eq!(w.dist.actions["wod"].needed, vec![Role::CounterpartyFinanceApprover, Role::CounterpartyFinanceApprover]);
+    assert_eq!(
+        w.dist.actions["wod"].needed,
+        vec![Role::CounterpartyFinanceApprover, Role::CounterpartyFinanceApprover]
+    );
     w.sign("wod", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
     assert_eq!(w.payable("fap-one"), -1_200_00);
     w.sign("wod", finance_approver_2(), Role::CounterpartyFinanceApprover).unwrap();
@@ -515,11 +590,36 @@ fn holding_pending_a_review_is_a_decision_with_a_date_and_unblocks_month_end() {
     w.days(10);
     control(&mut w);
     assert_eq!(w.dist.tasks.len(), tasks + 1);
-    let task = w.dist.tasks.values().filter(|t| t.kind == "held_review" && t.done.is_none()).next_back().unwrap().id.clone();
+    let task = w.dist.tasks.values().rfind(|t| t.kind == "held_review" && t.done.is_none()).unwrap().id.clone();
     assert_eq!(w.dist.month_end_blocks(w.today()).len(), 1, "the review date has arrived");
-    w.send(finance(), Command::CompleteTask { id: task.clone(), note: "reviewed".into() }).unwrap();
-    assert_eq!(code(w.send(finance(), Command::CompleteTask { id: task, note: "again".into() })), "task_done");
-    assert_eq!(code(w.send(finance(), Command::CompleteTask { id: "ghost".into(), note: "x".into() })), "unknown_task");
+    w.send(
+        finance(),
+        Command::CompleteTask {
+            id: task.clone(),
+            note: "reviewed".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        code(w.send(
+            finance(),
+            Command::CompleteTask {
+                id: task,
+                note: "again".into()
+            }
+        )),
+        "task_done"
+    );
+    assert_eq!(
+        code(w.send(
+            finance(),
+            Command::CompleteTask {
+                id: "ghost".into(),
+                note: "x".into()
+            }
+        )),
+        "unknown_task"
+    );
     assert_eq!(code(w.send(finance(), Command::RecordDailyControl)), "caller_not_allowed");
     w.days(400);
     assert_eq!(w.dist.held_control(w.today()).aged_minor, [0, 0, 0, held]);
@@ -538,8 +638,11 @@ fn a_disputed_amount_is_split_between_the_parties_who_agreed_to_it() {
     let mut disputed = base("fap-one", Share::OfRemainder(pct(25.0)), false);
     disputed.disputed = true;
     let lines = vec![base("a-co", Share::OfRemainder(pct(75.0)), true), disputed];
-    w.activate("dispute", vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, lines, vec![liable("fap-one")]))])
-        .unwrap();
+    w.activate(
+        "dispute",
+        vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, lines, vec![liable("fap-one")]))],
+    )
+    .unwrap();
     let (mut w, _, _) = advised_in(w);
     let held = w.held("fap-one");
     let a_co = w.payable("a-co");
@@ -552,9 +655,16 @@ fn a_disputed_amount_is_split_between_the_parties_who_agreed_to_it() {
     assert_eq!(code(w.act("split", "fap-one", split(vec![]))), "invalid_split");
     assert_eq!(code(w.act("split", "fap-one", split(vec![share("a-co", 100, " ")]))), "invalid_split");
     assert_eq!(code(w.act("split", "fap-one", split(vec![share("adviser-a", 100, "agreed")]))), "unknown_payee");
-    assert_eq!(code(w.act("split", "fap-one", split(vec![share("a-co", held + 1, "agreed")]))), "insufficient_held");
-    w.act("split", "fap-one", split(vec![share("a-co", 100_00, "a-agrees"), share("fap-one", held - 100_00, "fap-agrees")]))
-        .unwrap();
+    assert_eq!(
+        code(w.act("split", "fap-one", split(vec![share("a-co", held + 1, "agreed")]))),
+        "insufficient_held"
+    );
+    w.act(
+        "split",
+        "fap-one",
+        split(vec![share("a-co", 100_00, "a-agrees"), share("fap-one", held - 100_00, "fap-agrees")]),
+    )
+    .unwrap();
     w.sign("split", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
     assert_eq!(w.held("fap-one"), 0);
     assert_eq!(w.payable("a-co"), a_co + 100_00);
@@ -572,7 +682,10 @@ fn an_aged_debt_moves_to_the_guarantor_the_rule_names() {
     let today = w.today();
     let mut liability = liable("fap-one");
     liability.guarantor = Some(party("group-old"));
-    let lines = vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-one", Share::OfRemainder(pct(25.0)), false)];
+    let lines = vec![
+        base("a-co", Share::OfRemainder(pct(75.0)), true),
+        base("fap-one", Share::OfRemainder(pct(25.0)), false),
+    ];
     w.activate("guaranteed", vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, lines, vec![liability]))])
         .unwrap();
     let (mut w, policy, _) = advised_in(w);
@@ -603,10 +716,18 @@ fn an_overpayment_is_held_until_conduct_and_legal_agree_to_pursue_it() {
     let mut w = worked_example();
     w.add_party("claimant-1", PartyKind::Counterparty);
     let settlement = || CounterpartyAccount::Internal(InternalLedger::Settlement);
-    w.post_as_finance(0, "claim-9-overpaid", vec![(acct("claimant-1", PartyLedger::Receivable), 500_00), (settlement(), -500_00)])
-        .unwrap();
-    w.post_as_finance(0, "claim-10-benefit", vec![(settlement(), 200_00), (acct("claimant-1", PartyLedger::Held), -200_00)])
-        .unwrap();
+    w.post_as_finance(
+        0,
+        "claim-9-overpaid",
+        vec![(acct("claimant-1", PartyLedger::Receivable), 500_00), (settlement(), -500_00)],
+    )
+    .unwrap();
+    w.post_as_finance(
+        0,
+        "claim-10-benefit",
+        vec![(settlement(), 200_00), (acct("claimant-1", PartyLedger::Held), -200_00)],
+    )
+    .unwrap();
     let note = |recovery| PositionNote {
         class: "claim_overpayment".into(),
         recovery,
@@ -635,10 +756,19 @@ fn an_overpayment_is_held_until_conduct_and_legal_agree_to_pursue_it() {
         to,
     };
     assert_eq!(code(w.act("rec", "claimant-1", set("ghost", RecoveryStatus::Pursued))), "unknown_reference");
-    assert_eq!(code(w.act("rec", "claimant-1", set("claim-9-overpaid", RecoveryStatus::Held))), "invalid_recovery");
-    assert_eq!(code(w.act("rec", "fap-one", set("claim-9-overpaid", RecoveryStatus::Pursued))), "invalid_recovery");
+    assert_eq!(
+        code(w.act("rec", "claimant-1", set("claim-9-overpaid", RecoveryStatus::Held))),
+        "invalid_recovery"
+    );
+    assert_eq!(
+        code(w.act("rec", "fap-one", set("claim-9-overpaid", RecoveryStatus::Pursued))),
+        "invalid_recovery"
+    );
     w.act("rec", "claimant-1", set("claim-9-overpaid", RecoveryStatus::Pursued)).unwrap();
-    assert_eq!(w.dist.actions["rec"].needed, vec![Role::CounterpartyFinanceApprover, Role::ConductOfficer, Role::Legal]);
+    assert_eq!(
+        w.dist.actions["rec"].needed,
+        vec![Role::CounterpartyFinanceApprover, Role::ConductOfficer, Role::Legal]
+    );
     w.sign("rec", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
     w.sign("rec", conduct(), Role::ConductOfficer).unwrap();
     assert_eq!(code(w.act("net", "claimant-1", offset.clone())), "recovery_held");
@@ -656,7 +786,12 @@ fn an_overpayment_is_held_until_conduct_and_legal_agree_to_pursue_it() {
     w.act("wo", "claimant-1", write_off).unwrap();
     w.sign("wo", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
     assert_eq!(w.ledger("claimant-1", PartyLedger::Receivable), 0);
-    assert_eq!(w.internal(InternalLedger::WriteOff { class: "claim_overpayment".into() }), 300_00);
+    assert_eq!(
+        w.internal(InternalLedger::WriteOff {
+            class: "claim_overpayment".into()
+        }),
+        300_00
+    );
     // Writing off a held recovery needs no conduct signature: it favours the customer.
     w.act("rec2", "claimant-1", set("claim-9-overpaid", RecoveryStatus::WrittenOff)).unwrap();
     assert_eq!(w.dist.actions["rec2"].needed, vec![Role::CounterpartyFinanceApprover]);
@@ -730,7 +865,9 @@ fn a_posting_the_core_refuses_marks_the_action_failed_and_raises_a_task() {
     };
     assert_eq!(code(w.send(finance(), refused.clone())), "caller_not_allowed");
     let events = w.send(module("event-relay"), refused.clone()).unwrap();
-    assert!(events.iter().any(|e| matches!(e, Event::PostingRefused { code, .. } if code == "ledger_closed")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::PostingRefused { code, .. } if code == "ledger_closed")));
     assert_eq!(w.dist.actions["rel-1"].failed.as_deref(), Some("ledger_closed: the period is closed"));
     assert!(w.dist.tasks.values().any(|t| t.kind == "posting_refused" && t.subject == "wb:rel-1:1"));
     assert_eq!(code(w.send(module("event-relay"), refused)), "posting_settled");

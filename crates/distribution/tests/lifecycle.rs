@@ -79,7 +79,11 @@ fn indexation_steps_inherit_their_terms_and_an_unwound_step_gives_its_initial_ba
     assert!(step.indexation);
     assert_eq!(step.sum_insured_minor, 12_500_00);
     let terms = step.terms.as_ref().unwrap();
-    assert_eq!((terms.annual_premium_minor, terms.rates.initial_ppm), (30_00, 0), "2.5% of the cover, 2.5% of the premium, no initial");
+    assert_eq!(
+        (terms.annual_premium_minor, terms.rates.initial_ppm),
+        (30_00, 0),
+        "2.5% of the cover, 2.5% of the premium, no initial"
+    );
     assert_eq!(step.writing, w.dist.layers[&layer_of(&plain, 1)].writing);
     assert_eq!(step.books_on(w.today()), w.dist.layers[&layer_of(&plain, 1)].books_on(w.today()));
     let exposures = |w: &World, policy: &PolicyId| w.dist.exposures.values().filter(|e| &e.policy == policy && e.open).count();
@@ -120,7 +124,10 @@ fn indexation_steps_inherit_their_terms_and_an_unwound_step_gives_its_initial_ba
     assert_eq!((layer.ended, layer.initial_paid.clone()), (Some(third.start), None));
     assert_eq!(exposures(&w, &indexed), 4);
     let taken_back = before - (w.payable("a-co") + w.payable("fap-one"));
-    assert!(taken_back >= initial_on_third, "the step's initial commission, and what the step earned beside it: {taken_back}");
+    assert!(
+        taken_back >= initial_on_third,
+        "the step's initial commission, and what the step earned beside it: {taken_back}"
+    );
     assert!(w.events.iter().any(|e| matches!(e, Event::CommissionReversed { .. })));
     w.assert_reconciled();
 
@@ -143,7 +150,9 @@ fn indexation_steps_inherit_their_terms_and_an_unwound_step_gives_its_initial_ba
             origin: LayerOrigin::Increase,
         },
     );
-    assert!(events.iter().any(|e| matches!(e, Event::TaskCreated { kind, .. } if kind == "layer_needs_terms")));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::TaskCreated { kind, .. } if kind == "layer_needs_terms")));
     assert!(w.dist.layers[&layer_of(&indexed, 9)].terms.is_none());
     w.send(module("policy-servicing"), Command::WriteLayer(Box::new(written))).unwrap();
     assert!(w.dist.layers[&layer_of(&indexed, 9)].terms.is_some());
@@ -161,7 +170,10 @@ fn commission_follows_a_policy_to_another_partition() {
     w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", ANNUAL).unwrap();
     w.pay(&policy, "r1");
     let to = 1 - from;
-    let target = (0..).map(|i| ic_core::GroupId(format!("grp-move-{i}"))).find(|g| w.cluster.partition_of(g) == to).unwrap();
+    let target = (0..)
+        .map(|i| ic_core::GroupId(format!("grp-move-{i}")))
+        .find(|g| w.cluster.partition_of(g) == to)
+        .unwrap();
     w.cluster
         .submit(
             from,
@@ -184,11 +196,19 @@ fn commission_follows_a_policy_to_another_partition() {
     assert!(earned > ANNUAL);
 
     w.days(2);
-    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() }).unwrap();
-    assert_eq!(w.payable("a-co") + w.payable("fap-one"), 0, "cooling-off reverses everything, across the two partitions");
+    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() })
+        .unwrap();
+    assert_eq!(
+        w.payable("a-co") + w.payable("fap-one"),
+        0,
+        "cooling-off reverses everything, across the two partitions"
+    );
     let reversal = w.dist.allocations.values().find(|a| a.kind == "commission_reversed").unwrap();
     assert_eq!((reversal.partition, reversal.reverses.clone()), (to, None));
-    assert_eq!(w.dist.by_partition(&party("a-co"), ic_core::counterparty::PartyLedger::CommissionPayable).len(), 2);
+    assert_eq!(
+        w.dist.by_partition(&party("a-co"), ic_core::counterparty::PartyLedger::CommissionPayable).len(),
+        2
+    );
     assert!(w.refused.is_empty(), "{:?}", w.refused);
     w.assert_reconciled();
 }
@@ -234,7 +254,14 @@ fn a_replaced_policys_clawback_carries_to_the_replacement() {
     w.days(20);
     let (new, _) = w.issue(2, 600_000_00, None);
     write(&mut w, &new, true);
-    w.send(module("new-business"), Command::LinkReplacement { policy: new.clone(), replaces: old.clone() }).unwrap();
+    w.send(
+        module("new-business"),
+        Command::LinkReplacement {
+            policy: new.clone(),
+            replaces: old.clone(),
+        },
+    )
+    .unwrap();
     w.pay(&new, "r1");
     let fap = w.payable("fap-one");
     w.core(&old, "policy-servicing", CoreCommand::CancelPolicy { policy: old.clone() }).unwrap();
@@ -243,6 +270,10 @@ fn a_replaced_policys_clawback_carries_to_the_replacement() {
     assert_eq!(w.dist.clawback_exposure(w.today())[&party("fap-one")], ANNUAL);
     w.days(20);
     w.core(&new, "policy-servicing", CoreCommand::CancelPolicy { policy: new.clone() }).unwrap();
-    assert_eq!(w.payable("fap-one"), fap - ANNUAL, "the carried exposure is clawed back when the replacement ends");
+    assert_eq!(
+        w.payable("fap-one"),
+        fap - ANNUAL,
+        "the carried exposure is clawed back when the replacement ends"
+    );
     w.assert_reconciled();
 }

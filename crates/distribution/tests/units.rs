@@ -97,8 +97,14 @@ fn a_tail_that_ends_flows_to_the_ongoing_parties_without_a_new_rule() {
             .map(|a| (a.payee.0, a.amount_minor))
             .collect()
     };
-    assert_eq!(amounts(end), BTreeMap::from([("adviser".into(), 56_25), ("new-fap".into(), 18_75), ("old-fap".into(), 25_00)]));
-    assert_eq!(amounts(end.succ_opt().unwrap()), BTreeMap::from([("adviser".into(), 75_00), ("new-fap".into(), 25_00)]));
+    assert_eq!(
+        amounts(end),
+        BTreeMap::from([("adviser".into(), 56_25), ("new-fap".into(), 18_75), ("old-fap".into(), 25_00)])
+    );
+    assert_eq!(
+        amounts(end.succ_opt().unwrap()),
+        BTreeMap::from([("adviser".into(), 75_00), ("new-fap".into(), 25_00)])
+    );
     // The tail is renewal only: initial commission never saw it.
     let initial = composed.allocate_base(100_00, CommissionType::Initial, day()).unwrap();
     assert!(initial.iter().all(|a| a.payee.0 != "old-fap"));
@@ -145,9 +151,15 @@ fn rule_validation_catches_every_way_a_rule_fails_to_add_up() {
     };
     assert!(err(vec![ending], vec![]).contains("from 2028-01-01"));
     // A line that starts later leaves a gap until it does.
-    let later = Line { from: d(2028, 1, 1), ..whole() };
+    let later = Line {
+        from: d(2028, 1, 1),
+        ..whole()
+    };
     assert!(err(vec![later], vec![]).contains("from 2027-06-01"));
-    let half = LiabilityLine { share: pct(50.0), ..liable("a") };
+    let half = LiabilityLine {
+        share: pct(50.0),
+        ..liable("a")
+    };
     assert!(err(vec![whole()], vec![half.clone()]).contains("clawback liability for base sums to 500000"));
     let other_half = LiabilityLine {
         liable: party("b"),
@@ -162,7 +174,13 @@ fn rule_validation_catches_every_way_a_rule_fails_to_add_up() {
     };
     assert!(err(vec![whole()], vec![first_half, other_half]).contains("from 2028-01-01"));
     // No absorber is an error at allocation too, when rounding actually leaves a cent.
-    let no_absorber = rule("book", 1, day(), vec![base("a", Share::OfRemainder(pct(50.0)), false), base("b", Share::OfRemainder(pct(50.0)), false)], vec![]);
+    let no_absorber = rule(
+        "book",
+        1,
+        day(),
+        vec![base("a", Share::OfRemainder(pct(50.0)), false), base("b", Share::OfRemainder(pct(50.0)), false)],
+        vec![],
+    );
     assert!(composed_of(&no_absorber).allocate_base(1, CommissionType::Initial, day()).is_err());
     assert!(composed_of(&no_absorber).allocate_base(2, CommissionType::Initial, day()).is_ok());
     assert!(composed_of(&no_absorber).allocate_base(2, CommissionType::Initial, d(2019, 1, 1)).is_err());
@@ -196,9 +214,17 @@ fn a_books_own_lines_replace_the_fragments_lines_for_the_same_component() {
     let plain = rule("book", 1, day(), vec![base("a", Share::OfRemainder(WHOLE), true)], vec![]);
     let composed = Composed::of(&plain, &[&fragment]);
     assert_eq!(composed.extra_components(CommissionType::Initial, day()).len(), 2);
-    assert_eq!(composed.allocate_extra(&Component::Override("group".into()), 1_000_00, false, CommissionType::Renewal, day())[0].amount_minor, 20_00);
-    assert!(composed.allocate_extra(&Component::FixedFee("referral".into()), 1_000_00, false, CommissionType::Renewal, day()).is_empty());
-    assert_eq!(composed.allocate_extra(&Component::FixedFee("referral".into()), 1_000_00, true, CommissionType::Initial, day())[0].amount_minor, 25_00);
+    assert_eq!(
+        composed.allocate_extra(&Component::Override("group".into()), 1_000_00, false, CommissionType::Renewal, day())[0].amount_minor,
+        20_00
+    );
+    assert!(composed
+        .allocate_extra(&Component::FixedFee("referral".into()), 1_000_00, false, CommissionType::Renewal, day())
+        .is_empty());
+    assert_eq!(
+        composed.allocate_extra(&Component::FixedFee("referral".into()), 1_000_00, true, CommissionType::Initial, day())[0].amount_minor,
+        25_00
+    );
     assert_eq!(composed.liable(&Component::Base, day()), vec![(party("group"), WHOLE, None)]);
 
     let mut negotiated = plain.clone();
@@ -209,7 +235,11 @@ fn a_books_own_lines_replace_the_fragments_lines_for_the_same_component() {
     assert_eq!(paid.len(), 1);
     assert_eq!(paid[0].amount_minor, 10_00);
     assert_eq!(composed.liable(&Component::Base, day()), vec![(party("a"), WHOLE, None)]);
-    assert_eq!(composed.extra_components(CommissionType::Initial, day()).len(), 2, "the fee still comes from the fragment");
+    assert_eq!(
+        composed.extra_components(CommissionType::Initial, day()).len(),
+        2,
+        "the fee still comes from the fragment"
+    );
 
     assert_ne!(plain.content_hash(), negotiated.content_hash());
     assert_eq!(plain.content_hash(), plain.clone().content_hash());
@@ -250,7 +280,10 @@ fn a_licence_problem_cascades_through_the_dated_structure() {
     relate(&mut s, "fap", "group", RelationKind::Under, d(2020, 1, 1), None).unwrap();
     relate(&mut s, "body", "fap", RelationKind::LicensedBy, d(2020, 1, 1), Some(d(2028, 1, 1))).unwrap();
     relate(&mut s, "adviser-co", "adviser", RelationKind::PayeeFor, d(2020, 1, 1), None).unwrap();
-    assert!(relate(&mut s, "body", "fap", RelationKind::LicensedBy, d(2021, 1, 1), None).is_err(), "already in force");
+    assert!(
+        relate(&mut s, "body", "fap", RelationKind::LicensedBy, d(2021, 1, 1), None).is_err(),
+        "already in force"
+    );
     assert!(relate(&mut s, "body", "fap", RelationKind::LicensedBy, d(2029, 1, 1), Some(d(2029, 1, 1))).is_err());
     let engage = |s: &mut Structure, id: &str, adviser: &str, with: &str| {
         s.start_engagement(
@@ -275,7 +308,10 @@ fn a_licence_problem_cascades_through_the_dated_structure() {
         accreditations: BTreeSet::new(),
     };
     assert!(matches!(s.start_engagement(EngagementId::from("bad"), bad), Err(StructureError::Invalid(_))));
-    assert!(matches!(s.end_engagement(&EngagementId::from("ghost"), day()), Err(StructureError::UnknownEngagement(_))));
+    assert!(matches!(
+        s.end_engagement(&EngagementId::from("ghost"), day()),
+        Err(StructureError::UnknownEngagement(_))
+    ));
 
     let suspended = LicenceRecord {
         state: LicenceState::Suspended,
@@ -342,8 +378,14 @@ fn a_licence_problem_cascades_through_the_dated_structure() {
     .unwrap();
     assert_eq!(s.payee_impairment(&party("dual"), d(2027, 10, 2)).unwrap().state, LicenceState::Lapsed);
     assert!(s.engagement_impairment(&EngagementId::from("e-dual-2"), d(2027, 10, 2)).is_some());
-    assert!(matches!(s.record_licence(&party("ghost"), suspended.clone()), Err(StructureError::UnknownParty(_))));
-    assert!(matches!(s.mark_ceased(&party("ghost"), day(), ic_distribution::structure::CeasedReason::Deceased), Err(StructureError::UnknownParty(_))));
+    assert!(matches!(
+        s.record_licence(&party("ghost"), suspended.clone()),
+        Err(StructureError::UnknownParty(_))
+    ));
+    assert!(matches!(
+        s.mark_ceased(&party("ghost"), day(), ic_distribution::structure::CeasedReason::Deceased),
+        Err(StructureError::UnknownParty(_))
+    ));
 
     // Who a group sees: everything under it on the day.
     let below = s.below(&party("group"), during);
@@ -408,11 +450,22 @@ fn the_authority_decision_applies_limits_uplifts_ceilings_and_one_off_grants() {
     approver.grants = vec![uplift(100_000_00, d(2027, 6, 1), d(2027, 6, 30))];
     let raised = authority.decide(&approver, &ask(90_000_00), day(), &none).unwrap();
     assert_eq!(raised.grants, vec!["uplift-1".to_string()]);
-    assert!(authority.decide(&approver, &ask(90_000_00), d(2027, 7, 1), &none).is_err(), "the uplift has ended");
+    assert!(
+        authority.decide(&approver, &ask(90_000_00), d(2027, 7, 1), &none).is_err(),
+        "the uplift has ended"
+    );
     approver.grants = vec![uplift(900_000_000_00, d(2027, 6, 1), d(2027, 6, 30))];
-    assert_eq!(authority.decide(&approver, &ask(1), day(), &none).unwrap().limit_minor, 5_000_000_00, "capped at the ceiling");
+    assert_eq!(
+        authority.decide(&approver, &ask(1), day(), &none).unwrap().limit_minor,
+        5_000_000_00,
+        "capped at the ceiling"
+    );
     approver.grants = vec![uplift(1, d(2027, 6, 1), d(2027, 6, 30))];
-    assert_eq!(authority.decide(&approver, &ask(1), day(), &none).unwrap().limit_minor, 25_000_00, "an uplift never lowers");
+    assert_eq!(
+        authority.decide(&approver, &ask(1), day(), &none).unwrap().limit_minor,
+        25_000_00,
+        "an uplift never lowers"
+    );
 
     let mut narrow = person("q", &[Role::Legal]);
     narrow.paths = BTreeSet::new();
@@ -431,8 +484,13 @@ fn the_authority_decision_applies_limits_uplifts_ceilings_and_one_off_grants() {
         external_ref: None,
     }];
     assert_eq!(authority.decide(&narrow, &legal, day(), &none).unwrap().grants, vec!["one-off-1".to_string()]);
-    assert!(authority.decide(&narrow, &Ask::new("workbench.approve_legal", "fap-two"), day(), &none).is_err());
-    assert!(authority.decide(&narrow, &Ask::new("workbench.view", "fap-one"), day(), &none).is_err(), "one action only");
+    assert!(authority
+        .decide(&narrow, &Ask::new("workbench.approve_legal", "fap-two"), day(), &none)
+        .is_err());
+    assert!(
+        authority.decide(&narrow, &Ask::new("workbench.view", "fap-one"), day(), &none).is_err(),
+        "one action only"
+    );
     // A cover grant uses the paths its holder was given by the caller.
     narrow.grants = vec![Grant {
         id: "cover-1".into(),
@@ -447,7 +505,10 @@ fn the_authority_decision_applies_limits_uplifts_ceilings_and_one_off_grants() {
     assert_eq!(authority.decide(&narrow, &legal, day(), &covered).unwrap().grants, vec!["cover-1".to_string()]);
 
     assert!(matches!(Authority::new("this is not cedar"), Err(AuthorityError::Policies(_))));
-    assert!(matches!(authority.decide(&narrow, &Ask::new("bad action \u{0}", "x"), day(), &covered), Err(AuthorityError::Denied(_) | AuthorityError::Request(_))));
+    assert!(matches!(
+        authority.decide(&narrow, &Ask::new("bad action \u{0}", "x"), day(), &covered),
+        Err(AuthorityError::Denied(_) | AuthorityError::Request(_))
+    ));
     for role in [
         Role::DistributionAdmin,
         Role::CommissionOps,
@@ -460,7 +521,10 @@ fn the_authority_decision_applies_limits_uplifts_ceilings_and_one_off_grants() {
     ] {
         assert!(!role.key().is_empty());
         let classes = role.data_classes();
-        assert!(classes.contains(&"ordinary") && !classes.contains(&"clinical"), "no distribution role holds clinical data");
+        assert!(
+            classes.contains(&"ordinary") && !classes.contains(&"clinical"),
+            "no distribution role holds clinical data"
+        );
     }
     assert!(AuthorityError::Request("x".into()).to_string().contains("could not build"));
 }
@@ -504,7 +568,10 @@ fn posting(reference: &str, lines: Vec<(CounterpartyAccount, i64)>) -> Counterpa
         value_date: None,
         policy: None,
         reverses: None,
-        lines: lines.into_iter().map(|(account, amount_minor)| CounterpartyLine { account, amount_minor }).collect(),
+        lines: lines
+            .into_iter()
+            .map(|(account, amount_minor)| CounterpartyLine { account, amount_minor })
+            .collect(),
         detail: BTreeMap::new(),
     }
 }
@@ -534,17 +601,51 @@ fn the_core_refuses_a_counterparty_posting_that_is_not_well_formed() {
         (bad, posting("has space", good())),
         (bad, posting("", good())),
         (bad, posting(&"x".repeat(121), good())),
-        (bad, CounterpartyPosting { kind: "bad kind".into(), ..posting("r", good()) }),
+        (
+            bad,
+            CounterpartyPosting {
+                kind: "bad kind".into(),
+                ..posting("r", good())
+            },
+        ),
         (bad, posting("r", vec![])),
         (bad, posting("r", (0..201).map(|n| (held("p-1"), if n % 2 == 0 { 1 } else { -1 })).collect())),
         (bad, posting("r", vec![(cash(), 10_00), (held("p-1"), -9_99)])),
         (bad, posting("r", vec![(cash(), 0), (held("p-1"), 0)])),
         (bad, posting("r", vec![(cash(), 10_00), (held("p 1"), -10_00)])),
         (bad, posting("r", vec![(expense("term life", "life"), 10_00), (held("p-1"), -10_00)])),
-        (bad, posting("r", vec![(CounterpartyAccount::Internal(InternalLedger::WriteOff { class: "".into() }), 10_00), (held("p-1"), -10_00)])),
-        (bad, CounterpartyPosting { value_date: w.today().succ_opt(), ..posting("r", good()) }),
-        (bad, CounterpartyPosting { policy: Some(policy.clone()), currency: ic_money::Currency::AUD, ..posting("r", good()) }),
-        ("unknown_reference", CounterpartyPosting { reverses: Some("never-posted".into()), ..posting("r", good()) }),
+        (
+            bad,
+            posting(
+                "r",
+                vec![
+                    (CounterpartyAccount::Internal(InternalLedger::WriteOff { class: "".into() }), 10_00),
+                    (held("p-1"), -10_00),
+                ],
+            ),
+        ),
+        (
+            bad,
+            CounterpartyPosting {
+                value_date: w.today().succ_opt(),
+                ..posting("r", good())
+            },
+        ),
+        (
+            bad,
+            CounterpartyPosting {
+                policy: Some(policy.clone()),
+                currency: ic_money::Currency::AUD,
+                ..posting("r", good())
+            },
+        ),
+        (
+            "unknown_reference",
+            CounterpartyPosting {
+                reverses: Some("never-posted".into()),
+                ..posting("r", good())
+            },
+        ),
     ];
     for (n, (expected, p)) in cases.into_iter().enumerate() {
         assert_eq!(submit(&mut w, "distribution", p).unwrap_err().code, expected, "case {n}");
@@ -566,7 +667,10 @@ fn the_core_refuses_a_counterparty_posting_that_is_not_well_formed() {
     };
     submit(&mut w, "distribution", with_policy).unwrap();
     assert!(w.cluster.state(0).counterparty.has("r"));
-    assert_eq!(submit(&mut w, "counterparty-finance", posting("r", good())).unwrap_err().code, "duplicate_reference");
+    assert_eq!(
+        submit(&mut w, "counterparty-finance", posting("r", good())).unwrap_err().code,
+        "duplicate_reference"
+    );
     let reversal = CounterpartyPosting {
         reverses: Some("r".into()),
         ..posting("r-reversed", vec![(held("p-1"), 10_00), (expense("term-life", "life"), -10_00)])

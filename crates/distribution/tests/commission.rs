@@ -109,7 +109,13 @@ fn a_dishonour_reverses_the_original_lines_whatever_the_rule_says_today() {
     let today = w.today();
     w.activate(
         "all-to-fap",
-        vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, vec![base("fap-one", Share::OfRemainder(WHOLE), true)], vec![liable("fap-one")]))],
+        vec![Change::ActivateRule(rule(
+            "a-at-fap-one",
+            2,
+            today,
+            vec![base("fap-one", Share::OfRemainder(WHOLE), true)],
+            vec![liable("fap-one")],
+        ))],
     )
     .unwrap();
     w.core(
@@ -146,7 +152,10 @@ fn a_lapse_claws_back_from_the_liable_party_and_reinstatement_restores_it() {
     w.until_status(&policy, PolicyStatus::Lapsed);
     assert_eq!(w.payable("a-co"), a_co, "the adviser's company is not liable under this rule");
     assert_eq!(w.payable("fap-one"), fap - ANNUAL);
-    assert!(w.events.iter().any(|e| matches!(e, Event::ClawbackRaised { total_minor, .. } if *total_minor == ANNUAL)));
+    assert!(w
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::ClawbackRaised { total_minor, .. } if *total_minor == ANNUAL)));
     assert!(w.dist.clawback_exposure(w.today()).is_empty());
     w.assert_reconciled();
 
@@ -169,7 +178,8 @@ fn a_lapse_claws_back_from_the_liable_party_and_reinstatement_restores_it() {
 fn cancelling_in_cooling_off_reverses_all_commission_from_whoever_received_it() {
     let (mut w, policy, _) = advised();
     w.days(3);
-    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() }).unwrap();
+    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() })
+        .unwrap();
     assert_eq!(w.payable("a-co"), 0);
     assert_eq!(w.payable("fap-one"), 0);
     assert!(!w.events.iter().any(|e| matches!(e, Event::ClawbackRaised { .. })));
@@ -185,7 +195,8 @@ fn cancelling_after_cooling_off_is_a_clawback_on_the_scale() {
     let (mut w, policy, _) = advised();
     let fap = w.payable("fap-one");
     w.days(20);
-    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() }).unwrap();
+    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() })
+        .unwrap();
     assert_eq!(w.payable("fap-one"), fap - ANNUAL, "under twelve months the scale takes all of it");
     w.assert_reconciled();
 }
@@ -238,7 +249,10 @@ fn an_adviser_moves_with_the_book_and_the_previous_provider_keeps_a_tail() {
             new_book: BookId::from("a-at-fap-two"),
             new_book_name: "A at FAP Two".into(),
             release_ref: "release-signed-by-fap-one".into(),
-            lines: vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-two", Share::OfRemainder(pct(25.0)), false)],
+            lines: vec![
+                base("a-co", Share::OfRemainder(pct(75.0)), true),
+                base("fap-two", Share::OfRemainder(pct(25.0)), false),
+            ],
             liability: vec![liable("fap-two")],
             fragments: vec![],
             tail: Some((party("fap-one"), pct(25.0), None)),
@@ -248,7 +262,10 @@ fn an_adviser_moves_with_the_book_and_the_previous_provider_keeps_a_tail() {
     w.activate("move-a", changes).unwrap();
     assert_eq!(w.dist.policies[&policy].servicing, Some(EngagementId::from("eng-a-two")));
     assert!(w.events.iter().any(|e| matches!(e, Event::ServicingChanged { .. })), "the customer is told");
-    assert!(w.dist.config.books[&BookId::from("a-at-fap-two")].watch_until.is_some(), "replacement monitoring");
+    assert!(
+        w.dist.config.books[&BookId::from("a-at-fap-two")].watch_until.is_some(),
+        "replacement monitoring"
+    );
     assert_eq!(w.dist.config.structure.engagements[&EngagementId::from("eng-a-one")].to, Some(on));
 
     let before = (w.payable("a-co"), w.payable("fap-one"), w.payable("fap-two"));
@@ -351,7 +368,10 @@ fn a_backdated_rule_moves_the_difference_between_payees_and_leaves_expense_alone
             "a-at-fap-one",
             2,
             start(),
-            vec![base("a-co", Share::OfRemainder(pct(60.0)), true), base("fap-one", Share::OfRemainder(pct(40.0)), false)],
+            vec![
+                base("a-co", Share::OfRemainder(pct(60.0)), true),
+                base("fap-one", Share::OfRemainder(pct(40.0)), false),
+            ],
             vec![liable("fap-one")],
         ))],
     )
@@ -375,7 +395,10 @@ fn a_backdated_rule_moves_the_difference_between_payees_and_leaves_expense_alone
             "a-at-fap-one",
             3,
             start(),
-            vec![base("a-co", Share::OfRemainder(pct(60.0)), true), base("fap-one", Share::OfRemainder(pct(40.0)), false)],
+            vec![
+                base("a-co", Share::OfRemainder(pct(60.0)), true),
+                base("fap-one", Share::OfRemainder(pct(40.0)), false),
+            ],
             vec![liable("fap-one")],
         ))],
     )
@@ -420,7 +443,10 @@ fn a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base() {
                     "a-at-fap-one",
                     2,
                     today,
-                    vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-one", Share::OfRemainder(pct(25.0)), false)],
+                    vec![
+                        base("a-co", Share::OfRemainder(pct(75.0)), true),
+                        base("fap-one", Share::OfRemainder(pct(25.0)), false),
+                    ],
                     vec![liable("fap-one")],
                 )
             }),
@@ -433,7 +459,18 @@ fn a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base() {
     let base_total = w.payable("a-co") + w.payable("fap-one");
     let first = w.payable("group-old");
     // 2% of the annual premium with initial, 2% of the premium received with renewal, and the fee.
-    let net: i64 = w.dist.allocations.values().next().unwrap().lines.iter().filter(|l| l.commission_type == Some(CommissionType::Renewal) && l.component == Some(Component::Base)).map(|l| l.amount_minor).sum::<i64>() * 10;
+    let net: i64 = w
+        .dist
+        .allocations
+        .values()
+        .next()
+        .unwrap()
+        .lines
+        .iter()
+        .filter(|l| l.commission_type == Some(CommissionType::Renewal) && l.component == Some(Component::Base))
+        .map(|l| l.amount_minor)
+        .sum::<i64>()
+        * 10;
     assert!(net <= premium);
     assert_eq!(first, portion(ANNUAL, pct(2.0)) + portion(net, pct(2.0)) + 50_00);
     assert_eq!(base_total, ANNUAL + portion(net, pct(10.0)), "base is not reduced by the override");
@@ -464,16 +501,44 @@ fn disputed_lines_and_accrual_holds_earn_into_held_with_their_reason() {
         ))],
     )
     .unwrap();
-    assert_eq!(code(w.send(admin(), Command::SetAccrualHold { party: party("a-co"), hold: Some((today, HeldReason::Dispute, "x".into())) })), "invalid_hold");
-    assert_eq!(code(w.send(admin(), Command::SetAccrualHold { party: party("ghost"), hold: None })), "unknown_payee");
+    assert_eq!(
+        code(w.send(
+            admin(),
+            Command::SetAccrualHold {
+                party: party("a-co"),
+                hold: Some((today, HeldReason::Dispute, "x".into()))
+            }
+        )),
+        "invalid_hold"
+    );
+    assert_eq!(
+        code(w.send(
+            admin(),
+            Command::SetAccrualHold {
+                party: party("ghost"),
+                hold: None
+            }
+        )),
+        "unknown_payee"
+    );
     let (policy, _) = w.issue(1, 500_000_00, None);
     w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", ANNUAL).unwrap();
     w.pay(&policy, "r1");
     assert_eq!(w.payable("fap-one"), 0);
     assert!(w.held("fap-one") >= 300_00);
     assert!(w.payable("a-co") > 0);
-    assert!(w.dist.held.iter().all(|h| h.reason == Some(HeldReason::Dispute) && h.book == Some(BookId::from("a-at-fap-one"))));
-    assert!(w.events.iter().any(|e| matches!(e, Event::AmountHeld { reason: Some(HeldReason::Dispute), .. })));
+    assert!(w
+        .dist
+        .held
+        .iter()
+        .all(|h| h.reason == Some(HeldReason::Dispute) && h.book == Some(BookId::from("a-at-fap-one"))));
+    assert!(w.events.iter().any(|e| matches!(
+        e,
+        Event::AmountHeld {
+            reason: Some(HeldReason::Dispute),
+            ..
+        }
+    )));
 
     w.send(
         admin(),
@@ -531,9 +596,34 @@ fn replacement_cover_earns_trail_only_and_the_house_book_earns_nothing() {
     layer.books = vec![(BookId::from("house"), WHOLE)];
     layer.replacement = false;
     w.send(module("new-business"), Command::WriteLayer(Box::new(layer))).unwrap();
-    w.send(module("new-business"), Command::LinkReplacement { policy: replacement.clone(), replaces: original.clone() }).unwrap();
-    assert_eq!(code(w.send(module("new-business"), Command::LinkReplacement { policy: replacement.clone(), replaces: ic_core::PolicyId("ghost".into()) })), "unknown_policy");
-    assert_eq!(code(w.send(module("new-business"), Command::LinkReplacement { policy: ic_core::PolicyId("ghost".into()), replaces: original })), "unknown_policy");
+    w.send(
+        module("new-business"),
+        Command::LinkReplacement {
+            policy: replacement.clone(),
+            replaces: original.clone(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        code(w.send(
+            module("new-business"),
+            Command::LinkReplacement {
+                policy: replacement.clone(),
+                replaces: ic_core::PolicyId("ghost".into())
+            }
+        )),
+        "unknown_policy"
+    );
+    assert_eq!(
+        code(w.send(
+            module("new-business"),
+            Command::LinkReplacement {
+                policy: ic_core::PolicyId("ghost".into()),
+                replaces: original
+            }
+        )),
+        "unknown_policy"
+    );
     w.pay(&replacement, "r1");
     w.pay(&orphan, "r1");
     let total = w.payable("a-co") + w.payable("fap-one");
@@ -565,7 +655,13 @@ fn a_customers_change_of_adviser_moves_servicing_at_once_and_commission_by_the_s
                 owner: Some(party("fap-two")),
                 house: false,
             },
-            Change::ActivateRule(rule("b-at-fap-two", 1, today, vec![base("b-co", Share::OfRemainder(WHOLE), true)], vec![liable("fap-two")])),
+            Change::ActivateRule(rule(
+                "b-at-fap-two",
+                1,
+                today,
+                vec![base("b-co", Share::OfRemainder(WHOLE), true)],
+                vec![liable("fap-two")],
+            )),
         ],
     )
     .unwrap();
@@ -588,8 +684,14 @@ fn a_customers_change_of_adviser_moves_servicing_at_once_and_commission_by_the_s
     assert_eq!(w.payable("b-co"), 0);
 
     // Stand-down: a future-dated assignment, three months out.
-    w.activate("stand-down", vec![Change::AdviserChangeSetting(AdviserChangeSetting { version: 2, mode: AdviserChangeMode::StandDown { months: 3 } })])
-        .unwrap();
+    w.activate(
+        "stand-down",
+        vec![Change::AdviserChangeSetting(AdviserChangeSetting {
+            version: 2,
+            mode: AdviserChangeMode::StandDown { months: 3 },
+        })],
+    )
+    .unwrap();
     assert_eq!(code(appoint(&mut w, Some("eng-b-two"), Some("a-at-fap-one"))), "wrong_book");
     assert_eq!(code(appoint(&mut w, Some("eng-b-two"), Some("ghost"))), "unknown_book");
     assert_eq!(code(appoint(&mut w, Some("ghost"), None)), "unknown_engagement");
@@ -599,8 +701,14 @@ fn a_customers_change_of_adviser_moves_servicing_at_once_and_commission_by_the_s
     assert_eq!(w.payable("b-co"), 0, "inside the stand-down the previous adviser is still paid");
 
     // At once.
-    w.activate("at-once", vec![Change::AdviserChangeSetting(AdviserChangeSetting { version: 3, mode: AdviserChangeMode::MovesAtOnce })])
-        .unwrap();
+    w.activate(
+        "at-once",
+        vec![Change::AdviserChangeSetting(AdviserChangeSetting {
+            version: 3,
+            mode: AdviserChangeMode::MovesAtOnce,
+        })],
+    )
+    .unwrap();
     appoint(&mut w, Some("eng-b-two"), Some("b-at-fap-two")).unwrap();
     w.days(31);
     w.pay(&policy, "r4");
@@ -611,7 +719,17 @@ fn a_customers_change_of_adviser_moves_servicing_at_once_and_commission_by_the_s
     // The previous adviser's exposure stays theirs.
     assert_eq!(w.dist.clawback_exposure(w.today()), BTreeMap::from([(party("fap-one"), ANNUAL)]));
     let ghost = ic_core::PolicyId("ghost".into());
-    assert_eq!(code(w.send(module("customer-app"), Command::AppointAdviser { policy: ghost, engagement: None, book: None })), "unknown_policy");
+    assert_eq!(
+        code(w.send(
+            module("customer-app"),
+            Command::AppointAdviser {
+                policy: ghost,
+                engagement: None,
+                book: None
+            }
+        )),
+        "unknown_policy"
+    );
     w.assert_reconciled();
 }
 
@@ -638,7 +756,7 @@ fn duplicate_and_missing_events_cannot_double_or_lose_commission() {
         )
         .unwrap();
     let events = w.cluster.take_events();
-    assert!(events.len() >= 1);
+    assert!(!events.is_empty());
     let ingest = |e: &ic_core::EventRecord| Command::Ingest(Box::new(e.clone()));
     // A later event first: refused, and nothing changes.
     if events.len() > 1 {
@@ -668,14 +786,24 @@ fn duplicate_and_missing_events_cannot_double_or_lose_commission() {
     assert!(w.dist.requested.values().all(|r| matches!(r.state, PostingState::Posted { .. })));
     let total = w.payable("a-co") + w.payable("fap-one");
     // The same command key again returns the stored result and changes nothing.
-    let first = w.send_keyed("same-key", admin(), Command::AddParty { party: party("x"), kind: PartyKind::Team });
+    let first = w.send_keyed(
+        "same-key",
+        admin(),
+        Command::AddParty {
+            party: party("x"),
+            kind: PartyKind::Team,
+        },
+    );
     assert!(first.is_ok());
     let out = w.dist.apply_envelope(
         999,
         ic_distribution::Envelope {
             key: "same-key".into(),
             actor: admin(),
-            command: Command::AddParty { party: party("x"), kind: PartyKind::Team },
+            command: Command::AddParty {
+                party: party("x"),
+                kind: PartyKind::Team,
+            },
         },
     );
     assert!(out.duplicate && out.result.is_ok() && out.events.is_empty());
@@ -780,13 +908,20 @@ fn a_company_paid_for_an_adviser_is_held_when_the_adviser_is_suspended() {
     w.days(1);
     let today = w.today();
     let events = w.licence("adviser-a", ic_distribution::structure::LicenceState::Suspended, today).unwrap();
-    assert!(events.iter().any(|e| matches!(e, Event::AuthorisationChanged { suspended_payees, .. } if suspended_payees.contains(&party("a-co")))));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::AuthorisationChanged { suspended_payees, .. } if suspended_payees.contains(&party("a-co")))));
     let (a_co, fap) = (w.payable("a-co"), w.payable("fap-one"));
     w.days(31);
     w.pay(&policy, "r2");
     assert_eq!(w.payable("a-co"), a_co);
     assert!(w.held("a-co") > 0);
     assert!(w.payable("fap-one") > fap, "the provider's own licence is fine");
-    assert!(w.dist.allocations.values().flat_map(|a| &a.lines).any(|l| l.dest == Dest::Held(HeldReason::SuspendedLicence)));
+    assert!(w
+        .dist
+        .allocations
+        .values()
+        .flat_map(|a| &a.lines)
+        .any(|l| l.dest == Dest::Held(HeldReason::SuspendedLicence)));
     w.assert_reconciled();
 }

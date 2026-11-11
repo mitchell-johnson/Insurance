@@ -19,7 +19,10 @@ fn start() -> chrono::NaiveDate {
 }
 
 fn split(a: f64, b: f64) -> Vec<Line> {
-    vec![base("a-co", Share::OfRemainder(pct(a)), true), base("fap-one", Share::OfRemainder(pct(b)), false)]
+    vec![
+        base("a-co", Share::OfRemainder(pct(a)), true),
+        base("fap-one", Share::OfRemainder(pct(b)), false),
+    ]
 }
 
 fn next_rule(lines: Vec<Line>) -> Rule {
@@ -62,7 +65,11 @@ fn a_change_needs_two_approvals_from_two_people_who_did_not_prepare_it() {
 
     let both = || staff("staff-both", &[Role::CommissionApprover, Role::Compliance]);
     w.send(both(), approve(false)).unwrap();
-    assert_eq!(code(w.send(both(), approve(true))), "not_authorised", "the same person cannot give both approvals");
+    assert_eq!(
+        code(w.send(both(), approve(true))),
+        "not_authorised",
+        "the same person cannot give both approvals"
+    );
     assert_eq!(code(w.send(approver(), approve(false))), "already_approved");
     assert_eq!(w.dist.config.books[&BookId::from("a-at-fap-one")].rules.len(), 1);
     let events = w.send(compliance(), approve(true)).unwrap();
@@ -70,14 +77,57 @@ fn a_change_needs_two_approvals_from_two_people_who_did_not_prepare_it() {
     assert!(events.iter().any(|e| matches!(e, Event::ChangeActivated { .. })));
     assert_eq!(w.dist.change_sets["c1"].state, ChangeState::Activated);
     assert_eq!(code(w.send(compliance(), approve(true))), "change_settled");
-    assert_eq!(code(w.send(compliance(), Command::ApproveChange { id: "ghost".into(), compliance: true })), "unknown_change");
+    assert_eq!(
+        code(w.send(
+            compliance(),
+            Command::ApproveChange {
+                id: "ghost".into(),
+                compliance: true
+            }
+        )),
+        "unknown_change"
+    );
 
     w.propose("c2", vec![book("b2")]).unwrap();
-    assert_eq!(code(w.send(ops(), Command::RejectChange { id: "ghost".into(), reason: "x".into() })), "unknown_change");
-    w.send(ops(), Command::RejectChange { id: "c2".into(), reason: "wrong book".into() }).unwrap();
+    assert_eq!(
+        code(w.send(
+            ops(),
+            Command::RejectChange {
+                id: "ghost".into(),
+                reason: "x".into()
+            }
+        )),
+        "unknown_change"
+    );
+    w.send(
+        ops(),
+        Command::RejectChange {
+            id: "c2".into(),
+            reason: "wrong book".into(),
+        },
+    )
+    .unwrap();
     assert_eq!(w.dist.change_sets["c2"].rejected_because.as_deref(), Some("wrong book"));
-    assert_eq!(code(w.send(ops(), Command::RejectChange { id: "c2".into(), reason: "x".into() })), "change_settled");
-    assert_eq!(code(w.send(approver(), Command::ApproveChange { id: "c2".into(), compliance: false })), "change_settled");
+    assert_eq!(
+        code(w.send(
+            ops(),
+            Command::RejectChange {
+                id: "c2".into(),
+                reason: "x".into()
+            }
+        )),
+        "change_settled"
+    );
+    assert_eq!(
+        code(w.send(
+            approver(),
+            Command::ApproveChange {
+                id: "c2".into(),
+                compliance: false
+            }
+        )),
+        "change_settled"
+    );
     assert!(!w.dist.config.books.contains_key(&BookId::from("b2")));
 }
 
@@ -94,41 +144,152 @@ fn a_malformed_or_conflicting_change_is_refused_when_proposed() {
     let cases: Vec<(&str, Vec<Change>)> = vec![
         ("empty_change", vec![]),
         ("config_conflict", vec![book("a-at-fap-one")]),
-        ("unknown_engagement", vec![Change::CreateBook { id: BookId::from("x"), name: "x".into(), engagement: Some(EngagementId::from("ghost")), owner: None, house: false }]),
-        ("unknown_party", vec![Change::CreateBook { id: BookId::from("x"), name: "x".into(), engagement: None, owner: Some(party("ghost")), house: false }]),
+        (
+            "unknown_engagement",
+            vec![Change::CreateBook {
+                id: BookId::from("x"),
+                name: "x".into(),
+                engagement: Some(EngagementId::from("ghost")),
+                owner: None,
+                house: false,
+            }],
+        ),
+        (
+            "unknown_party",
+            vec![Change::CreateBook {
+                id: BookId::from("x"),
+                name: "x".into(),
+                engagement: None,
+                owner: Some(party("ghost")),
+                house: false,
+            }],
+        ),
         ("unknown_book", rule_change(rule("ghost", 1, today, split(75.0, 25.0), vec![]))),
         ("config_conflict", rule_change(rule("a-at-fap-one", 3, today, split(75.0, 25.0), vec![]))),
-        ("config_conflict", rule_change(rule("a-at-fap-one", 2, d(2027, 2, 1), split(75.0, 25.0), vec![]))),
-        ("invalid_rule", rule_change(Rule { instructions_ref: " ".into(), ..next_rule(split(75.0, 25.0)) })),
+        (
+            "config_conflict",
+            rule_change(rule("a-at-fap-one", 2, d(2027, 2, 1), split(75.0, 25.0), vec![])),
+        ),
+        (
+            "invalid_rule",
+            rule_change(Rule {
+                instructions_ref: " ".into(),
+                ..next_rule(split(75.0, 25.0))
+            }),
+        ),
         ("invalid_rule", rule_change(next_rule(split(75.0, 20.0)))),
         ("invalid_rule", rule_change(next_rule(vec![base("a-co", Share::OfRemainder(WHOLE), false)]))),
-        ("payee_without_agreement", rule_change(next_rule(vec![base("adviser-a", Share::OfRemainder(WHOLE), true)]))),
-        ("unknown_fragment", rule_change(Rule { fragments: vec![FragmentId::from("ghost")], ..next_rule(split(75.0, 25.0)) })),
+        (
+            "payee_without_agreement",
+            rule_change(next_rule(vec![base("adviser-a", Share::OfRemainder(WHOLE), true)])),
+        ),
+        (
+            "unknown_fragment",
+            rule_change(Rule {
+                fragments: vec![FragmentId::from("ghost")],
+                ..next_rule(split(75.0, 25.0))
+            }),
+        ),
         (
             "house_book",
             vec![
-                Change::CreateBook { id: BookId::from("house"), name: "House".into(), engagement: None, owner: None, house: true },
+                Change::CreateBook {
+                    id: BookId::from("house"),
+                    name: "House".into(),
+                    engagement: None,
+                    owner: None,
+                    house: true,
+                },
                 Change::ActivateRule(rule("house", 1, today, split(75.0, 25.0), vec![])),
             ],
         ),
-        ("unknown_book", vec![Change::CloseBook { book: BookId::from("ghost"), from: today }]),
-        ("unknown_book", vec![Change::WatchBook { book: BookId::from("ghost"), until: today }]),
+        (
+            "unknown_book",
+            vec![Change::CloseBook {
+                book: BookId::from("ghost"),
+                from: today,
+            }],
+        ),
+        (
+            "unknown_book",
+            vec![Change::WatchBook {
+                book: BookId::from("ghost"),
+                until: today,
+            }],
+        ),
         ("config_conflict", vec![Change::ActivateSchedule(schedule())]),
-        ("config_conflict", vec![Change::ActivateSchedule(ic_distribution::model::Schedule { id: "new".into(), version: 2, ..schedule() })]),
-        ("invalid_schedule", vec![Change::ActivateSchedule(ic_distribution::model::Schedule { id: "new".into(), options: Default::default(), ..schedule() })]),
-        ("config_conflict", vec![Change::AdviserChangeSetting(AdviserChangeSetting { version: 5, mode: AdviserChangeMode::MovesAtOnce })]),
-        ("structure", vec![Change::EndEngagement { id: EngagementId::from("ghost"), on: today }]),
-        ("invalid_shares", vec![Change::MoveLayers { layers: vec![], to: vec![(BookId::from("a-at-fap-one"), 5)], from: today }]),
-        ("unknown_book", vec![Change::MoveLayers { layers: vec![], to: vec![(BookId::from("ghost"), WHOLE)], from: today }]),
-        ("unknown_layer", vec![Change::MoveLayers { layers: vec!["ghost/life/1".into()], to: vec![(BookId::from("a-at-fap-one"), WHOLE)], from: today }]),
-        ("unknown_policy", vec![Change::SetServicing { policy: ic_core::PolicyId("ghost".into()), engagement: None }]),
+        (
+            "config_conflict",
+            vec![Change::ActivateSchedule(ic_distribution::model::Schedule {
+                id: "new".into(),
+                version: 2,
+                ..schedule()
+            })],
+        ),
+        (
+            "invalid_schedule",
+            vec![Change::ActivateSchedule(ic_distribution::model::Schedule {
+                id: "new".into(),
+                options: Default::default(),
+                ..schedule()
+            })],
+        ),
+        (
+            "config_conflict",
+            vec![Change::AdviserChangeSetting(AdviserChangeSetting {
+                version: 5,
+                mode: AdviserChangeMode::MovesAtOnce,
+            })],
+        ),
+        (
+            "structure",
+            vec![Change::EndEngagement {
+                id: EngagementId::from("ghost"),
+                on: today,
+            }],
+        ),
+        (
+            "invalid_shares",
+            vec![Change::MoveLayers {
+                layers: vec![],
+                to: vec![(BookId::from("a-at-fap-one"), 5)],
+                from: today,
+            }],
+        ),
+        (
+            "unknown_book",
+            vec![Change::MoveLayers {
+                layers: vec![],
+                to: vec![(BookId::from("ghost"), WHOLE)],
+                from: today,
+            }],
+        ),
+        (
+            "unknown_layer",
+            vec![Change::MoveLayers {
+                layers: vec!["ghost/life/1".into()],
+                to: vec![(BookId::from("a-at-fap-one"), WHOLE)],
+                from: today,
+            }],
+        ),
+        (
+            "unknown_policy",
+            vec![Change::SetServicing {
+                policy: ic_core::PolicyId("ghost".into()),
+                engagement: None,
+            }],
+        ),
     ];
     for (n, (expected, changes)) in cases.into_iter().enumerate() {
         assert_eq!(code(w.propose(&format!("bad-{n}"), changes)), expected, "case {n}");
     }
     assert!(w.dist.change_sets.len() == 1, "only the setup change exists");
     assert_eq!(code(w.propose("setup", vec![book("z")])), "duplicate_change");
-    let no_instructions = Command::ProposeChange { id: "n".into(), changes: vec![book("z")], instructions_ref: " ".into() };
+    let no_instructions = Command::ProposeChange {
+        id: "n".into(),
+        changes: vec![book("z")],
+        instructions_ref: " ".into(),
+    };
     assert_eq!(code(w.send(ops(), no_instructions.clone())), "instructions_required");
     assert_eq!(code(w.send(admin(), no_instructions.clone())), "not_authorised");
     assert_eq!(code(w.send(module("migration"), no_instructions)), "caller_not_allowed");
@@ -156,14 +317,26 @@ fn backdating_is_limited_and_a_fragment_change_must_keep_every_follower_whole() 
         lines,
         liability: vec![],
     };
-    assert_eq!(code(w.propose("f0", vec![Change::ActivateFragment(fragment(1, today.pred_opt().unwrap(), vec![over(2.0)]))])), "backdated_fragment");
-    assert_eq!(code(w.propose("f0", vec![Change::ActivateFragment(fragment(2, today, vec![over(2.0)]))])), "config_conflict");
+    assert_eq!(
+        code(w.propose("f0", vec![Change::ActivateFragment(fragment(1, today.pred_opt().unwrap(), vec![over(2.0)]))])),
+        "backdated_fragment"
+    );
+    assert_eq!(
+        code(w.propose("f0", vec![Change::ActivateFragment(fragment(2, today, vec![over(2.0)]))])),
+        "config_conflict"
+    );
     let following = Rule {
         fragments: vec![FragmentId::from("std")],
         ..rule("a-at-fap-one", 2, today, split(75.0, 25.0), vec![liable("fap-one")])
     };
-    w.activate("f1", vec![Change::ActivateFragment(fragment(1, today, vec![over(2.0)])), Change::ActivateRule(following.clone())])
-        .unwrap();
+    w.activate(
+        "f1",
+        vec![
+            Change::ActivateFragment(fragment(1, today, vec![over(2.0)])),
+            Change::ActivateRule(following.clone()),
+        ],
+    )
+    .unwrap();
     // A new version whose line does not fit its component breaks the follower: refused whole.
     let broken = Line {
         share: Share::Fixed(5),
@@ -194,7 +367,10 @@ fn backdating_is_limited_and_a_fragment_change_must_keep_every_follower_whole() 
         share: Share::RateOnPremium(pct(1.0)),
         ..base("fap-one", Share::OfRemainder(1), false)
     });
-    assert_eq!(code(w.propose("b", backdated(recent, with_override.clone(), std.clone()))), "backdated_override");
+    assert_eq!(
+        code(w.propose("b", backdated(recent, with_override.clone(), std.clone()))),
+        "backdated_override"
+    );
     w.activate("b", backdated(recent, split(60.0, 40.0), std.clone())).unwrap();
     // From today, the override may change.
     let mut from_today = backdated(today, with_override, std);
@@ -221,16 +397,33 @@ fn writing_a_layer_is_checked_and_can_never_be_rewritten() {
         to: None,
         accreditations: BTreeSet::from(["health".to_string()]),
     };
-    w.send(admin(), Command::StartEngagement { id: EngagementId::from("eng-b"), engagement: unaccredited }).unwrap();
+    w.send(
+        admin(),
+        Command::StartEngagement {
+            id: EngagementId::from("eng-b"),
+            engagement: unaccredited,
+        },
+    )
+    .unwrap();
     w.add_party("adviser-c", PartyKind::Adviser);
     w.engage("eng-c-ended", "adviser-c", "fap-one", d(2020, 1, 1));
-    w.send(admin(), Command::EndEngagement { id: EngagementId::from("eng-c-ended"), on: d(2025, 1, 1) }).unwrap();
+    w.send(
+        admin(),
+        Command::EndEngagement {
+            id: EngagementId::from("eng-c-ended"),
+            on: d(2025, 1, 1),
+        },
+    )
+    .unwrap();
     w.activate(
         "books",
         vec![
             book("closed"),
             Change::ActivateRule(rule("closed", 1, today, split(75.0, 25.0), vec![])),
-            Change::CloseBook { book: BookId::from("closed"), from: today },
+            Change::CloseBook {
+                book: BookId::from("closed"),
+                from: today,
+            },
             book("no-rule"),
         ],
     )
@@ -250,18 +443,84 @@ fn writing_a_layer_is_checked_and_can_never_be_rewritten() {
     let send = |w: &mut World, layer: WriteLayer| w.send(module("new-business"), Command::WriteLayer(Box::new(layer)));
     let cases: Vec<(&str, WriteLayer)> = vec![
         ("unknown_layer", WriteLayer { layer: 9, ..good.clone() }),
-        ("invalid_shares", WriteLayer { writing: vec![], ..good.clone() }),
-        ("invalid_shares", WriteLayer { writing: vec![(EngagementId::from("eng-a-one"), 5)], ..good.clone() }),
+        (
+            "invalid_shares",
+            WriteLayer {
+                writing: vec![],
+                ..good.clone()
+            },
+        ),
+        (
+            "invalid_shares",
+            WriteLayer {
+                writing: vec![(EngagementId::from("eng-a-one"), 5)],
+                ..good.clone()
+            },
+        ),
         ("invalid_shares", WriteLayer { books: vec![], ..good.clone() }),
-        ("not_authorised_to_advise", WriteLayer { writing: vec![(EngagementId::from("ghost"), WHOLE)], ..good.clone() }),
-        ("not_authorised_to_advise", WriteLayer { writing: vec![(EngagementId::from("eng-b"), WHOLE)], ..good.clone() }),
-        ("not_authorised_to_advise", WriteLayer { writing: vec![(EngagementId::from("eng-c-ended"), WHOLE)], ..good.clone() }),
-        ("unknown_book", WriteLayer { books: vec![(BookId::from("ghost"), WHOLE)], ..good.clone() }),
-        ("book_closed", WriteLayer { books: vec![(BookId::from("closed"), WHOLE)], ..good.clone() }),
-        ("no_rule", WriteLayer { books: vec![(BookId::from("no-rule"), WHOLE)], ..good.clone() }),
-        ("unknown_schedule", WriteLayer { schedule: "ghost".into(), ..good.clone() }),
-        ("unknown_option", WriteLayer { option: "ghost".into(), ..good.clone() }),
-        ("invalid_amount", WriteLayer { annual_premium_minor: 0, ..good.clone() }),
+        (
+            "not_authorised_to_advise",
+            WriteLayer {
+                writing: vec![(EngagementId::from("ghost"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "not_authorised_to_advise",
+            WriteLayer {
+                writing: vec![(EngagementId::from("eng-b"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "not_authorised_to_advise",
+            WriteLayer {
+                writing: vec![(EngagementId::from("eng-c-ended"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "unknown_book",
+            WriteLayer {
+                books: vec![(BookId::from("ghost"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "book_closed",
+            WriteLayer {
+                books: vec![(BookId::from("closed"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "no_rule",
+            WriteLayer {
+                books: vec![(BookId::from("no-rule"), WHOLE)],
+                ..good.clone()
+            },
+        ),
+        (
+            "unknown_schedule",
+            WriteLayer {
+                schedule: "ghost".into(),
+                ..good.clone()
+            },
+        ),
+        (
+            "unknown_option",
+            WriteLayer {
+                option: "ghost".into(),
+                ..good.clone()
+            },
+        ),
+        (
+            "invalid_amount",
+            WriteLayer {
+                annual_premium_minor: 0,
+                ..good.clone()
+            },
+        ),
     ];
     for (n, (expected, layer)) in cases.into_iter().enumerate() {
         assert_eq!(code(send(&mut w, layer)), expected, "case {n}");
@@ -289,7 +548,11 @@ fn writing_a_layer_is_checked_and_can_never_be_rewritten() {
         })),
     )
     .unwrap_err();
-    let _ = ScheduleOption { initial_ppm: 0, renewal_ppm: 0, renewal_from_month: 0 };
+    let _ = ScheduleOption {
+        initial_ppm: 0,
+        renewal_ppm: 0,
+        renewal_from_month: 0,
+    };
 }
 
 /// Purpose: a layer split between two books pays each book's rule its share, and a level
@@ -304,7 +567,10 @@ fn a_layer_split_between_books_pays_each_book_its_share() {
     w.payee("b-co");
     w.activate(
         "second-book",
-        vec![book("b-book"), Change::ActivateRule(rule("b-book", 1, today, vec![base("b-co", Share::OfRemainder(WHOLE), true)], vec![]))],
+        vec![
+            book("b-book"),
+            Change::ActivateRule(rule("b-book", 1, today, vec![base("b-co", Share::OfRemainder(WHOLE), true)], vec![])),
+        ],
     )
     .unwrap();
     let (policy, _) = w.issue(1, 500_000_00, None);
@@ -351,10 +617,44 @@ fn the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party() {
             to: None,
         })
     };
-    assert_eq!(code(w.send(admin(), Command::AddParty { party: party("fap-one"), kind: PartyKind::Fap })), "structure");
-    assert_eq!(code(w.send(ops(), Command::AddParty { party: party("new"), kind: PartyKind::Fap })), "not_authorised");
-    w.send(module("migration"), Command::AddParty { party: party("ab-1"), kind: PartyKind::AuthorisedBody }).unwrap();
-    assert_eq!(code(w.send(module("payments"), Command::AddParty { party: party("p"), kind: PartyKind::Fap })), "caller_not_allowed");
+    assert_eq!(
+        code(w.send(
+            admin(),
+            Command::AddParty {
+                party: party("fap-one"),
+                kind: PartyKind::Fap
+            }
+        )),
+        "structure"
+    );
+    assert_eq!(
+        code(w.send(
+            ops(),
+            Command::AddParty {
+                party: party("new"),
+                kind: PartyKind::Fap
+            }
+        )),
+        "not_authorised"
+    );
+    w.send(
+        module("migration"),
+        Command::AddParty {
+            party: party("ab-1"),
+            kind: PartyKind::AuthorisedBody,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        code(w.send(
+            module("payments"),
+            Command::AddParty {
+                party: party("p"),
+                kind: PartyKind::Fap
+            }
+        )),
+        "caller_not_allowed"
+    );
     w.send(admin(), relate("fap-one", "group-old", RelationKind::Under)).unwrap();
     assert_eq!(code(w.send(admin(), relate("fap-one", "group-old", RelationKind::Under))), "structure");
     assert_eq!(code(w.send(admin(), relate("group-old", "fap-one", RelationKind::Under))), "structure");
@@ -386,11 +686,24 @@ fn the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party() {
     assert_eq!(code(w.send(admin(), engage("e", "adviser-a", "group-old"))), "structure");
     assert_eq!(code(w.send(admin(), engage("e", "adviser-a", "ghost"))), "structure");
     w.send(admin(), engage("e", "adviser-a", "ab-1")).unwrap();
-    let end_engagement = |on| Command::EndEngagement { id: EngagementId::from("e"), on };
+    let end_engagement = |on| Command::EndEngagement {
+        id: EngagementId::from("e"),
+        on,
+    };
     assert_eq!(code(w.send(admin(), end_engagement(d(2020, 1, 1)))), "structure");
     w.send(admin(), end_engagement(d(2028, 1, 1))).unwrap();
     assert_eq!(code(w.send(admin(), end_engagement(d(2029, 1, 1)))), "structure");
-    assert_eq!(code(w.send(admin(), Command::MarkCeased { party: party("ghost"), on: d(2028, 1, 1), reason: ic_distribution::structure::CeasedReason::Retired })), "structure");
+    assert_eq!(
+        code(w.send(
+            admin(),
+            Command::MarkCeased {
+                party: party("ghost"),
+                on: d(2028, 1, 1),
+                reason: ic_distribution::structure::CeasedReason::Retired
+            }
+        )),
+        "structure"
+    );
 
     // Payees need a place in the structure, an agreement and a sane recovery share.
     let register = |who: &str, agreement: &str, ppm| Command::RegisterPayee {
@@ -450,7 +763,11 @@ fn a_cover_grant_lends_a_colleagues_records_for_its_period_only() {
         party: party("fap-one"),
         reason: Some("review".into()),
     };
-    assert_eq!(code(w.send(Actor::Staff(Box::new(cover.clone())), other)), "not_authorised", "only the colleague's records");
+    assert_eq!(
+        code(w.send(Actor::Staff(Box::new(cover.clone())), other)),
+        "not_authorised",
+        "only the colleague's records"
+    );
     w.days(6);
     assert_eq!(code(w.send(Actor::Staff(Box::new(cover)), hold())), "not_authorised", "the grant has ended");
 }
@@ -467,7 +784,10 @@ fn nothing_is_decided_before_the_first_business_date_is_known() {
         ic_distribution::Envelope {
             key: "k".into(),
             actor: admin(),
-            command: Command::AddParty { party: party("x"), kind: PartyKind::Fap },
+            command: Command::AddParty {
+                party: party("x"),
+                kind: PartyKind::Fap,
+            },
         },
     );
     assert_eq!(out.result.unwrap_err().code, "business_date");

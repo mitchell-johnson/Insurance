@@ -65,9 +65,16 @@ fn a_statement_shows_the_detail_and_its_payment_clears_the_ledger() {
         && l.policy.as_ref() == Some(&policy)));
     assert_eq!(s.lines.iter().map(|l| l.amount_minor).sum::<i64>(), owed);
     assert_eq!(s.payments.len(), 1);
-    assert_eq!((s.payments[0].reference.as_str(), s.payments[0].account_ref.as_str(), s.payments[0].amount_minor), ("pay:a-co.1:1", "acct-a-co", owed));
-    assert!(events.iter().any(|e| matches!(e, Event::PaymentRequested { amount_minor, .. } if *amount_minor == owed)));
-    assert!(events.iter().any(|e| matches!(e, Event::StatementIssued { hash, .. } if *hash == s.hash && !hash.is_empty())));
+    assert_eq!(
+        (s.payments[0].reference.as_str(), s.payments[0].account_ref.as_str(), s.payments[0].amount_minor),
+        ("pay:a-co.1:1", "acct-a-co", owed)
+    );
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::PaymentRequested { amount_minor, .. } if *amount_minor == owed)));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::StatementIssued { hash, .. } if *hash == s.hash && !hash.is_empty())));
     assert_eq!(w.payable("a-co"), 0);
     assert_eq!(w.ledger("a-co", PartyLedger::Clearing), owed);
     assert_eq!(code(w.cut("a-co")), "payment_in_progress");
@@ -75,7 +82,15 @@ fn a_statement_shows_the_detail_and_its_payment_clears_the_ledger() {
     w.settle("pay:a-co.1:1");
     assert_eq!(w.ledger("a-co", PartyLedger::Clearing), 0);
     assert_eq!(w.internal(InternalLedger::Settlement), cash - owed);
-    assert_eq!(code(w.send(module("payments"), Command::PaymentSettled { reference: "pay:a-co.1:1".into() })), "unknown_payment");
+    assert_eq!(
+        code(w.send(
+            module("payments"),
+            Command::PaymentSettled {
+                reference: "pay:a-co.1:1".into()
+            }
+        )),
+        "unknown_payment"
+    );
 
     // The next statement opens at zero, shows the sweep and the new premium, and pays the new amount.
     w.days(31);
@@ -83,7 +98,16 @@ fn a_statement_shows_the_detail_and_its_payment_clears_the_ledger() {
     w.cut("a-co").unwrap();
     let next = w.statement("a-co", 2);
     assert_eq!(next.closing_minor, renewal - ic_distribution::rules::portion(renewal, pct(25.0)));
-    assert_eq!(next.opening_minor + next.lines.iter().filter(|l| l.ledger == PartyLedger::CommissionPayable).map(|l| l.amount_minor).sum::<i64>(), next.closing_minor);
+    assert_eq!(
+        next.opening_minor
+            + next
+                .lines
+                .iter()
+                .filter(|l| l.ledger == PartyLedger::CommissionPayable)
+                .map(|l| l.amount_minor)
+                .sum::<i64>(),
+        next.closing_minor
+    );
     assert_eq!(w.statement("a-co", 1), &s, "an issued statement never changes");
     assert_eq!(code(w.cut("ghost")), "unknown_payee");
     assert_eq!(code(w.send(admin(), Command::CutStatement { payee: party("a-co") })), "not_authorised");
@@ -114,7 +138,10 @@ fn a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement() {
     w.send(admin(), hold(Some("bank details under review"))).unwrap();
     w.cut("a-co").unwrap();
     assert_eq!(w.statement("a-co", 2).payment_held.as_deref(), Some("bank details under review"));
-    assert_eq!(w.dist.position(&party("a-co"), w.today()).payment_hold.as_deref(), Some("bank details under review"));
+    assert_eq!(
+        w.dist.position(&party("a-co"), w.today()).payment_hold.as_deref(),
+        Some("bank details under review")
+    );
     w.send(admin(), hold(None)).unwrap();
     w.cut("a-co").unwrap();
     let third = w.statement("a-co", 3);
@@ -156,23 +183,56 @@ fn court_orders_and_assignments_are_paid_first_in_order_of_priority() {
     ] {
         assert_eq!(code(w.send(admin(), add(bad))), "invalid_instruction");
     }
-    assert_eq!(code(w.send(admin(), Command::AddPaymentInstruction { party: party("ghost"), instruction: lender })), "unknown_payee");
+    assert_eq!(
+        code(w.send(
+            admin(),
+            Command::AddPaymentInstruction {
+                party: party("ghost"),
+                instruction: lender
+            }
+        )),
+        "unknown_payee"
+    );
     assert_eq!(w.dist.position(&party("a-co"), w.today()).instructions[0].id, "court", "legal priority first");
 
     let owed = w.payable("a-co");
     w.cut("a-co").unwrap();
-    let parts: Vec<(String, i64)> = w.statement("a-co", 1).payments.iter().map(|p| (p.account_ref.clone(), p.amount_minor)).collect();
+    let parts: Vec<(String, i64)> = w
+        .statement("a-co", 1)
+        .payments
+        .iter()
+        .map(|p| (p.account_ref.clone(), p.amount_minor))
+        .collect();
     let to_lender = ic_distribution::rules::portion(owed, pct(50.0));
     assert_eq!(
         parts,
-        vec![("acct-court".to_string(), 100_00), ("acct-lender".to_string(), to_lender), ("acct-a-co".to_string(), owed - 100_00 - to_lender)]
+        vec![
+            ("acct-court".to_string(), 100_00),
+            ("acct-lender".to_string(), to_lender),
+            ("acct-a-co".to_string(), owed - 100_00 - to_lender)
+        ]
     );
     let cash = w.internal(InternalLedger::Settlement);
     w.settle("pay:a-co.1:1");
     assert_eq!(w.ledger("a-co", PartyLedger::Clearing), owed, "clearing waits for every part");
-    assert_eq!(code(w.send(module("payments"), Command::PaymentSettled { reference: "pay:a-co.1:1".into() })), "payment_settled");
+    assert_eq!(
+        code(w.send(
+            module("payments"),
+            Command::PaymentSettled {
+                reference: "pay:a-co.1:1".into()
+            }
+        )),
+        "payment_settled"
+    );
     w.settle("pay:a-co.1:2");
-    w.send(module("payments"), Command::PaymentReturned { reference: "pay:a-co.1:3".into(), reason: "closed".into() }).unwrap();
+    w.send(
+        module("payments"),
+        Command::PaymentReturned {
+            reference: "pay:a-co.1:3".into(),
+            reason: "closed".into(),
+        },
+    )
+    .unwrap();
     w.sync();
     assert_eq!(w.ledger("a-co", PartyLedger::Clearing), 0);
     assert_eq!(w.payable("a-co"), owed - 100_00 - to_lender, "the returned part is owed again");
@@ -230,25 +290,43 @@ fn advances_retentions_and_book_level_items_flow_through_the_statement() {
     w.cut("a-co").unwrap();
     let s = w.statement("a-co", 1).clone();
     let recovered = ic_distribution::rules::portion(closing, pct(20.0));
-    assert_eq!((s.advance_outstanding_minor, s.advance_recovered_minor, s.retention_minor), (1_000_00, recovered, 200_00));
+    assert_eq!(
+        (s.advance_outstanding_minor, s.advance_recovered_minor, s.retention_minor),
+        (1_000_00, recovered, 200_00)
+    );
     assert_eq!(s.payments[0].amount_minor, closing - recovered);
     assert_eq!(w.ledger("a-co", PartyLedger::Advance), recovered - 1_000_00);
     w.settle("pay:a-co.1:1");
     assert_eq!(w.ledger("a-co", PartyLedger::Clearing), 0);
 
-    w.activate("release", vec![adjustment("ret-1-release", "a-co", 200_00, AdjustmentKind::RetentionRelease)]).unwrap();
+    w.activate("release", vec![adjustment("ret-1-release", "a-co", 200_00, AdjustmentKind::RetentionRelease)])
+        .unwrap();
     assert_eq!((w.ledger("a-co", PartyLedger::Retention), w.payable("a-co")), (0, 200_00));
 
     // What a change set may not carry.
-    assert_eq!(code(w.propose("bad", vec![adjustment("adv-1", "a-co", 1, AdjustmentKind::Advance)])), "duplicate_reference");
+    assert_eq!(
+        code(w.propose("bad", vec![adjustment("adv-1", "a-co", 1, AdjustmentKind::Advance)])),
+        "duplicate_reference"
+    );
     let twice = vec![adjustment("n", "a-co", 1, book_level()), adjustment("n", "a-co", 1, book_level())];
     assert_eq!(code(w.propose("bad", twice)), "duplicate_reference");
     assert_eq!(code(w.propose("bad", vec![adjustment("n", "a-co", 0, book_level())])), "invalid_amount");
-    assert_eq!(code(w.propose("bad", vec![adjustment("n", "a-co", -1, AdjustmentKind::Advance)])), "invalid_amount");
+    assert_eq!(
+        code(w.propose("bad", vec![adjustment("n", "a-co", -1, AdjustmentKind::Advance)])),
+        "invalid_amount"
+    );
     assert_eq!(code(w.propose("bad", vec![adjustment("n", "adviser-a", 1, book_level())])), "unknown_payee");
     // Above the approver's authority: the approval is refused with the limit.
     w.propose("large", vec![adjustment("bonus", "a-co", 60_000_00, book_level())]).unwrap();
-    let denied = w.send(approver(), Command::ApproveChange { id: "large".into(), compliance: false }).unwrap_err();
+    let denied = w
+        .send(
+            approver(),
+            Command::ApproveChange {
+                id: "large".into(),
+                compliance: false,
+            },
+        )
+        .unwrap_err();
     assert!(denied.message.contains("above your limit of 5000000"), "{}", denied.message);
     w.assert_reconciled();
 }
