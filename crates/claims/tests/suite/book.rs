@@ -72,7 +72,10 @@ fn a_payee_is_verified_before_anything_is_paid() {
     assert_eq!(w.refused(verify(PayeeKind::Estate, "acct-1", None, "ana")), "authority_document_required");
     w.ok(verify(PayeeKind::Estate, "acct-1", Some("probate-1"), "ana"));
     let payee = w.claim("c-1").payee.clone().expect("recorded");
-    assert_eq!((payee.party.as_str(), payee.verified_by.as_str(), payee.verified_on), ("party-estate", "ana", d(2027, 3, 1)));
+    assert_eq!(
+        (payee.party.as_str(), payee.verified_by.as_str(), payee.verified_on),
+        ("party-estate", "ana", d(2027, 3, 1))
+    );
 }
 
 /// Purpose: a lump sum is released by its owner within their payment authority, in one payment
@@ -96,8 +99,14 @@ fn a_lump_sum_is_released_within_what_was_admitted() {
     assert_eq!((c.status, c.payable_minor, c.paid_minor(false)), (Status::Admitted, 150_000, 50_000));
     assert_eq!(c.timers[&TimerKind::Payment].met_on, Some(d(2027, 3, 1)));
     let notice = w.core.noticed("claim_paid")[0].clone();
-    assert_eq!((notice["payment_ref"].as_str(), notice["amount_minor"].as_str(), notice["net_minor"].as_str()), ("p-1", "50000", "50000"));
-    assert_eq!((notice["payee"].as_str(), notice["period_end"].as_str(), notice["ex_gratia"].as_str()), ("party-claimant", "", "false"));
+    assert_eq!(
+        (notice["payment_ref"].as_str(), notice["amount_minor"].as_str(), notice["net_minor"].as_str()),
+        ("p-1", "50000", "50000")
+    );
+    assert_eq!(
+        (notice["payee"].as_str(), notice["period_end"].as_str(), notice["ex_gratia"].as_str()),
+        ("party-claimant", "", "false")
+    );
     assert_eq!(w.refused(pay("c-1", "ana", "p-1", 10_000, None)), "payment_exists");
 
     // A new authority version lowers the assessor's payment limit: it binds at once.
@@ -133,7 +142,10 @@ fn a_returned_payment_is_owed_again() {
     assert_eq!(w.refused(returned("p-1")), "ledger");
     w.ok(returned("p-1"));
     let c = w.claim("c-1");
-    assert_eq!((c.status, c.payable_minor, c.closed_on, c.paid_minor(false)), (Status::Admitted, 200_000, None, 0));
+    assert_eq!(
+        (c.status, c.payable_minor, c.closed_on, c.paid_minor(false)),
+        (Status::Admitted, 200_000, None, 0)
+    );
     assert!(c.tasks.iter().any(|t| t.id == "payment-failure/p-1" && t.kind == TaskKind::PaymentFailure));
     assert!(matches!(w.core.instructions.last(), Some(Instruction::PaymentReturned { payment_ref, .. }) if payment_ref == "p-1"));
     assert_eq!(w.core.noticed("payment_returned")[0]["amount_minor"], "200000");
@@ -176,16 +188,34 @@ fn a_benefit_run_is_prepared_by_one_person_and_approved_by_another() {
     assert_eq!(w.refused(approve_run("run-1", "ben")), "run_approval");
     w.ok(approve_run("run-1", "sam"));
     assert_eq!(w.refused(approve_run("run-1", "sue")), "run_approval");
-    let Some(Instruction::PayBenefit { payment_ref, period_start, period_end, gross_minor, offset, close, .. }) = w.core.instructions.last() else {
+    let Some(Instruction::PayBenefit {
+        payment_ref,
+        period_start,
+        period_end,
+        gross_minor,
+        offset,
+        close,
+        ..
+    }) = w.core.instructions.last()
+    else {
         panic!("the run did not pay the benefit");
     };
-    assert_eq!((payment_ref.as_str(), *period_start, *period_end), ("run-1/ip-1/2027-03-01", d(2027, 3, 1), d(2027, 4, 1)));
+    assert_eq!(
+        (payment_ref.as_str(), *period_start, *period_end),
+        ("run-1/ip-1/2027-03-01", d(2027, 3, 1), d(2027, 4, 1))
+    );
     assert_eq!((*gross_minor, offset.is_none(), *close), (3_000, true, false));
     let c = w.claim("ip-1");
     let s = c.schedule.as_ref().expect("in payment");
-    assert_eq!((s.next_period, c.reserve_minor, c.in_run.clone(), c.paid_minor(false)), (d(2027, 4, 1), 45_000, None, 3_000));
+    assert_eq!(
+        (s.next_period, c.reserve_minor, c.in_run.clone(), c.paid_minor(false)),
+        (d(2027, 4, 1), 45_000, None, 3_000)
+    );
     let run = w.state.runs["run-1"].clone();
-    assert_eq!((run.status, run.submitted_minor, run.approved_by.as_deref()), (RunStatus::Submitted, 3_000, Some("sam")));
+    assert_eq!(
+        (run.status, run.submitted_minor, run.approved_by.as_deref()),
+        (RunStatus::Submitted, 3_000, Some("sam"))
+    );
     assert_eq!(w.core.noticed("claim_paid")[0]["period_end"], "2027-04-01");
     assert_eq!(w.core.noticed("run_submitted")[0]["exceptions"], "0");
     assert_eq!(w.state.remittance("run-1")["party-claimant"], (1, 3_000));
@@ -293,7 +323,10 @@ fn a_returned_benefit_period_is_reissued_as_that_period() {
     let c = w.claim("ip-1");
     let period = &c.schedule.as_ref().expect("in payment").periods[&d(2027, 3, 1)];
     assert_eq!((period.returned, period.payment_ref.as_str()), (false, "again-1"));
-    assert_eq!((c.status, c.payable_minor, c.paid_minor(false), c.payments.len()), (Status::InPayment, 0, 3_000, 0));
+    assert_eq!(
+        (c.status, c.payable_minor, c.paid_minor(false), c.payments.len()),
+        (Status::InPayment, 0, 3_000, 0)
+    );
     assert_eq!(w.core.noticed("claim_paid").last().expect("published")["period_end"], "2027-04-01");
 }
 
@@ -316,19 +349,35 @@ fn declared_income_replays_the_periods_already_paid() {
     w.ok(income("ip-1", d(2027, 4, 1), 1_000));
     let c = w.claim("ip-1");
     let o = &c.overpayments[0];
-    assert_eq!((o.amount_minor, o.cause, o.status, o.protected()), (1_000, OverpaymentCause::LateInformation, RecoveryStatus::Held, false));
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::RaiseOverpayment { amount_minor: 1_000, .. })));
+    assert_eq!(
+        (o.amount_minor, o.cause, o.status, o.protected()),
+        (1_000, OverpaymentCause::LateInformation, RecoveryStatus::Held, false)
+    );
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::RaiseOverpayment { amount_minor: 1_000, .. })
+    ));
 
     // Held: the next benefit is reduced by the income, and nothing is offset.
     w.on(d(2027, 5, 1));
     w.pay_run("run-3", d(2027, 5, 1));
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::PayBenefit { gross_minor: 2_000, offset: None, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::PayBenefit {
+            gross_minor: 2_000,
+            offset: None,
+            ..
+        })
+    ));
 
     // The income turns out lower from April: May and April were underpaid.
     w.ok(income("ip-1", d(2027, 4, 1), 400));
     let c = w.claim("ip-1");
     assert_eq!(c.overpayments.len(), 1);
-    assert!(c.tasks.iter().any(|t| t.id == "senior-review/underpaid/2027-04-01" && t.kind == TaskKind::SeniorReview));
+    assert!(c
+        .tasks
+        .iter()
+        .any(|t| t.id == "senior-review/underpaid/2027-04-01" && t.kind == TaskKind::SeniorReview));
     assert_eq!(w.refused(income("c-none", d(2027, 4, 1), 0)), "unknown_claim");
 }
 
@@ -361,12 +410,23 @@ fn an_offset_is_taken_only_by_decision_and_within_the_cap() {
     w.ok(prepare("run-2", d(2027, 4, 1)));
     let run = w.state.runs["run-2"].clone();
     assert_eq!((run.count, run.control_total_minor), (2, 4_000));
-    assert!(run.items.iter().all(|i| i.offset.as_ref().is_some_and(|o| o.amount_minor == 500 && o.amount_minor * 4 <= i.gross_minor)));
+    assert!(run
+        .items
+        .iter()
+        .all(|i| i.offset.as_ref().is_some_and(|o| o.amount_minor == 500 && o.amount_minor * 4 <= i.gross_minor)));
     w.ok(approve_run("run-2", "sam"));
     let c = w.claim("ip-1");
-    assert_eq!((c.overpayments[0].recovered_minor, c.overpayments[0].status), (1_000, RecoveryStatus::Recovered));
+    assert_eq!(
+        (c.overpayments[0].recovered_minor, c.overpayments[0].status),
+        (1_000, RecoveryStatus::Recovered)
+    );
     assert_eq!(c.schedule.as_ref().expect("in payment").periods[&d(2027, 4, 1)].offset_minor, 500);
-    let paid: Vec<_> = w.core.noticed("claim_paid").into_iter().filter(|n| n["payment_ref"] == "run-2/ip-1/2027-04-01").collect();
+    let paid: Vec<_> = w
+        .core
+        .noticed("claim_paid")
+        .into_iter()
+        .filter(|n| n["payment_ref"] == "run-2/ip-1/2027-04-01")
+        .collect();
     assert_eq!((paid[0]["amount_minor"].as_str(), paid[0]["net_minor"].as_str()), ("2000", "1500"));
 
     // May: nothing is left to take, and both benefits are paid in full.
@@ -406,7 +466,10 @@ fn an_offset_can_recover_another_claims_overpayment() {
     let Some(Instruction::PayBenefit { claim, offset: Some(o), .. }) = w.core.instructions.last() else {
         panic!("the benefit was paid without the offset");
     };
-    assert_eq!((claim.as_str(), o.claim.as_str(), o.policy.as_str(), o.overpayment.as_str(), o.amount_minor), ("ip-2", "ip-1", "pol-2", op.as_str(), 300));
+    assert_eq!(
+        (claim.as_str(), o.claim.as_str(), o.policy.as_str(), o.overpayment.as_str(), o.amount_minor),
+        ("ip-2", "ip-1", "pol-2", op.as_str(), 300)
+    );
     assert_eq!(w.claim("ip-1").overpayments[0].recovered_minor, 300);
 }
 
@@ -433,7 +496,14 @@ fn a_benefit_ends_closes_and_can_recur() {
 
     w.on(d(2027, 4, 1));
     w.pay_run("run-2", d(2027, 4, 1));
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::PayBenefit { gross_minor: 1_500, close: true, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::PayBenefit {
+            gross_minor: 1_500,
+            close: true,
+            ..
+        })
+    ));
     let c = w.claim("ip-1");
     assert_eq!((c.status, c.reserve_minor, c.closed_on), (Status::Ended, 0, Some(d(2027, 4, 1))));
     assert_eq!(w.core.noticed("claim_closed")[0]["outcome"], "benefit_ended");
@@ -450,7 +520,10 @@ fn a_benefit_ends_closes_and_can_recur() {
     let c = w.claim("ip-1");
     let s = c.schedule.as_ref().expect("in payment");
     assert_eq!((c.status, c.reserve_minor, c.overturns), (Status::InPayment, 20_000, 0));
-    assert_eq!((s.end, s.next_period, s.ended, s.case_manager.as_deref()), (d(2029, 3, 1), d(2027, 6, 1), None, Some("ben")));
+    assert_eq!(
+        (s.end, s.next_period, s.ended, s.case_manager.as_deref()),
+        (d(2029, 3, 1), d(2027, 6, 1), None, Some("ben"))
+    );
     w.verify_payee("ip-1", "ben");
     w.pay_run("run-3", d(2027, 6, 1));
     assert_eq!(w.claim("ip-1").paid_minor(false), 7_500);
@@ -488,7 +561,10 @@ fn a_death_notified_late_ends_the_benefit_and_raises_the_overpayment() {
     assert_eq!((c.status, s.end, s.ended), (Status::Ended, d(2027, 3, 11), Some(EndReason::Death)));
     // 21 of March's 31 days and all of April were paid past the death.
     let o = &c.overpayments[0];
-    assert_eq!((o.amount_minor, o.cause, o.status, o.protected()), (2_032 + 3_000, OverpaymentCause::LateDeathNotification, RecoveryStatus::Held, false));
+    assert_eq!(
+        (o.amount_minor, o.cause, o.status, o.protected()),
+        (2_032 + 3_000, OverpaymentCause::LateDeathNotification, RecoveryStatus::Held, false)
+    );
     let decision = c.decisions.last().expect("recorded");
     assert!(decision.straight_through && decision.signers.is_empty());
     assert_eq!(decision.reasons, vec!["death_notified".to_string()]);
@@ -497,7 +573,10 @@ fn a_death_notified_late_ends_the_benefit_and_raises_the_overpayment() {
     assert_eq!(w.core.noticed("death_register_cadence_check").len(), 1);
 
     // The cadence check is the lead's to close, and recovery from the estate is a senior's call.
-    assert_eq!(w.complete("ip-1", "death-register-cadence", "checked", "ana").expect_err("not a lead").code, "not_authorised");
+    assert_eq!(
+        w.complete("ip-1", "death-register-cadence", "checked", "ana").expect_err("not a lead").code,
+        "not_authorised"
+    );
     w.complete("ip-1", "death-register-cadence", "checked", "sam").expect("a lead closes it");
     let pursue = Request::RecoveryStatus {
         overpayment: o.id.clone(),
@@ -528,7 +607,14 @@ fn a_death_is_never_dropped() {
     assert!(!c.has_open_task(TaskKind::DeathRegisterCadence) && c.overpayments.is_empty());
     w.pay_run("run-1", d(2027, 3, 12));
     // Ten of March's 31 days.
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::PayBenefit { gross_minor: 967, close: true, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::PayBenefit {
+            gross_minor: 967,
+            close: true,
+            ..
+        })
+    ));
     assert_eq!(w.claim("ip-1").status, Status::Ended);
 
     // In a run: left for a senior.
@@ -604,7 +690,10 @@ fn reviews_fall_due_by_date_and_never_stop_the_benefit() {
     assert_eq!(w.state.due_backlog(d(2027, 3, 1)), 0);
     w.ok(Command::DrainDue);
     let c = w.claim("ip-1");
-    assert!(c.tasks.iter().any(|t| t.id == "review/IncomeDeclaration/2027-06-01" && t.due == Some(d(2027, 6, 1))));
+    assert!(c
+        .tasks
+        .iter()
+        .any(|t| t.id == "review/IncomeDeclaration/2027-06-01" && t.due == Some(d(2027, 6, 1))));
     assert_eq!(c.schedule.as_ref().expect("in payment").reviews[&TaskKind::IncomeDeclaration], d(2027, 9, 1));
     assert_eq!(w.core.noticed("review_due")[0]["review"], "IncomeDeclaration");
     assert_eq!(w.state.book(d(2027, 6, 1)).reviews_open, 1);
@@ -619,7 +708,8 @@ fn reviews_fall_due_by_date_and_never_stop_the_benefit() {
     w.pay_run("run-1", d(2027, 6, 15));
     assert_eq!(w.state.runs["run-1"].count, 4);
 
-    w.complete("ip-1", "review/IncomeDeclaration/2027-06-01", "declared", "ana").expect("the case manager completes it");
+    w.complete("ip-1", "review/IncomeDeclaration/2027-06-01", "declared", "ana")
+        .expect("the case manager completes it");
     assert_eq!(w.claim("ip-1").schedule.as_ref().expect("in payment").reviews_overdue, 0);
 
     // Past the expected end, still in payment.

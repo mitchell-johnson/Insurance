@@ -33,27 +33,49 @@ fn the_exclusion_control_finds_a_claim_paid_against_an_exclusion() {
     assert_eq!((run["scanned"].as_str(), run["hits"].as_str(), run["complete"].as_str()), ("2", "0", "true"));
 
     // The exclusion reaches the policy record after the admission.
-    w.core.cover("pol-2", "ip", CoverFacts { sum_insured_minor: 4_000, exclusions: vec!["EX-0001".into()], ..facts("income_protection") });
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            exclusions: vec!["EX-0001".into()],
+            ..facts("income_protection")
+        },
+    );
     w.on(d(2027, 3, 2));
     w.ok(control(None));
     let run = w.core.noticed("exclusion_control_run")[1].clone();
     assert_eq!((run["scanned"].as_str(), run["hits"].as_str()), ("2", "1"));
     let c = w.claim("ip-2");
     assert_eq!(c.queue, Queue::ComplexLarge);
-    assert!(c.tasks.iter().any(|t| t.id == "exclusion-match/CC-0001/1" && t.kind == TaskKind::ExclusionMatch));
+    assert!(c
+        .tasks
+        .iter()
+        .any(|t| t.id == "exclusion-match/CC-0001/1" && t.kind == TaskKind::ExclusionMatch));
     assert_eq!(c.status, Status::InPayment);
     assert_eq!(w.claim("ip-1").queue, Queue::IncomeProtectionOngoing);
     assert_eq!(w.core.noticed("exclusion_match").len(), 1);
     assert_eq!(w.state.control.last_run, Some(d(2027, 3, 2)));
     // The notice names the claim and nothing clinical.
-    assert!(w.core.notices.iter().filter(|(k, _, _)| k == "exclusion_match").all(|(_, claim, detail)| claim == "ip-2" && detail.is_empty()));
+    assert!(w
+        .core
+        .notices
+        .iter()
+        .filter(|(k, _, _)| k == "exclusion_match")
+        .all(|(_, claim, detail)| claim == "ip-2" && detail.is_empty()));
 
     // A hit already in front of a senior is not raised again by the next pass.
     w.ok(control(None));
     assert_eq!(w.core.noticed("exclusion_control_run")[2]["hits"], "0");
     assert_eq!(w.core.noticed("exclusion_match").len(), 1);
-    assert_eq!(w.complete("ip-2", "exclusion-match/CC-0001/1", "reviewed", "ana").expect_err("a senior's task").code, "not_authorised");
-    w.complete("ip-2", "exclusion-match/CC-0001/1", "reviewed", "sue").expect("a senior reviews the hit");
+    assert_eq!(
+        w.complete("ip-2", "exclusion-match/CC-0001/1", "reviewed", "ana")
+            .expect_err("a senior's task")
+            .code,
+        "not_authorised"
+    );
+    w.complete("ip-2", "exclusion-match/CC-0001/1", "reviewed", "sue")
+        .expect("a senior reviews the hit");
 
     // If the policy has left the partition the control falls back on the recorded cover check.
     w.core.covers.remove("pol-2/ip");
@@ -73,7 +95,15 @@ fn the_exclusion_control_finds_a_claim_paid_against_an_exclusion() {
 #[test]
 fn proposed_rules_can_be_dry_run_against_admitted_claims() {
     let mut w = World::new();
-    w.core.cover("pol-2", "ip", CoverFacts { sum_insured_minor: 4_000, exclusions: vec!["EX-0001".into()], ..facts("income_protection") });
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            exclusions: vec!["EX-0001".into()],
+            ..facts("income_protection")
+        },
+    );
     w.benefit_in_payment("ip-1");
     w.open_claim("c-open");
     assert!(w.state.exclusion_hits(&w.state.rules).is_empty());
@@ -131,7 +161,10 @@ fn decisions_are_sampled_for_independent_peer_review() {
     assert!(!sampled(0).claim("c-1").has_open_task(TaskKind::QualityReview));
     let mut w = sampled(100);
     let task = w.claim("c-1").task(TaskKind::QualityReview).next().expect("sampled").id.clone();
-    assert_eq!(w.complete("c-1", &task, "sound", "ana").expect_err("ana made the decision").code, "not_authorised");
+    assert_eq!(
+        w.complete("c-1", &task, "sound", "ana").expect_err("ana made the decision").code,
+        "not_authorised"
+    );
     assert_eq!(w.complete("c-1", &task, "sound", "sam").expect_err("not a reviewer").code, "not_authorised");
     w.complete("c-1", &task, "sound", "quin").expect("an independent reviewer");
     assert!(!w.claim("c-1").touched_by.contains("quin"));
@@ -171,7 +204,12 @@ fn a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior() {
     let c = w.claim("c-1");
     assert!(c.tasks.iter().any(|t| t.id == "reinsurer-consent/treaty-1" && t.due == Some(d(2027, 3, 20))));
     assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(1_000)), "R-OK"), "awaiting_reinsurer_consent");
-    assert_eq!(w.complete("c-1", "reinsurer-consent/treaty-1", "agreed", "ana").expect_err("not the assessor's").code, "system_task");
+    assert_eq!(
+        w.complete("c-1", "reinsurer-consent/treaty-1", "agreed", "ana")
+            .expect_err("not the assessor's")
+            .code,
+        "system_task"
+    );
 
     w.ok(consent(true, Some("treaty-1")));
     let c = w.claim("c-1");
@@ -184,7 +222,10 @@ fn a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior() {
     assert!(c.reinsurance.consent_refused && c.reinsurance.consent_required.is_empty());
     assert_eq!((c.queue, c.owner.clone()), (Queue::ComplexLarge, None));
     assert!(c.tasks.iter().any(|t| t.id == "senior-review/reinsurer-refused"));
-    assert_eq!(c.task(TaskKind::ReinsurerConsent).filter(|t| t.outcome.as_deref() == Some("refused")).count(), 1);
+    assert_eq!(
+        c.task(TaskKind::ReinsurerConsent).filter(|t| t.outcome.as_deref() == Some("refused")).count(),
+        1
+    );
 
     // The senior holds the conference and decides.
     w.assign("c-1", "sam");
@@ -253,7 +294,10 @@ fn an_overpayment_can_be_raised_by_hand_within_what_was_paid() {
     assert_eq!(w.refused(raise("op-1", 100, "rec")), "invalid_overpayment");
     assert_eq!(w.refused(raise("op-2", 141, "rec")), "invalid_overpayment");
     let c = w.claim("h-1");
-    assert_eq!((c.overpayments[0].id.as_str(), c.overpayments[0].amount_minor, c.overpayments[0].protected()), ("op-1", 300, false));
+    assert_eq!(
+        (c.overpayments[0].id.as_str(), c.overpayments[0].amount_minor, c.overpayments[0].protected()),
+        ("op-1", 300, false)
+    );
     assert_eq!(w.core.noticed("overpayment_raised")[0]["cause"], "ProviderBilling");
 }
 
@@ -283,8 +327,22 @@ fn each_command_names_who_may_send_it() {
             "confirm_run",
             &["payments", "claims"],
         ),
-        (Command::Approve { claim: "c".into(), actor: a.clone() }, "approve", &["claims", "held-balances"]),
-        (Command::Refuse { claim: "c".into(), actor: a.clone() }, "refuse", &["claims", "held-balances"]),
+        (
+            Command::Approve {
+                claim: "c".into(),
+                actor: a.clone(),
+            },
+            "approve",
+            &["claims", "held-balances"],
+        ),
+        (
+            Command::Refuse {
+                claim: "c".into(),
+                actor: a.clone(),
+            },
+            "refuse",
+            &["claims", "held-balances"],
+        ),
         (
             Command::Reinsurance(ReinsuranceNotice::LargeClaimNotification {
                 claim: "c".into(),
@@ -312,8 +370,22 @@ fn each_command_names_who_may_send_it() {
             "record_death",
             &["claims", "customer-master"],
         ),
-        (Command::OpenFile { claim: "c".into(), actor: a.clone() }, "open_file", &["claims"]),
-        (Command::RecordContact { claim: "c".into(), actor: a.clone() }, "record_contact", &["claims"]),
+        (
+            Command::OpenFile {
+                claim: "c".into(),
+                actor: a.clone(),
+            },
+            "open_file",
+            &["claims"],
+        ),
+        (
+            Command::RecordContact {
+                claim: "c".into(),
+                actor: a.clone(),
+            },
+            "record_contact",
+            &["claims"],
+        ),
         (
             Command::IdentifyLife {
                 claim: "c".into(),

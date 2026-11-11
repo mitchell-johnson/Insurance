@@ -7,7 +7,9 @@ use chrono::NaiveDate;
 use ic_claims::command::{Notification, Periodic};
 use ic_claims::config::{Exclusion, HealthBenefit, Line, Profile, Queue, Role, Staff};
 use ic_claims::testing::FakeCore;
-use ic_claims::{Actor, AuthorityBook, Channel, ClaimType, ClaimsState, Command, CoverFacts, DecisionKind, Flags, Notifier, PayeeKind, Reject, Request, Rules, TaskKind};
+use ic_claims::{
+    Actor, AuthorityBook, Channel, ClaimType, ClaimsState, Command, CoverFacts, DecisionKind, Flags, Notifier, PayeeKind, Reject, Request, Rules, TaskKind,
+};
 
 pub fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).expect("a real date")
@@ -156,7 +158,13 @@ pub fn authority() -> AuthorityBook {
         ..Profile::default()
     };
     let reviewer = Profile { lines, ..Profile::default() };
-    let work = [Queue::Health, Queue::LumpSum, Queue::IncomeProtectionNew, Queue::IncomeProtectionOngoing, Queue::Group];
+    let work = [
+        Queue::Health,
+        Queue::LumpSum,
+        Queue::IncomeProtectionNew,
+        Queue::IncomeProtectionOngoing,
+        Queue::Group,
+    ];
     let senior_work = [
         Queue::Health,
         Queue::LumpSum,
@@ -236,8 +244,22 @@ impl World {
         let mut core = FakeCore::new(d(TODAY.0, TODAY.1, TODAY.2));
         core.cover("pol-1", "life", facts("life"));
         core.cover("pol-1", "trauma", facts("trauma"));
-        core.cover("pol-2", "ip", CoverFacts { sum_insured_minor: 4_000, ..facts("income_protection") });
-        core.cover("pol-3", "health", CoverFacts { sum_insured_minor: 0, ..facts("health") });
+        core.cover(
+            "pol-2",
+            "ip",
+            CoverFacts {
+                sum_insured_minor: 4_000,
+                ..facts("income_protection")
+            },
+        );
+        core.cover(
+            "pol-3",
+            "health",
+            CoverFacts {
+                sum_insured_minor: 0,
+                ..facts("health")
+            },
+        );
         let mut w = World {
             state: ClaimsState::default(),
             core,

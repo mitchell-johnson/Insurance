@@ -130,7 +130,10 @@ fn a_reversal_stops_the_benefit_and_holds_the_overpayment() {
     assert_eq!((o.id.as_str(), o.amount_minor, o.status), ("ip-1/overpayment/1", 6_000, RecoveryStatus::Held));
     assert_eq!((o.cause, o.good_faith, o.protected()), (OverpaymentCause::InsurerError, true, true));
     let decision = c.decisions.last().expect("recorded");
-    assert_eq!((decision.kind, decision.finding), (DecisionKind::ReverseAdmission, Some(Finding::RulesUnmapped)));
+    assert_eq!(
+        (decision.kind, decision.finding),
+        (DecisionKind::ReverseAdmission, Some(Finding::RulesUnmapped))
+    );
     assert_eq!(decision.signers, vec!["sam".to_string(), "sue".to_string()]);
     assert!(c.tasks.iter().any(|t| t.id == "finding/rules_unmapped" && t.kind == TaskKind::QualityReview));
 
@@ -141,7 +144,10 @@ fn a_reversal_stops_the_benefit_and_holds_the_overpayment() {
     assert_eq!(overpayment, &Some(("ip-1/overpayment/1".to_string(), 6_000)));
     let reversed = w.core.noticed("admission_reversed");
     assert_eq!(reversed[0]["decided_on"], "2027-04-10");
-    assert_eq!((reversed[0]["reason_code"].as_str(), reversed[0]["cause"].as_str()), ("R-REV", "rules_unmapped"));
+    assert_eq!(
+        (reversed[0]["reason_code"].as_str(), reversed[0]["cause"].as_str()),
+        ("R-REV", "rules_unmapped")
+    );
     assert_eq!(w.core.noticed("overpayment_raised")[0]["amount_minor"], "6000");
     assert_eq!(w.core.noticed("claim_closed").last().expect("published")["outcome"], "admission_reversed");
 
@@ -183,10 +189,22 @@ fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
     let op = "ip-1/overpayment/1";
 
     assert_eq!(w.undecided("ip-1", "ana", status(op, RecoveryStatus::Pursued), "R-OK"), "authority");
-    assert_eq!(w.undecided("ip-1", "sam", status("nope", RecoveryStatus::Pursued), "R-OK"), "unknown_overpayment");
-    assert_eq!(w.undecided("ip-1", "sam", status(op, RecoveryStatus::WrittenOff), "R-OK"), "invalid_recovery_status");
-    assert_eq!(w.undecided("ip-1", "sam", status(op, RecoveryStatus::Offset), "R-OK"), "invalid_recovery_status");
-    assert_eq!(w.undecided("ip-1", "sam", status(op, RecoveryStatus::Arrangement), "R-OK"), "invalid_recovery_status");
+    assert_eq!(
+        w.undecided("ip-1", "sam", status("nope", RecoveryStatus::Pursued), "R-OK"),
+        "unknown_overpayment"
+    );
+    assert_eq!(
+        w.undecided("ip-1", "sam", status(op, RecoveryStatus::WrittenOff), "R-OK"),
+        "invalid_recovery_status"
+    );
+    assert_eq!(
+        w.undecided("ip-1", "sam", status(op, RecoveryStatus::Offset), "R-OK"),
+        "invalid_recovery_status"
+    );
+    assert_eq!(
+        w.undecided("ip-1", "sam", status(op, RecoveryStatus::Arrangement), "R-OK"),
+        "invalid_recovery_status"
+    );
     let too_much = Request::RecoveryStatus {
         overpayment: op.into(),
         status: RecoveryStatus::Offset,
@@ -208,7 +226,10 @@ fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
     w.approved("ip-1", "lex");
     let o = &w.claim("ip-1").overpayments[0];
     assert_eq!(o.status, RecoveryStatus::Pursued);
-    assert_eq!(o.history.iter().map(|(_, s, _)| *s).collect::<Vec<_>>(), vec![RecoveryStatus::Held, RecoveryStatus::Held, RecoveryStatus::Pursued]);
+    assert_eq!(
+        o.history.iter().map(|(_, s, _)| *s).collect::<Vec<_>>(),
+        vec![RecoveryStatus::Held, RecoveryStatus::Held, RecoveryStatus::Pursued]
+    );
     assert_eq!(w.core.noticed("recovery_status_changed").last().expect("published")["status"], "pursued");
     assert_eq!(w.state.claimant_view("ip-1").expect("the claim exists").repayment_asked_minor, 6_000);
 
@@ -223,9 +244,15 @@ fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
     w.approved("ip-1", "lex");
     w.approved("ip-1", "cody");
     let c = w.claim("ip-1");
-    assert_eq!((c.overpayments[0].status, c.overpayments[0].instalment_minor), (RecoveryStatus::Arrangement, 250));
+    assert_eq!(
+        (c.overpayments[0].status, c.overpayments[0].instalment_minor),
+        (RecoveryStatus::Arrangement, 250)
+    );
     let task = c.task(TaskKind::RepaymentArrangement).next().expect("opened").id.clone();
-    assert_eq!(w.complete("ip-1", &task, "agreed", "ana").expect_err("not on recoveries").code, "not_authorised");
+    assert_eq!(
+        w.complete("ip-1", &task, "agreed", "ana").expect_err("not on recoveries").code,
+        "not_authorised"
+    );
     w.complete("ip-1", &task, "agreed", "rec").expect("the recoveries queue works it");
 }
 
@@ -255,12 +282,18 @@ fn repayment_and_write_off_move_the_ledger_and_the_record_together() {
     w.core.refuse_next = 1;
     assert_eq!(w.refused(repay(1_000)), "ledger");
     w.ok(repay(1_000));
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::RecoverOverpayment { amount_minor: 1_000, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::RecoverOverpayment { amount_minor: 1_000, .. })
+    ));
     assert_eq!(w.claim("ip-1").overpayments[0].outstanding_minor(), 5_000);
     assert_eq!(w.core.noticed("overpayment_recovered")[0]["amount_minor"], "1000");
 
     let write_off = Request::WriteOff { overpayment: op.into() };
-    assert_eq!(w.undecided("ip-1", "sam", Request::WriteOff { overpayment: "nope".into() }, "R-OK"), "unknown_overpayment");
+    assert_eq!(
+        w.undecided("ip-1", "sam", Request::WriteOff { overpayment: "nope".into() }, "R-OK"),
+        "unknown_overpayment"
+    );
     // The assessor may propose, but 5,000 is beyond their limit and over the two-signature amount.
     w.decided("ip-1", "ben", write_off.clone(), "R-OK");
     assert_eq!(w.unapproved("ip-1", "ana"), "authority");
@@ -269,7 +302,10 @@ fn repayment_and_write_off_move_the_ledger_and_the_record_together() {
     w.approved("ip-1", "sue");
     let o = &w.claim("ip-1").overpayments[0];
     assert_eq!((o.status, o.written_off_minor, o.outstanding_minor()), (RecoveryStatus::WrittenOff, 5_000, 0));
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::WriteOffOverpayment { amount_minor: 5_000, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::WriteOffOverpayment { amount_minor: 5_000, .. })
+    ));
     let written = w.core.noticed("overpayment_written_off");
     assert_eq!((written[0]["amount_minor"].as_str(), written[0]["insurer_error"].as_str()), ("5000", "true"));
     assert_eq!(w.undecided("ip-1", "sam", write_off, "R-OK"), "unknown_overpayment");
@@ -308,7 +344,14 @@ fn a_full_repayment_closes_the_overpayment() {
 fn the_finding_says_why_the_admission_was_wrong() {
     // The assessor overrode the exclusion: a lump sum, admitted and paid.
     let mut w = World::new();
-    w.core.cover("pol-1", "trauma", CoverFacts { exclusions: vec!["EX-0001".into()], ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            exclusions: vec!["EX-0001".into()],
+            ..facts("trauma")
+        },
+    );
     w.open_claim("c-1");
     w.assign("c-1", "sam");
     w.assess("c-1", "CC-0001");
@@ -341,7 +384,10 @@ fn the_finding_says_why_the_admission_was_wrong() {
     let c = w.claim("c-1");
     assert_eq!(c.decisions.last().expect("recorded").finding, Some(Finding::AssessorOverride));
     let o = c.overpayments[0].clone();
-    assert_eq!((o.amount_minor, o.cause, o.protected()), (200_000, OverpaymentCause::ClaimantFalseDeclaration, false));
+    assert_eq!(
+        (o.amount_minor, o.cause, o.protected()),
+        (200_000, OverpaymentCause::ClaimantFalseDeclaration, false)
+    );
     assert_eq!(w.core.noticed("overpayment_raised")[0]["cause"], "ClaimantFalseDeclaration");
     // Not protected: a senior alone may pursue it.
     w.decided("c-1", "sam", status(&o.id, RecoveryStatus::Pursued), "R-OK");
@@ -406,7 +452,10 @@ fn a_disputed_reinsurance_item_is_recorded_on_the_claim() {
     };
     assert_eq!(w.refused(dispute("c-9")), "unknown_claim");
     w.ok(dispute("c-1"));
-    assert_eq!(w.claim("c-1").reinsurance.disputed_items, vec![("re-1".to_string(), "DSP/c-1/treaty-1/re-1".to_string())]);
+    assert_eq!(
+        w.claim("c-1").reinsurance.disputed_items,
+        vec![("re-1".to_string(), "DSP/c-1/treaty-1/re-1".to_string())]
+    );
     w.ok(Command::Reinsurance(ReinsuranceNotice::LargeClaimNotification {
         claim: "c-1".into(),
         treaty: "treaty-1".into(),

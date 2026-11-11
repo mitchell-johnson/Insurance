@@ -29,7 +29,10 @@ fn the_views_show_each_audience_only_what_it_may_see() {
     assert!(!json.contains("CC-0003") && !json.contains("cause"));
 
     let view = w.state.claimant_view("c-1").expect("the claim exists");
-    assert_eq!((view.owner.as_deref(), view.claim_type, view.admitted_minor, view.paid_minor), (Some("ana"), ClaimType::Trauma, 0, 0));
+    assert_eq!(
+        (view.owner.as_deref(), view.claim_type, view.admitted_minor, view.paid_minor),
+        (Some("ana"), ClaimType::Trauma, 0, 0)
+    );
     assert_eq!(view.decision_due, Some(w.claim("c-1").timers[&TimerKind::Decision].due));
     assert_eq!(view.evidence_outstanding.len(), 1);
     assert_eq!(view.next_benefit, None);
@@ -164,8 +167,14 @@ fn totals_by_policy_are_what_the_ledger_must_agree_with() {
     w.open_claim("c-3");
     w.decided("c-3", "ana", Request::Withdraw, "R-OK");
     let totals = w.state.totals_by_policy();
-    assert_eq!((totals["pol-1"].reserve_minor, totals["pol-1"].payable_minor, totals["pol-1"].receivable_minor), (500_000, 100_000, 0));
-    assert_eq!((totals["pol-2"].reserve_minor, totals["pol-2"].payable_minor, totals["pol-2"].receivable_minor), (45_000, 0, 700));
+    assert_eq!(
+        (totals["pol-1"].reserve_minor, totals["pol-1"].payable_minor, totals["pol-1"].receivable_minor),
+        (500_000, 100_000, 0)
+    );
+    assert_eq!(
+        (totals["pol-2"].reserve_minor, totals["pol-2"].payable_minor, totals["pol-2"].receivable_minor),
+        (45_000, 0, 700)
+    );
     assert!(!totals.contains_key("pol-3"));
 }
 

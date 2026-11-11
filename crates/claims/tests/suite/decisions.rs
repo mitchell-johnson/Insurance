@@ -38,16 +38,28 @@ fn an_admission_within_authority_takes_effect_and_is_recorded() {
 
     w.decided("c-1", "ana", World::admit_lump(Some(200_000)), "R-OK");
     let c = w.claim("c-1");
-    assert_eq!((c.status, c.admitted_minor, c.payable_minor, c.reserve_minor), (Status::Admitted, 200_000, 200_000, 0));
+    assert_eq!(
+        (c.status, c.admitted_minor, c.payable_minor, c.reserve_minor),
+        (Status::Admitted, 200_000, 200_000, 0)
+    );
     assert!(matches!(
         w.core.instructions.last(),
-        Some(Instruction::Admit { amount_minor: 200_000, release_reserve: true, deduct_premium_minor: 0, terminate: None, .. })
+        Some(Instruction::Admit {
+            amount_minor: 200_000,
+            release_reserve: true,
+            deduct_premium_minor: 0,
+            terminate: None,
+            ..
+        })
     ));
     assert_eq!(w.core.noticed("claim_admitted")[0]["admitted_minor"], "200000");
     let decision = c.decisions.last().expect("the admission is recorded");
     assert_eq!(decision.kind, DecisionKind::Admit);
     assert_eq!(decision.signers, vec!["ana".to_string()]);
-    assert_eq!((decision.rules_version, decision.authority_version, decision.profile.as_str()), (1, 1, "assessor"));
+    assert_eq!(
+        (decision.rules_version, decision.authority_version, decision.profile.as_str()),
+        (1, 1, "assessor")
+    );
     assert_eq!(decision.cause_code.as_deref(), Some("CC-0003"));
     assert_eq!(decision.definitions, vec!["trauma-def@3".to_string()]);
     assert_eq!(decision.relied_on, vec!["in_force".to_string(), "sum_insured".to_string()]);
@@ -102,8 +114,14 @@ fn a_reserve_beyond_authority_is_borrowed_and_a_sharp_move_is_reviewed() {
     w.approved("c-1", "sam");
     let c = w.claim("c-1");
     assert_eq!(c.reserve_minor, 800_000);
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::SetReserve { amount_minor: 800_000, .. })));
-    assert_eq!(w.core.noticed("claim_reserve_changed").last().expect("published")["gross_reserve_minor"], "800000");
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::SetReserve { amount_minor: 800_000, .. })
+    ));
+    assert_eq!(
+        w.core.noticed("claim_reserve_changed").last().expect("published")["gross_reserve_minor"],
+        "800000"
+    );
     // 500,000 to 800,000 is a 60% move: a senior looks at it.
     assert!(c.has_open_task(TaskKind::SeniorReview));
     let reviews = c.task(TaskKind::SeniorReview).count();
@@ -218,7 +236,14 @@ fn a_proposal_can_be_refused_and_is_rechecked_at_signing() {
 #[test]
 fn an_exclusion_stops_admission_unless_overridden_with_authority() {
     let mut w = World::new();
-    w.core.cover("pol-1", "trauma", CoverFacts { exclusions: vec!["EX-0001".into()], ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            exclusions: vec!["EX-0001".into()],
+            ..facts("trauma")
+        },
+    );
     w.open_claim("c-1");
     w.assess("c-1", "CC-0001");
     assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(200_000)), "R-OK"), "exclusion_applies");
@@ -241,11 +266,26 @@ fn an_exclusion_stops_admission_unless_overridden_with_authority() {
     w.open_claim("c-2");
     w.assess("c-2", "CC-0003");
     w.decided("c-2", "ana", World::admit_lump(Some(100_000)), "R-OK");
-    assert_eq!(w.claim("c-2").decisions.last().expect("recorded").exclusion_outcomes["EX-0001"], Match::DoesNotApply);
+    assert_eq!(
+        w.claim("c-2").decisions.last().expect("recorded").exclusion_outcomes["EX-0001"],
+        Match::DoesNotApply
+    );
 
     // Free-text wording: the rules cannot decide, a person must read it.
-    w.core.cover("pol-1", "life", CoverFacts { exclusions: vec!["EX-9001".into()], ..facts("life") });
-    w.ok(Command::Notify(Box::new(World::notification("c-3", "pol-1", "life", ClaimType::TerminalIllness))));
+    w.core.cover(
+        "pol-1",
+        "life",
+        CoverFacts {
+            exclusions: vec!["EX-9001".into()],
+            ..facts("life")
+        },
+    );
+    w.ok(Command::Notify(Box::new(World::notification(
+        "c-3",
+        "pol-1",
+        "life",
+        ClaimType::TerminalIllness,
+    ))));
     w.assign("c-3", "ana");
     w.assess("c-3", "CC-0003");
     assert_eq!(w.undecided("c-3", "ana", World::admit_lump(Some(100_000)), "R-OK"), "exclusion_needs_assessor");
@@ -257,7 +297,10 @@ fn an_exclusion_stops_admission_unless_overridden_with_authority() {
         payer_deceased: false,
     };
     w.decided("c-3", "ana", read, "R-OK");
-    assert_eq!(w.claim("c-3").decisions.last().expect("recorded").exclusion_outcomes["EX-9001"], Match::NeedsAssessor);
+    assert_eq!(
+        w.claim("c-3").decisions.last().expect("recorded").exclusion_outcomes["EX-9001"],
+        Match::NeedsAssessor
+    );
 }
 
 /// Purpose: admission needs cover in force for the life on the event date; a member not on the
@@ -269,13 +312,27 @@ fn an_exclusion_stops_admission_unless_overridden_with_authority() {
 #[test]
 fn admission_follows_the_cover_facts() {
     let mut w = World::new();
-    w.core.cover("pol-1", "trauma", CoverFacts { in_force: false, ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            in_force: false,
+            ..facts("trauma")
+        },
+    );
     w.open_claim("c-1");
     w.assess("c-1", "CC-0003");
     assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(1_000)), "R-OK"), "cover_not_confirmed");
 
     // The scheme's records do not show the member: the employer's evidence settles it.
-    w.core.cover("pol-1", "trauma", CoverFacts { life_on_policy: false, ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            life_on_policy: false,
+            ..facts("trauma")
+        },
+    );
     w.open_claim("c-2");
     w.assess("c-2", "CC-0003");
     assert_eq!(w.undecided("c-2", "ana", World::admit_lump(Some(1_000)), "R-OK"), "cover_not_confirmed");
@@ -293,7 +350,13 @@ fn admission_follows_the_cover_facts() {
     w.open_claim("c-3");
     w.assess("c-3", "CC-0003");
     w.decided("c-3", "ana", World::admit_lump(Some(100_000)), "R-OK");
-    assert!(matches!(w.core.instructions.last(), Some(Instruction::Admit { deduct_premium_minor: 1_200, .. })));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Admit {
+            deduct_premium_minor: 1_200,
+            ..
+        })
+    ));
     assert_eq!((w.claim("c-3").admitted_minor, w.claim("c-3").payable_minor), (100_000, 98_800));
 
     // A death claim on a policy that ends on death: the admission ends the policy.
@@ -365,10 +428,16 @@ fn ex_gratia_is_decided_and_paid_apart_from_the_contract() {
     assert_eq!(w.undecided("c-1", "ana", gift(0, "xg-1"), "R-OK"), "payee_not_verified");
     w.decided("c-1", "ana", gift(500, "xg-1"), "R-OK");
     let c = w.claim("c-1");
-    assert_eq!((c.status, c.reserve_minor, c.paid_minor(true), c.paid_minor(false)), (Status::Open, 500_000, 500, 0));
+    assert_eq!(
+        (c.status, c.reserve_minor, c.paid_minor(true), c.paid_minor(false)),
+        (Status::Open, 500_000, 500, 0)
+    );
     assert!(matches!(w.core.instructions.last(), Some(Instruction::ExGratia { amount_minor: 500, payee, .. }) if payee == "party-claimant"));
     let paid = w.core.noticed("claim_paid");
-    assert_eq!((paid[0]["ex_gratia"].as_str(), paid[0]["payment_ref"].as_str(), paid[0]["amount_minor"].as_str()), ("true", "xg-1", "500"));
+    assert_eq!(
+        (paid[0]["ex_gratia"].as_str(), paid[0]["payment_ref"].as_str(), paid[0]["amount_minor"].as_str()),
+        ("true", "xg-1", "500")
+    );
     assert_eq!(w.undecided("c-1", "ana", gift(100, "xg-1"), "R-OK"), "payment_exists");
 
     // At the two-signature amount it waits; beyond the assessor's limit only a senior signs.
@@ -435,8 +504,14 @@ fn a_non_disclosure_review_holds_the_admission() {
     w.task("c-1", "ndr-1", TaskKind::NonDisclosureReview, "ana");
     let asked = w.core.noticed("non_disclosure_review_requested");
     assert_eq!((asked[0]["review_ref"].as_str(), asked[0]["policy"].as_str()), ("ndr-1", "pol-1"));
-    assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(1_000)), "R-OK"), "awaiting_non_disclosure_review");
-    assert_eq!(w.complete("c-1", "ndr-1", "fine", "ana").expect_err("not the assessor's to close").code, "system_task");
+    assert_eq!(
+        w.undecided("c-1", "ana", World::admit_lump(Some(1_000)), "R-OK"),
+        "awaiting_non_disclosure_review"
+    );
+    assert_eq!(
+        w.complete("c-1", "ndr-1", "fine", "ana").expect_err("not the assessor's to close").code,
+        "system_task"
+    );
     let outcome = |review: &str| Command::NonDisclosureOutcome {
         claim: "c-1".into(),
         review_ref: review.into(),
@@ -545,8 +620,21 @@ fn benefit_terms_and_exclusion_scope_are_checked() {
     r.version = 2;
     r.exclusions.insert("EX-0002".into(), scoped);
     w.ok(Command::ActivateRules { rules: Box::new(r) });
-    w.core.cover("pol-2", "ip", CoverFacts { sum_insured_minor: 4_000, exclusions: vec!["EX-0002".into(), "EX-7777".into()], ..facts("income_protection") });
-    w.ok(Command::Notify(Box::new(World::notification("ip-1", "pol-2", "ip", ClaimType::IncomeProtection))));
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            exclusions: vec!["EX-0002".into(), "EX-7777".into()],
+            ..facts("income_protection")
+        },
+    );
+    w.ok(Command::Notify(Box::new(World::notification(
+        "ip-1",
+        "pol-2",
+        "ip",
+        ClaimType::IncomeProtection,
+    ))));
     w.assign("ip-1", "ana");
     w.assess("ip-1", "CC-0002");
     let terms = |monthly: i64, reviewed: bool| Request::Admit {
@@ -585,5 +673,8 @@ fn benefit_terms_and_exclusion_scope_are_checked() {
     };
     w.decided("ip-1", "ana", end, "R-OK");
     let c = w.claim("ip-1");
-    assert_eq!((c.status, c.overpayments[0].cause, c.overpayments[0].amount_minor), (Status::Ended, OverpaymentCause::LateDeathNotification, 3_000));
+    assert_eq!(
+        (c.status, c.overpayments[0].cause, c.overpayments[0].amount_minor),
+        (Status::Ended, OverpaymentCause::LateDeathNotification, 3_000)
+    );
 }

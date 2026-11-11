@@ -83,7 +83,10 @@ fn notification_opens_a_claim_with_a_reserve() {
     let mut w = World::new();
     notify(&mut w, "c-1", "pol-1", "trauma", ClaimType::Trauma);
     let c = w.claim("c-1");
-    assert_eq!((c.status, c.queue, c.reserve_minor, c.claimed_minor), (Status::Open, Queue::LumpSum, 500_000, 500_000));
+    assert_eq!(
+        (c.status, c.queue, c.reserve_minor, c.claimed_minor),
+        (Status::Open, Queue::LumpSum, 500_000, 500_000)
+    );
     assert_eq!(c.policyholder, "party-holder");
     assert!(c.timers.contains_key(&TimerKind::Acknowledgement));
     assert!(matches!(&w.core.instructions[0], Instruction::SetReserve { amount_minor: 500_000, reason, .. } if reason == "notification"));
@@ -109,7 +112,14 @@ fn notification_opens_a_claim_with_a_reserve() {
 #[test]
 fn doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing() {
     let mut w = World::new();
-    w.core.cover("pol-1", "trauma", CoverFacts { in_force: false, ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            in_force: false,
+            ..facts("trauma")
+        },
+    );
     w.core.refuse_next = 1;
     let n = World::notification("c-1", "pol-1", "trauma", ClaimType::Trauma);
     assert_eq!(w.refused(Command::Notify(Box::new(n.clone()))), "ledger");
@@ -181,7 +191,14 @@ fn health_invoice_goes_straight_through_inside_the_limits() {
     assert_eq!((c.status, c.admitted_minor, c.payable_minor, c.reserve_minor), (Status::Admitted, 440, 440, 0));
     assert!(c.decisions[0].straight_through);
     assert_eq!((c.decisions[0].rules_version, c.decisions[0].authority_version), (1, 1));
-    assert!(matches!(&w.core.instructions[0], Instruction::Admit { amount_minor: 440, release_reserve: true, .. }));
+    assert!(matches!(
+        &w.core.instructions[0],
+        Instruction::Admit {
+            amount_minor: 440,
+            release_reserve: true,
+            ..
+        }
+    ));
     assert_eq!(w.core.noticed("claim_admitted")[0]["admitted_minor"], "440");
     assert!(w.state.provider_payable.contains("h-1"));
     assert_eq!(w.state.report().straight_through["dental"], 1);
@@ -223,7 +240,14 @@ fn straight_through_stops_at_any_doubt() {
     assert_eq!(w.claim("t-1").status, Status::Admitted);
     assert_eq!(w.state.report().straight_through["trauma"], 1);
     // The cover carries an exclusion the cause matches.
-    w.core.cover("pol-1", "trauma", CoverFacts { exclusions: vec!["EX-0001".into()], ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            exclusions: vec!["EX-0001".into()],
+            ..facts("trauma")
+        },
+    );
     w.ok(Command::Notify(Box::new(small("t-2", Some("CC-0001")))));
     assert_eq!(w.claim("t-2").status, Status::Open);
     // No cause, or a cause the rules do not know: the exclusion cannot be cleared.
@@ -237,10 +261,24 @@ fn straight_through_stops_at_any_doubt() {
     w.ok(Command::Notify(Box::new(small("t-5", Some("CC-0003")))));
     assert_eq!(w.claim("t-5").status, Status::Admitted);
 
-    w.core.cover("pol-1", "trauma", CoverFacts { standing: Some("in_grace".into()), ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            standing: Some("in_grace".into()),
+            ..facts("trauma")
+        },
+    );
     w.ok(Command::Notify(Box::new(small("t-6", Some("CC-0003")))));
     assert_eq!(w.claim("t-6").status, Status::Open);
-    w.core.cover("pol-1", "trauma", CoverFacts { life_on_policy: false, ..facts("trauma") });
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            life_on_policy: false,
+            ..facts("trauma")
+        },
+    );
     w.ok(Command::Notify(Box::new(small("t-7", Some("CC-0003")))));
     assert_eq!(w.claim("t-7").status, Status::Open);
     w.core.cover("pol-1", "trauma", facts("trauma"));
@@ -328,12 +366,21 @@ fn acknowledgement_starts_the_service_timers() {
     assert_eq!(c.timers[&TimerKind::FirstContact].due, d(2027, 3, 7));
     assert_eq!(c.timers[&TimerKind::Decision].due, d(2027, 3, 22));
     assert_eq!(w.refused(ack("delivered-2")), "acknowledgement");
-    assert_eq!(w.refused(Command::Acknowledge { claim: "nope".into(), delivery_ref: "x".into() }), "unknown_claim");
+    assert_eq!(
+        w.refused(Command::Acknowledge {
+            claim: "nope".into(),
+            delivery_ref: "x".into()
+        }),
+        "unknown_claim"
+    );
 
     let mut vulnerable = World::notification("c-2", "pol-1", "trauma", ClaimType::Trauma);
     vulnerable.flags.vulnerable = true;
     w.ok(Command::Notify(Box::new(vulnerable)));
-    w.ok(Command::Acknowledge { claim: "c-2".into(), delivery_ref: "delivered-3".into() });
+    w.ok(Command::Acknowledge {
+        claim: "c-2".into(),
+        delivery_ref: "delivered-3".into(),
+    });
     assert_eq!(w.claim("c-2").timers[&TimerKind::Decision].due, d(2027, 4, 11));
 }
 
@@ -346,7 +393,10 @@ fn a_missed_timer_escalates_in_three_steps() {
     let mut w = World::new();
     notify(&mut w, "c-1", "pol-1", "trauma", ClaimType::Trauma);
     notify(&mut w, "c-2", "pol-1", "trauma", ClaimType::Trauma);
-    w.ok(Command::Acknowledge { claim: "c-2".into(), delivery_ref: "delivered".into() });
+    w.ok(Command::Acknowledge {
+        claim: "c-2".into(),
+        delivery_ref: "delivered".into(),
+    });
     // Acknowledgement is due in 2 days; the steps follow 1, 3 and 7 days later.
     w.advance(3);
     w.ok(Command::DrainDue);
@@ -355,14 +405,23 @@ fn a_missed_timer_escalates_in_three_steps() {
     w.advance(6);
     w.ok(Command::DrainDue);
     assert_eq!(w.claim("c-1").timers[&TimerKind::Acknowledgement].escalated, 3);
-    let levels: Vec<&str> = w.core.noticed("timer_escalated").iter().filter(|n| n["timer"] == "Acknowledgement").map(|n| n["level"].as_str()).collect();
+    let levels: Vec<&str> = w
+        .core
+        .noticed("timer_escalated")
+        .iter()
+        .filter(|n| n["timer"] == "Acknowledgement")
+        .map(|n| n["level"].as_str())
+        .collect();
     assert_eq!(levels, ["1", "2", "3"]);
     assert_eq!(w.claim("c-2").timers[&TimerKind::Acknowledgement].escalated, 0);
     assert_eq!(w.state.report().timers[&TimerKind::Acknowledgement], (1, 1));
     // First contact on the second claim was due on day 5 and is now late too.
     assert_eq!(w.claim("c-2").timers[&TimerKind::FirstContact].escalated, 2);
     w.assign("c-2", "ana");
-    w.ok(Command::RecordContact { claim: "c-2".into(), actor: actor("ana") });
+    w.ok(Command::RecordContact {
+        claim: "c-2".into(),
+        actor: actor("ana"),
+    });
     assert_eq!(w.claim("c-2").timers[&TimerKind::FirstContact].met_on, Some(d(2027, 3, 10)));
     assert_eq!(w.state.report().timers[&TimerKind::FirstContact], (0, 1));
     w.advance(30);
@@ -392,7 +451,14 @@ fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     assert_eq!(w.refused(assign("rel", "sam")), "conflict_of_interest");
     let mut no_purpose = actor("sam");
     no_purpose.purpose = " ".into();
-    assert_eq!(w.refused(Command::Assign { claim: "c-1".into(), to: "ana".into(), actor: no_purpose }), "purpose_required");
+    assert_eq!(
+        w.refused(Command::Assign {
+            claim: "c-1".into(),
+            to: "ana".into(),
+            actor: no_purpose
+        }),
+        "purpose_required"
+    );
     // Taking a claim from the queue yourself is allowed.
     w.ok(assign("ana", "ana"));
     assert_eq!(w.core.noticed("claim_assigned")[0]["handover"], "false");
@@ -673,8 +739,16 @@ fn a_late_notified_death_prompts_a_register_check() {
     late.event_date = d(2027, 1, 15);
     w.ok(Command::Notify(Box::new(late)));
     assert!(w.claim("c-late").has_open_task(TaskKind::DeathRegisterCadence));
-    assert_eq!(w.core.notices.iter().filter(|(kind, claim, _)| kind == "death_register_cadence_check" && claim == "c-late").count(), 1);
+    assert_eq!(
+        w.core
+            .notices
+            .iter()
+            .filter(|(kind, claim, _)| kind == "death_register_cadence_check" && claim == "c-late")
+            .count(),
+        1
+    );
     // The check is a lead's to close.
     assert!(w.complete("c-late", "death-register-cadence", "feed_daily", "ana").is_err());
-    w.complete("c-late", "death-register-cadence", "feed_daily", "sam").expect("a lead closes the check");
+    w.complete("c-late", "death-register-cadence", "feed_daily", "sam")
+        .expect("a lead closes the check");
 }
