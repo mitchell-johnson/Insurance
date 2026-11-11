@@ -408,3 +408,100 @@ async fn a_day_is_due_only_after_its_midnight_in_new_zealand() {
     let error = ledger_day(&client, Duration::from_millis(300)).await.unwrap_err();
     assert!(error.contains("no ledger node answered"), "{error}");
 }
+
+/// Steps that answer from a script, to put the run in situations a healthy
+/// ledger never produces.
+struct Scripted {
+    /// Policies still unfinished after every round.
+    unfinished: u32,
+    /// What each partition reports as its in-transit net, and whether a
+    /// transfer is in flight.
+    in_transit: Vec<(&'static str, bool)>,
+    published: AtomicU32,
+}
+
+impl Steps for Scripted {
+    type Error = String;
+
+    async fn cutoff(&self, step: PartitionStep) -> Result<ClosedDay, String> {
+        Ok(ClosedDay {
+            date: step.closing,
+            closing_head: ic_ledger::Hash32::ZERO,
+        })
+    }
+
+    async fn run_round(&self, _step: RoundStep) -> Result<u32, String> {
+        Ok(self.unfinished)
+    }
+
+    async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, String> {
+        let (net, in_flight) = self.in_transit[usize::from(step.partition)];
+        Ok(PartitionCheck {
+            breaks: vec![],
+            transfer_in_transit: net.to_string(),
+            transfer_in_flight: in_flight,
+        })
+    }
+
+    async fn publish(&self, step: PublishStep) -> Result<PublishedSummary, String> {
+        self.published.fetch_add(1, Ordering::SeqCst);
+        Ok(PublishedSummary {
+            name: root_name(step.closing),
+            root: ic_ledger::Hash32::ZERO,
+        })
+    }
+}
+
+/// Purpose: the run's own judgements, on situations forced by scripted steps: money left
+/// in transit between partitions with no transfer in flight is a break, the same money
+/// with a transfer in flight is not, a partition whose in-transit total cannot be read is
+/// a break, and policy work that never finishes stops the run as stuck before anything is
+/// published. Each day has one workflow ID.
+/// Why it matters: money in transit with nothing in flight means a transfer debited one
+/// partition and never credited the other: the one imbalance no single partition can see.
+/// This is the only check that would catch it, and a healthy ledger never trips it, so
+/// without a forced case the check itself would never have been seen to work.
+#[tokio::test]
+async fn money_stranded_between_partitions_is_a_break_and_endless_work_is_stuck() {
+    let input = EndOfDayInput::new(day(0), 2);
+    assert_eq!(input.workflow_id(), format!("end-of-day-{}", day(0)));
+    assert_eq!(EndOfDayInput::new(day(0), 64).workflow_id(), input.workflow_id(), "one day, one run");
+    let scripted = |unfinished, in_transit| Scripted {
+        unfinished,
+        in_transit,
+        published: AtomicU32::new(0),
+    };
+
+    // Balanced: what left one partition arrived on the other.
+    let balanced = run_end_of_day(&scripted(0, vec![("-5000", false), ("5000", false)]), &input).await.unwrap();
+    assert_eq!(balanced.breaks, vec![]);
+
+    // Stranded: 50.00 left partition 0 and is nowhere.
+    let stranded = run_end_of_day(&scripted(0, vec![("-5000", false), ("0", false)]), &input).await.unwrap();
+    assert_eq!(stranded.breaks.len(), 1);
+    assert_eq!(stranded.breaks[0].check, "transfer_in_transit");
+    assert!(stranded.breaks[0].detail.contains("-5000"), "{}", stranded.breaks[0].detail);
+
+    // The same position mid-transfer is expected.
+    let mid_transfer = run_end_of_day(&scripted(0, vec![("-5000", true), ("0", false)]), &input).await.unwrap();
+    assert_eq!(mid_transfer.breaks, vec![]);
+
+    // A total that is not a number is never read as zero.
+    let unreadable = run_end_of_day(&scripted(0, vec![("0", false), ("fifty", false)]), &input).await.unwrap();
+    assert_eq!(unreadable.breaks.len(), 1);
+    assert!(unreadable.breaks[0].detail.contains("partition 1"));
+
+    // Work that never finishes: stopped, and nothing published for the day.
+    let endless = scripted(3, vec![("0", false), ("0", false)]);
+    let stuck = run_end_of_day(&endless, &input).await.unwrap_err();
+    assert_eq!(
+        stuck,
+        EndOfDayError::Stuck {
+            partition: 0,
+            rounds: ic_workflows::eod::MAX_ROUNDS,
+            unfinished: 3
+        }
+    );
+    assert!(stuck.to_string().contains("still has 3 unfinished policies"));
+    assert_eq!(endless.published.load(Ordering::SeqCst), 0);
+}

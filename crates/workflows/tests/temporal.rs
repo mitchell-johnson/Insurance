@@ -232,6 +232,74 @@ fn run(args: &[&str], env: &[(&str, &str)]) -> (bool, String) {
     (output.status.success(), String::from_utf8_lossy(&output.stderr).into_owned())
 }
 
+/// Purpose: the command the nightly schedule runs, against a real Temporal server and a
+/// ledger that is two days behind the calendar: it closes both overdue days, oldest
+/// first, stops at today, reports what it closed, and when run again closes nothing.
+/// Why it matters: this is how the insurer's day actually ends in production. After an
+/// outage the ledger is days behind; the job must catch up without a person, must not run
+/// past today into a day still in progress, and must be harmless when the scheduler fires
+/// it twice.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_scheduled_close_catches_up_to_today_and_stops() {
+    if std::env::var("IC_SKIP_TEMPORAL_TESTS").is_ok_and(|v| v == "1") {
+        eprintln!("IC_SKIP_TEMPORAL_TESTS=1: the scheduled close test was NOT run");
+        return;
+    }
+    let server = temporal().await;
+    let ledger = Ledger::start_empty("scheduled", 3, 2).await;
+    let today = chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Auckland).date_naive();
+    let behind = today - chrono::Days::new(2);
+    for partition in 0..2 {
+        let open = ic_core::Command::OpenBusinessDate { date: behind };
+        ledger.run(partition, &format!("open-{partition}"), "leader", open).await;
+    }
+    let fleet = Fleet {
+        temporal: server.address.clone(),
+        task_queue: format!("ic-test-{}-{}", std::process::id(), free_port()),
+        nodes: ledger.client.nodes().join(","),
+        roots: scratch("scheduled-roots"),
+    };
+    let mut worker = fleet.worker();
+    let close_due = || {
+        fleet
+            .command(&fleet.nodes)
+            .arg("close-due")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap()
+    };
+
+    let output = finish(close_due()).await;
+    assert!(
+        output.status.success(),
+        "the scheduled close failed: {}\nworkers logged:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+        std::fs::read_to_string(worker_log_path()).unwrap_or_default()
+    );
+    let said: serde_json::Value = serde_json::from_slice(&output.stdout).expect("the report is not JSON");
+    let yesterday = today - chrono::Days::new(1);
+    assert_eq!(said["closed"], serde_json::json!([behind.to_string(), yesterday.to_string()]));
+    assert_eq!(said["business_date"], today.to_string());
+    for date in [behind, yesterday] {
+        assert!(verify_published(&published(&fleet.roots, date)), "{date}");
+    }
+    let on = ic_workflows::due::ledger_day(&ledger.client, Duration::from_secs(20)).await.unwrap();
+    assert_eq!(on.business_date, today);
+
+    // Fired again the same night: nothing to do, and today stays open.
+    let again = finish(close_due()).await;
+    assert!(again.status.success());
+    let said: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert_eq!(said["closed"], serde_json::json!([]));
+    assert!(!fleet.roots.join(root_name(today)).exists(), "today was closed while still in progress");
+
+    assert!(Process::new("kill").args(["-TERM", &worker.id().to_string()]).status().unwrap().success());
+    tokio::task::spawn_blocking(move || worker.wait().unwrap()).await.unwrap();
+    drop(server.local);
+    ledger.stop().await;
+}
+
 /// Purpose: the worker binary refuses to start with missing settings, an unknown command,
 /// a malformed `close` request or an unreachable Temporal server, and says which.
 /// Why it matters: these are the mistakes made in a deployment manifest or a runbook

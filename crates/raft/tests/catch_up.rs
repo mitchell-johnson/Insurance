@@ -129,3 +129,67 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Purpose: a ledger node's Raft endpoints turn away a caller with the cluster token but no
+/// node identity, a caller that expects this node to be a different incarnation, and a
+/// caller claiming a node number this node already knows under another identity. A caller
+/// with no token is turned away before any of that.
+/// Why it matters: Raft messages decide who leads and what is committed. A node rebuilt on
+/// an empty disk that kept its old number could vote twice in one term; these refusals are
+/// what stop it, and they sit on the network path where the only other test of them is
+/// the container drill.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn raft_endpoints_refuse_callers_they_cannot_place() {
+    let dir = scratch("raft-door");
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
+    let node = server::start(Settings {
+        id: 1,
+        listen: addr.parse().unwrap(),
+        data_dir: dir.join("node-1"),
+        partitions: 1,
+        peers: BTreeMap::from([(1, addr.clone()), (2, "127.0.0.1:1".to_string())]),
+        bootstrap: true,
+        heartbeat_ms: 50,
+        auth,
+        cold: ColdTarget::Dir(dir.join("cold")),
+        events: EventTarget::Discard,
+        segment_entries: 10,
+        snapshot_every: 1000,
+    })
+    .await
+    .unwrap();
+    let http = reqwest::Client::new();
+    let vote = |headers: Vec<(&'static str, &'static str)>, token: bool| {
+        let mut request = http.post(format!("http://{addr}/raft/0/vote")).json(&serde_json::json!({}));
+        if token {
+            request = request.bearer_auth(TOKEN);
+        }
+        for (name, value) in headers {
+            request = request.header(name, value);
+        }
+        async move {
+            let response = request.send().await.unwrap();
+            (response.status().as_u16(), response.text().await.unwrap())
+        }
+    };
+
+    assert_eq!(vote(vec![("x-ic-node", "2"), ("x-ic-incarnation", "first")], false).await.0, 401);
+    let (status, said) = vote(vec![], true).await;
+    assert_eq!(status, 400);
+    assert!(said.contains("identify"), "{said}");
+
+    // Node 2 as first met: let in as far as the handler, which rejects the empty body.
+    let (status, _) = vote(vec![("x-ic-node", "2"), ("x-ic-incarnation", "first")], true).await;
+    assert!(status == 422 || status == 400, "a known peer was stopped at the door: {status}");
+    // The same number under another identity: an impostor, or a wiped disk.
+    let (status, said) = vote(vec![("x-ic-node", "2"), ("x-ic-incarnation", "second")], true).await;
+    assert_eq!(status, 409, "{said}");
+    // A caller that remembers this node as someone else.
+    let (status, said) = vote(vec![("x-ic-node", "2"), ("x-ic-incarnation", "first"), ("x-ic-expects", "not-this-node")], true).await;
+    assert_eq!(status, 409);
+    assert!(said.contains("not the member"), "{said}");
+    node.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
