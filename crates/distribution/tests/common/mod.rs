@@ -472,6 +472,7 @@ pub fn advised_in(mut w: World) -> (World, PolicyId, i64) {
     (w, policy, renewal)
 }
 
+#[track_caller]
 pub fn code<T: std::fmt::Debug>(r: Result<T, Reject>) -> String {
     r.unwrap_err().code
 }

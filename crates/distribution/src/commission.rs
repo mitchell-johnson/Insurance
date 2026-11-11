@@ -135,6 +135,12 @@ impl DistributionState {
         let partition = record.partition;
         let cause = record.id.clone();
         match record.event {
+            CoreEvent::BusinessDateAdvanced { to, .. } => {
+                // The event is recorded on the day that closed; the new day starts here.
+                if self.today.is_none_or(|t| to > t) {
+                    self.today = Some(to);
+                }
+            }
             CoreEvent::PolicyIssued {
                 policy,
                 product_code,
