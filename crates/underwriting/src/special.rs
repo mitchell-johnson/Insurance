@@ -155,13 +155,37 @@ pub struct Report {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "query", rename_all = "snake_case")]
 pub enum Query {
-    Proposal { proposal: ProposalId },
-    TermsOn { policy: PolicyId, life: LifeId, cover: String },
-    UnderwritersOf { policy: PolicyId, life: LifeId },
-    Queue { queue: Queue, now: DateTime<Utc> },
-    Workload { underwriter: String },
-    Report { from: DateTime<Utc>, to: DateTime<Utc> },
-    Exclusions { on: NaiveDate },
+    Proposal {
+        proposal: ProposalId,
+    },
+    TermsOn {
+        policy: PolicyId,
+        life: LifeId,
+        cover: String,
+    },
+    UnderwritersOf {
+        policy: PolicyId,
+        life: LifeId,
+    },
+    Queue {
+        queue: Queue,
+        now: DateTime<Utc>,
+    },
+    Workload {
+        underwriter: String,
+    },
+    Report {
+        from: DateTime<Utc>,
+        to: DateTime<Utc>,
+    },
+    Exclusions {
+        on: NaiveDate,
+    },
+    /// Effects waiting for delivery after number `after`, oldest first.
+    Outbox {
+        after: u64,
+        max: usize,
+    },
 }
 
 /// Answer a query from the state. The function the module host calls.
@@ -175,6 +199,7 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         Query::Workload { underwriter } => json(serde_json::to_value(state.workload(&underwriter))),
         Query::Report { from, to } => json(serde_json::to_value(state.report(from, to))),
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
+        Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
     }
 }
 
