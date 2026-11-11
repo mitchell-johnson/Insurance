@@ -311,8 +311,25 @@ impl Projections {
                     self.layers.remove(policy);
                 }
             }
-            Event::MemberJoined { policy, life, covers, .. } | Event::MemberChanged { policy, life, covers, .. } => {
+            Event::MemberJoined {
+                policy, life, covers, party, ..
+            } => {
                 self.set_member_covers(policy, partition, Some(life), covers);
+                if let Some(party) = party {
+                    self.life_party.insert((policy.clone(), life.clone()), party.clone());
+                }
+            }
+            Event::MemberChanged { policy, life, covers, .. } => {
+                self.set_member_covers(policy, partition, Some(life), covers);
+            }
+            Event::LayerEnded { policy, cover, layer, .. } => {
+                let emptied = self.layers.get_mut(policy).is_some_and(|rows| {
+                    rows.remove(&(cover.clone(), *layer));
+                    rows.is_empty()
+                });
+                if emptied {
+                    self.layers.remove(policy);
+                }
             }
             Event::MemberLeft { policy, life, .. } => {
                 self.set_member_covers(policy, partition, Some(life), &[]);

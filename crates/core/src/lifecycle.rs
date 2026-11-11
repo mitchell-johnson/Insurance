@@ -170,6 +170,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
                 origin: LayerOrigin::Original,
                 loadings: spec.loadings,
                 exclusions: spec.exclusions,
+                loading_itemised: false,
             });
         }
     }
@@ -340,6 +341,7 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
                             origin: LayerOrigin::Indexation,
                             loadings,
                             exclusions,
+                            loading_itemised: false,
                         });
                         added.push(LayerInfo {
                             cover: cover.code.clone(),

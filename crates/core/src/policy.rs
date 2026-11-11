@@ -80,6 +80,22 @@ pub struct LifeFactors {
     pub category: Option<String>,
     #[serde(default)]
     pub salary_minor: Option<i64>,
+    /// A ceiling on this member's automatic (formula-driven) cover, below
+    /// the category maximum and the automatic acceptance limit. Set where a
+    /// reinsurer or the scheme's terms require the excess to be underwritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_cover_cap_minor: Option<i64>,
+    /// The declared aggregate of a pool life. A pool with a declaration is
+    /// billed on it; a new declaration is a membership change like any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<PoolAggregate>,
+}
+
+/// What an employer declares for a pool: how many people and their total pay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoolAggregate {
+    pub headcount: u32,
+    pub total_salary_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +119,9 @@ pub enum LayerOrigin {
     Original,
     Increase,
     Indexation,
+    /// A scheme member's cover above the automatic amount, accepted by
+    /// underwriting and written as its own layer on the scheme's cover.
+    UnderwrittenExcess,
 }
 
 /// One tranche of a cover with its own start date. Frozen forever at the end
@@ -123,6 +142,11 @@ pub struct Layer {
     pub loadings: Vec<DecStr>,
     #[serde(default)]
     pub exclusions: Vec<String>,
+    /// The member has agreed that the employer may see this layer's premium
+    /// with its loading on the member's own invoice line. Otherwise loadings
+    /// reach the employer only inside one scheme total.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loading_itemised: bool,
 }
 
 impl Layer {
