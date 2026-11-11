@@ -1,0 +1,307 @@
+//! Regulatory returns with lineage, restatements, and conduct measures.
+
+mod common;
+
+use common::*;
+use ic_finance::books::{FinEvent, JournalKind};
+use ic_finance::config::ConfigError;
+use ic_finance::returns::{ConductFact, ConductMeasure, ReturnDefinition, MAX_CONDUCT_FACTS};
+use ic_finance::{FinCommand, FinanceState};
+use ic_money::FINE_PER_MINOR;
+
+const QUARTERLY: &str = include_str!("../../../config/finance/returns/insurer_quarterly.star");
+
+fn definition() -> ReturnDefinition {
+    ReturnDefinition::load("insurer_quarterly.star", QUARTERLY).unwrap()
+}
+
+fn fact(id: &str, measure: ConductMeasure, date: chrono::NaiveDate) -> ConductFact {
+    ConductFact {
+        id: id.to_string(),
+        measure,
+        date,
+        product: Some("term-life".to_string()),
+        relates_to: None,
+    }
+}
+
+fn undoing(id: &str, measure: ConductMeasure, date: chrono::NaiveDate, earlier: chrono::NaiveDate) -> ConductFact {
+    ConductFact {
+        relates_to: Some(earlier),
+        ..fact(id, measure, date)
+    }
+}
+
+fn record(facts: Vec<ConductFact>) -> FinCommand {
+    FinCommand::RecordConductFacts { facts }
+}
+
+/// A core run from 20 November 2027 to `until` with one paying policy.
+fn world(until: chrono::NaiveDate) -> World {
+    let mut w = World::new(1, d(2027, 11, 20));
+    let (p, id) = w.issue(1, d(2027, 11, 20));
+    w.pay(p, &id, "r1", 3 * MONTHLY);
+    w.until(until);
+    w
+}
+
+/// Purpose: a decline that is later overturned stays counted as a decline in the month it
+/// was made. The overturn is counted on its own in the month it happened, against the month
+/// of the decline, and a reversed admission is counted the same way. A fact sent twice is
+/// counted once, and a fact from the wrong service, malformed, or dated in a closed period
+/// is refused with nothing counted.
+/// Why it matters: this is the design addendum's fifth decision. Netting overturns against
+/// declines would make the decline rate look better exactly when the insurer got more
+/// decisions wrong, which is the opposite of what a conduct regulator needs to see.
+#[test]
+fn an_overturned_decline_is_reported_apart_from_the_declines() {
+    use ConductMeasure::*;
+    let mut w = world(d(2028, 1, 20));
+    let (nov, dec, jan) = (period(2027, 11), period(2027, 12), period(2028, 1));
+    let b = &mut w.books;
+    let december = vec![
+        fact("clm-1", ClaimAccepted, d(2027, 12, 3)),
+        fact("clm-2", ClaimAccepted, d(2027, 12, 9)),
+        fact("clm-3", ClaimDeclined, d(2027, 12, 10)),
+        fact("clm-4", ClaimDeclined, d(2027, 12, 15)),
+        ConductFact {
+            product: Some("health-plan".to_string()),
+            ..fact("clm-5", ClaimDeclined, d(2027, 12, 20))
+        },
+    ];
+    let first = b.send_keyed("dec-facts", "claims", None, record(december.clone()));
+    assert!(matches!(first.events[0].event, FinEvent::ConductFactsRecorded { count: 5 }));
+    // Sent again with one new fact: only the new one counts.
+    let mut resent = december;
+    resent.push(fact("clm-6", ClaimDeclined, d(2028, 1, 5)));
+    let second = b.send_keyed("resend", "claims", None, record(resent.clone()));
+    assert!(matches!(second.events[0].event, FinEvent::ConductFactsRecorded { count: 1 }));
+    let third = b.send_keyed("resend-2", "claims", None, record(resent));
+    assert_eq!((third.result, third.events.len()), (Ok(()), 0));
+
+    let january = vec![
+        undoing("clm-3/overturned", DeclineOverturned, d(2028, 1, 12), d(2027, 12, 10)),
+        undoing("clm-1/reversed", AdmissionReversed, d(2028, 1, 14), d(2027, 12, 3)),
+    ];
+    b.send("claims", None, record(january)).unwrap();
+    let complaints = vec![
+        fact("cmp-1", ComplaintReceived, d(2028, 1, 6)),
+        fact("cmp-2", ComplaintReceived, d(2028, 1, 8)),
+        fact("cmp-1/upheld", ComplaintUpheld, d(2028, 1, 15)),
+    ];
+    b.send("complaints", None, record(complaints)).unwrap();
+
+    let was = b.state.conduct_report(dec, None);
+    assert_eq!((was.accepted, was.declined), (2, 3), "December's declines are still three");
+    assert_eq!(was.declines_later_overturned, 1);
+    assert!(was.overturned.is_empty() && was.admissions_reversed.is_empty());
+    let now = b.state.conduct_report(jan, None);
+    assert_eq!((now.declined, now.accepted), (1, 0));
+    assert_eq!(now.overturned.iter().collect::<Vec<_>>(), vec![(&dec, &1)]);
+    assert_eq!(now.admissions_reversed.iter().collect::<Vec<_>>(), vec![(&dec, &1)]);
+    assert_eq!((now.complaints_received, now.complaints_upheld), (2, 1));
+    assert_eq!(b.state.conduct_report(dec, Some("health-plan")).declined, 1);
+    assert_eq!(b.state.conduct_report(dec, Some("term-life")).declined, 2);
+
+    // A refused batch counts none of its facts, the good one included.
+    let counted = b.state.conduct_report(jan, None);
+    let refused = |b: &mut Books, caller: &str, bad: ConductFact| b.code(caller, None, record(vec![fact("good", ClaimAccepted, d(2028, 1, 2)), bad]));
+    assert_eq!(refused(b, "complaints", fact("a", ClaimDeclined, d(2028, 1, 2))), "caller");
+    assert_eq!(refused(b, "claims", fact("a", ComplaintReceived, d(2028, 1, 2))), "caller");
+    assert_eq!(b.code("payments", None, record(vec![])), "caller");
+    assert_eq!(refused(b, "claims", fact("", ClaimDeclined, d(2028, 1, 2))), "fact");
+    assert_eq!(refused(b, "claims", fact("a", DeclineOverturned, d(2028, 1, 2))), "fact");
+    assert_eq!(refused(b, "claims", undoing("a", ClaimDeclined, d(2028, 1, 2), d(2027, 12, 1))), "fact");
+    assert_eq!(refused(b, "claims", undoing("a", AdmissionReversed, d(2028, 1, 2), d(2028, 1, 3))), "fact");
+    let many = (0..=MAX_CONDUCT_FACTS).map(|n| fact(&format!("f{n}"), ClaimAccepted, d(2028, 1, 2))).collect();
+    assert_eq!(b.code("claims", None, record(many)), "batch");
+    assert_eq!(b.state.conduct_report(jan, None), counted);
+
+    // Once November has closed, nothing more is counted in it.
+    w.close(nov);
+    assert_eq!(
+        w.books.code("claims", None, record(vec![fact("late", ClaimDeclined, d(2027, 11, 28))])),
+        "period_closed"
+    );
+    assert_eq!(w.books.state.conduct_report(nov, None).declined, 0);
+}
+
+/// Purpose: a return is worked out by the ledger from a closed period, each line showing the
+/// accounts behind it, and is stored as filed. Filing needs a closed period and the right
+/// authority, and the same return cannot be filed twice. When a correction is later posted
+/// for that period the ledger reports that the return needs restating; the restatement is a
+/// new version with a reason, shows the restating amount by the period it was posted in, and
+/// leaves the first version exactly as filed. A restatement with nothing changed is refused.
+/// Why it matters: a figure sent to the regulator has to be reproducible from the ledger and
+/// traceable to postings, and what was sent must never be overwritten. When the past is
+/// corrected, both the original and the restated figure have to exist, with the path
+/// between them.
+#[test]
+fn a_return_is_filed_from_a_closed_period_and_restated_as_a_new_version() {
+    let mut w = world(d(2027, 12, 20));
+    let (nov, dec) = (period(2027, 11), period(2027, 12));
+    let def = definition();
+    let file = |id: &str, period| FinCommand::FileReturn {
+        id: id.to_string(),
+        definition: definition(),
+        period,
+    };
+    let restate = |id: &str, reason: &str| FinCommand::RestateReturn {
+        id: id.to_string(),
+        definition: definition(),
+        reason: reason.to_string(),
+    };
+    assert_eq!(w.books.console_code("olive", file("q-2027-11", nov)), "period", "November is not closed yet");
+    w.books
+        .send("claims", None, record(vec![fact("clm-1", ConductMeasure::ClaimDeclined, d(2027, 11, 25))]))
+        .unwrap();
+    let mut reserves = journal("res", JournalKind::Accrual, nov, "6000", "2400", 4_000_00);
+    reserves.value_date = d(2027, 11, 30);
+    w.books.console("olive", FinCommand::ProposeJournal { journal: reserves }).unwrap();
+    w.books.console("ana", FinCommand::ApproveJournal { id: "res".to_string() }).unwrap();
+    w.close(nov);
+
+    let b = &mut w.books;
+    assert_eq!(b.console_code("ana", file("q-2027-11", nov)), "authority");
+    assert_eq!(b.code("reporting", Some("olive"), file("q-2027-11", nov)), "caller");
+    assert_eq!(b.console_code("olive", file("", nov)), "return");
+    assert_eq!(b.console_code("lena", restate("q-2027-11", "too early")), "return");
+    b.console("olive", file("q-2027-11", nov)).unwrap();
+    assert!(matches!(&b.applied.last().unwrap().events[0].event, FinEvent::ReturnFiled { version: 1, .. }));
+    assert_eq!(b.console_code("olive", file("q-2027-11", nov)), "return");
+
+    let v1 = b.state.returns["q-2027-11"][0].clone();
+    let closed = b.state.periods[&nov].closed.clone().unwrap();
+    assert_eq!((v1.version, v1.period, v1.filed_by.as_str(), v1.reason.clone()), (1, nov, "olive", None));
+    assert_eq!(
+        (v1.definition.as_str(), v1.definition_version, &v1.definition_hash),
+        ("insurer-quarterly", 1, &def.content_hash)
+    );
+    assert_eq!(v1.trial_balance_hash, closed.trial_balance_hash);
+    let line = |r: &ic_finance::returns::FiledReturn, code: &str| r.lines.iter().find(|l| l.code == code).unwrap().clone();
+    assert_eq!(line(&v1, "A1").value, 3 * i128::from(MONTHLY) * FINE_PER_MINOR);
+    assert_eq!(line(&v1, "L2").value, 4_000_00 * FINE_PER_MINOR, "a liability is reported as a positive figure");
+    assert_eq!(
+        line(&v1, "L2").as_closed.iter().collect::<Vec<_>>(),
+        vec![(&"2400".to_string(), &(4_000_00 * FINE_PER_MINOR))]
+    );
+    assert_eq!(line(&v1, "P2").value, 4_000_00 * FINE_PER_MINOR);
+    let earned = line(&v1, "P1");
+    assert!(earned.value > 0 && earned.value == line(&v1, "P1L").value);
+    assert_eq!(
+        earned.value,
+        -closed.trial_balance.iter().filter(|r| r.account == "4000").map(|r| r.balance).sum::<i128>()
+    );
+    assert_eq!((line(&v1, "C2").value, line(&v1, "C3").value), (1, 0));
+    assert!(v1.lines.iter().all(|l| l.restated.is_empty()) && v1.restating_entries.is_empty());
+
+    // Nothing has changed, so there is nothing to restate.
+    assert!(b.state.returns_needing_restatement(std::slice::from_ref(&def)).is_empty());
+    assert_eq!(b.console_code("lena", restate("q-2027-11", "no reason at all")), "unchanged");
+
+    // In December the November reserve is found to be 500.00 short.
+    let mut correction = journal("res-fix", JournalKind::Correction, dec, "6000", "2400", 500_00);
+    correction.value_date = d(2027, 11, 30);
+    b.console("olive", FinCommand::ProposeJournal { journal: correction }).unwrap();
+    b.console("ana", FinCommand::ApproveJournal { id: "res-fix".to_string() }).unwrap();
+    assert_eq!(b.state.returns_needing_restatement(std::slice::from_ref(&def)), vec!["q-2027-11".to_string()]);
+    assert!(
+        b.state.returns_needing_restatement(&[]).is_empty(),
+        "without its definition a return cannot be recomputed"
+    );
+
+    assert_eq!(b.console_code("olive", restate("q-2027-11", "reserve corrected")), "authority");
+    assert_eq!(b.console_code("lena", restate("q-2027-11", "  ")), "return");
+    let mut other = definition();
+    other.id = "another-return".to_string();
+    let wrong = FinCommand::RestateReturn {
+        id: "q-2027-11".to_string(),
+        definition: other,
+        reason: "reserve corrected".to_string(),
+    };
+    assert_eq!(b.console_code("lena", wrong), "return");
+    b.console("lena", restate("q-2027-11", "November reserve corrected in December")).unwrap();
+    assert!(matches!(&b.applied.last().unwrap().events[0].event, FinEvent::ReturnFiled { version: 2, .. }));
+
+    let versions = &b.state.returns["q-2027-11"];
+    assert_eq!(versions.len(), 2);
+    assert_eq!(versions[0], v1, "what was filed first is exactly as it was");
+    let v2 = &versions[1];
+    assert_eq!(
+        (v2.version, v2.filed_by.as_str(), v2.reason.as_deref()),
+        (2, "lena", Some("November reserve corrected in December"))
+    );
+    assert_ne!(v2.hash, v1.hash);
+    let restated = line(v2, "L2");
+    assert_eq!(restated.as_closed, line(&v1, "L2").as_closed);
+    assert_eq!(restated.restated.iter().collect::<Vec<_>>(), vec![(&dec, &(500_00 * FINE_PER_MINOR))]);
+    assert_eq!(restated.value, 4_500_00 * FINE_PER_MINOR);
+    assert_eq!(line(v2, "P2").value, 4_500_00 * FINE_PER_MINOR);
+    assert_eq!(line(v2, "A1"), line(&v1, "A1"), "lines the correction did not touch are unchanged");
+    assert!(b.state.returns_needing_restatement(&[def]).is_empty());
+
+    // The filed returns survive a save and load with the rest of the state.
+    let loaded: FinanceState = serde_json::from_slice(&serde_json::to_vec(&b.state).unwrap()).unwrap();
+    assert_eq!(loaded, b.state);
+}
+
+/// Purpose: a return definition is refused when it has no ID, version or lines, a line with
+/// no code or a repeated code, or a line that names no accounts; a definition naming an
+/// account the chart does not have is refused when filed; and the shipped definition keeps
+/// declines and overturned declines as separate lines.
+/// Why it matters: a line that silently summed nothing would file a zero with the regulator.
+/// The shipped template is also where the rule about not netting overturns is made concrete.
+#[test]
+fn a_return_definition_that_would_report_nothing_is_refused() {
+    let def = definition();
+    let measures: Vec<_> = def
+        .lines
+        .iter()
+        .filter_map(|l| match &l.source {
+            ic_finance::returns::LineSource::Conduct { measure } => Some((l.code.as_str(), *measure)),
+            _ => None,
+        })
+        .collect();
+    assert!(measures.contains(&("C2", ConductMeasure::ClaimDeclined)) && measures.contains(&("C3", ConductMeasure::DeclineOverturned)));
+    assert_eq!(def.content_hash.len(), 64);
+
+    let invalid = |change: &dyn Fn(&mut ReturnDefinition)| {
+        let mut d = def.clone();
+        change(&mut d);
+        match d.validate() {
+            Err(ConfigError::Invalid(message)) => message,
+            other => panic!("expected a validation error, got {other:?}"),
+        }
+    };
+    assert!(invalid(&|d| d.id.clear()).contains("needs an ID"));
+    assert!(invalid(&|d| d.version = 0).contains("needs an ID"));
+    assert!(invalid(&|d| d.lines.clear()).contains("at least one line"));
+    assert!(invalid(&|d| d.lines[1].code = "A1".to_string()).contains("declared twice"));
+    assert!(invalid(&|d| d.lines[0].code.clear()).contains("unnamed"));
+    assert!(invalid(&|d| d.lines[0].source = ic_finance::returns::LineSource::Balance { accounts: vec![] }).contains("names no accounts"));
+    assert!(matches!(
+        ReturnDefinition::load(
+            "r.star",
+            "RETURN = {\"id\": \"x\", \"version\": 1, \"title\": \"x\", \"currency\": \"NZD\", \"lines\": []}"
+        ),
+        Err(ConfigError::Invalid(_))
+    ));
+    assert!(matches!(ReturnDefinition::load("r.star", "OTHER = 1"), Err(ConfigError::MissingSymbol { .. })));
+
+    let mut w = world(d(2027, 12, 3));
+    w.close(period(2027, 11));
+    let file = |definition| FinCommand::FileReturn {
+        id: "q".to_string(),
+        definition,
+        period: period(2027, 11),
+    };
+    let mut empty = def.clone();
+    empty.lines.clear();
+    assert_eq!(w.books.console_code("olive", file(empty)), "definition");
+    let mut unknown = def.clone();
+    unknown.lines[0].source = ic_finance::returns::LineSource::Movement {
+        accounts: vec!["1000".to_string(), "0000".to_string()],
+    };
+    assert_eq!(w.books.console_code("olive", file(unknown)), "account");
+    assert!(w.books.state.returns.is_empty());
+}

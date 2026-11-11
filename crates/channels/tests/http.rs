@@ -17,6 +17,7 @@ use ic_channels::http::{approval_action, router, AppState, Local, OPERATIONS};
 use ic_channels::identity::{action_hash, proof_message, Enrolment, IdentityCommand};
 use ic_channels::ops::{Fixed, RegionHealth, RegionReport};
 use ic_channels::staff::{actions as staff_actions, Profile, StaffCommand, Template};
+use ic_channels::ui::{origin, SignIn, UiConfig};
 use ic_channels::workbench::{self, HoldReason, Item, ItemKind, WorkbenchCommand};
 use ic_channels::Command;
 use ic_core::PolicyId;
@@ -186,6 +187,7 @@ fn portal() -> Portal {
         workforce: Auth::Dev,
         clock: Arc::new(move || tick.load(Ordering::SeqCst)),
         regions: regions.clone(),
+        ui: UiConfig::Dev,
     }));
     Portal {
         app,
@@ -813,9 +815,91 @@ async fn pages_are_served_locked_down() {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
-        let csp = response.headers()["content-security-policy"].to_str().unwrap();
-        assert!(csp.contains("default-src 'self'") && csp.contains("frame-ancestors 'none'"));
+        let csp = response.headers()["content-security-policy"].to_str().unwrap().to_string();
+        assert!(
+            csp.starts_with("default-src 'none'") && csp.contains("frame-ancestors 'none'") && csp.contains("connect-src 'self';"),
+            "{csp}"
+        );
+        assert!(!csp.contains("unsafe"), "{csp}");
         assert_eq!(response.headers()["x-content-type-options"], "nosniff");
         assert!(response.headers()["content-type"].to_str().unwrap().starts_with("text/html"));
+        // Every inline script on the page is one the policy names by hash, so the browser will run it and nothing else.
+        let body = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        let inline = body.matches("<script>").count();
+        assert_eq!(csp.matches("'sha256-").count(), inline, "{path}");
+        assert_eq!(inline, usize::from(path != "/"), "{path}");
     }
+    for (path, kind, has) in [
+        ("/ui/app.js", "text/javascript", "const portal"),
+        ("/ui/app.css", "text/css", "box-sizing"),
+        ("/ui/config.json", "application/json", r#"{"mode":"dev"}"#),
+    ] {
+        let response = portal
+            .app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert!(response.headers()["content-type"].to_str().unwrap().starts_with(kind), "{path}");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        let body = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+        assert!(body.contains(has), "{path}");
+    }
+}
+
+/// Purpose: with Entra sign-in the pages are told where to sign in, and may call those authorities and nowhere else.
+/// Why it matters: the browser exchanges its sign-in code at the authority; a policy that forgot it would break sign-in, and one that allowed more would let a page send tokens elsewhere.
+#[tokio::test]
+async fn pages_may_call_the_sign_in_authorities_only() {
+    let sign_in = |authority: &str, client: &str| SignIn {
+        authority: authority.into(),
+        tenant: "t".into(),
+        client_id: client.into(),
+        scope: "api://portal/.default".into(),
+    };
+    let ui = UiConfig::Entra {
+        customers: sign_in("https://contoso.ciamlogin.com", "spa-c"),
+        workforce: sign_in("https://login.microsoftonline.com", "spa-w"),
+    };
+    let policy = ui.policy(ic_channels::ui::STAFF);
+    assert!(
+        policy.contains("connect-src 'self' https://contoso.ciamlogin.com https://login.microsoftonline.com;"),
+        "{policy}"
+    );
+    // One authority for both populations is listed once.
+    let same = UiConfig::Entra {
+        customers: sign_in("https://login.example/", "a"),
+        workforce: sign_in("https://login.example/", "b"),
+    };
+    assert!(same.policy("").contains("connect-src 'self' https://login.example;"));
+    assert_eq!(same.policy("<script>never closed"), same.policy(""));
+    for bad in ["login.example", "ftp://login.example", "https://", "https://a b", "https://a;script-src *"] {
+        assert_eq!(origin(bad), None, "{bad}");
+    }
+    assert_eq!(origin("http://127.0.0.1:9000/x").as_deref(), Some("http://127.0.0.1:9000"));
+    let config = serde_json::to_value(&ui).unwrap();
+    assert_eq!(
+        (config["mode"].as_str(), config["workforce"]["client_id"].as_str()),
+        (Some("entra"), Some("spa-w"))
+    );
+    assert_eq!(config["customers"]["authority"], "https://contoso.ciamlogin.com");
+}
+
+/// Purpose: serve the seeded portal on a real port so the pages can be driven in a browser by `tests/browser/check.js`.
+/// Why it matters: the pages are script; only a browser shows whether they run under the content security policy and render what the service returns.
+#[tokio::test]
+#[ignore = "serves until killed; started by tests/browser/check.js"]
+async fn serve_for_a_browser() {
+    let addr = std::env::var("IC_BROWSER_ADDR").unwrap_or_else(|_| "127.0.0.1:8099".into());
+    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
+    let portal = portal();
+    // Kiri appoints the adviser, so the adviser's book has a policy in it.
+    let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
+    let (status, _) = portal
+        .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    println!("policy {}", portal.retail);
+    axum::serve(listener, portal.app.clone()).await.unwrap();
 }

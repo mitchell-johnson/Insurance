@@ -7,6 +7,7 @@ use ic_api::auth::{Auth, ENTRA_AUTHORITY};
 use ic_raft::{ClusterAuth, ClusterClient};
 
 use crate::ops::Regions;
+use crate::ui::{origin, SignIn, UiConfig};
 
 /// How one population of callers is identified.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,6 +44,8 @@ pub struct PortalSettings {
     pub regions: Regions,
     /// How often the gateway tells the module the event stream is current.
     pub heartbeat: Duration,
+    /// How the web pages sign people in.
+    pub ui: UiConfig,
 }
 
 impl PortalSettings {
@@ -61,6 +64,10 @@ impl PortalSettings {
     ///   `IC_CUSTOMER_AUTHORITY`: the customer tenant (Microsoft Entra
     ///   External ID). The authority is the tenant's own, such as
     ///   `https://contoso.ciamlogin.com`.
+    /// - `IC_ENTRA_CLIENT_ID`, `IC_CUSTOMER_CLIENT_ID`: the single-page
+    ///   application registered in each tenant, which the web pages sign in
+    ///   through. `IC_ENTRA_SCOPE`, `IC_CUSTOMER_SCOPE`: the scope they ask
+    ///   for; default `<audience>/.default`.
     /// - `IC_AUTH=dev`: trust caller headers instead. Refused in Kubernetes.
     /// - `IC_REGIONS`: `auckland=host:port,host:port;sydney=...`, and
     ///   `IC_HOME_REGION`: the region that normally holds the leaders. Without
@@ -82,11 +89,11 @@ impl PortalSettings {
         };
         let list = get("IC_NODES").ok_or("set IC_NODES to the ledger nodes that host the channel module")?;
         let nodes = ClusterClient::from_list(&list).map_err(|e| format!("IC_NODES: {e}"))?.nodes().to_vec();
-        let (customers, workforce) = match get("IC_AUTH").as_deref() {
+        let (customers, workforce, ui) = match get("IC_AUTH").as_deref() {
             Some("dev") if get("KUBERNETES_SERVICE_HOST").is_some() => {
                 return Err("IC_AUTH=dev is refused in Kubernetes: callers must present Entra tokens".to_string());
             }
-            Some("dev") => (Identity::Dev, Identity::Dev),
+            Some("dev") => (Identity::Dev, Identity::Dev, UiConfig::Dev),
             None | Some("entra") => {
                 let identity = |prefix: &str, default_authority: Option<&str>| -> Result<Identity, String> {
                     let need = |name: &str| get(&format!("{prefix}_{name}")).ok_or_else(|| format!("set {prefix}_{name}, or IC_AUTH=dev on a laptop"));
@@ -100,7 +107,29 @@ impl PortalSettings {
                         audience: need("AUDIENCE")?,
                     })
                 };
-                (identity("IC_CUSTOMER", None)?, identity("IC_ENTRA", Some(ENTRA_AUTHORITY))?)
+                let sign_in = |prefix: &str, identity: &Identity| -> Result<SignIn, String> {
+                    let Identity::Entra { authority, tenant, audience } = identity else {
+                        return Err(format!("{prefix}: not an Entra identity"));
+                    };
+                    if origin(authority).is_none() {
+                        return Err(format!(
+                            "{prefix}_AUTHORITY must be a web address such as https://login.microsoftonline.com, not {authority:?}"
+                        ));
+                    }
+                    Ok(SignIn {
+                        authority: authority.trim_end_matches('/').to_string(),
+                        tenant: tenant.clone(),
+                        client_id: get(&format!("{prefix}_CLIENT_ID"))
+                            .ok_or_else(|| format!("set {prefix}_CLIENT_ID to the single-page application the web pages sign in through"))?,
+                        scope: get(&format!("{prefix}_SCOPE")).unwrap_or_else(|| format!("{audience}/.default")),
+                    })
+                };
+                let (customers, workforce) = (identity("IC_CUSTOMER", None)?, identity("IC_ENTRA", Some(ENTRA_AUTHORITY))?);
+                let ui = UiConfig::Entra {
+                    customers: sign_in("IC_CUSTOMER", &customers)?,
+                    workforce: sign_in("IC_ENTRA", &workforce)?,
+                };
+                (customers, workforce, ui)
             }
             Some(other) => return Err(format!("IC_AUTH must be entra or dev, not {other:?}")),
         };
@@ -124,6 +153,7 @@ impl PortalSettings {
             patience: Duration::from_secs(seconds("IC_LEDGER_PATIENCE_SECS", 10)?),
             regions,
             heartbeat: Duration::from_secs(seconds("IC_PORTAL_HEARTBEAT_SECS", 15)?),
+            ui,
         })
     }
 

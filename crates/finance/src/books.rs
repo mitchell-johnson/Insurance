@@ -39,6 +39,7 @@ use crate::close::{
     BalanceRow, Capacity, CheckReport, CheckSource, CheckStatus, CloseConfig, ClosedPeriod, Outcome, PeriodState, PeriodStatus, SignOff, Waiver,
 };
 use crate::period::PeriodId;
+use crate::returns::{ConductFact, ConductKey, FiledReturn, ReturnDefinition};
 
 /// The partition number the finance ledger's own chain is kept under. The
 /// core's partitions are numbered from zero and there are 64 of them.
@@ -279,6 +280,22 @@ pub enum FinCommand {
     RegisterExtract {
         extract: ExtractRecord,
     },
+    /// Things that happened in claims or complaints, for the conduct measures.
+    RecordConductFacts {
+        facts: Vec<ConductFact>,
+    },
+    /// Work a return out from a closed period and store it as filed.
+    FileReturn {
+        id: String,
+        definition: ReturnDefinition,
+        period: PeriodId,
+    },
+    /// File a return again after a later posting restated its period.
+    RestateReturn {
+        id: String,
+        definition: ReturnDefinition,
+        reason: String,
+    },
 }
 
 impl FinCommand {
@@ -288,6 +305,7 @@ impl FinCommand {
             FinCommand::Configure { .. } => &["operator"],
             FinCommand::Ingest { .. } | FinCommand::RecordMerkleRoot { .. } => &["feed"],
             FinCommand::RegisterExtract { .. } => &["reporting"],
+            FinCommand::RecordConductFacts { .. } => &["claims", "complaints"],
             FinCommand::ClosePeriod { .. } => &["finance-console", "close-workflow"],
             // Who may report which check is declared in the close configuration.
             FinCommand::ReportCheck { .. } | FinCommand::ReportAgedItems { .. } => &[],
@@ -314,6 +332,9 @@ impl FinCommand {
             FinCommand::SignOff { .. } => "sign_off",
             FinCommand::ClosePeriod { .. } => "close_period",
             FinCommand::RegisterExtract { .. } => "register_extract",
+            FinCommand::RecordConductFacts { .. } => "record_conduct_facts",
+            FinCommand::FileReturn { .. } => "file_return",
+            FinCommand::RestateReturn { .. } => "restate_return",
         }
     }
 }
@@ -414,6 +435,15 @@ pub enum FinEvent {
         kind: String,
         as_at: NaiveDate,
         content_hash: Hash32,
+    },
+    ConductFactsRecorded {
+        count: u32,
+    },
+    ReturnFiled {
+        id: String,
+        period: PeriodId,
+        version: u32,
+        hash: Hash32,
     },
 }
 
@@ -638,6 +668,13 @@ pub struct FinanceState {
     pub backdated: Vec<BackdatedItem>,
     pub aged: BTreeMap<String, AgedReport>,
     pub extracts: BTreeMap<String, ExtractRecord>,
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) conduct: BTreeMap<ConductKey, u64>,
+    #[serde(default)]
+    pub(crate) conduct_seen: BTreeSet<String>,
+    /// Every version of every return filed, oldest first.
+    #[serde(default)]
+    pub returns: BTreeMap<String, Vec<FiledReturn>>,
     next_event_seq: u64,
     idempotency: BTreeMap<String, StoredResult>,
 }
@@ -707,6 +744,9 @@ impl FinanceState {
             backdated: Vec::new(),
             aged: BTreeMap::new(),
             extracts: BTreeMap::new(),
+            conduct: BTreeMap::new(),
+            conduct_seen: BTreeSet::new(),
+            returns: BTreeMap::new(),
             next_event_seq: 1,
             idempotency: BTreeMap::new(),
         }
@@ -989,6 +1029,30 @@ impl FinanceState {
                     content_hash: extract.content_hash,
                 });
                 self.extracts.insert(extract.id.clone(), extract);
+                Ok(())
+            }
+            FinCommand::RecordConductFacts { facts } => {
+                let count = self.record_conduct(ctx.caller, facts)?;
+                if count > 0 {
+                    ctx.events.push(FinEvent::ConductFactsRecorded { count });
+                }
+                Ok(())
+            }
+            FinCommand::FileReturn { id, definition, period } => {
+                let by = ctx.actor_with(&[ROLE_OPERATOR, ROLE_LEAD])?;
+                let filed = self.file_return(&id, &definition, period, by, None, ctx.index)?;
+                let (version, hash) = (filed.version, filed.hash);
+                ctx.events.push(FinEvent::ReturnFiled { id, period, version, hash });
+                Ok(())
+            }
+            FinCommand::RestateReturn { id, definition, reason } => {
+                let by = ctx.actor_with(&[ROLE_LEAD])?;
+                let Some(period) = self.returns.get(&id).and_then(|v| v.last()).map(|r| r.period) else {
+                    return reject("return", format!("return {id} has not been filed, so it cannot be restated"));
+                };
+                let filed = self.file_return(&id, &definition, period, by, Some(reason), ctx.index)?;
+                let (version, hash) = (filed.version, filed.hash);
+                ctx.events.push(FinEvent::ReturnFiled { id, period, version, hash });
                 Ok(())
             }
         }

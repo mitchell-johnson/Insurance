@@ -52,6 +52,7 @@ async fn main() -> Result<(), String> {
         workforce: settings.workforce.auth(),
         clock: Arc::new(wall_clock),
         regions: Live::new(settings.client(), settings.regions.clone()),
+        ui: settings.ui.clone(),
     });
     let beat = tokio::spawn(heartbeat(channel, settings.client(), settings.heartbeat, Arc::new(wall_clock)));
     let listener = tokio::net::TcpListener::bind(settings.listen)
