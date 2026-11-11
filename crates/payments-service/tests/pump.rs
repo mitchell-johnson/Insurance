@@ -965,11 +965,62 @@ fn the_pump_does_not_start_half_configured() {
     assert_eq!(with("IC_PAYMENTS_INSTANCE", "x").unwrap().instance, "x");
     assert_eq!(with("IC_PAYMENTS_CONTAINER", "c").unwrap().container, "c");
 
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ic-payments-pump")).env_clear().output().unwrap();
+    // Built as deployed, the pump is in the region and under the name given.
+    let pump = ic_payments_service::pump::DeployedPump::deployed(&settings, ic_azure::credential::AzureCredential::static_token("t"));
+    assert_eq!((pump.region.as_str(), pump.instance.as_str(), pump.grace.num_minutes()), ("syd", "pump-0", 10));
+
+    // The coverage tooling's own variables are kept so the run is measured.
+    let measured = std::env::vars().filter(|(key, _)| key.starts_with("LLVM_"));
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_ic-payments-pump"))
+        .env_clear()
+        .envs(measured)
+        .output()
+        .unwrap();
     assert!(!output.status.success());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("IC_CLUSTER"),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// Purpose: the binary's three modes do what they say: `once` fails when a
+/// pass left something undone, `drill` fails when a channel could not be
+/// reached, the standing pump keeps passing until it is told to stop, and
+/// anything else is a usage error.
+/// Why it matters: the drill's exit status is what an evacuation exercise
+/// and the scheduled job read. A drill that failed and exited zero would
+/// certify a region that cannot pay anyone.
+#[tokio::test]
+async fn the_binarys_modes_report_failure_as_failure() {
+    let mut world = World::new().await;
+    world.payee("p1", PayeeKind::Customer);
+    let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let quick = std::time::Duration::from_millis(5);
+    let never = std::future::pending::<()>;
+    let sydney = world.pump("syd", "s");
+    sydney.run(&args(&["once"]), quick, never()).await.unwrap();
+    sydney.run(&args(&["drill", "d1"]), quick, never()).await.unwrap();
+    let melbourne = world.pump("mel", "m");
+    assert!(melbourne
+        .run(&args(&["drill", "d2"]), quick, never())
+        .await
+        .unwrap_err()
+        .contains("could not be reached"));
+    assert!(sydney.run(&args(&["twice"]), quick, never()).await.unwrap_err().contains("usage"));
+
+    // The standing pump sends what is queued, reports what it cannot do,
+    // and stops when told.
+    let s = world.run("r1", RunType::BenefitPayments, false, vec![pay("i1", "p1", 300_00)]);
+    let state = world.module.state.clone();
+    let sent = async move {
+        while state.lock().unwrap().0.submissions[&s].status != SubmissionStatus::Sent {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
+    sydney.run(&[], quick, sent).await.unwrap();
+    world.bank.lock().down = true;
+    assert!(sydney.run(&args(&["once"]), quick, never()).await.unwrap_err().contains("channel anz-file"));
+    sydney.run(&[], quick, tokio::time::sleep(std::time::Duration::from_millis(20))).await.unwrap();
 }

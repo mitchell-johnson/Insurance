@@ -400,3 +400,84 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         Ok(reached)
     }
 }
+
+/// The pump as deployed: the cluster, the banks over HTTPS, Key Vault for
+/// signing, immutable Blob Storage for evidence, mounted bank credentials.
+pub type DeployedPump = Pump<
+    ic_raft::ClusterClient,
+    crate::ports::ClusterCore,
+    crate::bank::HttpBank,
+    ic_azure::blob::BlobContainer,
+    crate::ports::VaultKeys,
+    crate::ports::MountedSecrets,
+    crate::ports::LogNotifier,
+>;
+
+impl DeployedPump {
+    pub fn deployed(settings: &crate::settings::PumpSettings, credential: ic_azure::credential::AzureCredential) -> Self {
+        let client = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
+        Pump {
+            module: client.clone(),
+            core: crate::ports::ClusterCore {
+                client,
+                matcher: ic_cashmatch::Matcher::default(),
+            },
+            bank: crate::bank::HttpBank::default(),
+            vault: ic_azure::blob::BlobContainer::new(&settings.blob_endpoint, &settings.container, credential.clone()),
+            keys: crate::ports::VaultKeys {
+                vault: settings.key_vault.clone(),
+                credential,
+            },
+            secrets: crate::ports::MountedSecrets(settings.secrets_dir.clone()),
+            notifier: crate::ports::LogNotifier,
+            region: settings.region.clone(),
+            instance: settings.instance.clone(),
+            clock: Arc::new(nz_now),
+            grace: settings.grace,
+            cursors: Mutex::default(),
+        }
+    }
+}
+
+impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier> Pump<M, C, B, V, K, S, N> {
+    /// What the binary does with its arguments: nothing for the standing
+    /// pump (until `stop` resolves), `once` for one pass that fails if
+    /// anything was left undone, `drill <id>` for the evacuation drill.
+    pub async fn run(&self, args: &[String], interval: std::time::Duration, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
+        match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+            [] => {
+                tokio::pin!(stop);
+                loop {
+                    let pass = self.pass().await;
+                    tracing::info!(
+                        sent = pass.sent,
+                        failed = pass.failed,
+                        messages = pass.messages,
+                        instructions = pass.instructions,
+                        "pass"
+                    );
+                    for problem in &pass.problems {
+                        tracing::warn!(target: "payments.pump", problem, "not done this pass");
+                    }
+                    tokio::select! {
+                        () = tokio::time::sleep(interval) => {}
+                        () = &mut stop => return Ok(()),
+                    }
+                }
+            }
+            ["once"] => {
+                let pass = self.pass().await;
+                if pass.problems.is_empty() {
+                    Ok(())
+                } else {
+                    Err(pass.problems.join("; "))
+                }
+            }
+            ["drill", id] => match self.drill(id).await? {
+                true => Ok(()),
+                false => Err(format!("drill {id} from {}: a bank channel could not be reached", self.region)),
+            },
+            _ => Err("usage: ic-payments-pump [once | drill <id>]".to_string()),
+        }
+    }
+}
