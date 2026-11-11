@@ -1,1 +1,21 @@
-<!doctype html><title>status</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Service status</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Service status</h1></header>
+<main><div id="status" aria-live="polite"><p class="muted">Checking…</p></div><p class="muted" id="checked"></p></main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, clear, put } = portal;
+const kinds = { operational: "ok", degraded: "warn", outage: "bad" };
+async function refresh() {
+  const box = document.getElementById("status");
+  try {
+    const page = await (await fetch("/status.json", { cache: "no-store" })).json();
+    put(box, h("div", { class: "banner " + (kinds[page.level] || "warn") }, h("strong", {}, page.headline)), ...page.detail.map((line) => h("p", {}, line)));
+  } catch {
+    put(box, h("div", { class: "banner bad" }, h("strong", {}, "We cannot check the service right now")), h("p", {}, "Your cover is not affected. Please try again shortly."));
+  }
+  document.getElementById("checked").textContent = "Last checked " + new Date().toLocaleTimeString() + ". This page updates by itself.";
+}
+refresh(); setInterval(refresh, 30000);
+</script></body></html>
