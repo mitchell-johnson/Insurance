@@ -438,3 +438,30 @@ fn state_survives_a_snapshot_and_replicas_agree() {
     let loaded: ic_payments::PaymentsState = serde_json::from_str(&saved).unwrap();
     assert_eq!(loaded, one);
 }
+
+/// Purpose: the core's notice that a payer has died becomes the module's
+/// own command, keyed by the event so that it is applied once however often
+/// the event is offered; other events are ignored.
+/// Why it matters: this is the wire between the death claim in the core and
+/// the direct debit that must stop. If it drops the event, collection from
+/// a dead customer's account carries on.
+#[test]
+fn the_cores_death_notice_stops_collection() {
+    use ic_log::StateMachine;
+    let record = |event: serde_json::Value| -> ic_core::EventRecord {
+        serde_json::from_value(json!({"id": "3-77", "partition": 3, "seq": 77, "business_date": "2027-11-16", "log_index": 900, "event": event})).unwrap()
+    };
+    let death = record(json!({"payment_authority_cancelled": {"policy": "pol-1", "claim": "clm-1"}}));
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", true);
+    let commands = ic_payments::query::react(&death);
+    assert_eq!(commands.len(), 1);
+    assert_eq!(commands[0].key, "core-3-77");
+    for (index, envelope) in commands.iter().chain(&ic_payments::query::react(&death)).enumerate() {
+        desk.state.apply(index as u64 + 1000, envelope.clone()).unwrap();
+    }
+    assert!(desk.state.blocked_accounts.contains("0101234567"));
+    assert_eq!(desk.state.clock, Some(monday()), "an event does not move the clock");
+    let other = record(json!({"payment_returned": {"policy": "pol-1", "payment": "i1", "payable": "benefit", "amount_minor": 5, "bank_account": "a"}}));
+    assert!(ic_payments::query::react(&other).is_empty());
+}
