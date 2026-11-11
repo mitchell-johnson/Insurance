@@ -207,43 +207,56 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
         })
     }
 
-    /// Carry the module's outbox to where each entry belongs.
+    /// Carry the module's outbox to where each entry belongs. An entry that
+    /// cannot be delivered stays where it is and does not hold up the ones
+    /// behind it: the pass reads on past it.
     pub async fn deliver(&self) -> Result<Pass, DriverError> {
         let today = self.today().await?;
-        let items: Vec<(u64, Outbound)> = decode(self.module.ask(Question::Outbox { limit: self.batch }).await?, "items")?;
         let mut pass = Pass::default();
-        let mut delivered = vec![];
-        for (id, out) in items {
-            let result = match &out {
-                Outbound::Core { key, group, command } => match self.core.submit(key, group, command).await {
-                    Ok(error) => {
-                        // The answer is the acknowledgement: the entry leaves the outbox with it.
-                        self.send(format!("core-result:{key}"), GroupCommand::CoreResult { key: key.clone(), error })
-                            .await?
-                            .map_err(DriverError::Refused)?;
-                        pass.done += 1;
-                        continue;
-                    }
-                    Err(e) => Err(e),
-                },
-                Outbound::Reinsurance { key, notice } => self.peers.reinsurance(key, today, notice).await,
-                Outbound::Underwriting { key, request } => self.peers.underwriting(key, request).await,
-                Outbound::Publish { seq, date, event } => self.peers.publish(*seq, *date, event).await,
-                Outbound::ResolveParties { scheme, file, employee_ids } => self.resolve(scheme, file, employee_ids).await,
-            };
-            match result {
-                Ok(()) => delivered.push(id),
-                Err(_) => pass.failed += 1,
+        let mut after = None;
+        loop {
+            let question = Question::Outbox { limit: self.batch, after };
+            let items: Vec<(u64, Outbound)> = decode(self.module.ask(question).await?, "items")?;
+            let full = items.len() >= self.batch;
+            let failed_before = pass.failed;
+            let mut delivered = vec![];
+            for (id, out) in items {
+                after = Some(id);
+                let result = match &out {
+                    Outbound::Core { key, group, command } => match self.core.submit(key, group, command).await {
+                        Ok(error) => {
+                            // The answer is the acknowledgement: the entry leaves the outbox with it.
+                            self.send(format!("core-result:{key}"), GroupCommand::CoreResult { key: key.clone(), error })
+                                .await?
+                                .map_err(DriverError::Refused)?;
+                            pass.done += 1;
+                            continue;
+                        }
+                        Err(e) => Err(e),
+                    },
+                    Outbound::Reinsurance { key, notice } => self.peers.reinsurance(key, today, notice).await,
+                    Outbound::Underwriting { key, request } => self.peers.underwriting(key, request).await,
+                    Outbound::Publish { seq, date, event } => self.peers.publish(*seq, *date, event).await,
+                    Outbound::ResolveParties { scheme, file, employee_ids } => self.resolve(scheme, file, employee_ids).await,
+                };
+                match result {
+                    Ok(()) => delivered.push(id),
+                    Err(_) => pass.failed += 1,
+                }
+            }
+            if !delivered.is_empty() {
+                let ids = delivered.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
+                pass.done += delivered.len() as u32;
+                self.send(format!("ack:{}", content_hash(ids.as_bytes())), GroupCommand::Ack { ids: delivered })
+                    .await?
+                    .map_err(DriverError::Refused)?;
+            }
+            // Read on only past entries that are stuck; otherwise the next
+            // pass takes the next batch.
+            if !full || pass.failed == failed_before {
+                return Ok(pass);
             }
         }
-        if !delivered.is_empty() {
-            let ids = delivered.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
-            pass.done += delivered.len() as u32;
-            self.send(format!("ack:{}", content_hash(ids.as_bytes())), GroupCommand::Ack { ids: delivered })
-                .await?
-                .map_err(DriverError::Refused)?;
-        }
-        Ok(pass)
     }
 
     async fn mapped(&self, scheme: &str, file: &str, expected_hash: Option<&str>) -> Result<Result<(FileMapping, Mapped), &'static str>, String> {

@@ -78,6 +78,7 @@ impl Core for SimCore {
 #[derive(Clone, Default)]
 struct Sink {
     down: Flag,
+    underwriting_down: Flag,
     notices: Arc<Mutex<Vec<(String, ReinsuranceNotice)>>>,
     requests: Arc<Mutex<Vec<UnderwritingRequest>>>,
     events: Arc<Mutex<Vec<(u64, GroupEvent)>>>,
@@ -91,6 +92,7 @@ impl Peers for Sink {
     }
     async fn underwriting(&self, _key: &str, request: &UnderwritingRequest) -> Result<(), String> {
         self.down.check("underwriting")?;
+        self.underwriting_down.check("underwriting")?;
         self.requests.lock().unwrap().push(request.clone());
         Ok(())
     }
@@ -469,4 +471,37 @@ async fn large_work_is_taken_in_bounded_pieces() {
     assert_eq!(d.directory.asked.lock().unwrap().len(), 1_100);
     assert_eq!(d.module.state.lock().unwrap().schemes[SCHEME].membership.active_count(), 1_101);
     assert_eq!(d.core.cluster.lock().unwrap().state(0).policies.values().next().unwrap().lives.len(), 1_101);
+}
+
+/// Purpose: an outbox entry that cannot be delivered, here a request to an underwriting
+/// service that is away for days, stays in the outbox and does not stop the entries
+/// behind it, even when a pass takes only one entry at a time.
+/// Why it matters: the outbox is one ordered list. If the oldest entry blocked the rest,
+/// one peer being away would stop members' cover reaching the core.
+#[tokio::test]
+async fn a_stuck_entry_does_not_hold_up_the_rest() {
+    let d = rig().with_batch(1);
+    d.peers.underwriting_down.set(true);
+    d.upload(caller::EMPLOYER, "admin-bo", SCHEME, "nov.csv", FILE.as_bytes().to_vec())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "nov.csv", Scan::Clean);
+    settle(&d).await;
+    approve(&d, "nov.csv").await;
+    settle(&d).await;
+    assert_eq!(file_status(&d, "nov.csv"), FileStatus::Applied);
+    assert_eq!(d.module.state.lock().unwrap().outbox.len(), 1, "only the request to underwriting waits");
+    assert_eq!(d.deliver().await.unwrap().failed, 1);
+    // A later file goes through behind it.
+    let next = FILE.replace("E003,Cy,Patel,03/07/1975,executive,240000", "E003,Cy,Patel,03/07/1975,executive,250000");
+    d.upload(caller::EMPLOYER, "admin-bo", SCHEME, "dec.csv", next.into_bytes()).await.unwrap();
+    d.files.mark(SCHEME, "dec.csv", Scan::Clean);
+    settle(&d).await;
+    approve(&d, "dec.csv").await;
+    settle(&d).await;
+    assert_eq!(file_status(&d, "dec.csv"), FileStatus::Applied);
+    d.peers.underwriting_down.set(false);
+    settle(&d).await;
+    assert!(d.module.state.lock().unwrap().outbox.is_empty());
+    assert_eq!(d.peers.requests.lock().unwrap().len(), 2);
 }

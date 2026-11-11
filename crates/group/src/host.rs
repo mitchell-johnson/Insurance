@@ -64,8 +64,13 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum Question {
-    /// What the driver has to deliver, oldest first.
-    Outbox { limit: usize },
+    /// What the driver has to deliver, oldest first, after an entry it
+    /// has already looked at.
+    Outbox {
+        limit: usize,
+        #[serde(default)]
+        after: Option<u64>,
+    },
     /// A scheme's standing: terms, counts, what is open.
     Scheme { scheme: String },
     /// One file with its preview and row-level results.
@@ -94,9 +99,10 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
     let question: Question = serde_json::from_value(question).map_err(|e| format!("not a question this module answers: {e}"))?;
     let scheme = |id: &str| state.schemes.get(id).ok_or_else(|| format!("scheme {id} is not registered"));
     Ok(match question {
-        Question::Outbox { limit } => {
-            let items: Vec<(u64, &Outbound)> = state.outbox.iter().take(limit).map(|(id, o)| (*id, o)).collect();
-            json!({ "items": items, "more": state.outbox.len() > limit })
+        Question::Outbox { limit, after } => {
+            let from = after.map_or(0, |a| a.saturating_add(1));
+            let items: Vec<(u64, &Outbound)> = state.outbox.range(from..).take(limit).map(|(id, o)| (*id, o)).collect();
+            json!({ "items": items, "more": state.outbox.range(from..).count() > limit })
         }
         Question::Scheme { scheme: id } => {
             let s = scheme(&id)?;
