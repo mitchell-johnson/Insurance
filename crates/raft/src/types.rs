@@ -17,6 +17,9 @@ pub enum Proposal {
     /// The leader's host recording that outputs have safely left the node,
     /// so every member can let go of them.
     Housekeeping(Housekeeping),
+    /// A command for a module's own group (see [`crate::module`]), as the
+    /// module's JSON. A partition's group ignores it.
+    Module(serde_json::Value),
 }
 
 /// Outputs of applied commands are held by every member until the leader's
@@ -40,6 +43,7 @@ impl fmt::Display for Proposal {
             Proposal::Housekeeping(Housekeeping::Delivered { ids }) => write!(f, "delivered {} messages", ids.len()),
             Proposal::Housekeeping(Housekeeping::Sealed { through_seq }) => write!(f, "sealed journal through {through_seq}"),
             Proposal::Housekeeping(Housekeeping::Published { through_seq }) => write!(f, "published events through {through_seq}"),
+            Proposal::Module(_) => write!(f, "a module command"),
         }
     }
 }
@@ -58,6 +62,10 @@ pub struct Reply {
     /// Journal entries posted by the command.
     pub entries: u64,
     pub work_units: u32,
+    /// What a module made of a module command: its answer, or why it refused.
+    /// `None` for everything a partition's group applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<Result<serde_json::Value, String>>,
 }
 
 impl Reply {
@@ -70,6 +78,7 @@ impl Reply {
             messages: a.messages,
             entries: a.entries.len() as u64,
             work_units: a.work_units,
+            module: None,
         }
     }
 }

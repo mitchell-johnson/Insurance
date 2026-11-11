@@ -20,6 +20,7 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 use crate::auth::ClusterAuth;
+use crate::module::{ModuleReply, ModuleStatus};
 use crate::node::{NodeStatus, ProposeError};
 use crate::query::{PolicyView, Query};
 use crate::types::Reply;
@@ -61,6 +62,10 @@ pub enum ClientError {
     /// retry with the same idempotency key.
     #[error("no node answered for partition {partition}: {detail}")]
     Unavailable { partition: PartitionId, detail: String },
+    /// As `Unavailable`, for a module's group. Retry with the same command:
+    /// the module's own idempotency key makes that safe.
+    #[error("no node answered for module {module}: {detail}")]
+    ModuleUnavailable { module: String, detail: String },
 }
 
 /// A salt for a command's payload commitments, from the operating system's
@@ -75,8 +80,9 @@ pub struct ClusterClient {
     http: reqwest::Client,
     /// Node addresses as `host:port`.
     nodes: Arc<Vec<String>>,
-    /// Where each partition's leader was last seen.
-    leaders: Arc<Mutex<BTreeMap<PartitionId, String>>>,
+    /// Where each group's leader was last seen: a partition by its number,
+    /// a module by `module-<name>`.
+    leaders: Arc<Mutex<BTreeMap<String, String>>>,
     attempt_timeout: Duration,
     auth: ClusterAuth,
 }
@@ -118,15 +124,15 @@ impl ClusterClient {
         self
     }
 
-    fn hint(&self, partition: PartitionId) -> Option<String> {
-        self.leaders.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&partition).cloned()
+    fn hint(&self, group: &str) -> Option<String> {
+        self.leaders.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(group).cloned()
     }
 
-    fn remember(&self, partition: PartitionId, addr: Option<&str>) {
+    fn remember(&self, group: &str, addr: Option<&str>) {
         let mut leaders = self.leaders.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         match addr {
-            Some(a) => leaders.insert(partition, a.to_string()),
-            None => leaders.remove(&partition),
+            Some(a) => leaders.insert(group.to_string(), a.to_string()),
+            None => leaders.remove(group),
         };
     }
 
@@ -157,8 +163,24 @@ impl ClusterClient {
     /// One pass over the cluster: the last known leader first, then every
     /// node, following a redirect when a follower gives one.
     async fn sweep<T: DeserializeOwned>(&self, partition: PartitionId, build: impl Fn(&str) -> reqwest::RequestBuilder) -> Result<T, ClientError> {
+        self.sweep_group(&partition.to_string(), build)
+            .await
+            .map_err(|detail| ClientError::Unavailable { partition, detail })
+    }
+
+    async fn sweep_module<T: DeserializeOwned>(&self, module: &str, build: impl Fn(&str) -> reqwest::RequestBuilder) -> Result<T, ClientError> {
+        self.sweep_group(&format!("module-{module}"), build)
+            .await
+            .map_err(|detail| ClientError::ModuleUnavailable {
+                module: module.to_string(),
+                detail,
+            })
+    }
+
+    /// The pass itself, for any group. The error says what the last node tried said.
+    async fn sweep_group<T: DeserializeOwned>(&self, group: &str, build: impl Fn(&str) -> reqwest::RequestBuilder) -> Result<T, String> {
         // A stack: the last known leader is on top, then the nodes in the order given.
-        let mut queue: Vec<String> = self.nodes.iter().rev().cloned().chain(self.hint(partition)).collect();
+        let mut queue: Vec<String> = self.nodes.iter().rev().cloned().chain(self.hint(group)).collect();
         let mut tried = Vec::new();
         let mut detail = "no nodes configured".to_string();
         while let Some(addr) = queue.pop() {
@@ -168,7 +190,7 @@ impl ClusterClient {
             tried.push(addr.clone());
             match self.attempt(build(&addr)).await {
                 Attempt::Done(body) => {
-                    self.remember(partition, Some(&addr));
+                    self.remember(group, Some(&addr));
                     return Ok(body);
                 }
                 Attempt::Redirect(Some(leader)) => {
@@ -179,8 +201,60 @@ impl ClusterClient {
                 Attempt::Failed(e) => detail = format!("{addr}: {e}"),
             }
         }
-        self.remember(partition, None);
-        Err(ClientError::Unavailable { partition, detail })
+        self.remember(group, None);
+        Err(detail)
+    }
+
+    /// Offer a command to a module's leader. One pass: the caller decides
+    /// how long to keep retrying. The command carries the module's own
+    /// idempotency key, so offering it again is safe.
+    pub async fn propose_module(&self, module: &str, command: &serde_json::Value) -> Result<ModuleReply, ClientError> {
+        self.sweep_module(module, |addr| {
+            self.http.post(format!("http://{addr}/v1/modules/{module}/commands")).json(command)
+        })
+        .await
+    }
+
+    /// Keep offering a module command until a leader confirms it or
+    /// `patience` runs out.
+    pub async fn propose_module_until(&self, module: &str, command: &serde_json::Value, patience: Duration) -> Result<ModuleReply, ClientError> {
+        let deadline = tokio::time::Instant::now() + patience;
+        loop {
+            match self.propose_module(module, command).await {
+                Ok(reply) => return Ok(reply),
+                Err(e) if tokio::time::Instant::now() >= deadline => return Err(e),
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
+    }
+
+    /// Ask a module's leader a question. One pass. The inner result is the
+    /// module's own answer or refusal.
+    pub async fn query_module(&self, module: &str, question: &serde_json::Value) -> Result<Result<serde_json::Value, String>, ClientError> {
+        self.sweep_module(module, |addr| self.http.post(format!("http://{addr}/v1/modules/{module}/query")).json(question))
+            .await
+    }
+
+    /// Set the voters of a module's group: `id -> host:port`.
+    pub async fn set_module_members(&self, module: &str, members: &BTreeMap<crate::NodeId, String>) -> Result<(), ClientError> {
+        let patient = self.clone().with_attempt_timeout(Duration::from_secs(300));
+        patient
+            .sweep_module::<()>(module, |addr| {
+                patient.http.put(format!("http://{addr}/v1/modules/{module}/members")).json(members)
+            })
+            .await
+    }
+
+    /// Every hosted module's status as one node sees it.
+    pub async fn module_status(&self, addr: &str) -> Result<Vec<ModuleStatus>, String> {
+        let response = self
+            .auth
+            .sign(self.http.get(format!("http://{addr}/v1/modules")))
+            .timeout(self.attempt_timeout)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        response.error_for_status().map_err(|e| e.to_string())?.json().await.map_err(|e| e.to_string())
     }
 
     /// Offer a command to the partition's leader. One pass: the caller
