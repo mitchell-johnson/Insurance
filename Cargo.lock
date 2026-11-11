@@ -2078,6 +2078,7 @@ name = "ic-node"
 version = "0.1.0"
 dependencies = [
  "ic-channels",
+ "ic-documents",
  "ic-raft",
  "serde_json",
  "tokio",

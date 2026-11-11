@@ -7,8 +7,8 @@ use std::time::Duration;
 use ic_azure::credential::AzureCredential;
 use ic_documents::channels::{AzureChannels, HttpDirectory};
 use ic_documents::crypto::KeyVaultWrap;
-use ic_documents::driver::{ClusterModule, Driver, EventHubsPublisher};
-use ic_documents::service::{router, run_cycles, serve, Config, NoCore};
+use ic_documents::driver::{ClusterCore, ClusterModule, Driver, EventHubsPublisher};
+use ic_documents::service::{router, run_cycles, serve, Config};
 use ic_documents::vault::BlobVault;
 use ic_raft::{ClusterAuth, ClusterClient};
 
@@ -40,6 +40,8 @@ async fn main() -> Result<(), String> {
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;
     let auth = ClusterAuth::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
+    let partitions = client.partitions(Duration::from_secs(60)).await?;
+    let core = ClusterCore::new(client.clone(), partitions, Duration::from_secs(10));
     let driver = Arc::new(Driver {
         module: ClusterModule::new(client, Duration::from_secs(10)),
         objects: BlobVault::new(&config.vault_endpoint, &config.vault_container, credential.clone()),
@@ -62,6 +64,6 @@ async fn main() -> Result<(), String> {
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     tracing::info!(?config, "documents service started");
     let web = tokio::spawn(serve(listener, router(driver.clone(), &config.webhook_key), stop_signal()));
-    run_cycles(driver, publisher, None::<NoCore>, config.cycle_every, stop_signal(), |_| {}).await;
+    run_cycles(driver, publisher, Some(core), config.cycle_every, stop_signal(), |_| {}).await;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }

@@ -10,7 +10,8 @@ use axum::routing::post;
 use axum::{Json, Router};
 use ic_core::EventRecord;
 use ic_documents::command::{ApprovalRole, Command, HoldScope, LegacyImport, Settings};
-use ic_documents::driver::{ClusterModule, DriverError, Module};
+use ic_documents::driver::{ClusterCore, ClusterModule, CoreLink, DriverError, Module};
+use ic_documents::model::CoreInstruction;
 use ic_documents::model::{AttemptOutcome, Channel, DefectCause};
 use ic_documents::module::Query;
 use ic_documents::template::Part;
@@ -325,4 +326,93 @@ async fn the_driver_reaches_the_module_over_the_cluster() {
     let nowhere = ClusterModule::new(ClusterClient::new(vec!["127.0.0.1:1".into()]), Duration::from_millis(50));
     assert!(matches!(nowhere.propose(envelope("tick:2")).await, Err(DriverError::Unavailable(m)) if m.contains("module documents")));
     assert!(matches!(nowhere.ask(Query::Settings).await, Err(DriverError::Unavailable(_))));
+}
+
+/// Purpose: an instruction for the core is sent to the partition that
+/// holds the policy, as caller `documents` under a key made from the
+/// instruction's own ID; a refusal by the core and a policy no partition
+/// holds are errors that leave the instruction to be tried again.
+/// Why it matters: this is how the core learns a lapse notice was
+/// delivered and when a reopened choice may be made. Sent to the wrong
+/// partition or under a changing key it would be lost or applied twice;
+/// a refusal swallowed as success would be a proof of delivery the core
+/// never has.
+#[tokio::test]
+async fn instructions_reach_the_partition_that_holds_the_policy() {
+    use axum::extract::{Path, State};
+    use std::sync::{Arc, Mutex};
+    type Seen = Arc<Mutex<Vec<(u16, Value)>>>;
+
+    async fn query(Path(partition): Path<u16>, Json(question): Json<Value>) -> Json<Value> {
+        let policy = question["locate"]["policy"].as_str().unwrap_or_default().to_string();
+        let held = (partition == 2 && policy == "pol-1") || (partition == 1 && policy == "pol-refused");
+        if !held {
+            return Json(Value::Null);
+        }
+        Json(
+            json!({ "policy": policy, "number": "P-1", "group": "g-1", "partition": partition, "status": "in_force", "standing": null, "product_code": "term-life" }),
+        )
+    }
+    async fn commands(State(seen): State<Seen>, Path(partition): Path<u16>, Json(envelope): Json<Value>) -> Json<Value> {
+        seen.lock().unwrap().push((partition, envelope.clone()));
+        let mut reply = ic_raft::Reply {
+            log_index: 9,
+            ..Default::default()
+        };
+        if partition == 1 {
+            reply.rejected = Some(ic_core::Reject::new("reopen_conflict", "the reference was used with other terms"));
+        }
+        Json(serde_json::to_value(reply).unwrap())
+    }
+    let seen: Seen = Arc::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let app = Router::new()
+        .route("/v1/partitions/{partition}/query", post(query))
+        .route("/v1/partitions/{partition}/commands", post(commands))
+        .with_state(seen.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    let core = ClusterCore::new(ClusterClient::new(vec![addr]), 4, Duration::from_millis(200));
+    let today = Kit::new().today();
+
+    let delivery = CoreInstruction::RecordNoticeDelivery {
+        policy: policy("pol-1"),
+        purpose: "lapse".into(),
+        notice: "n1".into(),
+        delivered_on: today,
+        earliest_effect: today + chrono::Duration::days(14),
+    };
+    core.instruct("notice-delivery:n1:pol-1", &delivery).await.unwrap();
+    core.instruct("notice-delivery:n1:pol-1", &delivery).await.unwrap();
+    let window = |p: &str| CoreInstruction::OpenReopenWindow {
+        policy: policy(p),
+        reopen_reference: "d1:n1".into(),
+        purpose: "renewal".into(),
+        from: today,
+        until: today + chrono::Duration::days(30),
+    };
+    core.instruct("reopen:d1:n1:pol-1", &window("pol-1")).await.unwrap();
+    {
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 3);
+        assert!(seen.iter().all(|(partition, _)| *partition == 2));
+        assert_eq!(seen[0].1["key"], json!("documents:notice-delivery:n1:pol-1"));
+        assert_eq!(seen[0].1["key"], seen[1].1["key"], "a repeat carries the same key");
+        assert_eq!(seen[0].1["caller"], json!("documents"));
+        assert_eq!(seen[0].1["command"]["record_notice_delivery"]["purpose"], json!("lapse"));
+        assert_eq!(seen[2].1["command"]["open_reopen_window"]["reopen_reference"], json!("d1:n1"));
+        assert!(!seen[0].1["salt"].as_str().unwrap().is_empty());
+    }
+
+    let refused = core.instruct("reopen:d1:n1:pol-refused", &window("pol-refused")).await.unwrap_err();
+    assert!(refused.contains("reopen_conflict"), "{refused}");
+    assert_eq!(
+        core.instruct("reopen:d1:n1:pol-9", &window("pol-9")).await.unwrap_err(),
+        "no partition holds policy pol-9"
+    );
+
+    let nowhere = ClusterCore::new(ClusterClient::new(vec!["127.0.0.1:1".into()]), 1, Duration::from_millis(50));
+    assert!(nowhere.instruct("x", &delivery).await.is_err());
 }

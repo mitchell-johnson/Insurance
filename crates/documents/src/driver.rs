@@ -694,3 +694,103 @@ impl EventPublisher for EventHubsPublisher {
         Ok(())
     }
 }
+
+/// The core's ledger nodes. An instruction goes to the partition that holds
+/// the policy, as caller `documents`, under the instruction's own ID as the
+/// idempotency key.
+pub struct ClusterCore {
+    client: ClusterClient,
+    partitions: u16,
+    patience: Duration,
+    /// Where each policy was last found.
+    homes: Mutex<std::collections::BTreeMap<PolicyId, u16>>,
+}
+
+impl ClusterCore {
+    pub fn new(client: ClusterClient, partitions: u16, patience: Duration) -> Self {
+        Self {
+            client,
+            partitions,
+            patience,
+            homes: Mutex::default(),
+        }
+    }
+
+    fn homes(&self) -> std::sync::MutexGuard<'_, std::collections::BTreeMap<PolicyId, u16>> {
+        self.homes.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    async fn home(&self, policy: &PolicyId) -> Result<u16, String> {
+        if let Some(partition) = self.homes().get(policy) {
+            return Ok(*partition);
+        }
+        for partition in 0..self.partitions {
+            if self.client.locate(partition, policy).await.map_err(|e| e.to_string())?.is_some() {
+                self.homes().insert(policy.clone(), partition);
+                return Ok(partition);
+            }
+        }
+        Err(format!("no partition holds policy {policy}"))
+    }
+}
+
+impl CoreLink for ClusterCore {
+    async fn instruct(&self, id: &str, instruction: &CoreInstruction) -> Result<(), String> {
+        let (policy, command) = match instruction.clone() {
+            CoreInstruction::RecordNoticeDelivery {
+                policy,
+                purpose,
+                notice,
+                delivered_on,
+                earliest_effect,
+            } => (
+                policy.clone(),
+                ic_core::Command::RecordNoticeDelivery {
+                    policy,
+                    purpose,
+                    notice,
+                    delivered_on,
+                    earliest_effect,
+                },
+            ),
+            CoreInstruction::OpenReopenWindow {
+                policy,
+                reopen_reference,
+                purpose,
+                from,
+                until,
+            } => (
+                policy.clone(),
+                ic_core::Command::OpenReopenWindow {
+                    policy,
+                    reopen_reference,
+                    purpose,
+                    from,
+                    until,
+                },
+            ),
+        };
+        let partition = self.home(&policy).await?;
+        let envelope = ic_core::Envelope {
+            key: format!("documents:{id}"),
+            caller: "documents".to_string(),
+            salt: ic_raft::client::fresh_salt(),
+            traceparent: None,
+            command,
+        };
+        let reply = self
+            .client
+            .propose_until(partition, &envelope, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        match reply.rejected {
+            None => Ok(()),
+            Some(reject) => {
+                // The policy may have moved to another partition since it
+                // was found: look again next time.
+                self.homes().remove(&policy);
+                Err(reject.to_string())
+            }
+        }
+    }
+}

@@ -29,4 +29,5 @@ pub mod vault;
 pub use command::{Command, Envelope, Settings};
 pub use event::{Event, EventRecord};
 pub use kinds::{DocumentClass, DocumentKind};
+pub use module::module_spec;
 pub use state::{Applied, DocumentsState, Gate, Waiting};

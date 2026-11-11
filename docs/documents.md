@@ -81,10 +81,15 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | Events out | Event Hubs, hub `documents-events`, one partition | |
 | Identity | Workload identity | No keys or connection strings anywhere. |
 
+## Running it
+
+- The module is hosted by the deployed node: `ic_documents::module_spec()` is listed in `ic_node::modules()`.
+- The driver runs as the `ic-documents` binary (`service.rs`): a cycle every `IC_DOCUMENTS_CYCLE_SECONDS` (15 by default) that lets time pass, sends, deletes, instructs the core and publishes, and a webhook at `POST /v1/delivery-reports` for the Event Grid subscription on Communication Services delivery reports. The webhook requires the header `x-webhook-key`, set as a delivery property on the subscription from a Key Vault secret of at least 32 characters. Any number of copies can run.
+- Instructions to the core go to the partition that holds the policy as caller `documents`: `RecordNoticeDelivery` when a notice with a clock is proven delivered, `OpenReopenWindow` when a corrected notice is. The idempotency key is the instruction's own ID. An instruction the core refuses stays in the module's outbox and is reported by every cycle until it is resolved.
+- Settings are listed on `service::Config`. All are required except the container names, key name, hub name, listen address and cycle interval.
+
 ## Not built, or waiting on others
 
-- **Hosting on a node.** `ic_documents::module::spec()` is ready to register. `ic-node` cannot depend on module crates, so no real node hosts any module until the core thread adds the composing binary.
-- **Core commands for notices.** The core does not yet have `RecordNoticeDelivery` or `OpenReopenWindow`. The instructions wait in the module's outbox and are carried by a `CoreLink` when the commands exist. Until then the core should ask `notice_gate` before acting on a notice.
 - **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
 - **Rendering to PDF, large print, audio and braille.** Documents are text. The requested format is recorded on the document and passed to the print house; producing the other formats is not built.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

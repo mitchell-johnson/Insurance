@@ -41,7 +41,7 @@ fn grace(seq: u64, on: NaiveDate) -> EventRecord {
 /// A hosted module brought to the state of a prepared kit by replaying
 /// the kit's log through it, as a member catching up would.
 fn hosted_from(kit: &Kit) -> Box<dyn ModuleState> {
-    let spec = module::spec();
+    let spec = module::module_spec().unwrap();
     let mut hosted = (spec.make)();
     for (i, envelope) in kit.log.iter().enumerate() {
         let reply = hosted.apply(i as u64 + 1, serde_json::to_value(envelope).unwrap()).unwrap();
@@ -62,7 +62,7 @@ fn ask(hosted: &dyn ModuleState, query: Query) -> Value {
 /// an event and no notice would ever be triggered.
 #[test]
 fn the_module_is_declared_as_an_event_reader_named_documents() {
-    let spec = module::spec();
+    let spec = module::module_spec().unwrap();
     assert_eq!(spec.name, NAME);
     assert_eq!(spec.name, "documents");
     assert!(spec.events);
@@ -295,7 +295,7 @@ fn a_saved_state_restores_to_the_same_module() {
 
     let saved = hosted.save().unwrap();
     assert!(saved["results"].as_object().unwrap().keys().all(|k| !k.starts_with("core:")));
-    let mut restored = (module::spec().make)();
+    let mut restored = (module::module_spec().unwrap().make)();
     restored.load(saved.clone()).unwrap();
     assert_eq!(restored.save().unwrap(), saved);
     assert_eq!(ask(restored.as_ref(), Query::StateHash), ask(hosted.as_ref(), Query::StateHash));

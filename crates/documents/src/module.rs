@@ -162,7 +162,7 @@ fn make() -> Box<dyn ModuleState> {
     hosted_reading(DocumentsState::new(), answer, react)
 }
 
-/// The module as a node hosts it: `ic_raft::server::start_with(settings, &[spec()])`.
-pub fn spec() -> ModuleSpec {
-    ModuleSpec::new(NAME, make).expect("the module name is a valid one").reading_events()
+/// The module as a node hosts it: listed in `ic_node::modules()`.
+pub fn module_spec() -> Result<ModuleSpec, String> {
+    Ok(ModuleSpec::new(NAME, make)?.reading_events())
 }

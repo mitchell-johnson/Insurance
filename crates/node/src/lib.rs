@@ -10,5 +10,5 @@ use ic_raft::ModuleSpec;
 /// Every module a ledger node hosts, each in its own replicated group.
 /// Every node of a cluster runs the same binary, so they host the same list.
 pub fn modules() -> Result<Vec<ModuleSpec>, String> {
-    Ok(vec![ic_channels::query::module_spec()?])
+    Ok(vec![ic_channels::query::module_spec()?, ic_documents::module_spec()?])
 }
