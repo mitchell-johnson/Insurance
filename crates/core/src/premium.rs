@@ -7,10 +7,10 @@ use chrono::NaiveDate;
 use ic_money::{round_to_money, Dec, MoneyError, RoundingMode};
 use ic_product::rating::{cover_premium, modal_premium, ModalPremium, RatingError, RatingFactors};
 use ic_product::schedule::{age_on, anniversary, policy_year};
-use ic_product::{CoverDefinition, PremiumType, ProductDefinition};
+use ic_product::{CoverDefinition, PremiumType, ProductDefinition, RateBasis};
 
 use crate::catalog::Catalog;
-use crate::policy::{CoverStatus, LifeFactors, LifeRecord, Policy};
+use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeRecord, Policy};
 use crate::LifeId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -102,13 +102,43 @@ pub fn member_sum_insured(
         .iter()
         .find(|c| c.code == category)
         .ok_or_else(|| PremiumError::MissingFactor(life.clone(), "category"))?;
-    let salary = f.salary_minor.ok_or_else(|| PremiumError::MissingFactor(life.clone(), "salary"))?;
+    // A pool is rated on its declared total pay; the per-person limits apply
+    // to it as many times as there are people.
+    let (salary, lives) = match f.pool {
+        Some(pool) => (pool.total_salary_minor, i64::from(pool.headcount)),
+        None => (f.salary_minor.ok_or_else(|| PremiumError::MissingFactor(life.clone(), "salary"))?, 1),
+    };
     let si = round_to_money(Dec::from(salary) / Dec::from(100i64) * cat.salary_multiple.get(), currency, rounding)?.minor;
-    let mut si = si.min(cat.max_sum_insured_minor);
+    let mut si = si.min(cat.max_sum_insured_minor.saturating_mul(lives));
     if let Some(aal) = def.automatic_acceptance_limit_minor {
-        si = si.min(aal);
+        si = si.min(aal.saturating_mul(lives));
+    }
+    if let Some(cap) = f.auto_cover_cap_minor {
+        si = si.min(cap.max(0));
     }
     Ok(si)
+}
+
+/// Which underwriting loadings a price includes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Loadings {
+    /// Every loading: what the scheme is charged.
+    All,
+    /// Only loadings the member agreed the employer may see: what a
+    /// member's own invoice line shows.
+    ItemisedOnly,
+}
+
+/// A member's underwritten layers in force on a date, with the cover each
+/// sits on.
+pub fn excess_layers_on<'a>(policy: &'a Policy, life: &LifeId, on: NaiveDate) -> Vec<(&'a str, &'a Layer)> {
+    policy
+        .covers
+        .values()
+        .filter(|c| c.formula_driven)
+        .flat_map(|c| c.layers.iter().map(move |l| (c.code.as_str(), l)))
+        .filter(|(_, l)| l.life == *life && l.origin == LayerOrigin::UnderwrittenExcess && l.in_force_on(on))
+        .collect()
 }
 
 /// One member's premium for one scheme billing period.
@@ -122,6 +152,27 @@ pub fn member_period_premium(
     member_premium_with(catalog, product, policy, &life.id, factors_on(life, period_start)?, period_start)
 }
 
+/// The same, showing only the loadings a member's invoice line may show.
+pub fn member_period_line(
+    catalog: &Catalog,
+    product: &ProductDefinition,
+    policy: &Policy,
+    life: &LifeRecord,
+    period_start: NaiveDate,
+) -> Result<ModalPremium, PremiumError> {
+    let excess = excess_layers_on(policy, &life.id, period_start);
+    member_premium_detail(
+        catalog,
+        product,
+        policy,
+        &life.id,
+        factors_on(life, period_start)?,
+        period_start,
+        &excess,
+        Loadings::ItemisedOnly,
+    )
+}
+
 /// A member's premium for a period on explicit factors: used to price both
 /// sides of a retrospective change.
 pub fn member_premium_with(
@@ -131,6 +182,24 @@ pub fn member_premium_with(
     life_id: &LifeId,
     f: &LifeFactors,
     period_start: NaiveDate,
+) -> Result<ModalPremium, PremiumError> {
+    let excess = excess_layers_on(policy, life_id, period_start);
+    member_premium_detail(catalog, product, policy, life_id, f, period_start, &excess, Loadings::All)
+}
+
+/// A member's premium for a period on explicit factors and an explicit set
+/// of underwritten layers: the automatic cover at the scheme's rates, plus
+/// each layer at the same rates with its own loadings.
+#[allow(clippy::too_many_arguments)]
+pub fn member_premium_detail(
+    catalog: &Catalog,
+    product: &ProductDefinition,
+    policy: &Policy,
+    life_id: &LifeId,
+    f: &LifeFactors,
+    period_start: NaiveDate,
+    excess: &[(&str, &Layer)],
+    loadings: Loadings,
 ) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
     let mut annual: BTreeMap<String, Dec> = BTreeMap::new();
@@ -148,7 +217,19 @@ pub fn member_premium_with(
             category: f.category.clone(),
             loadings: vec![],
         };
-        annual.insert(cover.code.clone(), cover_premium(def, table, &rf, si)?);
+        let mut premium = cover_premium(def, table, &rf, si)?;
+        if let (Some(pool), RateBasis::PerLife) = (f.pool, def.rating.basis) {
+            premium *= Dec::from(i64::from(pool.headcount));
+        }
+        for (_, layer) in excess.iter().filter(|(code, _)| *code == cover.code) {
+            let shown = loadings == Loadings::All || layer.loading_itemised;
+            let rf = RatingFactors {
+                loadings: if shown { layer.loadings.clone() } else { vec![] },
+                ..rf.clone()
+            };
+            premium += cover_premium(def, table, &rf, layer.sum_insured_minor)?;
+        }
+        annual.insert(cover.code.clone(), premium);
     }
     Ok(modal_premium(product, &annual, policy.frequency)?)
 }

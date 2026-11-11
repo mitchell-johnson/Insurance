@@ -77,6 +77,9 @@ pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut
             set_standing(policy, ctx, Some(s));
             Ok(())
         }
+        // A policy does not lapse before its lapse notice, as last proven
+        // delivered, allows it to.
+        Derived::Lapse if policy.notices.get("lapse").is_some_and(|n| n.earliest_effect > ctx.date) => Ok(()),
         Derived::Lapse => lapse(ledger, product, policy, ctx),
     }
 }

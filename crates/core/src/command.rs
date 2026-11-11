@@ -8,7 +8,7 @@ use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LifeFactors, LifeKind, UnwindCause};
+use crate::policy::{LifeFactors, LifeKind, ReopenedChoice, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -79,6 +79,32 @@ pub enum MemberChange {
         effective: NaiveDate,
         factors: LifeFactors,
     },
+    /// Undo a leave that should not have happened: the member is back from
+    /// the day they were removed, with no gap in cover, and any underwritten
+    /// layer that ended with the leave is restored.
+    Reinstated {
+        life: LifeId,
+    },
+}
+
+/// An underwritten layer above a scheme member's automatic cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExcessLayer {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    pub start: NaiveDate,
+    pub sum_insured_minor: i64,
+    /// Underwriting terms. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The member agreed to the employer seeing this layer's loaded premium.
+    #[serde(default)]
+    pub loading_itemised: bool,
+    /// The underwriting decision this layer comes from.
+    pub reference: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -154,6 +180,34 @@ pub enum Command {
     /// happened to the policy after the event is unwound first, cover ends
     /// with the day of the event, and premium for every later day is
     /// returned.
+    /// Open a period in which choices the policyholder made on a defective
+    /// notice can be made again. Sent once the corrected notice has proof
+    /// of delivery. The same reference with the same terms changes nothing.
+    OpenReopenWindow {
+        policy: PolicyId,
+        reopen_reference: String,
+        /// What the notice was for: `renewal`, `lapse`, `premium_change`.
+        purpose: String,
+        from: NaiveDate,
+        until: NaiveDate,
+    },
+    /// Record proof that a mandatory notice was delivered. A policy does
+    /// not lapse before the earliest effect of its latest lapse notice.
+    RecordNoticeDelivery {
+        policy: PolicyId,
+        purpose: String,
+        notice: String,
+        delivered_on: NaiveDate,
+        earliest_effect: NaiveDate,
+    },
+    /// Make again a choice that was made on a defective notice. Applied by
+    /// value date at the original effective date, with no fee, no
+    /// underwriting and no waiting period.
+    ReopenChoice {
+        policy: PolicyId,
+        reopen_reference: String,
+        choice: ReopenedChoice,
+    },
     TerminateOnClaim {
         policy: PolicyId,
         event_date: NaiveDate,
@@ -175,6 +229,17 @@ pub enum Command {
         policy: PolicyId,
         life: LifeId,
         party: PartyId,
+    },
+    /// Write a member's accepted cover above the automatic amount as its own
+    /// layer on the scheme's cover, billed with the scheme from its start.
+    AddExcessLayer(Box<ExcessLayer>),
+    /// End an underwritten layer from a date (a reduction, or the member
+    /// giving the extra cover up). A leaver's layers end with the leave.
+    EndExcessLayer {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        effective: NaiveDate,
     },
 
     // --- cash ---
@@ -272,13 +337,19 @@ impl Command {
             }
             Command::OpenBusinessDate { .. } | Command::AdvanceBusinessDate { .. } => &["leader"],
             Command::RunEndOfDay { .. } => &["end-of-day"],
-            Command::IssuePolicy(_) => &["new-business"],
-            Command::CancelPolicy { .. } | Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
+            // Group administration issues the retail policy of a continuation
+            // option and ends a scheme that is terminated.
+            Command::IssuePolicy(_) => &["new-business", "group-admin"],
+            Command::CancelPolicy { .. } => &["policy-servicing", "group-admin"],
+            Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
             Command::Reinstate { .. } => &["policy-servicing", "collections"],
             Command::UnwindAfter { .. } | Command::ResumeAfterUnwind { .. } => &["claims", "remediation"],
+            Command::OpenReopenWindow { .. } | Command::RecordNoticeDelivery { .. } => &["documents"],
+            Command::ReopenChoice { .. } => &["policy-servicing", "remediation"],
             Command::TerminateOnClaim { .. } => &["claims"],
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
+            Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
@@ -305,9 +376,14 @@ impl Command {
             Command::MergeLayers { .. } => "merge_layers",
             Command::UnwindAfter { .. } => "unwind_after",
             Command::ResumeAfterUnwind { .. } => "resume_after_unwind",
+            Command::OpenReopenWindow { .. } => "open_reopen_window",
+            Command::RecordNoticeDelivery { .. } => "record_notice_delivery",
+            Command::ReopenChoice { .. } => "reopen_choice",
             Command::TerminateOnClaim { .. } => "terminate_on_claim",
             Command::ApplyMembership { .. } => "apply_membership",
             Command::IdentifyMember { .. } => "identify_member",
+            Command::AddExcessLayer(_) => "add_excess_layer",
+            Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",

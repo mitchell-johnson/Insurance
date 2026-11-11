@@ -80,6 +80,22 @@ pub struct LifeFactors {
     pub category: Option<String>,
     #[serde(default)]
     pub salary_minor: Option<i64>,
+    /// A ceiling on this member's automatic (formula-driven) cover, below
+    /// the category maximum and the automatic acceptance limit. Set where a
+    /// reinsurer or the scheme's terms require the excess to be underwritten.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_cover_cap_minor: Option<i64>,
+    /// The declared aggregate of a pool life. A pool with a declaration is
+    /// billed on it; a new declaration is a membership change like any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pool: Option<PoolAggregate>,
+}
+
+/// What an employer declares for a pool: how many people and their total pay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PoolAggregate {
+    pub headcount: u32,
+    pub total_salary_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -103,6 +119,9 @@ pub enum LayerOrigin {
     Original,
     Increase,
     Indexation,
+    /// A scheme member's cover above the automatic amount, accepted by
+    /// underwriting and written as its own layer on the scheme's cover.
+    UnderwrittenExcess,
 }
 
 /// One tranche of a cover with its own start date. Frozen forever at the end
@@ -123,6 +142,11 @@ pub struct Layer {
     pub loadings: Vec<DecStr>,
     #[serde(default)]
     pub exclusions: Vec<String>,
+    /// The member has agreed that the employer may see this layer's premium
+    /// with its loading on the member's own invoice line. Otherwise loadings
+    /// reach the employer only inside one scheme total.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub loading_itemised: bool,
 }
 
 impl Layer {
@@ -352,6 +376,21 @@ pub struct Policy {
     /// The money side of each claim on the policy, by claim ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub claims: BTreeMap<String, ClaimLedger>,
+    /// Periods in which choices made on a defective notice can be made
+    /// again, by reopen reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub reopen_windows: BTreeMap<String, ReopenWindow>,
+    /// The latest proven delivery of each mandatory notice, by purpose.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub notices: BTreeMap<String, NoticeRecord>,
+    /// What a cancellation wrote, so that one set aside is undone exactly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancellation: Option<CancellationRecord>,
+    /// The anniversaries that passed with indexation declined. A decline
+    /// set aside is taken out again, so it does not count against the
+    /// policyholder's right to indexation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub declined_anniversaries: Vec<u32>,
     /// What is still owed on each refund raised to refund payable, by refund ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub refunds_raised: BTreeMap<String, i64>,
@@ -359,6 +398,52 @@ pub struct Policy {
     /// bank sends back can be reversed exactly.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payments: BTreeMap<String, PaymentRecord>,
+}
+
+/// A period in which a choice made on a defective notice can be made again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReopenWindow {
+    /// What the notice was for: `renewal`, `lapse`, `premium_change`.
+    pub purpose: String,
+    pub from: NaiveDate,
+    /// The last day a choice can be made again.
+    pub until: NaiveDate,
+    /// The choices already made again under this reference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub used: Vec<ReopenedChoice>,
+}
+
+/// A choice that can be made again under a reopen reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReopenedChoice {
+    /// A decline of indexation is set aside: indexation applies, from the
+    /// anniversary it would have applied at.
+    IndexationAccepted,
+    /// A cancellation is set aside: the policy is in force as if it had
+    /// never been cancelled.
+    CancellationSetAside,
+}
+
+/// Proof that a mandatory notice reached the policyholder.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NoticeRecord {
+    pub notice: String,
+    pub delivered_on: NaiveDate,
+    /// The first day what the notice warns of may take effect.
+    pub earliest_effect: NaiveDate,
+}
+
+/// A cancellation as it was applied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CancellationRecord {
+    pub cancelled_on: NaiveDate,
+    /// The cancellation entry and its postings, if it posted anything.
+    pub entry: Option<EntryId>,
+    pub postings: Vec<Posting>,
+    pub receivables_before: Vec<Receivable>,
+    pub covers_before: BTreeMap<String, Cover>,
+    pub standing_before: Option<Standing>,
 }
 
 /// A payment settled from one of the policy's payable accounts.

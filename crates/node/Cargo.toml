@@ -1,0 +1,19 @@
+[package]
+name = "ic-node"
+description = "The ledger node as deployed: the partitions and every module's replicated group"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-raft.workspace = true
+ic-channels = { path = "../channels" }
+ic-underwriting = { path = "../underwriting" }
+tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true
