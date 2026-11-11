@@ -20,6 +20,7 @@ pub mod model;
 pub mod module;
 pub mod render;
 pub mod report;
+pub mod service;
 pub mod state;
 pub mod template;
 pub mod triggers;

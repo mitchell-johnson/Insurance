@@ -11,7 +11,7 @@ ic-core.workspace = true
 ic-log.workspace = true
 ic-raft.workspace = true
 ic-azure.workspace = true
-chrono.workspace = true
+chrono = { workspace = true, features = ["clock"] }
 chrono-tz.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,9 +24,14 @@ tokio.workspace = true
 tracing.workspace = true
 rand.workspace = true
 aes-gcm = "0.10"
+axum.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "ic-documents"
+path = "src/bin/ic-documents.rs"
 
 [dev-dependencies]
-axum.workspace = true
 proptest.workspace = true
 
 [lints]
