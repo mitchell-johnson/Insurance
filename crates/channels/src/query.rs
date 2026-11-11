@@ -284,7 +284,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             purpose,
             at,
         } => {
-            let (request, decision) = staff_check(
+            let (request, mut decision) = staff_check(
                 state,
                 &staff,
                 "policy.view",
@@ -294,6 +294,18 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 purpose,
                 at,
             );
+            // Nobody handles their own policy or that of someone they are
+            // connected to, whatever their role and path say.
+            let on = state.today(at);
+            let related = |who: &PartyId| !d.directory.relationships(&d.view, who, &policy, on).is_empty();
+            let is_staff = decision.denied != Some(crate::staff::Denial::NotStaff);
+            if is_staff && (related(&staff) || d.staff.connections.get(&staff).is_some_and(|c| c.iter().any(related))) {
+                decision = crate::staff::Decision {
+                    allowed: false,
+                    denied: Some(crate::staff::Denial::Personal),
+                    ..decision
+                };
+            }
             if !decision.allowed {
                 return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
