@@ -340,13 +340,27 @@ impl World {
         });
     }
 
-    pub fn decide(&mut self, id: &str, who: &str, request: Request, reason: &str) -> Result<(), Reject> {
-        self.run(Command::Decide {
+    pub fn decide_command(id: &str, who: &str, request: Request, reason: &str) -> Command {
+        Command::Decide {
             claim: id.into(),
             request,
             reasons: vec![reason.into()],
             actor: actor(who),
-        })
+        }
+    }
+
+    pub fn decide(&mut self, id: &str, who: &str, request: Request, reason: &str) -> Result<(), Reject> {
+        self.run(Self::decide_command(id, who, request, reason))
+    }
+
+    /// A decision that must be accepted, at once or as a proposal.
+    pub fn decided(&mut self, id: &str, who: &str, request: Request, reason: &str) {
+        self.ok(Self::decide_command(id, who, request, reason));
+    }
+
+    /// A decision that must be refused, leaving nothing behind.
+    pub fn undecided(&mut self, id: &str, who: &str, request: Request, reason: &str) -> String {
+        self.refused(Self::decide_command(id, who, request, reason))
     }
 
     pub fn approve(&mut self, id: &str, who: &str) -> Result<(), Reject> {
@@ -354,6 +368,38 @@ impl World {
             claim: id.into(),
             actor: actor(who),
         })
+    }
+
+    pub fn approved(&mut self, id: &str, who: &str) {
+        self.ok(Command::Approve {
+            claim: id.into(),
+            actor: actor(who),
+        });
+    }
+
+    pub fn unapproved(&mut self, id: &str, who: &str) -> String {
+        self.refused(Command::Approve {
+            claim: id.into(),
+            actor: actor(who),
+        })
+    }
+
+    /// Hold the conversation with the claimant, as the owner.
+    pub fn conversation(&mut self, id: &str, task: &str) {
+        let owner = self.claim(id).owner.clone().expect("the claim has an owner");
+        self.task(id, task, TaskKind::ClaimantConversation, &owner);
+        self.complete(id, task, "held", &owner).expect("the owner completes the conversation");
+    }
+
+    /// Hold the open case conference on a claim.
+    pub fn conference(&mut self, id: &str, who: &str) {
+        let task = self
+            .claim(id)
+            .task(TaskKind::CaseConference)
+            .find(|t| t.completed_on.is_none())
+            .map(|t| t.id.clone())
+            .expect("a case conference is open");
+        self.complete(id, &task, "held", who).expect("the conference is held");
     }
 
     pub fn admit_lump(amount: Option<i64>) -> Request {

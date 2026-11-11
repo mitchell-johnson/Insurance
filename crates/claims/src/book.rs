@@ -478,6 +478,9 @@ impl ClaimsState {
                 }
             }
         }
+        if items.is_empty() && unpayable.is_empty() {
+            return Err(Reject::new("nothing_to_pay", "no payment is due for this run"));
+        }
         // A benefit that is due and has nobody verified to pay is never
         // skipped in silence.
         for id in unpayable {
@@ -493,7 +496,9 @@ impl ClaimsState {
             }
         }
         if items.is_empty() {
-            return Err(Reject::new("nothing_to_pay", "no payment is due for this run"));
+            // Nothing could be paid, and the tasks say why: no run is made.
+            cx.notify("run_prepared", &run, &[("count", "0".into()), ("control_total_minor", "0".into())]);
+            return Ok(());
         }
         let claims: BTreeSet<String> = items.iter().map(|i| i.claim.clone()).collect();
         for id in claims {

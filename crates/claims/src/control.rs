@@ -121,7 +121,7 @@ impl ClaimsState {
             }
             ReinsuranceNotice::ReinsurerConsent {
                 reinsurer,
-                agreed: true,
+                agreed,
                 reference,
                 treaty,
                 ..
@@ -133,18 +133,28 @@ impl ClaimsState {
                     .filter(|t| treaty.as_ref().is_none_or(|x| x == *t))
                     .cloned()
                     .collect();
+                let outcome = if agreed { "agreed" } else { "refused" };
                 for t in answered {
                     claim.reinsurance.consent_required.remove(&t);
-                    finish_task(&mut claim, &format!("reinsurer-consent/{t}"), cx.today, None, "agreed".into(), vec![], None, 0);
+                    finish_task(&mut claim, &format!("reinsurer-consent/{t}"), cx.today, None, outcome.into(), vec![], None, 0);
                 }
-                note(&mut claim, cx, None, format!("reinsurer_consent:{reinsurer}"));
-                claim.reinsurance.consents.push((reinsurer, reference));
-            }
-            ReinsuranceNotice::ReinsurerConsent { reinsurer, .. } => {
-                // The decision is still the insurer's, and a senior makes it.
-                claim.reinsurance.consent_refused = true;
-                open_task(&mut claim, cx, "senior-review/reinsurer-refused", TaskKind::SeniorReview, None);
-                note(&mut claim, cx, None, format!("reinsurer_refused:{reinsurer}"));
+                if agreed {
+                    note(&mut claim, cx, None, format!("reinsurer_consent:{reinsurer}"));
+                    claim.reinsurance.consents.push((reinsurer, reference));
+                } else {
+                    // The decision is still the insurer's, and a senior makes
+                    // it: the claim moves to the senior queue with a review.
+                    claim.reinsurance.consent_refused = true;
+                    if claim.status == Status::Open {
+                        claim.queue = Queue::ComplexLarge;
+                        let senior = claim.owner.as_ref().is_some_and(|o| self.authority.profile(o).is_ok_and(|p| p.senior));
+                        if !senior {
+                            claim.owner = None;
+                        }
+                    }
+                    open_task(&mut claim, cx, "senior-review/reinsurer-refused", TaskKind::SeniorReview, None);
+                    note(&mut claim, cx, None, format!("reinsurer_refused:{reinsurer}"));
+                }
             }
             ReinsuranceNotice::DisputedItemRaised { reinsurer, reference, .. } => {
                 // Settled by people under the treaty, never reversed automatically.
