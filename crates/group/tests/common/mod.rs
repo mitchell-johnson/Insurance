@@ -448,6 +448,63 @@ impl Harness {
         self.resolve(file, |_| None);
     }
 
+    /// Carry the one command waiting for the core as a driver might after a
+    /// delay: the core's events reach the module before the core's answer.
+    pub fn core_events_before_answer(&mut self) {
+        let (key, group, command) = self
+            .g
+            .outbox
+            .values()
+            .find_map(|o| match o {
+                Outbound::Core { key, group, command } => Some((key.clone(), group.clone(), (**command).clone())),
+                _ => None,
+            })
+            .expect("a command for the core");
+        let partition = self.c.partition_of(&group);
+        let error = self.c.submit_keyed(partition, &key, "group-admin", command).result.err().map(|e| e.code);
+        for record in self.c.take_events() {
+            for env in ic_group::react(&record) {
+                assert!(self.g.apply_envelope(env).result.is_ok());
+            }
+        }
+        self.driver(GroupCommand::CoreResult { key, error }).unwrap();
+    }
+
+    /// The core's underwritten layers on a member: amount and end date.
+    pub fn excess_layers(&self, id: &str) -> Vec<(i64, Option<NaiveDate>)> {
+        self.c.state(self.p).policies[&self.policy]
+            .covers
+            .values()
+            .flat_map(|c| c.layers.iter())
+            .filter(|l| l.life == life(id) && l.origin == ic_core::LayerOrigin::UnderwrittenExcess)
+            .map(|l| (l.sum_insured_minor, l.end))
+            .collect()
+    }
+
+    /// A change file of one salary change, applied.
+    pub fn salary(&mut self, file: &str, id: &str, category: &str, salary_minor: i64) {
+        let today = self.today();
+        self.apply(
+            file,
+            FileKind::Changes,
+            vec![change(1, id, RowChange::Change, today, attrs(category, salary_minor, "wlg"))],
+        );
+    }
+
+    pub fn underwriting(&mut self, case: u64, decision: ic_group::command::ExcessDecision) -> Result<(), Reject> {
+        let r = self.send_as(
+            caller::UNDERWRITING,
+            "underwriter-di",
+            GroupCommand::RecordExcessDecision {
+                scheme: SCHEME.to_string(),
+                case,
+                decision,
+            },
+        );
+        self.settle();
+        r
+    }
+
     pub fn core_lives(&self) -> Vec<String> {
         self.c.state(self.p).policies[&self.policy]
             .lives
