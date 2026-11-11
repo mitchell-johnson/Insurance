@@ -156,11 +156,13 @@ fn triage_routes_by_skill_and_ranks_by_urgency() {
     };
     w.ok(Command::Notify(Box::new(health)));
     assert_eq!(w.claim("c-health").queue, Queue::Health);
-    // Nine days since the event, and three urgency flags.
-    assert_eq!(w.claim("c-health").priority, 9 + 90);
-    assert_eq!(w.claim("c-large").priority, 9 + 20);
+    // Three urgency flags, and a large amount.
+    assert_eq!(w.claim("c-health").priority, 90);
+    assert_eq!(w.claim("c-large").priority, 20);
     let rows = w.state.queue(Queue::ComplexLarge, d(2027, 3, 4));
     assert_eq!(rows.iter().map(|r| r.claim.as_str()).collect::<Vec<_>>(), ["c-large", "c-contested"]);
+    // The days since the event keep counting while the claim waits: twelve by now.
+    assert_eq!(rows[0].priority, 20 + 12);
     assert_eq!(rows[0].age_days, 3);
 }
 

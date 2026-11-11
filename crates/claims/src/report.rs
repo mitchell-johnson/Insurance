@@ -148,7 +148,7 @@ impl ClaimsState {
             .filter(|c| c.queue == queue && c.status.is_open())
             .map(|c| QueueRow {
                 claim: c.id.clone(),
-                priority: c.priority,
+                priority: c.priority + (today - c.event_date).num_days().clamp(0, 30) as u32,
                 age_days: (today - c.notified_on).num_days(),
                 owner: c.owner.clone(),
             })

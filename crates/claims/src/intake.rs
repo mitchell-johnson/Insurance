@@ -108,13 +108,13 @@ impl ClaimsState {
         }
     }
 
-    /// Higher is more urgent: amount, vulnerability, hardship, a provider
-    /// waiting to treat, and the time since the event.
-    fn priority(&self, claim: &Claim, today: NaiveDate) -> u32 {
+    /// Higher is more urgent: amount, vulnerability, hardship and a provider
+    /// waiting to treat. The time since the event is added when a queue is
+    /// read, so it keeps counting.
+    fn priority(&self, claim: &Claim) -> u32 {
         let flags = &claim.flags;
-        let age = (today - claim.event_date).num_days().clamp(0, 30) as u32;
         let large = if claim.claimed_minor >= self.rules.large_claim_minor { 20 } else { 0 };
-        age + large + [flags.vulnerable, flags.hardship, flags.provider_waiting].into_iter().filter(|f| *f).count() as u32 * 30
+        large + [flags.vulnerable, flags.hardship, flags.provider_waiting].into_iter().filter(|f| *f).count() as u32 * 30
     }
 
     /// Register a claim. Whatever the channel, and however doubtful cover
@@ -179,7 +179,7 @@ impl ClaimsState {
         }
         claim.cause_history.extend(claim.cause_code.clone().map(|c| (cx.today, c)));
         claim.queue = self.triage(&claim);
-        claim.priority = self.priority(&claim, cx.today);
+        claim.priority = self.priority(&claim);
         self.start_timer(&mut claim, TimerKind::Acknowledgement, cx.today);
         note(&mut claim, cx, None, "notified");
         if n.cause_code.is_some() && !cause_known {
