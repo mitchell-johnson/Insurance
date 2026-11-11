@@ -82,6 +82,15 @@ pub fn reconcile(state: &CoreState) -> Vec<Break> {
                 detail: format!("policy {} has a debit balance in suspense", p.id),
             });
         }
+        // Refund payable equals the refunds raised and not yet paid or released.
+        let refund_payable = state.ledger.natural_balance(&accounts::refund_payable(&p.id, c).id);
+        let owed: i128 = p.refunds_raised.values().map(|v| *v as i128).sum();
+        if refund_payable != owed {
+            breaks.push(Break {
+                check: "refund_payable",
+                detail: format!("policy {}: ledger {refund_payable}, refunds owed {owed}", p.id),
+            });
+        }
         // Only a policy in force has a standing.
         if (p.status == PolicyStatus::InForce) != p.standing.is_some() {
             breaks.push(Break {

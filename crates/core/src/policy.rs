@@ -275,8 +275,12 @@ pub struct ClaimLedger {
     pub open: bool,
     pub reserve_minor: i64,
     pub admitted_minor: i64,
-    /// Admitted and not yet paid: this claim's share of benefit payable.
+    /// Owed and not yet settled at the bank: this claim's share of benefit
+    /// payable.
     pub payable_minor: i64,
+    /// The part of it released for payment and waiting for the bank.
+    #[serde(default)]
+    pub instructed_minor: i64,
     /// Overpaid and not yet recovered or written off.
     pub receivable_minor: i64,
     pub payments: BTreeMap<String, ClaimPayment>,
@@ -286,7 +290,18 @@ pub struct ClaimLedger {
 pub struct ClaimPayment {
     pub amount_minor: i64,
     pub ex_gratia: bool,
-    pub returned: bool,
+    pub state: ClaimPaymentState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaimPaymentState {
+    /// Released by claims; the payments module has it to pay.
+    Instructed,
+    /// The bank confirmed it and benefit payable was discharged.
+    Settled,
+    /// It failed or came back. The money is owed again.
+    Returned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -337,6 +352,30 @@ pub struct Policy {
     /// The money side of each claim on the policy, by claim ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub claims: BTreeMap<String, ClaimLedger>,
+    /// What is still owed on each refund raised to refund payable, by refund ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub refunds_raised: BTreeMap<String, i64>,
+    /// Payments settled from a payable, by payment ID, so a payment the
+    /// bank sends back can be reversed exactly.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payments: BTreeMap<String, PaymentRecord>,
+}
+
+/// A payment settled from one of the policy's payable accounts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaymentRecord {
+    pub payable: crate::payments::PayableKind,
+    /// The refund this payment paid, for a refund payment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refund: Option<String>,
+    pub amount_minor: i64,
+    /// The payments module's code for the bank account the money left.
+    pub bank_account: String,
+    pub settled_on: NaiveDate,
+    /// The entry that settled it: what a return reverses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<EntryId>,
+    pub returned: bool,
 }
 
 impl Policy {
@@ -360,5 +399,6 @@ impl Policy {
         self.receivables
             .retain(|r| r.outstanding_minor != 0 || r.unearned_fine() != 0 || r.period_end > keep_from);
         self.receipts.retain(|_, r| r.received_on > keep_from);
+        self.payments.retain(|_, p| p.settled_on > keep_from);
     }
 }

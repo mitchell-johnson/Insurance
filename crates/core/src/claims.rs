@@ -12,13 +12,12 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use ic_claims::port::{CoverFacts, Instruction, Offset, Termination};
 use ic_ledger::{Dimensions, Ledger};
-use ic_money::Money;
 
 use crate::accounts::{self, dims};
 use crate::arrears::{self, Derived};
 use crate::event::Event;
 use crate::machine::{CoreState, Ctx, Reject};
-use crate::policy::{ClaimLedger, ClaimPayment, LayerOrigin, LifeKind, Policy, PolicyStatus, Standing, UnwindCause};
+use crate::policy::{ClaimLedger, ClaimPayment, ClaimPaymentState, LayerOrigin, LifeKind, Policy, PolicyStatus, Standing, UnwindCause};
 use crate::postings::PostingSet;
 use crate::{cash, group, lifecycle, unwind, LifeId, PartyId, PolicyId};
 
@@ -85,7 +84,10 @@ pub(crate) fn drain_due(state: &mut CoreState, ctx: &mut Ctx<'_>) {
 /// end-of-day run is not finished until it has visited them.
 pub(crate) fn policies_with_work_due(state: &CoreState, today: NaiveDate) -> Vec<PolicyId> {
     let due = state.claims.due_index.iter().take_while(|(d, _)| *d <= today);
-    let mut policies: Vec<PolicyId> = due.filter_map(|(_, id)| state.claims.claims.get(id)).map(|c| PolicyId(c.policy.clone())).collect();
+    let mut policies: Vec<PolicyId> = due
+        .filter_map(|(_, id)| state.claims.claims.get(id))
+        .map(|c| PolicyId(c.policy.clone()))
+        .collect();
     policies.sort();
     policies.dedup();
     policies.truncate(crate::machine::MAX_EOD_CHUNK);
@@ -97,13 +99,19 @@ pub(crate) fn policies_with_work_due(state: &CoreState, today: NaiveDate) -> Vec
 pub(crate) fn may_transfer(policy: &Policy) -> Result<(), Reject> {
     let busy = |c: &ClaimLedger| c.open || c.reserve_minor != 0 || c.payable_minor != 0 || c.receivable_minor != 0;
     if policy.claims.values().any(busy) {
-        return Err(Reject::new("open_claim", "the policy has a claim that is open or has money outstanding; it cannot be transferred yet"));
+        return Err(Reject::new(
+            "open_claim",
+            "the policy has a claim that is open or has money outstanding; it cannot be transferred yet",
+        ));
     }
     Ok(())
 }
 
 fn status_code(status: PolicyStatus) -> String {
-    serde_json::to_value(status).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+    serde_json::to_value(status)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default()
 }
 
 /// The cover check: what the policy record says about a cover and a life on
@@ -115,7 +123,9 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         .filter(|p| p.status != PolicyStatus::Transferred)
         .ok_or_else(|| Reject::new("unknown_policy", format!("policy {policy} is not on this partition")))?;
     let product = state.catalog.product(&p.product_hash);
-    let life_id = life.map(|l| LifeId(l.to_string())).or_else(|| Some(p.lives.keys().next()?.clone()).filter(|_| p.lives.len() == 1));
+    let life_id = life
+        .map(|l| LifeId(l.to_string()))
+        .or_else(|| Some(p.lives.keys().next()?.clone()).filter(|_| p.lives.len() == 1));
     let record = life_id.as_ref().and_then(|l| p.lives.get(l));
     let life_on_policy = record.is_some_and(|r| r.in_force_on(on));
     let life_party = record.and_then(|r| match &r.kind {
@@ -138,7 +148,12 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     let mut facts = CoverFacts {
         policy_status: status_code(p.status),
         standing: standing.map(str::to_string),
-        outstanding_premium_minor: p.receivables.iter().filter(|r| !r.closed && r.due <= on).map(|r| r.outstanding_minor.max(0)).sum(),
+        outstanding_premium_minor: p
+            .receivables
+            .iter()
+            .filter(|r| !r.closed && r.due <= on)
+            .map(|r| r.outstanding_minor.max(0))
+            .sum(),
         life_on_policy,
         life_party,
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),
@@ -161,7 +176,11 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.
-        let later = c.layers.iter().filter(mine).filter(|l| l.origin == LayerOrigin::Indexation && l.start > on && l.end.is_none_or(|e| e > l.start));
+        let later = c
+            .layers
+            .iter()
+            .filter(mine)
+            .filter(|l| l.origin == LayerOrigin::Indexation && l.start > on && l.end.is_none_or(|e| e > l.start));
         sum_insured += later.map(|l| l.sum_insured_minor).sum::<i64>();
     }
     let mut covered = !at_event.is_empty();
@@ -169,7 +188,10 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         // Scheme cover moves with the member's details as they were on the date.
         let factors = record.filter(|_| life_on_policy).and_then(|r| r.factors.as_of(on));
         let amount = match (product, life_id.as_ref(), factors) {
-            (Some(pr), Some(id), Some(f)) => lifecycle::member_covers(pr, p, id, f).into_iter().find(|m| m.cover == cover).map(|m| m.sum_insured_minor),
+            (Some(pr), Some(id), Some(f)) => lifecycle::member_covers(pr, p, id, f)
+                .into_iter()
+                .find(|m| m.cover == cover)
+                .map(|m| m.sum_insured_minor),
             _ => None,
         };
         sum_insured = amount.unwrap_or(0);
@@ -188,7 +210,11 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
     let id = PolicyId(instruction.policy().to_string());
     state.with_policy_tracked(ctx, &id, true, |s, ctx, p| match instruction {
         Instruction::SetReserve {
-            claim, cover, amount_minor, reason, ..
+            claim,
+            cover,
+            amount_minor,
+            reason,
+            ..
         } => set_reserve(&mut s.ledger, p, ctx, &claim, cover, amount_minor, reason),
         Instruction::Admit {
             claim,
@@ -218,7 +244,7 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             close,
             ..
         } => pay_benefit(s, p, ctx, &claim, payment_ref, (period_start, period_end), gross_minor, offset, payee, close),
-        Instruction::PaymentReturned { claim, payment_ref, .. } => payment_returned(&mut s.ledger, p, ctx, &claim, &payment_ref),
+        Instruction::PaymentReturned { claim, payment_ref, .. } => payment_returned(p, &claim, &payment_ref),
         Instruction::ExGratia {
             claim,
             cover,
@@ -227,16 +253,27 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             payee,
             ..
         } => ex_gratia(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee),
-        Instruction::Close { claim, outcome, overpayment, .. } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
+        Instruction::Close {
+            claim, outcome, overpayment, ..
+        } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
         Instruction::Reopen { claim, reserve_minor, .. } => reopen(&mut s.ledger, p, ctx, &claim, reserve_minor),
         Instruction::RaiseOverpayment {
-            claim, overpayment, amount_minor, ..
+            claim,
+            overpayment,
+            amount_minor,
+            ..
         } => move_receivable(&mut s.ledger, p, ctx, &claim, "claim_overpayment_raised", overpayment, amount_minor),
         Instruction::RecoverOverpayment {
-            claim, overpayment, amount_minor, ..
+            claim,
+            overpayment,
+            amount_minor,
+            ..
         } => move_receivable(&mut s.ledger, p, ctx, &claim, "claim_overpayment_recovered", overpayment, amount_minor),
         Instruction::WriteOffOverpayment {
-            claim, overpayment, amount_minor, ..
+            claim,
+            overpayment,
+            amount_minor,
+            ..
         } => move_receivable(&mut s.ledger, p, ctx, &claim, "claim_overpayment_written_off", overpayment, amount_minor),
         Instruction::IdentifyMember { life, party, .. } => group::identify(p, ctx, &LifeId(life), PartyId(party)),
     })
@@ -332,7 +369,15 @@ fn admit(
     set.debit(expense, i128::from(amount - released), d.clone());
     set.credit(accounts::benefit_payable(&policy.id, c), i128::from(amount - deduct), d);
     set.credit(accounts::policy_suspense(&policy.id, c), i128::from(deduct), Dimensions::default());
-    post(&mut state.ledger, policy, ctx, "claim_admitted", set, claim, &[("deducted_premium_minor", deduct.to_string())])?;
+    post(
+        &mut state.ledger,
+        policy,
+        ctx,
+        "claim_admitted",
+        set,
+        claim,
+        &[("deducted_premium_minor", deduct.to_string())],
+    )?;
     let record = policy.claims.entry(claim.to_string()).or_insert_with(|| ClaimLedger {
         cover,
         open: true,
@@ -353,47 +398,65 @@ fn admit(
     Ok(())
 }
 
-/// Pay from benefit payable. On the last payment the claim closes and any
-/// reserve left is released. Where the premium payer was the deceased, what
-/// the policy holds in suspense is paid with the claim.
-#[allow(clippy::too_many_arguments)]
-fn pay(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, payment_ref: String, amount: i64, payee: String, close: bool) -> Result<(), Reject> {
-    let record = known(policy, claim)?;
-    if amount <= 0 || amount > record.payable_minor || record.payments.contains_key(&payment_ref) || (close && amount != record.payable_minor) {
-        return invalid("a payment is new, positive and within what is admitted and unpaid");
-    }
-    let c = policy.currency;
-    let reserve = if close { record.reserve_minor } else { 0 };
-    let (expense, d) = incurred(policy, &record.cover, "claim_paid");
-    let mut set = PostingSet::new();
-    set.debit(accounts::benefit_payable(&policy.id, c), i128::from(amount), d.clone());
-    set.credit(accounts::settlement(c), i128::from(amount), Dimensions::default());
-    set.debit(accounts::claim_reserve(&policy.id, c), i128::from(reserve), d.clone());
-    set.credit(expense, i128::from(reserve), d);
-    post(ledger, policy, ctx, "claim_paid", set, claim, &[("payment_ref", payment_ref.clone()), ("payee", payee)])?;
+/// Record a payment against a claim that the payments module is to make.
+fn instruct(policy: &mut Policy, claim: &str, payment_ref: String, amount: i64, ex_gratia: bool) {
     if let Some(record) = policy.claims.get_mut(claim) {
-        record.payable_minor -= amount;
-        record.reserve_minor -= reserve;
-        record.open = !close;
+        record.instructed_minor += amount;
         record.payments.insert(
             payment_ref,
             ClaimPayment {
                 amount_minor: amount,
-                ex_gratia: false,
-                returned: false,
+                ex_gratia,
+                state: ClaimPaymentState::Instructed,
             },
         );
     }
-    let suspense = ledger.available(&accounts::policy_suspense(&policy.id, c).id);
-    if policy.refund_with_claim.as_deref() == Some(claim) && suspense > 0 {
-        let refund = Money::new(i64::try_from(suspense).unwrap_or(i64::MAX), c);
-        cash::refund_suspense(ledger, policy, ctx, refund, Some(claim.to_string()))?;
+}
+
+/// Release a payment from what has been admitted. The money stays in
+/// benefit payable until the payments module settles it at the bank. On the
+/// last payment the claim closes and any reserve left is released.
+#[allow(clippy::too_many_arguments)]
+fn pay(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    claim: &str,
+    payment_ref: String,
+    amount: i64,
+    payee: String,
+    close: bool,
+) -> Result<(), Reject> {
+    let record = known(policy, claim)?;
+    let free = record.payable_minor - record.instructed_minor;
+    if amount <= 0 || amount > free || record.payments.contains_key(&payment_ref) || (close && amount != free) {
+        return invalid("a payment is new, positive and within what is admitted and not yet released");
     }
+    let c = policy.currency;
+    let reserve = if close { record.reserve_minor } else { 0 };
+    let (expense, d) = incurred(policy, &record.cover, "claim_closed");
+    let mut set = PostingSet::new();
+    set.debit(accounts::claim_reserve(&policy.id, c), i128::from(reserve), d.clone());
+    set.credit(expense, i128::from(reserve), d);
+    post(
+        ledger,
+        policy,
+        ctx,
+        "claim_reserve_released",
+        set,
+        claim,
+        &[("payment_ref", payment_ref.clone()), ("payee", payee)],
+    )?;
+    if let Some(record) = policy.claims.get_mut(claim) {
+        record.reserve_minor -= reserve;
+        record.open = !close;
+    }
+    instruct(policy, claim, payment_ref, amount, false);
     Ok(())
 }
 
 /// One period of a benefit in payment, in one entry: drawn from the reserve
-/// as far as it goes and from claims expense beyond it, paid to the claimant
+/// as far as it goes and from claims expense beyond it, owed to the claimant
 /// less any offset, which reduces the overpayment it recovers.
 #[allow(clippy::too_many_arguments)]
 fn pay_benefit(
@@ -419,7 +482,11 @@ fn pay_benefit(
     let other = offset.as_ref().map(|o| PolicyId(o.policy.clone())).filter(|id| *id != policy.id);
     if let Some(o) = &offset {
         let owed = match &other {
-            Some(id) => state.policies.get(id).filter(|p| p.currency == c && !p.is_frozen()).and_then(|p| p.claims.get(&o.claim)),
+            Some(id) => state
+                .policies
+                .get(id)
+                .filter(|p| p.currency == c && !p.is_frozen())
+                .and_then(|p| p.claims.get(&o.claim)),
             None => policy.claims.get(&o.claim),
         };
         if owed.is_none_or(|l| l.receivable_minor < o.amount_minor) {
@@ -432,7 +499,7 @@ fn pay_benefit(
     let mut set = PostingSet::new();
     set.debit(accounts::claim_reserve(&policy.id, c), i128::from(drawn + released), d.clone());
     set.debit(expense, i128::from(gross - drawn - released), d.clone());
-    set.credit(accounts::settlement(c), i128::from(gross - taken), Dimensions::default());
+    set.credit(accounts::benefit_payable(&policy.id, c), i128::from(gross - taken), d.clone());
     if let Some(o) = &offset {
         set.credit(accounts::claim_recovery_receivable(&PolicyId(o.policy.clone()), c), i128::from(taken), d);
     }
@@ -445,16 +512,10 @@ fn pay_benefit(
     post(&mut state.ledger, policy, ctx, "benefit_paid", set, claim, &extra)?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= drawn + released;
+        record.payable_minor += gross - taken;
         record.open = !close;
-        record.payments.insert(
-            payment_ref,
-            ClaimPayment {
-                amount_minor: gross - taken,
-                ex_gratia: false,
-                returned: false,
-            },
-        );
     }
+    instruct(policy, claim, payment_ref, gross - taken, false);
     if let Some(o) = &offset {
         let owing = match other {
             Some(id) => state.policies.get_mut(&id).and_then(|p| p.claims.get_mut(&o.claim)),
@@ -467,32 +528,48 @@ fn pay_benefit(
     Ok(())
 }
 
-/// A payment failed or came back: the money returns to benefit payable,
-/// never to suspense, and the claim is open again until it is paid.
-fn payment_returned(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, payment_ref: &str) -> Result<(), Reject> {
-    let record = known(policy, claim)?;
-    let Some(amount) = record.payments.get(payment_ref).filter(|p| !p.returned).map(|p| p.amount_minor) else {
-        return Err(Reject::new("unknown_payment", format!("claim {claim} has no payment {payment_ref} outstanding")));
+/// A payment failed before the bank settled it, or the bank sent it back
+/// (which the core has by then posted through `ReturnPayment`). Either way
+/// the money is in benefit payable, owed and no longer with the bank.
+fn payment_returned(policy: &mut Policy, claim: &str, payment_ref: &str) -> Result<(), Reject> {
+    known(policy, claim)?;
+    let record = policy.claims.get_mut(claim).filter(|r| r.payments.contains_key(payment_ref));
+    let Some((record, payment)) = record.and_then(|r| {
+        let p = r.payments.get(payment_ref)?.clone();
+        Some((r, p))
+    }) else {
+        return Err(Reject::new("unknown_payment", format!("claim {claim} has no payment {payment_ref}")));
     };
-    let c = policy.currency;
-    let (_, d) = incurred(policy, &record.cover, "claim_payment_returned");
-    let mut set = PostingSet::new();
-    set.debit(accounts::settlement(c), i128::from(amount), Dimensions::default());
-    set.credit(accounts::benefit_payable(&policy.id, c), i128::from(amount), d);
-    post(ledger, policy, ctx, "claim_payment_returned", set, claim, &[("payment_ref", payment_ref.to_string())])?;
-    if let Some(record) = policy.claims.get_mut(claim) {
-        record.payable_minor += amount;
-        record.open = true;
-        if let Some(p) = record.payments.get_mut(payment_ref) {
-            p.returned = true;
+    match payment.state {
+        ClaimPaymentState::Instructed => {
+            record.instructed_minor -= payment.amount_minor;
+            record.open = true;
+            if let Some(p) = record.payments.get_mut(payment_ref) {
+                p.state = ClaimPaymentState::Returned;
+            }
+            Ok(())
         }
+        // The bank's return already put it back.
+        ClaimPaymentState::Returned => Ok(()),
+        ClaimPaymentState::Settled => Err(Reject::new(
+            "payment_settled",
+            "the bank settled this payment; a return comes through the payments module",
+        )),
     }
-    Ok(())
 }
 
 /// A goodwill payment: its own posting type and its own expense account.
 #[allow(clippy::too_many_arguments)]
-fn ex_gratia(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, cover: &str, payment_ref: String, amount: i64, payee: String) -> Result<(), Reject> {
+fn ex_gratia(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    claim: &str,
+    cover: &str,
+    payment_ref: String,
+    amount: i64,
+    payee: String,
+) -> Result<(), Reject> {
     let record = known(policy, claim)?;
     if amount <= 0 || record.payments.contains_key(&payment_ref) {
         return invalid("an ex gratia payment is new and positive");
@@ -500,20 +577,78 @@ fn ex_gratia(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim:
     let c = policy.currency;
     let (_, d) = incurred(policy, cover, "ex_gratia");
     let mut set = PostingSet::new();
-    set.debit(accounts::ex_gratia(&policy.product_code, c), i128::from(amount), d);
-    set.credit(accounts::settlement(c), i128::from(amount), Dimensions::default());
-    post(ledger, policy, ctx, "claim_ex_gratia", set, claim, &[("payment_ref", payment_ref.clone()), ("payee", payee)])?;
+    set.debit(accounts::ex_gratia(&policy.product_code, c), i128::from(amount), d.clone());
+    set.credit(accounts::benefit_payable(&policy.id, c), i128::from(amount), d);
+    post(
+        ledger,
+        policy,
+        ctx,
+        "claim_ex_gratia",
+        set,
+        claim,
+        &[("payment_ref", payment_ref.clone()), ("payee", payee)],
+    )?;
     if let Some(record) = policy.claims.get_mut(claim) {
-        record.payments.insert(
-            payment_ref,
-            ClaimPayment {
-                amount_minor: amount,
-                ex_gratia: true,
-                returned: false,
-            },
-        );
+        record.payable_minor += amount;
+    }
+    instruct(policy, claim, payment_ref, amount, true);
+    Ok(())
+}
+
+/// Before the payments module settles a benefit payment: it must be one
+/// claims released, for exactly that amount. Where the policy does not owe
+/// the money at all, the settlement's own check says so.
+pub(crate) fn check_settlement(ledger: &Ledger, policy: &Policy, payment: &str, amount: i64) -> Result<(), Reject> {
+    let instructed = policy
+        .claims
+        .values()
+        .filter_map(|c| c.payments.get(payment))
+        .any(|p| p.state == ClaimPaymentState::Instructed && p.amount_minor == amount);
+    let owed = ledger.available(&accounts::benefit_payable(&policy.id, policy.currency).id) >= i128::from(amount);
+    if owed && !instructed {
+        return Err(Reject::new(
+            "payment_not_instructed",
+            format!("no claim has released a payment {payment} of that amount"),
+        ));
     }
     Ok(())
+}
+
+/// The bank settled a benefit payment: the claim no longer owes it.
+pub(crate) fn settled(policy: &mut Policy, payment: &str) {
+    for record in policy.claims.values_mut() {
+        if let Some(p) = record.payments.get_mut(payment).filter(|p| p.state == ClaimPaymentState::Instructed) {
+            p.state = ClaimPaymentState::Settled;
+            record.payable_minor -= p.amount_minor;
+            record.instructed_minor -= p.amount_minor;
+        }
+    }
+}
+
+/// The bank sent a settled benefit payment back. The core has posted it to
+/// benefit payable; the claim owes it again and the claims module is told in
+/// the same step, so it raises its task and the two never disagree.
+pub(crate) fn bank_returned(state: &mut CoreState, ctx: &mut Ctx<'_>, policy: &PolicyId, payment: &str) -> Result<(), Reject> {
+    let mut claim = None;
+    for (id, record) in state.policies.get_mut(policy).into_iter().flat_map(|p| p.claims.iter_mut()) {
+        if let Some(p) = record.payments.get_mut(payment).filter(|p| p.state == ClaimPaymentState::Settled) {
+            p.state = ClaimPaymentState::Returned;
+            record.payable_minor += p.amount_minor;
+            record.open = true;
+            claim = Some(id.clone());
+        }
+    }
+    match claim {
+        Some(claim) => apply(
+            state,
+            ctx,
+            ic_claims::Command::PaymentReturned {
+                claim,
+                payment_ref: payment.to_string(),
+            },
+        ),
+        None => Ok(()),
+    }
 }
 
 /// Close a claim: whatever reserve and unpaid admission remain are released
@@ -525,7 +660,8 @@ fn close(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &st
         return invalid("an overpayment is positive");
     }
     let c = policy.currency;
-    let (reserve, payable) = (record.reserve_minor, record.payable_minor);
+    // What has been released for payment is still owed; the rest is not.
+    let (reserve, payable) = (record.reserve_minor, record.payable_minor - record.instructed_minor);
     let (expense, d) = incurred(policy, &record.cover, "claim_closed");
     let mut set = PostingSet::new();
     set.debit(accounts::claim_reserve(&policy.id, c), i128::from(reserve), d.clone());
@@ -536,7 +672,7 @@ fn close(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &st
     post(ledger, policy, ctx, "claim_closed", set, claim, &extra)?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor = 0;
-        record.payable_minor = 0;
+        record.payable_minor -= payable;
         record.receivable_minor += overpaid;
         record.open = false;
     }
@@ -564,7 +700,15 @@ fn reopen(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &s
 
 /// Raise, recover or write off an overpayment. The receivable is on the
 /// claim's policy; recovery is money in, a write-off is its own expense.
-fn move_receivable(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, kind: &str, overpayment: String, amount: i64) -> Result<(), Reject> {
+fn move_receivable(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    claim: &str,
+    kind: &str,
+    overpayment: String,
+    amount: i64,
+) -> Result<(), Reject> {
     let record = known(policy, claim)?;
     let raising = kind == "claim_overpayment_raised";
     if amount <= 0 || (!raising && amount > record.receivable_minor) {
@@ -615,12 +759,22 @@ pub(crate) fn reconcile(state: &CoreState, breaks: &mut Vec<crate::recon::Break>
                 detail: format!("policy {}: ledger {ledger:?}, claim records {core:?} (reserve, payable, receivable)", p.id),
             });
         }
+        // The module counts what it has still to release; the ledger also
+        // holds what is released and waiting for the bank.
+        let waiting = sum(|l| l.instructed_minor);
         let m = module.get(&p.id.0).copied().unwrap_or_default();
-        let claims = (i128::from(m.reserve_minor), i128::from(m.payable_minor), i128::from(m.receivable_minor));
+        let claims = (
+            i128::from(m.reserve_minor),
+            i128::from(m.payable_minor) + waiting,
+            i128::from(m.receivable_minor),
+        );
         if claims != core {
             breaks.push(crate::recon::Break {
                 check: "claims_control",
-                detail: format!("policy {}: claims module {claims:?}, claim records {core:?} (reserve, payable, receivable)", p.id),
+                detail: format!(
+                    "policy {}: claims module {claims:?}, claim records {core:?} (reserve, payable, receivable)",
+                    p.id
+                ),
             });
         }
     }

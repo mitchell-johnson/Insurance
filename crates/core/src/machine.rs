@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, claims, earning, group, lifecycle, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -375,6 +375,39 @@ impl CoreState {
             } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 unwind::terminate_on_claim(&mut s.ledger, &s.catalog, p, ctx, event_date, &claim, payer_deceased)
             }),
+            Command::RaiseRefundPayable {
+                policy,
+                refund,
+                amount,
+                with_claim,
+            } => self.with_policy(&policy, true, |s, p| {
+                payments::raise_refund_payable(&mut s.ledger, p, ctx, refund, amount, with_claim)
+            }),
+            Command::ReleaseRefundPayable { policy, refund } => {
+                self.with_policy(&policy, true, |s, p| payments::release_refund_payable(&mut s.ledger, p, ctx, &refund))
+            }
+            Command::SettlePayable {
+                policy,
+                payment,
+                payable,
+                refund,
+                amount,
+                bank_account,
+            } => self.with_policy(&policy, true, |s, p| {
+                let benefit = payable == payments::PayableKind::Benefit;
+                if benefit {
+                    claims::check_settlement(&s.ledger, p, &payment, amount.minor)?;
+                }
+                payments::settle_payable(&mut s.ledger, p, ctx, payment.clone(), payable, refund, amount, bank_account)?;
+                if benefit {
+                    claims::settled(p, &payment);
+                }
+                Ok(())
+            }),
+            Command::ReturnPayment { policy, payment } => {
+                self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment))?;
+                claims::bank_returned(self, ctx, &policy, &payment)
+            }
             Command::BeginTransfer {
                 policy,
                 transfer_id,
