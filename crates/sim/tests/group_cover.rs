@@ -1,0 +1,823 @@
+//! Group scheme cover beyond the salary formula: underwritten layers above
+//! the automatic amount, a ceiling on one member's automatic cover, pools
+//! billed from declarations, reinstating a member removed in error, and the
+//! dry run an employer's preview is built on.
+
+use chrono::NaiveDate;
+use ic_core::command::{ExcessLayer, LifeSpec, MemberChange};
+use ic_core::event::Event;
+use ic_core::{preview_membership, Command, LayerOrigin, LifeFactors, LifeId, LifeKind, PartyId, PolicyId, PolicyStatus, PoolAggregate, Reject};
+use ic_ledger::PartitionId;
+use ic_money::DecStr;
+use ic_product::{Frequency, Sex};
+use ic_readmodel::Projections;
+use ic_sim::config::shipped_activations;
+use ic_sim::persona::{group_scheme, issue_command, member, term_life};
+use ic_sim::Cluster;
+
+fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+    NaiveDate::from_ymd_opt(y, m, day).unwrap()
+}
+
+fn cluster(open: NaiveDate) -> Cluster {
+    let mut c = Cluster::in_memory(1, 7);
+    c.open(open).unwrap();
+    for cmd in shipped_activations().unwrap() {
+        c.activate_everywhere(cmd).unwrap();
+    }
+    c
+}
+
+fn days(c: &mut Cluster, n: u32) {
+    for _ in 0..n {
+        let close = c.end_of_day().unwrap();
+        assert!(close.breaks.is_empty(), "reconciliation breaks on {}: {:?}", close.closed, close.breaks);
+    }
+}
+
+fn life(id: &str) -> LifeId {
+    LifeId(id.to_string())
+}
+
+/// A scheme from 1 November 2027: one staff member on 60,000 (120,000 of
+/// cover, 11.00 a month) and one executive on 240,000, whose formula gives
+/// 960,000 and whose automatic cover stops at the 750,000 limit (90.62).
+fn scheme(c: &mut Cluster) -> (PartitionId, PolicyId) {
+    let issue = group_scheme(
+        20,
+        d(2027, 11, 1),
+        vec![
+            member("staff-1", d(1985, 1, 1), "staff", 60_000_00),
+            member("exec-1", d(1975, 1, 1), "executive", 240_000_00),
+        ],
+    );
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    assert_eq!(owed(c, p, &id), 11_00 + 90_62);
+    (p, id)
+}
+
+fn owed(c: &Cluster, p: PartitionId, id: &PolicyId) -> i64 {
+    c.state(p).policies[id].outstanding_minor()
+}
+
+fn excess(id: &PolicyId, start: NaiveDate, loading: Option<&str>, itemised: bool) -> ExcessLayer {
+    ExcessLayer {
+        policy: id.clone(),
+        cover: "group-life".into(),
+        life: life("exec-1"),
+        start,
+        sum_insured_minor: 210_000_00,
+        loadings: loading.map(|l| DecStr::parse(l).unwrap()).into_iter().collect(),
+        exclusions: vec![],
+        loading_itemised: itemised,
+        reference: "uw-1".into(),
+    }
+}
+
+fn add(c: &mut Cluster, p: PartitionId, layer: ExcessLayer) -> Result<(), Reject> {
+    c.submit(p, "group-admin", Command::AddExcessLayer(Box::new(layer)))
+}
+
+fn membership(c: &mut Cluster, p: PartitionId, id: &PolicyId, changes: Vec<MemberChange>) -> Result<(), Reject> {
+    c.submit(p, "group-admin", Command::ApplyMembership { policy: id.clone(), changes })
+}
+
+/// The lines and the unshown loading of the last complete invoice among the events.
+fn last_invoice(events: &[Event]) -> (Vec<(LifeId, i64)>, i64) {
+    events
+        .iter()
+        .rev()
+        .find_map(|e| match e {
+            Event::SchemeInvoiceChunk {
+                lines,
+                loading_minor,
+                complete,
+                ..
+            } if *complete => Some((lines.clone(), *loading_minor)),
+            _ => None,
+        })
+        .expect("an invoice was built")
+}
+
+fn events(c: &mut Cluster) -> Vec<Event> {
+    c.take_events().into_iter().map(|r| r.event).collect()
+}
+
+/// Purpose: an underwritten layer above the automatic amount is billed with the scheme at
+/// the scheme's rate from its start date, and its event says nothing about its terms.
+/// Why it matters: cover above the limit that is accepted but never billed is premium the
+/// insurer never collects; and a loading in an event would tell every consumer of the
+/// stream something about a member's health.
+#[test]
+fn an_underwritten_layer_is_billed_with_the_scheme_from_its_start() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    c.take_events();
+    add(&mut c, p, excess(&id, d(2027, 11, 1), None, false)).unwrap();
+    // 750,000 + 210,000 at 1.45 per thousand = 1,392 a year = 116.00 a month; 90.62 was billed.
+    assert_eq!(owed(&c, p, &id), 11_00 + 116_00);
+    let seen = events(&mut c);
+    let added = seen.iter().find_map(|e| match e {
+        Event::LayerAdded { layer, origin, .. } => Some((layer.clone(), *origin)),
+        _ => None,
+    });
+    let (layer, origin) = added.expect("the layer is announced");
+    assert_eq!(origin, LayerOrigin::UnderwrittenExcess);
+    assert_eq!((layer.life, layer.sum_insured_minor, layer.start), (life("exec-1"), 210_000_00, d(2027, 11, 1)));
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::PremiumAdjusted { life: l, total_minor, .. } if *l == life("exec-1") && *total_minor == 116_00 - 90_62)));
+
+    days(&mut c, 30);
+    let (lines, loading) = last_invoice(&events(&mut c));
+    assert_eq!(lines, vec![(life("exec-1"), 116_00), (life("staff-1"), 11_00)]);
+    assert_eq!(loading, 0);
+    assert_eq!(owed(&c, p, &id), 2 * (11_00 + 116_00));
+}
+
+/// Purpose: a loading on an underwritten layer is charged to the scheme but kept off the
+/// member's invoice line unless the member agreed to show it, both on the invoice and on
+/// a backdated adjustment.
+/// Why it matters: an employer who can see one member's premium jump has been told that
+/// member's health. The design allows the loading to reach the employer only inside one
+/// total, or itemised with the member's recorded consent.
+#[test]
+fn a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    c.take_events();
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("1"), false)).unwrap();
+    // The layer at double rate: 1,087.50 + 609.00 = 1,696.50 a year = 141.38 a month.
+    assert_eq!(owed(&c, p, &id), 11_00 + 141_38);
+    let seen = events(&mut c);
+    let shown: i64 = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::PremiumAdjusted { total_minor, .. } => Some(*total_minor),
+            _ => None,
+        })
+        .sum();
+    let unshown: i64 = seen
+        .iter()
+        .filter_map(|e| match e {
+            Event::LoadingAdjusted { total_minor, .. } => Some(*total_minor),
+            _ => None,
+        })
+        .sum();
+    assert_eq!((shown, unshown), (116_00 - 90_62, 141_38 - 116_00));
+    let text = serde_json::to_string(&seen).unwrap();
+    assert!(!text.contains("loadings"), "no event carries underwriting terms: {text}");
+
+    days(&mut c, 30);
+    let (lines, loading) = last_invoice(&events(&mut c));
+    assert_eq!(lines, vec![(life("exec-1"), 116_00), (life("staff-1"), 11_00)]);
+    assert_eq!(loading, 141_38 - 116_00);
+
+    // With the member's agreement the same layer shows on the member's own line.
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("1"), true)).unwrap();
+    c.take_events();
+    days(&mut c, 30);
+    let seen = events(&mut c);
+    assert!(!seen.iter().any(|e| matches!(e, Event::LoadingAdjusted { .. })));
+    let (lines, loading) = last_invoice(&seen);
+    assert_eq!(lines, vec![(life("exec-1"), 141_38), (life("staff-1"), 11_00)]);
+    assert_eq!(loading, 0);
+}
+
+/// Purpose: a layer started or ended part way through a billed period is charged or
+/// credited for exactly the days it applies, and ending it is announced.
+/// Why it matters: underwriting decisions arrive weeks after the cover date, and members
+/// give cover up mid-month. Whole-period charging in either direction is a wrong invoice.
+#[test]
+fn a_layer_started_or_ended_mid_period_is_charged_for_its_days() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    days(&mut c, 20); // 21 November
+    let before = owed(&c, p, &id);
+    add(&mut c, p, excess(&id, d(2027, 11, 16), None, false)).unwrap();
+    // 15 of November's 30 days at 25.37 a month more.
+    assert_eq!(owed(&c, p, &id) - before, (116_00 - 90_62) / 2);
+    c.take_events();
+    c.submit(
+        p,
+        "underwriting",
+        Command::EndExcessLayer {
+            policy: id.clone(),
+            cover: "group-life".into(),
+            layer: 1,
+            effective: d(2027, 11, 16),
+        },
+    )
+    .unwrap();
+    assert_eq!(owed(&c, p, &id), before, "ended from its first day, the layer cost nothing");
+    let seen = events(&mut c);
+    assert!(seen.iter().any(|e| matches!(
+        e,
+        Event::LayerEnded { layer: 1, life: l, effective, sum_insured_minor: 210_000_00, .. } if *l == life("exec-1") && *effective == d(2027, 11, 16)
+    )));
+    days(&mut c, 10);
+    assert_eq!(owed(&c, p, &id), before + 11_00 + 90_62, "December is billed without the ended layer");
+}
+
+/// Purpose: a leaver's underwritten layer ends with them, and reinstating a member removed
+/// in error restores the member and the layer from the same day with no gap and no net
+/// premium change.
+/// Why it matters: this is the remedy for a membership file that removed people who had
+/// not left. If cover had a gap, a claim in it would be declined for the employer's
+/// mistake; if the invoice did not net to zero, the employer would pay for our correction.
+#[test]
+fn a_member_removed_in_error_comes_back_with_no_gap() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("1"), false)).unwrap();
+    days(&mut c, 35); // December is billed
+    let before = owed(&c, p, &id);
+    let hash_of_lives = serde_json::to_string(&c.state(p).policies[&id].covers).unwrap();
+    c.take_events();
+
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Left {
+            life: life("exec-1"),
+            effective: d(2027, 11, 16),
+        }],
+    )
+    .unwrap();
+    // Half of November and all of December come back, loading included.
+    assert_eq!(before - owed(&c, p, &id), 141_38 / 2 + 141_38);
+    let seen = events(&mut c);
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::LayerEnded { layer: 1, effective, .. } if *effective == d(2027, 11, 16))));
+    assert_eq!(c.state(p).policies[&id].covers["group-life"].layers[0].end, Some(d(2027, 11, 16)));
+
+    membership(&mut c, p, &id, vec![MemberChange::Reinstated { life: life("exec-1") }]).unwrap();
+    assert_eq!(owed(&c, p, &id), before, "the correction nets to nothing");
+    let pol = &c.state(p).policies[&id];
+    assert_eq!(pol.lives[&life("exec-1")].left, None);
+    assert!(pol.lives[&life("exec-1")].in_force_on(d(2027, 11, 20)), "cover was never absent");
+    assert_eq!(serde_json::to_string(&pol.covers).unwrap(), hash_of_lives);
+    let seen = events(&mut c);
+    assert!(seen.iter().any(|e| matches!(
+        e,
+        Event::MemberJoined { life: l, effective, covers, .. } if *l == life("exec-1") && *effective == d(2027, 11, 16) && covers[0].sum_insured_minor == 750_000_00
+    )));
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::LayerAdded { layer, origin: LayerOrigin::UnderwrittenExcess, .. } if layer.layer == 1)));
+
+    // Only someone who has left can be reinstated, and only inside the backdating window.
+    let again = membership(&mut c, p, &id, vec![MemberChange::Reinstated { life: life("exec-1") }]);
+    assert_eq!(again.unwrap_err().code, "not_left");
+    let nobody = membership(&mut c, p, &id, vec![MemberChange::Reinstated { life: life("nobody") }]);
+    assert_eq!(nobody.unwrap_err().code, "not_left");
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Left {
+            life: life("staff-1"),
+            effective: d(2027, 11, 2),
+        }],
+    )
+    .unwrap();
+    // Paid well ahead, so the scheme is still in force when the window has closed.
+    c.submit(
+        p,
+        "cash-matching",
+        Command::ApplyReceipt {
+            policy: id.clone(),
+            receipt: "ahead".into(),
+            amount: ic_money::Money::new(5_000_00, ic_money::Currency::NZD),
+        },
+    )
+    .unwrap();
+    days(&mut c, 400);
+    let late = membership(&mut c, p, &id, vec![MemberChange::Reinstated { life: life("staff-1") }]);
+    assert_eq!(late.unwrap_err().code, "backdating_limit");
+}
+
+/// Purpose: every way an underwritten layer command can be wrong is refused with its own
+/// code and leaves the policy untouched.
+/// Why it matters: these commands write cover and money. A layer on the wrong member, the
+/// wrong policy or a date nobody approved must fail loudly, not land quietly.
+#[test]
+fn a_wrong_layer_command_is_refused_and_changes_nothing() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    let retail = term_life(
+        21,
+        d(2027, 11, 1),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    );
+    let retail_id = retail.policy.clone();
+    c.submit(p, "new-business", issue_command(retail)).unwrap();
+    let pooled = LifeSpec {
+        id: life("pool-1"),
+        kind: LifeKind::Pool {
+            headcount: 10,
+            total_salary_minor: 500_000_00,
+        },
+        factors: LifeFactors::default(),
+    };
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Joined {
+            life: pooled,
+            effective: d(2027, 11, 1),
+        }],
+    )
+    .unwrap();
+    days(&mut c, 3);
+    let written = |c: &Cluster| (serde_json::to_string(&c.state(p).policies).unwrap(), c.state(p).ledger.entry_count());
+    let state_before = written(&c);
+
+    let base = excess(&id, d(2027, 11, 1), None, false);
+    let cases: Vec<(&str, ExcessLayer)> = vec![
+        (
+            "unknown_cover",
+            ExcessLayer {
+                cover: "trauma".into(),
+                ..base.clone()
+            },
+        ),
+        (
+            "unknown_cover",
+            ExcessLayer {
+                policy: retail_id.clone(),
+                cover: "life".into(),
+                ..base.clone()
+            },
+        ),
+        (
+            "unknown_member",
+            ExcessLayer {
+                life: life("nobody"),
+                ..base.clone()
+            },
+        ),
+        (
+            "unknown_member",
+            ExcessLayer {
+                life: life("pool-1"),
+                ..base.clone()
+            },
+        ),
+        (
+            "future_dated",
+            ExcessLayer {
+                start: d(2027, 12, 1),
+                ..base.clone()
+            },
+        ),
+        (
+            "backdating_limit",
+            ExcessLayer {
+                start: d(2027, 10, 1),
+                ..base.clone()
+            },
+        ),
+        (
+            "sum_insured",
+            ExcessLayer {
+                sum_insured_minor: 0,
+                ..base.clone()
+            },
+        ),
+        (
+            "invalid_loading",
+            ExcessLayer {
+                loadings: vec![DecStr::parse("-0.1").unwrap()],
+                ..base.clone()
+            },
+        ),
+        (
+            "unknown_policy",
+            ExcessLayer {
+                policy: PolicyId("pol-none".into()),
+                ..base.clone()
+            },
+        ),
+    ];
+    for (code, layer) in cases {
+        assert_eq!(add(&mut c, p, layer).unwrap_err().code, code);
+    }
+    let end = |c: &mut Cluster, layer: u32, effective: NaiveDate| {
+        c.submit(
+            p,
+            "group-admin",
+            Command::EndExcessLayer {
+                policy: id.clone(),
+                cover: "group-life".into(),
+                layer,
+                effective,
+            },
+        )
+    };
+    assert_eq!(end(&mut c, 9, d(2027, 11, 2)).unwrap_err().code, "unknown_layer");
+    let not_theirs = c.submit(p, "claims", Command::AddExcessLayer(Box::new(base.clone())));
+    assert_eq!(not_theirs.unwrap_err().code, "caller_not_allowed");
+    assert_eq!(written(&c), state_before, "nothing was written by any refusal");
+
+    // A layer cannot be ended before it starts or twice, nor on a scheme that has ended.
+    add(
+        &mut c,
+        p,
+        ExcessLayer {
+            start: d(2027, 11, 3),
+            ..base.clone()
+        },
+    )
+    .unwrap();
+    assert_eq!(end(&mut c, 1, d(2027, 11, 2)).unwrap_err().code, "unknown_layer");
+    end(&mut c, 1, d(2027, 11, 4)).unwrap();
+    assert_eq!(end(&mut c, 1, d(2027, 11, 4)).unwrap_err().code, "unknown_layer");
+    c.submit(p, "group-admin", Command::CancelPolicy { policy: id.clone() }).unwrap();
+    assert_eq!(c.state(p).policies[&id].status, PolicyStatus::Cancelled);
+    assert_eq!(add(&mut c, p, base).unwrap_err().code, "not_in_force");
+}
+
+/// Purpose: a ceiling on one member's automatic cover lowers that member's cover and
+/// premium from its date, below what the category and the scheme limit would give.
+/// Why it matters: where a reinsurer requires part of a member's cover to be underwritten,
+/// the automatic cover has to stop at the ceiling at once; otherwise the insurer carries
+/// risk it has not ceded and has not assessed.
+#[test]
+fn a_member_ceiling_caps_automatic_cover() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    c.take_events();
+    let capped = LifeFactors {
+        auto_cover_cap_minor: Some(600_000_00),
+        ..c.state(p).policies[&id].lives[&life("exec-1")].factors.as_of(d(2027, 11, 1)).unwrap().clone()
+    };
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Changed {
+            life: life("exec-1"),
+            effective: d(2027, 11, 1),
+            factors: capped,
+        }],
+    )
+    .unwrap();
+    // 600,000 at 1.45 per thousand = 870 a year = 72.50 a month.
+    assert_eq!(owed(&c, p, &id), 11_00 + 72_50);
+    let seen = events(&mut c);
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::MemberChanged { covers, .. } if covers[0].sum_insured_minor == 600_000_00)));
+}
+
+/// Purpose: a pool is billed on the aggregate the employer declared, a new declaration
+/// adjusts periods already billed from its date, and a pool nobody has declared is not
+/// billed at all.
+/// Why it matters: pool schemes pay a deposit premium on an estimate and true it up on
+/// declaration. If the pool were skipped, or the true-up ignored billed periods, the
+/// scheme's premium would simply be wrong for as long as nobody noticed.
+#[test]
+fn a_pool_is_billed_on_its_declared_aggregate() {
+    let mut c = cluster(d(2027, 11, 1));
+    let pool = |headcount, total_salary_minor| LifeFactors {
+        category: Some("staff".into()),
+        pool: Some(PoolAggregate { headcount, total_salary_minor }),
+        ..LifeFactors::default()
+    };
+    let spec = |id: &str, factors| LifeSpec {
+        id: life(id),
+        kind: LifeKind::Pool {
+            headcount: 0,
+            total_salary_minor: 0,
+        },
+        factors,
+    };
+    // 40 people on 3,000,000 between them: 6,000,000 of cover at 1.10 = 6,600 a year = 550.00 a month.
+    let issue = group_scheme(22, d(2027, 11, 1), vec![spec("warehouse", pool(40, 3_000_000_00))]);
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    let quoted = ic_core::quote(&c.state(p).catalog, issue.clone(), d(2027, 11, 1)).unwrap();
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    assert_eq!(owed(&c, p, &id), 550_00);
+    assert_eq!(quoted.total(), 550_00, "the quote and the first bill agree for a pool");
+    let seen = events(&mut c);
+    assert!(seen.iter().any(|e| matches!(e, Event::PremiumDue { members: Some(40), .. })));
+
+    // An undeclared pool joins and is not billed.
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Joined {
+            life: spec("casuals", LifeFactors::default()),
+            effective: d(2027, 11, 1),
+        }],
+    )
+    .unwrap();
+    assert_eq!(owed(&c, p, &id), 550_00);
+
+    // The declaration for the year arrives on 16 November: 44 people, 3,300,000.
+    days(&mut c, 20);
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Changed {
+            life: life("warehouse"),
+            effective: d(2027, 11, 16),
+            factors: pool(44, 3_300_000_00),
+        }],
+    )
+    .unwrap();
+    // 605.00 a month from the 16th: half of the 55.00 difference for November.
+    assert_eq!(owed(&c, p, &id), 550_00 + 27_50);
+    days(&mut c, 10);
+    assert_eq!(owed(&c, p, &id), 550_00 + 27_50 + 605_00);
+
+    // The per-person limits apply once per person: 2 people cannot hold more than 2 x 750,000.
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Joined {
+            life: spec(
+                "directors",
+                LifeFactors {
+                    category: Some("executive".into()),
+                    ..pool(2, 1_000_000_00)
+                },
+            ),
+            effective: d(2027, 12, 1),
+        }],
+    )
+    .unwrap();
+    // 4,000,000 by formula, 1,500,000 by the limit, at 1.45 = 2,175 a year = 181.25 a month.
+    assert_eq!(owed(&c, p, &id), 550_00 + 27_50 + 605_00 + 181_25);
+}
+
+/// Purpose: the dry run of a membership chunk reports the cover and the premium effect
+/// that applying the same chunk then produces, refuses what applying would refuse, and
+/// writes nothing.
+/// Why it matters: an employer approves a file on the strength of its preview. A preview
+/// computed by different code, or one that leaves a trace, would make that approval
+/// meaningless.
+#[test]
+fn the_dry_run_of_a_membership_chunk_matches_what_applying_it_does() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("1"), false)).unwrap();
+    days(&mut c, 14);
+    let changes = vec![
+        MemberChange::Joined {
+            life: member("staff-2", d(1990, 1, 1), "staff", 60_000_00),
+            effective: d(2027, 11, 1),
+        },
+        MemberChange::Left {
+            life: life("exec-1"),
+            effective: d(2027, 11, 16),
+        },
+    ];
+    let hash = c.state(p).state_hash();
+    let preview = preview_membership(c.state(p), &id, changes.clone()).unwrap();
+    assert_eq!(c.state(p).state_hash(), hash, "a dry run leaves no trace");
+    assert_eq!(preview.changes.len(), 2);
+    assert_eq!(preview.changes[0].covers[0].sum_insured_minor, 120_000_00);
+    assert_eq!(preview.changes[0].adjustment_minor, 11_00);
+    assert!(preview.changes[1].covers.is_empty());
+    // The leaver's line shows the scheme rate only; the total carries the loading too.
+    assert_eq!(preview.changes[1].adjustment_minor, -(116_00 / 2));
+    assert_eq!(preview.adjustment_total_minor, 11_00 - 141_38 / 2);
+
+    let before = owed(&c, p, &id);
+    membership(&mut c, p, &id, changes.clone()).unwrap();
+    assert_eq!(owed(&c, p, &id) - before, preview.adjustment_total_minor);
+
+    // The same refusals as the command itself.
+    let refused = |c: &Cluster, policy: &PolicyId, changes: Vec<MemberChange>| preview_membership(c.state(p), policy, changes).unwrap_err().code;
+    assert_eq!(refused(&c, &id, changes.clone()), "member_exists");
+    assert_eq!(refused(&c, &PolicyId("pol-none".into()), vec![]), "unknown_policy");
+    let too_many = (0..101)
+        .map(|i| MemberChange::Left {
+            life: life(&format!("m{i}")),
+            effective: d(2027, 11, 2),
+        })
+        .collect();
+    assert_eq!(refused(&c, &id, too_many), "apply_budget");
+    let unopened = Cluster::in_memory(1, 7);
+    assert_eq!(preview_membership(unopened.state(0), &id, vec![]).unwrap_err().code, "business_date");
+    c.submit(
+        p,
+        "transfer",
+        Command::BeginTransfer {
+            policy: id.clone(),
+            transfer_id: "t1".into(),
+            target_group: ic_core::GroupId("grp-elsewhere".into()),
+            target_partition: 0,
+        },
+    )
+    .unwrap();
+    assert_eq!(refused(&c, &id, vec![]), "policy_transferring");
+}
+
+/// Purpose: a member who joins as a named person reaches the event stream and the life
+/// index with that person attached, and group administration may issue and end policies.
+/// Why it matters: reinsurance accumulates cover per person across policies. A named
+/// joiner with no person on the event is invisible to it, and the insurer can exceed its
+/// retention on one life without knowing. Continuation and scheme termination both need
+/// group administration to be an allowed sender.
+#[test]
+fn a_named_joiner_carries_the_person_to_the_stream_and_the_index() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    let mut model = Projections::new();
+    for r in c.take_events() {
+        model.apply(&r).unwrap();
+    }
+    let named = LifeSpec {
+        id: life("E100"),
+        kind: LifeKind::Named {
+            party: PartyId("party-77".into()),
+        },
+        factors: LifeFactors {
+            date_of_birth: Some(d(1988, 4, 4)),
+            category: Some("staff".into()),
+            salary_minor: Some(60_000_00),
+            ..LifeFactors::default()
+        },
+    };
+    let linked = LifeSpec {
+        id: life("E101"),
+        kind: LifeKind::UnnamedMember {
+            member_ref: "E101".into(),
+            linked_party: Some(PartyId("party-78".into())),
+        },
+        ..named.clone()
+    };
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![
+            MemberChange::Joined {
+                life: named,
+                effective: d(2027, 11, 1),
+            },
+            MemberChange::Joined {
+                life: linked,
+                effective: d(2027, 11, 1),
+            },
+        ],
+    )
+    .unwrap();
+    let records = c.take_events();
+    let parties: Vec<Option<PartyId>> = records
+        .iter()
+        .filter_map(|r| match &r.event {
+            Event::MemberJoined { party, .. } => Some(party.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(parties, vec![Some(PartyId("party-77".into())), Some(PartyId("party-78".into()))]);
+    for r in &records {
+        model.apply(r).unwrap();
+    }
+    assert_eq!(model.party_of(&id, &life("E100")), Some(&PartyId("party-77".into())));
+    assert_eq!(model.layers_on_party(&PartyId("party-77".into())).len(), 1);
+
+    // An underwritten layer shows in the index while it runs and leaves it when it ends.
+    add(&mut c, p, excess(&id, d(2027, 11, 1), None, false)).unwrap();
+    for r in c.take_events() {
+        model.apply(&r).unwrap();
+    }
+    let layer_rows = |m: &Projections| m.layers_on_policy(&id).iter().filter(|r| r.layer == 1).count();
+    assert_eq!(layer_rows(&model), 1);
+    c.submit(
+        p,
+        "group-admin",
+        Command::EndExcessLayer {
+            policy: id.clone(),
+            cover: "group-life".into(),
+            layer: 1,
+            effective: d(2027, 11, 1),
+        },
+    )
+    .unwrap();
+    for r in c.take_events() {
+        model.apply(&r).unwrap();
+    }
+    assert_eq!(layer_rows(&model), 0);
+
+    // Group administration issues the retail policy of a continuation option.
+    let retail = term_life(
+        23,
+        d(2027, 11, 1),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        100_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    );
+    c.submit(p, "group-admin", issue_command(retail)).unwrap();
+}
+
+/// Purpose: on a scheme priced per person rather than per thousand of cover, a pool is
+/// charged once for each person declared, and an underwritten layer is refused.
+/// Why it matters: a flat rate charged once for a pool of forty undercharges by a factor of
+/// forty, and a layer on a cover with no price per amount would be cover given away.
+#[test]
+fn a_scheme_priced_per_person_charges_a_pool_per_head_and_takes_no_layers() {
+    let mut c = cluster(d(2027, 11, 1));
+    let mut flat = ic_product::load_product("group_life.star", include_str!("../../../products/group_life.star")).unwrap();
+    flat.code = "group-life-flat".into();
+    flat.content_hash = "flat-rate-test-version".into();
+    flat.covers[0].rating.basis = ic_product::RateBasis::PerLife;
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(flat) }).unwrap();
+    let pooled = LifeSpec {
+        id: life("warehouse"),
+        kind: LifeKind::Pool {
+            headcount: 0,
+            total_salary_minor: 0,
+        },
+        factors: LifeFactors {
+            category: Some("staff".into()),
+            pool: Some(PoolAggregate {
+                headcount: 40,
+                total_salary_minor: 3_000_000_00,
+            }),
+            ..LifeFactors::default()
+        },
+    };
+    let mut issue = group_scheme(24, d(2027, 11, 1), vec![pooled, member("exec-1", d(1975, 1, 1), "executive", 240_000_00)]);
+    issue.product_code = "group-life-flat".into();
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    // 40 x 1.10 a year for the pool and 1.45 for the executive: 45.45 a year = 3.79 a month.
+    assert_eq!(owed(&c, p, &id), 3_79);
+    assert_eq!(
+        add(&mut c, p, excess(&id, d(2027, 11, 1), None, false)).unwrap_err().code,
+        "not_rated_by_amount"
+    );
+}
+
+/// Purpose: while a scheme invoice is being built across several commands, membership
+/// changes, their dry run and layer commands are all refused with a code that says to
+/// retry, and the invoice chunk event survives the log's encoding with its loading total.
+/// Why it matters: a change landing between two chunks of one invoice would be priced in
+/// some chunks and not others. The module retries on this code, so it must be the same
+/// code everywhere and must never be mistaken for a permanent refusal.
+#[test]
+fn nothing_changes_membership_or_layers_while_an_invoice_is_being_built() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("1"), false)).unwrap();
+    c.take_events();
+    days(&mut c, 30);
+    let chunk = events(&mut c).into_iter().find(|e| matches!(e, Event::SchemeInvoiceChunk { .. })).unwrap();
+    let json = serde_json::to_value(&chunk).unwrap();
+    assert_eq!(json["scheme_invoice_chunk"]["loading_minor"], 141_38 - 116_00);
+    assert_eq!(serde_json::from_value::<Event>(json).unwrap(), chunk);
+    let plain = serde_json::to_value(Event::SchemeInvoiceChunk {
+        policy: id.clone(),
+        period_index: 0,
+        lines: vec![],
+        complete: true,
+        loading_minor: 0,
+    })
+    .unwrap();
+    assert!(
+        plain["scheme_invoice_chunk"].get("loading_minor").is_none(),
+        "an invoice with no loading reads as it always did"
+    );
+
+    let half_built = ic_core::PendingInvoice {
+        period_index: 2,
+        cursor: Some(life("exec-1")),
+        members: 1,
+        premium: ic_core::premium::zero_premium(ic_money::Currency::NZD),
+    };
+    c.nodes.get_mut(&p).unwrap().replica.state.policies.get_mut(&id).unwrap().pending_invoice = Some(half_built);
+    let leave = vec![MemberChange::Left {
+        life: life("staff-1"),
+        effective: d(2027, 11, 20),
+    }];
+    assert_eq!(preview_membership(c.state(p), &id, leave.clone()).unwrap_err().code, "invoice_in_progress");
+    assert_eq!(membership(&mut c, p, &id, leave).unwrap_err().code, "invoice_in_progress");
+    assert_eq!(
+        add(&mut c, p, excess(&id, d(2027, 11, 5), None, false)).unwrap_err().code,
+        "invoice_in_progress"
+    );
+}

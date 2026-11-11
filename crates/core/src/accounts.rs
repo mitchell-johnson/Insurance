@@ -16,10 +16,14 @@ pub mod role {
     pub const PENDING_INVESTMENT_CASH: &str = "pending_investment_cash";
     /// Admitted claims, surrenders and maturities awaiting payment.
     pub const BENEFIT_PAYABLE: &str = "benefit_payable";
+    /// Premium refunds raised and awaiting payment by the payments module.
+    pub const REFUND_PAYABLE: &str = "refund_payable";
     pub const UNIT_ACCOUNT: &str = "unit_account";
     pub const POLICY_LOAN: &str = "policy_loan";
 
     pub const SETTLEMENT: &str = "settlement";
+    /// The mirror of one bank account the insurer holds.
+    pub const BANK: &str = "bank";
     pub const EARNED_PREMIUM: &str = "earned_premium";
     pub const GST_PAYABLE: &str = "gst_payable";
     pub const LEVY_PAYABLE: &str = "levy_payable";
@@ -71,6 +75,15 @@ pub fn benefit_payable(p: &PolicyId, c: Currency) -> Account {
         role::BENEFIT_PAYABLE,
     )
 }
+/// A refund that is owed and waits for a payment run. Opened on first use.
+pub fn refund_payable(p: &PolicyId, c: Currency) -> Account {
+    acct(
+        format!("pol/{p}/refund_payable"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::REFUND_PAYABLE,
+    )
+}
 pub fn pending_investment_cash(p: &PolicyId, c: Currency) -> Account {
     acct(
         format!("pol/{p}/pending_investment_cash"),
@@ -97,11 +110,26 @@ pub fn policy_accounts(p: &PolicyId, c: Currency) -> Vec<Account> {
     vec![premium_receivable(p, c), unearned_premium(p, c), policy_suspense(p, c), benefit_payable(p, c)]
 }
 
+/// Every account whose balance travels with a policy when it moves to
+/// another group: the accounts opened at issue, then those opened on first
+/// use.
+pub fn transferable_accounts(p: &PolicyId, c: Currency) -> Vec<Account> {
+    let mut all = policy_accounts(p, c);
+    all.push(refund_payable(p, c));
+    all
+}
+
 // Internal accounts, one instance per partition, created on first use and
 // consolidated in the finance ledger.
 
 pub fn settlement(c: Currency) -> Account {
     acct(format!("int/settlement/{c}"), AccountUnit::Minor(c), AccountClass::Asset, role::SETTLEMENT)
+}
+/// The ledger account that mirrors one bank account, named by the payments
+/// module's code for it (one per statutory fund and purpose). Reconciled to
+/// the bank's statement every day.
+pub fn bank(code: &str, c: Currency) -> Account {
+    acct(format!("int/bank/{code}/{c}"), AccountUnit::Minor(c), AccountClass::Asset, role::BANK)
 }
 pub fn earned_premium(product: &str, cover_type: &str, c: Currency) -> Account {
     acct(

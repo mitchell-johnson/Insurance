@@ -57,6 +57,7 @@ impl MemberAttrs {
             smoker: self.smoker,
             category: self.category.clone(),
             salary_minor: self.salary_minor,
+            ..LifeFactors::default()
         }
     }
 
