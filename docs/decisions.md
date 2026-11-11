@@ -50,3 +50,6 @@ Two choices can be made again under a reopen reference: a decline of indexation 
 
 A module hosted from the first start is shown every event. One added later starts at the oldest event each partition still holds. Loading a new module from Event Hubs or the cold tier is not built.
 
+### Claims stay on the partition they were made on
+
+A policy with an open claim, or a claim with a reserve, an unpaid admission or an overpayment outstanding, cannot be transferred to another group. The other gaps in claims operations are listed in `docs/claims.md`.

@@ -86,6 +86,7 @@ crates/workflows  the end-of-day close and its Temporal workflow
 crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
 crates/api        the HTTP API, the gateway, ic-admin
 crates/sim        in-process cluster and the synthetic insurer
+crates/claims      intake, assessment, decisions and authority, benefits in payment, overpayments (docs/claims.md)
 crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
 crates/underwriting proposals, disclosure, rules, case work and authority, offers, issue, the clinical store
 treaties/         the shipped reinsurance treaties and reinsurer rate tables
