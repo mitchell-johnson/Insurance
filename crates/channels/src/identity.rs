@@ -159,7 +159,12 @@ pub fn action_hash(action: &serde_json::Value) -> String {
 
 /// What a device signs to prove possession on an ordinary request.
 pub fn proof_message(timestamp: At, method: &str, path: &str, body: &[u8]) -> Vec<u8> {
-    format!("{timestamp}\n{method}\n{path}\n{}", hex::encode(Sha256::digest(body))).into_bytes()
+    proof_message_hashed(timestamp, method, path, &hex::encode(Sha256::digest(body)))
+}
+
+/// As [`proof_message`], from the SHA-256 of the body in hex.
+pub fn proof_message_hashed(timestamp: At, method: &str, path: &str, body_sha256: &str) -> Vec<u8> {
+    format!("{timestamp}\n{method}\n{path}\n{body_sha256}").into_bytes()
 }
 
 /// What a device signs to redeem a challenge.
@@ -179,11 +184,18 @@ impl IdentityState {
     }
 
     /// Check a request's proof of possession. `proof` is `timestamp.signature`.
+    #[allow(clippy::too_many_arguments)]
     pub fn check_proof(&self, party: &PartyId, device: &str, proof: &str, now: At, method: &str, path: &str, body: &[u8]) -> bool {
+        self.check_proof_hashed(party, device, proof, now, method, path, &hex::encode(Sha256::digest(body)))
+    }
+
+    /// As [`Self::check_proof`], from the SHA-256 of the body in hex.
+    #[allow(clippy::too_many_arguments)]
+    pub fn check_proof_hashed(&self, party: &PartyId, device: &str, proof: &str, now: At, method: &str, path: &str, body_sha256: &str) -> bool {
         let Some(d) = self.active_device(device, party) else { return false };
         let Some((ts, sig)) = proof.split_once('.') else { return false };
         let Ok(ts) = ts.parse::<At>() else { return false };
-        (now - ts).abs() <= PROOF_WINDOW_SECS && verify(&d.public_key, &proof_message(ts, method, path, body), sig)
+        (now - ts).abs() <= PROOF_WINDOW_SECS && verify(&d.public_key, &proof_message_hashed(ts, method, path, body_sha256), sig)
     }
 
     pub fn apply(&mut self, at: At, command: IdentityCommand) -> Result<Vec<IdentityEvent>, Reject> {
