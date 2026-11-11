@@ -63,52 +63,152 @@ pub enum Command {
     // --- the core's events, relayed in order per partition ---
     Ingest(Box<EventRecord>),
     /// The core refused a posting this module asked for.
-    PostingRefused { reference: String, code: String, message: String },
+    PostingRefused {
+        reference: String,
+        code: String,
+        message: String,
+    },
 
     // --- structure ---
-    AddParty { party: PartyId, kind: PartyKind },
+    AddParty {
+        party: PartyId,
+        kind: PartyKind,
+    },
     Relate(Relation),
-    EndRelation { child: PartyId, parent: PartyId, kind: RelationKind, on: NaiveDate },
-    StartEngagement { id: EngagementId, engagement: Engagement },
-    EndEngagement { id: EngagementId, on: NaiveDate },
+    EndRelation {
+        child: PartyId,
+        parent: PartyId,
+        kind: RelationKind,
+        on: NaiveDate,
+    },
+    StartEngagement {
+        id: EngagementId,
+        engagement: Engagement,
+    },
+    EndEngagement {
+        id: EngagementId,
+        on: NaiveDate,
+    },
     /// A licence-status event from the regulator's register or the insurer's own records.
-    RecordLicence { party: PartyId, state: LicenceState, effective: NaiveDate, source_ref: String },
-    MarkCeased { party: PartyId, on: NaiveDate, reason: CeasedReason },
+    RecordLicence {
+        party: PartyId,
+        state: LicenceState,
+        effective: NaiveDate,
+        source_ref: String,
+    },
+    MarkCeased {
+        party: PartyId,
+        on: NaiveDate,
+        reason: CeasedReason,
+    },
 
     // --- payees ---
-    RegisterPayee { party: PartyId, agreement_ref: String, advance_recovery_ppm: u32 },
-    AddPayeeAccount { party: PartyId, account_ref: String, name_check_ref: String, step_up_ref: String, appointment_ref: Option<String> },
-    SetPaymentHold { party: PartyId, reason: Option<String> },
-    SetAccrualHold { party: PartyId, hold: Option<(NaiveDate, HeldReason, String)> },
-    AddPaymentInstruction { party: PartyId, instruction: PaymentInstruction },
-    RemovePaymentInstruction { party: PartyId, id: String, consent_ref: String },
+    RegisterPayee {
+        party: PartyId,
+        agreement_ref: String,
+        advance_recovery_ppm: u32,
+    },
+    AddPayeeAccount {
+        party: PartyId,
+        account_ref: String,
+        name_check_ref: String,
+        step_up_ref: String,
+        appointment_ref: Option<String>,
+    },
+    SetPaymentHold {
+        party: PartyId,
+        reason: Option<String>,
+    },
+    SetAccrualHold {
+        party: PartyId,
+        hold: Option<(NaiveDate, HeldReason, String)>,
+    },
+    AddPaymentInstruction {
+        party: PartyId,
+        instruction: PaymentInstruction,
+    },
+    RemovePaymentInstruction {
+        party: PartyId,
+        id: String,
+        consent_ref: String,
+    },
 
     // --- policies ---
     WriteLayer(Box<WriteLayer>),
     /// The customer appoints or removes their servicing adviser. Access follows the customer.
-    AppointAdviser { policy: PolicyId, engagement: Option<EngagementId>, book: Option<BookId> },
-    LinkReplacement { policy: PolicyId, replaces: PolicyId },
+    AppointAdviser {
+        policy: PolicyId,
+        engagement: Option<EngagementId>,
+        book: Option<BookId>,
+    },
+    LinkReplacement {
+        policy: PolicyId,
+        replaces: PolicyId,
+    },
 
     // --- configuration: proposed, approved twice, then active ---
-    ProposeChange { id: String, changes: Vec<Change>, instructions_ref: String },
-    ApproveChange { id: String, compliance: bool },
-    RejectChange { id: String, reason: String },
+    ProposeChange {
+        id: String,
+        changes: Vec<Change>,
+        instructions_ref: String,
+    },
+    ApproveChange {
+        id: String,
+        compliance: bool,
+    },
+    RejectChange {
+        id: String,
+        reason: String,
+    },
 
     // --- statements and payment ---
-    CutStatement { payee: PartyId },
-    PaymentSettled { reference: String },
-    PaymentReturned { reference: String, reason: String },
+    CutStatement {
+        payee: PartyId,
+    },
+    PaymentSettled {
+        reference: String,
+    },
+    PaymentReturned {
+        reference: String,
+        reason: String,
+    },
 
     // --- the held balance workbench ---
-    ProposeAction { id: String, party: PartyId, action: Action, reason_code: String, document_ref: String },
-    ApproveAction { id: String, as_role: Role },
-    RejectAction { id: String, reason: String },
-    AttachDocument { party: PartyId, kind: String, document_ref: String },
+    ProposeAction {
+        id: String,
+        party: PartyId,
+        action: Action,
+        reason_code: String,
+        document_ref: String,
+    },
+    ApproveAction {
+        id: String,
+        as_role: Role,
+    },
+    RejectAction {
+        id: String,
+        reason: String,
+    },
+    AttachDocument {
+        party: PartyId,
+        kind: String,
+        document_ref: String,
+    },
     /// Another module says what a receivable it posted is.
-    DescribePosition { party: PartyId, reference: String, note: PositionNote },
+    DescribePosition {
+        party: PartyId,
+        reference: String,
+        note: PositionNote,
+    },
     RecordDailyControl,
-    CompleteTask { id: String, note: String },
-    CloseCase { id: String, outcome: String },
+    CompleteTask {
+        id: String,
+        note: String,
+    },
+    CloseCase {
+        id: String,
+        outcome: String,
+    },
 }
 
 impl Command {
@@ -239,10 +339,24 @@ pub struct Task {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Event {
-    PartyAdded { party: PartyId, kind: PartyKind },
-    StructureChanged { child: PartyId, parent: PartyId },
-    EngagementStarted { id: EngagementId, adviser: PartyId, with: PartyId, from: NaiveDate },
-    EngagementEnded { id: EngagementId, on: NaiveDate },
+    PartyAdded {
+        party: PartyId,
+        kind: PartyKind,
+    },
+    StructureChanged {
+        child: PartyId,
+        parent: PartyId,
+    },
+    EngagementStarted {
+        id: EngagementId,
+        adviser: PartyId,
+        with: PartyId,
+        from: NaiveDate,
+    },
+    EngagementEnded {
+        id: EngagementId,
+        on: NaiveDate,
+    },
     /// A licence-status event and what it cascaded to. Portals drop the
     /// engagements to read-only; the app shows the adviser as unavailable.
     AuthorisationChanged {
@@ -253,39 +367,147 @@ pub enum Event {
         suspended_payees: Vec<PartyId>,
         policies_to_service_directly: u32,
     },
-    PartyCeased { party: PartyId, on: NaiveDate, reason: CeasedReason },
-    CaseOpened { case: String, kind: CaseKind, subject: PartyId },
-    CaseClosed { case: String },
-    TaskCreated { task: String, kind: String, due: NaiveDate },
-    PayeeChanged { party: PartyId, what: String },
-    LayerAssigned { policy: PolicyId, layer: String, books: Vec<(BookId, u32)>, from: NaiveDate },
+    PartyCeased {
+        party: PartyId,
+        on: NaiveDate,
+        reason: CeasedReason,
+    },
+    CaseOpened {
+        case: String,
+        kind: CaseKind,
+        subject: PartyId,
+    },
+    CaseClosed {
+        case: String,
+    },
+    TaskCreated {
+        task: String,
+        kind: String,
+        due: NaiveDate,
+    },
+    PayeeChanged {
+        party: PartyId,
+        what: String,
+    },
+    LayerAssigned {
+        policy: PolicyId,
+        layer: String,
+        books: Vec<(BookId, u32)>,
+        from: NaiveDate,
+    },
     /// Customers are told when their servicing adviser changes.
-    ServicingChanged { policy: PolicyId, from: Option<EngagementId>, to: Option<EngagementId>, on: NaiveDate },
-    ChangeProposed { id: String, hash: String },
-    ChangeApproved { id: String, by: PartyId, compliance: bool },
-    ChangeActivated { id: String, hash: String },
-    ChangeRejected { id: String },
-    BookCreated { book: BookId },
-    RuleActivated { book: BookId, version: u32, hash: String },
-    CommissionEarned { reference: String, policy: PolicyId, total_minor: i64 },
-    CommissionReversed { reference: String, reverses: String },
-    ClawbackRaised { reference: String, policy: PolicyId, total_minor: i64 },
-    AmountHeld { party: PartyId, amount_minor: i64, reason: Option<HeldReason>, reference: String },
-    AmountReleased { party: PartyId, amount_minor: i64, reference: String },
+    ServicingChanged {
+        policy: PolicyId,
+        from: Option<EngagementId>,
+        to: Option<EngagementId>,
+        on: NaiveDate,
+    },
+    ChangeProposed {
+        id: String,
+        hash: String,
+    },
+    ChangeApproved {
+        id: String,
+        by: PartyId,
+        compliance: bool,
+    },
+    ChangeActivated {
+        id: String,
+        hash: String,
+    },
+    ChangeRejected {
+        id: String,
+    },
+    BookCreated {
+        book: BookId,
+    },
+    RuleActivated {
+        book: BookId,
+        version: u32,
+        hash: String,
+    },
+    CommissionEarned {
+        reference: String,
+        policy: PolicyId,
+        total_minor: i64,
+    },
+    CommissionReversed {
+        reference: String,
+        reverses: String,
+    },
+    ClawbackRaised {
+        reference: String,
+        policy: PolicyId,
+        total_minor: i64,
+    },
+    AmountHeld {
+        party: PartyId,
+        amount_minor: i64,
+        reason: Option<HeldReason>,
+        reference: String,
+    },
+    AmountReleased {
+        party: PartyId,
+        amount_minor: i64,
+        reference: String,
+    },
     /// Commission could not be worked out. Becomes an exception item.
-    CommissionException { policy: PolicyId, cause: String, message: String },
-    StatementIssued { payee: PartyId, number: u32, closing_minor: i64, hash: String },
+    CommissionException {
+        policy: PolicyId,
+        cause: String,
+        message: String,
+    },
+    StatementIssued {
+        payee: PartyId,
+        number: u32,
+        closing_minor: i64,
+        hash: String,
+    },
     /// For the payments module: pay this amount to this account reference.
-    PaymentRequested { reference: String, party: PartyId, account_ref: String, amount_minor: i64, currency: ic_money::Currency },
-    PaymentCompleted { reference: String },
-    PaymentFailed { reference: String, reason: String },
-    ActionProposed { id: String, party: PartyId, kind: String, amount_minor: i64 },
-    ActionApproved { id: String, by: PartyId, role: Role },
-    ActionRejected { id: String },
-    ActionCompleted { id: String },
-    DocumentAttached { party: PartyId, kind: String },
-    ControlRecorded { date: NaiveDate, held_total_minor: i64, parties: u32 },
-    PostingRefused { reference: String, code: String },
+    PaymentRequested {
+        reference: String,
+        party: PartyId,
+        account_ref: String,
+        amount_minor: i64,
+        currency: ic_money::Currency,
+    },
+    PaymentCompleted {
+        reference: String,
+    },
+    PaymentFailed {
+        reference: String,
+        reason: String,
+    },
+    ActionProposed {
+        id: String,
+        party: PartyId,
+        kind: String,
+        amount_minor: i64,
+    },
+    ActionApproved {
+        id: String,
+        by: PartyId,
+        role: Role,
+    },
+    ActionRejected {
+        id: String,
+    },
+    ActionCompleted {
+        id: String,
+    },
+    DocumentAttached {
+        party: PartyId,
+        kind: String,
+    },
+    ControlRecorded {
+        date: NaiveDate,
+        held_total_minor: i64,
+        parties: u32,
+    },
+    PostingRefused {
+        reference: String,
+        code: String,
+    },
 }
 
 /// What applying one command produced. The host writes the events and the
@@ -471,7 +693,8 @@ impl DistributionState {
     }
 
     pub(crate) fn date(&self) -> Result<NaiveDate, Reject> {
-        self.today.ok_or_else(|| Reject::new("business_date", "no business date has been seen from the core yet"))
+        self.today
+            .ok_or_else(|| Reject::new("business_date", "no business date has been seen from the core yet"))
     }
 
     /// Ask the four questions of a person for an action on a record.
@@ -620,7 +843,10 @@ impl DistributionState {
                     return reject("unknown_party", format!("{party} is not in the structure"));
                 }
                 if agreement_ref.trim().is_empty() || advance_recovery_ppm > crate::rules::WHOLE {
-                    return reject("invalid_payee", "a payee has a place in an agreement, and a recovery share no more than the whole");
+                    return reject(
+                        "invalid_payee",
+                        "a payee has a place in an agreement, and a recovery share no more than the whole",
+                    );
                 }
                 let p = self.payees.entry(party.clone()).or_default();
                 p.agreement_ref = Some(agreement_ref);
@@ -723,7 +949,10 @@ impl DistributionState {
                     return reject("unknown_instruction", "no such instruction on the payee");
                 };
                 if payee.instructions[at].kind == InstructionKind::Statutory {
-                    return reject("restricted_instruction", "an instruction with legal priority ends on its own terms, not by removal");
+                    return reject(
+                        "restricted_instruction",
+                        "an instruction with legal priority ends on its own terms, not by removal",
+                    );
                 }
                 if consent_ref.trim().is_empty() {
                     return reject("consent_required", "an assignment is removed only with the lender's recorded consent");
@@ -794,7 +1023,10 @@ impl DistributionState {
             }
             Command::RecordDailyControl => self.record_daily_control(ctx),
             Command::CompleteTask { id, note } => {
-                let t = self.tasks.get_mut(&id).ok_or_else(|| Reject::new("unknown_task", format!("task {id} is not known")))?;
+                let t = self
+                    .tasks
+                    .get_mut(&id)
+                    .ok_or_else(|| Reject::new("unknown_task", format!("task {id} is not known")))?;
                 if t.done.is_some() {
                     return reject("task_done", "the task is already complete");
                 }
@@ -803,7 +1035,10 @@ impl DistributionState {
             }
             Command::CloseCase { id, outcome } => {
                 let on = self.date()?;
-                let c = self.cases.get_mut(&id).ok_or_else(|| Reject::new("unknown_case", format!("case {id} is not known")))?;
+                let c = self
+                    .cases
+                    .get_mut(&id)
+                    .ok_or_else(|| Reject::new("unknown_case", format!("case {id} is not known")))?;
                 if c.closed.is_some() || outcome.trim().is_empty() {
                     return reject("invalid_case", "a case closes once, with its outcome");
                 }
@@ -926,16 +1161,10 @@ impl DistributionState {
             decision: None,
         };
         let actor = env.actor.clone();
-        // Handlers check everything before they write, with one exception
-        // made safe here: a refusal part-way through restores the state as
-        // it was, so a rejected command leaves no trace but its key.
-        let before = (!matches!(env.command, Command::Ingest(_))).then(|| self.clone());
+        // Handlers check everything before they write, so a rejected
+        // command leaves no trace but its key.
         let result = self.check_actor(&env, &mut ctx).and_then(|()| self.dispatch(&mut ctx, &actor, env.command));
         if result.is_err() {
-            if let Some(mut before) = before {
-                before.seq = self.seq;
-                *self = before;
-            }
             ctx.events.clear();
             ctx.postings.clear();
         }

@@ -1876,6 +1876,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-distribution"
+version = "0.1.0"
+dependencies = [
+ "cedar-policy",
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-ledger"
 version = "0.1.0"
 dependencies = [

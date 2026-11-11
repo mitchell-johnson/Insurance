@@ -305,8 +305,14 @@ impl Authority {
             None,
         )
         .map_err(|e| err(e.to_string()))?;
-        let request =
-            Request::new(uid("Staff", &staff.id.0)?, uid("Action", ask.action)?, uid("Record", ask.record)?, context, None).map_err(|e| err(e.to_string()))?;
+        let request = Request::new(
+            uid("Staff", &staff.id.0)?,
+            uid("Action", ask.action)?,
+            uid("Record", ask.record)?,
+            context,
+            None,
+        )
+        .map_err(|e| err(e.to_string()))?;
         if self.authorizer.is_authorized(&request, &self.policies, &entities).decision() == Decision::Allow {
             return Ok(DecisionRecord {
                 staff: staff.id.clone(),

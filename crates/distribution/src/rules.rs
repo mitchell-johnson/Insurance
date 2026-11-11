@@ -353,7 +353,11 @@ impl<'a> Composed<'a> {
                 _ => false,
             };
             if !ok {
-                return invalid(format!("the share on the {} line for {} does not fit its component", l.component.label(), l.payee));
+                return invalid(format!(
+                    "the share on the {} line for {} does not fit its component",
+                    l.component.label(),
+                    l.payee
+                ));
             }
         }
         for day in self.boundaries(effective_from) {
@@ -362,8 +366,14 @@ impl<'a> Composed<'a> {
                 if lines.is_empty() {
                     return invalid(format!("base {ctype:?} commission is paid to nobody from {day}"));
                 }
-                let tails: u64 = lines.iter().filter_map(|l| if let Share::OfComponent(p) = l.share { Some(p as u64) } else { None }).sum();
-                let rest: u64 = lines.iter().filter_map(|l| if let Share::OfRemainder(p) = l.share { Some(p as u64) } else { None }).sum();
+                let tails: u64 = lines
+                    .iter()
+                    .filter_map(|l| if let Share::OfComponent(p) = l.share { Some(p as u64) } else { None })
+                    .sum();
+                let rest: u64 = lines
+                    .iter()
+                    .filter_map(|l| if let Share::OfRemainder(p) = l.share { Some(p as u64) } else { None })
+                    .sum();
                 let whole = WHOLE as u64;
                 let complete = if rest == 0 { tails == whole } else { rest == whole && tails < whole };
                 if !complete {

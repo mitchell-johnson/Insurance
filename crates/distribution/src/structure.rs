@@ -209,7 +209,11 @@ impl Structure {
     /// End every open relation of one kind between two parties.
     pub fn end_relation(&mut self, child: &PartyId, parent: &PartyId, kind: RelationKind, on: NaiveDate) -> Result<(), StructureError> {
         let mut found = false;
-        for r in self.relations.iter_mut().filter(|r| &r.child == child && &r.parent == parent && r.kind == kind && r.to.is_none()) {
+        for r in self
+            .relations
+            .iter_mut()
+            .filter(|r| &r.child == child && &r.parent == parent && r.kind == kind && r.to.is_none())
+        {
             if on <= r.from {
                 return Err(StructureError::Invalid("a relation cannot end before it began".into()));
             }
@@ -231,10 +235,7 @@ impl Structure {
             return Err(StructureError::Invalid(format!("{} is not an adviser", engagement.adviser)));
         }
         if !matches!(self.known(&engagement.with)?.kind, PartyKind::Fap | PartyKind::AuthorisedBody) {
-            return Err(StructureError::Invalid(format!(
-                "{} is not a provider or an authorised body",
-                engagement.with
-            )));
+            return Err(StructureError::Invalid(format!("{} is not a provider or an authorised body", engagement.with)));
         }
         if engagement.to.is_some_and(|t| t <= engagement.from) {
             return Err(StructureError::Invalid("an engagement must last at least a day".into()));
@@ -355,10 +356,8 @@ impl Structure {
             let mut any = false;
             for (id, _) in self.engagements.iter().filter(|(_, e)| &e.adviser == payee && e.on(day)) {
                 any = true;
-                match self.engagement_impairment(id, day) {
-                    None => return None,
-                    Some(i) => first = first.or(Some(i)),
-                }
+                let i = self.engagement_impairment(id, day)?;
+                first = first.or(Some(i));
             }
             if any {
                 return first;
