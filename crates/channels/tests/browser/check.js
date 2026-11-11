@@ -68,6 +68,9 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#bench-msg .banner.bad").waitFor();
     await p.getByRole("tab", { name: "My access" }).click();
     await sees(p, "finance");
+    await p.fill("#conn", "party-00000009"); await p.locator("#connect button").click();
+    await sees(p, "Declared.");
+    await p.locator("#connections").getByText("party-00000009").waitFor();
   }, expectStatus: [403, 409, 422] });
   await visit(browser, "/staff", { subject: "sub-sue" }, { run: async (p) => {
     await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");

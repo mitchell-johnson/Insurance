@@ -154,24 +154,23 @@ fn staff_check(
     record: String,
     purpose: Option<Purpose>,
     at: At,
-) -> crate::staff::Decision {
-    state.data.staff.authorise(
-        state.staff_policy(),
-        &AccessRequest {
-            staff: staff.clone(),
-            action: action.to_string(),
-            class,
-            scopes,
-            record: Some(record),
-            amount: None,
-            purpose,
-            decides: false,
-            conflict_subject: None,
-            maker: None,
-            fresh: state.data.staff.external_available,
-            at,
-        },
-    )
+) -> (AccessRequest, crate::staff::Decision) {
+    let request = AccessRequest {
+        staff: staff.clone(),
+        action: action.to_string(),
+        class,
+        scopes,
+        record: Some(record),
+        amount: None,
+        purpose,
+        decides: false,
+        conflict_subject: None,
+        maker: None,
+        fresh: state.data.staff.external_available,
+        at,
+    };
+    let decision = state.data.staff.authorise(state.staff_policy(), &request);
+    (request, decision)
 }
 
 /// Answer one question. An `Err` is a question that could not be understood.
@@ -285,7 +284,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             purpose,
             at,
         } => {
-            let decision = staff_check(
+            let (request, mut decision) = staff_check(
                 state,
                 &staff,
                 "policy.view",
@@ -295,13 +294,26 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 purpose,
                 at,
             );
+            // Nobody handles their own policy or that of someone they are
+            // connected to, whatever their role and path say.
+            let on = state.today(at);
+            let related = |who: &PartyId| !d.directory.relationships(&d.view, who, &policy, on).is_empty();
+            let is_staff = decision.denied != Some(crate::staff::Denial::NotStaff);
+            if is_staff && (related(&staff) || d.staff.connections.get(&staff).is_some_and(|c| c.iter().any(related))) {
+                decision = crate::staff::Decision {
+                    allowed: false,
+                    denied: Some(crate::staff::Denial::Personal),
+                    ..decision
+                };
+            }
             if !decision.allowed {
-                return json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
+                return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
             let sensitive = decision.classes.contains(&DataClass::InsuranceSensitive);
             let rows = state.rows(&policy, state.today(at), None);
             let withheld = rows.values().filter(|r| r.sensitive && !sensitive).count();
             json!({
+                "request": request,
                 "decision": decision,
                 "found": state.data.view.policy(&policy).is_some(),
                 "rows": rows.values().filter(|r| !r.sensitive || sensitive)
@@ -328,7 +340,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         }
         Question::Workbench { staff, party, at } => {
             let record = party.as_ref().map_or_else(|| "counterparty:*".to_string(), |p| format!("counterparty:{p}"));
-            let decision = staff_check(
+            let (request, decision) = staff_check(
                 state,
                 &staff,
                 workbench::actions::VIEW,
@@ -342,11 +354,12 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 at,
             );
             if !decision.allowed {
-                return json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
+                return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
             match party {
-                Some(party) => json!({ "decision": decision, "position": d.workbench.position(&party) }),
+                Some(party) => json!({ "request": request, "decision": decision, "position": d.workbench.position(&party) }),
                 None => json!({
+                    "request": request,
                     "decision": decision,
                     "control": d.workbench.control(state.today(at)),
                     "settings": d.workbench.settings,
@@ -358,7 +371,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             }
         }
         Question::ProofOfDebt { staff, party, at } => {
-            let decision = staff_check(
+            let (request, decision) = staff_check(
                 state,
                 &staff,
                 workbench::actions::VIEW,
@@ -372,9 +385,9 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 at,
             );
             if !decision.allowed {
-                return json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
+                return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
-            json!({ "decision": decision, "extract": d.workbench.proof_of_debt(&party, state.today(at)) })
+            json!({ "request": request, "decision": decision, "extract": d.workbench.proof_of_debt(&party, state.today(at)) })
         }
         Question::Status => json!({
             "business_date": d.today,
