@@ -59,7 +59,7 @@ The end-of-day workflow test needs a Temporal server. It uses the one at `IC_TES
 
 The standards the suite is held to, enforced in CI (`.github/workflows/ci.yml`):
 
-- Line coverage of at least 98%, measured with `cargo llvm-cov --workspace` with the Temporal test included.
+- Line coverage of at least 98%, measured with `cargo llvm-cov --workspace` with the Temporal tests included and each source line counted once (`tools/coverage_floor.py`). The table `cargo llvm-cov` prints counts a line again for every generic instantiation and enclosing closure and reads lower; CI prints both.
 - Every test carries a `Purpose:` and a `Why it matters:` line. `tools/check_test_docs.py` fails the build otherwise.
 - Resilience is tested, not assumed: ledger node processes are killed mid-write, disks are destroyed, workers die mid-close, Azure goes away.
 

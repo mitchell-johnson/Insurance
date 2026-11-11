@@ -54,8 +54,12 @@ jobs:
         env:
           IC_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
         run: |
-          cargo llvm-cov --workspace --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
-      - name: Coverage summary
+          cargo llvm-cov --workspace --locked --lcov --output-path lcov.info
+      - name: Coverage floor, each source line counted once
+        run: |
+          set -o pipefail
+          python3 tools/coverage_floor.py lcov.info "$COVERAGE_FLOOR" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Coverage by file, as cargo llvm-cov counts it
         if: always()
         run: cargo llvm-cov report --summary-only | tee -a "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
