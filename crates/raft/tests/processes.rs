@@ -84,7 +84,7 @@ impl Fleet {
 
     fn spawn(&mut self, id: NodeId) {
         let peers = self.addrs.iter().map(|(id, addr)| format!("{id}={addr}")).collect::<Vec<_>>().join(",");
-        let child = Process::new(env!("CARGO_BIN_EXE_ic-node"))
+        let child = Process::new(env!("CARGO_BIN_EXE_ic-core-node"))
             .env("IC_NODE_ID", id.to_string())
             .env("IC_NODE_PEERS", peers)
             .env("IC_NODE_LISTEN", &self.addrs[&id])
@@ -472,7 +472,7 @@ async fn a_node_stops_cleanly_and_refuses_bad_configuration() {
     let exit = tokio::task::spawn_blocking(move || child.wait().unwrap()).await.unwrap();
     assert!(exit.success(), "SIGTERM did not lead to a clean exit: {exit:?}");
 
-    let bad = Process::new(env!("CARGO_BIN_EXE_ic-node"))
+    let bad = Process::new(env!("CARGO_BIN_EXE_ic-core-node"))
         .env_clear()
         .envs(std::env::vars().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
         .env("IC_CLUSTER_AUTH", "open")

@@ -120,7 +120,10 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
             },
         },
     );
-    let lines = vec![base("a-co", Share::OfRemainder(pct(75.0)), true), base("fap-one", Share::OfRemainder(pct(25.0)), false)];
+    let lines = vec![
+        base("a-co", Share::OfRemainder(pct(75.0)), true),
+        base("fap-one", Share::OfRemainder(pct(25.0)), false),
+    ];
     let changes = vec![
         Change::ActivateSchedule(schedule()),
         Change::CreateBook {
@@ -132,11 +135,43 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
         },
         Change::ActivateRule(rule("book", 1, d(START.0, START.1, START.2), lines, vec![liable("fap-one")])),
     ];
-    h.send("propose", ops(), Command::ProposeChange { id: "setup".into(), changes, instructions_ref: "doc".into() });
-    h.send("approve", approver(), Command::ApproveChange { id: "setup".into(), compliance: false });
-    h.send("comply", compliance(), Command::ApproveChange { id: "setup".into(), compliance: true });
+    h.send(
+        "propose",
+        ops(),
+        Command::ProposeChange {
+            id: "setup".into(),
+            changes,
+            instructions_ref: "doc".into(),
+        },
+    );
+    h.send(
+        "approve",
+        approver(),
+        Command::ApproveChange {
+            id: "setup".into(),
+            compliance: false,
+        },
+    );
+    h.send(
+        "comply",
+        compliance(),
+        Command::ApproveChange {
+            id: "setup".into(),
+            compliance: true,
+        },
+    );
 
-    let issue = ic_sim::persona::term_life(1, d(START.0, START.1, START.2), d(1990, 3, 10), ic_product::Sex::Female, false, 500_000_00, None, ic_product::Frequency::Monthly, None);
+    let issue = ic_sim::persona::term_life(
+        1,
+        d(START.0, START.1, START.2),
+        d(1990, 3, 10),
+        ic_product::Sex::Female,
+        false,
+        500_000_00,
+        None,
+        ic_product::Frequency::Monthly,
+        None,
+    );
     let policy = issue.policy.clone();
     h.cluster.submit(0, "new-business", ic_sim::persona::issue_command(issue)).unwrap();
     h.pump();
@@ -162,7 +197,11 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
         date: today,
         net_by_cover_type: BTreeMap::from([("life".to_string(), 100_00)]),
     }));
-    assert_eq!(disclosure["a-co"], json!(900_00 + 7_50), "initial on the annual premium and renewal on this one");
+    assert_eq!(
+        disclosure["a-co"],
+        json!(900_00 + 7_50),
+        "initial on the annual premium and renewal on this one"
+    );
 
     let owing = h.cluster.state(0).policies[&policy].outstanding_minor();
     let receipt = CoreCommand::ApplyReceipt {
@@ -172,7 +211,10 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
     };
     h.cluster.submit(0, "cash-matching", receipt).unwrap();
     h.pump();
-    let position = h.ask(question(Question::Position { party: party("fap-one"), as_at: today }));
+    let position = h.ask(question(Question::Position {
+        party: party("fap-one"),
+        as_at: today,
+    }));
     let earned = position["summary"]["commission_minor"].as_i64().unwrap();
     assert!(earned > 300_00);
     assert_eq!(position["clawback_at_risk_minor"], json!(1_200_00));
@@ -191,13 +233,26 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
     );
     h.pump();
     let aged = h.ask(question(Question::AgedHeld { as_at: today }));
-    assert_eq!((aged["kind"].as_str(), aged["count"].as_u64(), aged["total_minor"].as_i64()), (Some("held_balance"), Some(1), Some(earned)));
+    assert_eq!(
+        (aged["kind"].as_str(), aged["count"].as_u64(), aged["total_minor"].as_i64()),
+        (Some("held_balance"), Some(1), Some(earned))
+    );
     let item = &aged["items"][0];
-    assert_eq!((item["party"].as_str(), item["reason"].as_str(), item["action"].is_null()), (Some("fap-one"), Some("SuspendedLicence"), true));
-    assert_eq!(h.ask(question(Question::AgedHeld { as_at: today.pred_opt().unwrap() }))["count"], json!(0));
+    assert_eq!(
+        (item["party"].as_str(), item["reason"].as_str(), item["action"].is_null()),
+        (Some("fap-one"), Some("SuspendedLicence"), true)
+    );
+    assert_eq!(
+        h.ask(question(Question::AgedHeld {
+            as_at: today.pred_opt().unwrap()
+        }))["count"],
+        json!(0)
+    );
     assert_eq!(h.ask(question(Question::HeldControl { date: today }))["held_total_minor"], json!(earned));
     assert_eq!(h.ask(question(Question::MonthEndBlocks { date: today })), json!([]));
-    let case = h.ask(question(Question::Case { id: format!("conduct-fap-one-{today}") }));
+    let case = h.ask(question(Question::Case {
+        id: format!("conduct-fap-one-{today}"),
+    }));
     assert_eq!(case["owner"], json!("conduct_officer"));
 
     // A documented decision to keep it held shows on the aged report as the action taken.
@@ -216,16 +271,42 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
             document_ref: "vault-doc-7".into(),
         },
     );
-    h.send("hold-a", finance_approver(), Command::ApproveAction { id: "hold-1".into(), as_role: ic_distribution::authority::Role::CounterpartyFinanceApprover });
-    h.send("hold-l", legal(), Command::ApproveAction { id: "hold-1".into(), as_role: ic_distribution::authority::Role::Legal });
+    h.send(
+        "hold-a",
+        finance_approver(),
+        Command::ApproveAction {
+            id: "hold-1".into(),
+            as_role: ic_distribution::authority::Role::CounterpartyFinanceApprover,
+        },
+    );
+    h.send(
+        "hold-l",
+        legal(),
+        Command::ApproveAction {
+            id: "hold-1".into(),
+            as_role: ic_distribution::authority::Role::Legal,
+        },
+    );
     assert_eq!(h.ask(question(Question::AgedHeld { as_at: today }))["items"][0]["action"], json!("vault-doc-7"));
     assert_eq!(h.ask(question(Question::Action { id: "hold-1".into() }))["state"], json!("completed"));
     assert_eq!(h.ask(question(Question::OpenTasks)).as_array().unwrap().len(), 1, "the review");
     assert_eq!(h.ask(question(Question::SweepCheck)), json!({ "green": true, "items": [] }));
-    assert!(h.ask(question(Question::ProofOfDebt { party: party("fap-one"), as_at: today }))["hash"].is_string());
-    assert!(h.ask(question(Question::Statement { payee: party("a-co"), number: 1 })).is_null());
+    assert!(h.ask(question(Question::ProofOfDebt {
+        party: party("fap-one"),
+        as_at: today
+    }))["hash"]
+        .is_string());
+    assert!(h
+        .ask(question(Question::Statement {
+            payee: party("a-co"),
+            number: 1
+        }))
+        .is_null());
     let status = h.ask(question(Question::Status));
-    assert_eq!((status["unconfirmed"].as_u64(), status["today"].as_str()), (Some(0), Some(today.to_string().as_str())));
+    assert_eq!(
+        (status["unconfirmed"].as_u64(), status["today"].as_str()),
+        (Some(0), Some(today.to_string().as_str()))
+    );
 
     // Planning a move is a question: it changes nothing and says why it cannot be done.
     let request = MoveRequest {
@@ -239,12 +320,21 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
             new_servicing: "eng-a-one".into(),
         }],
     };
-    assert_eq!(h.ask(question(Question::PlanMove(Box::new(request.clone()))))["changes"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        h.ask(question(Question::PlanMove(Box::new(request.clone()))))["changes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
     let unknown = MoveRequest {
         from_engagement: "ghost".into(),
         ..request
     };
-    assert_eq!(h.ask(question(Question::PlanMove(Box::new(unknown))))["refused"]["code"], json!("unknown_engagement"));
+    assert_eq!(
+        h.ask(question(Question::PlanMove(Box::new(unknown))))["refused"]["code"],
+        json!("unknown_engagement")
+    );
 
     // What the host refuses, and what it keeps across a snapshot.
     assert!(h.module.query(json!({ "no_such_question": 1 })).unwrap_err().contains("not a question"));
