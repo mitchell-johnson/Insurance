@@ -2,12 +2,14 @@
 //! opaque IDs and never personal data. Underwriting terms (loadings and
 //! exclusions) are sensitive and are not in events at all.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
-use ic_ledger::{EntryId, Hash32, PartitionId};
+use ic_ledger::{AccountClass, AccountUnit, Dimensions, EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LayerOrigin, PolicyStatus, Standing, UnwindCause};
+use crate::policy::{LayerOrigin, PolicyStatus, ReopenedChoice, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -32,6 +34,31 @@ pub struct PayableCover {
     pub cover: String,
     pub cover_type: String,
     pub sum_insured_minor: i64,
+}
+
+/// One line of a posted entry as the finance ledger needs it: the account's
+/// role and class in place of the account itself, so the line says what kind
+/// of money moved without naming a policy's account. Postings of one entry to
+/// accounts of the same role, class, unit and dimensions are one line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PostedLine {
+    pub role: String,
+    pub class: AccountClass,
+    pub unit: AccountUnit,
+    /// Debits positive, in `unit`.
+    pub signed: i128,
+    #[serde(default)]
+    pub dims: Dimensions,
+}
+
+/// The balance of every account of one role, class and unit on a partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RoleTotal {
+    pub role: String,
+    pub class: AccountClass,
+    pub unit: AccountUnit,
+    /// Debits positive, in `unit`.
+    pub balance: i128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +121,25 @@ pub enum Event {
         kind: String,
         policy: Option<PolicyId>,
         hash: Hash32,
+        /// The entry's value date. A value date before the business date
+        /// marks a backdated entry; the finance ledger reports it as a
+        /// prior-period item when it falls in an earlier period.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value_date: Option<NaiveDate>,
+        /// The entry this one reverses, where it is a reversal.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reverses: Option<String>,
+        /// The entry's postings by role, class, unit and dimensions.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        lines: Vec<PostedLine>,
+    },
+    /// The partition's materialised balances by role when a business day
+    /// closed, at the chain head the day's Merkle root covers. The finance
+    /// ledger checks what it built from the day's entries against this.
+    ControlTotals {
+        date: NaiveDate,
+        closing_head: Hash32,
+        totals: Vec<RoleTotal>,
     },
 
     PolicyIssued {
@@ -175,6 +221,10 @@ pub enum Event {
         period_end: NaiveDate,
         total_minor: i64,
         members: Option<u32>,
+        /// The premium for the period by cover type, before tax and levies.
+        /// Reinsurance priced on the original premium reads it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        by_cover_type: BTreeMap<String, i64>,
     },
     PremiumAdjusted {
         policy: PolicyId,
@@ -257,6 +307,29 @@ pub enum Event {
         reference: String,
         /// The receivables whose billing was reversed.
         receivables: Vec<u32>,
+    },
+    /// Choices made on a defective notice can be made again until `until`.
+    ReopenWindowOpened {
+        policy: PolicyId,
+        reopen_reference: String,
+        purpose: String,
+        from: NaiveDate,
+        until: NaiveDate,
+    },
+    NoticeDeliveryRecorded {
+        policy: PolicyId,
+        purpose: String,
+        notice: String,
+        delivered_on: NaiveDate,
+        earliest_effect: NaiveDate,
+    },
+    /// A choice made on a defective notice was made again. `effective` is
+    /// the date the new choice applies from.
+    ChoiceReopened {
+        policy: PolicyId,
+        reopen_reference: String,
+        choice: ReopenedChoice,
+        effective: NaiveDate,
     },
     PolicyUnwindResumed {
         policy: PolicyId,

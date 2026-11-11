@@ -51,6 +51,15 @@ ic_raft::server::start_with(settings, modules).await?;
 
 Until a module is attached to the host, run the state machine over `ic_log::Replica` with a `FileLog`; moving it across is the `hosted(...)` line above.
 
+### Getting hosted on the deployed node
+
+The node that is deployed is the `ic-node` binary in `crates/node`. It depends on every module crate and lists their specs in one function, `ic_node::modules()`. To be hosted:
+
+1. Expose `pub fn module_spec() -> Result<ic_raft::ModuleSpec, String>` from your crate.
+2. Add your crate to `crates/node/Cargo.toml` and one line to `modules()` in `crates/node/src/lib.rs`.
+
+That is the only place modules are attached. `crates/node/tests/node.rs` starts a node with the whole list and fails if a group does not form or two modules share a name. Do not ship a node binary of your own: two binaries named alike collide in the build, and a module hosted by a private binary is not in the cluster anyone deploys. `ic-core-node` in `ic-raft` is a node with no modules, kept for the Raft crate's own process tests.
+
 ### Reading the core's events
 
 A module that reads events is declared with `hosted_reading(state, query, react)` and `ModuleSpec::new(name, make)?.reading_events()`. `react` is a pure function from an `ic_core::EventRecord` to the module's own commands.

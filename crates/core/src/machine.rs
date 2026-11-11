@@ -10,10 +10,10 @@ use sha2::{Digest, Sha256};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, Envelope};
-use crate::event::{Event, EventRecord, OutboundMessage};
+use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, payments, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, earning, group, lifecycle, payments, reopen, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -112,6 +112,16 @@ impl Ctx<'_> {
             debug_assert!(ledger.has_account(&p.account), "account {} not opened", p.account);
         }
         self.work += postings.len() as u32;
+        // Every line of a policy's entry belongs to the policy's statutory
+        // fund and product, the cash side included, so each fund's trial
+        // balance balances on its own.
+        let mut postings = postings;
+        if let Some(policy) = policy {
+            for posting in &mut postings {
+                posting.dims.statutory_fund.get_or_insert_with(|| policy.statutory_fund.clone());
+                posting.dims.product.get_or_insert_with(|| policy.product_code.clone());
+            }
+        }
         let draft = EntryDraft {
             kind: kind.to_string(),
             value_date,
@@ -128,10 +138,50 @@ impl Ctx<'_> {
             kind: kind.to_string(),
             policy: policy.map(|p| p.id.clone()),
             hash: entry.hash,
+            value_date: Some(value_date),
+            reverses: entry.body.detail.get("reverses").cloned(),
+            lines: posted_lines(ledger, &entry),
         });
         self.entries.push(entry);
         Ok(())
     }
+}
+
+/// An entry's postings as lines by role, class, unit and dimensions.
+fn posted_lines(ledger: &Ledger, entry: &JournalEntry) -> Vec<PostedLine> {
+    let mut lines: Vec<PostedLine> = Vec::new();
+    for p in &entry.body.postings {
+        // `Ledger::post` accepted the entry, so every account exists.
+        let Some(account) = ledger.account(&p.account) else { continue };
+        match lines
+            .iter_mut()
+            .find(|l| l.role == account.role && l.class == account.class && l.unit == account.unit && l.dims == p.dims)
+        {
+            Some(line) => line.signed += p.signed(),
+            None => lines.push(PostedLine {
+                role: account.role.clone(),
+                class: account.class,
+                unit: account.unit.clone(),
+                signed: p.signed(),
+                dims: p.dims.clone(),
+            }),
+        }
+    }
+    lines
+}
+
+/// The ledger's materialised balances by role, class and unit. Zero totals
+/// are left out.
+fn role_totals(ledger: &Ledger) -> Vec<RoleTotal> {
+    let mut totals: BTreeMap<(String, ic_ledger::AccountClass, ic_ledger::AccountUnit), i128> = BTreeMap::new();
+    for (account, balance) in ledger.accounts() {
+        *totals.entry((account.role.clone(), account.class, account.unit.clone())).or_insert(0) += balance;
+    }
+    totals
+        .into_iter()
+        .filter(|(_, balance)| *balance != 0)
+        .map(|((role, class, unit), balance)| RoleTotal { role, class, unit, balance })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,6 +336,11 @@ impl CoreState {
                     to,
                     closing_head,
                 });
+                ctx.emit(Event::ControlTotals {
+                    date: from,
+                    closing_head,
+                    totals: role_totals(&self.ledger),
+                });
                 Ok(())
             }
             Command::RunEndOfDay { policies } => {
@@ -370,6 +425,29 @@ impl CoreState {
                 reference,
             } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 unwind::unwind_after(&mut s.ledger, &s.catalog, p, ctx, after, cause, &reference)
+            }),
+            Command::OpenReopenWindow {
+                policy,
+                reopen_reference,
+                purpose,
+                from,
+                until,
+            } => self.with_policy(&policy, false, |_, p| reopen::open_window(p, ctx, reopen_reference, purpose, from, until)),
+            Command::RecordNoticeDelivery {
+                policy,
+                purpose,
+                notice,
+                delivered_on,
+                earliest_effect,
+            } => self.with_policy(&policy, false, |_, p| {
+                reopen::record_notice(p, ctx, purpose, notice, delivered_on, earliest_effect)
+            }),
+            Command::ReopenChoice {
+                policy,
+                reopen_reference,
+                choice,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                reopen::choose_again(&mut s.ledger, &s.catalog, p, ctx, &reopen_reference, choice)
             }),
             Command::ResumeAfterUnwind { policy, reference } => self.with_policy(&policy, true, |_, p| unwind::resume(p, ctx, &reference)),
             Command::TerminateOnClaim {
