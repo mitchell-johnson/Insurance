@@ -255,6 +255,10 @@ pub enum Event {
         receipt: String,
         allocated_minor: i64,
         to_suspense_minor: i64,
+        /// The part that paid for cover, by cover type, without the policy
+        /// fee, GST and levies. Commission is earned on it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     ReceiptReversed {
         policy: PolicyId,
@@ -271,6 +275,9 @@ pub enum Event {
     SuspenseApplied {
         policy: PolicyId,
         amount_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     SuspenseRefunded {
         policy: PolicyId,
@@ -382,6 +389,27 @@ pub enum Event {
         claim: String,
     },
 
+    /// The reinsurance module recorded the cession on a cover from a date.
+    CessionRecorded {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        life: LifeId,
+        from: NaiveDate,
+    },
+    /// A reinsurance entry was posted. The finance ledger and the reinsurer
+    /// exposure view read it.
+    ReinsurancePosted {
+        kind: crate::reinsurance::ReinsurancePosting,
+        treaty: String,
+        reinsurer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<PolicyId>,
+        amount_minor: i64,
+        value_date: NaiveDate,
+        reference: String,
+    },
+
     /// End-of-day could not process a policy. Becomes an exception item.
     PolicyException {
         policy: PolicyId,
@@ -453,6 +481,19 @@ pub enum Event {
     TransferAborted {
         policy: PolicyId,
         transfer_id: String,
+    },
+
+    /// A balanced entry on counterparty accounts. Carries the lines, so the
+    /// module that keeps each party's position builds it from this alone.
+    CounterpartyPosted {
+        entry: EntryId,
+        reference: String,
+        kind: String,
+        currency: ic_money::Currency,
+        value_date: NaiveDate,
+        policy: Option<PolicyId>,
+        reverses: Option<String>,
+        lines: Vec<crate::counterparty::CounterpartyLine>,
     },
 }
 

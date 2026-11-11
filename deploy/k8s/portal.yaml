@@ -1,0 +1,196 @@
+# The portal service: the customer app's API, the adviser and employer
+# portals, the staff console, the operations console and the public status
+# page. Stateless gateways to the channel module on the ledger nodes
+# (crates/channels).
+#
+# Its identity reaches nothing in Azure but the cluster token; the client ID
+# is the portalClientId output of infra/main.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-portal
+  annotations:
+    azure.workload.identity/client-id: REPLACE-portalClientId
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-portal-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-portalClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+# Who signs in, and where. None of these is a secret: the pages are public
+# clients and sign in with PKCE.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-portal
+data:
+  # Staff and other modules: the insurer's Microsoft Entra ID tenant. The
+  # audience is the portal service's app registration; the client ID is the
+  # single-page application the staff and operations consoles sign in
+  # through, with redirect URIs https://<host>/staff and https://<host>/ops.
+  IC_ENTRA_TENANT_ID: REPLACE-tenantId
+  IC_ENTRA_AUDIENCE: REPLACE-portal-application-id
+  IC_ENTRA_CLIENT_ID: REPLACE-staff-spa-client-id
+  # Customers, advisers and employer administrators: the Microsoft Entra
+  # External ID tenant. The authority is that tenant's own sign-in host. The
+  # client ID is the single-page application the adviser and employer portals
+  # sign in through, with redirect URIs https://<host>/adviser and
+  # https://<host>/employer. The mobile app has its own registration.
+  IC_CUSTOMER_AUTHORITY: https://REPLACE-external-tenant.ciamlogin.com
+  IC_CUSTOMER_TENANT_ID: REPLACE-external-tenant-id
+  IC_CUSTOMER_AUDIENCE: REPLACE-customer-application-id
+  IC_CUSTOMER_CLIENT_ID: REPLACE-portal-spa-client-id
+  # With ledger nodes in two regions, name which node is where and which
+  # region normally leads, so the operations console and the status page can
+  # say when a region is lost (docs/operations.md, "Losing a region"):
+  # IC_REGIONS: "australiaeast=ic-node-1.ic-node:7000,ic-node-2.ic-node:7000;australiasoutheast=ic-node-3.ic-node:7000"
+  # IC_HOME_REGION: australiaeast
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-portal
+spec:
+  selector:
+    app: ic-portal
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-portal
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-portal
+  template:
+    metadata:
+      labels:
+        app: ic-portal
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-portal
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-portal
+      containers:
+        - name: portal
+          image: insurance-core
+          command: ["/usr/local/bin/ic-portal"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            - configMapRef:
+                name: ic-portal
+          env:
+            - name: IC_PORTAL_LISTEN
+              value: 0.0.0.0:8090
+          ports:
+            - name: http
+              containerPort: 8090
+          # Ready means the process is serving, not that the ledger answers.
+          # When the nodes cannot be reached the service must stay behind the
+          # ingress: requests get a plain 503 with a retry hint, and the
+          # status page and operations console say what is wrong. Taking the
+          # pods out of the Service would turn all of that into a bare
+          # gateway error exactly when people look. /readyz reports whether
+          # the channel module answers, for dashboards and alerts.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-portal-token
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-portal
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-portal
+---
+# The portal service hears from the ingress controller's namespace, as the
+# API does.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-portal
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-portal
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              insurance-core/ingress: "true"
+      ports:
+        - port: 8090

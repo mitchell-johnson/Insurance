@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use ic_channels::settings::{Identity, PortalSettings};
+use ic_channels::ui::UiConfig;
 
 fn load(vars: &[(&str, &str)]) -> Result<PortalSettings, String> {
     let map: BTreeMap<String, String> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
@@ -29,7 +30,10 @@ const DEV: (&str, &str) = ("IC_AUTH", "dev");
 fn a_laptop_configuration_and_its_guard() {
     let s = load(&[NODES, OPEN, DEV]).unwrap();
     assert_eq!(s.listen.to_string(), "0.0.0.0:8090");
-    assert_eq!((s.customers.clone(), s.workforce.clone()), (Identity::Dev, Identity::Dev));
+    assert_eq!(
+        (s.customers.clone(), s.workforce.clone(), s.ui.clone()),
+        (Identity::Dev, Identity::Dev, UiConfig::Dev)
+    );
     assert_eq!((s.patience, s.heartbeat), (Duration::from_secs(10), Duration::from_secs(15)));
     assert_eq!((s.regions.home.as_str(), s.regions.nodes["local"].len(), s.nodes.len()), ("local", 3, 3));
     assert_eq!(s.client().nodes().len(), 3);
@@ -44,11 +48,17 @@ fn a_laptop_configuration_and_its_guard() {
 /// Why it matters: validating customer tokens against the workforce tenant, or the other way round, would either lock everyone out or accept the wrong population as staff.
 #[test]
 fn production_needs_both_tenants() {
-    let workforce = [("IC_ENTRA_TENANT_ID", "staff-tenant"), ("IC_ENTRA_AUDIENCE", "api://portal")];
+    let workforce = [
+        ("IC_ENTRA_TENANT_ID", "staff-tenant"),
+        ("IC_ENTRA_AUDIENCE", "api://portal"),
+        ("IC_ENTRA_CLIENT_ID", "spa-staff"),
+    ];
     let customers = [
         ("IC_CUSTOMER_TENANT_ID", "cust-tenant"),
         ("IC_CUSTOMER_AUDIENCE", "api://app"),
-        ("IC_CUSTOMER_AUTHORITY", "https://contoso.ciamlogin.com"),
+        ("IC_CUSTOMER_AUTHORITY", "https://contoso.ciamlogin.com/"),
+        ("IC_CUSTOMER_CLIENT_ID", "spa-app"),
+        ("IC_CUSTOMER_SCOPE", "api://app/portal"),
     ];
     let base = [NODES, ("IC_CLUSTER_TOKEN_FILE", "/token")];
     let all: Vec<(&str, &str)> = base.iter().chain(&workforce).chain(&customers).copied().collect();
@@ -56,7 +66,7 @@ fn production_needs_both_tenants() {
     assert_eq!(
         s.customers,
         Identity::Entra {
-            authority: "https://contoso.ciamlogin.com".into(),
+            authority: "https://contoso.ciamlogin.com/".into(),
             tenant: "cust-tenant".into(),
             audience: "api://app".into()
         }
@@ -65,10 +75,27 @@ fn production_needs_both_tenants() {
     assert!(matches!(s.workforce.auth(), ic_api::auth::Auth::Entra(_)));
     assert!(!s.cluster_auth.is_open());
 
+    // The pages sign in through each tenant's single-page application.
+    let UiConfig::Entra { customers, workforce: staff } = &s.ui else {
+        panic!("entra sign-in expected")
+    };
+    assert_eq!(
+        (customers.authority.as_str(), customers.client_id.as_str(), customers.scope.as_str()),
+        ("https://contoso.ciamlogin.com", "spa-app", "api://app/portal")
+    );
+    assert_eq!(
+        (staff.client_id.as_str(), staff.scope.as_str(), staff.tenant.as_str()),
+        ("spa-staff", "api://portal/.default", "staff-tenant")
+    );
+
     let without = |drop: &str| all.iter().filter(|(k, _)| *k != drop).copied().collect::<Vec<_>>();
     assert!(load(&without("IC_CUSTOMER_AUTHORITY")).unwrap_err().contains("IC_CUSTOMER_AUTHORITY"));
     assert!(load(&without("IC_CUSTOMER_TENANT_ID")).unwrap_err().contains("IC_CUSTOMER_TENANT_ID"));
     assert!(load(&without("IC_ENTRA_AUDIENCE")).unwrap_err().contains("IC_ENTRA_AUDIENCE"));
+    assert!(load(&without("IC_ENTRA_CLIENT_ID")).unwrap_err().contains("IC_ENTRA_CLIENT_ID"));
+    let mut odd = without("IC_CUSTOMER_AUTHORITY");
+    odd.push(("IC_CUSTOMER_AUTHORITY", "contoso; script-src *"));
+    assert!(load(&odd).unwrap_err().contains("web address"));
     assert!(load(&without("IC_CLUSTER_TOKEN_FILE")).unwrap_err().contains("IC_CLUSTER_TOKEN"));
     let mut explicit = all.clone();
     explicit.push(("IC_AUTH", "entra"));

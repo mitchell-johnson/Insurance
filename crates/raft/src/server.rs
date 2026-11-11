@@ -24,7 +24,8 @@ use openraft::raft::ReadPolicy;
 use openraft::BasicNode;
 
 use crate::auth::ClusterAuth;
-use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, Refusal};
+use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, MoveLeader, Refusal};
+use crate::failback::{Failback, FailbackSettings, FailbackStatus};
 use crate::machine::Machine;
 use crate::module::{ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus};
 use crate::network::{self, Network};
@@ -170,6 +171,8 @@ pub struct Host {
     pub groups: BTreeMap<PartitionId, Node>,
     /// A member of each hosted module's group, by the module's name.
     pub modules: BTreeMap<String, ModuleGroup>,
+    /// Hands leadership back to the preferred region. Off unless configured.
+    pub failback: Failback,
     /// The hosted modules that read the partitions' events.
     readers: Vec<String>,
     partitions: PartitionId,
@@ -219,6 +222,11 @@ impl Host {
     /// As [`Self::start`], and a member of each module's group besides.
     /// Every node of a cluster hosts the same modules.
     pub async fn start_with(settings: &Settings, specs: &[ModuleSpec]) -> Result<Arc<Self>, String> {
+        Self::start_full(settings, specs, None).await
+    }
+
+    /// As [`Self::start_with`], with automatic fail-back to preferred nodes.
+    pub async fn start_full(settings: &Settings, specs: &[ModuleSpec], failback: Option<FailbackSettings>) -> Result<Arc<Self>, String> {
         let mut modules = BTreeMap::new();
         for spec in specs {
             let group = ModuleGroup::group_name(&spec.name);
@@ -260,6 +268,7 @@ impl Host {
             segment_entries: settings.segment_entries,
             groups,
             modules,
+            failback: Failback::new(failback),
             readers: specs.iter().filter(|s| s.events).map(|s| s.name.clone()).collect(),
             partitions: settings.partitions,
             peers: settings.peers.clone(),
@@ -288,7 +297,7 @@ impl Host {
         self.modules.values().map(ModuleGroup::status).collect()
     }
 
-    fn view(&self, member: &Node) -> EndOfDayView {
+    pub(crate) fn view(&self, member: &Node) -> EndOfDayView {
         member.machine.read(|s| EndOfDayView {
             partition: member.partition,
             business_date: s.business_date,
@@ -567,6 +576,44 @@ async fn unsubscribe(State(host): State<Arc<Host>>, Path((partition, consumer)):
     }
 }
 
+async fn failback_status(State(host): State<Arc<Host>>) -> Json<FailbackStatus> {
+    Json(host.failback.status())
+}
+
+async fn failback_pause(State(host): State<Arc<Host>>) -> Json<FailbackStatus> {
+    host.failback.pause();
+    tracing::warn!("fail-back paused by an operator");
+    Json(host.failback.status())
+}
+
+async fn failback_resume(State(host): State<Arc<Host>>) -> Json<FailbackStatus> {
+    host.failback.resume();
+    tracing::warn!("fail-back resumed by an operator");
+    Json(host.failback.status())
+}
+
+/// Hand a partition's leadership to a named voter. Asked of the leader.
+/// This is how an operator reverses a fail-back, or makes any planned move.
+async fn move_leader(State(host): State<Arc<Host>>, Path(partition): Path<PartitionId>, Json(to): Json<MoveLeader>) -> Response {
+    let Some(member) = host.groups.get(&partition) else {
+        return no_partition(partition);
+    };
+    if !member.raft.is_leader() {
+        let (leader, addr) = member.leader_hint();
+        return refusal(ProposeError::NotLeader { leader, addr });
+    }
+    if !member.raft.voter_ids().any(|id| id == to.to) {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            ProposeError::Unknown(format!("node {} is not a voter of partition {partition}", to.to)),
+        );
+    }
+    match member.raft.trigger().transfer_leader(to.to).await {
+        Ok(()) => Json(()).into_response(),
+        Err(e) => refusal(ProposeError::Unknown(e.to_string())),
+    }
+}
+
 fn no_module(module: &str) -> Response {
     refuse(StatusCode::NOT_FOUND, ProposeError::Unknown(format!("this node hosts no module {module}")))
 }
@@ -627,6 +674,10 @@ pub fn router(host: Arc<Host>) -> Router {
             "/v1/partitions/{partition}/consumers/{consumer}",
             axum::routing::put(consumed).delete(unsubscribe),
         )
+        .route("/v1/partitions/{partition}/leader", post(move_leader))
+        .route("/v1/failback", get(failback_status))
+        .route("/v1/failback/pause", post(failback_pause))
+        .route("/v1/failback/resume", post(failback_resume))
         .route("/v1/modules", get(module_status))
         .route("/v1/modules/{module}/commands", post(module_propose))
         .route("/v1/modules/{module}/query", post(module_query))
@@ -662,7 +713,12 @@ pub async fn start(settings: Settings) -> Result<Running, String> {
 
 /// Start a node that also hosts a member of each module's group.
 pub async fn start_with(settings: Settings, modules: Vec<ModuleSpec>) -> Result<Running, String> {
-    let host = Host::start_with(&settings, &modules).await?;
+    start_full(settings, modules, None).await
+}
+
+/// Start a node that also hands leadership back to its preferred nodes.
+pub async fn start_full(settings: Settings, modules: Vec<ModuleSpec>, failback: Option<FailbackSettings>) -> Result<Running, String> {
+    let host = Host::start_full(&settings, &modules, failback).await?;
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
@@ -682,6 +738,7 @@ pub async fn start_with(settings: Settings, modules: Vec<ModuleSpec>) -> Result<
         tokio::spawn(async move {
             loop {
                 host.housekeep_once(&client).await;
+                host.failback.pass(&host, &client, chrono::Utc::now()).await;
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         })
@@ -729,7 +786,17 @@ pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = (
 
 /// Run a node and its modules until `stop` resolves.
 pub async fn serve_with(settings: Settings, modules: Vec<ModuleSpec>, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
-    let running = start_with(settings, modules).await?;
+    serve_full(settings, modules, None, stop).await
+}
+
+/// Run a node, its modules and fail-back until `stop` resolves.
+pub async fn serve_full(
+    settings: Settings,
+    modules: Vec<ModuleSpec>,
+    failback: Option<FailbackSettings>,
+    stop: impl std::future::Future<Output = ()>,
+) -> Result<(), String> {
+    let running = start_full(settings, modules, failback).await?;
     stop.await;
     tracing::info!("ledger node stopping");
     running.stop().await
@@ -762,5 +829,6 @@ pub async fn run(modules: Vec<ModuleSpec>) -> Result<(), String> {
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
     let settings = Settings::from_lookup(|key| std::env::var(key).ok())?;
-    serve_with(settings, modules, stop_signal()).await
+    let failback = FailbackSettings::from_lookup(|key| std::env::var(key).ok())?;
+    serve_full(settings, modules, failback, stop_signal()).await
 }

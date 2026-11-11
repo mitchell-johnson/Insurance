@@ -45,6 +45,21 @@ pub enum ExcessPath {
     UnderwrittenExcess,
 }
 
+/// Who pays the loading on a member's underwritten cover, and what the
+/// employer sees of it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExcessLoading {
+    /// The employer pays and sees one total, with no member breakdown.
+    #[default]
+    EmployerTotal,
+    /// The employer pays and sees it on the member's line. Needs the
+    /// member's consent, recorded when the cover is accepted.
+    EmployerItemised,
+    /// The member pays the loading as voluntary cover.
+    MemberPays,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Eligibility {
@@ -141,6 +156,17 @@ pub struct SchemeTerms {
     /// A file needs approval by someone other than whoever uploaded it.
     #[serde(default)]
     pub second_approver: bool,
+    /// How the loading on underwritten cover is billed.
+    #[serde(default)]
+    pub excess_loading: ExcessLoading,
+    /// If fewer members than this hold loaded cover, the loading is billed
+    /// to the member instead, so that a total cannot be traced to a person.
+    #[serde(default)]
+    pub excess_loading_min_count: u32,
+    /// After this many short payments in a row the scheme stops taking new
+    /// joiners until it has paid in full. Existing members are not touched.
+    #[serde(default)]
+    pub suspend_joiners_after_short_payments: Option<u32>,
 }
 
 /// The core's own backdating limit: nothing can be dated further back.
@@ -172,6 +198,15 @@ impl SchemeTerms {
         }
         if self.file_max_age_days == 0 {
             return Err("the file age limit must be at least one day".to_string());
+        }
+        // Billing a member directly needs voluntary cover billing, which the
+        // platform does not have yet. Refused here so that no scheme is set
+        // up on terms whose premium nobody would collect.
+        if self.excess_loading == ExcessLoading::MemberPays || self.excess_loading_min_count > 0 {
+            return Err("billing a loading to the member needs voluntary cover billing, which is not available".to_string());
+        }
+        if self.suspend_joiners_after_short_payments == Some(0) {
+            return Err("the short payment count must be at least one".to_string());
         }
         Ok(())
     }
@@ -250,6 +285,9 @@ pub(crate) mod tests {
             declaration_due_days: 30,
             file_max_age_days: 14,
             second_approver: false,
+            excess_loading: ExcessLoading::EmployerTotal,
+            excess_loading_min_count: 0,
+            suspend_joiners_after_short_payments: Some(3),
         }
     }
 
@@ -272,6 +310,9 @@ pub(crate) mod tests {
             ("unique", Box::new(|t| t.billing_groups[1].code = String::new())),
             ("minimum age", Box::new(|t| t.eligibility.min_age = Some(70))),
             ("file age", Box::new(|t| t.file_max_age_days = 0)),
+            ("voluntary cover billing", Box::new(|t| t.excess_loading = ExcessLoading::MemberPays)),
+            ("voluntary cover billing", Box::new(|t| t.excess_loading_min_count = 3)),
+            ("short payment count", Box::new(|t| t.suspend_joiners_after_short_payments = Some(0))),
         ];
         for (expect, breakage) in broken {
             let mut t = sample_terms();

@@ -2030,6 +2030,53 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-distribution"
+version = "0.1.0"
+dependencies = [
+ "cedar-policy",
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-raft",
+ "ic-sim",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "ic-documents"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-azure",
+ "ic-core",
+ "ic-log",
+ "ic-raft",
+ "proptest",
+ "rand 0.8.8",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ic-finance"
 version = "0.1.0"
 dependencies = [
@@ -2060,6 +2107,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-readmodel",
  "ic-sim",
  "proptest",
@@ -2109,6 +2157,9 @@ name = "ic-node"
 version = "0.1.0"
 dependencies = [
  "ic-channels",
+ "ic-distribution",
+ "ic-documents",
+ "ic-group",
  "ic-raft",
  "ic-underwriting",
  "serde_json",
@@ -2149,6 +2200,7 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
+ "chrono-tz 0.10.4",
  "futures",
  "ic-azure",
  "ic-cashmatch",
@@ -2195,6 +2247,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-sim",
  "proptest",
  "serde",
  "serde_json",
