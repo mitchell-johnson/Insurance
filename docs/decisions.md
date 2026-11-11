@@ -34,6 +34,10 @@ Finding a policy by its number, and matching a payment by reference, asks all 64
 
 `ic-api` without `IC_NODES` runs everything in one process with no replication. It keeps its ledger on disk and re-sends unpublished events after a restart, but a Merkle root that could not be published at the close is reported and not retried, and there is one copy of the data. Do not run it in production.
 
-### Not built
+### Built beside the core
 
-Claims, underwriting workflow, reinsurance cessions, commission, documents and correspondence, and the customer master are outside this system. The core publishes the events and holds the data (for example sum at risk per person) that those systems need.
+Claims, underwriting, reinsurance, group administration, commission and held balances, payments, documents and correspondence, the finance ledger and the portal services are modules in their own crates. `docs/modules.md` is the contract between them and the core. Each module records its own gaps.
+
+### Unwinding has limits
+
+A retail policy can be unwound at most 365 days back, because settled receivables older than 400 days are no longer in the policy's state (they are in the journal). An older correction is a remediation case worked from the journal. A scheme policy is never unwound as a whole; it is corrected through its membership file by effective date.

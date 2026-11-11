@@ -7,7 +7,7 @@ use ic_money::{DecStr, Money};
 use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::{LifeFactors, LifeKind};
+use crate::policy::{LifeFactors, LifeKind, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -131,6 +131,37 @@ pub enum Command {
         policy: PolicyId,
         cover: String,
     },
+    /// Reverse every effective-dated change after a date: layers that started
+    /// after it, covers that expired after it, anniversaries and billing.
+    /// Each reversal is a new entry with the original value date and a
+    /// reference to the entry it reverses; nothing is removed. The policy is
+    /// then held as at the date until terminated or resumed.
+    UnwindAfter {
+        policy: PolicyId,
+        after: NaiveDate,
+        cause: UnwindCause,
+        /// The claim or remediation case.
+        reference: String,
+    },
+    /// End the hold of a remediation unwind: end-of-day replays the
+    /// anniversaries and billing from the unwind date on current terms.
+    ResumeAfterUnwind {
+        policy: PolicyId,
+        reference: String,
+    },
+    /// End the policy with a claim, as at the insured event. Anything that
+    /// happened to the policy after the event is unwound first, cover ends
+    /// with the day of the event, and premium for every later day is
+    /// returned.
+    TerminateOnClaim {
+        policy: PolicyId,
+        event_date: NaiveDate,
+        claim: String,
+        /// The premiums were paid by the person the claim is for, or from an
+        /// account in that person's sole name: refunds are paid with the
+        /// claim and the payment authority is cancelled.
+        payer_deceased: bool,
+    },
 
     // --- group schemes ---
     /// One chunk of a membership file.
@@ -161,6 +192,11 @@ pub enum Command {
     RefundSuspense {
         policy: PolicyId,
         amount: Money,
+        /// Pay the refund with this claim, to the estate or the beneficiary,
+        /// instead of back to the source account. Required, and only
+        /// accepted, where the payer is the person the claim is for.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        with_claim: Option<String>,
     },
 
     // --- policy transfer between groups ---
@@ -196,10 +232,12 @@ impl Command {
             Command::IssuePolicy(_) => &["new-business"],
             Command::CancelPolicy { .. } | Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
             Command::Reinstate { .. } => &["policy-servicing", "collections"],
+            Command::UnwindAfter { .. } | Command::ResumeAfterUnwind { .. } => &["claims", "remediation"],
+            Command::TerminateOnClaim { .. } => &["claims"],
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
-            Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing"],
+            Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::BeginTransfer { .. } | Command::LandTransfer { .. } | Command::CompleteTransfer { .. } | Command::AbortTransfer { .. } => &["transfer"],
         }
     }
@@ -218,6 +256,9 @@ impl Command {
             Command::Reinstate { .. } => "reinstate",
             Command::DeclineIndexation { .. } => "decline_indexation",
             Command::MergeLayers { .. } => "merge_layers",
+            Command::UnwindAfter { .. } => "unwind_after",
+            Command::ResumeAfterUnwind { .. } => "resume_after_unwind",
+            Command::TerminateOnClaim { .. } => "terminate_on_claim",
             Command::ApplyMembership { .. } => "apply_membership",
             Command::IdentifyMember { .. } => "identify_member",
             Command::ApplyReceipt { .. } => "apply_receipt",

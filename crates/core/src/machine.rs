@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, transfer, PolicyId};
+use crate::{arrears, billing, cash, earning, group, lifecycle, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -221,6 +221,7 @@ impl CoreState {
             .filter(|p| {
                 p.status == PolicyStatus::InForce
                     && !p.is_frozen()
+                    && p.unwind.is_none()
                     && (p.pending_invoice.is_some()
                         || ic_product::schedule::period_start(p.inception, p.frequency, p.periods_billed).is_some_and(|s| s <= today))
             })
@@ -345,7 +346,26 @@ impl CoreState {
             Command::ReverseReceipt { policy, receipt } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 cash::reverse_receipt(&mut s.ledger, &s.catalog, p, ctx, &receipt)
             }),
-            Command::RefundSuspense { policy, amount } => self.with_policy(&policy, true, |s, p| cash::refund_suspense(&mut s.ledger, p, ctx, amount)),
+            Command::RefundSuspense { policy, amount, with_claim } => {
+                self.with_policy(&policy, true, |s, p| cash::refund_suspense(&mut s.ledger, p, ctx, amount, with_claim))
+            }
+            Command::UnwindAfter {
+                policy,
+                after,
+                cause,
+                reference,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                unwind::unwind_after(&mut s.ledger, &s.catalog, p, ctx, after, cause, &reference)
+            }),
+            Command::ResumeAfterUnwind { policy, reference } => self.with_policy(&policy, true, |_, p| unwind::resume(p, ctx, &reference)),
+            Command::TerminateOnClaim {
+                policy,
+                event_date,
+                claim,
+                payer_deceased,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                unwind::terminate_on_claim(&mut s.ledger, &s.catalog, p, ctx, event_date, &claim, payer_deceased)
+            }),
             Command::BeginTransfer {
                 policy,
                 transfer_id,
@@ -431,6 +451,14 @@ impl CoreState {
             .product(&policy.product_hash)
             .ok_or_else(|| Reject::new("unknown_product", "the policy's product version is not active on this partition"))?
             .clone();
+        if policy.unwind.is_some() {
+            // Held as at the unwind date: what is still billed goes on
+            // earning, and nothing that was just reversed is applied again.
+            if let Some(closed_day) = ctx.date.pred_opt() {
+                earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
+            }
+            return Ok(());
+        }
         lifecycle::anniversaries(&self.catalog, &product, policy, ctx)?;
         if policy.status != PolicyStatus::InForce {
             // The policy expired at this anniversary. The day just closed was

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
-use ic_ledger::{PartitionId, Posting};
+use ic_ledger::{EntryId, PartitionId, Posting};
 use ic_money::{Currency, DecStr};
 use ic_product::rating::ModalPremium;
 use ic_product::{DefinitionBinding, Frequency, Sex};
@@ -26,6 +26,8 @@ pub enum PolicyStatus {
     Matured,
     Expired,
     Cancelled,
+    /// Ended by a claim that ends the policy, as at the insured event.
+    Terminated,
     /// Moved to another group. History stays on this partition's chain.
     Transferred,
 }
@@ -178,6 +180,10 @@ pub struct Receivable {
     pub earned_fine: BTreeMap<String, i128>,
     /// Closed by lapse, cancellation or transfer: no longer earns.
     pub closed: bool,
+    /// The journal entry that raised it, so a reversal can name what it
+    /// reverses. Absent on receivables raised before this was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<EntryId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +240,32 @@ pub struct LapseRecord {
     pub arrears_minor: i64,
 }
 
+/// Why a policy was unwound to a date.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UnwindCause {
+    /// An insured event was notified after the policy had carried on past it.
+    Claim,
+    /// The insurer's own error is being corrected under a remediation case.
+    Remediation,
+}
+
+/// A policy unwound to a date is held there: end-of-day earns what is still
+/// billed and does nothing else, so the anniversary and the billing that
+/// were just reversed are not applied again the same night. The hold ends
+/// when the policy is terminated by the claim, or when the remediation case
+/// resumes it and end-of-day replays from the date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnwindHold {
+    /// Everything effective after this date was reversed.
+    pub after: NaiveDate,
+    pub cause: UnwindCause,
+    /// The claim or remediation case.
+    pub reference: String,
+    /// The business date the unwind was applied.
+    pub applied_on: NaiveDate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferOut {
     pub transfer_id: String,
@@ -272,6 +304,13 @@ pub struct Policy {
     pub transfer_out: Option<TransferOut>,
     /// Where earlier history was written, if the policy arrived by transfer.
     pub history: Vec<(PartitionId, GroupId)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unwind: Option<UnwindHold>,
+    /// Set when the person who paid the premiums is the person the claim is
+    /// for: refunds are then paid with this claim, to the estate or the
+    /// beneficiary, never back to the account the money came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refund_with_claim: Option<String>,
 }
 
 impl Policy {

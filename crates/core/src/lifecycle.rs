@@ -198,6 +198,8 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         lapse: None,
         transfer_out: None,
         history: vec![],
+        unwind: None,
+        refund_with_claim: None,
     };
     Ok((policy, product))
 }
@@ -443,6 +445,35 @@ pub(crate) fn cancel(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy
             earning::earn_through(ledger, policy, ctx, yesterday)?;
         }
     }
+    let kind = if cooling_off { "cancelled_cooling_off" } else { "cancelled" };
+    close_out(ledger, &product, policy, ctx, cooling_off, kind, ctx.date, ctx.date, BTreeMap::new())?;
+    arrears::set_standing(policy, ctx, None);
+    ctx.emit(Event::PolicyStatusChanged {
+        policy: policy.id.clone(),
+        from: policy.status,
+        to: PolicyStatus::Cancelled,
+    });
+    policy.status = PolicyStatus::Cancelled;
+    Ok(())
+}
+
+/// Close every open receivable and end every cover: the unearned premium
+/// and the tax that went with it are returned to policy suspense (in the
+/// cooling-off period, the earned premium too), and premium still owed for
+/// cover already given is written off. The caller has earned the policy up
+/// to the last day of cover and sets the status afterwards.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn close_out(
+    ledger: &mut Ledger,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    cooling_off: bool,
+    entry_kind: &str,
+    value_date: NaiveDate,
+    cover_ends: NaiveDate,
+    detail: BTreeMap<String, String>,
+) -> Result<(), Reject> {
     let c = policy.currency;
     let mut set = PostingSet::new();
     let mut refund_fine: i128 = 0;
@@ -492,8 +523,7 @@ pub(crate) fn cancel(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy
     set.credit(accounts::rounding(c), rem.fine, dims(policy, None, "rounding"));
     let postings = set.into_postings(ledger)?;
     if !postings.is_empty() {
-        let kind = if cooling_off { "cancelled_cooling_off" } else { "cancelled" };
-        ctx.post(ledger, kind, Some(policy), ctx.date, postings, BTreeMap::new())?;
+        ctx.post(ledger, entry_kind, Some(policy), value_date, postings, detail)?;
     }
     for r in policy.receivables.iter_mut() {
         r.outstanding_minor = 0;
@@ -502,16 +532,10 @@ pub(crate) fn cancel(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy
     for cover in policy.covers.values_mut() {
         cover.status = CoverStatus::Ended;
         for l in cover.layers.iter_mut().filter(|l| l.end.is_none()) {
-            l.end = Some(ctx.date);
+            // A layer cannot end before it starts.
+            l.end = Some(cover_ends.max(l.start));
         }
     }
-    arrears::set_standing(policy, ctx, None);
-    ctx.emit(Event::PolicyStatusChanged {
-        policy: policy.id.clone(),
-        from: policy.status,
-        to: PolicyStatus::Cancelled,
-    });
-    policy.status = PolicyStatus::Cancelled;
     Ok(())
 }
 

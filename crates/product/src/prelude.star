@@ -71,8 +71,13 @@ def arrears(grace_days, lapse_days, suspend_after_grace = False, reinstatement_d
     return {"kind": "arrears", "grace_days": grace_days, "lapse_days": lapse_days,
             "suspend_after_grace": suspend_after_grace, "reinstatement_days": reinstatement_days}
 
-def indexation(rate_code, opt_out = True):
-    return {"kind": "indexation", "rate_code": rate_code, "opt_out": opt_out}
+def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False):
+    return {
+        "kind": "indexation",
+        "rate_code": rate_code,
+        "opt_out": opt_out,
+        "pays_step_applied_after_event": pays_step_applied_after_event,
+    }
 
 def multi_cover_discount(min_covers, percent):
     return {"kind": "multi_cover_discount", "min_covers": min_covers, "percent": percent}

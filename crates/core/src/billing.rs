@@ -122,6 +122,7 @@ pub(crate) fn raise_receivable(
         net_fine: bill.net.iter().map(|(k, v)| (k.clone(), *v as i128 * FINE_PER_MINOR)).collect(),
         earned_fine: BTreeMap::new(),
         closed: false,
+        entry: ctx.entries.last().map(|e| e.id),
     });
     settle_credits(ledger, policy, ctx)?;
     Ok(Some(id))

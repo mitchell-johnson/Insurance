@@ -1,19 +1,7 @@
 [workspace]
 resolver = "2"
-members = [
-    "crates/money",
-    "crates/ledger",
-    "crates/log",
-    "crates/product",
-    "crates/core",
-    "crates/readmodel",
-    "crates/cashmatch",
-    "crates/sim",
-    "crates/azure",
-    "crates/api",
-    "crates/raft",
-    "crates/workflows",
-]
+# Every directory under crates/ is a member, so adding a module does not edit this file.
+members = ["crates/*"]
 
 [workspace.package]
 version = "0.1.0"

@@ -263,6 +263,7 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                                     Command::RefundSuspense {
                                         policy: id.clone(),
                                         amount: Money::new(held as i64, payer.persona.issue_currency()),
+                                        with_claim: None,
                                     },
                                 )
                                 .map_err(|e| e.to_string())?;

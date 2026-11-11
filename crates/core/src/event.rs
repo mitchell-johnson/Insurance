@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 use ic_ledger::{EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
 
-use crate::policy::{LayerOrigin, PolicyStatus, Standing};
+use crate::policy::{LayerOrigin, PolicyStatus, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -24,6 +24,13 @@ pub struct EventRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traceparent: Option<String>,
     pub event: Event,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PayableCover {
+    pub cover: String,
+    pub cover_type: String,
+    pub sum_insured_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,6 +202,58 @@ pub enum Event {
     SuspenseRefunded {
         policy: PolicyId,
         amount_minor: i64,
+        /// The claim the refund is paid with, where the payer is the person
+        /// the claim is for. Absent for a refund to the source account.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        with_claim: Option<String>,
+    },
+
+    /// A layer that started after the unwind date now ends on the day it
+    /// started: it existed for no days, and its history shows it was created
+    /// and unwound.
+    LayerUnwound {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        start: NaiveDate,
+        reference: String,
+    },
+    /// A cover that expired after the unwind date is in force again.
+    CoverExpiryUnwound {
+        policy: PolicyId,
+        cover: String,
+        layers: Vec<LayerInfo>,
+        reference: String,
+    },
+    /// Everything effective after `after` was reversed. The policy is held
+    /// as at that date until it is terminated or resumed.
+    PolicyUnwound {
+        policy: PolicyId,
+        after: NaiveDate,
+        cause: UnwindCause,
+        reference: String,
+        /// The receivables whose billing was reversed.
+        receivables: Vec<u32>,
+    },
+    PolicyUnwindResumed {
+        policy: PolicyId,
+        reference: String,
+    },
+    /// The policy ended with a claim, as at the insured event.
+    PolicyTerminated {
+        policy: PolicyId,
+        effective: NaiveDate,
+        claim: String,
+        /// The sum insured the claim is assessed on, by cover: what was in
+        /// force on the day of the event, plus any indexation step applied
+        /// since where the product's wording pays it.
+        payable: Vec<PayableCover>,
+    },
+    /// Collection from the payer's account must stop: the payments module
+    /// cancels the direct debit authority.
+    PaymentAuthorityCancelled {
+        policy: PolicyId,
+        claim: String,
     },
 
     /// End-of-day could not process a policy. Becomes an exception item.

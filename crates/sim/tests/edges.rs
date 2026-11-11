@@ -367,7 +367,11 @@ fn suspense_cannot_be_refunded_or_reversed_below_zero() {
     let mut c = cluster(1);
     let id = standard(&mut c, 1);
     pay(&mut c, &id, "r1", MONTHLY + 500);
-    let refund = |amount: Money| Command::RefundSuspense { policy: id.clone(), amount };
+    let refund = |amount: Money| Command::RefundSuspense {
+        policy: id.clone(),
+        amount,
+        with_claim: None,
+    };
     assert_eq!(code(c.submit(0, "policy-servicing", refund(Money::new(0, NZD)))), "invalid_amount");
     assert_eq!(code(c.submit(0, "policy-servicing", refund(Money::new(500, AUD)))), "invalid_amount");
     assert_eq!(code(c.submit(0, "policy-servicing", refund(Money::new(501, NZD)))), "insufficient_suspense");

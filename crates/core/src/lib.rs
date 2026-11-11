@@ -25,6 +25,7 @@ mod group;
 mod lifecycle;
 mod postings;
 mod transfer;
+mod unwind;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};

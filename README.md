@@ -26,7 +26,7 @@ Azure services do the work that should not be ours:
 | The cluster token | Key Vault, mounted through the Secrets Store CSI driver |
 | Logs and metrics | Container Insights and Application Insights (JSON lines on stdout) |
 
-[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open.
+[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core.
 
 ## Try it
 

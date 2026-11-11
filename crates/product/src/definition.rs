@@ -178,6 +178,13 @@ pub enum Feature {
     Indexation {
         rate_code: String,
         opt_out: bool,
+        /// What a claim pays when an indexation step was applied after the
+        /// insured event but before anyone knew of it. By default the step
+        /// is treated as never having started and the claim pays the sum
+        /// insured as at the event. A product whose wording promises the
+        /// indexed amount sets this.
+        #[serde(default)]
+        pays_step_applied_after_event: bool,
     },
     MultiCoverDiscount {
         min_covers: u32,
@@ -258,6 +265,19 @@ impl ProductDefinition {
         self.features.iter().find_map(|f| match f {
             Feature::Indexation { rate_code, .. } => Some(rate_code.as_str()),
             _ => None,
+        })
+    }
+    /// Whether an indexation step applied after an insured event that was
+    /// not yet known stands at claim. See [`Feature::Indexation`].
+    pub fn pays_step_applied_after_event(&self) -> bool {
+        self.features.iter().any(|f| {
+            matches!(
+                f,
+                Feature::Indexation {
+                    pays_step_applied_after_event: true,
+                    ..
+                }
+            )
         })
     }
     pub fn allows_frequency(&self, f: Frequency) -> bool {

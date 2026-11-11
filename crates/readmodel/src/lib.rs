@@ -287,6 +287,21 @@ impl Projections {
                     }
                 }
             }
+            Event::LayerUnwound { policy, cover, layer, .. } => {
+                let emptied = self.layers.get_mut(policy).is_some_and(|rows| {
+                    rows.remove(&(cover.clone(), *layer));
+                    rows.is_empty()
+                });
+                if emptied {
+                    self.layers.remove(policy);
+                }
+            }
+            Event::CoverExpiryUnwound { policy, layers, .. } => {
+                let rows = self.layers.entry(policy.clone()).or_default();
+                for layer in layers {
+                    rows.insert((layer.cover.clone(), layer.layer), row(policy, partition, layer));
+                }
+            }
             Event::CoverExpired { policy, cover, .. } => {
                 let emptied = self.layers.get_mut(policy).is_some_and(|rows| {
                     rows.retain(|(c, _), _| c != cover);

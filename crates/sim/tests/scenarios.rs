@@ -249,7 +249,8 @@ fn money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing() {
             "policy-servicing",
             Command::RefundSuspense {
                 policy: id.clone(),
-                amount: Money::new(501, NZD)
+                amount: Money::new(501, NZD),
+                with_claim: None,
             }
         )
         .is_err());
@@ -259,6 +260,7 @@ fn money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing() {
         Command::RefundSuspense {
             policy: id,
             amount: Money::new(500, NZD),
+            with_claim: None,
         },
     )
     .unwrap();

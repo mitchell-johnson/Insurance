@@ -356,6 +356,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         Command::RefundSuspense {
             policy: p.clone(),
             amount: Money::new(1, NZD),
+            with_claim: None,
         },
         Command::BeginTransfer {
             policy: p.clone(),

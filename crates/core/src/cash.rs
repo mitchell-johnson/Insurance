@@ -59,7 +59,7 @@ pub(crate) fn apply_receipt(
     if policy.receipts.contains_key(&receipt) {
         return Err(Reject::new("duplicate_receipt", format!("receipt {receipt} has already been applied")));
     }
-    if matches!(policy.status, PolicyStatus::Cancelled | PolicyStatus::Expired) && policy.outstanding_minor() == 0 {
+    if matches!(policy.status, PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Terminated) && policy.outstanding_minor() == 0 {
         return Err(Reject::new("policy_ended", "the policy has ended; the money stays with cash matching"));
     }
     let c = policy.currency;
@@ -176,7 +176,18 @@ pub(crate) fn apply_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut
     Ok(())
 }
 
-pub(crate) fn refund_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, amount: Money) -> Result<(), Reject> {
+pub(crate) fn refund_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, amount: Money, with_claim: Option<String>) -> Result<(), Reject> {
+    // Refunds go back to where the money came from, unless the payer is the
+    // person a claim is for: then they are paid with that claim and only so.
+    if policy.refund_with_claim != with_claim {
+        return Err(match &policy.refund_with_claim {
+            Some(claim) => Reject::new(
+                "refund_with_claim",
+                format!("the payer is the person claim {claim} is for; this refund is paid with that claim, not to the source account"),
+            ),
+            None => Reject::new("refund_to_source", "refunds on this policy go back to the source account; no claim takes them"),
+        });
+    }
     let c = policy.currency;
     if amount.currency != c || amount.minor <= 0 {
         return Err(Reject::new("invalid_amount", "a refund must be a positive amount in the policy's currency"));
@@ -188,10 +199,15 @@ pub(crate) fn refund_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mu
     set.debit(accounts::policy_suspense(&policy.id, c), amount.minor as i128, Dimensions::default());
     set.credit(accounts::settlement(c), amount.minor as i128, Dimensions::default());
     let postings = set.into_postings(ledger)?;
-    ctx.post(ledger, "suspense_refunded", Some(policy), ctx.date, postings, BTreeMap::new())?;
+    let mut detail = BTreeMap::new();
+    if let Some(claim) = &with_claim {
+        detail.insert("with_claim".to_string(), claim.clone());
+    }
+    ctx.post(ledger, "suspense_refunded", Some(policy), ctx.date, postings, detail)?;
     ctx.emit(Event::SuspenseRefunded {
         policy: policy.id.clone(),
         amount_minor: amount.minor,
+        with_claim,
     });
     Ok(())
 }
