@@ -21,9 +21,19 @@ In: `Command::CoreEvents` from the event feed; capacity commands from underwriti
 
 Out, on each applied command: `Instruction`s for the core (record this cession, post this entry, sweep this balance), each with a stable ID that is its idempotency key there, and `Notice`s for other modules and people (exceptions, underwritten-excess requests, large-claim notifications, consent requests, disputed items, documents to file in write-once Blob Storage, settlements due).
 
+## Reaching the core
+
+The core keeps two things for reinsurance, both by command from caller `reinsurance` and neither worked out there.
+
+- **The cession on a cover.** `record_cession` replaces a cover's record from a date with dated segments, kept on the policy (`Policy.cessions`, read with `ic_core::reinsurance::cession_on`). The core checks only that the parts of each cession add up to its sum at risk and that the dates are in order. The record moves with the policy when it transfers between partitions.
+- **Reinsurance entries.** `post_reinsurance` posts one balanced entry of a named kind: ceded premium, commission, a recoverable, a recovery due, an aggregate recovery, profit commission, a dispute settlement, an opening balance or a settlement sweep. A negative amount posts the opposite entry. Each reinsurer has one account per treaty and partition, `int/reinsurer/{treaty}/{reinsurer}/{currency}`; the sum across partitions is the balance the module holds, and the end-to-end tests assert it.
+
+`Reinsurance::to_core` turns an instruction into its command, with the instruction's ID as the idempotency key. The driver's rules are short. An instruction the core accepts, or reports as a duplicate, is done. A cession the core refuses with `policy_transferring` or `policy_transferred` is dropped: the core keeps the refusal against the key, so a retry would not apply, and the module sends the cover's whole record again when the transfer lands or is abandoned. Entries are never refused for a transfer, because premium already billed is owed from the partition that billed it. Any other refusal is a defect and stops the driver for a person to look at.
+
 ## Known gaps
 
-- **Delivery to the core is not wired yet.** The module produces instructions; the core commands that record a cession on a layer and post reinsurance entries, and the driver that carries instructions to them, are the next piece of work in this module. Until then nothing reinsurance works out reaches the ledger.
+- **The driver is not running yet.** Everything either side of it is built and tested together: the core takes `record_cession` and `post_reinsurance` from caller `reinsurance` (`crates/core/src/reinsurance.rs`), `delivery.rs` turns each instruction into one of them, and `tests/core.rs` runs the module against real partitions. What is missing is the process that reads the partitions' event streams into the module and sends its instructions on. That waits on two things the core owns: the event feed into module groups, and a node binary that can host module crates. Until then the module runs only in tests.
+- **Settlement clearing is not paid out.** A settlement instruction moves the statement's net amount to `int/reinsurance_settlement_clearing` on each partition that holds part of it. The payment to, or from, the reinsurer's bank that clears that account belongs to the payments module and is not built.
 - **Hosting.** The state machine is ready for the module host in `ic-raft`, but is not yet registered with the node server, and the feed of partition events into a module group is not on `main` yet.
 - **Joint lives.** The design counts joint cover in full against each life's retention. The core has no joint-life cover yet, so there is nothing to count.
 - **Longevity reinsurance for annuities** is not built: the core has no annuities.

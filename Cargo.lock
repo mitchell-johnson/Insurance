@@ -2027,6 +2027,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-sim",
  "proptest",
  "serde",
  "serde_json",

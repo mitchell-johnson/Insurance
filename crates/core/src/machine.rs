@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, payments, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, earning, group, lifecycle, payments, reinsurance, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -412,6 +412,54 @@ impl CoreState {
                 payments::settle_payable(&mut s.ledger, p, ctx, payment, payable, refund, amount, bank_account)
             }),
             Command::ReturnPayment { policy, payment } => self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment)),
+            Command::RecordCession {
+                policy,
+                cover,
+                layer,
+                life,
+                from,
+                segments,
+            } => self.with_policy(&policy, true, |_, p| reinsurance::record_cession(p, ctx, cover, layer, life, from, segments)),
+            Command::PostReinsurance {
+                kind,
+                treaty,
+                reinsurer,
+                currency,
+                policy,
+                amount_minor,
+                value_date,
+                reference,
+            } => match policy {
+                // The entry touches no policy account, so a policy that is
+                // moving, or has moved, does not stop it: the money is owed
+                // to the reinsurer from the partition that billed it.
+                Some(id) => self.with_policy(&id, false, |s, p| {
+                    reinsurance::post(
+                        &mut s.ledger,
+                        Some(p),
+                        ctx,
+                        kind,
+                        &treaty,
+                        &reinsurer,
+                        currency,
+                        amount_minor,
+                        value_date,
+                        &reference,
+                    )
+                }),
+                None => reinsurance::post(
+                    &mut self.ledger,
+                    None,
+                    ctx,
+                    kind,
+                    &treaty,
+                    &reinsurer,
+                    currency,
+                    amount_minor,
+                    value_date,
+                    &reference,
+                ),
+            },
             Command::BeginTransfer {
                 policy,
                 transfer_id,

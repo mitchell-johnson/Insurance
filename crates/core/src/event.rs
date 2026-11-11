@@ -315,6 +315,27 @@ pub enum Event {
         claim: String,
     },
 
+    /// The reinsurance module recorded the cession on a cover from a date.
+    CessionRecorded {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        life: LifeId,
+        from: NaiveDate,
+    },
+    /// A reinsurance entry was posted. The finance ledger and the reinsurer
+    /// exposure view read it.
+    ReinsurancePosted {
+        kind: crate::reinsurance::ReinsurancePosting,
+        treaty: String,
+        reinsurer: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<PolicyId>,
+        amount_minor: i64,
+        value_date: NaiveDate,
+        reference: String,
+    },
+
     /// End-of-day could not process a policy. Becomes an exception item.
     PolicyException {
         policy: PolicyId,
