@@ -1,16 +1,16 @@
 //! One member of a partition's Raft group.
 
 use openraft::async_runtime::WatchReceiver;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::NaiveDate;
 use ic_core::Envelope;
 use ic_ledger::PartitionId;
-use openraft::errors::{ClientWriteError, RaftError};
-use openraft::{BasicNode, Config, ServerState, SnapshotPolicy};
+use openraft::{BasicNode, Config, SnapshotPolicy};
 use serde::{Deserialize, Serialize};
 
+use crate::group;
 use crate::machine::{Backlog, Machine};
 use crate::network::{Network, RaftGroup};
 use crate::peers::Identity;
@@ -124,15 +124,7 @@ impl Node {
     }
 
     async fn write(&self, proposal: Proposal) -> Result<Reply, ProposeError> {
-        let forward = |f: openraft::errors::ForwardToLeader<crate::types::TypeConfig>| ProposeError::NotLeader {
-            leader: f.leader_id,
-            addr: f.leader_node.map(|n| n.addr),
-        };
-        match self.raft.client_write(proposal).await {
-            Ok(response) => Ok(response.data),
-            Err(RaftError::APIError(ClientWriteError::ForwardToLeader(f))) => Err(forward(f)),
-            Err(e) => Err(ProposeError::Unknown(e.to_string())),
-        }
+        group::write(&self.raft, proposal).await
     }
 
     /// Replicate a command and apply it. Returns once a majority has it
@@ -149,25 +141,7 @@ impl Node {
     /// This is how a failed node is replaced: start a new node with a new
     /// number and call this with the old number left out and the new one in.
     pub async fn set_members(&self, members: BTreeMap<NodeId, String>) -> Result<(), ProposeError> {
-        let forward = |f: openraft::errors::ForwardToLeader<crate::types::TypeConfig>| ProposeError::NotLeader {
-            leader: f.leader_id,
-            addr: f.leader_node.map(|n| n.addr),
-        };
-        let unknown = |e: RaftError<crate::types::TypeConfig, ClientWriteError<crate::types::TypeConfig>>| match e {
-            RaftError::APIError(ClientWriteError::ForwardToLeader(f)) => forward(f),
-            other => ProposeError::Unknown(other.to_string()),
-        };
-        let voters: BTreeSet<NodeId> = self.raft.voter_ids().collect();
-        for (id, addr) in &members {
-            if !voters.contains(id) {
-                self.raft.add_learner(*id, BasicNode::new(addr.clone()), true).await.map_err(unknown)?;
-            }
-        }
-        let wanted: BTreeSet<NodeId> = members.keys().copied().collect();
-        if wanted != voters {
-            self.raft.change_membership(wanted, false).await.map_err(unknown)?;
-        }
-        Ok(())
+        group::set_members(&self.raft, members).await
     }
 
     /// Record, through the log, that outputs have left the node.
@@ -179,20 +153,12 @@ impl Node {
     /// own membership records it. A member added after this node was
     /// configured is therefore found too.
     pub fn leader_hint(&self) -> (Option<NodeId>, Option<String>) {
-        let metrics = self.raft.metrics().borrow_watched().clone();
-        let leader = metrics.current_leader;
-        let addr = leader.and_then(|l| metrics.membership_config.nodes().find(|(id, _)| **id == l).map(|(_, n)| n.addr.clone()));
-        (leader, addr)
+        group::leader_hint(&self.raft)
     }
 
     pub fn status(&self) -> NodeStatus {
         let metrics = self.raft.metrics().borrow_watched().clone();
-        let role = match metrics.state {
-            ServerState::Leader => "leader",
-            ServerState::Follower => "follower",
-            ServerState::Candidate => "candidate",
-            _ => "learner",
-        };
+        let role = group::role(metrics.state);
         let (business_date, state_hash, ledger_head, ledger_entries, policies) = self.machine.read(|s| {
             (
                 s.business_date,

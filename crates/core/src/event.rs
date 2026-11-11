@@ -8,6 +8,7 @@ use chrono::NaiveDate;
 use ic_ledger::{EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
 
+use crate::payments::PayableKind;
 use crate::policy::{LayerOrigin, PolicyStatus, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
@@ -257,6 +258,36 @@ pub enum Event {
         /// force on the day of the event, plus any indexation step applied
         /// since where the product's wording pays it.
         payable: Vec<PayableCover>,
+    },
+    /// A refund moved from suspense to refund payable and waits to be paid.
+    RefundPayableRaised {
+        policy: PolicyId,
+        refund: String,
+        amount_minor: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        with_claim: Option<String>,
+    },
+    /// A raised refund went back to suspense unpaid.
+    RefundPayableReleased {
+        policy: PolicyId,
+        refund: String,
+        amount_minor: i64,
+    },
+    /// The bank confirmed a payment and the payable was discharged.
+    PaymentSettled {
+        policy: PolicyId,
+        payment: String,
+        payable: PayableKind,
+        amount_minor: i64,
+        bank_account: String,
+    },
+    /// The bank sent a payment back and it is owed again.
+    PaymentReturned {
+        policy: PolicyId,
+        payment: String,
+        payable: PayableKind,
+        amount_minor: i64,
+        bank_account: String,
     },
     /// Collection from the payer's account must stop: the payments module
     /// cancels the direct debit authority.

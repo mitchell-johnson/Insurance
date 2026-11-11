@@ -17,6 +17,7 @@ use openraft::alias::{SnapshotMetaOf, SnapshotOf, VoteOf};
 use openraft::errors::{RPCError, ReplicationClosed, StreamingError, Unreachable};
 use openraft::network::RPCOption;
 use openraft::raft::{AppendEntriesRequest, AppendEntriesResponse, AppendResult, SnapshotResponse, VoteRequest, VoteResponse};
+use openraft::storage::RaftStateMachine;
 use openraft::{AnyError, BasicNode, RaftNetworkFactory, RaftNetworkV2};
 
 use crate::auth::ClusterAuth;
@@ -26,6 +27,10 @@ use crate::types::{NodeId, TypeConfig};
 
 /// A member's handle on its Raft group.
 pub type RaftGroup = openraft::Raft<TypeConfig, Machine>;
+
+/// A member's handle on a group over any state machine whose snapshot is its
+/// own JSON text: a partition's, or a module's.
+pub type GroupOf<SM> = openraft::Raft<TypeConfig, SM>;
 
 #[derive(Default)]
 struct LocalState {
@@ -99,7 +104,8 @@ enum Transport {
     Local(LocalNet),
     Http {
         client: reqwest::Client,
-        partition: PartitionId,
+        /// The group's name in the path: a partition's number, or `module-<name>`.
+        group: String,
         auth: ClusterAuth,
     },
 }
@@ -121,11 +127,16 @@ impl Network {
 
     /// Peers are reached at `http://{addr}/raft/{partition}/...`.
     pub fn http(from: Identity, partition: PartitionId, auth: ClusterAuth) -> Self {
+        Self::http_group(from, partition.to_string(), auth)
+    }
+
+    /// Peers are reached at `http://{addr}/raft/{group}/...`.
+    pub fn http_group(from: Identity, group: String, auth: ClusterAuth) -> Self {
         Self {
             from,
             transport: Transport::Http {
                 client: reqwest::Client::new(),
-                partition,
+                group,
                 auth,
             },
         }
@@ -161,7 +172,7 @@ impl Connection {
         &self,
         client: &reqwest::Client,
         auth: &ClusterAuth,
-        partition: PartitionId,
+        group: &str,
         path: &str,
         body: &Req,
         option: &RPCOption,
@@ -170,7 +181,7 @@ impl Connection {
         Req: serde::Serialize,
         Resp: serde::de::DeserializeOwned,
     {
-        let url = format!("http://{}/raft/{partition}/{path}", self.addr);
+        let url = format!("http://{}/raft/{group}/{path}", self.addr);
         let mut request = auth
             .sign(client.post(url))
             .header(NODE_HEADER, self.from.id)
@@ -204,9 +215,9 @@ impl RaftNetworkV2<TypeConfig> for Connection {
     async fn append_entries(&mut self, rpc: AppendEntriesRequest<TypeConfig>, option: RPCOption) -> Result<AppendResult<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(&self.from, self.to)?.append_entries(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition, auth } => {
+            Transport::Http { client, group, auth } => {
                 let (prev, last) = (rpc.prev_log_id, rpc.last_log_id());
-                let response: AppendEntriesResponse<TypeConfig> = self.post(client, auth, *partition, "append", &rpc, &option).await?;
+                let response: AppendEntriesResponse<TypeConfig> = self.post(client, auth, group, "append", &rpc, &option).await?;
                 Ok(response.into_append_result(prev, last))
             }
         }
@@ -215,14 +226,14 @@ impl RaftNetworkV2<TypeConfig> for Connection {
     async fn vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(&self.from, self.to)?.vote(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "vote", &rpc, &option).await?),
+            Transport::Http { client, group, auth } => Ok(self.post(client, auth, group, "vote", &rpc, &option).await?),
         }
     }
 
     async fn pre_vote(&mut self, rpc: VoteRequest<TypeConfig>, option: RPCOption) -> Result<VoteResponse<TypeConfig>, RPCError<TypeConfig>> {
         match &self.transport {
             Transport::Local(net) => Ok(net.route(&self.from, self.to)?.pre_vote(rpc).await.map_err(unreachable)?),
-            Transport::Http { client, partition, auth } => Ok(self.post(client, auth, *partition, "pre-vote", &rpc, &option).await?),
+            Transport::Http { client, group, auth } => Ok(self.post(client, auth, group, "pre-vote", &rpc, &option).await?),
         }
     }
 
@@ -239,13 +250,13 @@ impl RaftNetworkV2<TypeConfig> for Connection {
                 .install_full_snapshot(vote, snapshot)
                 .await
                 .map_err(unreachable)?),
-            Transport::Http { client, partition, auth } => {
+            Transport::Http { client, group, auth } => {
                 let wire = SnapshotWire {
                     vote,
                     meta: snapshot.meta,
                     state: String::from_utf8(snapshot.snapshot).map_err(unreachable)?,
                 };
-                Ok(self.post(client, auth, *partition, "snapshot", &wire, &option).await?)
+                Ok(self.post(client, auth, group, "snapshot", &wire, &option).await?)
             }
         }
     }
@@ -298,18 +309,33 @@ async fn identify(State(me): State<Identity>, request: axum::extract::Request, n
 }
 
 /// The receiving side: routes that hand a peer's RPC to this member's Raft.
-/// Mount under `/raft/{partition}`.
-pub fn routes(raft: RaftGroup, identity: Identity) -> Router {
-    async fn append(State(raft): State<RaftGroup>, Json(rpc): Json<AppendEntriesRequest<TypeConfig>>) -> Json<Wire<AppendEntriesResponse<TypeConfig>>> {
+/// Mount under `/raft/{group}`.
+pub fn routes<SM>(raft: GroupOf<SM>, identity: Identity) -> Router
+where
+    SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+{
+    async fn append<SM>(State(raft): State<GroupOf<SM>>, Json(rpc): Json<AppendEntriesRequest<TypeConfig>>) -> Json<Wire<AppendEntriesResponse<TypeConfig>>>
+    where
+        SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+    {
         Json(raft.append_entries(rpc).await.map(AppendEntriesResponse::from).map_err(|e| e.to_string()))
     }
-    async fn vote(State(raft): State<RaftGroup>, Json(rpc): Json<VoteRequest<TypeConfig>>) -> Json<Wire<VoteResponse<TypeConfig>>> {
+    async fn vote<SM>(State(raft): State<GroupOf<SM>>, Json(rpc): Json<VoteRequest<TypeConfig>>) -> Json<Wire<VoteResponse<TypeConfig>>>
+    where
+        SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+    {
         Json(raft.vote(rpc).await.map_err(|e| e.to_string()))
     }
-    async fn pre_vote(State(raft): State<RaftGroup>, Json(rpc): Json<VoteRequest<TypeConfig>>) -> Json<Wire<VoteResponse<TypeConfig>>> {
+    async fn pre_vote<SM>(State(raft): State<GroupOf<SM>>, Json(rpc): Json<VoteRequest<TypeConfig>>) -> Json<Wire<VoteResponse<TypeConfig>>>
+    where
+        SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+    {
         Json(raft.pre_vote(rpc).await.map_err(|e| e.to_string()))
     }
-    async fn snapshot(State(raft): State<RaftGroup>, Json(wire): Json<SnapshotWire>) -> Json<Wire<SnapshotResponse<TypeConfig>>> {
+    async fn snapshot<SM>(State(raft): State<GroupOf<SM>>, Json(wire): Json<SnapshotWire>) -> Json<Wire<SnapshotResponse<TypeConfig>>>
+    where
+        SM: RaftStateMachine<TypeConfig, SnapshotData = Vec<u8>>,
+    {
         let snapshot = SnapshotOf::<TypeConfig, Vec<u8>> {
             meta: wire.meta,
             snapshot: wire.state.into_bytes(),
@@ -317,10 +343,10 @@ pub fn routes(raft: RaftGroup, identity: Identity) -> Router {
         Json(raft.install_full_snapshot(wire.vote, snapshot).await.map_err(|e| e.to_string()))
     }
     Router::new()
-        .route("/append", post(append))
-        .route("/vote", post(vote))
-        .route("/pre-vote", post(pre_vote))
-        .route("/snapshot", post(snapshot))
+        .route("/append", post(append::<SM>))
+        .route("/vote", post(vote::<SM>))
+        .route("/pre-vote", post(pre_vote::<SM>))
+        .route("/snapshot", post(snapshot::<SM>))
         .layer(axum::extract::DefaultBodyLimit::max(MAX_RAFT_BODY))
         .layer(axum::middleware::from_fn_with_state(identity, identify))
         .with_state(raft)

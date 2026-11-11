@@ -32,7 +32,9 @@ type Vote = VoteOf<TypeConfig>;
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum Record {
-    Append(Entry),
+    /// Boxed so a record is small whatever a command carries. The stored form
+    /// is the same.
+    Append(Box<Entry>),
     /// Discard every entry after this index. `None` discards everything.
     TruncateAfter(Option<u64>),
     /// Every entry up to and including this one is covered by a snapshot and
@@ -102,7 +104,7 @@ impl LogStore {
                 }
                 match serde_json::from_str::<Record>(&line).map_err(invalid)? {
                     Record::Append(e) => {
-                        entries.insert(e.index(), e);
+                        entries.insert(e.index(), *e);
                     }
                     Record::TruncateAfter(Some(index)) => {
                         entries.split_off(&(index + 1));
@@ -229,7 +231,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         let result = {
             let mut inner = self.lock();
             let entries: Vec<Entry> = entries.into_iter().collect();
-            let records: Vec<Record> = entries.iter().cloned().map(Record::Append).collect();
+            let records: Vec<Record> = entries.iter().cloned().map(|e| Record::Append(Box::new(e))).collect();
             // Disk first: an entry is visible to readers only once it is durable.
             inner.journal(&records).map(|()| {
                 for e in entries {
@@ -269,7 +271,7 @@ impl RaftLogStorage<TypeConfig> for LogStore {
         // and swap it in. A crash before the swap leaves the old journal,
         // whose extra entries a snapshot already covers; after it, the new.
         let mut buf = Vec::new();
-        for record in std::iter::once(Record::Purged(log_id)).chain(keep.values().cloned().map(Record::Append)) {
+        for record in std::iter::once(Record::Purged(log_id)).chain(keep.values().cloned().map(|e| Record::Append(Box::new(e)))) {
             serde_json::to_writer(&mut buf, &record).map_err(invalid)?;
             buf.push(b'\n');
         }

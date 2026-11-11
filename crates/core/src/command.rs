@@ -7,6 +7,7 @@ use ic_money::{DecStr, Money};
 use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
+use crate::payments::PayableKind;
 use crate::policy::{LifeFactors, LifeKind, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
@@ -199,6 +200,42 @@ pub enum Command {
         with_claim: Option<String>,
     },
 
+    // --- payments: money leaving through a payable ---
+    /// Move a credit balance from suspense to refund payable, where it waits
+    /// for a payment run. The same route rule as `RefundSuspense` applies.
+    RaiseRefundPayable {
+        policy: PolicyId,
+        /// The payments module's ID for the refund.
+        refund: String,
+        amount: Money,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        with_claim: Option<String>,
+    },
+    /// Put a raised refund that will not be paid as raised back in suspense.
+    ReleaseRefundPayable {
+        policy: PolicyId,
+        refund: String,
+    },
+    /// The bank confirmed settlement: discharge the payable from the ledger
+    /// account that mirrors the bank account the money left.
+    SettlePayable {
+        policy: PolicyId,
+        /// The payment's idempotency key: its end-to-end reference at the bank.
+        payment: String,
+        payable: PayableKind,
+        /// The refund this pays. Required for a refund payment, and only then.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refund: Option<String>,
+        amount: Money,
+        /// The payments module's code for the bank account.
+        bank_account: String,
+    },
+    /// The bank sent a settled payment back: it is owed again.
+    ReturnPayment {
+        policy: PolicyId,
+        payment: String,
+    },
+
     // --- policy transfer between groups ---
     BeginTransfer {
         policy: PolicyId,
@@ -242,6 +279,9 @@ impl Command {
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
+            Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
+                &["payments"]
+            }
             Command::BeginTransfer { .. } | Command::LandTransfer { .. } | Command::CompleteTransfer { .. } | Command::AbortTransfer { .. } => &["transfer"],
             Command::PostCounterparty(_) => &["distribution", "counterparty-finance"],
         }
@@ -269,6 +309,10 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::RaiseRefundPayable { .. } => "raise_refund_payable",
+            Command::ReleaseRefundPayable { .. } => "release_refund_payable",
+            Command::SettlePayable { .. } => "settle_payable",
+            Command::ReturnPayment { .. } => "return_payment",
             Command::BeginTransfer { .. } => "begin_transfer",
             Command::LandTransfer { .. } => "land_transfer",
             Command::CompleteTransfer { .. } => "complete_transfer",
