@@ -606,6 +606,11 @@ pub struct DistributionState {
     pub tasks: BTreeMap<String, Task>,
     /// The last event sequence taken from each partition.
     pub checkpoints: BTreeMap<PartitionId, u64>,
+    /// The module sequence at which each party last changed: its position,
+    /// its actions, its documents, its licence or its payee record. What a
+    /// publisher reads to send on only what moved.
+    #[serde(default)]
+    pub changed: BTreeMap<PartyId, u64>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -649,6 +654,7 @@ impl DistributionState {
             cases: BTreeMap::new(),
             tasks: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
+            changed: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1115,6 +1121,46 @@ impl DistributionState {
         Ok(())
     }
 
+    /// The parties an event is about, for the change cursor.
+    fn parties_of(&self, event: &Event) -> Vec<PartyId> {
+        let of_action = |id: &String| self.actions.get(id).map(|a| a.party.clone()).into_iter().collect();
+        match event {
+            Event::PartyAdded { party, .. }
+            | Event::PartyCeased { party, .. }
+            | Event::PayeeChanged { party, .. }
+            | Event::AmountHeld { party, .. }
+            | Event::AmountReleased { party, .. }
+            | Event::PaymentRequested { party, .. }
+            | Event::ActionProposed { party, .. }
+            | Event::DocumentAttached { party, .. } => vec![party.clone()],
+            Event::StatementIssued { payee, .. } => vec![payee.clone()],
+            Event::CaseOpened { subject, .. } => vec![subject.clone()],
+            Event::StructureChanged { child, parent } => vec![child.clone(), parent.clone()],
+            Event::EngagementStarted { adviser, with, .. } => vec![adviser.clone(), with.clone()],
+            Event::EngagementEnded { id, .. } => self
+                .config
+                .structure
+                .engagements
+                .get(id)
+                .map(|e| vec![e.adviser.clone(), e.with.clone()])
+                .unwrap_or_default(),
+            Event::AuthorisationChanged {
+                party,
+                engagements,
+                suspended_payees,
+                ..
+            } => {
+                let advisers = engagements
+                    .iter()
+                    .filter_map(|id| self.config.structure.engagements.get(id))
+                    .map(|e| e.adviser.clone());
+                std::iter::once(party.clone()).chain(suspended_payees.iter().cloned()).chain(advisers).collect()
+            }
+            Event::ActionApproved { id, .. } | Event::ActionRejected { id } | Event::ActionCompleted { id } => of_action(id),
+            _ => vec![],
+        }
+    }
+
     /// Apply one logged command.
     pub fn apply_envelope(&mut self, index: u64, env: Envelope) -> Output {
         if let Some(stored) = self.idempotency.get(&env.key) {
@@ -1139,6 +1185,10 @@ impl DistributionState {
         if result.is_err() {
             ctx.events.clear();
             ctx.postings.clear();
+        }
+        let touched: Vec<PartyId> = ctx.events.iter().flat_map(|e| self.parties_of(e)).collect();
+        for party in touched {
+            self.changed.insert(party, self.seq);
         }
         self.idempotency.insert(
             env.key,

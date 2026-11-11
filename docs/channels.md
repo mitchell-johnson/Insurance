@@ -70,6 +70,10 @@ A refusal says which question failed, so the person knows what to ask for. Roles
 
 **Data classes.** A view is shaped to the classes of data the person's roles include. Health and claim detail are withheld from someone without that class, and the person is told that something was withheld, never what.
 
+**Personal records.** Nobody opens their own policy in the staff console, or the policy of someone they have declared a personal connection with, whatever their role and path. Staff declare connections themselves; only a staff administrator can remove one. The attempt is refused, logged and flagged.
+
+**Flagged attempts.** An attempt on a record the person has no path to, or on a personal record, is marked in the access log and raised as an `access_flagged` event for the people who watch for misuse.
+
 **The access log.** Every staff read of a policy or of the workbench is written to the access log before the data is returned, with the person, the record, the purpose and the decision. Refusals are logged too. If the log cannot be written the read fails. Staff see their own recent access at `GET /staff/v1/me`; nobody can write a line by hand.
 
 | Call | What it does |
@@ -148,7 +152,7 @@ node crates/channels/tests/browser/check.js
 
 - **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app.
 - **New business is not in the adviser portal.** Quotes and proposals are underwriting's API. The portal shows the book, standing, held money and servicing requests.
-- **A scheme member is not linked to a person when they join.** The core's `MemberJoined` event carries no party, so a member sees their cover in the app only after group administration identifies them (`IdentifyMember`).
+- **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).
 - **The browser check is not run by CI.** CI has no browser. Run it before changing anything under `ui/`.
 - **Freshness depends on a heartbeat.** The gateway tells the module the stream is current every 15 seconds once it has confirmed the module is caught up. The heartbeat is a command, so it needs a majority; without one, answers go stale after two minutes and say so, which is the truth.
 - **Modules reach the workbench over HTTP today.** Each owning module must send its own positions; until it does, the workbench is empty for that module's money. Commission is the first publisher.

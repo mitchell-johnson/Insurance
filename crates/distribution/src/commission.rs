@@ -877,6 +877,7 @@ impl DistributionState {
                 continue;
             };
             let amount = -line.amount_minor;
+            self.changed.insert(party.clone(), seq);
             *self
                 .positions
                 .entry(party.clone())
