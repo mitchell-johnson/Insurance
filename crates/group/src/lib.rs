@@ -10,6 +10,7 @@ pub mod benefit;
 pub mod command;
 pub mod csv;
 pub mod diff;
+pub mod driver;
 pub mod event;
 pub mod host;
 pub mod mapping;

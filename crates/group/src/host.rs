@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::command::{caller, Envelope, GroupCommand};
 use crate::event::Outbound;
-use crate::state::GroupState;
+use crate::state::{FileStatus, GroupState};
 
 /// The module's permanent name on the cluster.
 pub const MODULE: &str = "group";
@@ -74,6 +74,20 @@ pub enum Question {
     Invoices { scheme: String },
     /// Open exceptions, for one scheme or all.
     Exceptions { scheme: Option<String> },
+    /// Files waiting for the driver: stored and not yet scanned, or scanned
+    /// and not yet read.
+    FilesToRead,
+    /// The mapping a scheme's files are read with.
+    Mapping { scheme: String },
+}
+
+/// A file the driver has work to do on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileToRead {
+    pub scheme: String,
+    pub file: String,
+    pub status: FileStatus,
+    pub content_hash: String,
 }
 
 pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
@@ -127,6 +141,22 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             })
         }
         Question::Invoices { scheme: id } => json!({ "invoices": scheme(&id)?.invoices }),
+        Question::FilesToRead => {
+            let files: Vec<FileToRead> = state
+                .schemes
+                .values()
+                .flat_map(|s| s.files.values().map(move |f| (s, f)))
+                .filter(|(_, f)| matches!(f.status, FileStatus::Quarantined | FileStatus::Scanned))
+                .map(|(s, f)| FileToRead {
+                    scheme: s.id.clone(),
+                    file: f.id.clone(),
+                    status: f.status,
+                    content_hash: f.content_hash.clone(),
+                })
+                .collect();
+            json!({ "files": files })
+        }
+        Question::Mapping { scheme: id } => json!({ "mapping": scheme(&id)?.mapping }),
         Question::Exceptions { scheme: only } => {
             let open: Vec<_> = state
                 .exceptions
