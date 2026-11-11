@@ -80,6 +80,8 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
 //   ic-node    seals journal segments and publishes events
 //   ic-worker  signs and publishes the day's Merkle root
 //   ic-api     the gateway; reaches nothing in Azure but the cluster token
+//   ic-payments  the payments pump: the bank keys, bank credentials and
+//              payment evidence, in a vault and container of its own
 //   ic-portal  the portal service for the app, the portals and the consoles;
 //              likewise reaches nothing in Azure but the cluster token
 // Pods get their identity through workload identity federation: no secret is
@@ -504,6 +506,106 @@ resource postgresAdmin 'Microsoft.DBforPostgreSQL/flexibleServers/administrators
   }
 }
 
+// --- payments and bank channels ------------------------------------------------
+
+// The pump is the only process that speaks to a bank. It has its own
+// identity and its own vault, so no other process can read a bank
+// credential or sign a payment file, and the pump can read nothing of the
+// core's but the cluster token.
+resource paymentsIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-payments'
+  location: location
+  tags: tags
+}
+
+resource paymentsFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: paymentsIdentity
+  name: 'aks-${workloadNamespace}-ic-payments'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-payments'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource paymentsToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, paymentsIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: paymentsIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+// The payments vault. It holds, per bank channel and region, the key that
+// signs what is sent to the bank and the credential the bank issued. Keys
+// and credentials are created by the connectivity administrator when a bank
+// channel is set up, never by this template, and are named as the payments
+// configuration names them (docs/payments.md).
+resource paymentsVault 'Microsoft.KeyVault/vaults@2023-07-01' = {
+  name: 'pay-${take(unique, 8)}-${take(replace(name, '-', ''), 10)}'
+  location: location
+  tags: tags
+  properties: {
+    tenantId: subscription().tenantId
+    sku: { family: 'A', name: 'premium' }
+    enableRbacAuthorization: true
+    enablePurgeProtection: true
+    enableSoftDelete: true
+    softDeleteRetentionInDays: 90
+  }
+}
+
+// Sign with the bank keys and read the bank credentials. The pump cannot
+// create, export or delete either.
+resource paymentsSigning 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: paymentsVault
+  name: guid(paymentsVault.id, paymentsIdentity.id, roles.keyVaultCryptoUser)
+  properties: {
+    principalId: paymentsIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultCryptoUser)
+  }
+}
+
+resource paymentsCredentials 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: paymentsVault
+  name: guid(paymentsVault.id, paymentsIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: paymentsIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+// Every file and request sent to a bank, with its signed manifest, kept
+// unchanged for the retention period: the evidence of what was instructed.
+resource paymentsEvidence 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  parent: blobs
+  name: 'payments-evidence'
+  properties: { publicAccess: 'None' }
+}
+
+resource paymentsWorm 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
+  parent: paymentsEvidence
+  name: 'default'
+  properties: {
+    immutabilityPeriodSinceCreationInDays: retentionDays
+    allowProtectedAppendWrites: false
+  }
+}
+
+resource paymentsEvidenceWrite 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: paymentsEvidence
+  name: guid(paymentsEvidence.id, paymentsIdentity.id, roles.blobDataContributor)
+  properties: {
+    principalId: paymentsIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+  }
+}
+
 // --- outputs: everything deploy/ needs ---------------------------------------------------
 
 output aksName string = aks.name
@@ -513,6 +615,9 @@ output workerClientId string = workerIdentity.properties.clientId
 output apiClientId string = apiIdentity.properties.clientId
 output portalClientId string = portalIdentity.properties.clientId
 output keyVaultName string = vault.name
+output paymentsClientId string = paymentsIdentity.properties.clientId
+output paymentsKeyVaultName string = paymentsVault.name
+output paymentsKeyVaultUrl string = paymentsVault.properties.vaultUri
 output tenantId string = subscription().tenantId
 output blobEndpoint string = storage.properties.primaryEndpoints.blob
 output keyVaultUrl string = vault.properties.vaultUri
