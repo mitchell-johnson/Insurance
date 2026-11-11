@@ -1931,6 +1931,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-payments"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-log",
+ "ic-money",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "ic-product"
 version = "0.1.0"
 dependencies = [
