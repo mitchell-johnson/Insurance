@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 use crate::catalog::Catalog;
 use crate::command::{Command, Envelope};
-use crate::event::{Event, EventRecord, OutboundMessage};
+use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
 use crate::{arrears, billing, cash, earning, group, lifecycle, payments, reopen, transfer, unwind, PolicyId};
@@ -138,10 +138,50 @@ impl Ctx<'_> {
             kind: kind.to_string(),
             policy: policy.map(|p| p.id.clone()),
             hash: entry.hash,
+            value_date: Some(value_date),
+            reverses: entry.body.detail.get("reverses").cloned(),
+            lines: posted_lines(ledger, &entry),
         });
         self.entries.push(entry);
         Ok(())
     }
+}
+
+/// An entry's postings as lines by role, class, unit and dimensions.
+fn posted_lines(ledger: &Ledger, entry: &JournalEntry) -> Vec<PostedLine> {
+    let mut lines: Vec<PostedLine> = Vec::new();
+    for p in &entry.body.postings {
+        // `Ledger::post` accepted the entry, so every account exists.
+        let Some(account) = ledger.account(&p.account) else { continue };
+        match lines
+            .iter_mut()
+            .find(|l| l.role == account.role && l.class == account.class && l.unit == account.unit && l.dims == p.dims)
+        {
+            Some(line) => line.signed += p.signed(),
+            None => lines.push(PostedLine {
+                role: account.role.clone(),
+                class: account.class,
+                unit: account.unit.clone(),
+                signed: p.signed(),
+                dims: p.dims.clone(),
+            }),
+        }
+    }
+    lines
+}
+
+/// The ledger's materialised balances by role, class and unit. Zero totals
+/// are left out.
+fn role_totals(ledger: &Ledger) -> Vec<RoleTotal> {
+    let mut totals: BTreeMap<(String, ic_ledger::AccountClass, ic_ledger::AccountUnit), i128> = BTreeMap::new();
+    for (account, balance) in ledger.accounts() {
+        *totals.entry((account.role.clone(), account.class, account.unit.clone())).or_insert(0) += balance;
+    }
+    totals
+        .into_iter()
+        .filter(|(_, balance)| *balance != 0)
+        .map(|((role, class, unit), balance)| RoleTotal { role, class, unit, balance })
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +335,11 @@ impl CoreState {
                     from: Some(from),
                     to,
                     closing_head,
+                });
+                ctx.emit(Event::ControlTotals {
+                    date: from,
+                    closing_head,
+                    totals: role_totals(&self.ledger),
                 });
                 Ok(())
             }
