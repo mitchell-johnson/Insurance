@@ -9,13 +9,13 @@ use ic_core::event::Event;
 use ic_core::{Command, GroupId, PayableKind, PolicyId, PolicyStatus, Reject};
 use ic_ledger::PartitionId;
 use ic_money::{Currency::NZD, Money};
-use ic_product::{Frequency, Sex};
+use ic_product::{load_product, Frequency, Sex};
 use ic_sim::config::shipped_activations;
-use ic_sim::persona::{issue_command, term_life};
+use ic_sim::persona::{group_scheme, health_family, issue_command, member, term_life};
 use ic_sim::Cluster;
 
 use claims::command::{Notification, Periodic};
-use claims::config::{Exclusion, Profile, Staff};
+use claims::config::{Exclusion, HealthBenefit, Profile, Staff};
 use claims::model::{EndReason, RecoveryStatus};
 use claims::{Actor, AuthorityBook, Channel, ClaimType, DecisionKind, Flags, Line, Notifier, PayeeKind, Queue, Request, Role, Rules, RunKind, Status};
 
@@ -57,6 +57,18 @@ fn rules() -> Rules {
         two_signature_write_off_minor: i64::MAX,
         sharp_reserve_move_pct: 1_000,
         reason_codes: [("R-1".to_string(), kinds.into_iter().collect())].into(),
+        straight_through_max_minor: [(ClaimType::Health, 2_000_00)].into(),
+        health_benefits: [(
+            "gp".to_string(),
+            HealthBenefit {
+                per_event_minor: 60_00,
+                per_year_minor: 600_00,
+                lifetime_minor: i64::MAX / 4,
+                copay_pct: 0,
+                excess_minor: 0,
+            },
+        )]
+        .into(),
         cause_codes: [("CC-0001".to_string(), vec!["cancer.skin".to_string()])].into(),
         exclusions: [("EX-0001".to_string(), Exclusion::default())].into(),
         medical_review_months: 6,
@@ -75,7 +87,7 @@ fn rules() -> Rules {
 
 fn authority() -> AuthorityBook {
     let lines: std::collections::BTreeSet<Line> = [Line::Health, Line::LumpSum, Line::IncomeProtection].into();
-    let types = [ClaimType::Death, ClaimType::TerminalIllness, ClaimType::Trauma, ClaimType::IncomeProtection];
+    let types = [ClaimType::Death, ClaimType::TerminalIllness, ClaimType::Trauma, ClaimType::IncomeProtection, ClaimType::Health];
     let senior = Profile {
         lines,
         max_admission_minor: types.into_iter().map(|t| (t, i64::MAX)).collect(),
@@ -92,7 +104,7 @@ fn authority() -> AuthorityBook {
     let person = |roles: &[Role]| Staff {
         profile: "senior".to_string(),
         roles: roles.iter().copied().collect(),
-        queues: [Queue::LumpSum, Queue::IncomeProtectionNew, Queue::IncomeProtectionOngoing, Queue::ComplexLarge, Queue::Recoveries].into(),
+        queues: [Queue::Health, Queue::Group, Queue::LumpSum, Queue::IncomeProtectionNew, Queue::IncomeProtectionOngoing, Queue::ComplexLarge, Queue::Recoveries].into(),
         wip_limit: 0,
         vulnerable_trained: true,
         related_parties: Default::default(),
@@ -747,4 +759,446 @@ fn the_day_end_drives_timers_and_the_rarer_postings_balance() {
     assert_eq!(code(c.submit(0, "payments", settle(&id, "pay-1", 1_000_00))), "payment_not_instructed");
     assert_eq!(money(&c, &id), (100_000_00, 1_000_00, 200_00));
     days(&mut c, 2);
+}
+
+fn state_mut(c: &mut Cluster) -> &mut ic_core::CoreState {
+    &mut c.nodes.get_mut(&0).unwrap().replica.state
+}
+
+/// Purpose: a provider's invoice is admitted by the rules with no reserve first, posted straight
+/// to benefit payable, paid to the provider by a run and settled, on the real ledger.
+/// Why it matters: most claims by count take this path and no person sees them. It is the one
+/// admission with no reserve before it, so the core must open the claim's ledger record at
+/// admission and still reconcile.
+#[test]
+fn a_health_invoice_goes_straight_through_to_the_provider() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = health_family(n, start(), &[d(1988, 5, 5)], Frequency::Monthly);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-h".into(),
+        amount: Money::new(2_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    let claims::Command::Notify(mut invoice) = notification("clm-h", &id, "hospital", ClaimType::Health, today) else {
+        unreachable!()
+    };
+    invoice.channel = Channel::Provider;
+    invoice.notifier = Notifier::Provider;
+    invoice.health = Some(claims::HealthItem {
+        category: "gp".into(),
+        invoice_minor: 95_00,
+        provider: Some("provider-7".into()),
+        pre_approval_request: false,
+        settles_pre_approval: None,
+    });
+    ok(&mut c, claims::Command::Notify(invoice));
+    let record = claim(&c, "clm-h");
+    assert_eq!((record.status, record.admitted_minor), (Status::Admitted, 60_00), "capped at the per-event limit");
+    assert!(record.decisions[0].straight_through);
+    assert_eq!(money(&c, &id), (0, 60_00, 0));
+
+    ok(
+        &mut c,
+        claims::Command::PrepareRun {
+            run: "prov-1".into(),
+            kind: RunKind::Provider,
+            benefit_date: today,
+            actor: actor("sue"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::ApproveRun {
+            run: "prov-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    let payment = format!("prov-1/clm-h/{today}");
+    c.submit(0, "payments", settle(&id, &payment, 60_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    assert_eq!(claim(&c, "clm-h").status, Status::Paid);
+    assert_eq!(c.state(0).claims.remittance("prov-1")["provider-7"], (1, 60_00));
+}
+
+/// Purpose: the cover check answers from the policy record for a group scheme member: cover by
+/// the scheme's formula on the member's details at the date, no named person until the member
+/// is identified at claim, and a death that does not end the scheme; someone the scheme does
+/// not know is reported as not on the policy.
+/// Why it matters: scheme members are unnamed until they claim. The claim has to be payable on
+/// the formula cover, the identification has to land on the policy record, and admitting one
+/// member's death must never terminate the employer's whole scheme.
+#[test]
+fn a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let mut issue = group_scheme(n, start(), vec![member("staff-1", d(1985, 1, 1), "staff", 60_000_00)]);
+    issue.lives.push(ic_core::command::LifeSpec {
+        id: ic_core::LifeId("pool-1".into()),
+        kind: ic_core::LifeKind::Pool { headcount: 3, total_salary_minor: 150_000_00 },
+        factors: ic_core::LifeFactors::default(),
+    });
+    let id = issue.policy.clone();
+    let issued = c.submit(0, "new-business", issue_command(issue.clone()));
+    if issued.is_err() {
+        // The scheme's pool needs its own category on this product: a scheme of named members only.
+        issue.lives.truncate(1);
+        c.submit(0, "new-business", issue_command(issue)).unwrap();
+    }
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-g".into(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+
+    let member_claim = |claim: &str, life: &str| {
+        let claims::Command::Notify(mut n) = notification(claim, &id, "group-life", ClaimType::Death, today) else {
+            unreachable!()
+        };
+        n.life = Some(life.into());
+        n.flags.group = true;
+        n.notifier = Notifier::Employer;
+        claims::Command::Notify(n)
+    };
+    ok(&mut c, member_claim("clm-ghost", "nobody"));
+    ok(
+        &mut c,
+        claims::Command::Assign {
+            claim: "clm-ghost".into(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::CoverCheck {
+            claim: "clm-ghost".into(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        },
+    );
+    let facts = claim(&c, "clm-ghost").cover_check.clone().unwrap().facts;
+    assert_eq!((facts.life_on_policy, facts.in_force, facts.sum_insured_minor), (false, false, 0));
+
+    ok(&mut c, member_claim("clm-g", "staff-1"));
+    for command in [
+        claims::Command::Acknowledge {
+            claim: "clm-g".into(),
+            delivery_ref: "delivered".into(),
+        },
+        claims::Command::Assign {
+            claim: "clm-g".into(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        },
+        claims::Command::RecordCause {
+            claim: "clm-g".into(),
+            cause_code: "CC-0001".into(),
+            actor: actor("sam"),
+        },
+        claims::Command::CoverCheck {
+            claim: "clm-g".into(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        },
+    ] {
+        ok(&mut c, command);
+    }
+    let facts = claim(&c, "clm-g").cover_check.clone().unwrap().facts;
+    assert_eq!((facts.in_force, facts.sum_insured_minor, facts.ends_on_death), (true, 120_000_00, false));
+    assert_eq!(facts.life_party, None);
+    ok(
+        &mut c,
+        claims::Command::IdentifyLife {
+            claim: "clm-g".into(),
+            party: "party-member-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::CoverCheck {
+            claim: "clm-g".into(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        },
+    );
+    assert_eq!(claim(&c, "clm-g").life_party.as_deref(), Some("party-member-1"));
+    ok(&mut c, decide("clm-g", admit(None, None, false)));
+    assert_eq!(money(&c, &id), (0, 120_000_00, 0));
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+    if c.state(0).policies[&id].lives.contains_key(&ic_core::LifeId("pool-1".into())) {
+        ok(&mut c, member_claim("clm-pool", "pool-1"));
+        assert_eq!(claim(&c, "clm-pool").life_party, None);
+    }
+    days(&mut c, 2);
+}
+
+/// Purpose: the cover check reads standing as it was on the event date: in grace, suspended and
+/// lapsed each answer differently, an event before the lapse is still an event on a live
+/// policy, a cover the policy does not have is reported rather than refused, and a product that
+/// pays an indexation step applied after the event includes it.
+/// Why it matters: a claim is often notified long after the event. Whether cover was in force
+/// is a question about that day, and answering it from today's status would decline valid
+/// claims on policies that lapsed later and pay invalid ones on policies since reinstated.
+#[test]
+fn the_cover_check_reads_the_policy_as_it_was_on_the_event_date() {
+    let mut c = Cluster::in_memory(2, 42);
+    c.open(start()).unwrap();
+    for command in shipped_activations().unwrap() {
+        let command = match command {
+            Command::ActivateProduct { product } if product.code == "term-life" => {
+                let source = include_str!("../../../products/term_life.star").replace(
+                    "indexation(rate_code = \"cpi\")",
+                    "indexation(rate_code = \"cpi\", pays_step_applied_after_event = True)",
+                );
+                Command::ActivateProduct {
+                    product: Box::new(load_product("term_life.star", &source).unwrap()),
+                }
+            }
+            other => other,
+        };
+        c.activate_everywhere(command).unwrap();
+    }
+    c.activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(rules()) })).unwrap();
+    c.activate_everywhere(wrap(claims::Command::ActivateAuthority { book: Box::new(authority()) })).unwrap();
+    let unpaid = policy(&mut c, 0, false);
+    let ahead = policy(&mut c, 1, false);
+    let receipt = Command::ApplyReceipt {
+        policy: ahead.clone(),
+        receipt: "ahead".into(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+
+    let mut checked = 0;
+    let mut facts_on = |c: &mut Cluster, policy: &PolicyId, cover: &str, event: NaiveDate| {
+        checked += 1;
+        let id = format!("clm-{checked}");
+        ok(c, notification(&id, policy, cover, ClaimType::Trauma, event));
+        ok(
+            c,
+            claims::Command::Assign {
+                claim: id.clone(),
+                to: "sam".into(),
+                actor: actor("sam"),
+            },
+        );
+        ok(
+            c,
+            claims::Command::CoverCheck {
+                claim: id.clone(),
+                relied_on: vec![],
+                actor: actor("sam"),
+            },
+        );
+        claim(c, &id).cover_check.clone().unwrap().facts
+    };
+
+    days(&mut c, 45);
+    let day_45 = c.business_date().unwrap();
+    let f = facts_on(&mut c, &unpaid, "trauma", day_45);
+    assert_eq!((f.standing.as_deref(), f.in_force), (Some("suspended"), false));
+    let f = facts_on(&mut c, &unpaid, "trauma", start().checked_add_days(chrono::Days::new(10)).unwrap());
+    assert_eq!((f.standing.as_deref(), f.in_force), (Some("in_grace"), true));
+    let f = facts_on(&mut c, &unpaid, "no-such-cover", day_45);
+    assert_eq!((f.in_force, f.cover_type.as_str(), f.policy_status.as_str()), (false, "", "in_force"));
+    assert_eq!(code(run(&mut c, notification("clm-x", &PolicyId("pol-nowhere".into()), "trauma", ClaimType::Trauma, day_45))), "unknown_policy");
+
+    days(&mut c, 60);
+    assert_eq!(c.state(0).policies[&unpaid].status, PolicyStatus::Lapsed);
+    let today = c.business_date().unwrap();
+    let f = facts_on(&mut c, &unpaid, "trauma", today);
+    assert_eq!((f.policy_status.as_str(), f.standing.as_deref(), f.in_force), ("lapsed", Some("lapsed"), false));
+    let f = facts_on(&mut c, &unpaid, "trauma", start().checked_add_days(chrono::Days::new(10)).unwrap());
+    assert_eq!((f.policy_status.as_str(), f.standing.as_deref(), f.in_force), ("lapsed", Some("in_grace"), true), "the event was in grace, before the lapse");
+    assert!(f.outstanding_premium_minor > 0, "the premium the lapse wrote off was owing on the event date");
+    // The lapse wrote the arrears off, but on day 45 cover was suspended and it still was.
+    let f = facts_on(&mut c, &unpaid, "trauma", day_45);
+    assert_eq!((f.standing.as_deref(), f.in_force), (Some("suspended"), false));
+
+    // Past the first anniversary: an event before it is paid with the step applied after it.
+    days(&mut c, 290);
+    let policy = &c.state(0).policies[&ahead];
+    assert_eq!(policy.anniversaries_processed, 1);
+    let stepped = policy.covers["life"].sum_insured_on(c.business_date().unwrap());
+    assert!(stepped > 500_000_00);
+    let f = facts_on(&mut c, &ahead, "life", d(2028, 10, 31));
+    assert_eq!(f.sum_insured_minor, stepped);
+    let f = facts_on(&mut c, &ahead, "life", start().pred_opt().unwrap());
+    assert!(!f.in_force, "before inception there was no cover");
+}
+
+/// Purpose: the core does not take the claims module's word for where a claim's money is. When
+/// the module's record and the core's disagree, the daily control reports it, and an
+/// instruction the core's own record does not support is refused with nothing posted.
+/// Why it matters: the module decides and the core posts. If a fault in either left them
+/// disagreeing, the control must show it the same day and the ledger must not follow the
+/// wrong one.
+#[test]
+fn the_core_refuses_instructions_its_own_record_does_not_support() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    let other = policy(&mut c, 1, false);
+    days(&mut c, 3);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(10_000_00), None, false)));
+    verify_payee(&mut c, "clm-1");
+    let head = c.state(0).ledger.head();
+
+    // The module believes more is payable than the core recorded.
+    state_mut(&mut c).claims.claims.get_mut("clm-1").unwrap().payable_minor = 15_000_00;
+    assert!(c.reconcile().iter().any(|b| b.check == "claims_control"));
+    assert_eq!(code(run(&mut c, pay("clm-1", "pay-1", 15_000_00, None))), "invalid_amount");
+    state_mut(&mut c).claims.claims.get_mut("clm-1").unwrap().payable_minor = 10_000_00;
+    clean(&c);
+
+    // The core's record drifts from the ledger.
+    state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-1").unwrap().reserve_minor = 1;
+    assert!(c.reconcile().iter().any(|b| b.check == "claims_ledger"));
+    state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-1").unwrap().reserve_minor = 0;
+    clean(&c);
+
+    // A payment the core never heard of cannot be reported as returned, and an ex gratia
+    // payment cannot be posted twice under one reference.
+    ok(&mut c, pay("clm-1", "pay-1", 4_000_00, None));
+    let kept = state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-1").unwrap().payments.remove("pay-1").unwrap();
+    let returned = claims::Command::PaymentReturned {
+        claim: "clm-1".into(),
+        payment_ref: "pay-1".into(),
+    };
+    assert_eq!(code(run(&mut c, returned)), "unknown_payment");
+    state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-1").unwrap().payments.insert("pay-1".into(), kept);
+    let gift = || {
+        decide(
+            "clm-1",
+            Request::ExGratia {
+                amount_minor: 100_00,
+                payment_ref: "xg-1".into(),
+            },
+        )
+    };
+    ok(&mut c, gift());
+    state_mut(&mut c).claims.claims.get_mut("clm-1").unwrap().payments.retain(|p| p.payment_ref != "xg-1");
+    assert_eq!(code(run(&mut c, gift())), "invalid_amount");
+
+    // The core has the claim closed; the module thinks it open, and the other way round.
+    open_claim(&mut c, "clm-2", &id, "trauma", ClaimType::Trauma, today);
+    state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-2").unwrap().open = false;
+    assert_eq!(code(run(&mut c, decide("clm-2", Request::Reserve { amount_minor: 5_000_00 }))), "invalid_amount");
+    assert_eq!(code(run(&mut c, decide("clm-2", admit(Some(5_000_00), None, false)))), "invalid_amount");
+    state_mut(&mut c).policies.get_mut(&id).unwrap().claims.get_mut("clm-2").unwrap().open = true;
+    state_mut(&mut c).claims.claims.get_mut("clm-2").unwrap().status = Status::Withdrawn;
+    let reopen = claims::Command::Reopen {
+        claim: "clm-2".into(),
+        basis: claims::command::ReopenBasis::NewEvidence,
+        reserve_minor: 1_000_00,
+        actor: actor("sue"),
+    };
+    assert_eq!(code(run(&mut c, reopen)), "invalid_amount");
+    state_mut(&mut c).claims.claims.get_mut("clm-2").unwrap().status = Status::Open;
+
+    // Premium the policy does not owe is not taken from a claim.
+    let check = state_mut(&mut c).claims.claims.get_mut("clm-2").unwrap().cover_check.as_mut().unwrap();
+    check.facts.standing = Some("in_grace".into());
+    check.facts.outstanding_premium_minor = 900_00;
+    assert_eq!(code(run(&mut c, decide("clm-2", admit(Some(5_000_00), None, false)))), "premium_not_owing");
+
+    // An overpayment the core has less of than the module cannot be over-recovered, and an
+    // offset against it stops the one payment, not the run.
+    open_claim(&mut c, "clm-ip", &other, "trauma", ClaimType::IncomeProtection, today);
+    ok(&mut c, decide("clm-ip", admit(None, Some(benefit(1_000_00, today)), false)));
+    verify_payee(&mut c, "clm-ip");
+    pay_run(&mut c, "run-1", today);
+    ok(
+        &mut c,
+        claims::Command::DeclareIncome {
+            claim: "clm-ip".into(),
+            from: today,
+            other_income_minor: 300_00,
+            actor: actor("sam"),
+        },
+    );
+    let op = claim(&c, "clm-ip").overpayments[0].id.clone();
+    state_mut(&mut c).claims.claims.get_mut("clm-ip").unwrap().overpayments[0].amount_minor = 800_00;
+    let repay = claims::Command::RecordRepayment {
+        claim: "clm-ip".into(),
+        overpayment: op.clone(),
+        amount_minor: 500_00,
+    };
+    assert_eq!(code(c.submit(0, "payments", wrap(repay))), "invalid_amount");
+    state_mut(&mut c).claims.claims.get_mut("clm-ip").unwrap().overpayments[0].amount_minor = 300_00;
+    let offset = Request::RecoveryStatus {
+        overpayment: op,
+        status: RecoveryStatus::Offset,
+        offset_pct: 25,
+        instalment_minor: 0,
+    };
+    ok(&mut c, decide("clm-ip", offset));
+    days(&mut c, 31);
+    let next = today.checked_add_months(chrono::Months::new(1)).unwrap();
+    // The same policy's own overpayment is offset against its own benefit.
+    pay_run(&mut c, "run-2", next);
+    assert_eq!(money(&c, &other).2, 300_00 - 175_00);
+    state_mut(&mut c).policies.get_mut(&other).unwrap().claims.get_mut("clm-ip").unwrap().receivable_minor = 0;
+    days_unchecked(&mut c, 31);
+    let third = today.checked_add_months(chrono::Months::new(2)).unwrap();
+    run(
+        &mut c,
+        claims::Command::PrepareRun {
+            run: "run-3".into(),
+            kind: RunKind::Benefit,
+            benefit_date: third,
+            actor: actor("sue"),
+        },
+    )
+    .unwrap();
+    run(
+        &mut c,
+        claims::Command::ApproveRun {
+            run: "run-3".into(),
+            actor: actor("sam"),
+        },
+    )
+    .unwrap();
+    let exceptions = c.state(0).claims.runs["run-3"].exceptions.clone();
+    assert_eq!(exceptions, vec![(format!("run-3/clm-ip/{third}"), "offset".to_string())]);
+    assert_ne!(c.state(0).ledger.head(), head);
+}
+
+/// Day ends for a test that has deliberately broken a record and expects the control to say so.
+fn days_unchecked(c: &mut Cluster, n: u32) {
+    for _ in 0..n {
+        c.end_of_day().unwrap();
+    }
+}
+
+/// Purpose: two death claims are open on a single-life policy; admitting the first ends the
+/// policy, and the second can no longer end it, so its admission is refused whole.
+/// Why it matters: the termination is checked before anything is posted. An admission that
+/// posted the benefit and then failed to end the policy would leave money payable on a
+/// half-applied decision.
+#[test]
+fn a_second_death_claim_cannot_end_a_policy_twice() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 5);
+    let died = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "life", ClaimType::Death, died);
+    open_claim(&mut c, "clm-2", &id, "trauma", ClaimType::Death, died);
+    ok(&mut c, decide("clm-1", admit(None, None, false)));
+    let before = (c.state(0).ledger.head(), money(&c, &id));
+    assert_eq!(code(run(&mut c, decide("clm-2", admit(None, None, false)))), "cannot_terminate");
+    assert_eq!((c.state(0).ledger.head(), money(&c, &id)), before);
+    assert_eq!(claim(&c, "clm-2").status, Status::Open);
 }

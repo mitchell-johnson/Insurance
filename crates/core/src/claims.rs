@@ -14,10 +14,10 @@ use ic_claims::port::{CoverFacts, Instruction, Offset, Termination};
 use ic_ledger::{Dimensions, Ledger};
 
 use crate::accounts::{self, dims};
-use crate::arrears::{self, Derived};
+use crate::arrears;
 use crate::event::Event;
 use crate::machine::{CoreState, Ctx, Reject};
-use crate::policy::{ClaimLedger, ClaimPayment, ClaimPaymentState, LayerOrigin, LifeKind, Policy, PolicyStatus, Standing, UnwindCause};
+use crate::policy::{ClaimLedger, ClaimPayment, ClaimPaymentState, LayerOrigin, LifeKind, Policy, PolicyStatus, UnwindCause};
 use crate::postings::PostingSet;
 use crate::{cash, group, lifecycle, unwind, LifeId, PartyId, PolicyId};
 
@@ -133,12 +133,26 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         LifeKind::UnnamedMember { linked_party, .. } => linked_party.as_ref().map(|p| p.0.clone()),
         LifeKind::Pool { .. } => None,
     });
-    // Standing on the event date: what is unpaid now was unpaid then.
-    let standing = product.and_then(|pr| pr.arrears()).map(|rules| match arrears::derive(p, rules, on) {
-        Derived::Standing(Standing::Paid) => "paid",
-        Derived::Standing(Standing::InGrace) => "in_grace",
-        Derived::Standing(Standing::Suspended) => "suspended",
-        Derived::Lapse => "lapsed",
+    // Standing on the event date: what is unpaid now was unpaid then. A lapse
+    // wrote the unpaid premium off, so for a lapsed policy the question is
+    // asked of the receivables as they stood when it lapsed.
+    let lapsed = p.lapse.as_ref().filter(|_| p.status == PolicyStatus::Lapsed);
+    let unpaid: Vec<&crate::policy::Receivable> = match lapsed {
+        Some(l) => l.receivables_before.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
+        None => p.receivables.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
+    };
+    let oldest = unpaid.iter().map(|r| r.due).min();
+    let standing = product.and_then(|pr| pr.arrears()).map(|rules| {
+        let age = oldest.map_or(0, |due| (on - due).num_days());
+        if lapsed.is_some_and(|l| l.lapsed_on <= on) || age > i64::from(rules.lapse_days) {
+            "lapsed"
+        } else if age <= 0 {
+            "paid"
+        } else if age <= i64::from(rules.grace_days) || !rules.suspend_after_grace {
+            "in_grace"
+        } else {
+            "suspended"
+        }
     });
     let policy_live = match p.status {
         PolicyStatus::Lapsed => p.lapse.as_ref().is_some_and(|l| l.lapsed_on > on),
@@ -148,12 +162,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     let mut facts = CoverFacts {
         policy_status: status_code(p.status),
         standing: standing.map(str::to_string),
-        outstanding_premium_minor: p
-            .receivables
-            .iter()
-            .filter(|r| !r.closed && r.due <= on)
-            .map(|r| r.outstanding_minor.max(0))
-            .sum(),
+        outstanding_premium_minor: unpaid.iter().filter(|r| r.due <= on).map(|r| r.outstanding_minor).sum(),
         life_on_policy,
         life_party,
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),
