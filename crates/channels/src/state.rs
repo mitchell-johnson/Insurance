@@ -21,7 +21,8 @@ use sha2::{Digest, Sha256};
 use crate::directory::{Actor, AdviserStanding, Directory, DirectoryCommand};
 use crate::feed::{visible, PartyFeed, Row};
 use crate::identity::{IdentityCommand, IdentityEvent, IdentityState};
-use crate::staff::{At, StaffCommand, StaffEvent, StaffState};
+use crate::staff::{At, PolicyError, StaffCommand, StaffEvent, StaffPolicy, StaffState};
+use crate::workbench::{Authority, Workbench, WorkbenchCommand, WorkbenchEvent};
 
 /// How many idempotency keys are remembered.
 pub const KEY_MEMORY: usize = 100_000;
@@ -105,6 +106,8 @@ pub enum Command {
     Directory(DirectoryCommand),
     Identity(IdentityCommand),
     Staff(StaffCommand),
+    /// The held balance workbench.
+    Workbench(WorkbenchCommand),
     /// A module publishes rows of its own into the audience-scoped views:
     /// a claim's status, a held balance, a proposal's progress.
     PublishRows {
@@ -139,6 +142,7 @@ pub enum Command {
 pub enum Effect {
     Identity(IdentityEvent),
     Staff(StaffEvent),
+    Workbench(WorkbenchEvent),
     /// Re-check this party's open sessions and streams now.
     Revoked {
         party: PartyId,
@@ -188,6 +192,8 @@ pub struct Data {
     /// Who holds rows of each policy in their feed.
     pub audiences: BTreeMap<PolicyId, BTreeSet<PartyId>>,
     pub requests: BTreeMap<String, Request>,
+    #[serde(default)]
+    pub workbench: Workbench,
     /// The latest business date any partition has reported.
     pub today: Option<NaiveDate>,
     keys: BTreeSet<String>,
@@ -197,6 +203,17 @@ pub struct Data {
 pub struct ChannelState {
     pub data: Data,
     scope: AudienceScope,
+    staff_policy: StaffPolicy,
+}
+
+/// The shipped policies do not load. A build that passes its tests cannot
+/// produce this.
+#[derive(Debug, thiserror::Error)]
+pub enum SetupError {
+    #[error(transparent)]
+    Audience(#[from] ic_readmodel::scope::ScopeError),
+    #[error(transparent)]
+    Staff(#[from] PolicyError),
 }
 
 // The replicated state is `data`. The audience policy is configuration every
@@ -211,7 +228,8 @@ impl<'de> Deserialize<'de> for ChannelState {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let data = Data::deserialize(deserializer)?;
         let scope = AudienceScope::shipped().map_err(serde::de::Error::custom)?;
-        Ok(Self { data, scope })
+        let staff_policy = StaffPolicy::shipped().map_err(serde::de::Error::custom)?;
+        Ok(Self { data, scope, staff_policy })
     }
 }
 
@@ -231,19 +249,24 @@ fn subject_of(record: &EventRecord) -> Option<(PolicyId, Option<LifeId>)> {
 }
 
 impl ChannelState {
-    pub fn new(scope: AudienceScope) -> Self {
+    pub fn new(scope: AudienceScope, staff_policy: StaffPolicy) -> Self {
         Self {
             data: Data {
                 staff: StaffState::new(),
                 ..Data::default()
             },
             scope,
+            staff_policy,
         }
     }
 
-    /// With the audience policy shipped with the platform.
-    pub fn shipped() -> Result<Self, ic_readmodel::scope::ScopeError> {
-        Ok(Self::new(AudienceScope::shipped()?))
+    /// With the audience and staff policies shipped with the platform.
+    pub fn shipped() -> Result<Self, SetupError> {
+        Ok(Self::new(AudienceScope::shipped()?, StaffPolicy::shipped()?))
+    }
+
+    pub fn staff_policy(&self) -> &StaffPolicy {
+        &self.staff_policy
     }
 
     pub fn scope(&self) -> &AudienceScope {
@@ -567,7 +590,7 @@ impl ChannelState {
                 }
             }
             Command::Heartbeat => {
-                if actor != Actor::Module(EVENT_RELAY.to_string()) {
+                if !matches!(&actor, Actor::Module(m) if m == EVENT_RELAY || m == GATEWAY) {
                     return Err(reject("forbidden", "only the event relay reports the stream is current"));
                 }
                 self.data.directory.heard = self.data.directory.heard.max(at);
@@ -629,6 +652,15 @@ impl ChannelState {
                     }
                     effects.push(Effect::Staff(event));
                 }
+            }
+            Command::Workbench(command) => {
+                let authority = Authority {
+                    staff: &self.data.staff,
+                    policy: &self.staff_policy,
+                    fresh: self.data.staff.external_available,
+                };
+                let events = self.data.workbench.apply(&authority, &actor, at, command)?;
+                effects.extend(events.into_iter().map(Effect::Workbench));
             }
             Command::PublishRows { rows, remove } => {
                 let Actor::Module(module) = &actor else {

@@ -21,8 +21,10 @@ pub mod classes;
 pub mod directory;
 pub mod feed;
 pub mod identity;
+pub mod query;
 pub mod staff;
 pub mod state;
+pub mod workbench;
 
 pub use directory::Actor;
 pub use state::{ChannelState, Command, Effect, Envelope};

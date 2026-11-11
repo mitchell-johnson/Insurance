@@ -86,6 +86,8 @@ crates/workflows  the end-of-day close and its Temporal workflow
 crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
 crates/api        the HTTP API, the gateway, ic-admin
 crates/sim        in-process cluster and the synthetic insurer
+crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
+treaties/         the shipped reinsurance treaties and reinsurer rate tables
 products/         the shipped products, definitions and rate tables
 infra/            the Azure platform (Bicep)
 deploy/compose    the cluster on one machine, and the failure drill
