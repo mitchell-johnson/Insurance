@@ -120,7 +120,10 @@ impl<V: KeyVault, B: Blobs> ClinicalStore<V, B> {
         };
         let cipher = Aes256Gcm::new(&key.into());
         // The reference is bound into the seal: a record moved under another name does not open.
-        let payload = Payload { msg: record, aad: vault_ref.as_bytes() };
+        let payload = Payload {
+            msg: record,
+            aad: vault_ref.as_bytes(),
+        };
         let mut sealed = fresh.nonce.to_vec();
         sealed.extend(cipher.encrypt(Nonce::from_slice(&fresh.nonce), payload).map_err(|_| ClinicalError::Tampered)?);
         self.blobs.put(&name, sealed)?;
@@ -136,15 +139,23 @@ impl<V: KeyVault, B: Blobs> ClinicalStore<V, B> {
             return Err(ClinicalError::NoPurpose);
         }
         let (party, record) = parse(vault_ref)?;
-        let sealed = self.blobs.get(&format!("records/{party}/{record}"))?.ok_or_else(|| ClinicalError::NotFound(vault_ref.to_string()))?;
+        let sealed = self
+            .blobs
+            .get(&format!("records/{party}/{record}"))?
+            .ok_or_else(|| ClinicalError::NotFound(vault_ref.to_string()))?;
         let wrapped = self.blobs.get(&key_name(&party))?.ok_or(ClinicalError::Shredded)?;
         let key = self.vault.unwrap(&wrapped)?;
         if sealed.len() < 12 {
             return Err(ClinicalError::Tampered);
         }
         let (nonce, ciphertext) = sealed.split_at(12);
-        let payload = Payload { msg: ciphertext, aad: vault_ref.as_bytes() };
-        let plain = Aes256Gcm::new(&key.into()).decrypt(Nonce::from_slice(nonce), payload).map_err(|_| ClinicalError::Tampered)?;
+        let payload = Payload {
+            msg: ciphertext,
+            aad: vault_ref.as_bytes(),
+        };
+        let plain = Aes256Gcm::new(&key.into())
+            .decrypt(Nonce::from_slice(nonce), payload)
+            .map_err(|_| ClinicalError::Tampered)?;
         let access = AccessRecord {
             who: who.to_string(),
             purpose: purpose.to_string(),
@@ -223,7 +234,9 @@ impl KeyVault for LocalVault {
             return Err(refused());
         }
         let (nonce, sealed) = wrapped.split_at(12);
-        let key = Aes256Gcm::new(&self.kek.into()).decrypt(Nonce::from_slice(nonce), sealed).map_err(|_| refused())?;
+        let key = Aes256Gcm::new(&self.kek.into())
+            .decrypt(Nonce::from_slice(nonce), sealed)
+            .map_err(|_| refused())?;
         key.try_into().map_err(|_| refused())
     }
 }
@@ -255,15 +268,24 @@ mod tests {
         let stored = s.put(&ann, "disclosure", "P1/L1", b"heart condition: yes", fresh(1)).unwrap();
         assert_eq!(stored.vault_ref, "clinical://ann/disclosure/P1/L1");
         assert_eq!(stored.hash, hex::encode(Sha256::digest(b"heart condition: yes")));
-        assert_eq!(s.put(&ann, "disclosure", "P1/L1", b"other", fresh(2)), Err(ClinicalError::Exists(stored.vault_ref.clone())));
-        assert!(!s.blobs.blobs.values().any(|b| b.windows(5).any(|w| w == b"heart")), "nothing is stored in the clear");
+        assert_eq!(
+            s.put(&ann, "disclosure", "P1/L1", b"other", fresh(2)),
+            Err(ClinicalError::Exists(stored.vault_ref.clone()))
+        );
+        assert!(
+            !s.blobs.blobs.values().any(|b| b.windows(5).any(|w| w == b"heart")),
+            "nothing is stored in the clear"
+        );
 
         let (plain, access) = s.get(&stored.vault_ref, "amy", "underwriting case P1/L1/case/1").unwrap();
         assert_eq!(plain, b"heart condition: yes");
         assert_eq!((access.who.as_str(), access.vault_ref.as_str()), ("amy", "clinical://ann/disclosure/P1/L1"));
         assert_eq!(s.get(&stored.vault_ref, "amy", ""), Err(ClinicalError::NoPurpose));
         assert_eq!(s.get(&stored.vault_ref, "", "x"), Err(ClinicalError::NoPurpose));
-        assert_eq!(s.get("clinical://ann/disclosure/nope", "amy", "x"), Err(ClinicalError::NotFound("clinical://ann/disclosure/nope".into())));
+        assert_eq!(
+            s.get("clinical://ann/disclosure/nope", "amy", "x"),
+            Err(ClinicalError::NotFound("clinical://ann/disclosure/nope".into()))
+        );
         for bad in ["vault://x", "clinical://ann", "clinical:///x", "clinical://ann/"] {
             assert_eq!(s.get(bad, "amy", "x"), Err(ClinicalError::BadReference(bad.into())));
         }
@@ -307,10 +329,15 @@ mod tests {
         assert!(s.get(&a.vault_ref, "amy", "x").is_ok());
 
         // Another vault's key-encryption key cannot unwrap, and nor can a damaged wrapped key.
-        let other = ClinicalStore { vault: LocalVault::new([8; 32]), blobs: s.blobs.clone() };
+        let other = ClinicalStore {
+            vault: LocalVault::new([8; 32]),
+            blobs: s.blobs.clone(),
+        };
         assert!(matches!(other.get(&a.vault_ref, "amy", "x"), Err(ClinicalError::Vault(_))));
         assert!(matches!(s.vault.unwrap(&[1, 2, 3]), Err(ClinicalError::Vault(_))));
-        let short = Aes256Gcm::new(&[9u8; 32].into()).encrypt(Nonce::from_slice(&[0; 12]), b"short".as_slice()).unwrap();
+        let short = Aes256Gcm::new(&[9u8; 32].into())
+            .encrypt(Nonce::from_slice(&[0; 12]), b"short".as_slice())
+            .unwrap();
         assert!(matches!(s.vault.unwrap(&[vec![0; 12], short].concat()), Err(ClinicalError::Vault(_))));
 
         s.shred(&ann).unwrap();
@@ -323,6 +350,9 @@ mod tests {
         assert_eq!(s.put(&bob, "notes", "1", b"n", fresh(3)), Err(outage.clone()));
         assert_eq!(s.shred(&bob), Err(outage.clone()));
         assert_eq!(s.blobs.put("x", vec![]), Err(outage));
-        assert_eq!(ClinicalError::Shredded.to_string(), "the person's key has been destroyed: their records can no longer be read");
+        assert_eq!(
+            ClinicalError::Shredded.to_string(),
+            "the person's key has been destroyed: their records can no longer be read"
+        );
     }
 }
