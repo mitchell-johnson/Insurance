@@ -20,7 +20,7 @@ param name string
 @allowed(['dev', 'test', 'prod'])
 param environment string = 'dev'
 
-@description('Kubernetes namespace the core runs in. The service accounts are ic-node, ic-worker and ic-api (see deploy/k8s); each federated credential trusts exactly one of them in this namespace.')
+@description('Kubernetes namespace the core runs in. The service accounts are ic-node, ic-worker, ic-api and ic-portal (see deploy/k8s); each federated credential trusts exactly one of them in this namespace.')
 param workloadNamespace string = 'insurance-core'
 
 @description('Days a Merkle root or sealed segment cannot be changed or deleted. Seven years plus a margin by default.')
@@ -80,6 +80,8 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
 //   ic-node    seals journal segments and publishes events
 //   ic-worker  signs and publishes the day's Merkle root
 //   ic-api     the gateway; reaches nothing in Azure but the cluster token
+//   ic-portal  the portal service for the app, the portals and the consoles;
+//              likewise reaches nothing in Azure but the cluster token
 // Pods get their identity through workload identity federation: no secret is
 // ever issued for any of them.
 resource nodeIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -96,6 +98,12 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-0
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
   name: '${name}-api'
+  location: location
+  tags: tags
+}
+
+resource portalIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: '${name}-portal'
   location: location
   tags: tags
 }
@@ -396,6 +404,26 @@ resource workerToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+resource portalFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedIdentityCredentials@2023-01-31' = {
+  parent: portalIdentity
+  name: 'aks-${workloadNamespace}-ic-portal'
+  properties: {
+    issuer: aks.properties.oidcIssuerProfile.issuerURL
+    subject: 'system:serviceaccount:${workloadNamespace}:ic-portal'
+    audiences: ['api://AzureADTokenExchange']
+  }
+}
+
+resource portalToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, portalIdentity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: portalIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
 resource apiToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   scope: vault
   name: guid(vault.id, apiIdentity.id, roles.keyVaultSecretsUser)
@@ -483,6 +511,7 @@ output registryLoginServer string = registry.properties.loginServer
 output nodeClientId string = nodeIdentity.properties.clientId
 output workerClientId string = workerIdentity.properties.clientId
 output apiClientId string = apiIdentity.properties.clientId
+output portalClientId string = portalIdentity.properties.clientId
 output keyVaultName string = vault.name
 output tenantId string = subscription().tenantId
 output blobEndpoint string = storage.properties.primaryEndpoints.blob

@@ -41,6 +41,8 @@
 
 7. **Expose the API** through your ingress controller, and label its namespace `insurance-core/ingress=true` so the network policy admits it.
 
+8. **Set up the portal service** (`ic-portal`: the app's API, the portals, the consoles and the status page). Its app registrations, the values in `deploy/k8s/portal.yaml` and its public host are described in `docs/channels.md`, "Running it".
+
 ## Day to day
 
 **Is it healthy?** `GET /readyz` on the API answers 200 with the business date when every partition has a leader. For detail:
