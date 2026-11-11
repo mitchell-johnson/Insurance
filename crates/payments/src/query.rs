@@ -122,7 +122,7 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         // An event carries no wall-clock time, and the core's business date
         // can run ahead of the wall clock. The module's clock never runs
         // backwards, so the epoch leaves it exactly where it was.
-        at: chrono::NaiveDateTime::UNIX_EPOCH,
+        at: chrono::DateTime::UNIX_EPOCH.naive_utc(),
         command,
     }]
 }
