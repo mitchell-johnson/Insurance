@@ -485,13 +485,27 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
         report.commands += node.commands;
         report.journal_entries += node.entries;
         report.max_work_units = report.max_work_units.max(node.max_work_units);
+        report.state_hashes.insert(*p, node.state().state_hash().to_hex());
+    }
+    let policies: Vec<PolicyId> = payers.iter().map(|payer| payer.persona.policy.clone()).collect();
+    audit(&c, &view, &policies, cfg.verify_journal)?;
+    report.final_merkle_root = last_root.to_hex();
+    Ok((c, report))
+}
+
+/// The independent checks on a finished run: every partition's log replays
+/// to the state it has, its journal verifies as a chain and re-sums to the
+/// balances held, no command exceeded the apply budget, the read models
+/// followed every event, and the policy directory places each policy where
+/// it really is. Any failure names what is wrong.
+pub fn audit(c: &Cluster, view: &Projections, policies: &[PolicyId], verify_journal: bool) -> Result<(), String> {
+    for (p, node) in &c.nodes {
         // A recorded log replays to an identical state hash.
         let replayed = Replica::recover(node.replica.log.clone(), CoreState::new(*p)).map_err(|e| e.to_string())?;
         if replayed.state.state_hash() != node.state().state_hash() {
             return fail(format!("partition {p}: replay produced a different state hash"));
         }
-        report.state_hashes.insert(*p, node.state().state_hash().to_hex());
-        if cfg.verify_journal {
+        if verify_journal {
             // An independent verifier walks the chain; re-summing the postings gives the balances.
             let head = verify_chain(*p, &node.journal).map_err(|e| format!("partition {p}: {e}"))?;
             if head != node.state().ledger.head() {
@@ -512,16 +526,12 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
                 node.state().last_event_seq()
             ));
         }
-    }
-    if report.max_work_units > APPLY_BUDGET {
-        return fail(format!(
-            "a command used {} work units; the apply budget is {APPLY_BUDGET}",
-            report.max_work_units
-        ));
+        if node.max_work_units > APPLY_BUDGET {
+            return fail(format!("a command used {} work units; the apply budget is {APPLY_BUDGET}", node.max_work_units));
+        }
     }
     // The policy directory agrees with where every policy really is.
-    for payer in &payers {
-        let id = &payer.persona.policy;
+    for id in policies {
         let actual = c.locate(id);
         let listed = view.policy(id).map(|e| e.partition);
         if actual != listed {
@@ -533,8 +543,7 @@ pub fn run_year(cfg: &YearConfig) -> Result<(Cluster, YearReport), String> {
             }
         }
     }
-    report.final_merkle_root = last_root.to_hex();
-    Ok((c, report))
+    Ok(())
 }
 
 fn absorb(c: &mut Cluster, view: &mut Projections, report: &mut YearReport) -> Result<(), String> {
