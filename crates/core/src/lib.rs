@@ -29,6 +29,7 @@ mod unwind;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
+pub use group::{preview_membership, ChangePreview, MembershipPreview};
 pub use ids::*;
 pub use lifecycle::quote;
 pub use machine::{Applied, CoreState, Reject, APPLY_BUDGET};
