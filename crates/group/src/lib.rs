@@ -6,6 +6,7 @@
 //! typed commands. The core holds members as life records and bills from the
 //! membership in force.
 
+pub mod adapters;
 pub mod benefit;
 pub mod command;
 pub mod csv;
