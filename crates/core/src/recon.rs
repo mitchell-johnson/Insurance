@@ -106,5 +106,6 @@ pub fn reconcile(state: &CoreState) -> Vec<Break> {
             detail: format!("control {}, policies {unearned_total}", totals.unearned_premium_fine),
         });
     }
+    crate::claims::reconcile(state, &mut breaks);
     breaks
 }

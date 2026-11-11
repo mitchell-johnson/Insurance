@@ -266,6 +266,29 @@ pub struct UnwindHold {
     pub applied_on: NaiveDate,
 }
 
+/// What the ledger holds for one claim on a policy. The claims module owns
+/// the claim; this is the core's own record of its money, so the two can be
+/// reconciled against each other every day.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimLedger {
+    pub cover: String,
+    pub open: bool,
+    pub reserve_minor: i64,
+    pub admitted_minor: i64,
+    /// Admitted and not yet paid: this claim's share of benefit payable.
+    pub payable_minor: i64,
+    /// Overpaid and not yet recovered or written off.
+    pub receivable_minor: i64,
+    pub payments: BTreeMap<String, ClaimPayment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimPayment {
+    pub amount_minor: i64,
+    pub ex_gratia: bool,
+    pub returned: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferOut {
     pub transfer_id: String,
@@ -311,6 +334,9 @@ pub struct Policy {
     /// beneficiary, never back to the account the money came from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refund_with_claim: Option<String>,
+    /// The money side of each claim on the policy, by claim ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub claims: BTreeMap<String, ClaimLedger>,
 }
 
 impl Policy {

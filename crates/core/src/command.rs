@@ -199,6 +199,13 @@ pub enum Command {
         with_claim: Option<String>,
     },
 
+    // --- claims ---
+    /// A command for the claims module, which lives on the policy's
+    /// partition. The module decides; whatever money that moves is posted by
+    /// the core in the same step, so the claim and the ledger commit or fail
+    /// together.
+    Claims(Box<ic_claims::Command>),
+
     // --- policy transfer between groups ---
     BeginTransfer {
         policy: PolicyId,
@@ -237,6 +244,7 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
+            Command::Claims(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::BeginTransfer { .. } | Command::LandTransfer { .. } | Command::CompleteTransfer { .. } | Command::AbortTransfer { .. } => &["transfer"],
         }
@@ -264,6 +272,7 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::Claims(_) => "claims",
             Command::BeginTransfer { .. } => "begin_transfer",
             Command::LandTransfer { .. } => "land_transfer",
             Command::CompleteTransfer { .. } => "complete_transfer",

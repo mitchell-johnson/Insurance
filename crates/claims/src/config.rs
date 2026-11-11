@@ -1,0 +1,378 @@
+//! Versioned configuration: who may decide how much, and the rules claims
+//! are triaged, timed and checked by. Both are activated through the log
+//! with a preparer and approvers, and every decision records the versions it
+//! was made under.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+
+use crate::model::{ClaimType, DecisionKind};
+use crate::port::Reject;
+use crate::StaffId;
+
+/// A line of business an assessor is accredited for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Line {
+    Health,
+    LumpSum,
+    IncomeProtection,
+}
+
+/// Work queues, by skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Queue {
+    Health,
+    LumpSum,
+    IncomeProtectionNew,
+    IncomeProtectionOngoing,
+    Group,
+    /// The senior queue: large, complex and reversal-of-admission work.
+    ComplexLarge,
+    MedicalOfficer,
+    Rehabilitation,
+    Recoveries,
+    QualityReview,
+}
+
+/// What kind of action a person may take. Small, and they combine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    Assessor,
+    QueueLead,
+    ClaimsManager,
+    MedicalOfficer,
+    QualityReviewer,
+    ConductOfficer,
+    Legal,
+}
+
+/// How much a person may decide.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Profile {
+    pub lines: BTreeSet<Line>,
+    /// Largest admission, by claim type. A type not listed may not be admitted.
+    #[serde(default)]
+    pub max_admission_minor: BTreeMap<ClaimType, i64>,
+    /// Largest single payment released.
+    #[serde(default)]
+    pub max_payment_minor: i64,
+    /// Largest reserve set without a senior.
+    #[serde(default)]
+    pub max_reserve_minor: i64,
+    #[serde(default)]
+    pub may_decline: bool,
+    #[serde(default)]
+    pub max_ex_gratia_minor: i64,
+    #[serde(default)]
+    pub max_write_off_minor: i64,
+    /// May admit over an exclusion the rules raised, with a reason code.
+    #[serde(default)]
+    pub may_override_exclusion: bool,
+    /// Reversal of admission is its own authority, above a decline.
+    #[serde(default)]
+    pub may_reverse_admission: bool,
+    /// Changing the recovery status of an overpayment is its own authority.
+    #[serde(default)]
+    pub may_change_recovery_status: bool,
+    /// Works the senior queue.
+    #[serde(default)]
+    pub senior: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Staff {
+    pub profile: String,
+    pub roles: BTreeSet<Role>,
+    #[serde(default)]
+    pub queues: BTreeSet<Queue>,
+    /// Open claims this person may own at once.
+    #[serde(default)]
+    pub wip_limit: u32,
+    #[serde(default)]
+    pub vulnerable_trained: bool,
+    /// Parties this person has declared a relationship with.
+    #[serde(default)]
+    pub related_parties: BTreeSet<String>,
+}
+
+/// Authority profiles and the staff who hold them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct AuthorityBook {
+    pub version: u32,
+    pub profiles: BTreeMap<String, Profile>,
+    pub staff: BTreeMap<StaffId, Staff>,
+    pub prepared_by: StaffId,
+    /// The manager and the function head.
+    pub approved_by: Vec<StaffId>,
+}
+
+/// Days allowed for each service step on a line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TimerTargets {
+    pub acknowledge_days: u32,
+    pub first_contact_days: u32,
+    pub evidence_days: u32,
+    pub decision_days: u32,
+    pub payment_days: u32,
+}
+
+impl Default for TimerTargets {
+    fn default() -> Self {
+        Self {
+            acknowledge_days: 2,
+            first_contact_days: 5,
+            evidence_days: 20,
+            decision_days: 20,
+            payment_days: 5,
+        }
+    }
+}
+
+/// One exclusion as the claims rules see it. The wording stays with underwriting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Exclusion {
+    /// Cover types the exclusion applies to. Empty means every cover type.
+    #[serde(default)]
+    pub applies_to: BTreeSet<String>,
+    /// Dotted cause tags. A claim tag matches a tag here and its descendants.
+    #[serde(default)]
+    pub cause_tags: Vec<String>,
+    /// A migrated clause in words: never matched by rule, always to an assessor.
+    #[serde(default)]
+    pub verbatim: bool,
+}
+
+/// What the rules make of one exclusion against a claim's cause.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Match {
+    DoesNotApply,
+    NeedsAssessor,
+    Applies,
+}
+
+/// The roots of the cause tag tree. A tag outside them is not recognised.
+pub const CAUSE_ROOTS: &[&str] = &[
+    "musculoskeletal",
+    "mental",
+    "cardiovascular",
+    "cancer",
+    "neurological",
+    "respiratory",
+    "digestive",
+    "endocrine",
+    "pregnancy",
+    "infection",
+    "injury",
+    "pursuit",
+    "occupation",
+    "travel",
+    "pre_existing",
+    "unknown",
+];
+
+/// Limits for one health benefit category.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct HealthBenefit {
+    pub per_event_minor: i64,
+    pub per_year_minor: i64,
+    pub lifetime_minor: i64,
+    /// The member's share, in whole percent.
+    #[serde(default)]
+    pub copay_pct: u32,
+    #[serde(default)]
+    pub excess_minor: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Rules {
+    pub version: u32,
+    #[serde(default)]
+    pub timers: BTreeMap<Line, TimerTargets>,
+    /// Days after a missed target at which the owner, the queue lead and the
+    /// claims manager are each told.
+    #[serde(default)]
+    pub escalation_days: [u32; 3],
+    /// Largest amount the rules may admit without a person, by claim type.
+    #[serde(default)]
+    pub straight_through_max_minor: BTreeMap<ClaimType, i64>,
+    /// At or above this, a claim goes to the senior queue.
+    pub large_claim_minor: i64,
+    /// At or above this, an admission needs two signatures.
+    pub two_signature_admission_minor: i64,
+    pub two_signature_ex_gratia_minor: i64,
+    pub two_signature_write_off_minor: i64,
+    /// The first reserve, as a percentage of the sum insured or amount claimed.
+    #[serde(default)]
+    pub initial_reserve_pct: BTreeMap<ClaimType, u32>,
+    /// A reserve moving by at least this percentage goes to senior review.
+    pub sharp_reserve_move_pct: u32,
+    /// The controlled list of reason codes and the decisions each may explain.
+    #[serde(default)]
+    pub reason_codes: BTreeMap<String, BTreeSet<DecisionKind>>,
+    /// Cause codes and the cause tags each maps to.
+    #[serde(default)]
+    pub cause_codes: BTreeMap<String, Vec<String>>,
+    #[serde(default)]
+    pub exclusions: BTreeMap<String, Exclusion>,
+    pub medical_review_months: u32,
+    pub income_declaration_months: u32,
+    /// Days after a review falls due before it is flagged overdue.
+    pub review_grace_days: u32,
+    /// The largest share of a benefit that may be offset against an overpayment.
+    pub max_offset_pct: u32,
+    /// Percentage of decisions of each kind sampled for peer review.
+    #[serde(default)]
+    pub sample_pct: BTreeMap<DecisionKind, u32>,
+    /// A death notified more than this many days after it happened prompts a
+    /// check of the death register feed.
+    pub late_death_days: u32,
+    /// At or below this an estate is paid on the simplified process.
+    pub estate_simplified_max_minor: i64,
+    #[serde(default)]
+    pub health_benefits: BTreeMap<String, HealthBenefit>,
+    pub pre_approval_days: u32,
+    /// The same condition recurring within this many days reopens the claim.
+    pub recurrence_days: u32,
+    pub prepared_by: StaffId,
+    pub approved_by: Vec<StaffId>,
+}
+
+fn hash_of<T: Serialize>(domain: &str, value: &T) -> String {
+    let mut h = Sha256::new();
+    h.update(domain.as_bytes());
+    // Maps here are BTreeMaps with string or enum keys, so the encoding is canonical.
+    h.update(serde_json::to_vec(value).unwrap_or_default());
+    hex::encode(h.finalize())
+}
+
+fn dual_approval(what: &str, prepared_by: &str, approved_by: &[StaffId]) -> Result<(), Reject> {
+    let distinct: BTreeSet<&StaffId> = approved_by.iter().collect();
+    if prepared_by.is_empty() || distinct.len() < 2 || approved_by.iter().any(|a| a == prepared_by) {
+        return Err(Reject::new(
+            "dual_approval",
+            format!("{what} need a preparer and two approvers, none of them the preparer"),
+        ));
+    }
+    Ok(())
+}
+
+impl AuthorityBook {
+    pub fn content_hash(&self) -> String {
+        hash_of("ic.claims.authority.v1", self)
+    }
+
+    pub fn validate(&self) -> Result<(), Reject> {
+        dual_approval("authority profiles", &self.prepared_by, &self.approved_by)?;
+        for (id, s) in &self.staff {
+            if !self.profiles.contains_key(&s.profile) {
+                return Err(Reject::new(
+                    "invalid_authority",
+                    format!("{id} holds profile {}, which is not in the book", s.profile),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn staff(&self, id: &str) -> Result<&Staff, Reject> {
+        self.staff
+            .get(id)
+            .ok_or_else(|| Reject::new("unknown_staff", format!("{id} holds no claims role")))
+    }
+
+    /// The person's profile. The book is validated at activation, so a
+    /// person in it always has one.
+    pub fn profile(&self, id: &str) -> Result<&Profile, Reject> {
+        let staff = self.staff(id)?;
+        self.profiles
+            .get(&staff.profile)
+            .ok_or_else(|| Reject::new("unknown_staff", format!("{id} holds no authority profile")))
+    }
+
+    pub fn has_role(&self, id: &str, role: Role) -> bool {
+        self.staff.get(id).is_some_and(|s| s.roles.contains(&role))
+    }
+}
+
+/// A well-formed cause tag: dotted lowercase segments under a known root.
+pub fn tag_recognised(tag: &str) -> bool {
+    let mut segments = tag.split('.');
+    let root_known = segments.next().is_some_and(|r| CAUSE_ROOTS.contains(&r) && r != "unknown");
+    root_known
+        && tag
+            .split('.')
+            .all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'))
+}
+
+/// `tag` is `ancestor` or one of its dotted descendants.
+fn tag_under(tag: &str, ancestor: &str) -> bool {
+    tag == ancestor || tag.strip_prefix(ancestor).is_some_and(|rest| rest.starts_with('.'))
+}
+
+impl Rules {
+    pub fn content_hash(&self) -> String {
+        hash_of("ic.claims.rules.v1", self)
+    }
+
+    pub fn validate(&self) -> Result<(), Reject> {
+        dual_approval("claims rules", &self.prepared_by, &self.approved_by)?;
+        if self.max_offset_pct > 100 || self.sample_pct.values().any(|p| *p > 100) || self.health_benefits.values().any(|b| b.copay_pct > 100) {
+            return Err(Reject::new("invalid_rules", "a percentage is over 100"));
+        }
+        let tags = self.cause_codes.values().flatten().chain(self.exclusions.values().flat_map(|e| &e.cause_tags));
+        if let Some(bad) = tags.into_iter().find(|t| !tag_recognised(t) && t.as_str() != "unknown") {
+            return Err(Reject::new("invalid_rules", format!("cause tag {bad} is not under a known root")));
+        }
+        Ok(())
+    }
+
+    pub fn timers(&self, line: Line) -> TimerTargets {
+        self.timers.get(&line).copied().unwrap_or_default()
+    }
+
+    /// Check a decision's reason codes against the controlled list.
+    pub fn check_reasons(&self, kind: DecisionKind, reasons: &[String]) -> Result<(), Reject> {
+        if reasons.is_empty() {
+            return Err(Reject::new("reason_required", "a decision needs at least one reason code"));
+        }
+        match reasons.iter().find(|r| !self.reason_codes.get(*r).is_some_and(|uses| uses.contains(&kind))) {
+            Some(bad) => Err(Reject::new("unknown_reason", format!("{bad} is not a reason code for this decision"))),
+            None => Ok(()),
+        }
+    }
+
+    /// Whether one exclusion bites on a claim with these cause tags.
+    ///
+    /// An empty or unrecognised cause never clears an exclusion: a cause
+    /// recorded in a form the rules cannot read goes to a person.
+    pub fn exclusion_match(&self, code: &str, cover_type: &str, tags: &[String]) -> Match {
+        let Some(exclusion) = self.exclusions.get(code) else {
+            return Match::NeedsAssessor;
+        };
+        if exclusion.verbatim || tags.is_empty() || tags.iter().any(|t| !tag_recognised(t)) {
+            return Match::NeedsAssessor;
+        }
+        if !exclusion.applies_to.is_empty() && !exclusion.applies_to.contains(cover_type) {
+            return Match::DoesNotApply;
+        }
+        if tags.iter().any(|t| exclusion.cause_tags.iter().any(|x| tag_under(t, x))) {
+            Match::Applies
+        } else {
+            Match::DoesNotApply
+        }
+    }
+
+    /// The strongest outcome across a cover's exclusions, with each code's own.
+    pub fn exclusion_check(&self, codes: &[String], cover_type: &str, cause_code: Option<&str>) -> (Match, BTreeMap<String, Match>) {
+        let none = Vec::new();
+        let tags = cause_code.and_then(|c| self.cause_codes.get(c)).unwrap_or(&none);
+        let each: BTreeMap<String, Match> = codes.iter().map(|c| (c.clone(), self.exclusion_match(c, cover_type, tags))).collect();
+        (each.values().copied().max().unwrap_or(Match::DoesNotApply), each)
+    }
+}

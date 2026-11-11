@@ -20,6 +20,7 @@ pub mod recon;
 mod arrears;
 mod billing;
 mod cash;
+mod claims;
 mod earning;
 mod group;
 mod lifecycle;
@@ -29,6 +30,7 @@ mod unwind;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
+pub use ic_claims as claims_module;
 pub use ids::*;
 pub use lifecycle::quote;
 pub use machine::{Applied, CoreState, Reject, APPLY_BUDGET};

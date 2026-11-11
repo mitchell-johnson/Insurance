@@ -1860,11 +1860,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-claims"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-claims",
  "ic-ledger",
  "ic-log",
  "ic-money",

@@ -1,0 +1,18 @@
+[package]
+name = "ic-claims"
+description = "Claims operations: intake, assessment, decisions under authority, benefits in payment, overpayments and controls"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
