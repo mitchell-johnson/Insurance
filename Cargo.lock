@@ -2030,6 +2030,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-documents"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-azure",
+ "ic-core",
+ "ic-log",
+ "ic-raft",
+ "proptest",
+ "rand 0.8.8",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "ic-finance"
 version = "0.1.0"
 dependencies = [
@@ -2109,6 +2135,7 @@ name = "ic-node"
 version = "0.1.0"
 dependencies = [
  "ic-channels",
+ "ic-documents",
  "ic-raft",
  "ic-underwriting",
  "serde_json",

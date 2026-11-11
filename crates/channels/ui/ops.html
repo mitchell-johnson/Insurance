@@ -1,1 +1,36 @@
-<!doctype html><title>ops</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Operations console</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Operations console</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Regions</h2><div id="summary"></div><div id="regions"></div></section>
+<section><h2>What customers are told</h2><div id="public"></div></section>
+<section><h2>Channel module</h2><div id="channels"></div></section>
+<p class="muted" id="checked"></p></main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, clear, put, table, say, signIn, signOut, api } = portal;
+const $ = (id) => document.getElementById(id);
+$("out").addEventListener("click", () => signOut("workforce"));
+async function refresh() {
+  try {
+    const view = await api("workforce", "GET", "/ops/v1/regions");
+    const r = view.regions;
+    clear($("msg"));
+    put($("summary"), h("p", {},
+      h("span", { class: "pill" }, r.quorum ? "Majority reachable" : "NO MAJORITY"), " ",
+      h("span", { class: "pill" }, `${r.partitions_with_leader} of ${r.partitions} partitions have a leader`), " ",
+      h("span", { class: "pill" }, r.at_home ? "Leaders at home" : "Leaders away from the home region")));
+    put($("regions"), table(["Region", "Home", "Nodes reachable", "Partitions led"],
+      r.regions.map((x) => [x.name, x.home ? "yes" : "", `${x.reachable} of ${x.nodes}`, x.leaders])));
+    const kind = { operational: "ok", degraded: "warn", outage: "bad" }[view.status.level];
+    put($("public"), h("div", { class: "banner " + kind }, h("strong", {}, view.status.headline)), ...view.status.detail.map((d) => h("p", {}, d)));
+    const c = view.channels;
+    put($("channels"), c ? table(["Business date", "Policies", "Device feeds", "Requests pending", "Stream last confirmed", "State hash"],
+      [[c.business_date, c.policies, c.feeds, c.requests_pending, c.heard ? new Date(c.heard * 1000).toLocaleString() : "never", h("code", {}, String(c.state_hash).slice(0, 16))]])
+      : h("div", { class: "banner bad" }, "The channel module did not answer."));
+  } catch (e) { say($("msg"), "bad", e.message); }
+  $("checked").textContent = "Last checked " + new Date().toLocaleTimeString() + ". Updates every 10 seconds.";
+}
+signIn("workforce").then(() => { refresh(); setInterval(refresh, 10000); }).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

@@ -419,6 +419,13 @@ pub enum Command {
         max: u32,
     },
 
+    // --- delivery ---
+    /// The driver has delivered every effect up to and including `through`,
+    /// and the receivers answered. They leave the outbox.
+    AcknowledgeEffects {
+        through: u64,
+    },
+
     // --- adviser licensing ---
     LicenceChanged {
         subject: String,
@@ -524,6 +531,7 @@ impl Command {
             CapacityAnswered { .. } | FacultativeTermsRecorded { .. } => &["reinsurance"],
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
+            AcknowledgeEffects { .. } => &["effects-driver"],
             LicenceChanged { .. } => &["adviser-licensing"],
             OpenFileForClaim { .. } | OpenNonDisclosureReview { .. } => &["claims"],
             DelegatedDecision(_) | DelegateFileReceived { .. } => &["delegate-api"],
