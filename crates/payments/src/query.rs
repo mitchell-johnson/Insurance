@@ -80,6 +80,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
     match text(&question, "q")? {
         "submission_in_progress" => Ok(json!(state.submission_in_progress())),
         "outbox" => found(Some(&state.outbox)),
+        "config" => found(state.config.as_ref()),
+        "batch" => found(state.batch(text(&question, "submission")?)),
         "queued_submissions" => {
             let queued: Vec<_> = state.submissions.iter().filter(|(_, s)| s.status == SubmissionStatus::Queued).collect();
             found(Some(queued))

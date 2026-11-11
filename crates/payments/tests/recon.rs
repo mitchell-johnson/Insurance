@@ -387,8 +387,14 @@ fn questions_are_answered_from_state() {
     assert_eq!(ask(&desk, json!({"q": "payee", "payee": "p1"})).unwrap()["kind"], json!("customer"));
     assert_eq!(ask(&desk, json!({"q": "authority", "authority": "a1"})).unwrap()["status"], json!("active"));
     assert_eq!(ask(&desk, json!({"q": "outbox"})).unwrap(), json!({}));
+    assert_eq!(ask(&desk, json!({"q": "config"})).unwrap()["rules"]["cooling_off_hours"], json!(24));
+    assert_eq!(ask(&desk, json!({"q": "batch", "submission": "r1-1"})).unwrap(), json!(null));
     let s = desk.approve("r1");
     assert_eq!(ask(&desk, json!({"q": "submission", "submission": s})).unwrap()["status"], json!("queued"));
+    assert_eq!(
+        ask(&desk, json!({"q": "batch", "submission": s})).unwrap()["items"][0]["number"],
+        json!("0101234567")
+    );
     let trail = ask(&desk, json!({"q": "trail"})).unwrap();
     assert_eq!(trail["events"], json!(desk.state.event_seq));
     assert_eq!(trail["chain"].as_str().unwrap().len(), 64);
