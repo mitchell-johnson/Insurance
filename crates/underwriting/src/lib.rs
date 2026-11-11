@@ -34,6 +34,7 @@ mod external;
 mod flow;
 mod intake;
 
+pub use host::module_spec;
 pub use machine::UnderwritingState;
 pub use special::{answer, Query};
 pub mod clinical;

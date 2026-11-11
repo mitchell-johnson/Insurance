@@ -32,11 +32,10 @@ Queries (`special::Query`, answered by `special::answer`): a proposal, the terms
 
 For claims: `codes::ExclusionLibrary::matches` decides whether an exclusion applies to a coded cause, and `codes::CAUSE_ROOTS` lists the roots cause codes hang from. Claims owns the coding of a cause; this module owns the wordings and the match.
 
-Hosting: `host::module_spec()` gives the ledger nodes the module under the name `underwriting`. It starts empty and takes its configuration through the log.
+Hosting: `ic_underwriting::module_spec()` is in `ic_node::modules()`, so every ledger node hosts the module under the name `underwriting`. It starts empty and takes its configuration through the log.
 
 ## Known gaps
 
-- **Not registered with the node server.** `module_spec()` is ready and tested against the host, but the node binary does not list it yet. That is the core's change to make.
 - **No drivers.** The module produces effects. The processes that carry them to reinsurance, the core and evidence providers, and bring the answers back as commands, are not built. Until they are, nothing here reaches a policy outside the tests.
 - **The clinical store has no Azure adapters.** The store is written against two traits, a key vault that wraps and unwraps and a blob store. Only an in-memory blob store and a local vault exist. The Key Vault and Blob Storage implementations belong in `ic-azure` and are not written, so the store must not be used with real clinical records yet.
 - **Core commands that do not exist yet.** The core has no command to add or replace a layer for revised terms after issue (`Effect::ApplyTerms`), none to vary or avoid a policy as a non-disclosure remedy, its cancel command accepts only `policy-servicing` so interim cover cannot be ended by this module, and issue carries no flag for a migrated policy.
