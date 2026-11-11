@@ -49,3 +49,54 @@ fn the_hosted_module_matches_the_state_machine_and_survives_a_snapshot() {
     assert_eq!(restored.query(question.clone()).unwrap(), hosted.query(question).unwrap());
     assert!(restored.load(json!("not a state")).is_err());
 }
+
+/// Purpose: every effect a command produces is also kept in the replicated outbox, in order and
+/// numbered, until the driver acknowledges it; an acknowledgement removes exactly what it
+/// covers, a repeated command adds nothing, only the driver may acknowledge, and a number never
+/// produced is refused.
+/// Why it matters: the reply to a command can be lost with the process that asked. Without the
+/// outbox a lost reply would be a capacity reservation never made or a policy never issued,
+/// with nothing left to say so.
+#[test]
+fn effects_wait_in_the_outbox_until_the_driver_acknowledges_them() {
+    use ic_underwriting::command::Command;
+
+    let mut w = World::new();
+    assert!(w.s.outbox(0, 10).is_empty());
+    w.open("P1", 500_000_00);
+    let disclosed = w.disclose("P1", "L1", &clean());
+    assert!(!disclosed.effects.is_empty());
+
+    let waiting = w.s.outbox(0, 100);
+    let numbers: Vec<u64> = waiting.iter().map(|(n, _)| *n).collect();
+    assert_eq!(numbers, (1..=waiting.len() as u64).collect::<Vec<_>>());
+    let tail: Vec<_> = waiting[waiting.len() - disclosed.effects.len()..].iter().map(|(_, e)| e.clone()).collect();
+    assert_eq!(tail, disclosed.effects);
+    // Read in pages, as the driver does.
+    assert_eq!(w.s.outbox(0, 1), waiting[..1].to_vec());
+    assert_eq!(w.s.outbox(1, 100), waiting[1..].to_vec());
+    let question = json!({ "query": "outbox", "after": 0, "max": 100 });
+    assert_eq!(answer(&w.s, question).unwrap(), serde_json::to_value(&waiting).unwrap());
+
+    // The same command delivered again produces nothing new.
+    let again = w.log[w.log.len() - 1].clone();
+    assert!(ic_log::StateMachine::apply(&mut w.s, 999, again).unwrap().duplicate);
+    assert_eq!(w.s.outbox(0, 100), waiting);
+
+    assert_eq!(w.err("new-business", Command::AcknowledgeEffects { through: 1 }), "caller");
+    let last = waiting.len() as u64;
+    assert_eq!(w.err("effects-driver", Command::AcknowledgeEffects { through: last + 1 }), "unknown_effect");
+    assert_eq!(w.s.outbox(0, 100), waiting);
+
+    w.ok("effects-driver", Command::AcknowledgeEffects { through: 1 });
+    assert_eq!(w.s.outbox(0, 100), waiting[1..].to_vec());
+    w.ok("effects-driver", Command::AcknowledgeEffects { through: last });
+    assert!(w.s.outbox(0, 100).is_empty());
+    // Acknowledged twice, as after a retry: nothing to remove, and not an error.
+    w.ok("effects-driver", Command::AcknowledgeEffects { through: last });
+
+    // Numbers are never reused.
+    let next = w.automatic(&disclosed);
+    assert!(!next.effects.is_empty());
+    assert_eq!(w.s.outbox(0, 1)[0].0, last + 1);
+}
