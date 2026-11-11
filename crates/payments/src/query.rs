@@ -80,6 +80,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
     match text(&question, "q")? {
         "submission_in_progress" => Ok(json!(state.submission_in_progress())),
         "outbox" => found(Some(&state.outbox)),
+        "config" => found(state.config.as_ref()),
+        "batch" => found(state.batch(text(&question, "submission")?)),
         "queued_submissions" => {
             let queued: Vec<_> = state.submissions.iter().filter(|(_, s)| s.status == SubmissionStatus::Queued).collect();
             found(Some(queued))
@@ -100,4 +102,29 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "trail" => Ok(json!({"events": state.event_seq, "chain": state.event_chain})),
         other => Err(format!("unknown question {other}")),
     }
+}
+
+/// What the module does about one of the core's events. A pure function of
+/// the event: the host shows every member the same events in the same order.
+pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
+    let command = match &record.event {
+        ic_core::Event::PaymentAuthorityCancelled { policy, claim } => crate::Command::PayerDeceased {
+            policy: policy.clone(),
+            claim: claim.clone(),
+        },
+        _ => return Vec::new(),
+    };
+    vec![crate::Envelope {
+        // The event's ID, so an event offered twice is taken in once.
+        key: format!("core-{}", record.id),
+        actor: crate::Actor {
+            id: "core-events".to_string(),
+            roles: [crate::Role::Service].into(),
+        },
+        // An event carries no wall-clock time, and the core's business date
+        // can run ahead of the wall clock. The module's clock never runs
+        // backwards, so the epoch leaves it exactly where it was.
+        at: chrono::DateTime::UNIX_EPOCH.naive_utc(),
+        command,
+    }]
 }

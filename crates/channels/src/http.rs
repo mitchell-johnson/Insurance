@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{HeaderMap, Method, StatusCode, Uri};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
@@ -36,6 +36,7 @@ use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
 use crate::staff::{At, Purpose, PurposeKind, StaffCommand};
 use crate::state::{ChannelState, Command, Envelope, Output, GATEWAY};
+use crate::ui::UiConfig;
 use crate::workbench::WorkbenchCommand;
 
 /// The workforce role that sees the operations console.
@@ -132,6 +133,8 @@ pub struct AppState {
     pub clock: Arc<dyn Fn() -> At + Send + Sync>,
     /// Where the operations console and status page learn the regions' health.
     pub regions: Arc<dyn RegionSource>,
+    /// How the web pages sign people in.
+    pub ui: UiConfig,
 }
 
 pub type Shared = Arc<AppState>;
@@ -172,7 +175,7 @@ impl IntoResponse for Problem {
             json!({ "type": format!("urn:insurance-core:problem:{}", self.code), "title": self.code, "status": self.status.as_u16(), "detail": self.detail });
         let mut response = (self.status, [("content-type", "application/problem+json")], body.to_string()).into_response();
         if self.status == StatusCode::SERVICE_UNAVAILABLE {
-            response.headers_mut().insert("retry-after", axum::http::HeaderValue::from_static("1"));
+            response.headers_mut().insert("retry-after", HeaderValue::from_static("1"));
         }
         response
     }
@@ -897,9 +900,7 @@ async fn ops_regions(State(s): State<Shared>, headers: HeaderMap) -> Answer {
 async fn status_json(State(s): State<Shared>) -> Answer {
     let report = s.regions.report().await;
     let mut response = Json(StatusPage::from(&report)).into_response();
-    response
-        .headers_mut()
-        .insert("cache-control", axum::http::HeaderValue::from_static("max-age=15"));
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("max-age=15"));
     Ok(response)
 }
 
@@ -908,17 +909,30 @@ async fn ready(State(s): State<Shared>) -> Answer {
     Ok("ready".into_response())
 }
 
-fn page(body: &'static str) -> Response {
-    let mut response = Html(body).into_response();
+/// Headers every page and page asset carries.
+fn hardened(mut response: Response) -> Response {
     let headers = response.headers_mut();
-    // The pages load nothing from elsewhere and cannot be framed.
-    headers.insert(
-        "content-security-policy",
-        axum::http::HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; frame-ancestors 'none'"),
-    );
-    headers.insert("x-content-type-options", axum::http::HeaderValue::from_static("nosniff"));
-    headers.insert("referrer-policy", axum::http::HeaderValue::from_static("no-referrer"));
+    headers.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    headers.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     response
+}
+
+fn page(s: &AppState, body: &'static str) -> Response {
+    let mut response = Html(body).into_response();
+    // The policy is built from validated settings and base64 hashes, so it is always a legal header.
+    if let Ok(policy) = HeaderValue::from_str(&s.ui.policy(body)) {
+        response.headers_mut().insert("content-security-policy", policy);
+    }
+    response.headers_mut().insert("cache-control", HeaderValue::from_static("no-cache"));
+    hardened(response)
+}
+
+fn asset(kind: &'static str, body: &'static str) -> Response {
+    hardened(([("content-type", kind), ("cache-control", "no-cache")], body).into_response())
+}
+
+async fn ui_config(State(s): State<Shared>) -> Response {
+    hardened(([("cache-control", "no-cache")], Json(&s.ui)).into_response())
 }
 
 pub fn router(state: Shared) -> Router {
@@ -956,11 +970,14 @@ pub fn router(state: Shared) -> Router {
         .route("/internal/v1/pending", get(module_pending))
         .route("/ops/v1/regions", get(ops_regions))
         .route("/status.json", get(status_json))
-        .route("/status", get(|| async { page(crate::ui::STATUS) }))
-        .route("/", get(|| async { page(crate::ui::INDEX) }))
-        .route("/adviser", get(|| async { page(crate::ui::ADVISER) }))
-        .route("/employer", get(|| async { page(crate::ui::EMPLOYER) }))
-        .route("/staff", get(|| async { page(crate::ui::STAFF) }))
-        .route("/ops", get(|| async { page(crate::ui::OPS) }))
+        .route("/status", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STATUS) }))
+        .route("/", get(|State(s): State<Shared>| async move { page(&s, crate::ui::INDEX) }))
+        .route("/adviser", get(|State(s): State<Shared>| async move { page(&s, crate::ui::ADVISER) }))
+        .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
+        .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
+        .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
+        .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
+        .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
+        .route("/ui/config.json", get(ui_config))
         .with_state(state)
 }

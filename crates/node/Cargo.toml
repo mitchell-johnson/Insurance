@@ -9,6 +9,9 @@ publish.workspace = true
 [dependencies]
 ic-raft.workspace = true
 ic-channels = { path = "../channels" }
+ic-documents = { path = "../documents" }
+ic-group = { path = "../group" }
+ic-underwriting = { path = "../underwriting" }
 tokio.workspace = true
 
 [dev-dependencies]

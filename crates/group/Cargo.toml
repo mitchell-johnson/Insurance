@@ -12,6 +12,7 @@ ic-ledger.workspace = true
 ic-log.workspace = true
 ic-money.workspace = true
 ic-product.workspace = true
+ic-raft.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
