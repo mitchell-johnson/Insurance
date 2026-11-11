@@ -211,6 +211,12 @@ pub(crate) fn bill_due_periods(
                     period_end: end,
                     total_minor: bill.total(),
                     members: None,
+                    by_cover_type: bill
+                        .net
+                        .iter()
+                        .filter(|(k, _)| k.as_str() != "policy_fee")
+                        .map(|(k, v)| (k.clone(), *v))
+                        .collect(),
                 });
             }
         }
