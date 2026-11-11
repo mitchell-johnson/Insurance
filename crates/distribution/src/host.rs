@@ -81,6 +81,18 @@ pub enum Question {
     },
     OpenTasks,
     Status,
+    /// Parties that changed after a module sequence, with the sequence to
+    /// ask from next time. A publisher keeps the sequence as its cursor.
+    ChangedParties {
+        since: u64,
+    },
+    /// Engagements, all of them or one adviser's, each with the licence
+    /// problem that stops it being used on the day, if there is one.
+    Engagements {
+        #[serde(default)]
+        adviser: Option<PartyId>,
+        as_at: NaiveDate,
+    },
 }
 
 /// Answer one question. An `Err` is a question that could not be understood.
@@ -128,6 +140,30 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
         Question::Action { id } => value(&state.actions.get(&id)),
         Question::Case { id } => value(&state.cases.get(&id)),
         Question::OpenTasks => value(&state.tasks.values().filter(|t| t.done.is_none()).collect::<Vec<_>>()),
+        Question::ChangedParties { since } => {
+            let parties: Vec<&PartyId> = state.changed.iter().filter(|(_, at)| **at > since).map(|(p, _)| p).collect();
+            Ok(json!({ "seq": state.seq, "parties": parties }))
+        }
+        Question::Engagements { adviser, as_at } => {
+            let structure = &state.config.structure;
+            let rows: Vec<Value> = structure
+                .engagements
+                .iter()
+                .filter(|(_, e)| adviser.as_ref().is_none_or(|a| &e.adviser == a))
+                .map(|(id, e)| {
+                    json!({
+                        "id": id,
+                        "adviser": e.adviser,
+                        "with": e.with,
+                        "from": e.from,
+                        "to": e.to,
+                        "accreditations": e.accreditations,
+                        "impairment": structure.engagement_impairment(id, as_at),
+                    })
+                })
+                .collect();
+            Ok(json!({ "as_at": as_at, "engagements": rows }))
+        }
         Question::Status => Ok(json!({
             "today": state.today,
             "seq": state.seq,
