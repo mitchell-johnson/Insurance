@@ -9,7 +9,7 @@ use ic_ledger::{EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LayerOrigin, PolicyStatus, Standing, UnwindCause};
+use crate::policy::{LayerOrigin, PolicyStatus, ReopenedChoice, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -263,6 +263,29 @@ pub enum Event {
         reference: String,
         /// The receivables whose billing was reversed.
         receivables: Vec<u32>,
+    },
+    /// Choices made on a defective notice can be made again until `until`.
+    ReopenWindowOpened {
+        policy: PolicyId,
+        reopen_reference: String,
+        purpose: String,
+        from: NaiveDate,
+        until: NaiveDate,
+    },
+    NoticeDeliveryRecorded {
+        policy: PolicyId,
+        purpose: String,
+        notice: String,
+        delivered_on: NaiveDate,
+        earliest_effect: NaiveDate,
+    },
+    /// A choice made on a defective notice was made again. `effective` is
+    /// the date the new choice applies from.
+    ChoiceReopened {
+        policy: PolicyId,
+        reopen_reference: String,
+        choice: ReopenedChoice,
+        effective: NaiveDate,
     },
     PolicyUnwindResumed {
         policy: PolicyId,

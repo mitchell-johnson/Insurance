@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, payments, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, earning, group, lifecycle, payments, reopen, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -380,6 +380,29 @@ impl CoreState {
                 reference,
             } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 unwind::unwind_after(&mut s.ledger, &s.catalog, p, ctx, after, cause, &reference)
+            }),
+            Command::OpenReopenWindow {
+                policy,
+                reopen_reference,
+                purpose,
+                from,
+                until,
+            } => self.with_policy(&policy, false, |_, p| reopen::open_window(p, ctx, reopen_reference, purpose, from, until)),
+            Command::RecordNoticeDelivery {
+                policy,
+                purpose,
+                notice,
+                delivered_on,
+                earliest_effect,
+            } => self.with_policy(&policy, false, |_, p| {
+                reopen::record_notice(p, ctx, purpose, notice, delivered_on, earliest_effect)
+            }),
+            Command::ReopenChoice {
+                policy,
+                reopen_reference,
+                choice,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                reopen::choose_again(&mut s.ledger, &s.catalog, p, ctx, &reopen_reference, choice)
             }),
             Command::ResumeAfterUnwind { policy, reference } => self.with_policy(&policy, true, |_, p| unwind::resume(p, ctx, &reference)),
             Command::TerminateOnClaim {
