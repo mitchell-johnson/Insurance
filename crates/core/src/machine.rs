@@ -149,6 +149,9 @@ pub struct CoreState {
     /// The end-of-day orchestration reads it to build the day's Merkle root,
     /// however many times it has to retry.
     pub last_close: Option<ClosedDay>,
+    /// Counterparty posting references this partition has accepted.
+    #[serde(default)]
+    pub counterparty: crate::counterparty::CounterpartyBook,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -170,6 +173,7 @@ impl CoreState {
             idempotency: BTreeMap::new(),
             transfers_seen: BTreeSet::new(),
             last_close: None,
+            counterparty: Default::default(),
         }
     }
 
@@ -192,6 +196,7 @@ impl CoreState {
             &self.idempotency,
             &self.transfers_seen,
             &self.last_close,
+            &self.counterparty,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -388,6 +393,14 @@ impl CoreState {
             }
             Command::CompleteTransfer { policy, transfer_id } => self.with_policy(&policy, false, |_, p| transfer::complete(p, ctx, &transfer_id)),
             Command::AbortTransfer { policy, transfer_id } => self.with_policy(&policy, false, |s, p| transfer::abort(&mut s.ledger, p, ctx, &transfer_id)),
+            Command::PostCounterparty(posting) => match posting.policy.clone() {
+                // Commission follows a policy wherever it is, so a policy in
+                // transfer is refused like any other command on it.
+                Some(id) => self.with_policy(&id, true, |s, p| {
+                    crate::counterparty::post(&mut s.ledger, &mut s.counterparty, Some(p), ctx, *posting)
+                }),
+                None => crate::counterparty::post(&mut self.ledger, &mut self.counterparty, None, ctx, *posting),
+            },
         }
     }
 

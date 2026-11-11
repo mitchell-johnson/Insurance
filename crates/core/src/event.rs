@@ -2,6 +2,8 @@
 //! opaque IDs and never personal data. Underwriting terms (loadings and
 //! exclusions) are sensitive and are not in events at all.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use ic_ledger::{EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
@@ -182,6 +184,10 @@ pub enum Event {
         receipt: String,
         allocated_minor: i64,
         to_suspense_minor: i64,
+        /// The part that paid for cover, by cover type, without the policy
+        /// fee, GST and levies. Commission is earned on it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     ReceiptReversed {
         policy: PolicyId,
@@ -198,6 +204,9 @@ pub enum Event {
     SuspenseApplied {
         policy: PolicyId,
         amount_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     SuspenseRefunded {
         policy: PolicyId,
@@ -323,6 +332,19 @@ pub enum Event {
     TransferAborted {
         policy: PolicyId,
         transfer_id: String,
+    },
+
+    /// A balanced entry on counterparty accounts. Carries the lines, so the
+    /// module that keeps each party's position builds it from this alone.
+    CounterpartyPosted {
+        entry: EntryId,
+        reference: String,
+        kind: String,
+        currency: ic_money::Currency,
+        value_date: NaiveDate,
+        policy: Option<PolicyId>,
+        reverses: Option<String>,
+        lines: Vec<crate::counterparty::CounterpartyLine>,
     },
 }
 

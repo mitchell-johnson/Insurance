@@ -78,6 +78,7 @@ pub(crate) fn apply_receipt(
     detail.insert("receipt".to_string(), receipt.clone());
     let postings = set.into_postings(ledger)?;
     ctx.post(ledger, "premium_received", Some(policy), ctx.date, postings, detail)?;
+    let net_by_cover_type = crate::counterparty::net_by_cover_type(&policy.receivables, &allocations);
     apply_allocations(policy, &allocations, 1);
     policy.receipts.insert(
         receipt.clone(),
@@ -94,6 +95,7 @@ pub(crate) fn apply_receipt(
         receipt,
         allocated_minor: allocated,
         to_suspense_minor: to_suspense,
+        net_by_cover_type,
     });
     refresh_standing(catalog, policy, ctx);
     Ok(())
@@ -168,10 +170,12 @@ pub(crate) fn apply_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut
     set.credit(accounts::premium_receivable(&policy.id, c), allocated as i128, Dimensions::default());
     let postings = set.into_postings(ledger)?;
     ctx.post(ledger, "suspense_applied", Some(policy), ctx.date, postings, BTreeMap::new())?;
+    let net_by_cover_type = crate::counterparty::net_by_cover_type(&policy.receivables, &allocations);
     apply_allocations(policy, &allocations, 1);
     ctx.emit(Event::SuspenseApplied {
         policy: policy.id.clone(),
         amount_minor: allocated,
+        net_by_cover_type,
     });
     Ok(())
 }
