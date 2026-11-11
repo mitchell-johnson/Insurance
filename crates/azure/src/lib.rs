@@ -34,6 +34,17 @@ pub enum AzureError {
     Io(#[from] std::io::Error),
 }
 
+/// The HTTP client every adapter uses. No call to an Azure service may wait
+/// for ever: a connection that is not made in five seconds, or a call not
+/// answered in thirty, fails and is retried by whoever asked.
+pub fn http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(5))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .unwrap_or_default()
+}
+
 pub(crate) async fn check(service: &'static str, resp: reqwest::Response) -> Result<reqwest::Response, AzureError> {
     if resp.status().is_success() {
         Ok(resp)

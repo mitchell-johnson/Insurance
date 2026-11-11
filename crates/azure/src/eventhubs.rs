@@ -45,7 +45,7 @@ impl EventHubsSink {
             namespace: namespace.trim_end_matches('/').to_string(),
             hub: hub.to_string(),
             credential,
-            http: reqwest::Client::new(),
+            http: crate::http_client(),
         }
     }
 }

@@ -38,7 +38,7 @@ impl BlobContainer {
             endpoint: endpoint.trim_end_matches('/').to_string(),
             container: container.to_string(),
             credential,
-            http: reqwest::Client::new(),
+            http: crate::http_client(),
         }
     }
 

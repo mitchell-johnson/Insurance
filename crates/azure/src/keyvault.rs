@@ -51,7 +51,7 @@ impl KeyVaultSigner {
             vault: vault.trim_end_matches('/').to_string(),
             key: key.to_string(),
             credential,
-            http: reqwest::Client::new(),
+            http: crate::http_client(),
         }
     }
 

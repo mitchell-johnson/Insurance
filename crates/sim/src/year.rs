@@ -54,6 +54,41 @@ impl YearConfig {
             verify_journal: true,
         }
     }
+
+    /// The `ic-simulate` command line over the small insurer:
+    /// `[--seed N] [--policies N] [--members N] [--days N] [--partitions N] [--no-journal]`.
+    pub fn from_args(args: &[String]) -> Result<Self, String> {
+        let mut cfg = Self::small(20271115);
+        let mut args = args.iter();
+        while let Some(flag) = args.next() {
+            if flag == "--no-journal" {
+                cfg.verify_journal = false;
+                continue;
+            }
+            let mut number = |max: u64| -> Result<u64, String> {
+                let value = args.next().ok_or_else(|| format!("{flag} needs a number"))?;
+                let n: u64 = value.parse().map_err(|_| format!("{flag}: {value:?} is not a number"))?;
+                if n > max {
+                    return Err(format!("{flag} must be at most {max}"));
+                }
+                Ok(n)
+            };
+            match flag.as_str() {
+                "--seed" => cfg.seed = number(u64::MAX)?,
+                "--policies" => cfg.retail_policies = number(u64::MAX)?,
+                "--members" => cfg.scheme_members = number(u64::from(u32::MAX))? as u32,
+                "--days" => cfg.days = number(u64::from(u32::MAX))? as u32,
+                "--partitions" => {
+                    cfg.partitions = number(u64::from(ic_ledger::PARTITION_COUNT))? as u16;
+                    if cfg.partitions == 0 {
+                        return Err("--partitions must be at least 1".to_string());
+                    }
+                }
+                other => return Err(format!("unknown argument: {other}")),
+            }
+        }
+        Ok(cfg)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]

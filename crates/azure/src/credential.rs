@@ -20,6 +20,9 @@ pub const SCOPE_MANAGED_HSM: &str = "https://managedhsm.azure.net/.default";
 pub const SCOPE_EVENT_HUBS: &str = "https://eventhubs.azure.net/.default";
 pub const SCOPE_POSTGRES: &str = "https://ossrdbms-aad.database.windows.net/.default";
 
+/// The Azure instance metadata service's token endpoint.
+pub const IMDS_ENDPOINT: &str = "http://169.254.169.254/metadata/identity/oauth2/token";
+
 #[derive(Debug, Clone)]
 enum Source {
     /// Entra Workload ID: a federated token file exchanged at the authority.
@@ -65,28 +68,52 @@ pub struct AzureCredential {
 }
 
 impl AzureCredential {
-    /// Workload identity if the AKS webhook has injected its variables,
-    /// otherwise the managed identity endpoint.
+    /// The credential the process environment describes.
     pub fn from_env() -> Result<Self, AzureError> {
-        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let source = match (var("AZURE_FEDERATED_TOKEN_FILE"), var("AZURE_TENANT_ID"), var("AZURE_CLIENT_ID")) {
-            (Some(token_file), Some(tenant), Some(client_id)) => Source::WorkloadIdentity {
-                authority: var("AZURE_AUTHORITY_HOST").unwrap_or_else(|| "https://login.microsoftonline.com/".to_string()),
-                tenant,
-                client_id,
-                token_file,
-            },
-            (None, _, client_id) => Source::ManagedIdentity {
-                endpoint: "http://169.254.169.254/metadata/identity/oauth2/token".to_string(),
-                client_id,
-            },
-            _ => {
-                return Err(AzureError::NoCredential(
-                    "AZURE_FEDERATED_TOKEN_FILE is set but AZURE_TENANT_ID or AZURE_CLIENT_ID is missing".to_string(),
-                ))
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// Workload identity if the AKS webhook has injected its variables
+    /// (`AZURE_FEDERATED_TOKEN_FILE`, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`,
+    /// and `AZURE_AUTHORITY_HOST` in a sovereign cloud), otherwise the
+    /// instance metadata service, for the identity `AZURE_CLIENT_ID` names
+    /// where the machine has more than one.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, AzureError> {
+        let var = |k: &str| get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        match (var("AZURE_FEDERATED_TOKEN_FILE"), var("AZURE_TENANT_ID"), var("AZURE_CLIENT_ID")) {
+            (Some(token_file), Some(tenant), Some(client_id)) => {
+                let authority = var("AZURE_AUTHORITY_HOST").unwrap_or_else(|| "https://login.microsoftonline.com/".to_string());
+                Ok(Self::workload_identity(&authority, &tenant, &client_id, &token_file))
             }
-        };
-        Ok(Self::new(source))
+            (None, _, client_id) => Ok(Self::managed_identity(IMDS_ENDPOINT, client_id.as_deref())),
+            _ => Err(AzureError::NoCredential(
+                "AZURE_FEDERATED_TOKEN_FILE is set but AZURE_TENANT_ID or AZURE_CLIENT_ID is missing".to_string(),
+            )),
+        }
+    }
+
+    /// A managed identity token from the metadata service at `endpoint`.
+    pub fn managed_identity(endpoint: &str, client_id: Option<&str>) -> Self {
+        Self::new(Source::ManagedIdentity {
+            endpoint: endpoint.to_string(),
+            client_id: client_id.map(str::to_string),
+        })
+    }
+
+    /// Where the tokens come from, without any secret: for the start-up log.
+    pub fn describe(&self) -> String {
+        match &self.source {
+            Source::WorkloadIdentity {
+                authority, tenant, client_id, ..
+            } => {
+                format!("workload identity {client_id} in tenant {tenant} at {}", authority.trim_end_matches('/'))
+            }
+            Source::ManagedIdentity { endpoint, client_id } => match client_id {
+                Some(id) => format!("managed identity {id} from {endpoint}"),
+                None => format!("the machine's managed identity from {endpoint}"),
+            },
+            Source::Static(_) => "a fixed token".to_string(),
+        }
     }
 
     pub fn workload_identity(authority: &str, tenant: &str, client_id: &str, token_file: &str) -> Self {
@@ -105,7 +132,7 @@ impl AzureCredential {
     fn new(source: Source) -> Self {
         Self {
             source,
-            http: reqwest::Client::new(),
+            http: crate::http_client(),
             cache: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }

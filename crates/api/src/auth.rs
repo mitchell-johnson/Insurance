@@ -100,7 +100,7 @@ impl Auth {
             issuer: format!("{authority}/{tenant}/v2.0"),
             audience: audience.to_string(),
             jwks_url: format!("{authority}/{tenant}/discovery/v2.0/keys"),
-            http: reqwest::Client::new(),
+            http: ic_azure::http_client(),
             keys: RwLock::new((BTreeMap::new(), None)),
         }))
     }
