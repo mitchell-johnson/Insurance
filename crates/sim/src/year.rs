@@ -507,6 +507,14 @@ pub fn audit(c: &Cluster, view: &Projections, policies: &[PolicyId], verify_jour
             return fail(format!("partition {p}: replay produced a different state hash"));
         }
         if verify_journal {
+            // Every line of a policy's entry is in the policy's statutory fund, so each
+            // fund's own trial balance balances.
+            for entry in node.journal.iter().filter(|e| e.body.policy.is_some()) {
+                let fund = &entry.body.postings[0].dims.statutory_fund;
+                if fund.is_none() || entry.body.postings.iter().any(|p| &p.dims.statutory_fund != fund) {
+                    return fail(format!("partition {p}: entry {} does not sit in one statutory fund", entry.id.seq));
+                }
+            }
             // An independent verifier walks the chain; re-summing the postings gives the balances.
             let head = verify_chain(*p, &node.journal).map_err(|e| format!("partition {p}: {e}"))?;
             if head != node.state().ledger.head() {

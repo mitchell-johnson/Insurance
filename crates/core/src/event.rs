@@ -2,10 +2,13 @@
 //! opaque IDs and never personal data. Underwriting terms (loadings and
 //! exclusions) are sensitive and are not in events at all.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use ic_ledger::{EntryId, Hash32, PartitionId};
 use serde::{Deserialize, Serialize};
 
+use crate::payments::PayableKind;
 use crate::policy::{LayerOrigin, PolicyStatus, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
@@ -133,6 +136,23 @@ pub enum Event {
         layer: LayerInfo,
         origin: LayerOrigin,
     },
+    /// A layer stopped from a date: an underwritten layer given up, reduced
+    /// or ended because the member left.
+    LayerEnded {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        life: LifeId,
+        effective: NaiveDate,
+        sum_insured_minor: i64,
+    },
+    /// The part of a retrospective adjustment that is underwriting loading.
+    /// It names no member: loadings reach the scheme only in aggregate.
+    LoadingAdjusted {
+        policy: PolicyId,
+        receivable: u32,
+        total_minor: i64,
+    },
     LayersMerged {
         policy: PolicyId,
         cover: String,
@@ -157,6 +177,10 @@ pub enum Event {
         period_end: NaiveDate,
         total_minor: i64,
         members: Option<u32>,
+        /// The premium for the period by cover type, before tax and levies.
+        /// Reinsurance priced on the original premium reads it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        by_cover_type: BTreeMap<String, i64>,
     },
     PremiumAdjusted {
         policy: PolicyId,
@@ -171,6 +195,11 @@ pub enum Event {
         period_index: u32,
         lines: Vec<(LifeId, i64)>,
         complete: bool,
+        /// Underwriting loading billed in this chunk that is not shown on any
+        /// member's line. The lines plus this is what the chunk added to the
+        /// invoice.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        loading_minor: i64,
     },
     PremiumEarned {
         policy: PolicyId,
@@ -249,6 +278,36 @@ pub enum Event {
         /// since where the product's wording pays it.
         payable: Vec<PayableCover>,
     },
+    /// A refund moved from suspense to refund payable and waits to be paid.
+    RefundPayableRaised {
+        policy: PolicyId,
+        refund: String,
+        amount_minor: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        with_claim: Option<String>,
+    },
+    /// A raised refund went back to suspense unpaid.
+    RefundPayableReleased {
+        policy: PolicyId,
+        refund: String,
+        amount_minor: i64,
+    },
+    /// The bank confirmed a payment and the payable was discharged.
+    PaymentSettled {
+        policy: PolicyId,
+        payment: String,
+        payable: PayableKind,
+        amount_minor: i64,
+        bank_account: String,
+    },
+    /// The bank sent a payment back and it is owed again.
+    PaymentReturned {
+        policy: PolicyId,
+        payment: String,
+        payable: PayableKind,
+        amount_minor: i64,
+        bank_account: String,
+    },
     /// Collection from the payer's account must stop: the payments module
     /// cancels the direct debit authority.
     PaymentAuthorityCancelled {
@@ -270,6 +329,10 @@ pub enum Event {
         /// The member's cover on the details just notified.
         #[serde(default)]
         covers: Vec<MemberCover>,
+        /// The person, where the member joined as a named life or is already
+        /// identified.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        party: Option<PartyId>,
     },
     MemberLeft {
         policy: PolicyId,
@@ -342,4 +405,8 @@ pub enum MessageBody {
     TransferRecord(Box<TransferRecord>),
     TransferLanded { policy: PolicyId, transfer_id: String },
     TransferRejected { policy: PolicyId, transfer_id: String, reason: String },
+}
+
+fn is_zero(n: &i64) -> bool {
+    *n == 0
 }
