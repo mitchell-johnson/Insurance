@@ -13,8 +13,10 @@
 //! - [`state`]: the state machine, its commands and events.
 //! - [`workbench`]: the held balance workbench and its controls.
 //! - [`authority`]: staff roles, authority profiles and the Cedar policy.
+//! - [`host`]: what a ledger node needs to host the module, and its questions.
 
 pub mod authority;
+pub mod host;
 pub mod model;
 pub mod rules;
 pub mod state;

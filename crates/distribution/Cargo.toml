@@ -11,6 +11,7 @@ ic-money.workspace = true
 ic-ledger.workspace = true
 ic-log.workspace = true
 ic-core.workspace = true
+ic-raft.workspace = true
 cedar-policy.workspace = true
 chrono.workspace = true
 serde.workspace = true

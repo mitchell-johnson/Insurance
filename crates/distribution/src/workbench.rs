@@ -372,6 +372,20 @@ impl DistributionState {
         }
     }
 
+    /// The document behind a standing decision to keep a party's balance
+    /// held: a completed hold whose review date is still ahead.
+    pub fn held_decision(&self, party: &PartyId, date: NaiveDate) -> Option<String> {
+        self.actions
+            .values()
+            .find(|a| &a.party == party && a.state == ActionState::Completed && matches!(a.action, Action::HoldPending { review_on, .. } if review_on > date))
+            .map(|a| a.document_ref.clone())
+    }
+
+    /// Whether a payment for the party is with the payments module.
+    pub fn payment_outstanding(&self, party: &PartyId) -> bool {
+        self.payments.values().any(|p| &p.party == party)
+    }
+
     /// Month-end: parties whose held balance older than the threshold age is
     /// above the threshold amount. Each blocks sign-off until it has a
     /// decision in the workbench with a review date still ahead.
@@ -385,12 +399,7 @@ impl DistributionState {
             *old.entry(h.party.clone()).or_insert(0) += h.remaining_minor;
         }
         old.into_iter()
-            .filter(|(party, amount)| {
-                let reviewed = self.actions.values().any(|a| {
-                    &a.party == party && a.state == ActionState::Completed && matches!(a.action, Action::HoldPending { review_on, .. } if review_on > date)
-                });
-                *amount > self.settings.month_end_held_threshold_minor && !reviewed
-            })
+            .filter(|(party, amount)| *amount > self.settings.month_end_held_threshold_minor && self.held_decision(party, date).is_none())
             .collect()
     }
 

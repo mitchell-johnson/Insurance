@@ -1918,6 +1918,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-sim",
  "proptest",
  "serde",

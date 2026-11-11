@@ -485,7 +485,7 @@ pub enum Event {
 /// What applying one command produced. The host writes the events and the
 /// postings to its outbox in the same atomic step as the state; a driver
 /// sends each posting to the core with its reference as the idempotency key.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Output {
     pub index: u64,
     pub result: Result<(), Reject>,
