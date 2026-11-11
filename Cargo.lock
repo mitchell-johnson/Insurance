@@ -2017,6 +2017,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-reinsurance"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "starlark",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-sim"
 version = "0.1.0"
 dependencies = [
