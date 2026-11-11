@@ -426,10 +426,22 @@ fn a_claim_is_offered_only_to_someone_who_may_work_it() {
     let mut book = authority();
     book.version = 2;
     book.staff.get_mut("ben").expect("ben is in the book").wip_limit = 2;
+    book.staff.get_mut("ben").expect("ben is in the book").queues.insert(Queue::ComplexLarge);
     w.ok(Command::ActivateAuthority { book: Box::new(book) });
     notify(&mut w, "c-4", "pol-1", "trauma", ClaimType::Trauma);
     assert_eq!(w.refused(to("c-4", "ben")), "wip_limit");
     w.ok(to("c-2", "ben"));
+
+    // Sitting on the senior queue's list does not make someone a senior, and a closed claim
+    // is given to nobody.
+    assert_eq!(w.refused(to("c-3", "ben")), "not_senior");
+    w.ok(Command::Decide {
+        claim: "c-3".into(),
+        request: ic_claims::Request::Withdraw,
+        reasons: vec!["R-OK".into()],
+        actor: actor("sue"),
+    });
+    assert_eq!(w.refused(to("c-3", "sam")), "claim_closed");
 }
 
 /// Purpose: only the owner records the cause and the cover check; the cause must be on the

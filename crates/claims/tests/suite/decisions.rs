@@ -2,7 +2,7 @@
 
 use ic_claims::command::{NonDisclosureOutcome, ReinsuranceNotice, ReopenBasis};
 use ic_claims::config::Match;
-use ic_claims::model::TimerKind;
+use ic_claims::model::{EndReason, HealthItem, OverpaymentCause, TimerKind};
 use ic_claims::{ClaimType, Command, CoverFacts, DecisionKind, Instruction, Queue, Request, Status, TaskKind};
 
 use crate::world::*;
@@ -476,4 +476,114 @@ fn the_senior_queue_needs_a_case_conference() {
     w.conference("c-1", "sam");
     w.decided("c-1", "sam", World::admit_lump(Some(200_000)), "R-OK");
     assert_eq!(w.claim("c-1").status, Status::Admitted);
+}
+
+fn dental(id: &str, invoice: i64, pre_approval: bool) -> ic_claims::command::Notification {
+    let mut n = World::notification(id, "pol-3", "health", ClaimType::Health);
+    n.health = Some(HealthItem {
+        category: "dental".into(),
+        invoice_minor: invoice,
+        provider: None,
+        pre_approval_request: pre_approval,
+        settles_pre_approval: None,
+    });
+    n
+}
+
+/// Purpose: a health invoice or pre-approval request the rules would not decide alone is priced
+/// by the same benefit limits when a person decides it, counts against the limits, and a
+/// person's pre-approval is a hold with an expiry and no posting.
+/// Why it matters: the limits are the contract. They must hold whether the rules or a person
+/// admits the claim, or the manual path becomes the way round the annual limit.
+#[test]
+fn a_person_admitting_a_health_claim_is_bound_by_the_same_limits() {
+    let mut w = World::new();
+    let grace = CoverFacts {
+        sum_insured_minor: 0,
+        standing: Some("in_grace".into()),
+        outstanding_premium_minor: 40,
+        ..facts("health")
+    };
+    w.core.cover("pol-3", "health", grace);
+    w.ok(Command::Notify(Box::new(dental("h-1", 600, false))));
+    assert_eq!(w.claim("h-1").status, Status::Open);
+    w.assign("h-1", "ana");
+    w.assess("h-1", "CC-0003");
+    assert_eq!(w.undecided("h-1", "ana", World::admit_lump(Some(441)), "R-OK"), "amount_exceeds_cover");
+    w.decided("h-1", "ana", World::admit_lump(None), "R-OK");
+    let c = w.claim("h-1");
+    assert_eq!((c.admitted_minor, c.payable_minor), (440, 400));
+    assert_eq!(w.state.health_used["pol-3/life-1/dental/2027-01-01"], 440);
+
+    w.ok(Command::Notify(Box::new(dental("pre-1", 900, true))));
+    w.assign("pre-1", "ana");
+    w.assess("pre-1", "CC-0003");
+    let instructions = w.core.instructions.len();
+    w.decided("pre-1", "ana", World::admit_lump(None), "R-OK");
+    assert_eq!(w.core.instructions.len(), instructions);
+    let hold = w.state.pre_approvals["pre-1"].clone();
+    assert_eq!((hold.amount_minor, hold.expires), (680, d(2027, 3, 31)));
+    assert_eq!(w.core.noticed("pre_approval_given").last().expect("published")["expires"], "2027-03-31");
+    assert_eq!(w.claim("pre-1").status, Status::Open);
+}
+
+/// Purpose: benefit terms that do not fit the cover are refused; an exclusion code the rules do
+/// not know needs a person; an exclusion scoped to another cover type does not apply; and a
+/// benefit ended by decision for a death records the overpayment as late death notification.
+/// Why it matters: each is a quiet way to pay wrongly: a monthly benefit above the insured
+/// amount, an unknown exclusion treated as no exclusion, and an estate recovery miscoded as
+/// the claimant's late information.
+#[test]
+fn benefit_terms_and_exclusion_scope_are_checked() {
+    let mut w = World::new();
+    let scoped = ic_claims::config::Exclusion {
+        applies_to: ["trauma".to_string()].into(),
+        cause_tags: vec!["mental".into()],
+        verbatim: false,
+    };
+    let mut r = rules();
+    r.version = 2;
+    r.exclusions.insert("EX-0002".into(), scoped);
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.core.cover("pol-2", "ip", CoverFacts { sum_insured_minor: 4_000, exclusions: vec!["EX-0002".into(), "EX-7777".into()], ..facts("income_protection") });
+    w.ok(Command::Notify(Box::new(World::notification("ip-1", "pol-2", "ip", ClaimType::IncomeProtection))));
+    w.assign("ip-1", "ana");
+    w.assess("ip-1", "CC-0002");
+    let terms = |monthly: i64, reviewed: bool| Request::Admit {
+        amount_minor: None,
+        periodic: Some(ic_claims::command::Periodic {
+            monthly_minor: monthly,
+            first_period: d(2027, 3, 1),
+            end: d(2027, 5, 1),
+            expected_end: d(2027, 4, 1),
+        }),
+        exclusion_override: None,
+        exclusion_reviewed: reviewed,
+        payer_deceased: false,
+    };
+    assert_eq!(w.undecided("ip-1", "ana", terms(3_000, false), "R-OK"), "exclusion_needs_assessor");
+    assert_eq!(w.undecided("ip-1", "ana", terms(4_001, true), "R-OK"), "invalid_schedule");
+    let lump = Request::Admit {
+        amount_minor: None,
+        periodic: None,
+        exclusion_override: None,
+        exclusion_reviewed: true,
+        payer_deceased: false,
+    };
+    assert_eq!(w.undecided("ip-1", "ana", lump, "R-OK"), "invalid_schedule");
+    w.decided("ip-1", "ana", terms(3_000, true), "R-OK");
+    let outcomes = w.claim("ip-1").decisions.last().expect("recorded").exclusion_outcomes.clone();
+    assert_eq!((outcomes["EX-0002"], outcomes["EX-7777"]), (Match::DoesNotApply, Match::NeedsAssessor));
+    // A two month benefit is too short for any review to fall due inside it.
+    assert!(w.claim("ip-1").schedule.as_ref().expect("in payment").reviews.is_empty());
+
+    w.verify_payee("ip-1", "ana");
+    w.pay_run("run-1", d(2027, 3, 1));
+    let end = Request::EndBenefit {
+        end: d(2027, 3, 1),
+        reason: EndReason::Death,
+    };
+    w.decided("ip-1", "ana", end, "R-OK");
+    let c = w.claim("ip-1");
+    assert_eq!((c.status, c.overpayments[0].cause, c.overpayments[0].amount_minor), (Status::Ended, OverpaymentCause::LateDeathNotification, 3_000));
 }

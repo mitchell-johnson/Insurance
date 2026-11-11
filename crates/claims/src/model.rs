@@ -246,16 +246,6 @@ pub enum TaskKind {
 }
 
 impl TaskKind {
-    pub fn queue(self) -> Option<Queue> {
-        match self {
-            TaskKind::MedicalOpinion => Some(Queue::MedicalOfficer),
-            TaskKind::Rehabilitation | TaskKind::ReturnToWork => Some(Queue::Rehabilitation),
-            TaskKind::SeniorReview | TaskKind::CaseConference | TaskKind::ExclusionMatch => Some(Queue::ComplexLarge),
-            TaskKind::QualityReview => Some(Queue::QualityReview),
-            TaskKind::RepaymentArrangement => Some(Queue::Recoveries),
-            _ => None,
-        }
-    }
     pub fn review(self) -> bool {
         matches!(self, TaskKind::MedicalReview | TaskKind::IncomeDeclaration | TaskKind::ReturnToWork)
     }
