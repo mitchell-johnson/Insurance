@@ -734,3 +734,33 @@ pub async fn serve_with(settings: Settings, modules: Vec<ModuleSpec>, stop: impl
     tracing::info!("ledger node stopping");
     running.stop().await
 }
+
+async fn stop_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! { () = ctrl_c => {}, () = term => {} }
+}
+
+/// A node binary's whole `main`: log as JSON, read the settings from the
+/// environment, host the given modules and run until the process is told
+/// to stop.
+pub async fn run(modules: Vec<ModuleSpec>) -> Result<(), String> {
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+    let settings = Settings::from_lookup(|key| std::env::var(key).ok())?;
+    serve_with(settings, modules, stop_signal()).await
+}
