@@ -25,7 +25,7 @@
 
 ## Known gaps
 
-- **Delivery is not running in a deployed process.** The module produces postings and `host::posting_envelope` and `host::refusal` turn them into core commands and refusals, and the tests drive that loop in the simulated cluster. The driver that does it on a deployed node, and the feed of partition events into the module's group, are not on `main` yet. Until they are, nothing this module works out reaches the ledger outside tests.
+- **Delivery is not running in a deployed process.** The module produces postings and `host::posting_envelope` and `host::refusal` turn them into core commands and refusals, and the tests drive that loop in the simulated cluster. On a deployed node the module's group receives every partition's events through the host, so it earns and holds correctly, but the driver that carries its postings to the core is not on `main` yet: the core thread is building it in the host as a generic outbox. Until it is, nothing this module works out reaches the ledger outside tests.
 - **Not published to the portal or to finance.** The channels module's commands for the workbench, the adviser directory and licence status, and the finance module's `ReportAgedItems` and `ReportCheck`, are not called. The questions that supply them exist; the driver that asks and forwards does not.
 - **Commission is posted by its own entry** after the premium event, not as lines in the premium entry. The entry cites the event and is idempotent on it, but the two are not atomic.
 - **Premium refunds do not reverse renewal commission.** A refund from an unwind or a claim termination claws back initial commission by the schedule; renewal commission already earned on the refunded premium is not reversed.
