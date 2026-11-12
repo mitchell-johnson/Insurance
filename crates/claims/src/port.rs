@@ -131,6 +131,18 @@ pub enum Instruction {
         amount_minor: i64,
         payee: String,
     },
+    /// A cost of handling the claim owed to a third party: a report fee, a
+    /// rehabilitation provider. Its own expense account, never claims incurred.
+    HandlingCost {
+        claim: String,
+        policy: String,
+        cover: String,
+        payment_ref: String,
+        amount_minor: i64,
+        payee: String,
+        /// `evidence` or `rehabilitation`.
+        kind: String,
+    },
     /// Close the claim, releasing whatever reserve and unpaid payable remain,
     /// and in the same step raise what was overpaid as a receivable.
     Close {
@@ -176,6 +188,7 @@ impl Instruction {
             | Instruction::PayBenefit { policy, .. }
             | Instruction::PaymentReturned { policy, .. }
             | Instruction::ExGratia { policy, .. }
+            | Instruction::HandlingCost { policy, .. }
             | Instruction::Close { policy, .. }
             | Instruction::Reopen { policy, .. }
             | Instruction::RaiseOverpayment { policy, .. }

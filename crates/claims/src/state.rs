@@ -228,6 +228,13 @@ impl ClaimsState {
                 reissue_of,
                 actor,
             } => self.pay(cx, &claim, payment_ref, amount_minor, reissue_of, &actor),
+            Command::PayCost {
+                claim,
+                payment_ref,
+                item,
+                provider,
+                actor,
+            } => self.pay_cost(cx, &claim, payment_ref, &item, &provider, &actor),
             Command::PaymentReturned { claim, payment_ref } => self.payment_returned(cx, &claim, &payment_ref),
             Command::DeclareIncome {
                 claim,
@@ -341,7 +348,7 @@ impl ClaimsState {
             toggle(self.by_party.entry(party.clone()).or_default(), c.id.clone(), add);
         }
         toggle(&mut self.in_payment, c.id.clone(), add && c.status == Status::InPayment);
-        let provider = c.claim_type == ClaimType::Health && c.status == Status::Admitted && c.payable_minor > 0 && c.in_run.is_none();
+        let provider = c.claim_type == ClaimType::Health && c.status == Status::Admitted && c.benefit_payable_minor() > 0 && c.in_run.is_none();
         toggle(&mut self.provider_payable, c.id.clone(), add && provider);
         let offsetting = c
             .overpayments

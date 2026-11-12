@@ -319,6 +319,18 @@ pub enum Command {
         reissue_of: Option<String>,
         actor: Actor,
     },
+    /// Pay the recorded cost of a piece of evidence or a rehabilitation
+    /// task to whoever provided it. Paid again under a new reference if the
+    /// bank sent the first payment back.
+    PayCost {
+        claim: String,
+        payment_ref: String,
+        /// The evidence ID or the rehabilitation task ID.
+        item: String,
+        /// Who is paid, as the payments module knows them.
+        provider: String,
+        actor: Actor,
+    },
     PaymentReturned {
         claim: String,
         payment_ref: String,
@@ -424,6 +436,7 @@ impl Command {
             Command::Reopen { .. } => "reopen",
             Command::VerifyPayee { .. } => "verify_payee",
             Command::Pay { .. } => "pay",
+            Command::PayCost { .. } => "pay_cost",
             Command::PaymentReturned { .. } => "payment_returned",
             Command::DeclareIncome { .. } => "declare_income",
             Command::PrepareRun { .. } => "prepare_run",

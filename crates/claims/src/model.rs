@@ -336,6 +336,10 @@ pub struct Payment {
     pub released_by: Option<StaffId>,
     /// The payment run it went out in, if it was not released by hand.
     pub run: Option<String>,
+    /// The evidence or rehabilitation task this pays for, where the payment
+    /// is a cost of handling the claim and not a benefit.
+    #[serde(default)]
+    pub cost_item: Option<String>,
 }
 
 /// One paid period of a benefit in payment.
@@ -573,6 +577,10 @@ pub struct Claim {
     pub admitted_minor: i64,
     /// Admitted and not yet paid: mirrors the claim's share of benefit payable.
     pub payable_minor: i64,
+    /// The part of `payable_minor` that is a handling cost the bank sent
+    /// back, waiting to be paid to its provider again.
+    #[serde(default)]
+    pub cost_payable_minor: i64,
     /// The payment run this claim is waiting in.
     pub in_run: Option<String>,
     pub decisions: Vec<Decision>,
@@ -614,12 +622,28 @@ impl Claim {
     pub fn task_done_since(&self, kind: TaskKind, since: NaiveDate) -> bool {
         self.task(kind).any(|t| t.completed_on.is_some_and(|d| d >= since))
     }
+    /// Admitted benefit not yet released. A handling cost that came back
+    /// from the bank is owed to its provider, not to the claimant.
+    pub fn benefit_payable_minor(&self) -> i64 {
+        self.payable_minor - self.cost_payable_minor
+    }
+    /// What a piece of evidence or a rehabilitation task cost, once recorded.
+    pub fn cost_of(&self, item: &str) -> Option<i64> {
+        let evidence = self.evidence.iter().find(|e| e.id == item && e.received_on.is_some()).map(|e| e.cost_minor);
+        let task = self
+            .tasks
+            .iter()
+            .find(|t| t.id == item && t.kind == TaskKind::Rehabilitation && t.completed_on.is_some())
+            .map(|t| t.spend_minor);
+        evidence.or(task).filter(|c| *c > 0)
+    }
     /// Money paid and not returned, contractual and ex gratia apart.
+    /// Handling costs are neither.
     pub fn paid_minor(&self, ex_gratia: bool) -> i64 {
         let lump: i64 = self
             .payments
             .iter()
-            .filter(|p| !p.returned && p.ex_gratia == ex_gratia)
+            .filter(|p| !p.returned && p.ex_gratia == ex_gratia && p.cost_item.is_none())
             .map(|p| p.amount_minor)
             .sum();
         let periods: i64 = match (&self.schedule, ex_gratia) {

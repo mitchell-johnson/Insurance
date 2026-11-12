@@ -27,6 +27,7 @@ pub mod role {
     pub const CLAIM_RECOVERY_RECEIVABLE: &str = "claim_recovery_receivable";
     pub const CLAIMS_INCURRED: &str = "claims_incurred";
     pub const EX_GRATIA: &str = "ex_gratia";
+    pub const CLAIMS_HANDLING: &str = "claims_handling";
     pub const CLAIM_RECOVERY_WRITE_OFF: &str = "claim_recovery_write_off";
 
     pub const SETTLEMENT: &str = "settlement";
@@ -158,6 +159,16 @@ pub fn ex_gratia(product: &str, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Expense,
         role::EX_GRATIA,
+    )
+}
+/// What it costs to handle claims: report fees, rehabilitation providers.
+/// Never mixed with what is paid under the contract.
+pub fn claims_handling(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/claims_handling/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::CLAIMS_HANDLING,
     )
 }
 pub fn claim_recovery_write_off(product: &str, c: Currency) -> Account {
