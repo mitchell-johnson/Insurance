@@ -21,9 +21,12 @@ pub const MAX_ANSWER: usize = 500;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Query {
-    /// The oldest instructions not yet acknowledged: `[seq, instruction]`.
+    /// The oldest instructions not yet acknowledged: `[seq, instruction]`,
+    /// from after `after` when it is given.
     Outbox {
         limit: usize,
+        #[serde(default)]
+        after: Option<u64>,
     },
     /// The oldest notices not yet handed on: `[seq, notice]`. With an
     /// audience, only that audience's, leaving out any it refused.
@@ -109,7 +112,7 @@ fn json<T: Serialize>(value: T) -> Result<Value, String> {
 pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
     let query: Query = serde_json::from_value(question).map_err(|e| format!("not a question of this module: {e}"))?;
     match query {
-        Query::Outbox { limit } => json(state.outbox(limit.min(MAX_ANSWER))),
+        Query::Outbox { limit, after } => json(state.outbox_after(after, limit.min(MAX_ANSWER))),
         Query::Notices { audience: None, limit } => json(state.notices(limit.min(MAX_ANSWER))),
         Query::Notices {
             audience: Some(audience),

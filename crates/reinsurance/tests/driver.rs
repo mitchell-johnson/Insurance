@@ -34,6 +34,8 @@ use serde_json::{json, Value};
 struct SimCore {
     cluster: Arc<Mutex<Cluster>>,
     refuse: Arc<Mutex<Option<Reject>>>,
+    /// When set, `refuse` applies only to the delivery with this key.
+    refuse_only: Arc<Mutex<Option<String>>>,
     unopened: Arc<Mutex<Option<PartitionId>>>,
     down: Arc<Mutex<bool>>,
 }
@@ -54,7 +56,9 @@ impl Core for SimCore {
             return Err(DriverError::Unavailable("no node answered".into()));
         }
         if let Some(refusal) = self.refuse.lock().unwrap().clone() {
-            return Ok(Err(refusal));
+            if self.refuse_only.lock().unwrap().as_ref().is_none_or(|only| *only == delivery.key) {
+                return Ok(Err(refusal));
+            }
         }
         let applied = self
             .cluster
@@ -82,6 +86,7 @@ impl World {
         let core = SimCore {
             cluster: Arc::new(Mutex::new(cluster)),
             refuse: Arc::default(),
+            refuse_only: Arc::default(),
             unopened: Arc::default(),
             down: Arc::default(),
         };
@@ -257,31 +262,47 @@ fn common_record() -> ic_core::EventRecord {
     }
 }
 
-/// Purpose: an instruction the core refuses stops delivery at that instruction, opens an
-/// exception that names it, and stays stopped on every pass until a person abandons it
-/// with a reason; delivery then carries on, and the abandoned instruction is kept.
+/// Purpose: an instruction the core refuses holds its own lane (the cover's cession record,
+/// or money on its partition) at that instruction, opens an exception that names it, and
+/// stays held on every pass until a person abandons it with a reason; every other lane is
+/// delivered meanwhile, past it in the outbox, and the held lane carries on once it is
+/// abandoned, with the abandoned instruction kept.
 /// Why it matters: a refusal means the module and the core disagree about something. Passing
 /// over it would leave the ledger short without anyone knowing; retrying forever in silence
-/// would stop all reinsurance postings with nothing on anyone's worklist.
+/// would stop all reinsurance postings with nothing on anyone's worklist; and holding every
+/// cover behind one bad entry would let one defect stop reinsurance for the whole insurer.
 #[tokio::test]
-async fn a_refused_instruction_stops_delivery_until_a_person_decides() {
+async fn a_refused_instruction_holds_its_lane_until_a_person_decides() {
     let mut w = World::new();
     w.issue(1, 800_000_00);
-    let waiting = w.module.state().outbox(usize::MAX).len() as u32;
-    let (first, _) = w.module.state().outbox(1).into_iter().map(|(s, i)| (s, i.clone())).next().unwrap();
+    w.issue(2, 900_000_00);
+    let outbox: Vec<(u64, ic_reinsurance::Instruction)> = w.module.state().outbox(usize::MAX).into_iter().map(|(s, i)| (s, i.clone())).collect();
+    let waiting = outbox.len() as u32;
+    let (first, refused) = outbox[0].clone();
+    let behind = outbox.iter().skip(1).filter(|(_, i)| i.lane() == refused.lane()).count() as u32;
+    assert!(outbox.iter().any(|(_, i)| i.lane() != refused.lane()), "the test needs a second lane");
+    *w.core.refuse_only.lock().unwrap() = Some(w.module.state().to_core(&refused, d(2027, 3, 1)).unwrap().key);
     *w.core.refuse.lock().unwrap() = Some(Reject::new("period_closed", "the ledger period is closed"));
 
-    for _ in 0..2 {
-        let pass = w.driver.deliver().await.unwrap();
-        assert_eq!((pass.delivered, pass.dropped), (0, 0));
-        assert_eq!(pass.held.as_ref().map(|(seq, r)| (*seq, r.code.as_str())), Some((first, "period_closed")));
-        assert!(!pass.clear());
-    }
+    let pass = w.driver.deliver().await.unwrap();
+    assert_eq!((pass.delivered, pass.dropped), (waiting - 1 - behind, 0));
+    assert_eq!(
+        pass.held.iter().map(|(seq, r)| (*seq, r.code.as_str())).collect::<Vec<_>>(),
+        vec![(first, "period_closed")]
+    );
+    assert!(!pass.clear());
+    let pass = w.driver.deliver().await.unwrap();
+    assert_eq!(
+        (pass.delivered, pass.held.len()),
+        (0, 1),
+        "the refused instruction is offered again, and nothing behind it"
+    );
     let state = w.module.state();
     let exception = &state.exceptions()[&format!("delivery:{first}")];
     assert_eq!(exception.code, "instruction_refused");
     assert!(exception.detail.contains("period_closed: the ledger period is closed"), "{}", exception.detail);
-    assert_eq!(state.outbox(usize::MAX).len() as u32, waiting);
+    assert!(exception.detail.contains(&refused.lane()), "{}", exception.detail);
+    assert_eq!(state.outbox(usize::MAX).len() as u32, 1 + behind);
     assert_eq!(
         state
             .notices(usize::MAX)
@@ -312,7 +333,7 @@ async fn a_refused_instruction_stops_delivery_until_a_person_decides() {
 
     *w.core.refuse.lock().unwrap() = None;
     let pass = w.driver.deliver().await.unwrap();
-    assert_eq!(pass.delivered, waiting - 1);
+    assert_eq!(pass.delivered, behind);
     assert!(w.module.state().outbox(usize::MAX).is_empty());
 }
 
@@ -327,13 +348,14 @@ async fn a_refusal_that_clears_closes_its_exception_and_an_unopened_partition_wa
     let (p, _) = w.issue(1, 800_000_00);
     *w.core.unopened.lock().unwrap() = Some(p);
     let pass = w.driver.deliver().await.unwrap();
-    assert_eq!((pass.delivered, pass.waiting_on, pass.held.clone()), (0, Some(p), None));
+    assert_eq!((pass.delivered, pass.waiting_on, pass.held.clone()), (0, Some(p), vec![]));
     assert!(w.module.state().exceptions().is_empty());
     *w.core.unopened.lock().unwrap() = None;
 
     *w.core.refuse.lock().unwrap() = Some(Reject::new("busy", "try later"));
-    assert!(w.driver.deliver().await.unwrap().held.is_some());
-    assert_eq!(w.module.state().exceptions().len(), 1);
+    let held = w.driver.deliver().await.unwrap().held;
+    assert!(!held.is_empty());
+    assert_eq!(w.module.state().exceptions().len(), held.len(), "one exception for the head of each lane");
     *w.core.refuse.lock().unwrap() = None;
     assert!(w.driver.deliver().await.unwrap().clear());
     assert!(w.module.state().exceptions().is_empty());
@@ -375,7 +397,7 @@ async fn a_cession_refused_for_a_transfer_is_passed_over_not_held() {
     w.feed();
     w.issue(1, 400_000_00);
     let pass = w.driver.deliver().await.unwrap();
-    assert_eq!((pass.dropped, pass.held.clone()), (1, None));
+    assert_eq!((pass.dropped, pass.held.clone()), (1, vec![]));
     assert_eq!(w.retained(src, &b), Some(300_000_00));
     {
         let mut c = w.core.cluster.lock().unwrap();
@@ -392,7 +414,7 @@ async fn a_cession_refused_for_a_transfer_is_passed_over_not_held() {
 
 /// Purpose: the outbox numbers what the module issues, gives it up only when acknowledged,
 /// and refuses an acknowledgement for something not yet issued or from anyone but the
-/// driver; notices are kept and acknowledged the same way.
+/// driver, by number as well as through a number; notices are kept and acknowledged the same way.
 /// Why it matters: the outbox is the module's promise that nothing it decided is lost
 /// between it and the core. An acknowledgement that could run ahead of what was issued
 /// would let a faulty driver discard instructions that do not exist yet.
@@ -420,6 +442,14 @@ fn the_outbox_gives_up_only_what_is_acknowledged() {
     assert_eq!(b.ri.outbox(usize::MAX).first().map(|(s, _)| *s), Some(3));
     b.ok(DRIVER, ack(1)); // an old acknowledgement arriving late changes nothing
     assert_eq!(b.ri.outbox(usize::MAX).len() as u64, last - 2);
+    // Past a held instruction, delivered ones are acknowledged by number; the rest stay.
+    let delivered = |seqs: Vec<u64>| Command::AcknowledgeDelivered { seqs };
+    assert_eq!(b.refused(DRIVER, delivered(vec![4, last + 1])), "unknown_instruction");
+    assert_eq!(b.refused("reinsurance-ops", delivered(vec![4])), "caller_not_allowed");
+    assert_eq!(b.ri.outbox(usize::MAX).len() as u64, last - 2, "a refused acknowledgement removes nothing");
+    b.ok(DRIVER, delivered(vec![4, 1]));
+    assert_eq!(b.ri.outbox(usize::MAX).iter().map(|(s, _)| *s).take(2).collect::<Vec<_>>(), vec![3, 5]);
+    assert_eq!(b.ri.outbox_after(Some(3), 1).first().map(|(s, _)| *s), Some(5));
     let refused = |seq, code: &str| Command::InstructionRefused {
         seq,
         code: code.into(),
@@ -465,11 +495,11 @@ fn the_hosted_module_answers_its_questions() {
     let ask = |b: &Bench, q: Query| answer(&b.ri, serde_json::to_value(q).unwrap()).unwrap();
     let k = key("P1", "life", 1, "L1");
 
-    let outbox = ask(&b, Query::Outbox { limit: 1_000_000 });
+    let outbox = ask(&b, Query::Outbox { limit: 1_000_000, after: None });
     assert_eq!(outbox[0][0], 1);
     assert_eq!(outbox[0][1]["id"], b.instructions[0].id.as_str());
     assert!(outbox.as_array().unwrap().len() <= MAX_ANSWER);
-    assert_eq!(ask(&b, Query::Outbox { limit: 1 }).as_array().unwrap().len(), 1);
+    assert_eq!(ask(&b, Query::Outbox { limit: 1, after: None }).as_array().unwrap().len(), 1);
     assert_eq!(ask(&b, Query::Notices { audience: None, limit: 1 }).as_array().unwrap().len(), 1);
 
     let delivery = ask(&b, Query::Delivery { seq: 1, on: d(2027, 4, 2) });
@@ -682,7 +712,7 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
     // The policy's instructions are carried. The scheme's are for a partition the core
     // does not have, so delivery is held there, and its notices are refused. Both are
     // results like any other: the loop goes on.
-    let held = |pass: &Result<Pass, DriverError>| matches!(pass, Ok(Pass { held: Some((_, refusal)), .. }) if refusal.code == "unknown_partition");
+    let held = |pass: &Result<Pass, DriverError>| matches!(pass, Ok(Pass { held, .. }) if !held.is_empty() && held.iter().all(|(_, refusal)| refusal.code == "unknown_partition"));
     assert!(matches!(&seen[1].0, Ok(pass) if pass.delivered > 0) && held(&seen[1].0), "{:?}", seen[1]);
     assert_eq!(seen[1].1, Ok(Round { taken: 0, refused: 2 }));
     for later in &seen[2..] {

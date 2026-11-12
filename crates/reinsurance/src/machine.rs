@@ -260,8 +260,15 @@ pub enum Command {
     AcknowledgeInstructions {
         through: u64,
     },
-    /// The core refused the oldest instruction for a reason the driver may
-    /// not pass over. Delivery stops there until a person has looked.
+    /// These instructions have been applied by the core, or were cessions
+    /// refused for a policy in transfer. Used when delivery has gone past a
+    /// refused instruction in another lane.
+    AcknowledgeDelivered {
+        seqs: Vec<u64>,
+    },
+    /// The core refused an instruction for a reason the driver may not pass
+    /// over. Delivery in its lane (`Instruction::lane`) stops there until a
+    /// person has looked; other lanes carry on.
     InstructionRefused {
         seq: u64,
         code: String,
@@ -325,6 +332,7 @@ impl Command {
             Command::FacultativeReinsurerTold { .. } | Command::ResumeRecoveries { .. } => &["reinsurance-ops"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
+            | Command::AcknowledgeDelivered { .. }
             | Command::InstructionRefused { .. }
             | Command::AcknowledgeNotices { .. }
             | Command::NoticeRefused { .. } => &["driver"],
@@ -367,6 +375,7 @@ impl Command {
             Command::LoadMigratedCession { .. } => "load_migrated_cession",
             Command::LoadOpeningBalance { .. } => "load_opening_balance",
             Command::AcknowledgeInstructions { .. } => "acknowledge_instructions",
+            Command::AcknowledgeDelivered { .. } => "acknowledge_delivered",
             Command::InstructionRefused { .. } => "instruction_refused",
             Command::AbandonInstruction { .. } => "abandon_instruction",
             Command::AcknowledgeNotices { .. } => "acknowledge_notices",
@@ -409,6 +418,19 @@ pub struct Instruction {
     pub id: String,
     pub partition: PartitionId,
     pub body: InstructionBody,
+}
+
+impl Instruction {
+    /// The instructions that must reach the core in order: each cover's
+    /// cession record is one lane, since a later record replaces an earlier
+    /// one from its date; money on a partition is another. A refusal holds
+    /// only its own lane.
+    pub fn lane(&self) -> String {
+        match &self.body {
+            InstructionBody::RecordCession { key, .. } => format!("cover:{key}"),
+            InstructionBody::Post { .. } | InstructionBody::Sweep { .. } => format!("money:{}", self.partition),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1100,6 +1122,7 @@ impl Reinsurance {
             }
             Command::ResumeRecoveries { claim, reference } => self.resume_recoveries(ctx, &claim, &reference),
             Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),
+            Command::AcknowledgeDelivered { seqs } => self.acknowledge_delivered(ctx, &seqs),
             Command::InstructionRefused { seq, code, message } => self.instruction_refused(ctx, seq, &code, &message),
             Command::AbandonInstruction { seq, reason, approved_by } => self.abandon_instruction(ctx, seq, reason, approved_by),
             Command::AcknowledgeNotices { seqs } => self.acknowledge_notices(&seqs),
