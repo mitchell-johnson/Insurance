@@ -12,7 +12,7 @@ use ic_ledger::{AccountClass, BalanceFamily, EntryId, Hash32, PartitionId};
 use serde::Serialize;
 
 use crate::books::{Anchor, BackdatedItem, FinanceState, JournalStatus};
-use crate::close::{BalanceRow, Capacity, CheckStatus, CheckView, PeriodStatus, SignOff, Waiver};
+use crate::close::{BalanceRow, Capacity, CheckSource, CheckStatus, CheckView, PeriodStatus, SignOff, Waiver};
 use crate::period::PeriodId;
 
 /// One account's movement in a period, by unit and statutory fund. Debits
@@ -444,5 +444,136 @@ impl FinanceState {
                 }
             })
             .collect()
+    }
+}
+
+/// What the close needs from outside the ledger: the worklist of its drivers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Work {
+    /// Dates checked against the core on every partition whose Merkle root
+    /// has not been recorded.
+    pub roots_wanted: Vec<NaiveDate>,
+    /// Periods past their last day and not yet closed, oldest first.
+    pub closing: Vec<PeriodWork>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PeriodWork {
+    pub period: PeriodId,
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+    /// Whether the mart holds every partition's events up to the period end.
+    pub mart_ready: bool,
+    /// Extract kinds registered as at the period end.
+    pub extracts: Vec<String>,
+    /// Reported checks due for this period with no report yet.
+    pub reports_wanted: Vec<String>,
+    /// Aged item kinds with no report as at the period end or later.
+    pub aged_wanted: Vec<String>,
+    /// Blocking checks that are red and not waived.
+    pub blockers: Vec<String>,
+    pub sign_offs_needed: Vec<Capacity>,
+}
+
+/// Part of an extract file, for a driver that stores it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ExtractPage {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub from: Option<NaiveDate>,
+    pub as_at: NaiveDate,
+    pub rows: u64,
+    pub content_hash: Hash32,
+    pub control: std::collections::BTreeMap<String, i128>,
+    pub reconciled: bool,
+    /// Lines in the whole file, the header included.
+    pub total_lines: u64,
+    pub offset: u64,
+    pub lines: Vec<String>,
+}
+
+/// The most lines of an extract one answer carries.
+pub const MAX_EXTRACT_LINES: u64 = 20_000;
+
+impl FinanceState {
+    pub fn work(&self) -> Work {
+        let mut roots_wanted: Vec<NaiveDate> = Vec::new();
+        for (date, _) in self.days.keys() {
+            let complete = (0..self.partitions()).all(|p| self.days.contains_key(&(*date, p)));
+            if complete && !self.roots.contains_key(date) && roots_wanted.last() != Some(date) {
+                roots_wanted.push(*date);
+            }
+        }
+        let closing = self
+            .periods
+            .iter()
+            .filter(|(p, s)| !p.is_adjustment() && s.status == PeriodStatus::Closing)
+            .map(|(period, state)| {
+                let checks = self.checks(*period);
+                let unreported = |id: &str| checks.iter().any(|c| c.id == id && c.status != CheckStatus::NotDue) && !state.reports.contains_key(id);
+                let config = self.close_config.as_ref();
+                let mut needed = vec![Capacity::FinanceLead];
+                if period.is_quarter_end(self.year_end_month()) {
+                    needed.push(Capacity::AppointedActuary);
+                }
+                needed.retain(|c| !state.sign_offs.iter().any(|s| s.capacity == *c));
+                PeriodWork {
+                    period: *period,
+                    start: period.start(),
+                    end: period.end(),
+                    mart_ready: self.mart.closed_through().is_some_and(|d| d >= period.end()),
+                    extracts: self.extracts.values().filter(|e| e.as_at == period.end()).map(|e| e.kind.clone()).collect(),
+                    reports_wanted: config
+                        .iter()
+                        .flat_map(|c| &c.checks)
+                        .filter(|c| matches!(c.source, CheckSource::Reported { .. }) && unreported(&c.id))
+                        .map(|c| c.id.clone())
+                        .collect(),
+                    aged_wanted: config
+                        .iter()
+                        .flat_map(|c| &c.aged)
+                        .filter(|a| self.aged.get(&a.kind).is_none_or(|r| r.as_at < period.end()))
+                        .map(|a| a.kind.clone())
+                        .collect(),
+                    blockers: checks
+                        .iter()
+                        .filter(|c| c.blocking && matches!(c.status, CheckStatus::Red { .. }))
+                        .map(|c| c.id.clone())
+                        .collect(),
+                    sign_offs_needed: needed,
+                }
+            })
+            .collect();
+        Work { roots_wanted, closing }
+    }
+
+    /// Lines `offset..offset + limit` of the extract of `kind` for a period,
+    /// with the hash and totals of the whole file.
+    pub fn extract(&self, kind: &str, period: PeriodId, offset: u64, limit: u64) -> Result<ExtractPage, String> {
+        let (from, to) = (period.start(), period.end());
+        let extract = match kind {
+            crate::mart::IN_FORCE => self.mart.in_force(to),
+            crate::mart::MOVEMENT => self.mart.movement(from, to),
+            crate::mart::EXPERIENCE => self.mart.experience(from, to),
+            other => return Err(format!("there is no {other} extract")),
+        }
+        .map_err(|e| e.to_string())?;
+        let first = offset.min(extract.lines.len() as u64) as usize;
+        let last = (first + limit.clamp(1, MAX_EXTRACT_LINES) as usize).min(extract.lines.len());
+        Ok(ExtractPage {
+            id: extract.id(),
+            name: extract.name(),
+            kind: kind.to_string(),
+            from: extract.from,
+            as_at: extract.as_at,
+            rows: extract.rows(),
+            content_hash: extract.content_hash(),
+            control: extract.control.clone(),
+            reconciled: extract.reconciled,
+            total_lines: extract.lines.len() as u64,
+            offset: first as u64,
+            lines: extract.lines[first..last].to_vec(),
+        })
     }
 }
