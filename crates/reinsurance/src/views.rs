@@ -112,6 +112,53 @@ impl Reinsurance {
             .sum()
     }
 
+    /// The close check finance asks for: what stands between this module
+    /// and a closed period ending on `period_end`. Nothing means green.
+    ///
+    /// A treaty owes a statement to `period_end` when its statement period
+    /// ends then, by the calendar: monthly at every month end, quarterly at
+    /// the end of March, June, September and December, yearly at the end of
+    /// December. Whether the reinsurer has agreed or been paid is not
+    /// checked: that waits on them, and the period does not.
+    pub fn sweep_check(&self, period_end: NaiveDate) -> Vec<serde_json::Value> {
+        use chrono::Datelike;
+        let mut items = Vec::new();
+        let due = |treaty: &TreatyId| {
+            self.latest_treaty(treaty).is_some_and(|t| match t.statement.period {
+                crate::treaty::StatementPeriod::Monthly => true,
+                crate::treaty::StatementPeriod::Quarterly => period_end.month().is_multiple_of(3),
+                crate::treaty::StatementPeriod::Yearly => period_end.month() == 12,
+            })
+        };
+        let mut uncut: BTreeMap<(&TreatyId, &ReinsurerId), i64> = BTreeMap::new();
+        for (bucket, amount) in self.pending.iter().filter(|(b, _)| b.value_date <= period_end) {
+            *uncut.entry((&bucket.treaty, &bucket.reinsurer)).or_default() += bucket.kind.sign() * amount;
+        }
+        for ((treaty, reinsurer), net) in uncut {
+            let cut = self
+                .statements
+                .iter()
+                .any(|s| &s.treaty == treaty && &s.reinsurer == reinsurer && s.period_end >= period_end);
+            if due(treaty) && !cut {
+                items.push(serde_json::json!({"kind": "statement_not_cut", "treaty": treaty, "reinsurer": reinsurer, "net_minor": net}));
+            }
+        }
+        for s in self.statements.iter().filter(|s| s.period_end <= period_end && s.supplementary_due) {
+            items.push(serde_json::json!({"kind": "supplementary_listing_due", "statement": s.number, "treaty": s.treaty, "reinsurer": s.reinsurer}));
+        }
+        // Until the core has every entry, its clearing does not net to the statements.
+        for (key, item) in self.exceptions.iter().filter(|(_, e)| e.code == "instruction_refused") {
+            items.push(serde_json::json!({"kind": "instruction_refused", "exception": key, "detail": item.detail}));
+        }
+        if !self.outbox.is_empty() {
+            items.push(serde_json::json!({"kind": "instructions_not_delivered", "count": self.outbox.len()}));
+        }
+        for detail in self.reconcile() {
+            items.push(serde_json::json!({"kind": "does_not_reconcile", "detail": detail}));
+        }
+        items
+    }
+
     /// The module's own invariants. An empty answer means it reconciles.
     pub fn reconcile(&self) -> Vec<String> {
         let mut breaks = Vec::new();
