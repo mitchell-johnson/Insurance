@@ -453,3 +453,36 @@ fn too_few_members_for_a_total_means_the_member_pays_the_loading() {
     // What the first member was told at their offer stands.
     assert_eq!(payers(&h, "E004"), vec![MemberPays::Loading]);
 }
+
+/// Purpose: a member who pays their own loading and stops paying loses that cover when
+/// the core lapses it: the case ends, the employer hears only that the cover is no longer
+/// in place, and the member's automatic cover and the scheme itself carry on.
+/// Why it matters: the module would otherwise go on showing underwritten cover the core
+/// has ended, and a claim would be assessed against cover that is not there. And a
+/// member's own arrears must never put their colleagues' cover, or their own automatic
+/// cover, at risk.
+#[test]
+fn a_member_who_stops_paying_their_loading_loses_only_that_cover() {
+    let mut t = terms();
+    t.excess_loading = ExcessLoading::MemberPays;
+    let (mut h, case) = with_executive(t);
+    h.underwriting(case, accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(status(&h, case), CaseStatus::Accepted);
+
+    // The employer pays every month. The member never does.
+    for _ in 0..8 {
+        h.days(30);
+        let owed = h.scheme().outstanding_minor;
+        if owed > 0 {
+            h.pay(owed);
+        }
+    }
+    assert_eq!(status(&h, case), CaseStatus::Ended);
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverEnded { case: c, .. } if *c == case)));
+    let layers = h.excess_layers("E004");
+    assert_eq!(layers.len(), 1);
+    assert!(layers[0].1.is_some(), "the core ended the layer");
+    assert!(h.scheme().membership.active("E004").is_some(), "still a member, on automatic cover");
+    assert_eq!(h.scheme().status, ic_group::state::SchemeStatus::Active);
+    assert!(h.core_lives().contains(&"E004".to_string()));
+}

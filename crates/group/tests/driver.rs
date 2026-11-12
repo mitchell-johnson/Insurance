@@ -4,6 +4,8 @@
 
 mod common;
 /// The customer master's own test harness: the real service over PostgreSQL.
+// It reads the clock to date its tokens, which this crate forbids only for the state machine.
+#[allow(clippy::disallowed_methods)]
 #[path = "../../customers/tests/common/mod.rs"]
 mod customer_master;
 
