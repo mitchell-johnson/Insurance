@@ -412,6 +412,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 sum_insured_minor,
                 commencement,
                 proposal_expires,
+                risk_codes,
             } => {
                 let request = CapacityRequest {
                     reservation_key: reservation.clone(),
@@ -422,7 +423,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     sum_insured_minor: *sum_insured_minor,
                     commencement: *commencement,
                     proposal_expires: *proposal_expires,
-                    risk_codes: vec![],
+                    risk_codes: risk_codes.clone(),
                 };
                 let reserved = self
                     .reinsure(

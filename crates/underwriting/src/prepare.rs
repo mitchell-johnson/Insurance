@@ -38,6 +38,8 @@ pub struct Prepared {
     pub rule_set: VersionRef,
     pub assessments: BTreeMap<String, Assessment>,
     pub entered_by_adviser: u32,
+    /// The risk codes the answers stand for. Never clinical.
+    pub risk_tags: BTreeSet<String>,
 }
 
 #[derive(Serialize)]
@@ -134,5 +136,6 @@ pub fn prepare_disclosure(
         },
         assessments,
         entered_by_adviser: answers.keys().filter(|id| adviser_entered.contains(*id)).count() as u32,
+        risk_tags: questions.risk_tags(answers),
     })
 }

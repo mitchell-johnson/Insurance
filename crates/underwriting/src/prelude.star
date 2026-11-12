@@ -26,14 +26,16 @@ def reason_library(id, version, effective_from, entries):
 
 # --- questions ---
 
-def yes_no(id, version = 1, required = True, clinical = True):
-    return {"id": id, "version": version, "kind": {"type": "yes_no"}, "required": required, "clinical": clinical}
+def yes_no(id, version = 1, required = True, clinical = True, risk_tag = None):
+    return {"id": id, "version": version, "kind": {"type": "yes_no"}, "required": required, "clinical": clinical,
+            "risk_tags": {"yes": risk_tag} if risk_tag else {}}
 
 def number(id, min, max, version = 1, required = True, clinical = True):
     return {"id": id, "version": version, "kind": {"type": "number", "min": min, "max": max}, "required": required, "clinical": clinical}
 
-def choice(id, options, version = 1, required = True, clinical = True):
-    return {"id": id, "version": version, "kind": {"type": "choice", "options": options}, "required": required, "clinical": clinical}
+def choice(id, options, version = 1, required = True, clinical = True, risk_tags = {}):
+    return {"id": id, "version": version, "kind": {"type": "choice", "options": options}, "required": required, "clinical": clinical,
+            "risk_tags": risk_tags}
 
 def text(id, version = 1, required = False, clinical = True):
     return {"id": id, "version": version, "kind": {"type": "text"}, "required": required, "clinical": clinical}

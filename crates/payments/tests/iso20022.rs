@@ -3,8 +3,9 @@
 
 use chrono::NaiveDate;
 use ic_money::Currency;
+use ic_payments::config::WireFormat;
 use ic_payments::file::{Batch, BatchItem, Direction};
-use ic_payments_service::iso20022::{document, OrderingAccount};
+use ic_payments::iso20022::{document, minor, read_initiation, OrderingAccount};
 
 fn item(id: &str, name: &str, number: &str, amount_minor: i64) -> BatchItem {
     BatchItem {
@@ -24,6 +25,8 @@ fn batch(direction: Direction, items: Vec<BatchItem>) -> Batch {
         value_date: NaiveDate::from_ymd_opt(2026, 11, 13).unwrap(),
         currency: Currency::NZD,
         items,
+        format: WireFormat::Iso20022,
+        ordering: Some(ordering(Some("BKNZNZ22"))),
     }
 }
 
@@ -131,5 +134,57 @@ fn a_batch_that_cannot_be_written_faithfully_is_refused() {
     for amount in [0, -100] {
         let refused = document(&batch(Direction::Credit, vec![item("PAY-1", "A", "01-1", amount)]), &own).unwrap_err();
         assert_eq!(refused, "item PAY-1 has no positive amount");
+    }
+}
+
+/// Purpose: what the writer produces, a bank's reader reads back as the
+/// same message ID, direction, count, control sum and transactions; a
+/// document that is not XML, not an initiation, or missing a required
+/// element is refused with the reason.
+/// Why it matters: the test bank checks submissions with this reader. If it
+/// read the writer's output differently from what the writer meant, every
+/// end-to-end test of an ISO 20022 channel would prove nothing.
+#[test]
+fn a_bank_reads_back_what_was_written() {
+    let items = vec![item("PAY-1", "A", "01-1", 12_345), item("PAY-2", "B", "01-2", 5)];
+    for direction in [Direction::Credit, Direction::Debit] {
+        let xml = document(&batch(direction, items.clone()), &ordering(None)).unwrap();
+        let read = read_initiation(&xml).unwrap();
+        assert_eq!(read.message, "SUB-0001");
+        assert_eq!(read.direction, direction);
+        assert_eq!(read.declared, (2, 12_350));
+        assert_eq!(read.items, vec![("PAY-1".to_string(), 12_345), ("PAY-2".to_string(), 5)]);
+    }
+    assert!(read_initiation("not xml").unwrap_err().starts_with("not well-formed XML"));
+    assert_eq!(read_initiation("<Document/>").unwrap_err(), "not a payment or collection initiation");
+    let xml = document(&batch(Direction::Credit, items), &ordering(None)).unwrap();
+    for (from, to, what) in [
+        ("<MsgId>SUB-0001</MsgId>", "", "message ID"),
+        (
+            "<NbOfTxs>2</NbOfTxs><CtrlSum>123.50</CtrlSum><InitgPty>",
+            "<NbOfTxs>two</NbOfTxs><CtrlSum>123.50</CtrlSum><InitgPty>",
+            "count",
+        ),
+        ("<CtrlSum>123.50</CtrlSum><InitgPty>", "<CtrlSum>123.5</CtrlSum><InitgPty>", "control sum"),
+        ("<EndToEndId>PAY-1</EndToEndId>", "", "end-to-end reference"),
+        (">123.45<", ">1,23.45<", "amount"),
+    ] {
+        let broken = xml.replacen(from, to, 1);
+        assert_ne!(broken, xml, "{what}");
+        assert_eq!(read_initiation(&broken).unwrap_err(), format!("the initiation has no readable {what}"));
+    }
+}
+
+/// Purpose: an ISO 20022 amount reads as minor units only when it has two
+/// decimal places or none, digits only, and fits.
+/// Why it matters: "12.5" read as 12.05, or a minus sign passed over, would
+/// be the wrong amount accepted silently.
+#[test]
+fn amounts_are_read_exactly_or_not_at_all() {
+    assert_eq!(minor("123.45"), Some(12_345));
+    assert_eq!(minor("7"), Some(700));
+    assert_eq!(minor("0.05"), Some(5));
+    for bad in ["12.5", "12.345", "-1.00", ".50", "1e3", "", "99999999999999999999.00"] {
+        assert_eq!(minor(bad), None, "{bad}");
     }
 }

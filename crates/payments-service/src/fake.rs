@@ -14,6 +14,7 @@ use axum::{Json, Router};
 use base64::Engine;
 use chrono::NaiveDate;
 use ic_payments::file::{BankMessage, Batch, Manifest};
+use ic_payments::iso20022;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -48,6 +49,8 @@ pub struct Inner {
     pub reject_items: BTreeMap<String, String>,
     /// Submissions that reached the bank, repeats included.
     pub arrivals: u64,
+    /// The bank speaks ISO 20022 instead of this system's own format.
+    pub iso: bool,
 }
 
 #[derive(Clone)]
@@ -131,40 +134,74 @@ async fn put_file(State(bank): State<FakeBank>, Path(id): Path<String>, headers:
     if manifest.file_id != id || manifest.sha256 != sha256 || manifest.signature.is_empty() {
         return bad("the manifest does not match the file");
     }
-    // The trailer's count and total are checked before a line is touched.
-    let mut items = Vec::new();
-    let mut trailer = None;
-    for line in body.lines() {
-        let fields: Vec<&str> = line.split('|').collect();
-        match fields.as_slice() {
-            ["D", item, _, _, amount] => items.push((item.to_string(), amount.parse::<i64>().unwrap_or(0))),
-            ["T", count, total] => trailer = Some((count.parse::<usize>().ok(), total.parse::<i64>().ok())),
-            _ => {}
+    let items = if inner.iso {
+        match iso_items(&body, &id) {
+            Ok(items) => items,
+            Err(why) => return bad(&why),
         }
-    }
-    if trailer != Some((Some(items.len()), Some(items.iter().map(|(_, a)| a).sum()))) {
-        return bad("the trailer does not match the lines");
-    }
+    } else {
+        // The trailer's count and total are checked before a line is touched.
+        let mut items = Vec::new();
+        let mut trailer = None;
+        for line in body.lines() {
+            let fields: Vec<&str> = line.split('|').collect();
+            match fields.as_slice() {
+                ["D", item, _, _, amount] => items.push((item.to_string(), amount.parse::<i64>().unwrap_or(0))),
+                ["T", count, total] => trailer = Some((count.parse::<usize>().ok(), total.parse::<i64>().ok())),
+                _ => {}
+            }
+        }
+        if trailer != Some((Some(items.len()), Some(items.iter().map(|(_, a)| a).sum()))) {
+            return bad("the trailer does not match the lines");
+        }
+        items
+    };
     match take(&mut inner, &id, sha256, items) {
         Ok(held) => say(StatusCode::CREATED, json!({"reference": held.reference})),
         Err(no) => no,
     }
 }
 
-async fn post_batch(State(bank): State<FakeBank>, headers: HeaderMap, Json(batch): Json<Batch>) -> Answer {
+/// An ISO 20022 initiation's items, once its header agrees with its lines
+/// and its message ID is the one it was sent under.
+fn iso_items(body: &str, id: &str) -> Result<Vec<(String, i64)>, String> {
+    let initiation = iso20022::read_initiation(body)?;
+    if initiation.message != id {
+        return Err("the message ID is not the ID it was sent under".to_string());
+    }
+    if initiation.declared != (initiation.items.len(), initiation.items.iter().map(|(_, a)| a).sum()) {
+        return Err("the count and control sum do not match the transactions".to_string());
+    }
+    Ok(initiation.items)
+}
+
+async fn post_batch(State(bank): State<FakeBank>, headers: HeaderMap, body: String) -> Answer {
     let mut inner = bank.lock();
     if let Err(no) = admit(&inner, &headers) {
         return no;
     }
-    if headers.get("idempotency-key").and_then(|h| h.to_str().ok()) != Some(batch.id.as_str()) {
-        return say(StatusCode::BAD_REQUEST, json!("the idempotency key is the batch's ID"));
-    }
-    let items = batch.items.iter().map(|i| (i.item.clone(), i.amount_minor)).collect();
-    match take(&mut inner, &batch.id, batch.content_hash(), items) {
+    let key = headers.get("idempotency-key").and_then(|h| h.to_str().ok()).unwrap_or_default().to_string();
+    let read = if inner.iso {
+        iso_items(&body, &key).map(|items| (key.clone(), hex::encode(Sha256::digest(body.as_bytes())), items))
+    } else {
+        match serde_json::from_str::<Batch>(&body) {
+            Ok(batch) if batch.id == key => {
+                let items = batch.items.iter().map(|i| (i.item.clone(), i.amount_minor)).collect();
+                batch.content_hash().map(|hash| (batch.id, hash, items))
+            }
+            Ok(_) => return say(StatusCode::BAD_REQUEST, json!("the idempotency key is the batch's ID")),
+            Err(e) => Err(e.to_string()),
+        }
+    };
+    let (id, sha256, items) = match read {
+        Ok(read) => read,
+        Err(why) => return say(StatusCode::UNPROCESSABLE_ENTITY, json!(why)),
+    };
+    match take(&mut inner, &id, sha256, items) {
         // An API answers for every item at once.
         Ok(held) => say(
             StatusCode::OK,
-            json!({"reference": held.reference, "acknowledgement": acknowledgement(&inner, &batch.id, &held)}),
+            json!({"reference": held.reference, "acknowledgement": acknowledgement(&inner, &id, &held)}),
         ),
         Err(no) => no,
     }

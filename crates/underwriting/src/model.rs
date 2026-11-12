@@ -159,6 +159,9 @@ pub struct DisclosureRef {
     /// The answers the adviser typed for the client, by count: each is
     /// marked in the record itself.
     pub entered_by_adviser: u32,
+    /// The risk codes the answers stand for. Never clinical.
+    #[serde(default)]
+    pub risk_tags: BTreeSet<String>,
 }
 
 /// How the person stood behind a record.

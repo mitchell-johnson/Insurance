@@ -11,6 +11,7 @@ license = "UNLICENSED"
 publish = false
 
 [workspace.dependencies]
+roxmltree = "0.20"
 ic-money = { path = "crates/money" }
 ic-ledger = { path = "crates/ledger" }
 ic-log = { path = "crates/log" }

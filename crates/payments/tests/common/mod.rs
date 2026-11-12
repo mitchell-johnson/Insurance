@@ -109,6 +109,7 @@ fn channel(id: &str, bank: &str, kind: ChannelKind, cutoff_hour: u32) -> (String
         bank: bank.to_string(),
         kind,
         cutoff: NaiveTime::from_hms_opt(cutoff_hour, 0, 0).unwrap(),
+        format: Default::default(),
         endpoints,
     };
     (id.to_string(), channel)
@@ -143,6 +144,7 @@ pub fn config() -> Config {
                     fund: "sf1".to_string(),
                     purpose,
                     currency: NZD,
+                    at_bank: None,
                 },
             );
         }
@@ -405,4 +407,21 @@ pub fn collect(item: &str, authority: &str, pol: &str, amount: i64) -> NewItem {
         refund: None,
         represents: None,
     }
+}
+
+/// The test configuration with the first bank, ANZ, spoken to in ISO 20022
+/// and each of its accounts named as the bank knows it.
+pub fn iso_config() -> Config {
+    let mut c = config();
+    for channel in c.channels.values_mut().filter(|ch| ch.bank == "anz") {
+        channel.format = ic_payments::config::WireFormat::Iso20022;
+    }
+    for (code, account) in c.accounts.iter_mut().filter(|(_, a)| a.bank == "anz") {
+        account.at_bank = Some(ic_payments::iso20022::OrderingAccount {
+            name: "Example Life Ltd".to_string(),
+            number: format!("01-0100-{:07}-000", code.len()),
+            bic: Some("ANZBNZ22".to_string()),
+        });
+    }
+    c
 }

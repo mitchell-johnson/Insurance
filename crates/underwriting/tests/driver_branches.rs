@@ -144,6 +144,7 @@ fn reserve() -> Effect {
         sum_insured_minor: 500_000_00,
         commencement: d(2027, 2, 1),
         proposal_expires: d(2027, 5, 1),
+        risk_codes: vec!["pursuit.diving".into()],
     }
 }
 

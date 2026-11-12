@@ -188,9 +188,12 @@ fn questions_with(body: &str) -> String {
 }
 
 /// Purpose: a question set with no questions, an end before its start, a question without an
-/// id, a repeated question, an inverted range or a choice with no options is refused.
+/// id, a repeated question, an inverted range or a choice with no options is refused; so is a
+/// risk code on a clinical question, on an answer the question cannot give, or outside the
+/// pursuit, occupation and travel families.
 /// Why it matters: the question set is the legal record of what was asked; a set that cannot be
-/// answered consistently cannot support a non-disclosure finding later.
+/// answered consistently cannot support a non-disclosure finding later. Risk codes go to the
+/// reinsurer: one tied to a health answer would send clinical information out of the module.
 #[test]
 fn question_set_is_validated_at_load() {
     assert!(load_question_set("f", &questions_with("yes_no('a')")).is_ok());
@@ -206,6 +209,36 @@ fn question_set_is_validated_at_load() {
     invalid(load_question_set("f", &questions_with("yes_no('a'), yes_no('a')")), "twice");
     invalid(load_question_set("f", &questions_with("number('n', 5, 1)")), "inverted");
     invalid(load_question_set("f", &questions_with("choice('c', [])")), "no options");
+
+    let tagged = load_question_set(
+        "f",
+        &questions_with("yes_no('p', clinical = False, risk_tag = 'pursuit.any'), choice('k', ['a', 'b'], clinical = False, risk_tags = {'a': 'travel.far'})"),
+    )
+    .unwrap();
+    let answers = |p: bool, k: &str| BTreeMap::from([("p".to_string(), (1, Answer::YesNo(p))), ("k".to_string(), (1, Answer::Choice(k.into())))]);
+    assert_eq!(
+        tagged.risk_tags(&answers(true, "a")),
+        BTreeSet::from(["pursuit.any".to_string(), "travel.far".to_string()])
+    );
+    assert!(tagged.risk_tags(&answers(false, "b")).is_empty());
+    invalid(load_question_set("f", &questions_with("yes_no('h', risk_tag = 'pursuit.any')")), "never sent");
+    invalid(
+        load_question_set("f", &questions_with("choice('k', ['a'], clinical = False, risk_tags = {'z': 'travel.far'})")),
+        "no answer z",
+    );
+    invalid(
+        load_question_set(
+            "f",
+            &questions_with("number('n', 1, 5, clinical = False) | {'risk_tags': {'yes': 'travel.far'}}"),
+        ),
+        "no answer yes",
+    );
+    for bad in ["cardiovascular.heart", "pursuit", "pursuit.Diving", "pursuit..x"] {
+        invalid(
+            load_question_set("f", &questions_with(&format!("yes_no('p', clinical = False, risk_tag = '{bad}')"))),
+            "not a pursuit, occupation or travel tag",
+        );
+    }
 }
 
 /// Purpose: answers are checked against the question set: unknown question, stale question

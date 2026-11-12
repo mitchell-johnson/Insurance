@@ -48,6 +48,28 @@ pub struct Question {
     pub required: bool,
     /// Whether the answer is clinical information.
     pub clinical: bool,
+    /// Opaque risk codes an answer stands for, by the answer (`yes`, or a
+    /// choice's option). Only on questions that are not clinical, and only
+    /// under the roots reinsurance treaties name: `pursuit`, `occupation`
+    /// and `travel`. Sent to reinsurance with a capacity request.
+    #[serde(default)]
+    pub risk_tags: BTreeMap<String, String>,
+}
+
+/// The families of risk code a question may stand for.
+pub const RISK_ROOTS: &[&str] = &["pursuit", "occupation", "travel"];
+
+/// Whether a code is a lower-case dotted tag under one of [`RISK_ROOTS`],
+/// with at least one segment below the root.
+pub fn is_risk_tag(tag: &str) -> bool {
+    let mut segments = tag.split('.');
+    let root_ok = segments.next().is_some_and(|r| RISK_ROOTS.contains(&r));
+    let rest: Vec<&str> = segments.collect();
+    root_ok
+        && !rest.is_empty()
+        && rest
+            .iter()
+            .all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +111,22 @@ pub enum AnswerProblem {
 impl QuestionSet {
     pub fn question(&self, id: &str) -> Option<&Question> {
         self.questions.iter().find(|q| q.id == id)
+    }
+
+    /// The risk codes a set of answers stands for.
+    pub fn risk_tags(&self, answers: &BTreeMap<String, (u32, Answer)>) -> std::collections::BTreeSet<String> {
+        answers
+            .iter()
+            .filter_map(|(id, (_, answer))| {
+                let q = self.question(id)?;
+                let key = match answer {
+                    Answer::YesNo(true) => "yes",
+                    Answer::Choice(c) => c.as_str(),
+                    _ => return None,
+                };
+                q.risk_tags.get(key).cloned()
+            })
+            .collect()
     }
 
     pub fn applies_on(&self, contract_date: NaiveDate) -> bool {
@@ -163,6 +201,22 @@ pub fn load_question_set(file: &str, source: &str) -> Result<QuestionSet, LoadEr
             AnswerKind::Number { min, max } if max < min => return Err(invalid(file, format!("question {}: range is inverted", q.id))),
             AnswerKind::Choice { options } if options.is_empty() => return Err(invalid(file, format!("question {}: no options", q.id))),
             _ => {}
+        }
+        if !q.risk_tags.is_empty() && q.clinical {
+            return Err(invalid(file, format!("question {}: a clinical answer is never sent as a risk code", q.id)));
+        }
+        for (answer, tag) in &q.risk_tags {
+            let fits = match &q.kind {
+                AnswerKind::YesNo => answer == "yes",
+                AnswerKind::Choice { options } => options.contains(answer),
+                _ => false,
+            };
+            if !fits {
+                return Err(invalid(file, format!("question {}: no answer {answer} to tag", q.id)));
+            }
+            if !is_risk_tag(tag) {
+                return Err(invalid(file, format!("question {}: {tag} is not a pursuit, occupation or travel tag", q.id)));
+            }
         }
     }
     Ok(set)

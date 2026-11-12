@@ -99,6 +99,10 @@ pub struct SubmitDisclosure {
     pub entered_by_adviser: u32,
     /// What the rules said, per cover code on this life.
     pub assessments: BTreeMap<String, Assessment>,
+    /// The risk codes the answers stand for, from the question set. Never
+    /// clinical; sent to reinsurance with a capacity request.
+    #[serde(default)]
+    pub risk_tags: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -637,6 +641,10 @@ pub enum Effect {
         sum_insured_minor: i64,
         commencement: NaiveDate,
         proposal_expires: NaiveDate,
+        /// Pursuit, occupation and travel tags declared or decided on.
+        /// Never clinical.
+        #[serde(default)]
+        risk_codes: Vec<String>,
     },
     ReleaseCapacity {
         reservation: String,

@@ -9,6 +9,8 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ic_money::Currency;
+
+use crate::config::WireFormat;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -43,6 +45,12 @@ pub struct Batch {
     pub value_date: NaiveDate,
     pub currency: Currency,
     pub items: Vec<BatchItem>,
+    /// What the batch is written in for its channel.
+    #[serde(default, skip_serializing_if = "WireFormat::is_own")]
+    pub format: WireFormat,
+    /// The insurer's account as the bank knows it, where the format names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordering: Option<crate::iso20022::OrderingAccount>,
 }
 
 /// What travels beside a file: enough for the bank to check that the file is
@@ -90,21 +98,38 @@ impl Batch {
         out
     }
 
-    pub fn content_hash(&self) -> String {
-        hex::encode(Sha256::digest(self.file().as_bytes()))
+    /// The bytes the bank receives, in the channel's format. These are what
+    /// is hashed, signed and kept as evidence. Refused if the format cannot
+    /// carry the batch faithfully.
+    pub fn wire(&self) -> Result<String, String> {
+        match self.format {
+            WireFormat::Own => Ok(self.file()),
+            WireFormat::Iso20022 => {
+                let ordering = self
+                    .ordering
+                    .as_ref()
+                    .ok_or_else(|| format!("account {} has no bank details for ISO 20022", self.account))?;
+                crate::iso20022::document(self, ordering)
+            }
+        }
     }
 
-    pub fn manifest(&self, algorithm: String, key_id: String, signature: String) -> Manifest {
-        Manifest {
+    pub fn content_hash(&self) -> Result<String, String> {
+        Ok(hex::encode(Sha256::digest(self.wire()?.as_bytes())))
+    }
+
+    pub fn manifest(&self, algorithm: String, key_id: String, signature: String) -> Result<Manifest, String> {
+        let wire = self.wire()?;
+        Ok(Manifest {
             file_id: self.id.clone(),
-            sha256: self.content_hash(),
-            bytes: self.file().len(),
+            sha256: hex::encode(Sha256::digest(wire.as_bytes())),
+            bytes: wire.len(),
             items: self.items.len(),
             total_minor: self.total_minor(),
             algorithm,
             key_id,
             signature,
-        }
+        })
     }
 }
 
@@ -128,7 +153,10 @@ impl PaymentsState {
                 })
             })
             .collect::<Option<Vec<_>>>()?;
+        let (format, ordering) = self.config.as_ref().map(|c| c.wire(&s.channel, &s.account)).unwrap_or_default();
         Some(Batch {
+            format,
+            ordering,
             id: submission.to_string(),
             channel: s.channel.clone(),
             account: s.account.clone(),

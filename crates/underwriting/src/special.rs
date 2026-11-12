@@ -443,6 +443,8 @@ impl UnderwritingState {
                         legacy_ref: m.legacy_ref.clone(),
                     },
                     entered_by_adviser: 0,
+                    // A legacy file's answers are not read here.
+                    risk_tags: BTreeSet::new(),
                 });
             }
             let source = DecisionSource::Migrated {
