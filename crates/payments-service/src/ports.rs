@@ -26,7 +26,16 @@ pub trait Module: Send + Sync {
 /// The core. `Ok(None)` is done, `Ok(Some(code))` is the core's refusal,
 /// and `Err` means the core could not be asked: try again later.
 pub trait Core: Send + Sync {
-    fn send(&self, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    fn send(&self, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send {
+        async move {
+            match policy_of(&command).cloned() {
+                Some(policy) => self.send_to(&policy, key, caller, command).await,
+                None => Ok(Some("not_a_payments_command".to_string())),
+            }
+        }
+    }
+    /// Send a command to the partition that holds `policy`.
+    fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Hand an unexpected credit to cash matching. `Ok(Some(reason))` means
     /// nobody could say whose it is.
     fn match_receipt(&self, payment: IncomingPayment) -> impl Future<Output = Result<Option<String>, String>> + Send;
@@ -105,13 +114,10 @@ impl ClusterCore {
 }
 
 impl Core for ClusterCore {
-    async fn send(&self, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
-        let Some(policy) = policy_of(&command).cloned() else {
-            return Ok(Some("not_a_payments_command".to_string()));
-        };
+    async fn send_to(&self, policy: &PolicyId, key: &str, caller: &str, command: Command) -> Result<Option<String>, String> {
         let partitions = self.client.partitions(Duration::from_secs(20)).await?;
         for partition in 0..partitions {
-            if self.client.locate(partition, &policy).await.map_err(lost)?.is_some() {
+            if self.client.locate(partition, policy).await.map_err(lost)?.is_some() {
                 return self.propose(partition, key, caller, command).await;
             }
         }

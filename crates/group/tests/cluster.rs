@@ -15,8 +15,8 @@ use ic_azure::testing::{FakeAzure, TOKEN};
 use ic_core::command::LifeSpec;
 use ic_core::{Command, LifeKind};
 use ic_group::adapters::{
-    event_message, excess_answer, follow_transfer, reinsurance_envelope, underwriting_envelope, underwriting_withdrawal, ClusterCore, ClusterModule,
-    ClusterPeers, QuarantineBlobs,
+    event_message, excess_answer, follow_transfer, reinsurance_envelope, underwriting_envelope, underwriting_outcome, underwriting_withdrawal, ClusterCore,
+    ClusterModule, ClusterPeers, QuarantineBlobs,
 };
 use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, Resolution};
 use ic_group::driver::{CustomerMaster, Driver, FileStore, Module, Peers, Scan};
@@ -289,6 +289,35 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     let envelope: ic_underwriting::command::Envelope = serde_json::from_value(withdrawal).unwrap();
     assert!(envelope.command.allowed_callers().contains(&envelope.caller.as_str()));
     assert!(matches!(envelope.command, Uw::Withdraw { proposal } if proposal.0 == key));
+
+    // What the core made of accepted terms goes back as the issuer's report.
+    let issued = ic_group::event::IssueOutcome::Issued {
+        life: life("E003"),
+        cover: "group-life".into(),
+        layer: 4,
+    };
+    let envelope: ic_underwriting::command::Envelope =
+        serde_json::from_value(underwriting_outcome("grp-uw:harbour:north:7/excess-issued", at, today, key, &issued)).unwrap();
+    assert!(envelope.command.allowed_callers().contains(&envelope.caller.as_str()));
+    let Uw::PolicyIssued { proposal, layers } = envelope.command else {
+        panic!("not an issue")
+    };
+    assert_eq!(proposal.0, key);
+    assert_eq!(
+        layers,
+        vec![ic_underwriting::command::IssuedLayer {
+            life: life("E003"),
+            cover: "group-life".into(),
+            layer: 4
+        }]
+    );
+    let rejected = ic_group::event::IssueOutcome::Rejected {
+        code: "exceeds_maximum".into(),
+    };
+    let envelope: ic_underwriting::command::Envelope =
+        serde_json::from_value(underwriting_outcome("grp-uw:harbour:north:7/excess-rejected", at, today, key, &rejected)).unwrap();
+    assert!(envelope.command.allowed_callers().contains(&envelope.caller.as_str()));
+    assert!(matches!(envelope.command, Uw::IssueRejected { proposal, code } if proposal.0 == key && code == "exceeds_maximum"));
 }
 
 /// Purpose: of everything in underwriting's outbox, only terms and endings for a scheme
@@ -573,6 +602,10 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
     let answers = driver.peers.underwriting_answers(0, 10).await.unwrap();
     assert_eq!((answers.through, answers.more, answers.answers.len()), (0, false, 0));
     driver.peers.withdraw_underwriting("w-1", today, "grp-uw:harbour:999").await.unwrap();
+    let nothing = ic_group::event::IssueOutcome::Rejected {
+        code: "exceeds_maximum".into(),
+    };
+    driver.peers.underwriting_outcome("o-1", today, "grp-uw:harbour:999", &nothing).await.unwrap();
 
     // The shipped binary: from its environment alone it joins the same cluster with a
     // workload identity, answers a portal's question, and stops on SIGTERM.

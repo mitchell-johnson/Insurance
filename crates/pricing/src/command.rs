@@ -225,7 +225,7 @@ impl Command {
     /// The callers that may send this command.
     pub fn allowed_callers(&self) -> &'static [&'static str] {
         match self {
-            Command::ActivateFund(_) => &[CALLER_CONFIG],
+            Command::ActivateFund(_) => &[CALLER_CONFIG, CALLER_EVENTS],
             Command::RecordPartitions { .. }
             | Command::ReceiveValuations { .. }
             | Command::RefuseValuationFile { .. }

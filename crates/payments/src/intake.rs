@@ -10,7 +10,7 @@ use ic_core::{PayableKind, PolicyId};
 use serde::{Deserialize, Serialize};
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{Counterparty, Id, NewItem, Reject, Role};
+use crate::model::{About, Counterparty, Id, Instruction, NewItem, OutboxEntry, Reject, Role};
 
 /// One released payment that has not yet been settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,18 +30,27 @@ pub struct Waiting {
     /// to the maker; this module pays the account it verified itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub account_ref: String,
-    pub policy: PolicyId,
+    /// The policy whose ledger the money settles on, and the payable it
+    /// discharges there. Both or neither: a payment to a reinsurer or
+    /// another counterparty is not policy money.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyId>,
+    /// The claim it pays, when claims released it: claims is told if the
+    /// bank refuses it before it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
     pub amount_minor: i64,
-    pub payable: PayableKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payable: Option<PayableKind>,
 }
 
 impl PaymentsState {
     pub(crate) fn offer_payment(&mut self, tx: &mut Tx<'_>, waiting: Waiting) -> Result<(), Reject> {
         tx.need(Role::Service)?;
-        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.amount_minor <= 0 {
+        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.amount_minor <= 0 || waiting.policy.is_some() != waiting.payable.is_some() {
             return Err(Reject::new(
                 "invalid_payment",
-                "a released payment has a reference, a source and a positive amount",
+                "a released payment has a reference, a source and a positive amount, and names a policy and its payable together or not at all",
             ));
         }
         match self.waiting.get(&waiting.payment) {
@@ -123,13 +132,35 @@ impl PaymentsState {
                 source: waiting.source.clone(),
                 counterparty: Counterparty::Payee(self.payee_for(waiting, payees.get(payment))?),
                 amount_minor: waiting.amount_minor,
-                policy: Some(waiting.policy.clone()),
-                payable: Some(waiting.payable),
+                policy: waiting.policy.clone(),
+                payable: waiting.payable,
                 refund: None,
                 represents: None,
             });
         }
         self.add_run_items(tx, run, items)
+    }
+
+    /// The bank refused or sent back an item before it settled. Its
+    /// reference is spent. If claims released it, claims is told the payment
+    /// failed, so the money goes back to benefit payable there and a task is
+    /// raised to release it again under a new reference.
+    pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
+        let Some(waiting) = self.waiting.remove(&n.item) else { return };
+        if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
+            self.push_outbox(OutboxEntry {
+                key: format!("claim-payment-failed-{}", n.item),
+                instruction: Instruction::CoreAt {
+                    policy,
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+                        claim,
+                        payment_ref: n.item.clone(),
+                    }))),
+                },
+                about: Some(About::Item(n.item.clone())),
+            });
+        }
     }
 
     /// Released payments that are in no run.

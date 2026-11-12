@@ -741,6 +741,7 @@ impl PaymentsState {
         }
         for n in &freed {
             self.free_item(n);
+            self.failed_before_settlement(n);
         }
         tx.emit(Event::SubmissionAcknowledged {
             submission: id.to_string(),
@@ -860,6 +861,9 @@ impl PaymentsState {
         // A second presentment that came back is the end of it.
         if let Some(first) = &n.represents {
             self.represent.remove(first);
+        }
+        if !was_settled {
+            self.failed_before_settlement(&n);
         }
         if was_settled {
             // The core heard it settle, so the core hears it come back, and
