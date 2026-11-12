@@ -177,6 +177,7 @@ mod tests {
                     field: Field::FamilyName,
                     value: Some(json!("Ngata")),
                     valid_from: at.date_naive(),
+                    valid_to: None,
                     recorded_at: at,
                     reason: None,
                     source: "t".into(),

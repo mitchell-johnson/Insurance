@@ -246,8 +246,7 @@ impl<W: KeyWrapper> Store<W> {
             let seq = u64::try_from(seq).map_err(|_| StoreError::Integrity("negative sequence".into()))?;
             match (&key, ciphertext) {
                 (Some(key), Some(ct)) => {
-                    let payload =
-                        crypto::open(key, &id.0, seq, &ct, &commitment).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
+                    let payload = crypto::open(key, &id.0, seq, &ct, &commitment).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
                     let rec = serde_json::from_value::<Recorded>(payload).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
                     records.push(rec);
                 }

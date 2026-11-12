@@ -13,6 +13,16 @@ pub enum Database {
     Local(String),
 }
 
+impl std::fmt::Debug for Database {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Database::Azure { host, database, user } => write!(f, "Azure({host}/{database} as {user})"),
+            // A local URL may carry a password.
+            Database::Local(_) => f.write_str("Local(..)"),
+        }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub database: Database,
@@ -57,7 +67,11 @@ impl Config {
         let need = |key: &str| get(key).ok_or_else(|| format!("{key} is not set"));
         let number = |key: &str, default: u64| -> Result<u64, String> {
             match get(key) {
-                Some(text) => text.parse::<u64>().ok().filter(|n| *n > 0).ok_or_else(|| format!("{key} must be a whole number above zero")),
+                Some(text) => text
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| *n > 0)
+                    .ok_or_else(|| format!("{key} must be a whole number above zero")),
                 None => Ok(default),
             }
         };
@@ -171,7 +185,12 @@ mod tests {
     /// is taken.
     #[test]
     fn bad_settings_are_named() {
-        for key in ["IC_CUSTOMERS_PG_HOST", "IC_CUSTOMERS_KEY_VAULT", "IC_CUSTOMERS_TENANT", "IC_EVENT_HUBS_NAMESPACE"] {
+        for key in [
+            "IC_CUSTOMERS_PG_HOST",
+            "IC_CUSTOMERS_KEY_VAULT",
+            "IC_CUSTOMERS_TENANT",
+            "IC_EVENT_HUBS_NAMESPACE",
+        ] {
             let mut env = base();
             env.remove(key);
             assert!(load(&env).unwrap_err().contains(key));

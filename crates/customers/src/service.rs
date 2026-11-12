@@ -247,7 +247,12 @@ struct ReadQuery {
     known_at: Option<DateTime<Utc>>,
 }
 
-async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, Query(q): Query<ReadQuery>, headers: HeaderMap) -> Answer {
+async fn read<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path(id): Path<String>,
+    Query(q): Query<ReadQuery>,
+    headers: HeaderMap,
+) -> Answer {
     let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
         Ok(c) => c,
         Err(a) => return a,
@@ -273,7 +278,10 @@ async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Pa
     for f in held {
         let fact = &facts[&f];
         if released.contains(&f) {
-            out.insert(f.as_str(), json!({ "value": fact.value, "valid_from": fact.valid_from, "recorded_at": fact.recorded_at }));
+            out.insert(
+                f.as_str(),
+                json!({ "value": fact.value, "valid_from": fact.valid_from, "recorded_at": fact.recorded_at }),
+            );
         } else if let Some(m) = mask(f, &fact.value) {
             masked.insert(f.as_str(), m);
         } else {
@@ -306,7 +314,12 @@ async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Pa
     )
 }
 
-async fn history<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, Query(q): Query<ReadQuery>, headers: HeaderMap) -> Answer {
+async fn history<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path(id): Path<String>,
+    Query(q): Query<ReadQuery>,
+    headers: HeaderMap,
+) -> Answer {
     let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
         Ok(c) => c,
         Err(a) => return a,
@@ -477,7 +490,12 @@ async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
     (StatusCode::OK, Json(json!({ "party": resolved, "route_to_person": route })))
 }
 
-async fn export<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, Query(q): Query<ReadQuery>, headers: HeaderMap) -> Answer {
+async fn export<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path(id): Path<String>,
+    Query(q): Query<ReadQuery>,
+    headers: HeaderMap,
+) -> Answer {
     let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
         Ok(c) => c,
         Err(a) => return a,
@@ -559,6 +577,7 @@ fn probe_facts(probe: &Probe, n: &matching::Normal) -> Vec<FactInput> {
         field,
         value,
         valid_from: None,
+        valid_to: None,
     };
     let mut facts = vec![fact(Field::FamilyName, Value::String(probe.family_name.clone()))];
     if let Some(g) = probe.given_name.as_ref().filter(|_| n.given.is_some()) {
@@ -854,7 +873,9 @@ async fn merging<W: KeyWrapper, S: WormStore>(app: Arc<App<W, S>>, headers: Head
     }
     let now = Utc::now();
     let result = if merge {
-        app.store.merge(&request.survivor, &request.absorbed, request.review.as_deref(), &ctx.who, now).await
+        app.store
+            .merge(&request.survivor, &request.absorbed, request.review.as_deref(), &ctx.who, now)
+            .await
     } else {
         app.store.unmerge(&request.survivor, &request.absorbed, &ctx.who, now).await
     };

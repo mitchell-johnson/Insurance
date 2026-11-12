@@ -155,7 +155,10 @@ impl fmt::Display for Field {
 }
 
 /// One statement of a fact: what was true from `valid_from` (the world's
-/// timeline), as learned at `recorded_at` (ours). A value of `None` says the
+/// timeline), as learned at `recorded_at` (ours). On any date, the
+/// statement in effect is the one recorded last among those covering that
+/// date, so a later statement overrides earlier knowledge from its
+/// `valid_from` on, and a statement about the past only carries `valid_to`. A value of `None` says the
 /// fact stopped being held from that date, such as a phone number given up.
 /// A correction is a later statement for the same date; nothing earlier is
 /// ever changed.
@@ -164,6 +167,10 @@ pub struct Assertion {
     pub field: Field,
     pub value: Option<Value>,
     pub valid_from: NaiveDate,
+    /// The first day it no longer held, for a fact stated about the past
+    /// only (a former address). `None`: until stated otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub valid_to: Option<NaiveDate>,
     pub recorded_at: DateTime<Utc>,
     /// Why, for a correction.
     #[serde(default)]

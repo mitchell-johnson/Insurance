@@ -43,7 +43,14 @@ pub struct FactInput {
     /// When it became true. Defaults to the day it is recorded.
     #[serde(default)]
     pub valid_from: Option<NaiveDate>,
+    /// For a fact about the past only: the first day it no longer held.
+    #[serde(default)]
+    pub valid_to: Option<NaiveDate>,
 }
+
+/// The date facts given at creation hold from, when the caller does not
+/// say: as far as we know, always.
+pub const SINCE_ALWAYS: NaiveDate = NaiveDate::from_ymd_opt(1, 1, 1).unwrap();
 
 /// A command to one party.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,7 +215,7 @@ pub fn create(id: &PartyId, kind: PartyKind, facts: &[FactInput], group: Option<
         kind: Some(kind),
         ..Party::default()
     };
-    let assertions = blank.assertions_for(facts, None, &source, now)?;
+    let assertions = blank.assertions_for(facts, None, &source, SINCE_ALWAYS, now)?;
     let needed: &[Field] = match kind {
         PartyKind::Person => &[Field::FamilyName],
         PartyKind::Organisation => &[Field::OrganisationName],
@@ -299,15 +306,16 @@ impl Party {
     }
 
     /// The facts as they were on `as_of`, as we knew them at `known_at`.
-    /// For each field, the statement in effect is the one with the latest
-    /// `valid_from` on or before `as_of`, and among statements for the same
-    /// date the one recorded last.
+    /// For each field, the statement in effect is the one recorded last
+    /// among those covering `as_of`; between statements recorded together,
+    /// the one with the later `valid_from`.
     pub fn facts(&self, as_of: NaiveDate, known_at: DateTime<Utc>) -> BTreeMap<Field, FactView> {
         let mut best: BTreeMap<Field, &Assertion> = BTreeMap::new();
-        for a in self.assertions.iter().filter(|a| a.recorded_at <= known_at && a.valid_from <= as_of) {
+        let covers = |a: &&Assertion| a.recorded_at <= known_at && a.valid_from <= as_of && a.valid_to.is_none_or(|end| as_of < end);
+        for a in self.assertions.iter().filter(covers) {
             let better = best
                 .get(&a.field)
-                .is_none_or(|b| (a.valid_from, a.recorded_at) >= (b.valid_from, b.recorded_at));
+                .is_none_or(|b| (a.recorded_at, a.valid_from) >= (b.recorded_at, b.valid_from));
             if better {
                 best.insert(a.field, a);
             }
@@ -346,7 +354,14 @@ impl Party {
         out.into_iter().map(|(p, (_, _, g))| (p, g)).collect()
     }
 
-    fn assertions_for(&self, facts: &[FactInput], reason: Option<&str>, source: &str, now: DateTime<Utc>) -> Result<Vec<Assertion>, Reject> {
+    fn assertions_for(
+        &self,
+        facts: &[FactInput],
+        reason: Option<&str>,
+        source: &str,
+        default_from: NaiveDate,
+        now: DateTime<Utc>,
+    ) -> Result<Vec<Assertion>, Reject> {
         if facts.is_empty() || facts.len() > 50 {
             return Err(reject("invalid", "between 1 and 50 facts at a time"));
         }
@@ -366,9 +381,12 @@ impl Party {
             if f.field == Field::DateOfDeath {
                 return Err(reject("invalid", "a death is recorded with mark_deceased"));
             }
-            let valid_from = f.valid_from.unwrap_or(today);
+            let valid_from = f.valid_from.unwrap_or(default_from);
             if valid_from > today {
                 return Err(reject("invalid", format!("{} cannot be stated for a future date", f.field)));
+            }
+            if f.valid_to.is_some_and(|end| end <= valid_from || end > today) {
+                return Err(reject("invalid", format!("{} must end after it starts and not after today", f.field)));
             }
             let value = if f.value.is_null() {
                 None
@@ -391,6 +409,7 @@ impl Party {
                 field: f.field,
                 value,
                 valid_from,
+                valid_to: f.valid_to,
                 recorded_at: now,
                 reason: reason.clone(),
                 source: source.to_string(),
@@ -424,7 +443,7 @@ impl Party {
         let mut events = Vec::new();
         match change {
             Change::Record { facts, reason } => {
-                let assertions = self.assertions_for(facts, reason.as_deref(), &token("source", source)?, now)?;
+                let assertions = self.assertions_for(facts, reason.as_deref(), &token("source", source)?, today, now)?;
                 events.push(EventBody::Asserted { assertions });
             }
             Change::DeclineCorrection { field, statement } => events.push(EventBody::CorrectionDeclined(DeclinedCorrection {
@@ -577,6 +596,7 @@ impl Party {
                         field: Field::DateOfDeath,
                         value: Some(Value::String(date_of_death.to_string())),
                         valid_from: *date_of_death,
+                        valid_to: None,
                         recorded_at: now,
                         reason: None,
                         source: token("source", source)?,
@@ -603,6 +623,7 @@ impl Party {
                         field: Field::DateOfDeath,
                         value: None,
                         valid_from: since,
+                        valid_to: None,
                         recorded_at: now,
                         reason: Some(reason.clone()),
                         source: token("source", source)?,

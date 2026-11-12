@@ -110,13 +110,7 @@ pub async fn reshred<W: KeyWrapper, S: WormStore>(app: &App<W, S>, since: NaiveD
 
 /// Run the outbox every `every`, and the sweep every `sweep_every`, until
 /// `stop` completes. A failed pass is logged and tried again next time.
-pub async fn run<W: KeyWrapper, S: WormStore>(
-    app: &App<W, S>,
-    hubs: &Hubs,
-    every: Duration,
-    sweep_every: Duration,
-    stop: impl Future<Output = ()>,
-) {
+pub async fn run<W: KeyWrapper, S: WormStore>(app: &App<W, S>, hubs: &Hubs, every: Duration, sweep_every: Duration, stop: impl Future<Output = ()>) {
     tokio::pin!(stop);
     let mut last_sweep: Option<std::time::Instant> = None;
     loop {

@@ -319,6 +319,7 @@ mod tests {
                 field: *f,
                 value: Some(json!(v)),
                 valid_from: at.date_naive(),
+                valid_to: None,
                 recorded_at: at,
                 reason: None,
                 source: "t".into(),

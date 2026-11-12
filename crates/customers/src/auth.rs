@@ -94,7 +94,9 @@ impl Entra {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.set_audience(&[&self.audience]);
         validation.set_issuer(&[&self.issuer]);
-        let claims = decode::<Claims>(token, &key, &validation).map_err(|e| AuthError::Invalid(e.to_string()))?.claims;
+        let claims = decode::<Claims>(token, &key, &validation)
+            .map_err(|e| AuthError::Invalid(e.to_string()))?
+            .claims;
         let role = match header("x-ic-caller") {
             Some(asked) if claims.roles.iter().any(|r| r == asked) => asked.to_string(),
             Some(asked) => return Err(AuthError::Invalid(format!("the token does not carry the role {asked}"))),
