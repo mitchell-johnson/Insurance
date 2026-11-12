@@ -131,6 +131,14 @@ pub enum DirectoryCommand {
         party: PartyId,
         active: bool,
     },
+    /// The policyholder lets someone look at the policy, or stops it. That
+    /// person can read what their kind of access is for and can change nothing.
+    SetDelegate {
+        policy: PolicyId,
+        party: PartyId,
+        /// `None` ends the access.
+        access: Option<DelegateAccess>,
+    },
     /// An adult on a policy lets the policyholder see their own sensitive rows, or stops it.
     SetFamilyConsent {
         policy: PolicyId,
@@ -157,6 +165,28 @@ pub enum DirectoryCommand {
         effective: NaiveDate,
         source: String,
     },
+}
+
+/// What someone the policyholder lets in may see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateAccess {
+    /// A relative or friend: the policy, without anything that implies health.
+    Viewer,
+    /// An accountant: the policy, its billing and its documents.
+    Financial,
+    /// A support person, who helps the policyholder use the service.
+    Support,
+}
+
+impl DelegateAccess {
+    fn relationship(self) -> Relationship {
+        match self {
+            DelegateAccess::Viewer => Relationship::Viewer,
+            DelegateAccess::Financial => Relationship::FinancialViewer,
+            DelegateAccess::Support => Relationship::SupportPerson,
+        }
+    }
 }
 
 /// Who a directory command comes from.
@@ -207,6 +237,9 @@ pub struct Directory {
     /// control of their own health information.
     #[serde(default)]
     pub dependants: BTreeMap<PolicyId, BTreeMap<PartyId, NaiveDate>>,
+    /// People the policyholder lets look at a policy.
+    #[serde(default)]
+    pub delegates: BTreeMap<PolicyId, BTreeMap<PartyId, DelegateAccess>>,
     pub engagements: BTreeMap<String, Engagement>,
     pub structure: BTreeMap<PartyId, Vec<StructureLink>>,
     pub licences: BTreeMap<PartyId, Vec<LicenceChange>>,
@@ -356,6 +389,9 @@ impl Directory {
         if self.assignees.get(policy).is_some_and(|a| a.contains(party)) {
             out.push(Relationship::Assignee);
         }
+        if let Some(access) = self.delegates.get(policy).and_then(|d| d.get(party)) {
+            out.push(access.relationship());
+        }
         out
     }
 
@@ -368,6 +404,7 @@ impl Directory {
             out.extend(view.party_of(policy, &row.life).cloned());
         }
         out.extend(self.assignees.get(policy).into_iter().flatten().cloned());
+        out.extend(self.delegates.get(policy).into_iter().flat_map(|d| d.keys()).cloned());
         out
     }
 
@@ -468,6 +505,8 @@ impl Directory {
                 if let Some(old) = self.policyholders.insert(policy.clone(), policyholder) {
                     touched.revoked.insert(old);
                 }
+                // So was anyone they let look.
+                touched.revoked.extend(self.delegates.remove(&policy).unwrap_or_default().into_keys());
                 // An authority was the previous owner's to give.
                 for adviser in self.authorities.remove(&policy).unwrap_or_default().into_keys() {
                     if let Some(p) = self.adviser_policies.get_mut(&adviser) {
@@ -546,6 +585,25 @@ impl Directory {
                 } else {
                     set.remove(&party);
                     touched.revoked.insert(party);
+                }
+                touched.policies.insert(policy);
+            }
+            DirectoryCommand::SetDelegate { policy, party, access } => {
+                let owner = self.require_policyholder(actor, &policy)?;
+                if owner == party {
+                    return Err(reject("policyholder", "the policyholder already sees their own policy"));
+                }
+                let on_policy = self.delegates.entry(policy.clone()).or_default();
+                match access {
+                    Some(access) => {
+                        on_policy.insert(party, access);
+                    }
+                    None => {
+                        if on_policy.remove(&party).is_none() {
+                            return Err(reject("not_authorised", "that person has no access to this policy"));
+                        }
+                        touched.revoked.insert(party);
+                    }
                 }
                 touched.policies.insert(policy);
             }
