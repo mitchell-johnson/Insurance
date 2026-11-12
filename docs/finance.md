@@ -95,7 +95,7 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 | `IC_FINANCE_EXTRACTS_ENDPOINT`, `IC_FINANCE_EXTRACTS_CONTAINER` | where extracts are written (container defaults to `finance-extracts`) |
 | `IC_FINANCE_PASS_SECONDS` | seconds between passes, 60 by default |
 
-It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
+`deploy/k8s/finance.yaml` runs two replicas under their own service account. It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
 
 ## Actuarial tables
 
