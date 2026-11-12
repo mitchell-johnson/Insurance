@@ -185,6 +185,21 @@ pub enum Command {
     },
 }
 
+/// The command that activates a fund definition in this module, as the
+/// configuration loader sends it beside the core's own `ActivateFund`. The
+/// key names the version and content, so loading the same files again
+/// changes nothing.
+pub fn activation(fund: FundDefinition, at: DateTime<Utc>) -> Envelope {
+    Envelope {
+        key: format!("fund:{}:{}:{}", fund.id.0, fund.version, fund.content_hash),
+        caller: CALLER_CONFIG.to_string(),
+        actor: "config".to_string(),
+        roles: Vec::new(),
+        at,
+        command: Command::ActivateFund(Box::new(fund)),
+    }
+}
+
 impl Command {
     pub fn name(&self) -> &'static str {
         match self {

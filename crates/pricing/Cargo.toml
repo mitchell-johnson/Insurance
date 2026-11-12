@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ic-azure.workspace = true
 ic-core.workspace = true
 ic-ledger.workspace = true
 ic-log.workspace = true
@@ -18,8 +19,20 @@ serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "ic-unit-pricing"
+path = "src/bin/ic-unit-pricing.rs"
 
 [dev-dependencies]
+ic-azure = { workspace = true, features = ["testing"] }
+axum.workspace = true
+ic-product.workspace = true
+ic-sim.workspace = true
 proptest.workspace = true
 
 [lints]

@@ -73,10 +73,10 @@ mod tests {
     #[test]
     fn renders_holdings_and_flow() {
         let x = Extract {
-            id: "growth@2026-11-03".into(),
+            id: "growth:2026-11-03".into(),
             fund: FundId("growth".into()),
             pricing_date: NaiveDate::from_ymd_opt(2026, 11, 3).unwrap_or_default(),
-            price: Some("growth@2026-11-03.1".into()),
+            price: Some("growth:2026-11-03.1".into()),
             holdings: [("P1".to_string(), 5_497_265i64), ("P2".to_string(), 1_000_000)].into(),
             units_on_issue_micro: 6_497_265,
             holders: 2,
@@ -90,7 +90,7 @@ mod tests {
         let text = String::from_utf8(render(&x, Currency::NZD)).unwrap_or_default();
         assert_eq!(
             text,
-            "H,unit-pricing,growth@2026-11-03,growth,2026-11-03,growth@2026-11-03.1\n\
+            "H,unit-pricing,growth:2026-11-03,growth,2026-11-03,growth:2026-11-03.1\n\
              D,P1,5.497265\nD,P2,1.000000\n\
              F,NZD,1000.00,1500.00,-500.00,3\n\
              T,2,6.497265\n"
