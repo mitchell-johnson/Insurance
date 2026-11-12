@@ -250,6 +250,10 @@ fn excess() -> Entry {
     Entry::GroupExcess { policy: "POL-1".into() }
 }
 
+fn alteration() -> Entry {
+    Entry::Alteration { policy: "POL-1".into() }
+}
+
 fn increase() -> Entry {
     Entry::Increase { policy: "POL-1".into() }
 }
@@ -355,11 +359,25 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             "the core refused to end interim cover: odd",
         ),
         (
+            terms("P1", alteration(), vec![cover(1)]),
+            None,
+            Value::Null,
+            vec![],
+            "the core has no command yet for an alteration or a reinstatement",
+        ),
+        (
             terms("P1", increase(), vec![cover(1)]),
             None,
             Value::Null,
             vec![],
-            "the core has no command yet for revised terms on a policy in force",
+            "proposal P1 is not known to the module",
+        ),
+        (
+            terms("P1", increase(), vec![CoverSpec { life: None, ..cover(1) }]),
+            None,
+            known.clone(),
+            vec![],
+            "the increase on life names no life",
         ),
         (
             ended("P1", increase(), "declined"),
@@ -521,6 +539,41 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
         "{told:?}"
     );
 
+    // An increase: one command a cover as "underwriting", keyed by proposal, life and cover;
+    // the first refusal stops it and goes back as the core's answer.
+    let two = terms(
+        "P1",
+        increase(),
+        vec![
+            cover(1),
+            CoverSpec {
+                code: "trauma".into(),
+                ..cover(2)
+            },
+        ],
+    );
+    let (_, script) = carry(two.clone(), None, a_proposal(), &[]).await;
+    let sent = script.with(|s| s.core.clone());
+    let keys: Vec<_> = sent.iter().map(|(key, caller, _)| (key.as_str(), caller.as_str())).collect();
+    assert_eq!(keys, [("P1/increase/L1/life", "underwriting"), ("P1/increase/L1/trauma", "underwriting")]);
+    assert!(matches!(&sent[1].2, ic_core::Command::AddUnderwrittenLayer(l) if l.cover == "trauma" && l.sum_insured_minor == 2 && l.reference == "P1/terms"));
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::PolicyIssued { .. })] if key == "P1/terms/issued" && caller == "issuer"),
+        "{told:?}"
+    );
+    let (pass, script) = carry(two, None, a_proposal(), &[("P1/increase/L1/life", "sum_insured")]).await;
+    assert_eq!(
+        (pass.delivered, script.with(|s| s.core.len())),
+        (1, 1),
+        "the second cover is not sent after a refusal"
+    );
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "sum_insured"),
+        "{told:?}"
+    );
+
     let (_, script) = carry(interim(), None, Value::Null, &[]).await;
     let told = script.with(|s| s.told.clone());
     assert!(
@@ -595,7 +648,7 @@ async fn a_module_that_misbehaves_stops_the_pass_with_the_outbox_intact() {
     let script = Scripted::default();
     script.with(|s| {
         s.outbox.insert(1, release());
-        s.outbox.insert(2, terms("P1", increase(), vec![]));
+        s.outbox.insert(2, terms("P1", alteration(), vec![]));
         s.refuse.insert("park:2".into(), ("caller_not_allowed".into(), "not the driver".into()));
     });
     let stopped = driver(&script).deliver().await.unwrap_err();
@@ -620,7 +673,7 @@ async fn a_module_that_misbehaves_stops_the_pass_with_the_outbox_intact() {
         for n in [1, 2, 4, 5] {
             s.outbox.insert(n, release());
         }
-        s.outbox.insert(3, terms("P1", increase(), vec![]));
+        s.outbox.insert(3, terms("P1", alteration(), vec![]));
     });
     let mut one_at_a_time = driver(&script);
     one_at_a_time.batch = 0;

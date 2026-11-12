@@ -333,8 +333,9 @@ fn a_returned_benefit_period_is_reissued_as_that_period() {
 }
 
 /// Purpose: other income declared for a benefit reduces later periods, and periods already paid
-/// are replayed: too much paid becomes an overpayment held as a fact, too little goes to a
-/// senior to put right.
+/// are replayed: too much paid becomes an overpayment held as a fact, too little is owed and
+/// goes out with the next benefit run, with a senior told when the person also owes an
+/// overpayment; arrears paid with a period are never counted as overpaid for that period.
 /// Why it matters: income offsets are the commonest reason a benefit in payment is wrong. The
 /// replay must find the exact amount, and neither take money back by itself nor leave a
 /// claimant short without anyone knowing.
@@ -374,13 +375,47 @@ fn declared_income_replays_the_periods_already_paid() {
 
     // The income turns out lower from April: May and April were underpaid.
     w.ok(income("ip-1", d(2027, 4, 1), 400));
-    let c = w.claim("ip-1");
+    let c = w.claim("ip-1").clone();
     assert_eq!(c.overpayments.len(), 1);
     assert!(c
         .tasks
         .iter()
         .any(|t| t.id == "senior-review/underpaid/2027-04-01" && t.kind == TaskKind::SeniorReview));
     assert_eq!(w.refused(income("c-none", d(2027, 4, 1), 0)), "unknown_claim");
+
+    // The 600 short on each of April and May is owed, and goes out with June's benefit in the
+    // ordinary run: 2,600 for June and 1,200 of arrears.
+    assert_eq!(c.schedule.as_ref().expect("in payment").arrears_minor, 1_200);
+    assert_eq!(w.core.noticed("underpayment_owed")[0]["amount_minor"], "1200");
+    w.on(d(2027, 6, 1));
+    w.pay_run("run-4", d(2027, 6, 1));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::PayBenefit {
+            gross_minor: 3_800,
+            offset: None,
+            ..
+        })
+    ));
+    let s = w.claim("ip-1").schedule.clone().expect("in payment");
+    assert_eq!((s.arrears_minor, s.periods[&d(2027, 6, 1)].arrears_minor), (0, 1_200));
+    // July is the plain benefit again.
+    w.on(d(2027, 7, 1));
+    w.pay_run("run-5", d(2027, 7, 1));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::PayBenefit { gross_minor: 2_600, .. })));
+
+    // A death on 15 June ends the benefit from the 16th: half of June's benefit and all of July's were paid past it. The
+    // arrears paid with June were owed for April and May and are not part of the overpayment.
+    w.on(d(2027, 7, 20));
+    w.ok(Command::RecordDeath {
+        party: "party-life".into(),
+        date_of_death: d(2027, 6, 15),
+    });
+    let late = w.claim("ip-1").overpayments.last().expect("raised").clone();
+    assert_eq!(
+        (late.cause, late.amount_minor),
+        (OverpaymentCause::LateDeathNotification, 2_600 * 15 / 30 + 2_600)
+    );
 }
 
 /// Purpose: an overpayment is taken from later benefits only once its status is set to offset,

@@ -14,7 +14,7 @@ use ic_azure::merkle::{publish_root, root_name};
 use ic_azure::AzureError;
 use ic_core::Reject;
 use ic_finance::close::{Capacity, CheckStatus, Outcome, PeriodStatus};
-use ic_finance::driver::{self, distribution_sources, payments_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK};
+use ic_finance::driver::{self, distribution_sources, payments_sources, reinsurance_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK};
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
 use serde_json::{json, Value};
@@ -108,6 +108,7 @@ type TestDriver = Driver<Ledger, Others, Store, Store>;
 fn sources() -> Vec<Source> {
     let mut all = distribution_sources();
     all.extend(payments_sources());
+    all.extend(reinsurance_sources());
     for (caller, kind) in [("collections", "policy_suspense"), ("investment", "pending_investment_cash")] {
         all.push(Source {
             caller: caller.to_string(),
@@ -207,7 +208,7 @@ fn a_month_goes_from_its_last_day_to_closed() {
     assert_eq!(first.roots_recorded.len(), 18, "15 November to 2 December");
     assert_eq!(
         first.extracts_registered,
-        ["in_force:2027-11-30:v1", "movement:2027-11-30:v1", "experience:2027-11-30:v1"]
+        ["in_force:2027-11-30:v2", "movement:2027-11-30:v2", "experience:2027-11-30:v2"]
     );
     assert_eq!(
         first.reports_sent,
@@ -378,20 +379,20 @@ fn an_interrupted_or_conflicting_extract_is_never_registered_wrongly() {
     let earlier = driver_after(d(2027, 12, 3), |_| true);
     block(earlier.pass()).unwrap();
     let driver = driver_after(d(2027, 12, 3), |_| true);
-    let name = "extracts/2027-11-30/in_force-v1.csv";
+    let name = "extracts/2027-11-30/in_force-v2.csv";
     let stored = block(earlier.extracts.get(name)).unwrap().unwrap();
     block(driver.extracts.put_new(name, "text/csv", stored.clone())).unwrap();
     // Another file under the movement extract's name.
-    block(driver.extracts.put_new("extracts/2027-11-30/movement-v1.csv", "text/csv", b"other".to_vec())).unwrap();
+    block(driver.extracts.put_new("extracts/2027-11-30/movement-v2.csv", "text/csv", b"other".to_vec())).unwrap();
 
     let pass = block(driver.pass()).unwrap();
-    assert_eq!(pass.extracts_registered, ["in_force:2027-11-30:v1", "experience:2027-11-30:v1"]);
+    assert_eq!(pass.extracts_registered, ["in_force:2027-11-30:v2", "experience:2027-11-30:v2"]);
     assert_eq!(
         pass.waiting,
-        ["2027-11: extracts/2027-11-30/movement-v1.csv is already stored with other content"]
+        ["2027-11: extracts/2027-11-30/movement-v2.csv is already stored with other content"]
     );
     assert_eq!(block(driver.extracts.get(name)).unwrap().unwrap(), stored);
-    assert_eq!(block(driver.extracts.get("extracts/2027-11-30/movement-v1.csv")).unwrap().unwrap(), b"other");
+    assert_eq!(block(driver.extracts.get("extracts/2027-11-30/movement-v2.csv")).unwrap().unwrap(), b"other");
     assert!(matches!(status(&driver, nov(), "valuation_extracts"), CheckStatus::Red { .. }));
 
     // Pages that are not one file.
@@ -435,6 +436,10 @@ fn refusals_are_listed_and_months_close_in_order() {
     let dec = period(2027, 12);
     let first = block(driver.pass()).unwrap();
     assert_eq!(first.extracts_registered.len(), 6);
+    // The reinsurer's sweep is asked for once: for December, which ends a quarter.
+    assert_eq!(first.reports_sent.iter().filter(|r| *r == "reinsurance_sweep").count(), 1);
+    assert_eq!(status(&driver, nov(), "reinsurance_sweep"), CheckStatus::NotDue);
+    assert_eq!(status(&driver, dec, "reinsurance_sweep"), CheckStatus::Green);
     assert!(first.waiting.is_empty(), "{:?}", first.waiting);
     {
         // December ends a quarter: its own requirements are not the subject here.

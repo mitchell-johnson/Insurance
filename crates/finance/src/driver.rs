@@ -136,6 +136,17 @@ pub fn payments_sources() -> Vec<Source> {
     ]
 }
 
+/// What the reinsurance module owes at a quarter end: statements cut and
+/// swept, and nothing undelivered or unreconciled.
+pub fn reinsurance_sources() -> Vec<Source> {
+    vec![Source {
+        caller: "reinsurance".to_string(),
+        module: "reinsurance".to_string(),
+        reports: Reports::Check("reinsurance_sweep".to_string()),
+        question: |end| json!({ "sweep_check": { "period_end": end } }),
+    }]
+}
+
 /// What one pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {

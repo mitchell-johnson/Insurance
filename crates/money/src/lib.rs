@@ -227,6 +227,16 @@ impl UnitQty {
     pub fn new(micro: i64, fund: FundId) -> Self {
         Self { micro, fund }
     }
+    /// The units a cash amount converts to at a unit price, rounded to
+    /// micro-units by the fund's rule. The price must be above zero.
+    pub fn for_cash(cash: Money, price: Dec, fund: FundId, mode: RoundingMode) -> Result<Self, MoneyError> {
+        if price.is_nan() || price.is_infinite() || price <= Dec::from(0i64) {
+            return Err(MoneyError::InvalidDecimal(price.to_string()));
+        }
+        let major = Dec::from(cash.minor) / pow10(cash.currency.minor_digits());
+        let micro = round_integer(major / price * Dec::from(MICRO_PER_UNIT), mode)?;
+        i64::try_from(micro).map(|m| Self::new(m, fund)).map_err(|_| MoneyError::Overflow)
+    }
     /// Currency value at a unit price, rounded to cents. Never stored as a balance.
     pub fn value_at(&self, price: Dec, currency: Currency, mode: RoundingMode) -> Result<Money, MoneyError> {
         let units = Dec::from(self.micro) / Dec::from(MICRO_PER_UNIT);
@@ -277,6 +287,45 @@ pub fn round_minor_to_fine(amount_minor: Dec, currency: Currency) -> Result<Accr
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    /// Purpose: cash converts to units at a price exactly, rounded to micro-units by the
+    /// stated rule; units convert back to cash at a price; and a price of zero, a negative
+    /// price or a result too large to hold is an error, never a number.
+    /// Why it matters: every contribution, withdrawal and switch on a unit-linked policy is
+    /// this conversion. A rounding rule applied the wrong way gives every investor slightly
+    /// too many or too few units; a zero price accepted would divide by zero and hand out
+    /// units without limit.
+    #[test]
+    fn cash_converts_to_units_at_a_price() {
+        let fund = || FundId("growth".to_string());
+        let cash = Money::new(1_000_00, Currency::NZD);
+        assert_eq!(
+            UnitQty::for_cash(cash, dec("2.0000").unwrap(), fund(), RoundingMode::HalfEven).unwrap().micro,
+            500_000_000
+        );
+        // 100.00 / 3 = 33.3333333...: down and up differ in the last micro-unit.
+        let third = |mode| {
+            UnitQty::for_cash(Money::new(100_00, Currency::NZD), dec("3").unwrap(), fund(), mode)
+                .unwrap()
+                .micro
+        };
+        assert_eq!((third(RoundingMode::Down), third(RoundingMode::Up)), (33_333_333, 33_333_334));
+        let back = UnitQty::new(500_000_000, fund())
+            .value_at(dec("2.0000").unwrap(), Currency::NZD, RoundingMode::HalfEven)
+            .unwrap();
+        assert_eq!(back, cash);
+        for bad in ["0", "-1.5"] {
+            assert!(
+                UnitQty::for_cash(cash, dec(bad).unwrap(), fund(), RoundingMode::HalfEven).is_err(),
+                "a price of {bad} was accepted"
+            );
+        }
+        let huge = Money::new(i64::MAX, Currency::NZD);
+        assert_eq!(
+            UnitQty::for_cash(huge, dec("0.000001").unwrap(), fund(), RoundingMode::HalfEven),
+            Err(MoneyError::Overflow)
+        );
+    }
 
     /// Purpose: money prints as a signed decimal amount with its currency code, including amounts
     /// under a dollar.

@@ -123,6 +123,7 @@ pub(crate) fn raise_receivable(
         earned_fine: BTreeMap::new(),
         closed: false,
         entry: ctx.entries.last().map(|e| e.id),
+        settled_on: None,
     });
     settle_credits(ledger, policy, ctx)?;
     Ok(Some(id))

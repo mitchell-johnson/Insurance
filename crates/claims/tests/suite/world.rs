@@ -214,6 +214,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         policy_status: "in_force".into(),
         in_force: true,
         standing: Some("paid".into()),
+        premium_paid_since_event_minor: 0,
         outstanding_premium_minor: 0,
         cover_type: cover_type.into(),
         cover_start: Some(d(2025, 1, 1)),
