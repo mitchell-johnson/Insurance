@@ -23,11 +23,12 @@ Azure services do the work that should not be ours:
 | Caller identity on the API | Entra ID tokens |
 | Tamper evidence: daily Merkle roots and sealed journal segments | Blob Storage with version-level immutability |
 | Signing the daily root | Key Vault (or Managed HSM) |
+| Clinical records, erasable per person | Key Vault key wrapping, a Blob container with no retention |
 | Events for downstream systems | Event Hubs, one hub partition per ledger partition |
 | The cluster token | Key Vault, mounted through the Secrets Store CSI driver |
 | Logs and metrics | Container Insights and Application Insights (JSON lines on stdout) |
 
-[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core.
+[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core. [docs/finance.md](docs/finance.md) describes the finance ledger, the close, returns and the table validation suite.
 
 ## Try it
 
@@ -88,6 +89,8 @@ crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
 crates/api        the HTTP API, the gateway, ic-admin
 crates/sim        in-process cluster and the synthetic insurer
 crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
+crates/payments   direct debits, payee accounts, payment runs, refunds, bank reconciliation, the evacuation drill (docs/payments.md)
+crates/payments-service  bank channels, the pump (ic-payments-pump), payment evidence
 crates/channels   the customer app API, adviser and employer portals, staff and operations consoles, the status page (ic-portal)
 crates/underwriting proposals, disclosure, rules, case work and authority, offers, issue, the clinical store
 crates/distribution advisers, licence status, commission, clawback, statements, the held balance workbench

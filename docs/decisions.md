@@ -54,3 +54,6 @@ A module hosted from the first start is shown every event. One added later start
 
 The fail-back controller runs on every node and is tested with three nodes in one process. The shipped infrastructure is still one region, so `IC_PREFERRED_NODES` is unset in the manifests and nothing fails back in a deployed cluster until voters exist in a second and third region. Pacing is per node: after a region loss the leaders sit on a few nodes, each of which moves its own share per round, so the share moved across the cluster in one round can be up to that share times the number of leading nodes. A pause is not persisted across a node restart. The operations console and status page showing the degraded state belong to the channels module and are not driven from this status yet.
 
+### Payments are built against a fake bank
+
+No bank is connected. The payments module, the pump and the drill are complete and tested against a fake bank that checks what a bank checks, in the module's own batch format over HTTPS. A real bank's file layout, transport and mutual TLS are one trait per bank and are not built. `docs/payments.md`, "What is not built", lists this and the module's other gaps.

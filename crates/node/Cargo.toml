@@ -11,6 +11,7 @@ ic-raft.workspace = true
 ic-channels = { path = "../channels" }
 ic-distribution = { path = "../distribution" }
 ic-documents = { path = "../documents" }
+ic-finance = { path = "../finance" }
 ic-group = { path = "../group" }
 ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
