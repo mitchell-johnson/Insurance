@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use ic_core::accounts;
 use ic_core::event::Event;
-use ic_core::invest::{Direction, FundDefinition, InvestCommand, InvestEvent, NewOrder, OrderAmount, OrderKind, OrderState, UnitPrice};
+use ic_core::invest::{
+    Direction, FundDefinition, InvestCommand, InvestEvent, InvestmentBook, NewOrder, OrderAmount, OrderKind, OrderState, Question, Reply, UnitPrice,
+};
 use ic_core::{Command, PolicyId, Reject};
 use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
 use ic_product::{Frequency, Sex};
@@ -593,4 +595,144 @@ fn funds_and_prices_are_immutable_once_active() {
         .any(|e| matches!(e, InvestEvent::UnitPriceActivated { price_id, pending_orders: 1, .. } if price_id == "p-1")));
     assert!(seen.iter().any(|e| matches!(e, InvestEvent::FundActivated { version: 3, .. })));
     assert!(c.state(0).investment.price("p-1").is_some());
+}
+
+/// Purpose: the investment ledger answers what its readers need (units on issue with what
+/// is still pending, cash waiting and since when, one order, one policy's holdings, and
+/// what the execution run has left to do), and its reconciliation names each way the book
+/// and the ledger can disagree: a fund's units on issue against the units policies hold,
+/// its cash against its executed orders, a pending order missing from the execution index,
+/// and buy orders counting on more cash than is waiting.
+/// Why it matters: the unit pricing module blocks a price when units on issue disagree
+/// with the administrator, so a wrong figure here stops a fund or lets a bad price through;
+/// finance ages the waiting cash at the close; and the reconciliation is what stops the
+/// line before a customer is told they hold units the ledger does not have.
+#[test]
+fn the_book_answers_its_readers_and_reconciles_to_the_ledger() {
+    let (mut c, policy) = invested();
+    let monday = start();
+    place(
+        &mut c,
+        order("buy-1", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 1_000_00 }, monday),
+    )
+    .unwrap();
+    let tuesday = d(2027, 11, 16);
+    place(
+        &mut c,
+        order("buy-2", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 500_00 }, tuesday),
+    )
+    .unwrap();
+    let ask = |c: &Cluster, question: Question| {
+        let state = c.state(0);
+        state.investment.answer(&state.ledger, &state.policies, &question)
+    };
+    assert_eq!(ask(&c, Question::Executable), Reply::Executable(vec![]));
+    c.end_of_day().unwrap();
+    invest(
+        &mut c,
+        "unit-pricing",
+        InvestCommand::ActivateUnitPrice(Box::new(price("p-1", "growth", monday, "2.0000", "2.0000"))),
+    )
+    .unwrap();
+    let Reply::Executable(todo) = ask(&c, Question::Executable) else {
+        unreachable!()
+    };
+    assert_eq!(todo.len(), 1);
+    assert_eq!(
+        (todo[0].fund.clone(), todo[0].pricing_date, todo[0].price_id.as_str(), todo[0].pending),
+        (fund_id("growth"), monday, "p-1", 1)
+    );
+    // Before execution Monday is not yet "executed through".
+    let Reply::UnitsOnIssue(before) = ask(&c, Question::UnitsOnIssue { fund: fund_id("growth") }) else {
+        unreachable!()
+    };
+    assert_eq!(
+        (before.units_micro, before.executed_through, before.pending.clone()),
+        (0, None, BTreeMap::from([(monday, 1), (tuesday, 1)]))
+    );
+    execute(&mut c, "growth", monday).unwrap();
+    let Reply::UnitsOnIssue(after) = ask(&c, Question::UnitsOnIssue { fund: fund_id("growth") }) else {
+        unreachable!()
+    };
+    assert_eq!(
+        (after.units_micro, after.executed_through, after.pending),
+        (500_000_000, Some(monday), BTreeMap::from([(tuesday, 1)]))
+    );
+
+    let Reply::WaitingCash(waiting) = ask(&c, Question::WaitingCash) else {
+        unreachable!()
+    };
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        (waiting[0].policy.clone(), waiting[0].amount_minor, waiting[0].currency, waiting[0].since),
+        (policy.clone(), 4_000_00, NZD, monday)
+    );
+    let Reply::Order(Some(found)) = ask(&c, Question::Order { order_id: "buy-2".to_string() }) else {
+        unreachable!()
+    };
+    assert_eq!(found.state, OrderState::Pending);
+    assert_eq!(
+        ask(
+            &c,
+            Question::Order {
+                order_id: "nothing".to_string()
+            }
+        ),
+        Reply::Order(None)
+    );
+    let Reply::Holdings(Some(holdings)) = ask(&c, Question::Holdings { policy: policy.clone() }) else {
+        unreachable!()
+    };
+    assert_eq!(holdings.units_micro, BTreeMap::from([("growth".to_string(), 500_000_000)]));
+    assert_eq!(
+        (holdings.pending_cash_minor, holdings.pending_orders.len(), holdings.currency),
+        (4_000_00, 1, NZD)
+    );
+    assert_eq!(
+        ask(
+            &c,
+            Question::Holdings {
+                policy: PolicyId::from("nobody")
+            }
+        ),
+        Reply::Holdings(None)
+    );
+
+    // The book as it stands reconciles. Each way it could disagree with the ledger is named.
+    let state = c.state(0);
+    assert!(state.investment.breaks(&state.ledger, &state.policies).is_empty());
+    let tampered = |edit: &dyn Fn(&mut serde_json::Value)| -> Vec<&'static str> {
+        let mut book = serde_json::to_value(&state.investment).unwrap();
+        edit(&mut book);
+        let book: InvestmentBook = serde_json::from_value(book).unwrap();
+        book.breaks(&state.ledger, &state.policies).into_iter().map(|(check, _)| check).collect()
+    };
+    assert_eq!(
+        tampered(&|b| b["orders"]["buy-1"]["state"]["executed"]["cash_minor"] = 999.into()),
+        ["fund_cash_position"]
+    );
+    assert_eq!(tampered(&|b| b["pending"] = serde_json::json!([])), ["unit_orders_pending"]);
+    assert_eq!(
+        tampered(&|b| b["orders"]["buy-2"]["order"]["amount"]["cash"]["minor"] = 4_000_01.into()),
+        ["pending_investment_cash"]
+    );
+    // An executed order filed under the wrong fund puts both funds' cash out.
+    assert_eq!(
+        tampered(&|b| {
+            let growth = b["funds"]["growth"].clone();
+            b["funds"]["bond"] = growth;
+            b["orders"]["buy-1"]["order"]["fund"] = "bond".into();
+        }),
+        ["fund_cash_position", "fund_cash_position"]
+    );
+    // The cancelled order's cash goes back to suspense, and nothing is left waiting.
+    invest(&mut c, "policy-servicing", InvestCommand::CancelOrder { order_id: "buy-2".to_string() }).unwrap();
+    let back = InvestCommand::AllocateCash {
+        policy: policy.clone(),
+        reference: "back".to_string(),
+        amount_minor: -4_000_00,
+    };
+    invest(&mut c, "policy-servicing", back).unwrap();
+    assert_eq!(ask(&c, Question::WaitingCash), Reply::WaitingCash(vec![]));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }

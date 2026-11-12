@@ -931,3 +931,162 @@ pub(crate) fn execute_orders(
     }
     Ok(())
 }
+
+/// A question about the investment ledger on one partition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Question {
+    /// Units on issue in a fund, for the control before a price is struck.
+    UnitsOnIssue { fund: FundId },
+    /// Every policy's pending investment cash and the day it has waited
+    /// since, for the aged-items check at the close.
+    WaitingCash,
+    /// One order and its state.
+    Order { order_id: String },
+    /// What one policy holds in each fund, in micro-units, and its pending
+    /// cash. The value in currency is units times a price and is worked out
+    /// where it is shown, labelled with the price date.
+    Holdings { policy: PolicyId },
+    /// The funds and pricing dates that have a price in force and orders
+    /// still pending: what the execution run has left to do.
+    Executable,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holdings {
+    pub policy: PolicyId,
+    pub currency: Currency,
+    pub units_micro: BTreeMap<String, i128>,
+    pub pending_cash_minor: i128,
+    pub pending_orders: Vec<UnitOrder>,
+}
+
+/// A fund and pricing date with a price in force and orders to execute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Executable {
+    pub fund: FundId,
+    pub pricing_date: NaiveDate,
+    pub price_id: String,
+    pub pending: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    UnitsOnIssue(UnitsOnIssue),
+    WaitingCash(Vec<WaitingCash>),
+    Order(Option<UnitOrder>),
+    Holdings(Option<Holdings>),
+    Executable(Vec<Executable>),
+}
+
+impl InvestmentBook {
+    pub fn answer(&self, ledger: &Ledger, policies: &BTreeMap<PolicyId, Policy>, question: &Question) -> Reply {
+        match question {
+            Question::UnitsOnIssue { fund } => Reply::UnitsOnIssue(self.units_on_issue(ledger, fund)),
+            Question::WaitingCash => Reply::WaitingCash(self.waiting_cash(ledger, policies)),
+            Question::Order { order_id } => Reply::Order(self.orders.get(order_id).cloned()),
+            Question::Holdings { policy } => Reply::Holdings(policies.get(policy).map(|p| {
+                Holdings {
+                    policy: p.id.clone(),
+                    currency: p.currency,
+                    units_micro: self
+                        .funds
+                        .keys()
+                        .map(|fund| (fund.clone(), -ledger.balance(&accounts::unit_account(&p.id, &FundId(fund.clone())).id)))
+                        .filter(|(_, units)| *units != 0)
+                        .collect(),
+                    pending_cash_minor: -ledger.balance(&accounts::pending_investment_cash(&p.id, p.currency).id),
+                    pending_orders: self.pending_of(&p.id).cloned().collect(),
+                }
+            })),
+            Question::Executable => Reply::Executable(self.executable()),
+        }
+    }
+
+    /// Funds and dates with a price in force and orders still pending.
+    pub fn executable(&self) -> Vec<Executable> {
+        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        for key in &self.pending {
+            if let Some((slot, _)) = key.rsplit_once('/') {
+                *counts.entry(slot.to_string()).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .filter_map(|(slot, pending)| {
+                let price = self.prices.get(self.in_force.get(&slot)?)?;
+                Some(Executable {
+                    fund: price.fund.clone(),
+                    pricing_date: price.pricing_date,
+                    price_id: price.price_id.clone(),
+                    pending,
+                })
+            })
+            .collect()
+    }
+
+    /// The investment ledger's own reconciliation: each fund's unit position
+    /// equals the units its policies hold, each fund's cash position equals
+    /// the net cash of its executed orders, no policy's pending buy orders
+    /// count on more cash than it has waiting, and every pending order is
+    /// indexed for execution.
+    pub fn breaks(&self, ledger: &Ledger, policies: &BTreeMap<PolicyId, Policy>) -> Vec<(&'static str, String)> {
+        let mut breaks = Vec::new();
+        let mut held: BTreeMap<FundId, i128> = BTreeMap::new();
+        for (account, balance) in ledger.accounts() {
+            if account.role == accounts::role::UNIT_ACCOUNT {
+                if let ic_ledger::AccountUnit::Units(fund) = &account.unit {
+                    *held.entry(fund.clone()).or_default() -= balance;
+                }
+            }
+        }
+        let mut flows: BTreeMap<FundId, i128> = BTreeMap::new();
+        let mut committed: BTreeMap<&PolicyId, i128> = BTreeMap::new();
+        let mut pending = 0usize;
+        for order in self.orders.values() {
+            match (&order.state, order.order.direction) {
+                (OrderState::Executed { cash_minor, .. }, Direction::Buy) => *flows.entry(order.order.fund.clone()).or_default() += *cash_minor as i128,
+                (OrderState::Executed { cash_minor, .. }, Direction::Sell) => *flows.entry(order.order.fund.clone()).or_default() -= *cash_minor as i128,
+                (OrderState::Pending, direction) => {
+                    pending += 1;
+                    if let (Direction::Buy, OrderAmount::Cash { minor }) = (direction, order.order.amount) {
+                        *committed.entry(&order.order.policy).or_default() += minor as i128;
+                    }
+                }
+                (OrderState::Cancelled { .. }, _) => {}
+            }
+        }
+        for fund in self.funds.keys().map(|f| FundId(f.clone())) {
+            let position = ledger.balance(&accounts::fund_unit_position(&fund).id);
+            let units = held.get(&fund).copied().unwrap_or(0);
+            if position != units {
+                breaks.push((
+                    "fund_unit_position",
+                    format!("{} has {position} micro-units on issue and policies hold {units}", fund.0),
+                ));
+            }
+            let currency = self.fund(&fund).map(|f| f.currency);
+            let cash = currency.map_or(0, |c| -ledger.balance(&accounts::fund_cash_position(&fund, c).id));
+            let net = flows.get(&fund).copied().unwrap_or(0);
+            if cash != net {
+                breaks.push(("fund_cash_position", format!("{} holds {cash} and its executed orders net to {net}", fund.0)));
+            }
+        }
+        if pending != self.pending.len() {
+            breaks.push((
+                "unit_orders_pending",
+                format!("{pending} orders are pending and {} are indexed for execution", self.pending.len()),
+            ));
+        }
+        for (policy, minor) in committed {
+            let waiting = policies
+                .get(policy)
+                .map_or(0, |p| -ledger.balance(&accounts::pending_investment_cash(&p.id, p.currency).id));
+            if waiting < minor {
+                breaks.push(("pending_investment_cash", format!("{policy} has {waiting} waiting and buy orders for {minor}")));
+            }
+        }
+        breaks
+    }
+}
