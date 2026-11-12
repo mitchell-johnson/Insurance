@@ -159,6 +159,18 @@ pub fn unit_pricing_sources() -> Vec<Source> {
     }]
 }
 
+/// What the finance ledger answers for itself: the policy suspense it has
+/// built up from the core's postings, aged by policy. The driver reports it
+/// under its own name.
+pub fn finance_sources() -> Vec<Source> {
+    vec![Source {
+        caller: CLOSE_WORKFLOW.to_string(),
+        module: crate::host::MODULE.to_string(),
+        reports: Reports::Aged("policy_suspense".to_string()),
+        question: |as_at| json!({ "q": "aged_suspense", "as_at": as_at }),
+    }]
+}
+
 /// The name the core's partitions are asked under, beside the modules.
 pub const CORE: &str = "core";
 

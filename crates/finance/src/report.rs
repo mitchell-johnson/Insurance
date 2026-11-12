@@ -548,6 +548,23 @@ impl FinanceState {
         Work { roots_wanted, closing }
     }
 
+    /// Money the core holds in suspense for each policy, as the feed has
+    /// built it up: one item for each policy, oldest first. The balances are
+    /// as at the latest day closed, which is the date the report carries
+    /// when that is later than the date asked for.
+    pub fn aged_suspense(&self, as_at: NaiveDate) -> serde_json::Value {
+        let held = self.mart.suspense();
+        let total: i64 = held.iter().map(|(_, h)| h.amount_minor).sum();
+        let as_at = self.mart.latest_close().map_or(as_at, |closed| closed.max(as_at));
+        let items: Vec<serde_json::Value> = held
+            .iter()
+            .filter(|(_, h)| h.since <= as_at)
+            .take(crate::driver::MAX_AGED_ITEMS)
+            .map(|(policy, h)| serde_json::json!({ "party": policy, "reason": "policy_suspense", "amount_minor": h.amount_minor, "since": h.since }))
+            .collect();
+        serde_json::json!({ "as_at": as_at, "items": items, "total_minor": total, "count": held.len() })
+    }
+
     /// Lines `offset..offset + limit` of the extract of `kind` for a period,
     /// with the hash and totals of the whole file.
     pub fn extract(&self, kind: &str, period: PeriodId, offset: u64, limit: u64) -> Result<ExtractPage, String> {

@@ -20,6 +20,7 @@ fn released(payment: &str, payee: &str, amount: i64) -> Waiting {
         payee: payee.to_string(),
         account_ref: "acct-ref-9".to_string(),
         policy: Some(policy("pol-1")),
+        claim: None,
         amount_minor: amount,
         payable: Some(PayableKind::Benefit),
     }
@@ -317,4 +318,64 @@ fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
     }));
     assert!(desk.state.outbox.is_empty(), "nothing for the core: this is not policy money");
     assert!(desk.state.waiting.is_empty());
+}
+
+/// Purpose: when the bank refuses a claim payment, or sends it back before
+/// it settled, claims is told that exact payment failed, at the policy's
+/// partition, and the spent reference stops waiting; a payment that was not
+/// released by claims tells nobody.
+/// Why it matters: claims holds a released payment as "with the bank" until
+/// it hears otherwise. Without this a benefit the bank bounced stays owed
+/// to a claimant with nobody prompted to pay it again.
+#[test]
+fn claims_is_told_when_the_bank_refuses_a_released_payment() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    for (n, payment) in ["pay-a", "pay-b"].into_iter().enumerate() {
+        // Different amounts: two equal payments to one payee are held as a possible duplicate.
+        let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": (10_000 * (n + 1)).to_string(), "payee": "p1"});
+        for envelope in react(&claim_paid(&format!("3-{}", 100 + n), detail)) {
+            desk.state.apply(7000 + n as u64, envelope).unwrap();
+        }
+    }
+    desk.ok(&svc(), offer(released("pay-c", "p1", 300_00)));
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["pay-a", "pay-b", "pay-c"]));
+    let submission = desk.approve("r1");
+    desk.deliver(&submission);
+    desk.ok(
+        &svc(),
+        Command::RecordAcknowledgement {
+            submission: submission.clone(),
+            refused: None,
+            rejected: [
+                ("pay-a".to_string(), "account_closed".to_string()),
+                ("pay-c".to_string(), "account_closed".to_string()),
+            ]
+            .into(),
+        },
+    );
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "pay-b".to_string(),
+            reason: ic_payments::model::ReturnReason::Other("recalled".to_string()),
+            returned_on: d(2027, 11, 15),
+        },
+    );
+    // The maker is also told of the return, as for any returned payment.
+    let told: Vec<_> = desk.state.outbox.values().filter(|e| e.key.starts_with("claim-payment-failed-")).collect();
+    assert_eq!(told.len(), 2, "{:?}", desk.state.outbox);
+    assert!(desk.state.outbox.values().any(|e| e.key == "returned-pay-b"));
+    let failed = |payment: &str| Instruction::CoreAt {
+        policy: policy("pol-1"),
+        caller: "payments".to_string(),
+        command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+            claim: "clm-1".to_string(),
+            payment_ref: payment.to_string(),
+        }))),
+    };
+    assert_eq!((&told[0].instruction, &told[1].instruction), (&failed("pay-a"), &failed("pay-b")));
+    assert!(desk.state.waiting.is_empty(), "a reference the bank has seen is spent");
+    assert!(waiting(&desk).is_empty());
 }

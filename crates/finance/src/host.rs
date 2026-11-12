@@ -71,6 +71,10 @@ pub enum Question {
     },
     /// What the close is waiting for from its drivers.
     Work,
+    /// Money held in policy suspense, by policy, as an aged items report.
+    AgedSuspense {
+        as_at: NaiveDate,
+    },
     /// Part of an extract cut from the data mart for a period.
     Extract {
         kind: String,
@@ -120,6 +124,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Journal { id } => state.journals.get(&id).map_or_else(|| Err(format!("there is no journal {id}")), encode),
         Question::Conduct { period, product } => encode(&state.conduct_report(period, product.as_deref())),
         Question::Work => encode(&state.work()),
+        Question::AgedSuspense { as_at } => Ok(state.aged_suspense(as_at)),
         Question::Extract { kind, period, offset, limit } => {
             encode(&state.extract(&kind, period, offset, limit.unwrap_or(crate::report::MAX_EXTRACT_LINES))?)
         }
