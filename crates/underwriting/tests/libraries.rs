@@ -672,3 +672,69 @@ fn evidence_kinds_route_to_the_right_queue() {
         ]
     );
 }
+
+/// Purpose: for every code in the shipped exclusion library, every cover type and a spread of
+/// cause tags (a tag under each entry, its parent, a sibling, every taxonomy root, a malformed
+/// tag, the unknown root and no tag at all), the claims module's matcher run on
+/// `ExclusionLibrary::for_claims` gives the same outcome as `ExclusionLibrary::matches` for an
+/// exclusion in force on the event date; an unknown code goes to an assessor in both; and the
+/// two modules agree on the roots of the cause taxonomy.
+/// Why it matters: claims cannot import this crate, so it matches with its own code on data
+/// produced here. An exclusion that underwriting believes bites and claims does not would pay
+/// an excluded claim, and the other way round would decline a covered one. This test is what
+/// makes the two matchers one rule.
+#[test]
+fn claims_and_underwriting_match_exclusions_identically() {
+    use ic_core::claims_module::config::{Match, Rules, CAUSE_ROOTS as CLAIMS_ROOTS};
+    use ic_underwriting::codes::{CAUSE_ROOTS, COVER_TYPES};
+
+    assert_eq!(CLAIMS_ROOTS, CAUSE_ROOTS);
+    let library = shipped::load().unwrap().exclusions;
+    let rules = Rules {
+        exclusions: library.for_claims(),
+        ..Rules::default()
+    };
+    assert_eq!(rules.exclusions.len(), library.entries.len());
+
+    let mut tags: BTreeSet<String> = CAUSE_ROOTS.iter().map(|r| r.to_string()).collect();
+    for entry in library.entries.values() {
+        for tag in &entry.cause_tags {
+            tags.insert(tag.clone());
+            tags.insert(format!("{tag}.deeper"));
+            tags.insert(format!("{tag}x"));
+            if let Some((parent, _)) = tag.rsplit_once('.') {
+                tags.insert(parent.to_string());
+            }
+        }
+    }
+    let mut cases: Vec<Vec<String>> = tags.iter().map(|t| vec![t.clone()]).collect();
+    cases.push(vec![]);
+    cases.push(vec!["Not.A.Tag".to_string()]);
+    cases.push(vec!["injury".to_string(), "unknown.cause".to_string()]);
+    cases.push(vec!["injury.sport".to_string(), "cancer.skin".to_string()]);
+
+    let on = d(2027, 6, 1);
+    let same = |outcome: MatchOutcome| match outcome {
+        MatchOutcome::Applies => Match::Applies,
+        MatchOutcome::DoesNotApply => Match::DoesNotApply,
+        MatchOutcome::NeedsAssessor => Match::NeedsAssessor,
+    };
+    let mut seen = BTreeSet::new();
+    let codes = library.entries.keys().cloned().chain(["EX-0000".to_string()]);
+    for code in codes {
+        let applied = AppliedExclusion {
+            code: code.clone(),
+            from: d(2026, 1, 1),
+            until: None,
+        };
+        for cover in COVER_TYPES.iter().chain(&["pets"]) {
+            for case in &cases {
+                let theirs = rules.exclusion_match(&code, cover, case);
+                assert_eq!(theirs, same(library.matches(&applied, cover, case, on)), "{code} on {cover} for {case:?}");
+                seen.insert(format!("{theirs:?}"));
+            }
+        }
+    }
+    // The spread reaches every outcome, so agreement is not agreement on one answer.
+    assert_eq!(seen.len(), 3, "{seen:?}");
+}

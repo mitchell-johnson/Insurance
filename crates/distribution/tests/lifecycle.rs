@@ -463,3 +463,87 @@ fn stray_and_repeated_events_post_nothing() {
     // A unit command names itself as the others do.
     assert_eq!(Command::RecordDailyControl.name(), "record_daily_control");
 }
+
+/// Purpose: a claim overpayment that claims keeps in its own ledger shows on the party's
+/// position as a memo line with the claim, the amount outstanding, the recovery status and
+/// whether the insurer made the error; each later word from claims replaces the line; a line
+/// with nothing outstanding drops off; the party is marked as changed each time; none of it
+/// touches this module's balances or asks the core for a posting; and an event that names no
+/// party, or is some other claims fact, is left alone.
+/// Why it matters: the workbench is the one place a person sees everything a counterparty owes
+/// before releasing money to them. An overpayment missing from it lets held commission be paid
+/// to someone who owes the insurer; one counted in this module's balances would be counted
+/// twice, because the claim ledger already holds it.
+#[test]
+fn a_claim_overpayment_shows_as_a_memo_line_and_moves_no_money() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    let today = w.today();
+    let (requested, payable) = (w.dist.requested.len(), w.payable("a-co"));
+    let claims = |kind: &str, fields: &[(&str, &str)]| CoreEvent::Module {
+        module: "claims".into(),
+        kind: kind.into(),
+        subject: "clm-1".into(),
+        detail: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    };
+    let whole = |outstanding: &'static str, status: &'static str| {
+        vec![
+            ("claim", "clm-1"),
+            ("policy", "POL-9"),
+            ("overpayment", "clm-1/overpayment/1"),
+            ("party", "a-co"),
+            ("outstanding_minor", outstanding),
+            ("status", status),
+            ("cause", "duplicate_payment"),
+            ("insurer_error", "true"),
+            ("good_faith", "true"),
+        ]
+    };
+
+    let cursor = w.dist.seq;
+    inject(&mut w, partition, claims("overpayment_raised", &whole("250000", "held")));
+    let memo = w.dist.position(&party("a-co"), today).memo;
+    assert_eq!(memo.len(), 1);
+    let line = &memo[0];
+    assert_eq!(
+        (line.owner.as_str(), line.reference.as_str(), line.case_ref.as_str()),
+        ("claims", "clm-1/overpayment/1", "clm-1")
+    );
+    assert_eq!(
+        (line.outstanding_minor, line.status.as_str(), line.cause.as_str()),
+        (2_500_00, "held", "duplicate_payment")
+    );
+    assert!(line.insurer_error && line.good_faith);
+    assert_eq!((line.policy.clone(), line.as_at), (Some(PolicyId("POL-9".into())), today));
+    assert!(w.dist.changed[&party("a-co")] > cursor, "the publisher is told the party moved");
+    assert!(
+        w.dist.position(&party("fap-one"), today).memo.is_empty(),
+        "it shows on the party that owes it and nobody else"
+    );
+
+    // Claims changes its mind about recovery, then part is repaid: the one line follows.
+    inject(&mut w, partition, claims("recovery_status_changed", &whole("250000", "pursued")));
+    inject(&mut w, partition, claims("overpayment_recovered", &whole("100000", "pursued")));
+    let memo = w.dist.position(&party("a-co"), today).memo;
+    assert_eq!((memo.len(), memo[0].outstanding_minor, memo[0].status.as_str()), (1, 1_000_00, "pursued"));
+
+    // Events that cannot be shown, or are not about an overpayment, are left alone.
+    let no_party: Vec<(&str, &str)> = whole("999", "held").into_iter().filter(|(k, _)| *k != "party").collect();
+    inject(&mut w, partition, claims("overpayment_raised", &no_party));
+    inject(&mut w, partition, claims("claim_paid", &whole("999", "held")));
+    assert_eq!(w.dist.memo.len(), 1);
+    assert_eq!(w.dist.position(&party("a-co"), today).memo[0].outstanding_minor, 1_000_00);
+
+    // Written off: nothing is outstanding, so it leaves the position. The record of it stays.
+    inject(&mut w, partition, claims("overpayment_written_off", &whole("0", "written_off")));
+    assert!(w.dist.position(&party("a-co"), today).memo.is_empty());
+    assert_eq!(w.dist.memo["claims:clm-1/overpayment/1"].status, "written_off");
+
+    assert_eq!(
+        (
+            w.dist.requested.len(),
+            w.dist.balance(&party("a-co"), ic_core::counterparty::PartyLedger::CommissionPayable)
+        ),
+        (requested, payable)
+    );
+}

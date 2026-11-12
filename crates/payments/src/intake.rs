@@ -1,0 +1,115 @@
+//! Payments other modules have released, waiting for a maker to put them in
+//! a run. Claims releases a benefit payment and says so with an event; the
+//! module keeps it here, under the reference claims gave it, until it is
+//! paid. Nothing here moves money: a waiting payment joins a run like any
+//! other item and passes the same checks and approvals.
+
+use std::collections::BTreeSet;
+
+use ic_core::{PayableKind, PolicyId};
+use serde::{Deserialize, Serialize};
+
+use crate::machine::{Event, PaymentsState, Tx};
+use crate::model::{Counterparty, Id, NewItem, Reject, Role};
+
+/// One released payment that has not yet been settled.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    /// The releasing module's payment reference. It becomes the item's ID,
+    /// the end-to-end reference at the bank, and the `payment` the core is
+    /// told has settled.
+    pub payment: Id,
+    /// What is being paid, in the releasing module's words.
+    pub source: String,
+    /// Who is paid: a payee's ID here, or the party a payee belongs to.
+    pub payee: String,
+    /// The releasing module's reference to the account it verified. Shown
+    /// to the maker; this module pays the account it verified itself.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub account_ref: String,
+    pub policy: PolicyId,
+    pub amount_minor: i64,
+    pub payable: PayableKind,
+}
+
+impl PaymentsState {
+    pub(crate) fn offer_payment(&mut self, tx: &mut Tx<'_>, waiting: Waiting) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.payee.is_empty() || waiting.amount_minor <= 0 {
+            return Err(Reject::new(
+                "invalid_payment",
+                "a released payment has a reference, a source, a payee and a positive amount",
+            ));
+        }
+        match self.waiting.get(&waiting.payment) {
+            // The same release told twice is one payment.
+            Some(held) if *held == waiting => return Ok(()),
+            Some(_) => {
+                return Err(Reject::new(
+                    "payment_conflict",
+                    format!("payment {} was released before with different details", waiting.payment),
+                ))
+            }
+            None => {}
+        }
+        if self.items.contains_key(&waiting.payment) {
+            return Err(Reject::new("duplicate_item", format!("item {} has been used before", waiting.payment)));
+        }
+        tx.emit(Event::PaymentOffered {
+            payment: waiting.payment.clone(),
+            source: waiting.source.clone(),
+            amount_minor: waiting.amount_minor,
+        });
+        self.waiting.insert(waiting.payment.clone(), waiting);
+        Ok(())
+    }
+
+    /// The payee a waiting payment is for: the payee of that ID, or the one
+    /// payee the party has. A party with several payees is not guessed at.
+    fn payee_for(&self, waiting: &Waiting) -> Result<Id, Reject> {
+        if self.payees.contains_key(&waiting.payee) {
+            return Ok(waiting.payee.clone());
+        }
+        let mut theirs = self.payees.iter().filter(|(_, p)| p.party == waiting.payee).map(|(id, _)| id);
+        match (theirs.next(), theirs.next()) {
+            (Some(only), None) => Ok(only.clone()),
+            (None, _) => Err(Reject::new(
+                "unknown_payee",
+                format!("payment {}: there is no payee for {}", waiting.payment, waiting.payee),
+            )),
+            (Some(_), Some(_)) => Err(Reject::new(
+                "ambiguous_payee",
+                format!("payment {}: {} has more than one payee", waiting.payment, waiting.payee),
+            )),
+        }
+    }
+
+    /// Put waiting payments into a run, as the items they were released as.
+    pub(crate) fn take_waiting(&mut self, tx: &mut Tx<'_>, run: &str, payments: BTreeSet<Id>) -> Result<(), Reject> {
+        tx.need(Role::Maker)?;
+        let mut items = Vec::new();
+        for payment in &payments {
+            let waiting = self
+                .waiting
+                .get(payment)
+                .filter(|_| !self.items.contains_key(payment))
+                .ok_or_else(|| Reject::new("not_waiting", format!("payment {payment} is not waiting to be paid")))?;
+            items.push(NewItem {
+                item: waiting.payment.clone(),
+                source: waiting.source.clone(),
+                counterparty: Counterparty::Payee(self.payee_for(waiting)?),
+                amount_minor: waiting.amount_minor,
+                policy: Some(waiting.policy.clone()),
+                payable: Some(waiting.payable),
+                refund: None,
+                represents: None,
+            });
+        }
+        self.add_run_items(tx, run, items)
+    }
+
+    /// Released payments that are in no run.
+    pub fn waiting_payments(&self) -> Vec<&Waiting> {
+        self.waiting.values().filter(|w| !self.items.contains_key(&w.payment)).collect()
+    }
+}
