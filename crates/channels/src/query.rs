@@ -113,6 +113,13 @@ pub enum Question {
         party: PartyId,
         at: At,
     },
+    /// Actions approved on the workbench and waiting for `module` to post
+    /// them, each with the people who prepared and approved it as the
+    /// commission module describes a member of staff.
+    WorkbenchApproved {
+        module: String,
+        at: At,
+    },
     /// How current the module is, for health checks and the operations console.
     Status,
 }
@@ -143,6 +150,41 @@ fn policy_summary(state: &ChannelState, viewer: &PartyId, policy: &PolicyId, at:
     }
     let entry = state.data.view.policy(policy)?;
     Some(json!({ "policy": policy, "number": entry.number, "product": entry.product_code, "status": entry.status, "relationships": relationships }))
+}
+
+/// A member of staff as the commission module's own authorisation wants
+/// them described: its roles, and how much they may decide. The roles follow
+/// from the workbench actions the person's templates hold here, and the one
+/// held balance limit stands for each kind of amount there.
+fn commission_staff(state: &ChannelState, party: &PartyId, at: At, purpose: &str) -> Value {
+    let staff = &state.data.staff;
+    let profile = staff.own_access(party, at)["profile"].clone();
+    let limit = profile["limits"][workbench::LIMIT].as_i64().unwrap_or(0);
+    let amounts = |value: i64| json!({ "release": value, "offset": value, "write_off": value, "split": value, "dividend": value });
+    let templates: Vec<Value> = staff
+        .templates_of(party, at)
+        .into_iter()
+        .filter_map(|t| {
+            let roles: Vec<&str> = [
+                (workbench::actions::PREPARE, "counterparty_finance"),
+                (workbench::actions::APPROVE, "counterparty_finance_approver"),
+                (workbench::actions::APPROVE_LEGAL, "legal"),
+            ]
+            .into_iter()
+            .filter(|(action, _)| t.actions.contains(*action))
+            .map(|(_, role)| role)
+            .collect();
+            (!roles.is_empty()).then(|| {
+                json!({
+                    "name": t.id,
+                    "roles": roles,
+                    "default_profile": { "version": profile["version"].as_u64().unwrap_or(0), "limits": amounts(limit) },
+                    "ceiling": amounts(t.ceilings.get(workbench::LIMIT).copied().unwrap_or(0)),
+                })
+            })
+        })
+        .collect();
+    json!({ "id": party, "templates": templates, "grants": [], "paths": ["*"], "purpose": purpose })
 }
 
 fn staff_check(
@@ -192,10 +234,16 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 d.identity
                     .check_proof_hashed(party, &p.device, &p.proof, at, &p.method, &p.path, &p.body_sha256)
             });
+            // A device that was enrolled to this person and no longer is must wipe what it holds.
+            let revoked = device
+                .as_ref()
+                .and_then(|p| d.identity.devices.get(&p.device))
+                .is_some_and(|known| &known.party == party && known.revoked.is_some());
             json!({
                 "known": true,
                 "party": party,
                 "valid": valid,
+                "device_revoked": revoked,
                 "assurance": if proved { Assurance::Device } else { Assurance::Token },
                 "device": device.filter(|_| proved).map(|p| p.device),
                 "staff": !d.staff.templates_of(party, at).is_empty(),
@@ -284,7 +332,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             purpose,
             at,
         } => {
-            let (request, decision) = staff_check(
+            let (request, mut decision) = staff_check(
                 state,
                 &staff,
                 "policy.view",
@@ -294,6 +342,18 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 purpose,
                 at,
             );
+            // Nobody handles their own policy or that of someone they are
+            // connected to, whatever their role and path say.
+            let on = state.today(at);
+            let related = |who: &PartyId| !d.directory.relationships(&d.view, who, &policy, on).is_empty();
+            let is_staff = decision.denied != Some(crate::staff::Denial::NotStaff);
+            if is_staff && (related(&staff) || d.staff.connections.get(&staff).is_some_and(|c| c.iter().any(related))) {
+                decision = crate::staff::Decision {
+                    allowed: false,
+                    denied: Some(crate::staff::Denial::Personal),
+                    ..decision
+                };
+            }
             if !decision.allowed {
                 return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
@@ -376,6 +436,22 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 return json!({ "request": request, "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) });
             }
             json!({ "request": request, "decision": decision, "extract": d.workbench.proof_of_debt(&party, state.today(at)) })
+        }
+        Question::WorkbenchApproved { module, at } => {
+            let waiting: Vec<Value> = d
+                .workbench
+                .proposals
+                .values()
+                .filter(|p| p.module == module && p.state == workbench::ProposalState::Approved)
+                .map(|p| {
+                    let people: serde_json::Map<String, Value> = std::iter::once(&p.maker)
+                        .chain(p.approvals.iter().map(|a| &a.by))
+                        .map(|who| (who.to_string(), commission_staff(state, who, at, &p.reason_code)))
+                        .collect();
+                    json!({ "proposal": p, "people": people })
+                })
+                .collect();
+            json!(waiting)
         }
         Question::Status => json!({
             "business_date": d.today,

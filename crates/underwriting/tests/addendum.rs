@@ -413,3 +413,107 @@ fn a_suspended_adviser_loses_access_at_once_and_the_proposals_carry_on() {
     let later = w.ok("adviser-licensing", change("adv-1", LicenceStatus::Suspended, d(2026, 11, 11), "FSPR-1"));
     assert_eq!((later.events.len(), later.effects.len()), (1, 0));
 }
+
+/// Purpose: group administration can ask for a scheme member's cover above the automatic
+/// acceptance limit to be underwritten and nothing else; accepted terms come back as terms to
+/// apply to the scheme policy; and when the proposal ends with nothing to apply, whether
+/// withdrawn by group administration, declined or lapsed, an effect says so with the outcome.
+/// Group administration cannot withdraw a proposal it did not open.
+/// Why it matters: the scheme honours the member's cover up to the limit while the excess is
+/// decided. If a decline or a lapse produced no answer, the member's excess would sit pending
+/// for ever and nobody would tell them they are not covered for it.
+#[test]
+fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
+    use ic_core::PolicyId;
+    use ic_underwriting::model::Entry;
+
+    let mut w = World::new();
+    let excess = |w: &World, id: &str| {
+        let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
+        open.product_code = "group-life".into();
+        open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+        open
+    };
+    let ended = |applied: &ic_underwriting::command::Applied| {
+        applied.effects.iter().find_map(|e| match e {
+            Effect::ProposalEnded { key, entry, outcome, .. } => Some((key.clone(), matches!(entry, Entry::GroupExcess { .. }), outcome.clone())),
+            _ => None,
+        })
+    };
+
+    // Only the excess door is open to group administration.
+    let ordinary = w.open_command("grp-uw:S1:0", &["L1"], &[("L1", "life", "life", 300_000_00)], false);
+    assert_eq!(w.err("group-admin", Command::OpenProposal(Box::new(ordinary.clone()))), "entry");
+    w.ok("new-business", Command::OpenProposal(Box::new(ordinary)));
+    assert_eq!(
+        w.err(
+            "group-admin",
+            Command::Withdraw {
+                proposal: "grp-uw:S1:0".into()
+            }
+        ),
+        "entry"
+    );
+
+    // Accepted: terms to apply to the scheme policy, and no "ended" effect.
+    let open = excess(&w, "grp-uw:S1:1");
+    let policy: PolicyId = open.policy.clone();
+    w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+    let disclosed = w.disclose("grp-uw:S1:1", "L1", &clean());
+    let applied = w.automatic(&disclosed);
+    assert!(
+        matches!(&applied.effects[0], Effect::ApplyTerms { entry: Entry::GroupExcess { policy: p }, covers, .. } if p == &policy && covers[0].sum_insured_minor == 300_000_00)
+    );
+    assert_eq!(ended(&applied), None);
+
+    // Not proceeded with: group administration withdraws its own proposal.
+    let open = excess(&w, "grp-uw:S1:2");
+    w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+    let withdrawn = w.ok(
+        "group-admin",
+        Command::Withdraw {
+            proposal: "grp-uw:S1:2".into(),
+        },
+    );
+    assert_eq!(ended(&withdrawn), Some(("grp-uw:S1:2/ended".into(), true, "withdrawn".into())));
+
+    // Never answered: the sweep lapses it, and says so.
+    let open = excess(&w, "grp-uw:S1:3");
+    w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+    w.days(91);
+    let swept = w.ok("timer", Command::Sweep { after: None, max: 100 });
+    assert_eq!(ended(&swept), Some(("grp-uw:S1:3/ended".into(), true, "lapsed".into())));
+
+    // Declined by two underwriters: the answer is a decline.
+    let open = excess(&w, "grp-uw:S1:4");
+    w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+    w.disclose("grp-uw:S1:4", "L1", &yes("heart_condition"));
+    let case = w.take("grp-uw:S1:4", "L1", "amy");
+    w.ok(
+        "underwriting-console",
+        Command::HandOver {
+            case: case.clone(),
+            by: "amy".into(),
+            to: "sam".into(),
+        },
+    );
+    w.propose(&case, "sam", vec![decline("life")]).unwrap();
+    w.ok(
+        "underwriting-console",
+        Command::TakeCase {
+            case: case.clone(),
+            underwriter: "sue".into(),
+        },
+    );
+    let declined = w.ok(
+        "underwriting-console",
+        Command::Countersign {
+            case,
+            underwriter: "sue".into(),
+            agree: true,
+            reasons: set(&["RC-0107"]),
+            withheld_reasons: Default::default(),
+        },
+    );
+    assert_eq!(ended(&declined), Some(("grp-uw:S1:4/ended".into(), true, "declined".into())));
+}

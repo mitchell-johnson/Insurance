@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{post, put};
 use axum::{Json, Router};
@@ -22,6 +22,7 @@ pub struct FakeAzure {
     /// `http://127.0.0.1:<port>`: use it as every endpoint and as the authority.
     pub base: String,
     blobs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    tags: Arc<Mutex<BTreeMap<String, BTreeMap<String, String>>>>,
     seen: Arc<Mutex<Vec<String>>>,
     down: Arc<AtomicBool>,
 }
@@ -39,8 +40,10 @@ impl FakeAzure {
         };
         let app = Router::new()
             .route("/{tenant}/oauth2/v2.0/token", post(token))
-            .route("/{container}/{*name}", put(put_blob).get(get_blob))
+            .route("/{container}/{*name}", put(put_blob).get(get_blob).delete(delete_blob))
             .route("/keys/{key}/sign", post(sign))
+            .route("/keys/{key}/wrapkey", post(wrap_key))
+            .route("/keys/{key}/{version}/unwrapkey", post(unwrap_key))
             .route("/{hub}/partitions/{partition}/messages", post(send))
             .with_state(fake.clone());
         tokio::spawn(async move {
@@ -60,7 +63,8 @@ impl FakeAzure {
     }
 
     /// One line per call that was served: `token <form>`, `sign <key>`,
-    /// `send <hub>/<partition> x<events>`.
+    /// `send <hub>/<partition> x<events>`, `wrap <key>`, `unwrap <key>/<version>`,
+    /// `delete <container>/<name>`.
     pub fn seen(&self) -> Vec<String> {
         self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
@@ -72,6 +76,20 @@ impl FakeAzure {
     /// Every stored blob, by `container/name`.
     pub fn blobs(&self) -> BTreeMap<String, Vec<u8>> {
         self.blobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
+    }
+
+    /// Set a stored blob's index tags, as Defender for Storage does after a scan.
+    pub fn set_blob_tags(&self, key: &str, tags: &[(&str, &str)]) {
+        let tags = tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        self.tags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key.to_string(), tags);
+    }
+
+    /// Remove a stored blob.
+    pub fn remove_blob(&self, key: &str) {
+        self.blobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key);
     }
 
     /// Events accepted for a hub partition, in total.
@@ -102,11 +120,95 @@ async fn put_blob(State(f): State<FakeAzure>, Path((container, name)): Path<(Str
     StatusCode::CREATED
 }
 
-async fn get_blob(State(f): State<FakeAzure>, Path((container, name)): Path<(String, String)>) -> Result<Vec<u8>, StatusCode> {
+async fn get_blob(
+    State(f): State<FakeAzure>,
+    Path((container, name)): Path<(String, String)>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Vec<u8>, StatusCode> {
     if f.is_down() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
+    if query.get("comp").map(String::as_str) == Some("tags") {
+        let key = format!("{container}/{name}");
+        if !f.blobs().contains_key(&key) {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        let tags = f
+            .tags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let set: String = tags
+            .iter()
+            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k.replace('&', "&amp;"), v.replace('&', "&amp;")))
+            .collect();
+        return Ok(format!("<?xml version=\"1.0\" encoding=\"utf-8\"?><Tags><TagSet>{set}</TagSet></Tags>").into_bytes());
+    }
     f.blobs().get(&format!("{container}/{name}")).cloned().ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn delete_blob(State(f): State<FakeAzure>, Path((container, name)): Path<(String, String)>, headers: HeaderMap) -> StatusCode {
+    if f.is_down() {
+        return StatusCode::SERVICE_UNAVAILABLE;
+    }
+    if !bearer_ok(&headers) {
+        return StatusCode::FORBIDDEN;
+    }
+    let key = format!("{container}/{name}");
+    f.saw(format!("delete {key}"));
+    match f.blobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&key) {
+        Some(_) => StatusCode::ACCEPTED,
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
+/// The version of every key the stand-in holds.
+pub const KEY_VERSION: &str = "v7";
+
+fn key_operation_ok(headers: &HeaderMap, body: &Value) -> bool {
+    bearer_ok(headers) && body["alg"] == "RSA-OAEP-256" && body["value"].is_string()
+}
+
+/// Wrapping in the stand-in is reversible text, not encryption: enough to
+/// show the adapter sends and reads what Key Vault expects.
+async fn wrap_key(State(f): State<FakeAzure>, Path(key): Path<String>, headers: HeaderMap, Json(body): Json<Value>) -> Result<Json<Value>, StatusCode> {
+    if f.is_down() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if !key_operation_ok(&headers, &body) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    f.saw(format!("wrap {key}"));
+    let value = body["value"].as_str().unwrap_or_default();
+    Ok(Json(
+        json!({ "kid": format!("{}/keys/{key}/{KEY_VERSION}", f.base), "value": format!("wrapped-{key}-{value}") }),
+    ))
+}
+
+async fn unwrap_key(
+    State(f): State<FakeAzure>,
+    Path((key, version)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, StatusCode> {
+    if f.is_down() {
+        return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if !key_operation_ok(&headers, &body) {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    if version != KEY_VERSION {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    f.saw(format!("unwrap {key}/{version}"));
+    // A key wrapped under another key does not unwrap, as in the real vault.
+    let value = body["value"]
+        .as_str()
+        .and_then(|v| v.strip_prefix(&format!("wrapped-{key}-")))
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    Ok(Json(json!({ "kid": format!("{}/keys/{key}/{version}", f.base), "value": value })))
 }
 
 async fn sign(State(f): State<FakeAzure>, Path(key): Path<String>, headers: HeaderMap, Json(body): Json<Value>) -> Result<Json<Value>, StatusCode> {

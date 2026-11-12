@@ -136,6 +136,14 @@ pub enum DirectoryCommand {
         policy: PolicyId,
         consent: bool,
     },
+    /// A child insured under a policy, and the date from which their health
+    /// information is theirs to control: the day they reach the age the
+    /// product sets. Until then the policyholder sees it as a parent does.
+    RecordDependant {
+        policy: PolicyId,
+        party: PartyId,
+        controls_from: NaiveDate,
+    },
     RecordEngagement {
         engagement: Engagement,
     },
@@ -195,6 +203,10 @@ pub struct Directory {
     pub assignees: BTreeMap<PolicyId, BTreeSet<PartyId>>,
     /// Adults who let the policyholder see their sensitive rows.
     pub family_consent: BTreeMap<PolicyId, BTreeSet<PartyId>>,
+    /// Children insured under a policy, each with the date they take
+    /// control of their own health information.
+    #[serde(default)]
+    pub dependants: BTreeMap<PolicyId, BTreeMap<PartyId, NaiveDate>>,
     pub engagements: BTreeMap<String, Engagement>,
     pub structure: BTreeMap<PartyId, Vec<StructureLink>>,
     pub licences: BTreeMap<PartyId, Vec<LicenceChange>>,
@@ -357,6 +369,36 @@ impl Directory {
         }
         out.extend(self.assignees.get(policy).into_iter().flatten().cloned());
         out
+    }
+
+    /// The people on a policy whose sensitive rows the policyholder may see
+    /// on a date: adults who consent, and children who do not yet control
+    /// their own health information.
+    pub fn consenting(&self, policy: &PolicyId, on: NaiveDate) -> BTreeSet<PartyId> {
+        let mut out = self.family_consent.get(policy).cloned().unwrap_or_default();
+        out.extend(
+            self.dependants
+                .get(policy)
+                .into_iter()
+                .flatten()
+                .filter(|(_, from)| on < **from)
+                .map(|(party, _)| party.clone()),
+        );
+        out
+    }
+
+    /// The children who took control of their own health information after
+    /// `after` and on or before `on`, with their policy.
+    pub fn came_of_age(&self, after: NaiveDate, on: NaiveDate) -> Vec<(PolicyId, PartyId)> {
+        self.dependants
+            .iter()
+            .flat_map(|(policy, children)| {
+                children
+                    .iter()
+                    .filter(move |(_, from)| after < **from && **from <= on)
+                    .map(move |(c, _)| (policy.clone(), c.clone()))
+            })
+            .collect()
     }
 
     /// Follow one core event.
@@ -522,6 +564,17 @@ impl Directory {
                 }
                 touched.policies.insert(policy);
             }
+            DirectoryCommand::RecordDependant { policy, party, controls_from } => {
+                Self::require_module(actor, &["customer-master"])?;
+                if !view.layers_on_policy(&policy).iter().any(|r| view.party_of(&policy, &r.life) == Some(&party)) {
+                    return Err(reject("not_insured", "a dependant is a person insured under the policy"));
+                }
+                if self.policyholders.get(&policy) == Some(&party) {
+                    return Err(reject("policyholder", "the policyholder is not their own dependant"));
+                }
+                self.dependants.entry(policy.clone()).or_default().insert(party, controls_from);
+                touched.policies.insert(policy);
+            }
             DirectoryCommand::RecordEngagement { engagement } => {
                 Self::require_module(actor, &["distribution"])?;
                 if engagement.to.is_some_and(|t| t < engagement.from) {
@@ -557,7 +610,12 @@ impl Directory {
                         "a licence change names its source: the regulator's notice or our own record",
                     ));
                 }
-                self.licences.entry(party.clone()).or_default().push(LicenceChange {
+                // The same change told twice, as a forwarder may after a restart, is one change.
+                let known = self.licences.entry(party.clone()).or_default();
+                if known.iter().any(|c| c.status == status && c.effective == effective && c.source == source) {
+                    return Ok(touched);
+                }
+                known.push(LicenceChange {
                     status,
                     effective,
                     source,

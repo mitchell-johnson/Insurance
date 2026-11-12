@@ -16,6 +16,8 @@
 //!   close dashboard, as read models of the books.
 //! * [`returns`]: regulatory returns worked out from closed periods with
 //!   their lineage, restatements, and conduct measures.
+//! * [`host`]: the ledger as a module of the deployed node: its questions
+//!   and how it reads the core's events.
 //! * [`tables`]: the validation suite an actuarial table must pass before
 //!   it can be activated.
 //!
@@ -26,6 +28,7 @@ pub mod books;
 pub mod chart;
 pub mod close;
 pub mod config;
+pub mod host;
 pub mod period;
 pub mod report;
 pub mod returns;

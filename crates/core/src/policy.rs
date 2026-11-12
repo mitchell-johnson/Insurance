@@ -383,6 +383,9 @@ pub struct Policy {
     /// The latest proven delivery of each mandatory notice, by purpose.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub notices: BTreeMap<String, NoticeRecord>,
+    /// Written on another system and brought in by the migration load.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub migrated: bool,
     /// What a cancellation wrote, so that one set aside is undone exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancellation: Option<CancellationRecord>,
