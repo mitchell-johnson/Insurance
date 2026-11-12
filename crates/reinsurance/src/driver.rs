@@ -511,6 +511,9 @@ impl<M: Module, C: Core> Driver<M, C> {
     pub async fn hand_on<A: Audiences>(&self, audiences: &A, on: NaiveDate) -> Result<Round, DriverError> {
         let mut round = Round::default();
         let mut set_aside = BTreeSet::new();
+        // An audience that is away keeps its own notices waiting, not the
+        // others': the round goes on and reports the first failure at its end.
+        let mut failed = None;
         // Claims lives in the core, which this driver already reaches.
         let reached = audiences.reached().into_iter().filter(|a| *a != Audience::Claims);
         for audience in reached.chain([Audience::Claims]) {
@@ -555,11 +558,12 @@ impl<M: Module, C: Core> Driver<M, C> {
                     self.tell(format!("notices:{last}"), on, Command::AcknowledgeNotices { seqs: taken }).await?;
                 }
                 if let Some(e) = stopped {
-                    return Err(e);
+                    failed.get_or_insert(e);
+                    break;
                 }
             }
         }
-        Ok(round)
+        failed.map_or(Ok(round), Err)
     }
 
     /// One cycle: carry instructions to the core, then hand notices on,

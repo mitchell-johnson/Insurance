@@ -13,6 +13,7 @@ ic-log.workspace = true
 ic-product.workspace = true
 ic-core.workspace = true
 ic-raft.workspace = true
+ic-azure.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,6 +30,7 @@ name = "ic-reinsurance"
 path = "src/bin/ic-reinsurance.rs"
 
 [dev-dependencies]
+ic-azure = { workspace = true, features = ["testing"] }
 ic-sim.workspace = true
 proptest.workspace = true
 

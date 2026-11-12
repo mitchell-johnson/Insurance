@@ -444,6 +444,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 life: "m1".into(),
                 effective: day(2),
                 covers: vec![member_cover("m1", 350)],
+                info: None,
             },
             Event::LayerAdded {
                 policy: sch.clone(),
@@ -537,6 +538,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 effective: day(9),
                 covers: vec![member_cover("m3", 500)],
                 party: None,
+                info: None,
             },
             Event::TransferLanded {
                 policy: moved_in.clone(),
