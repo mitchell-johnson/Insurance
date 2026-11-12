@@ -714,7 +714,11 @@ impl ClaimsState {
         claim.migrated = true;
         // What the old system would have remembered is put on the calendar here.
         if let Some(s) = claim.schedule.as_ref().filter(|_| claim.status == Status::InPayment) {
-            let reviews: Vec<_> = s.reviews.iter().map(|(kind, on)| ((*on).max(cx.today), crate::model::Due::Review(*kind))).collect();
+            let reviews: Vec<_> = s
+                .reviews
+                .iter()
+                .map(|(kind, on)| ((*on).max(cx.today), crate::model::Due::Review(*kind)))
+                .collect();
             claim.due.extend(reviews);
             claim.due.insert((s.expected_end.max(cx.today), crate::model::Due::ExpectedEnd));
             if claim.waiver_from.is_some() {

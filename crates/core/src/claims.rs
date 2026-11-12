@@ -290,7 +290,15 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             receivable_minor,
             open,
             ..
-        } => open_migrated(&mut s.ledger, p, ctx, &claim, cover, [reserve_minor, admitted_minor, payable_minor, receivable_minor], open),
+        } => open_migrated(
+            &mut s.ledger,
+            p,
+            ctx,
+            &claim,
+            cover,
+            [reserve_minor, admitted_minor, payable_minor, receivable_minor],
+            open,
+        ),
         Instruction::WaivePremium { claim, cover, from, until, .. } => waive(s, p, ctx, &claim, &cover, from, until),
         Instruction::Close {
             claim, outcome, overpayment, ..

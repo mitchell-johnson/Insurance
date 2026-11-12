@@ -781,13 +781,22 @@ fn a_migrated_claim_in_payment_carries_on_where_it_was() {
     w.ok(load(&legacy));
     assert!(matches!(
         w.core.instructions.last(),
-        Some(Instruction::OpenMigrated { reserve_minor: 50_000, payable_minor: 0, receivable_minor: 0, open: true, .. })
+        Some(Instruction::OpenMigrated {
+            reserve_minor: 50_000,
+            payable_minor: 0,
+            receivable_minor: 0,
+            open: true,
+            ..
+        })
     ));
     let c = w.claim("ip-1");
     assert!(c.migrated && w.state.in_payment.contains("ip-1"));
     assert!(c.history.iter().any(|h| h.action == "migrated"));
     assert_eq!(w.core.noticed("claim_migrated")[0]["status"], "in_payment");
-    assert!(c.due.iter().any(|(on, due)| *on == d(2027, 6, 1) && matches!(due, ic_claims::model::Due::Review(_))));
+    assert!(c
+        .due
+        .iter()
+        .any(|(on, due)| *on == d(2027, 6, 1) && matches!(due, ic_claims::model::Due::Review(_))));
     assert_eq!(w.refused(load(&legacy)), "claim_exists");
 
     w.on(d(2027, 4, 1));
@@ -849,7 +858,12 @@ fn a_migration_record_is_loaded_whole_or_refused() {
     w.ok(load(&admitted));
     assert!(matches!(
         w.core.instructions.last(),
-        Some(Instruction::OpenMigrated { admitted_minor: 200_000, payable_minor: 200_000, open: true, .. })
+        Some(Instruction::OpenMigrated {
+            admitted_minor: 200_000,
+            payable_minor: 200_000,
+            open: true,
+            ..
+        })
     ));
     w.verify_payee("c-1", "ana");
     w.ok(Command::Pay {
@@ -870,7 +884,12 @@ fn a_migration_record_is_loaded_whole_or_refused() {
     });
     assert!(matches!(
         w.core.instructions.last(),
-        Some(Instruction::OpenMigrated { reserve_minor: 0, payable_minor: 0, open: false, .. })
+        Some(Instruction::OpenMigrated {
+            reserve_minor: 0,
+            payable_minor: 0,
+            open: false,
+            ..
+        })
     ));
     assert_eq!(w.state.health_used["pol-1/life-1/dental"], 100);
     assert!(w.claim("c-2").migrated);
