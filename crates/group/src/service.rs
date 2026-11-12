@@ -142,6 +142,7 @@ impl CustomerMaster for HttpCustomerMaster {
             "date_of_birth": identity.date_of_birth,
             "email": identity.email,
             "national_id": identity.national_id,
+            "mobile_phone": identity.mobile_phone,
             "create_if_none": true,
         });
         let resp = self

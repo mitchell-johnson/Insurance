@@ -132,6 +132,9 @@ pub struct MemberIdentity {
     pub date_of_birth: Option<NaiveDate>,
     pub email: Option<String>,
     pub national_id: Option<String>,
+    /// The member's mobile phone, where the employer's file carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_phone: Option<String>,
 }
 
 /// The fingerprint of a name and date of birth under a scheme's salt.
