@@ -162,4 +162,14 @@ fn log_lines_name_a_command_without_its_payload() {
         Proposal::Housekeeping(Housekeeping::Published { through_seq: 7 }).to_string(),
         "published events through 7"
     );
+    let held = Housekeeping::Consumed {
+        consumer: "finance".to_string(),
+        through_seq: 9,
+    };
+    assert_eq!(Proposal::Housekeeping(held).to_string(), "finance holds events through 9");
+    let gone = Housekeeping::Unsubscribed {
+        consumer: "finance".to_string(),
+    };
+    assert_eq!(Proposal::Housekeeping(gone).to_string(), "finance no longer reads events");
+    assert_eq!(Proposal::Module(serde_json::json!({ "name": "A Person" })).to_string(), "a module command");
 }

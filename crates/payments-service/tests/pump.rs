@@ -41,6 +41,10 @@ const MONTHLY: i64 = 61_84;
 struct Local {
     state: Arc<Mutex<(PaymentsState, u64)>>,
     down: Arc<AtomicBool>,
+    /// Questions it will still answer; unset, it answers them all.
+    answers_left: Arc<Mutex<Option<u32>>>,
+    /// Answers every question with something that is not an answer.
+    garbled: Arc<AtomicBool>,
 }
 
 impl Module for Local {
@@ -56,6 +60,15 @@ impl Module for Local {
     async fn query(&self, question: Value) -> Result<Value, String> {
         if self.down.load(Ordering::SeqCst) {
             return Err("no leader".to_string());
+        }
+        if self.garbled.load(Ordering::SeqCst) {
+            return Ok(serde_json::json!("try again later"));
+        }
+        if let Some(left) = self.answers_left.lock().unwrap().as_mut() {
+            if *left == 0 {
+                return Err("no leader".to_string());
+            }
+            *left -= 1;
         }
         ic_payments::query::answer(&self.state.lock().unwrap().0, question)
     }
@@ -553,6 +566,46 @@ async fn an_unclear_answer_is_resolved_by_asking_the_bank() {
     let pass = pump.pass().await;
     assert!(pass.problems.iter().any(|p| p.contains("submission r3-1")), "{:?}", pass.problems);
     assert_eq!(world.state().submissions[&unsure].status, SubmissionStatus::Sending);
+
+    // A pump in a region the configuration does not know has no bank to
+    // ask, so it says so and decides nothing.
+    world.bank.lock().down = false;
+    let pass = world.pump("nowhere", "z").pass().await;
+    assert!(pass.problems.len() >= 2, "{:?}", pass.problems);
+    assert_eq!((pass.sent, pass.failed, pass.messages), (0, 0, 0));
+    assert_eq!(world.state().submissions[&unsure].status, SubmissionStatus::Sending);
+}
+
+/// Purpose: when the module stops answering part way through a pass, or
+/// answers with something unreadable, the pump reports each step it could
+/// not do, sends nothing, and the next pass does the work.
+/// Why it matters: leadership moves while pumps run. A pump that acted on
+/// half an answer, or that died on one, would send without a claim or stop
+/// paying until someone restarted it.
+#[tokio::test]
+async fn a_module_that_falters_mid_pass_costs_nothing() {
+    let mut world = World::new().await;
+    world.payee("p1", PayeeKind::Customer);
+    let pump = world.pump("akl", "a");
+    let s = world.run("r1", RunType::BenefitPayments, false, vec![pay("i1", "p1", 300_00)]);
+
+    // It answers the first question (its configuration) and no more.
+    *world.module.answers_left.lock().unwrap() = Some(1);
+    let pass = pump.pass().await;
+    assert_eq!(pass.sent, 0);
+    assert_eq!(pass.problems.iter().filter(|p| p.contains("no leader")).count(), 3, "{:?}", pass.problems);
+    assert_eq!(world.bank.lock().arrivals, 0);
+    *world.module.answers_left.lock().unwrap() = None;
+
+    world.module.garbled.store(true, Ordering::SeqCst);
+    let pass = pump.pass().await;
+    assert!(pass.problems[0].contains("unreadable answer"), "{:?}", pass.problems);
+    assert_eq!(world.bank.lock().arrivals, 0);
+    world.module.garbled.store(false, Ordering::SeqCst);
+
+    let pass = pump.pass().await;
+    assert_eq!((pass.sent, pass.problems.len()), (1, 0), "{:?}", pass.problems);
+    assert_eq!(world.state().submissions[&s].status, SubmissionStatus::Sent);
 }
 
 /// Purpose: two pumps that go for the same submission do not both send it,
@@ -914,6 +967,33 @@ async fn the_services_small_parts_do_what_they_say() {
     );
     let other = ic_core::Command::OpenBusinessDate { date: d(2027, 1, 1) };
     assert!(policy_of(&other).is_none());
+    let policy: PolicyId = serde_json::from_value(serde_json::json!("pol-1")).unwrap();
+    let release = ic_core::Command::ReleaseRefundPayable {
+        policy: policy.clone(),
+        refund: "rf1".to_string(),
+    };
+    assert_eq!(policy_of(&release), Some(&policy));
+
+    // A bank that answers with something that is not an answer: the outcome
+    // is unknown, which is never treated as "not sent".
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        while let Ok((mut socket, _)) = listener.accept().await {
+            let mut request = [0u8; 2048];
+            let _ = socket.read(&mut request).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 9\r\nconnection: close\r\n\r\nnot json!")
+                .await;
+        }
+    });
+    let to = Target {
+        kind: ic_payments::config::ChannelKind::File,
+        url,
+        token: "t".to_string(),
+    };
+    assert!(matches!(HttpBank::default().messages(&to, 0).await, Err(ChannelError::Unknown(_))));
 }
 
 /// Purpose: the pump's settings name what is missing, refuse a grace period
@@ -961,6 +1041,7 @@ fn the_pump_does_not_start_half_configured() {
     };
     assert!(with("IC_PUMP_GRACE_MINUTES", "1").unwrap_err().contains("at least 2"));
     assert!(with("IC_PUMP_INTERVAL_SECS", "0").is_err());
+    assert!(with("IC_NODES", " , ").unwrap_err().contains("IC_NODES"));
     assert!(with("IC_PUMP_INTERVAL_SECS", "soon").unwrap_err().contains("IC_PUMP_INTERVAL_SECS"));
     assert_eq!(with("IC_PAYMENTS_INSTANCE", "x").unwrap().instance, "x");
     assert_eq!(with("IC_PAYMENTS_CONTAINER", "c").unwrap().container, "c");
