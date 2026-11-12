@@ -41,7 +41,8 @@ metadata:
 data:
   IC_GROUP_QUARANTINE_ENDPOINT: REPLACE-quarantineEndpoint
   IC_GROUP_EVENT_HUBS_NAMESPACE: REPLACE-eventHubsEndpoint
-  IC_GROUP_CUSTOMER_MASTER: REPLACE-customer-master-url
+  # The customer master in this namespace (deploy/k8s/customers.yaml).
+  IC_GROUP_CUSTOMER_MASTER: http://ic-customers
   IC_GROUP_CUSTOMER_MASTER_SCOPE: REPLACE-customer-master-scope
   IC_GROUP_FINGERPRINT_SALT_FILE: /mnt/secrets/group-fingerprint-salt
   IC_GROUP_API_KEY_FILE: /mnt/secrets/group-api-key
