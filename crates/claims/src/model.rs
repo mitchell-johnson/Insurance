@@ -474,6 +474,16 @@ pub struct Reinsurance {
     pub consent_refused: bool,
     /// Disputed items raised on reinsurers' accounts from decisions here.
     pub disputed_items: Vec<(String, String)>,
+    /// Disputed items people have settled, with what the insurer repaid.
+    #[serde(default)]
+    pub disputes_settled: BTreeMap<String, i64>,
+}
+
+impl Reinsurance {
+    /// Disputed items raised and not yet settled.
+    pub fn disputes_open(&self) -> usize {
+        self.disputed_items.iter().filter(|(_, r)| !self.disputes_settled.contains_key(r)).count()
+    }
 }
 
 /// A health invoice or receipt, or a request to pre-approve one.

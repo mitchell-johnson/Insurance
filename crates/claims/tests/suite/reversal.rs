@@ -450,7 +450,8 @@ fn a_reversal_before_payment_has_nothing_to_recover() {
 }
 
 /// Purpose: a disputed item the reinsurance module raises from a reversal is recorded on the
-/// claim, and reinsurance notices about an unknown claim are refused.
+/// claim and closed when people settle it, and reinsurance notices about an unknown claim or
+/// an unknown item are refused.
 /// Why it matters: the recovery already taken from a reinsurer on the reversed claim is settled
 /// by people under the treaty. The claim file must show that a dispute exists so nobody
 /// treats the reinsurer's share as final.
@@ -471,6 +472,20 @@ fn a_disputed_reinsurance_item_is_recorded_on_the_claim() {
         w.claim("c-1").reinsurance.disputed_items,
         vec![("re-1".to_string(), "DSP/c-1/treaty-1/re-1".to_string())]
     );
+    assert_eq!(w.claim("c-1").reinsurance.disputes_open(), 1);
+    // People settle it under the treaty. Claims records the outcome once, however often it is told.
+    let resolved = |reference: &str| {
+        Command::Reinsurance(ReinsuranceNotice::DisputeResolved {
+            claim: "c-1".into(),
+            reference: reference.into(),
+            repay_minor: 2_500,
+        })
+    };
+    assert_eq!(w.refused(resolved("DSP/c-1/treaty-9/re-1")), "unknown_dispute");
+    w.ok(resolved("DSP/c-1/treaty-1/re-1"));
+    w.ok(resolved("DSP/c-1/treaty-1/re-1"));
+    let r = &w.claim("c-1").reinsurance;
+    assert_eq!((r.disputes_open(), r.disputes_settled["DSP/c-1/treaty-1/re-1"]), (0, 2_500));
     w.ok(Command::Reinsurance(ReinsuranceNotice::LargeClaimNotification {
         claim: "c-1".into(),
         treaty: "treaty-1".into(),
