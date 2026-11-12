@@ -94,6 +94,8 @@ crates/payments-service  bank channels, the pump (ic-payments-pump), payment evi
 crates/channels   the customer app API, adviser and employer portals, staff and operations consoles, the status page (ic-portal)
 crates/underwriting proposals, disclosure, rules, case work and authority, offers, issue, the clinical store
 crates/distribution advisers, licence status, commission, clawback, statements, the held balance workbench
+crates/documents  templates, issuing, the document vault, delivery and proof, notice clocks and defects (ic-documents)
+crates/complaints complaints, disputes and conduct cases: the register, timers, external forums, reporting
 treaties/         the shipped reinsurance treaties and reinsurer rate tables
 products/         the shipped products, definitions and rate tables
 infra/            the Azure platform (Bicep)
