@@ -457,6 +457,18 @@ pub enum Event {
         party: PartyId,
     },
 
+    /// A fact published by a module that lives on the partition. `kind` is
+    /// part of that module's published interface. Like every event it
+    /// carries opaque IDs, amounts and codes, never personal or clinical data.
+    Module {
+        module: String,
+        kind: String,
+        /// What the fact is about: a claim ID, for the claims module.
+        subject: String,
+        #[serde(default)]
+        detail: std::collections::BTreeMap<String, String>,
+    },
+
     TransferStarted {
         policy: PolicyId,
         transfer_id: String,
