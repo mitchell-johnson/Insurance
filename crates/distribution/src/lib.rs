@@ -25,6 +25,7 @@ pub mod workbench;
 
 mod commission;
 pub mod config;
+mod replacement;
 mod statement;
 
 use std::fmt;

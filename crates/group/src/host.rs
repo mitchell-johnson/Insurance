@@ -40,7 +40,8 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
         CoreEvent::LayerAdded {
             origin: LayerOrigin::UnderwrittenExcess,
             ..
-        } => GroupCommand::ObserveCore {
+        }
+        | CoreEvent::MemberCoverLapsed { .. } => GroupCommand::ObserveCore {
             event: Box::new(record.event.clone()),
         },
         _ => return vec![],

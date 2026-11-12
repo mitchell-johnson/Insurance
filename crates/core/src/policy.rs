@@ -448,6 +448,11 @@ pub struct Policy {
     /// this policy: each has a member suspense account in the ledger.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub member_accounts: BTreeSet<LifeId>,
+    /// The standing of each scheme member who is billed for cover of their
+    /// own, derived from the member's oldest unpaid bill. Separate from the
+    /// scheme's standing in both directions.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_standing: BTreeMap<LifeId, Standing>,
     pub anniversaries_processed: u32,
     pub pending_invoice: Option<PendingInvoice>,
     pub lapse: Option<LapseRecord>,

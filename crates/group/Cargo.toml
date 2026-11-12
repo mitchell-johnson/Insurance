@@ -34,6 +34,16 @@ path = "src/bin/ic-group.rs"
 ic-azure = { workspace = true, features = ["testing"] }
 ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
+# The customer master and what its own test harness needs (tests/driver.rs
+# builds it with that harness to run the two services together).
+ic-customers = { path = "../customers" }
+jsonwebtoken.workspace = true
+base64.workspace = true
+rand.workspace = true
+tower.workspace = true
+http-body-util.workspace = true
+rsa = "0.9"
+uuid = { version = "1", features = ["v4"] }
 ic-sim.workspace = true
 ic-readmodel.workspace = true
 proptest.workspace = true

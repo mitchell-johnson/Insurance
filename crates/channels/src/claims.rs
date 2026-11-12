@@ -165,19 +165,15 @@ pub fn command(staff: &PartyId, purpose: &str, partition: Option<PartitionId>, m
         }
         fields.insert("actor".to_string(), json!({ "staff": staff, "purpose": purpose.trim() }));
     }
-    let target = if RUNS.contains(&name.as_str()) {
-        Target::Partition(partition.ok_or("a payment run is on one partition: name it")?)
-    } else if let Some(claim) = fields.get("claim").and_then(Value::as_str) {
-        Target::Claim(claim.to_string())
-    } else if let Some(policy) = fields.get("policy").and_then(Value::as_str) {
-        Target::Policy(policy.to_string())
-    } else {
-        return Err(format!("{name} names no claim"));
+    // A notification opens the claim, so it goes where its policy lives.
+    let text = |field: &str| fields.get(field).and_then(Value::as_str).map(str::to_string);
+    let target = match (RUNS.contains(&name.as_str()), name == "notify") {
+        (true, _) => Target::Partition(partition.ok_or("a payment run is on one partition: name it")?),
+        (false, true) => Target::Policy(text("policy").ok_or("a notification names its policy")?),
+        (false, false) => Target::Claim(text("claim").ok_or_else(|| format!("{name} names no claim"))?),
     };
+    // The core checks the caller again: a command not open to `claims` is refused there.
     let typed: ClaimsCommand = serde_json::from_value(command).map_err(|e| format!("not a claims command: {e}"))?;
-    if !typed.allowed_callers().contains(&CALLER) {
-        return Err(format!("{name} is not sent by a person"));
-    }
     Ok((name, target, Command::Claims(Box::new(typed))))
 }
 

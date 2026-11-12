@@ -307,6 +307,7 @@ impl Desk {
                 authority: id.to_string(),
                 policy: policy(pol),
                 party: format!("party-{id}"),
+                life: None,
                 account: account(id, number),
                 sole_name,
             },

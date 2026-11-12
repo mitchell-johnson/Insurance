@@ -190,6 +190,52 @@ fn bill_member(
     Ok(())
 }
 
+/// End, from today, every layer a member pays for in whole or in part, with
+/// both payers adjusted for the days left of periods already billed. Returns
+/// the layers ended and the date.
+pub(crate) fn end_member_paid_layers(
+    ledger: &mut Ledger,
+    catalog: &Catalog,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: &LifeId,
+) -> Result<(Vec<(String, u32)>, NaiveDate), Reject> {
+    let effective = ctx.date;
+    let before = member_layers(policy, life);
+    let mut after = before.clone();
+    let mut ended = Vec::new();
+    for (cover, l) in &mut after {
+        if !l.member_pays.is_nothing() && l.start <= effective && l.end.is_none_or(|e| e > effective) {
+            l.end = Some(effective);
+            ended.push((cover.clone(), l.id, l.sum_insured_minor));
+        }
+    }
+    if ended.is_empty() {
+        return Ok((vec![], effective));
+    }
+    let d = match policy.lives.get(life) {
+        Some(record) => deltas(catalog, product, policy, life, effective, same_details(record), &before, &after)?,
+        None => Deltas::default(),
+    };
+    ctx.work += d.work;
+    for (cover, id, sum_insured_minor) in &ended {
+        if let Some(l) = policy.covers.get_mut(cover).and_then(|c| c.layers.iter_mut().find(|l| l.id == *id)) {
+            l.end = Some(effective);
+        }
+        ctx.emit(Event::LayerEnded {
+            policy: policy.id.clone(),
+            cover: cover.clone(),
+            layer: *id,
+            life: life.clone(),
+            effective,
+            sum_insured_minor: *sum_insured_minor,
+        });
+    }
+    post_deltas(ledger, policy, ctx, life, effective, d)?;
+    Ok((ended.into_iter().map(|(cover, id, _)| (cover, id)).collect(), effective))
+}
+
 /// Billed periods a change effective on `effective` reaches into.
 fn affected_periods(policy: &Policy, effective: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     (0..policy.periods_billed)

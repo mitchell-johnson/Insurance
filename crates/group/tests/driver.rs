@@ -3,6 +3,11 @@
 //! turn without anything being lost or done twice.
 
 mod common;
+/// The customer master's own test harness: the real service over PostgreSQL.
+// It reads the clock to date its tokens, which this crate forbids only for the state machine.
+#[allow(clippy::disallowed_methods)]
+#[path = "../../customers/tests/common/mod.rs"]
+mod customer_master;
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -213,14 +218,19 @@ E002,Bo,Ngata,02/06/1985,staff,60000,wlg\n\
 E003,Cy,Patel,03/07/1975,executive,240000,wlg\n\
 E004,Di,Broken,not-a-date,staff,50000,akl\n";
 
-type Rig = Driver<Local, SimCore, Sink, Directory, Store>;
+type RigWith<D> = Driver<Local, SimCore, Sink, D, Store>;
+type Rig = RigWith<Directory>;
 
 /// The harness's scheme, with the module and the core behind the driver's ports.
 fn rig() -> Rig {
+    rig_with(Directory::default(), named_mapping())
+}
+
+fn rig_with<D: CustomerMaster>(directory: D, mapping: FileMapping) -> RigWith<D> {
     let mut h = Harness::new(terms());
     h.staff(GroupCommand::SetMapping {
         scheme: SCHEME.into(),
-        mapping: Box::new(named_mapping()),
+        mapping: Box::new(mapping),
     })
     .unwrap();
     let module = Local {
@@ -232,11 +242,11 @@ fn rig() -> Rig {
         down: Flag::default(),
         sent: Arc::default(),
     };
-    Driver::new(module, core, Sink::default(), Directory::default(), Store::default(), "test-salt")
+    Driver::new(module, core, Sink::default(), directory, Store::default(), "test-salt")
 }
 
 /// Run the driver, and the host's event feed, until neither has anything to do.
-async fn settle(d: &Rig) {
+async fn settle<D: CustomerMaster>(d: &RigWith<D>) {
     for _ in 0..200 {
         let pass = d.run_once().await.unwrap();
         let records = d.core.cluster.lock().unwrap().take_events();
@@ -252,11 +262,11 @@ async fn settle(d: &Rig) {
     panic!("the driver never settled");
 }
 
-fn file_status(d: &Rig, file: &str) -> FileStatus {
+fn file_status<D: CustomerMaster>(d: &RigWith<D>, file: &str) -> FileStatus {
     d.module.state.lock().unwrap().schemes[SCHEME].files[file].status
 }
 
-async fn approve(d: &Rig, file: &str) {
+async fn approve<D: CustomerMaster>(d: &RigWith<D>, file: &str) {
     let today = d.core.business_date().await.unwrap().unwrap();
     let env = Envelope {
         key: format!("approve-{file}"),
@@ -539,7 +549,7 @@ async fn a_stuck_entry_does_not_hold_up_the_rest() {
     assert_eq!(d.peers.requests.lock().unwrap().len(), 2);
 }
 
-async fn through(d: &Rig, name: &str, content: &str) {
+async fn through<D: CustomerMaster>(d: &RigWith<D>, name: &str, content: &str) {
     d.upload(caller::EMPLOYER, "admin-bo", SCHEME, name, content.as_bytes().to_vec()).await.unwrap();
     d.files.mark(SCHEME, name, Scan::Clean);
     settle(d).await;
@@ -706,6 +716,89 @@ async fn a_request_no_longer_wanted_is_withdrawn_or_never_sent() {
     settle(&d).await;
     assert!(d.peers.requests.lock().unwrap().is_empty() && d.peers.withdrawals.lock().unwrap().is_empty());
     assert!(d.module.state.lock().unwrap().outbox.is_empty());
+}
+
+/// Purpose: with the real customer master service behind the driver, over HTTP with a
+/// signed Entra ID token and PostgreSQL underneath, a file's joiners are matched as the
+/// addendum requires: a joiner whose email is a known person's is linked to that person,
+/// a namesake with nothing stronger than a name and a birth date is left unlinked as a
+/// possible match for a person to decide, and someone unknown is created there and
+/// linked; a retried file asks again and gets the same people.
+/// Why it matters: the two services were built apart against a shape agreed in prose.
+/// This is the only test in which one actually answers the other, and a wrong link here
+/// joins two people's cover in accumulation and shows one person's records to another.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn joiners_are_matched_by_the_real_customer_master() {
+    use ic_group::service::HttpCustomerMaster;
+
+    let Some(world) = customer_master::world().await else { return };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let routes = world.router.clone();
+    tokio::spawn(async move { axum::serve(listener, routes).await.unwrap() });
+
+    let known = world
+        .person("Bo", "Ngata", "1985-06-02", &[("email", serde_json::json!("bo.ngata@example.test"))])
+        .await;
+    let namesake = world.person("Cy", "Patel", "1975-07-03", &[]).await;
+
+    let credential = ic_azure::credential::AzureCredential::static_token(&world.token("group-admin"));
+    let client = HttpCustomerMaster::new(&base, customer_master::AUDIENCE, credential);
+    let mut mapping = named_mapping();
+    mapping.columns.email = Some("Email".to_string());
+    mapping.content_hash = String::new();
+    let d = rig_with(client, mapping.seal().unwrap());
+
+    let file = "Emp No,First,Last,DOB,Category,Salary,Site,Email\n\
+E001,Ana,Founder,01/05/1980,staff,60000,akl,\n\
+E002,Bo,Ngata,02/06/1985,staff,60000,wlg,bo.ngata@example.test\n\
+E003,Cy,Patel,03/07/1975,staff,60000,wlg,\n\
+E005,Eru,Walker,04/08/1990,staff,60000,akl,eru.walker@example.test\n";
+    through(&d, "nov.csv", file).await;
+
+    let party_of = |id: &str| d.module.state.lock().unwrap().schemes[SCHEME].membership.active(id).unwrap().party.clone();
+    assert_eq!(party_of("E002"), Some(party(&known)), "the known email links");
+    assert_eq!(party_of("E003"), None, "a name and a birth date are not enough to link");
+    {
+        let g = d.module.state.lock().unwrap();
+        assert_eq!(g.schemes[SCHEME].possible.get("E003"), Some(&vec![party(&namesake)]));
+        assert!(g.exceptions.values().any(|e| e.kind == ExceptionKind::PossibleMatch && e.subject == "E003"));
+    }
+    let created = party_of("E005").expect("someone unknown is created and linked");
+    assert!(created != party(&known) && created != party(&namesake));
+    // The person is really there, under the name the file gave.
+    let (status, record) = world.get(&format!("/v1/parties/{}", created.0), "staff", "servicing").await;
+    assert_eq!(status, 200, "{record}");
+    assert!(record.to_string().contains("Walker"), "{record}");
+
+    // Asked again for the same joiners, the customer master gives the same people.
+    let again = HttpCustomerMaster::new(
+        &base,
+        customer_master::AUDIENCE,
+        ic_azure::credential::AzureCredential::static_token(&world.token("group-admin")),
+    );
+    let eru = MemberIdentity {
+        row: 5,
+        employee_id: "E005".into(),
+        given_name: "Eru".into(),
+        family_name: "Walker".into(),
+        date_of_birth: NaiveDate::from_ymd_opt(1990, 8, 4),
+        email: Some("eru.walker@example.test".into()),
+        national_id: None,
+    };
+    let answer = again.resolve(SCHEME, &eru).await.unwrap();
+    assert!(
+        matches!(&answer, Resolution::Linked { party: p } | Resolution::Created { party: p } if *p == created),
+        "{answer:?}"
+    );
+    // A caller without the role is refused, and the error does not carry the person's details.
+    let stranger = HttpCustomerMaster::new(
+        &base,
+        customer_master::AUDIENCE,
+        ic_azure::credential::AzureCredential::static_token(&world.token("documents")),
+    );
+    let refused = stranger.resolve(SCHEME, &eru).await.unwrap_err();
+    assert!(refused.contains("403") && !refused.contains("Walker"), "{refused}");
 }
 
 const KEY: &str = "service-key-0123456789abcdef0123456789";
@@ -904,7 +997,7 @@ async fn the_customer_master_client_reads_every_answer() {
                 assert_eq!(headers["authorization"], "Bearer tok-1");
                 log.lock().unwrap().push(body.clone());
                 match body["family_name"].as_str().unwrap() {
-                    "Linked" => (axum::http::StatusCode::OK, r#"{"outcome":"linked","party":"p-1"}"#),
+                    "Linked" => (axum::http::StatusCode::OK, r#"{"outcome":"linked","party":"p-1","ignored":["email"]}"#),
                     "Created" => (axum::http::StatusCode::CREATED, r#"{"outcome":"created","party":"p-2"}"#),
                     "Possible" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":["p-3","p-4"]}"#),
                     "Nobody" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":[]}"#),

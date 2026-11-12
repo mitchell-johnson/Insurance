@@ -22,12 +22,14 @@ impl PaymentsState {
             .ok_or_else(|| Reject::new("unknown_authority", format!("there is no authority {id}")))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn create_authority(
         &mut self,
         tx: &mut Tx<'_>,
         id: Id,
         policy: PolicyId,
         party: String,
+        life: Option<ic_core::LifeId>,
         account: AccountDetails,
         sole_name: bool,
     ) -> Result<(), Reject> {
@@ -44,6 +46,7 @@ impl PaymentsState {
             Authority {
                 policy: policy.clone(),
                 party,
+                life,
                 account,
                 sole_name,
                 status: AuthorityStatus::Active,
@@ -53,6 +56,15 @@ impl PaymentsState {
         );
         tx.emit(Event::AuthorityCreated { authority: id, policy });
         Ok(())
+    }
+
+    /// The scheme member an item was collected from, if its authority is a
+    /// member's own.
+    pub(crate) fn member_collected_from(&self, item: &crate::model::NewItem) -> Option<ic_core::LifeId> {
+        match &item.counterparty {
+            crate::model::Counterparty::Authority(a) => self.authorities.get(a)?.life.clone(),
+            _ => None,
+        }
     }
 
     pub(crate) fn suspend_authority(&mut self, tx: &mut Tx<'_>, id: &str, reason: String) -> Result<(), Reject> {

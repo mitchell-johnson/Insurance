@@ -769,3 +769,38 @@ async fn an_issued_document_can_be_fetched_as_a_pdf() {
 
     assert_eq!(w.driver.pdf("nope", &fonts).await, Err(DriverError::NotFound("document nope".into())));
 }
+
+/// Purpose: nothing is sent on any channel to a person the customer master
+/// says has died; each channel is recorded as having no contact point.
+/// Why it matters: a lapse notice or a renewal addressed to someone who
+/// has died reaches a grieving family. The document must instead show as
+/// undelivered so that staff send it to whoever acts for the estate.
+#[tokio::test]
+async fn nothing_is_sent_to_a_person_who_has_died() {
+    let w = World::new().await;
+    for (channel, destination) in [(Channel::Email, "aroha@example.nz"), (Channel::Post, "12 Kowhai Street\nWellington 6035")] {
+        w.driver.directory.set_contact(
+            "aroha",
+            channel,
+            ic_documents::channels::Contact {
+                name: "Aroha Ngata".into(),
+                destination: destination.into(),
+                deceased: true,
+                ..Default::default()
+            },
+        );
+    }
+    let mut request = w.renewal("n1");
+    request.recipients = vec![recipient("aroha", RecipientRole::Addressee, &[Channel::Email])];
+    w.driver.issue(request).await.unwrap();
+    let mut total = Sends::default();
+    for _ in 0..3 {
+        let sends = w.cycle().await.sends;
+        total.no_contact_point += sends.no_contact_point;
+        total.sent += sends.sent;
+    }
+    assert_eq!((total.sent, total.no_contact_point), (0, 2), "email, then post, and no more");
+    assert!(w.driver.channels.sent().is_empty());
+    let attempts = &w.state().documents["n1"].deliveries[0].attempts;
+    assert!(attempts.iter().all(|a| a.outcome == Some(AttemptOutcome::NoContactPoint)));
+}

@@ -159,8 +159,10 @@ pub struct SchemeTerms {
     /// How the loading on underwritten cover is billed.
     #[serde(default)]
     pub excess_loading: ExcessLoading,
-    /// If fewer members than this hold loaded cover, the loading is billed
-    /// to the member instead, so that a total cannot be traced to a person.
+    /// If fewer members than this hold underwritten cover when a member's
+    /// terms are accepted, that member's loading is billed to the member
+    /// instead, so that a total cannot be traced to a person. Zero is no
+    /// minimum. Only where the employer pays loadings as one total.
     #[serde(default)]
     pub excess_loading_min_count: u32,
     /// After this many short payments in a row the scheme stops taking new
@@ -199,11 +201,11 @@ impl SchemeTerms {
         if self.file_max_age_days == 0 {
             return Err("the file age limit must be at least one day".to_string());
         }
-        // Billing a member directly needs voluntary cover billing, which the
-        // platform does not have yet. Refused here so that no scheme is set
-        // up on terms whose premium nobody would collect.
-        if self.excess_loading == ExcessLoading::MemberPays || self.excess_loading_min_count > 0 {
-            return Err("billing a loading to the member needs voluntary cover billing, which is not available".to_string());
+        // The count protects a total from being traced to a person. Where
+        // the member pays anyway, or each member is itemised with consent,
+        // there is no total for it to protect.
+        if self.excess_loading_min_count > 0 && self.excess_loading != ExcessLoading::EmployerTotal {
+            return Err("the minimum count applies only where the employer pays loadings as one total".to_string());
         }
         if self.suspend_joiners_after_short_payments == Some(0) {
             return Err("the short payment count must be at least one".to_string());
@@ -310,8 +312,20 @@ pub(crate) mod tests {
             ("unique", Box::new(|t| t.billing_groups[1].code = String::new())),
             ("minimum age", Box::new(|t| t.eligibility.min_age = Some(70))),
             ("file age", Box::new(|t| t.file_max_age_days = 0)),
-            ("voluntary cover billing", Box::new(|t| t.excess_loading = ExcessLoading::MemberPays)),
-            ("voluntary cover billing", Box::new(|t| t.excess_loading_min_count = 3)),
+            (
+                "minimum count",
+                Box::new(|t| {
+                    t.excess_loading = ExcessLoading::MemberPays;
+                    t.excess_loading_min_count = 3;
+                }),
+            ),
+            (
+                "minimum count",
+                Box::new(|t| {
+                    t.excess_loading = ExcessLoading::EmployerItemised;
+                    t.excess_loading_min_count = 3;
+                }),
+            ),
             ("short payment count", Box::new(|t| t.suspend_joiners_after_short_payments = Some(0))),
         ];
         for (expect, breakage) in broken {

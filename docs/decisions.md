@@ -60,7 +60,7 @@ The fail-back controller runs on every node and is tested with three nodes in on
 
 ### Group scheme administration
 
-Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a scheme working end to end today: no customer master exists to match joiners on named schemes, and the group service's Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
+Its gaps are listed in `docs/group.md` under "Known gaps". The ones that matter most today: no test takes a member through a whole underwriting decision with both services up, a member has no way yet to pay a loading billed to them, and its Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
 
 ### Payments are built against a fake bank
 
@@ -94,3 +94,12 @@ The design lists increase, add a cover, decrease or remove, change of terms, fut
 - **Order of reduction** is always newest first. The design lets a product declare another order; no product setting for that exists.
 - **A cover given up for every life** stays on the policy with no layer in force, so it prices at nothing and can be taken up again by an underwritten increase. It is not marked ended.
 - **Not built**: adding a cover that was not on the policy at issue, future insurability options, and conversion to another product.
+
+### Cover a scheme member pays for is built for underwritten layers only
+
+The design gives voluntary cover its own receivable per member and its own standing, and bills a loading to the member where a total would identify the few members who have one.
+
+- **Built**: an underwritten layer on a scheme can be paid for by the member, in full (`member_pays: all`) or for its loading only (`loading`). That part never reaches the scheme invoice, its loading total, the scheme's balance or its standing. It is a receivable on the scheme policy with the member as payer (`MemberPremiumBilled`). `ApplyMemberReceipt` sets a member's money only against what that member owes; the rest is the member's credit in an account of its own, which pays later bills and is paid back with `RefundMemberCredit`. Each such member has a standing derived from their oldest unpaid bill on the scheme product's arrears rules (`MemberStandingChanged`). Past the lapse period the layers the member pays for end, both payers are credited for the days left, what the member owed is written off and `MemberCoverLapsed` is emitted; the member's employer-paid cover and the scheme are untouched. When the scheme itself lapses or ends, what members paid ahead goes back to their credit, not to the employer.
+- **Changing who pays** is ending the layer and adding it again from the same date.
+- **Not built**: automatic (formula) cover cannot be member-paid, so dependants' cover paid by the employee is not modelled. A member's lapse does not wait for a proven lapse notice as a policy's lapse does; no notice to the member is raised by the core, and the documents module does not yet act on `MemberStandingChanged`. A member's lapsed cover is not reinstated; it is added again. A scheme holding a member's credit is refused a partition transfer (`member_credit_held`). When a lapsed scheme is reinstated, members' bills closed at the lapse stay closed. Nothing routes a member's payment to `ApplyMemberReceipt` yet: the payments module matches receipts to policies, not to members.
+- **Known rounding**: cancelling a policy on which nothing was paid can leave one cent in policy suspense, from the fraction of a cent of unearned premium. It was there before this work and is not fixed.

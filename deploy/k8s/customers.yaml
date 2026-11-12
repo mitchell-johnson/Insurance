@@ -1,0 +1,190 @@
+# The customer master: parties, relationships, matching, consents and
+# retention (docs/customers.md). Its own PostgreSQL server holds every
+# record, sealed under a per-party key that Key Vault wraps; nothing it
+# holds is in the ledger. Stateless pods; any number may run.
+#
+# Set the values marked REPLACE from the outputs of infra/customers.bicep
+# and infra/main.bicep, and create the database role as that file says.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-customers
+  annotations:
+    azure.workload.identity/client-id: REPLACE-customersClientId
+---
+# The blind-index key, mounted as a file under the service's identity. It
+# never becomes a Kubernetes Secret.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-customers-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-customersClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: customers-index-key
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-customers
+data:
+  # Outputs of infra/customers.bicep.
+  IC_CUSTOMERS_PG_HOST: REPLACE-postgresHost
+  IC_CUSTOMERS_PG_USER: REPLACE-customersPrincipalName
+  IC_CUSTOMERS_REGISTER_ENDPOINT: REPLACE-registerEndpoint
+  IC_CUSTOMERS_INDEX_KEY_FILE: /mnt/secrets/customers-index-key
+  # Outputs of infra/main.bicep.
+  IC_CUSTOMERS_KEY_VAULT: REPLACE-keyVaultUrl
+  IC_EVENT_HUBS_NAMESPACE: REPLACE-eventHubsEndpoint
+  # The Entra ID tenant and the application ID URI callers ask tokens for.
+  # Each calling service is granted an app role named after it (staff,
+  # group-admin, claims, portal, documents, commission and the rest in
+  # config/cedar/customers.cedar).
+  IC_CUSTOMERS_TENANT: REPLACE-tenantId
+  IC_CUSTOMERS_AUDIENCE: REPLACE-customer-master-app-id-uri
+  IC_CUSTOMERS_POOL_SIZE: "16"
+  RUST_LOG: info
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-customers
+spec:
+  selector:
+    app: ic-customers
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Two copies or more: publishing and the retention sweep are safe on every
+# replica at once, and migrations run under a lock.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-customers
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-customers
+  template:
+    metadata:
+      labels:
+        app: ic-customers
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-customers
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-customers
+      containers:
+        - name: customers
+          image: insurance-core
+          command: ["/usr/local/bin/ic-customers"]
+          envFrom:
+            - configMapRef:
+                name: ic-customers
+          env:
+            - name: IC_CUSTOMERS_LISTEN
+              value: 0.0.0.0:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          # The process opens the database and applies its migrations before
+          # it listens, so a pod that cannot reach PostgreSQL never starts.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          # Ready only while the database answers.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-customers-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-customers
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-customers
+---
+# Callers are the services in this namespace (group, claims, portal,
+# documents, commission, staff screens) and the ingress for staff tools.
+# Every call also carries an Entra ID token naming the calling service, and
+# the Cedar policy decides what it may see.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-customers
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-customers
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector:
+            matchLabels:
+              insurance-core/ingress: "true"
+      ports:
+        - port: 8080
