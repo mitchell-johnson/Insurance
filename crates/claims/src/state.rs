@@ -95,8 +95,13 @@ impl Cx<'_> {
             .filter(|p| p.party == payee)
             .map(|p| p.account_ref.clone())
             .unwrap_or_default();
+        // The run it went out in, so the payments module can confirm the run once every item has settled.
+        let lump = claim.payments.iter().find(|p| p.payment_ref == payment_ref).and_then(|p| p.run.clone());
+        let periods = claim.schedule.iter().flat_map(|s| s.periods.values());
+        let run = lump.or_else(|| periods.filter(|p| p.payment_ref == payment_ref).map(|p| p.run.clone()).next());
         let detail = [
             ("policy", claim.policy.clone()),
+            ("run", run.unwrap_or_default()),
             ("account_ref", account_ref),
             ("payment_ref", payment_ref.to_string()),
             ("amount_minor", gross_minor.to_string()),

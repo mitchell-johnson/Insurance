@@ -109,6 +109,7 @@ fn a_lump_sum_is_released_within_what_was_admitted() {
         (notice["payee"].as_str(), notice["period_end"].as_str(), notice["ex_gratia"].as_str()),
         ("party-claimant", "", "false")
     );
+    assert_eq!(notice["run"], "", "released by hand, so in no run");
     assert_eq!(w.refused(pay("c-1", "ana", "p-1", 10_000, None)), "payment_exists");
 
     // A new authority version lowers the assessor's payment limit: it binds at once.
@@ -305,6 +306,8 @@ fn a_returned_benefit_period_is_reissued_as_that_period() {
     w.benefit_in_payment("ip-1");
     w.pay_run("run-1", d(2027, 3, 1));
     let payment = "run-1/ip-1/2027-03-01";
+    // The payments module confirms a run from the run named on each of its payments.
+    assert_eq!(w.core.noticed("claim_paid")[0]["run"], "run-1");
     w.ok(Command::PaymentReturned {
         claim: "ip-1".into(),
         payment_ref: payment.into(),
