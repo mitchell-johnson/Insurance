@@ -22,6 +22,7 @@ resources:
   - admin.yaml
   - network.yaml
   - group.yaml
+  - finance.yaml
 images:
   - name: insurance-core
     newName: REPLACE-registry.azurecr.io/insurance-core
