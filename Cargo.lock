@@ -2143,6 +2143,7 @@ dependencies = [
  "ic-readmodel",
  "ic-reinsurance",
  "ic-sim",
+ "ic-underwriting",
  "proptest",
  "reqwest 0.12.28",
  "serde",

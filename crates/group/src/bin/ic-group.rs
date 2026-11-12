@@ -49,6 +49,7 @@ async fn main() -> Result<(), String> {
             client,
             patience,
             &config.reinsurance_module,
+            &config.underwriting_module,
             EventHubsSink::new(&config.event_hubs_namespace, &config.event_hub, credential.clone()),
         ),
         HttpCustomerMaster::new(&config.customer_master, &config.customer_master_scope, credential.clone()),

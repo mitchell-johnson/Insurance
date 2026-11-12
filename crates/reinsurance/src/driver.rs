@@ -112,27 +112,70 @@ pub fn group_command(seq: u64, notice: &Notice, on: NaiveDate) -> Option<Value> 
     }))
 }
 
+/// The name of the underwriting module's replicated group.
+pub const UNDERWRITING_MODULE: &str = "underwriting";
+
+/// A notice for underwriting as that module's command, in its own wire
+/// format. The command's time is the first hour of the business date in New
+/// Zealand, which is never ahead of the real time.
+pub fn underwriting_command(notice: &Notice, on: NaiveDate) -> Option<Value> {
+    let Notice::FacultativeTermsRecorded {
+        reservation_id,
+        offered,
+        reference,
+    } = notice
+    else {
+        return None;
+    };
+    let outcome = if *offered {
+        serde_json::json!({"terms": "offered", "reference": reference})
+    } else {
+        serde_json::json!({"terms": "declined"})
+    };
+    Some(serde_json::json!({
+        "key": format!("ri-fac:{reservation_id}"),
+        "caller": crate::delivery::CALLER,
+        "at": on.and_time(chrono::NaiveTime::MIN).and_utc() - chrono::Duration::hours(12),
+        "today": on,
+        "command": {"facultative_terms_recorded": {"reservation": reservation_id, "outcome": outcome}},
+    }))
+}
+
+/// A module's answer to a command read as its own acceptance or refusal.
+/// Group administration answers `{"result": {"Ok": null} | {"Err": reject}}`;
+/// underwriting answers `{"Ok": ...} | {"Err": reject}`.
+fn refusal_in(answer: &Value) -> Result<Option<Reject>, DriverError> {
+    let result = answer.get("result").unwrap_or(answer);
+    match result.get("Err") {
+        Some(reject) => serde_json::from_value(reject.clone()).map(Some).map_err(|e| DriverError::Answer(e.to_string())),
+        None if result.get("Ok").is_some() => Ok(None),
+        None => Err(DriverError::Answer(format!("neither accepted nor refused: {answer}"))),
+    }
+}
+
 impl Audiences for ClusterAudiences {
     fn reached(&self) -> Vec<Audience> {
-        vec![Audience::Group]
+        vec![Audience::Group, Audience::Underwriting]
     }
 
     async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
-        let command = group_command(seq, notice, on).ok_or_else(|| DriverError::Answer(format!("notice {seq} is not for a module this carrier reaches")))?;
+        let (module, command) = match notice.audience() {
+            Audience::Group => (GROUP_MODULE, group_command(seq, notice, on)),
+            Audience::Underwriting => (UNDERWRITING_MODULE, underwriting_command(notice, on)),
+            _ => ("", None),
+        };
+        let command = command.ok_or_else(|| DriverError::Answer(format!("notice {seq} is not for a module this carrier reaches")))?;
         let reply = self
             .client
-            .propose_module_until(GROUP_MODULE, &command, self.patience)
+            .propose_module_until(module, &command, self.patience)
             .await
             .map_err(|e| DriverError::Unavailable(e.to_string()))?;
         // The host refuses what the module cannot read; the module refuses
         // in its own answer.
-        let outcome = match reply.result {
-            Ok(outcome) => outcome,
-            Err(unreadable) => return Ok(Handed::Refused(Reject::new("unreadable", unreadable))),
-        };
-        let result: Result<(), Reject> =
-            serde_json::from_value(outcome.get("result").cloned().unwrap_or(Value::Null)).map_err(|e| DriverError::Answer(e.to_string()))?;
-        Ok(result.map_or_else(Handed::Refused, |()| Handed::Taken))
+        match reply.result {
+            Ok(answer) => Ok(refusal_in(&answer)?.map_or(Handed::Taken, Handed::Refused)),
+            Err(unreadable) => Ok(Handed::Refused(Reject::new("unreadable", unreadable))),
+        }
     }
 }
 

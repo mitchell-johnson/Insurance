@@ -41,12 +41,15 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 | `GET /app/v1/sync?have=<n>` | What the device needs since position `n`: changed rows, deleted rows, or `purge` when access was lost. Without `have`, a full snapshot. |
 | `GET /app/v1/policies/{policy}` | The policy as you may see it. |
 | `POST`, `DELETE /app/v1/policies/{policy}/advisers` | Appoint or remove an adviser. Removal takes effect at once. |
+| `PUT /app/v1/policies/{policy}/delegates/{party}` | Let someone look (`viewer`, `financial` or `support`), change it, or end it with `null`. |
 | `PUT /app/v1/policies/{policy}/consent` | An adult on a family policy lets the policyholder see their sensitive rows, or stops it. |
 | `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. |
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
+
+**People the policyholder lets in.** A policyholder can let a relative look at a policy (`viewer`), let an accountant see its money side and documents (`financial`), or name a support person (`support`). Each has their own sign-in; nobody shares one. None of them ever sees a row that implies anything about health, and none can change anything. A support person can prepare a request, which then waits for the policyholder's own signature on their own device. The policyholder ends the access at any time and the other person's device is purged; it also ends if the policy changes hands.
 
 **Children.** The customer master records each child insured under a policy with the date they reach the age the product sets for controlling their own health information (`RecordDependant`). Until that date the policyholder sees the child's claims and other health-implying rows as a parent does. From the first business date on or after it, those rows are purged from the policyholder's devices, a `control_passed` effect goes out so both are told, and the young person can enrol a device of their own and, if they wish, consent to the parent seeing them again.
 
