@@ -306,44 +306,18 @@ impl GroupCommand {
                 &[DRIVER]
             }
             SelfRegister { .. } | TakeUpContinuation { .. } => &[MEMBER],
-            RecordExcessDecision { .. } => &[UNDERWRITING],
+            // The driver carries the underwriting module's answer from its outbox.
+            RecordExcessDecision { .. } => &[UNDERWRITING, DRIVER],
             RequireUnderwrittenExcess { .. } => &[REINSURANCE],
             RecordShortPayment { .. } => &[CASH],
         }
     }
 
-    pub fn name(&self) -> &'static str {
-        use GroupCommand::*;
-        match self {
-            RegisterScheme { .. } => "register_scheme",
-            AmendTerms { .. } => "amend_terms",
-            SetMapping { .. } => "set_mapping",
-            Freeze { .. } => "freeze",
-            Unfreeze { .. } => "unfreeze",
-            Resume { .. } => "resume",
-            ReceiveFile { .. } => "receive_file",
-            RecordScan { .. } => "record_scan",
-            RefuseFile { .. } => "refuse_file",
-            SubmitRows { .. } => "submit_rows",
-            ConfirmHeld { .. } => "confirm_held",
-            ApproveFile { .. } => "approve_file",
-            DecideBackdating { .. } => "decide_backdating",
-            WithdrawFile { .. } => "withdraw_file",
-            PartiesResolved { .. } => "parties_resolved",
-            Reinstate { .. } => "reinstate",
-            ResolveMatch { .. } => "resolve_match",
-            SelfRegister { .. } => "self_register",
-            RecordExcessDecision { .. } => "record_excess_decision",
-            RequireUnderwrittenExcess { .. } => "require_underwritten_excess",
-            DeclarePool { .. } => "declare_pool",
-            TakeUpContinuation { .. } => "take_up_continuation",
-            AgreeRenewal { .. } => "agree_renewal",
-            Terminate { .. } => "terminate",
-            RecordShortPayment { .. } => "record_short_payment",
-            CoreResult { .. } => "core_result",
-            ObserveCore { .. } => "observe_core",
-            Ack { .. } => "ack",
-            Tick => "tick",
+    /// The command's name as it is written in JSON.
+    pub fn name(&self) -> String {
+        match serde_json::to_value(self).unwrap_or_default() {
+            serde_json::Value::Object(fields) => fields.keys().next().cloned().unwrap_or_default(),
+            other => other.as_str().unwrap_or_default().to_string(),
         }
     }
 }

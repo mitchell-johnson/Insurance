@@ -169,6 +169,7 @@ fn commission_staff(state: &ChannelState, party: &PartyId, at: At, purpose: &str
                 (workbench::actions::PREPARE, "counterparty_finance"),
                 (workbench::actions::APPROVE, "counterparty_finance_approver"),
                 (workbench::actions::APPROVE_LEGAL, "legal"),
+                (workbench::actions::APPROVE_CONDUCT, "conduct_officer"),
             ]
             .into_iter()
             .filter(|(action, _)| t.actions.contains(*action))

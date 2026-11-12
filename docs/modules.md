@@ -21,7 +21,7 @@ A module reads the core in two ways and writes to it in one:
 
 ## Where a module's state lives
 
-- **State that belongs to one policy on one partition** (a claim, for example) lives in that partition's replicated state, attached through the core's module port (`CoreState::apply_module`). It is in the partition's snapshot and state hash, counts against the apply budget, and commits or fails together with the core command it issues.
+- **State that belongs to one policy on one partition** (a claim, for example) lives in that partition's replicated state, as the claims module does: the core holds the module's state (`CoreState::claims`), takes its commands as `Command::Claims`, and gives it a port (`ic_claims::Core`) for the cover check, postings and published facts. See `docs/claims.md`. It is in the partition's snapshot and state hash, counts against the apply budget, and commits or fails together with the core command it issues.
 - **State that spans partitions** (per-life reinsurance accumulation, an adviser's commission account, the finance ledger) lives in the module's own replicated group on the ledger nodes, with the same log, snapshots, membership changes and failover as a partition.
 
 ## The module host

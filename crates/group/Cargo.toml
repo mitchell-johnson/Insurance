@@ -33,6 +33,7 @@ path = "src/bin/ic-group.rs"
 [dev-dependencies]
 ic-azure = { workspace = true, features = ["testing"] }
 ic-reinsurance = { path = "../reinsurance" }
+ic-underwriting = { path = "../underwriting" }
 ic-sim.workspace = true
 ic-readmodel.workspace = true
 proptest.workspace = true
