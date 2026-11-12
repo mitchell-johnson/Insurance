@@ -471,3 +471,52 @@ Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a 
 - The chart's account codes, the close's due days and aged thresholds, and the shipped return (`config/finance/returns/insurer_quarterly.star`) are placeholders for finance and compliance to replace with the real chart and the regulator's template.
 - The rate tables under `products/rates/` are synthetic.
 - Is a restartable timed pass acceptable for the close in production, or is the Temporal workflow required first?
+
+## Area: claims operations (`ic-claims`): state and handover
+
+Written 12 November 2026 by the thread "Build claims operations". The full description of behaviour, every limit and the configuration is `docs/claims.md`; this section is what someone needs to pick the work up without that thread.
+
+### What is built and where (all on main)
+
+- **The crate.** `crates/claims` is pure and deterministic and does not depend on `ic-core`. `port.rs` defines the `Core` trait (business date, cover facts, `execute(Instruction)`, notify, work units), the `Instruction` enum and `CoverFacts`. `command.rs` is every command and who may send it. `state.rs` holds `ClaimsState`, the dispatch, the indexes rebuilt by `commit`, the daily due work (`drain_due`, `fall_due`) and moving a policy's claims (`moving`, `detach`, `attach`, `reattach`, `release`). `intake.rs` is notification, triage, tasks, evidence, health pricing and the file-opening log. `decide.rs` is decisions and signatures. `book.rs` is paying: lump sums, handling costs, interested parties, benefit schedules, runs, returns, waiver, death. `overpay.rs` is overpayments and recovery. `control.rs` is the exclusion-match control and reinsurance notices. `report.rs` is the views and `Question`/`Reply`. `config.rs` is `Rules` and `AuthorityBook`. `testing.rs` is the fake core for the suite.
+- **Hosting.** `ic-core` depends on `ic-claims`: `CoreState.claims`, `Command::Claims(Box<ic_claims::Command>)`, the port in `crates/core/src/claims.rs` (every instruction's postings are there), re-exported as `ic_core::claims_module`. Facts leave as `Event::Module { module: "claims", kind, subject: <claim id>, detail }`. Claims is therefore inside each partition's state and its hash, not a separate service. Because `ic-underwriting` depends on `ic-core`, claims cannot import underwriting; the shared exclusion library is proved equal by a test in `crates/underwriting/tests/libraries.rs`.
+- **Money.** Claims never posts. Reserve at notification, admission to benefit payable, release (`Pay`, `PayBenefit`), ex gratia, handling costs (`claims_handling` account), late payment interest (`claim_interest`, entry `claim_late_interest`), overpayment raise, recovery and write-off, premium waiver (`premium_waived`), all in `crates/core/src/claims.rs`. The payments module settles a released payment with core `SettlePayable { payable: Benefit }` for exactly the released amount.
+- **Reads.** `Query::Claims` in `ic-raft`; gateway routes in `crates/api/src/routes.rs`: `/v1/claims/{claim}`, `/v1/claims/{claim}/work`, `/v1/claims/queues/{queue}`, `/v1/claims/book`, `/v1/claims/report`, `/v1/claims/runs/{run}/remittance`.
+- **Design addendum.** Entry 5 (reversal of admission, held overpayment, recovery by decision only) is in `decide.rs` and `overpay.rs`; entry 1's claims points (late-notified death, cover as at the event date, `Receivable.settled_on`) are in `book.rs` and the core's `cover_facts`.
+- **Built on 12 November**, each with tests in `crates/claims/tests/suite` and on the real ledger in `crates/sim/tests/claims.rs`: provider fees (`PayCost`), late payment interest (`Rules.late_interest`), premium waiver (`StartWaiver`, waiver-only claims), lenders and assignees paid first (`PayInterest`, facts from `ic_core::interest::ranked`), proof of life (`Rules.proof_of_life_months`), a policy's claims moving with it between partitions (`TransferRecord.claims`), the staff working view (`Question::Work`), `run` on `claim_paid`.
+
+### Seams with other areas
+
+- **Payments**: reads `claim_paid` and `claim_cost_paid`; sends `PaymentReturned` for a refusal before settlement and `ConfirmRun` from the `run` field. Not sent: `RecordRepayment` (an inbound credit is not tied to an overpayment ID). Payments does not compare `account_ref` with its own payee's account. Lenders and providers must be verified payees in payments.
+- **Reinsurance**: reads the claim events; its driver sends the five reinsurance notices as caller `reinsurance`. `payment_returned` carries `ex_gratia`, `cost`, `interest_minor`.
+- **Distribution**: shows overpayments as memo lines from the four overpayment events; earns renewal commission from `premium_waived`; sends recovery status and write-off decisions as `held-balances`.
+- **Core**: owns the assignment record, the transfer protocol and billing. Policy loans, joint life first-event and linked covers are on the core thread's list; claims has nothing for them yet.
+- **Customer master**: asked to relay every death as `RecordDeath { party, date_of_death }` to every partition, caller `customer-master`. There is no command to undo a death.
+- **Portal**: building the claims screen on the queues and `Question::Work`; people's commands go in as caller `claims` with the signed-in staff ID and a typed purpose. `OpenFile` must stay a command so views of the clinical file are logged.
+- **Finance**: every core account role must be mapped in `config/finance/chart.star` or `crates/finance/tests/config.rs` fails. Claims roles mapped: 5030 claims handling, 5040 claim interest.
+
+### In progress when this was written
+
+- **Migration loader for claims** (design notes, migration of open claims, claims in payment, closed and declined claims). Written, compiling, not tested and not committed at the time of writing; if it is not on main, it is in the thread branch `claude/project-thread-p7xr3z` or has to be redone from this description. Shape: `Command::LoadMigrated { claim: Box<Claim>, health_used }` from caller `migration`; `ClaimsState::load_migrated` in `intake.rs` validates (new ID, policy and cover known to the core, no negative money, not in a run, no pending decision, status fits schedule and money), executes `Instruction::OpenMigrated { reserve_minor, admitted_minor, payable_minor, receivable_minor, open }`, marks `Claim.migrated`, registers review dates and the waiver on the calendar, and publishes `claim_migrated`. Core side: `open_migrated` in `crates/core/src/claims.rs` posts entry `claim_migrated` against a new account `claims_migration_control` (asset, chart account 1430) and creates the `ClaimLedger` record. Still to do: tests in the claims suite and in `crates/sim/tests/claims.rs` (an open claim with a reserve, a claim in payment whose next run pays the next period, a closed claim with health limits used, each refusal), the docs, and a note to the finance thread about account 1430. Open design point: instructed-but-unsettled payments in the old system are not carried; load after the old system's last run has settled.
+
+### Not built, with what each needs
+
+- **Offsets across partitions.** An overpayment is offset only against benefits on the same partition (`offset_sources` in `book.rs`). Across partitions it needs a message from the partition paying the benefit to the one holding the receivable; the core's outbound message mechanism (`ctx.messages`, as the transfer uses) is the place. Also: when a policy moves, an offset against another policy's benefit silently stops.
+- **Actuarial reserve table.** The first reserve is `Rules.initial_reserve_pct` of the amount claimed; a benefit in payment keeps the reserve it had at notification and is expensed beyond it period by period. A table by claim type, age and duration would set the reserve at admission of a periodic claim (`start_benefit` in `book.rs`) with a `SetReserve` instruction.
+- **Claim status for advisers and employers.** `ClaimsState::status_view` exists and is not served. The shipped audience policy treats the existence of a claim as a health fact, so only staff and the person it is about see it. Serving it needs a decision (below).
+- **Non-disclosure remedy.** Underwriting's outcome is recorded on the claim; there is no core command to vary or avoid the policy from it.
+- **Undoing a recorded death**, **death register or app confirmation satisfying proof of life without a person**, **tax withheld from late payment interest**, **a waiver checked against a product fact** (today the owner judges from the wording), **reversal billing back waived premium**: none built; each is one command or one rule and is described under its feature in `docs/claims.md`.
+- **Health limits** are held in claims (`health_used`) and nowhere else; the standing check reads receivables the core prunes after 400 days, so a very late claim reads standing as unknown.
+- **Run records stay on the partition that paid them** when a policy moves; a run confirmed after the move is confirmed there.
+
+### Open questions for Mitchell
+
+1. Should advisers and employers see that a claim exists and its status? The design gives them status without cause; the shipped privacy policy says existence itself is sensitive. Today they see nothing.
+2. Claims rules and authority limits are not shipped as configuration: the insurer's own staff IDs and limits have to be activated by two people before any claim can be worked. Is a sample book wanted for the demonstration environment?
+3. Late payment interest: the rate, the free days, and whether tax is withheld are the insurer's and the law's to set. The rule is off unless configured.
+
+### Checks
+
+- The claims suite alone covers the crate at 98.18% of lines (`cargo llvm-cov -p ic-claims`); `port.rs` and `report.rs` are covered from the sim and API tests.
+- The whole workspace suite passed locally before every push from this thread, the last at commit 71af93a. CI on main rarely completes because pushes arrive faster than a run; judge by the latest completed run.
+- Known weak spot outside claims' crates: `AbortTransfer` on the source is accepted while the transfer record may still be in flight to the target (reported to the core thread).
