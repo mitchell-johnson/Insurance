@@ -10,6 +10,7 @@
 pub mod bank;
 #[cfg(feature = "testing")]
 pub mod fake;
+pub mod iso20022;
 pub mod ports;
 pub mod pump;
 pub mod settings;
