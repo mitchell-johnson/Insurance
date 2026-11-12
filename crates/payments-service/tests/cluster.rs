@@ -238,9 +238,12 @@ async fn the_service_works_against_a_real_node() {
     let mounted = dir.join("bank-credentials");
     std::fs::create_dir_all(&mounted).unwrap();
     std::fs::write(mounted.join("bank"), "token-akl\n").unwrap();
+    let cluster_token = dir.join("cluster-token");
+    std::fs::write(&cluster_token, "test-cluster-token-0123456789abcdef\n").unwrap();
     let env: BTreeMap<&str, String> = BTreeMap::from([
         ("IC_NODES", addr.clone()),
-        ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef".to_string()),
+        ("IC_CLUSTER_TOKEN_FILE", cluster_token.to_str().unwrap().to_string()),
+        ("IC_PUMP_INTERVAL_SECS", "1".to_string()),
         ("IC_REGION", "akl".to_string()),
         ("HOSTNAME", "pump-0".to_string()),
         ("IC_BANK_SECRETS_DIR", mounted.to_str().unwrap().to_string()),
@@ -262,6 +265,11 @@ async fn the_service_works_against_a_real_node() {
         .unwrap();
     assert_eq!(readiness[0]["region"], json!("akl"));
     assert_eq!(readiness[0]["ready"], json!(true), "{readiness}");
+    // One pass with nothing left to do is a success, and the standing pump
+    // stops when it is told to.
+    assert_eq!(ic_payments_service::pump::run_from(&args(&["once"]), get, std::future::pending()).await, Ok(()));
+    let told = tokio::time::sleep(Duration::from_millis(100));
+    assert_eq!(ic_payments_service::pump::run_from(&[], get, told).await, Ok(()));
     // Without an identity to sign as, it does not start.
     let partial = |key: &str| env.get(key).filter(|_| key != "AZURE_CLIENT_ID").cloned();
     let refused = ic_payments_service::pump::run_from(&args(&["once"]), partial, std::future::pending()).await;
