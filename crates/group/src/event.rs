@@ -321,8 +321,23 @@ pub struct UnderwritingRequest {
     pub case: u64,
     pub policy: PolicyId,
     pub life: LifeId,
+    /// Who the member is. None until the member is linked to a person:
+    /// underwriting cannot ask a nobody for a disclosure, so the driver
+    /// holds the request until the link is made.
     pub party: Option<PartyId>,
+    /// The scheme policy's billing group, policyholder and product, which
+    /// underwriting records on its proposal.
+    pub group: GroupId,
+    pub policyholder: PartyId,
+    pub product_code: String,
+    pub product_hash: String,
     pub cover: String,
+    pub cover_type: String,
+    /// What the employer's file says of the member. Salary and category
+    /// stay here: underwriting is told the amount, not how it was reached.
+    pub date_of_birth: Option<NaiveDate>,
+    pub sex: Option<Sex>,
+    pub smoker: Option<bool>,
     pub excess_minor: i64,
     pub effective: NaiveDate,
     /// The reinsurer decides (facultative) or our underwriters do.
@@ -352,6 +367,13 @@ pub enum Outbound {
     Underwriting {
         key: String,
         request: UnderwritingRequest,
+    },
+    /// A request no longer wanted: the member left, or the cover fell back
+    /// under the automatic amount, before underwriting answered.
+    WithdrawUnderwriting {
+        key: String,
+        /// The key the request went under, which is its name there.
+        request_key: String,
     },
     /// Match these joiners of a file against the customer master and
     /// answer with `PartiesResolved`. The driver holds the identities; the

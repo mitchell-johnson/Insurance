@@ -43,6 +43,8 @@ pub struct Config {
     pub customer_master_scope: String,
     /// The name the reinsurance module is hosted under.
     pub reinsurance_module: String,
+    /// The name the underwriting module is hosted under.
+    pub underwriting_module: String,
     /// Salts member fingerprints. It must never change.
     pub fingerprint_salt: String,
     /// What callers of this service must present.
@@ -96,6 +98,7 @@ impl Config {
             customer_master: need("IC_GROUP_CUSTOMER_MASTER")?,
             customer_master_scope: need("IC_GROUP_CUSTOMER_MASTER_SCOPE")?,
             reinsurance_module: get("IC_GROUP_REINSURANCE_MODULE").unwrap_or_else(|| "reinsurance".into()),
+            underwriting_module: get("IC_GROUP_UNDERWRITING_MODULE").unwrap_or_else(|| "underwriting".into()),
             fingerprint_salt: secret("IC_GROUP_FINGERPRINT_SALT")?,
             api_key: secret("IC_GROUP_API_KEY")?,
             listen: get("IC_GROUP_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
