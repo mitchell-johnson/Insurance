@@ -25,7 +25,7 @@ PRODUCT = product(
     features = [
         billing(frequencies = ["fortnightly", "monthly", "yearly"], policy_fee_annual = "0"),
         earning(),
-        arrears(grace_days = 30, lapse_days = 60, reinstatement_days = 90),
+        arrears(grace_days = 30, lapse_days = 60, reinstatement_days = 90, reinstatement_evidence_free_days = 30),
         cooling_off(days = 14),
     ],
 )

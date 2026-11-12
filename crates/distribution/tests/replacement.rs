@@ -437,6 +437,14 @@ fn a_decision_between_premiums_and_a_reinstatement_after_a_match_pay_nobody_twic
     let fap_one = w.payable("fap-one");
     let arrears = w.cluster.state(0).policies[&old].lapse.as_ref().unwrap().arrears_minor;
     w.pay_amount(&old, "catch-up", arrears * 2);
+    // Lapsed longer than term life reinstates on payment alone: underwriting has looked again.
+    let approval = ic_core::command::ReinstatementTerms {
+        policy: old.clone(),
+        reference: "uw-reinstate-1".into(),
+        valid_until: w.today(),
+        terms: vec![],
+    };
+    w.core(&old, "underwriting", CoreCommand::ApproveReinstatement(Box::new(approval))).unwrap();
     let before = w.events.len();
     w.core(&old, "collections", CoreCommand::Reinstate { policy: old.clone() }).unwrap();
     assert!(w.events[before..]

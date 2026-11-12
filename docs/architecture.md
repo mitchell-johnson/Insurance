@@ -499,8 +499,8 @@ Owned by the thread "Build underwriting and new business". The full module descr
 
 **Not finished, in the order to do it.**
 
-1. Non-disclosure remedies in the core. The core thread agreed (2026-11-12) to write `AvoidPolicy { policy, case, premium: Refund | Retain }` and a vary command `{ policy, case, terms: Vec<LayerTerms> }`, caller `underwriting`, with no back-billing on a variation. When they land, route `Effect::NonDisclosureRemedy` in `driver.rs` (it already carries `terms` and `premium`), key `{review}/remedy`, park any refusal; replace the parked case in `tests/driver_branches.rs`.
-2. Evidence-free reinstatement days per product. Mitchell asked this thread to decide and document (2026-11-12). Not yet set in `products/*.star`; changing a product file changes its content hash, so it should go in as a new product version with its own `effective_from`, and the `underwriting_door.rs` test that relies on the shipped product asking for no evidence must be revisited.
+1. Non-disclosure remedies are routed: the core's `AvoidPolicy` and `VaryForNonDisclosure` (core thread, 13ce2de) are sent by the driver under `{review}/remedy`; refusals are parked for a person. Paying out a refund held in policy suspense is the existing suspense refund, started by a person.
+2. Evidence-free reinstatement days are set (term life 60, health plan 30, group life none; reasons in underwriting.md). Still to build: collections opening a reinstatement proposal by itself when `Reinstate` is refused `underwriting_required`.
 3. Receivers for notices, evidence requests and delegate file requests: the driver parks them. Each needs a door in documents or an evidence provider and a `Forward` implementation in `driver.rs`.
 4. A process that writes disclosures to the clinical store, and deploying `infra/underwriting.bicep` (bring it into `infra/main.bicep`).
 5. Risk codes on capacity reservations (`ReserveCapacity` effect does not send them), a horizon for the module's idempotency keys (agreed with the drivers), peer review drawing without scanning every proposal, staff grants, publishing proposal progress to channels, and an interim cover product.

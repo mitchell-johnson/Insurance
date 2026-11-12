@@ -725,6 +725,10 @@ pub enum Effect {
     /// core, never an edit.
     NonDisclosureRemedy {
         key: String,
+        /// The proposal the reviewed decision was made on, which says where
+        /// the policy is held. Absent only on effects written before it was.
+        #[serde(default)]
+        proposal: Option<ProposalId>,
         policy: PolicyId,
         life: LifeId,
         outcome: NonDisclosureOutcome,
