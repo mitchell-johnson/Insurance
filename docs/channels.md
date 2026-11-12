@@ -48,6 +48,8 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
 
+**Children.** The customer master records each child insured under a policy with the date they reach the age the product sets for controlling their own health information (`RecordDependant`). Until that date the policyholder sees the child's claims and other health-implying rows as a parent does. From the first business date on or after it, those rows are purged from the policyholder's devices, a `control_passed` effect goes out so both are told, and the young person can enrol a device of their own and, if they wish, consent to the parent seeing them again.
+
 **When the data may be stale.** The module knows when it last heard from the event stream. If that is more than two minutes ago, answers carry `fresh: false`, the audience policy is given that fact and withholds what it only allows on current relationship data, and the app shows "as at" rather than presenting old data as current.
 
 **When an adviser is unavailable (addendum entry 4).** If the licence an adviser's engagement depends on is suspended or lost, the customer's policy shows the adviser with `state: "unavailable"`, the date, and the insurer as the contact, from the moment the status is recorded. The customer may appoint another adviser at any time.
@@ -112,7 +114,7 @@ Modules call `/internal/v1/commands` with a token from the workforce tenant. The
 | Who | Sends |
 | --- | --- |
 | Identity service | `BindSubject`, `UnbindSubject`, device enrolment after verification. |
-| Customer master, group administration, distribution | Ownership, assignments, employer administrators, engagements and licence status. |
+| Customer master, group administration, distribution | Ownership, assignments, children and their age of control, employer administrators, engagements and licence status. |
 | Any module with rows to show | Rows for a policy, with a kind, a subject and whether they are sensitive. |
 | Commission, finance, reinsurance, group administration, claims | Workbench positions, and the outcome of an approved action. |
 | The module a request is for | `GET /internal/v1/pending` for requests accepted and waiting, then the outcome of each. |
