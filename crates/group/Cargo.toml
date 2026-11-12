@@ -7,6 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+ic-azure.workspace = true
 ic-core.workspace = true
 ic-ledger.workspace = true
 ic-log.workspace = true
@@ -19,8 +20,11 @@ serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
+ic-azure = { workspace = true, features = ["testing"] }
+ic-reinsurance = { path = "../reinsurance" }
 ic-sim.workspace = true
 ic-readmodel.workspace = true
 proptest.workspace = true

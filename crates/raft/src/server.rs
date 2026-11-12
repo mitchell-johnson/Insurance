@@ -27,13 +27,13 @@ use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, MoveLeader, Refusal};
 use crate::failback::{Failback, FailbackSettings, FailbackStatus};
 use crate::machine::Machine;
-use crate::module::{ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus};
+use crate::module::{CoreOutcome, CorePosting, ModuleGroup, ModuleMachine, ModuleSpec, ModuleStatus, Outbox, Route};
 use crate::network::{self, Network};
 use crate::node::{self, Node, NodeStatus, ProposeError};
 use crate::peers::Identity;
 use crate::query::Query as Question;
 use crate::store::LogStore;
-use crate::types::{Housekeeping, NodeId};
+use crate::types::{Housekeeping, NodeId, Reply};
 
 /// How a node is configured. Read from the environment by the binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +173,9 @@ pub struct Host {
     pub modules: BTreeMap<String, ModuleGroup>,
     /// Hands leadership back to the preferred region. Off unless configured.
     pub failback: Failback,
+    /// The hosted modules that post to the core, and how to read their
+    /// outboxes.
+    outboxes: BTreeMap<String, Outbox>,
     /// The hosted modules that read the partitions' events.
     readers: Vec<String>,
     partitions: PartitionId,
@@ -211,6 +214,8 @@ enum Sink {
 
 /// Events sent to the stream in one request.
 const EVENT_BATCH: usize = 500;
+/// How many of a module's core commands one pass carries.
+const OUTBOX_BATCH: usize = 64;
 
 impl Host {
     /// Open the logs and start every group's member. Existing logs are
@@ -270,6 +275,7 @@ impl Host {
             modules,
             failback: Failback::new(failback),
             readers: specs.iter().filter(|s| s.events).map(|s| s.name.clone()).collect(),
+            outboxes: specs.iter().filter_map(|s| s.outbox.map(|o| (s.name.clone(), o))).collect(),
             partitions: settings.partitions,
             peers: settings.peers.clone(),
             auth: settings.auth.clone(),
@@ -383,6 +389,50 @@ impl Host {
         Ok(fed)
     }
 
+    /// Carry a module's waiting core commands to their partitions, oldest
+    /// first, and tell the module what became of each. Stops at the first
+    /// one that could not be offered, or whose outcome the module could not
+    /// read, so the order holds; it is offered again on the next pass.
+    async fn carry(&self, module: &ModuleGroup, outbox: &Outbox, client: &ClusterClient) -> Result<usize, String> {
+        let answer = module.query((outbox.pending)(OUTBOX_BATCH)).await.map_err(|e| e.to_string())??;
+        let mut carried = 0;
+        for posting in (outbox.read)(answer)? {
+            let outcome = match self.offer(&posting, client).await? {
+                Some(partition) => match client.propose(partition, &posting.envelope).await.map_err(|e| e.to_string())? {
+                    Reply { rejected: Some(reject), .. } => CoreOutcome::Refused(reject),
+                    reply => CoreOutcome::Applied {
+                        partition,
+                        log_index: reply.log_index,
+                        duplicate: reply.duplicate,
+                    },
+                },
+                None => CoreOutcome::Unroutable(format!("no partition holds the policy of outbox item {}", posting.id)),
+            };
+            let told = module.propose((outbox.outcome)(&posting, &outcome)).await.map_err(|e| e.to_string())?;
+            if let Err(refusal) = told.result {
+                return Err(format!("the module refused the outcome of outbox item {}: {refusal}", posting.id));
+            }
+            carried += 1;
+        }
+        Ok(carried)
+    }
+
+    /// The partition a posting goes to. `None` when it names a policy that
+    /// no partition holds.
+    async fn offer(&self, posting: &CorePosting, client: &ClusterClient) -> Result<Option<PartitionId>, String> {
+        match &posting.route {
+            Route::Partition(partition) => Ok(Some(*partition)),
+            Route::Policy(policy) => {
+                for partition in 0..self.partitions {
+                    if client.locate(partition, policy).await.map_err(|e| e.to_string())?.is_some() {
+                        return Ok(Some(partition));
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
+
     /// Publish a partition's waiting events, in order, and record how far.
     async fn publish(&self, member: &Node) -> Result<usize, String> {
         let events = member.machine.pending_events(EVENT_BATCH);
@@ -448,6 +498,15 @@ impl Host {
                     Ok(n) => moved += n,
                     Err(error) => tracing::warn!(module = %module.name, partition, %error, "events not fed to the module; will retry"),
                 }
+            }
+        }
+        for (name, outbox) in &self.outboxes {
+            let Some(module) = self.modules.get(name).filter(|m| m.raft.is_leader()) else {
+                continue;
+            };
+            match self.carry(module, outbox, client).await {
+                Ok(n) => moved += n,
+                Err(error) => tracing::warn!(module = %name, %error, "the module's core commands were not all carried; will retry"),
             }
         }
         moved

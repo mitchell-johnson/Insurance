@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use crate::command::{caller, Envelope, GroupCommand};
 use crate::event::Outbound;
-use crate::state::GroupState;
+use crate::state::{FileStatus, GroupState};
 
 /// The module's permanent name on the cluster.
 pub const MODULE: &str = "group";
@@ -64,8 +64,13 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum Question {
-    /// What the driver has to deliver, oldest first.
-    Outbox { limit: usize },
+    /// What the driver has to deliver, oldest first, after an entry it
+    /// has already looked at.
+    Outbox {
+        limit: usize,
+        #[serde(default)]
+        after: Option<u64>,
+    },
     /// A scheme's standing: terms, counts, what is open.
     Scheme { scheme: String },
     /// One file with its preview and row-level results.
@@ -74,15 +79,30 @@ pub enum Question {
     Invoices { scheme: String },
     /// Open exceptions, for one scheme or all.
     Exceptions { scheme: Option<String> },
+    /// Files waiting for the driver: stored and not yet scanned, or scanned
+    /// and not yet read.
+    FilesToRead,
+    /// The mapping a scheme's files are read with.
+    Mapping { scheme: String },
+}
+
+/// A file the driver has work to do on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileToRead {
+    pub scheme: String,
+    pub file: String,
+    pub status: FileStatus,
+    pub content_hash: String,
 }
 
 pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
     let question: Question = serde_json::from_value(question).map_err(|e| format!("not a question this module answers: {e}"))?;
     let scheme = |id: &str| state.schemes.get(id).ok_or_else(|| format!("scheme {id} is not registered"));
     Ok(match question {
-        Question::Outbox { limit } => {
-            let items: Vec<(u64, &Outbound)> = state.outbox.iter().take(limit).map(|(id, o)| (*id, o)).collect();
-            json!({ "items": items, "more": state.outbox.len() > limit })
+        Question::Outbox { limit, after } => {
+            let from = after.map_or(0, |a| a.saturating_add(1));
+            let items: Vec<(u64, &Outbound)> = state.outbox.range(from..).take(limit).map(|(id, o)| (*id, o)).collect();
+            json!({ "items": items, "more": state.outbox.range(from..).count() > limit })
         }
         Question::Scheme { scheme: id } => {
             let s = scheme(&id)?;
@@ -127,6 +147,22 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             })
         }
         Question::Invoices { scheme: id } => json!({ "invoices": scheme(&id)?.invoices }),
+        Question::FilesToRead => {
+            let files: Vec<FileToRead> = state
+                .schemes
+                .values()
+                .flat_map(|s| s.files.values().map(move |f| (s, f)))
+                .filter(|(_, f)| matches!(f.status, FileStatus::Quarantined | FileStatus::Scanned))
+                .map(|(s, f)| FileToRead {
+                    scheme: s.id.clone(),
+                    file: f.id.clone(),
+                    status: f.status,
+                    content_hash: f.content_hash.clone(),
+                })
+                .collect();
+            json!({ "files": files })
+        }
+        Question::Mapping { scheme: id } => json!({ "mapping": scheme(&id)?.mapping }),
         Question::Exceptions { scheme: only } => {
             let open: Vec<_> = state
                 .exceptions

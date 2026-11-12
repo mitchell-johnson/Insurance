@@ -2103,6 +2103,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",
@@ -2110,12 +2111,14 @@ dependencies = [
  "ic-product",
  "ic-raft",
  "ic-readmodel",
+ "ic-reinsurance",
  "ic-sim",
  "proptest",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
