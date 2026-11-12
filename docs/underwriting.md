@@ -45,10 +45,11 @@ Hosting: `ic_underwriting::module_spec()` is in `ic_node::modules()`, so every l
 | Reserve capacity | Reinsurance module, key `uw:{reservation}:reserve`, then its `capacity` question | `CapacityAnswered`, key `cap:{reservation}` |
 | Release and confirm capacity, rating factors | Reinsurance module | none |
 | Issue the policy | Core, `IssueQuoted` from `new-business`, which refuses with `product_changed` when the product version is not the one quoted | `PolicyIssued` with the layers the core wrote, or `IssueRejected` |
+| Terms for an increase on a policy in force | Core, `AddUnderwrittenLayer` from `underwriting`, one a cover, key `{proposal}/increase/{life}/{cover}`: a new layer from the business date, with the days left of a billed period billed as an adjustment | `PolicyIssued` with the layers, or `IssueRejected` |
 | Issue and end interim cover | Core, `IssuePolicy` and `CancelPolicy` | `InterimIssued` |
 | Terms or an ended proposal for a group excess case | Group module, `record_excess_decision`, key `uw:{effect key}` | none |
 | Notices, evidence requests, delegate file requests | nothing yet | parked with the reason |
-| Revised terms on a policy in force, a non-disclosure remedy | nothing yet | parked with the reason |
+| Terms for an alteration or a reinstatement, a non-disclosure remedy | nothing yet | parked with the reason |
 
 A receiver's refusal that means "already done" or "no longer wanted" is counted as stale and acknowledged. Any other refusal parks the effect. Only a receiver that cannot be reached stops a pass, and the next pass starts from the same effect. Group administration's own driver reads the same outbox without acknowledging and sends the same excess decisions under the same key, so either may arrive first.
 
@@ -60,7 +61,9 @@ Settings: `IC_NODES` (required), the cluster token as for every worker, `IC_UNDE
 
 - **Notices, evidence and delegate files have no receiver.** The driver parks them with the reason. Correspondence and the evidence providers need a door for them, and then a `Forward` in the driver.
 - **The clinical store is not provisioned.** The store runs on `ic_azure::keywrap::KeyVaultWrapper` and `ic_azure::records::BlobRecords`, tested against the local stand-in for the Azure endpoints. The key-encryption key, the erasable container and the identity that may use them are not in `infra/` yet, and no process is deployed that writes to the store.
-- **Core commands that do not exist yet.** The core has no command to add or replace a layer for revised terms after issue (`Effect::ApplyTerms` for an increase, alteration or reinstatement) and none to vary or avoid a policy as a non-disclosure remedy. The driver parks both.
+- **Core commands that do not exist yet.** The core adds an increase as a layer (`AddUnderwrittenLayer`). It has no command to replace a layer for an alteration, none to reinstate on underwriting's terms, and none to vary or avoid a policy as a non-disclosure remedy. The driver parks those effects. A remedy effect also does not yet carry the varied terms.
+- **A group excess proposal stays in `issuing`.** Its terms go to group administration, which has the core write the layer; nothing brings the layer number back, so the proposal is never marked issued and its capacity reservation is never confirmed against the layer.
+- **An increase refused for `billing_behind`** (the day's billing has not run) comes back as a failed issue and waits for a person to retry it.
 - **No interim product is shipped.** Interim cover is off until settings name a product and cover the core has.
 - **Group excess answers do not carry the member's consent to itemising.** On a scheme that itemises loadings, group administration refuses an accepted answer with a loading (`consent_required`) and the effect is parked.
 - **Reserve capacity does not carry risk codes.** Reinsurance accepts optional `risk_codes` on a reservation; the effect does not send them, so a treaty exclusion by risk is found at the facultative step and not before.

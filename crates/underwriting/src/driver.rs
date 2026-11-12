@@ -181,6 +181,18 @@ fn issued_layers(events: &[CoreEvent]) -> Vec<IssuedLayer> {
         .collect()
 }
 
+/// The layers added to a policy in force, from the core's reply.
+fn added_layers(events: &[CoreEvent]) -> impl Iterator<Item = IssuedLayer> + '_ {
+    events.iter().filter_map(|e| match e {
+        CoreEvent::LayerAdded { layer, .. } => Some(IssuedLayer {
+            life: layer.life.clone(),
+            cover: layer.cover.clone(),
+            layer: layer.layer,
+        }),
+        _ => None,
+    })
+}
+
 pub struct Driver<U, R, C, S, F> {
     pub underwriting: U,
     pub reinsurer: R,
@@ -524,27 +536,52 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     issue: command.clone(),
                 };
                 let answer = self.core.send(home_partition(&command.group), key, "new-business", issue).await?;
-                let (suffix, back) = match answer.refused {
-                    None => (
-                        "issued",
-                        Command::PolicyIssued {
-                            proposal: proposal.clone(),
-                            layers: issued_layers(&answer.events),
-                        },
-                    ),
-                    Some(r) => (
-                        "rejected",
-                        Command::IssueRejected {
-                            proposal: proposal.clone(),
-                            code: r.code,
-                        },
-                    ),
+                let outcome = match answer.refused {
+                    None => Ok(issued_layers(&answer.events)),
+                    Some(r) => Err(r.code),
                 };
-                match self.tell(format!("{key}/{suffix}"), AS_ISSUER, back).await? {
-                    Ok(_) => Step::Delivered,
-                    Err(e) if e.code == "not_issuing" => Step::Stale,
-                    Err(e) => Step::Park(format!("the module refused the core's answer: {}: {}", e.code, e.message)),
+                self.issue_answer(key, proposal, outcome).await?
+            }
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry: Entry::Increase { .. },
+                policy,
+                covers,
+                ..
+            } => {
+                let Some(group) = self.group_of(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let mut layers = Vec::new();
+                let mut refused = None;
+                for cover in covers {
+                    let Some(life) = &cover.life else {
+                        return Ok(Step::Park(format!("the increase on {} names no life", cover.code)));
+                    };
+                    // Keyed by the proposal and cover, not the attempt: a cover the core has
+                    // written is not written again when the rest is tried again.
+                    let layer = ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+                        policy: policy.clone(),
+                        cover: cover.code.clone(),
+                        life: life.clone(),
+                        sum_insured_minor: cover.sum_insured_minor,
+                        loadings: cover.loadings.clone(),
+                        exclusions: cover.exclusions.clone(),
+                        reference: key.clone(),
+                    }));
+                    let sent = format!("{proposal}/increase/{life}/{}", cover.code);
+                    let answer = self.core.send(home_partition(&group), &sent, "underwriting", layer).await?;
+                    match answer.refused {
+                        None => layers.extend(added_layers(&answer.events)),
+                        Some(r) => {
+                            refused = Some(r.code);
+                            break;
+                        }
+                    }
                 }
+                let outcome = refused.map_or(Ok(layers), Err);
+                self.issue_answer(key, proposal, outcome).await?
             }
             Effect::IssueInterim { key, proposal, command } => {
                 let answer = self
@@ -625,13 +662,39 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
-            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for revised terms on a policy in force".to_string()),
+            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for an alteration or a reinstatement on underwriting's terms".to_string()),
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
             other => match self.forward.forward(other).await? {
                 None => Step::Delivered,
                 Some(reason) => Step::Park(reason),
             },
+        })
+    }
+
+    /// Bring the core's answer to an issue back: the layers it wrote, or
+    /// the code it refused with, which the module keeps for a retry.
+    async fn issue_answer(&self, key: &str, proposal: &ProposalId, outcome: Result<Vec<IssuedLayer>, String>) -> Result<Step, DriverError> {
+        let (suffix, back) = match outcome {
+            Ok(layers) => (
+                "issued",
+                Command::PolicyIssued {
+                    proposal: proposal.clone(),
+                    layers,
+                },
+            ),
+            Err(code) => (
+                "rejected",
+                Command::IssueRejected {
+                    proposal: proposal.clone(),
+                    code,
+                },
+            ),
+        };
+        Ok(match self.tell(format!("{key}/{suffix}"), AS_ISSUER, back).await? {
+            Ok(_) => Step::Delivered,
+            Err(e) if e.code == "not_issuing" => Step::Stale,
+            Err(e) => Step::Park(format!("the module refused the core's answer: {}: {}", e.code, e.message)),
         })
     }
 
