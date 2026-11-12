@@ -7,12 +7,13 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use common::*;
 use ic_core::command::MemberChange;
-use ic_core::event::{Event, EventRecord, LayerInfo, MemberCover, PayableCover};
+use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover, PayableCover};
 use ic_core::{Command, LayerOrigin, LifeId, PolicyId, PolicyStatus, UnwindCause};
 use ic_finance::close::{CheckStatus, VALUATION_EXTRACTS};
 use ic_finance::mart::{Extract, Mart, MartError, EXPERIENCE, IN_FORCE, MOVEMENT};
 use ic_finance::FinCommand;
 use ic_ledger::Hash32;
+use ic_product::Sex;
 use ic_sim::persona::{group_scheme, issue_command, member};
 
 fn mart_of(partitions: u16, events: &[EventRecord]) -> Mart {
@@ -80,8 +81,21 @@ fn extracts_reconcile_are_frozen_and_satisfy_the_close() {
     assert_eq!(total(&movement_nov, "opening_policies"), 0);
     assert_eq!(total(&movement_nov, "sum_insured_minor"), total(&in_force_nov, "sum_insured_minor"));
     assert!(total(&movement_nov, "premium_minor") >= 3 * i128::from(MONTHLY));
-    // No name and no party: a life is known only by its record ID.
-    assert!(in_force_nov.lines.iter().all(|l| !l.contains("party") && !l.contains("employer")));
+    // No name, no party and no date of birth: a life is known only by its record ID,
+    // with its age at the extract date, sex and smoker status.
+    assert!(in_force_nov
+        .lines
+        .iter()
+        .all(|l| !l.contains("party") && !l.contains("employer") && !l.contains("1990")));
+    let book = rows(&in_force_nov);
+    let insured = book.iter().find(|r| r["product"] == "term-life").unwrap();
+    assert_eq!(
+        (insured["age"].as_str(), insured["sex"].as_str(), insured["smoker"].as_str()),
+        ("37", "female", "false")
+    );
+    // A scheme member is rated on age alone.
+    let exec = book.iter().find(|r| r["life"] == "exec-1").unwrap();
+    assert_eq!((exec["age"].as_str(), exec["sex"].as_str(), exec["smoker"].as_str()), ("52", "", ""));
 
     // December: a member joins, and a death on 20 November is notified.
     let join = Command::ApplyMembership {
@@ -139,10 +153,15 @@ fn extracts_reconcile_are_frozen_and_satisfy_the_close() {
     assert!(experience.reconciled);
     assert_eq!(total(&experience, "ending_claims"), 1);
     assert!(total(&experience, "cover_days") > 31 * 4);
+    let claimed = rows(&experience).into_iter().find(|r| r["ending_claims"] == "1").unwrap();
+    assert_eq!(
+        (claimed["age_band"].as_str(), claimed["sex"].as_str(), claimed["smoker"].as_str()),
+        ("35-39", "female", "false")
+    );
 
     // The files as they would be stored, registered with the ledger.
-    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v1.csv");
-    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v1");
+    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v2.csv");
+    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v2");
     assert_eq!(in_force_nov.bytes().iter().filter(|b| **b == b'\n').count() as u64, in_force_nov.rows() + 1);
     let red = |w: &World| {
         let checks = w.books.state.checks(nov);
@@ -343,7 +362,12 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
         product_code: product.to_string(),
         product_hash: "h".to_string(),
         inception: day(1),
-        lives: vec![],
+        lives: vec![LifeInfo {
+            date_of_birth: Some(d(1988, 3, 5)),
+            sex: Some(Sex::Male),
+            smoker: Some(true),
+            ..LifeInfo::new("l1".into(), None)
+        }],
         layers,
         members,
     };
@@ -647,11 +671,34 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
     assert!(experience.reconciled);
     assert_eq!(total(&experience, "ending_claims"), 1);
     let cells = rows(&experience);
-    let life = cells.iter().find(|r| r["product"] == "term-life" && r["cover_type"] == "life-type").unwrap();
+    let life: Vec<_> = cells.iter().filter(|r| r["product"] == "term-life" && r["cover_type"] == "life-type").collect();
+    // pol-9 arrived with no factors: days 9 and 10, in a cell of its own.
+    assert_eq!(
+        (life[0]["age_band"].as_str(), life[0]["sex"].as_str(), life[0]["cover_days"].as_str()),
+        ("", "", "2")
+    );
     // pol-1 life: one layer on day 1, three on day 2, one on days 3 to 5, two on days 8
-    // and 9, none while lapsed or after the claim. pol-9: days 9 and 10.
-    assert_eq!(life["cover_days"], "13");
-    assert_eq!(life["ending_claim_sum_insured_minor"], "775");
+    // and 9, none while lapsed or after the claim. The life turned 40 on 5 March.
+    assert_eq!(
+        (
+            life[1]["age_band"].as_str(),
+            life[1]["sex"].as_str(),
+            life[1]["smoker"].as_str(),
+            life[1]["cover_days"].as_str()
+        ),
+        ("40-44", "male", "true", "11")
+    );
+    assert_eq!(life[1]["ending_claim_sum_insured_minor"], "775");
+    // Age is as at the day of each movement: 39 when issued, 40 when the layer was added on 7 March.
+    let ages = |kind: &str| {
+        moved
+            .iter()
+            .filter(|r| r["kind"] == kind && r["policy"] == "pol-1" && !r["life"].is_empty())
+            .map(|r| r["age"].clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ages("new_business"), ["39", "39"]);
+    assert_eq!(ages("in_force").last().map(String::as_str), Some("40"));
     let lapsed_days = mart.experience(day(6), day(7)).unwrap();
     assert!(rows(&lapsed_days).iter().all(|r| r["product"] != "term-life"));
 }

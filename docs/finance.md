@@ -68,7 +68,7 @@ The shipped return is illustrative. Its lines and account mappings are for finan
 - The movement rows are the difference each event makes to its policy; the in-force rows come from the dates each cover was known between. An extract is `reconciled` when the two agree: opening plus movements equals closing.
 - `Extract::bytes` is the file (CSV), `name` the path it is stored under in immutable storage, and `record` the `ExtractRecord` to register with `RegisterExtract`: content hash, row count, control totals and the Merkle root of its date.
 
-The extracts carry what the core publishes today. Age, sex, smoker status and occupation class are not on the core's events, so the files do not yet carry the rating factors a valuation model needs, and claims that do not end a policy are not in the experience extract.
+Each cover row carries the life's age last birthday on the extract date (on the day of the movement, in the movement extract), sex and smoker status, where the core published them; the experience extract groups by five-year age band at the period end, sex and smoker status. The date of birth stays in the mart and is never in a file. Lives that join a scheme after issue carry no factors yet, occupation class is not published, and claims that do not end a policy are not in the experience extract. The layouts are definition version 2.
 
 ## The close driver
 
@@ -132,7 +132,7 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 ## Not built yet
 
-- Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
+- Rating factors for members who join a scheme after issue, occupation class, and claims that do not end a policy, on the extracts. They need those facts on the core's or the claims module's events.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
 - Sources for policy suspense (collections) and pending investment cash. The driver takes any module's answer; commission, payments and reinsurance are wired. Pending investment cash will come from the core's investment ledger when it is built.
 - The dry-run compare tool for a new table against the in-force book.
