@@ -420,6 +420,7 @@ fn membership_events_move_the_cession_on_their_effective_dates() {
                 effective: d(2027, 3, 1),
                 covers: vec![member_cover("M2", 100 * K)],
                 party: None,
+                info: None,
             },
             // A salary change, backdated to mid February.
             Event::MemberChanged {
@@ -427,6 +428,7 @@ fn membership_events_move_the_cession_on_their_effective_dates() {
                 life: LifeId::from("M1"),
                 effective: d(2027, 2, 15),
                 covers: vec![member_cover("M1", 300 * K)],
+                info: None,
             },
         ],
     );
@@ -441,6 +443,7 @@ fn membership_events_move_the_cession_on_their_effective_dates() {
             life: LifeId::from("M1"),
             effective: d(2027, 2, 20),
             covers: vec![member_cover("M1", 300 * K)],
+            info: None,
         }],
     );
     assert!(same.instructions.is_empty());
@@ -463,6 +466,7 @@ fn membership_events_move_the_cession_on_their_effective_dates() {
             effective: d(2027, 7, 1),
             covers: vec![member_cover("M1", 250 * K)],
             party: None,
+            info: None,
         }],
     );
     assert!(b.ri.cession(&m1, d(2027, 6, 30)).is_none());
@@ -590,6 +594,7 @@ fn the_underwritten_excess_path_is_flagged_once() {
             effective: d(2027, 2, 1),
             covers: vec![member_cover("M2", 10 * K)],
             party: None,
+            info: None,
         }],
     );
     assert!(!later.notices.iter().any(|n| matches!(n, Notice::RequireUnderwrittenExcess { .. })));
@@ -672,6 +677,7 @@ fn an_underwritten_excess_layer_is_ceded_and_follows_the_member() {
         effective: d(2027, 2, 1),
         covers: vec![member_cover("M1", 500 * K)],
         party: Some(PartyId::from("anna")),
+        info: None,
     };
     b.feed(2, vec![join.clone()]);
     assert_eq!(b.ri.retained_on(&party("anna"), d(2027, 2, 1)), 500 * K);
@@ -714,6 +720,7 @@ fn an_underwritten_excess_layer_is_ceded_and_follows_the_member() {
         effective: d(2027, 5, 31),
         covers: vec![member_cover("M1", 500 * K)],
         party: Some(PartyId::from("anna")),
+        info: None,
     };
     b.feed(2, vec![rejoin, excess]);
     assert_eq!(b.ri.cession_record(&k).len(), 1, "no gap is left in the record");

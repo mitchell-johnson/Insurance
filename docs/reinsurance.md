@@ -45,9 +45,22 @@ Everything the module issues is numbered and kept in its replicated state (`outb
 - Instructions for a partition with no business date yet wait.
 - Any other refusal stops delivery at that instruction and opens the exception `delivery:{n}` with the core's code and message. It stays stopped until the core takes the instruction, or operations abandon it with `abandon_instruction` (a reason and an approver, kept in the state and answered by `Query::Abandoned`). An abandoned posting leaves the module's balance and the ledgers apart by its amount until someone posts the other side.
 
-After instructions, each cycle hands notices on to the audiences it reaches, with the notice's outbox number in the idempotency key. A notice its audience refuses is set aside with the exception `notice:{n}` and the ones behind it carry on; operations send it again (`retry_notice`) or abandon it with a reason and an approver (`abandon_notice`).
+After instructions, each cycle hands notices on to the audience each is for, with the notice's outbox number in the idempotency key. A notice its audience refuses is set aside with the exception `notice:{n}` and the ones behind it carry on; operations send it again (`retry_notice`) or abandon it with a reason and an approver (`abandon_notice`). An audience that cannot be reached keeps only its own notices waiting: the round carries on with the other audiences and reports the failure.
 
-Settings: `IC_NODES` and the cluster token as for every process, and optionally `IC_REINSURANCE_CYCLE_MS` (2000), `IC_REINSURANCE_PATIENCE_MS` (10000) and `IC_REINSURANCE_BATCH` (100). `tests/cluster.rs` runs the hosted module, the host's feed and the driver against a real node.
+| Audience | Notices | Where they go |
+|---|---|---|
+| Group administration | underwritten excess required | the `group` module on the nodes |
+| Underwriting | a reinsurer's answer to a facultative referral | the `underwriting` module |
+| Payments | settlement due | the `payments` module (see Settlements) |
+| Claims | large claim, consent, disputed items | the core, as claims commands (see Claims) |
+| Records | statements, listings, supplementary listings, the release log | write-once Blob Storage |
+| Staff | exceptions opened and closed, supplementary listing due, a capacity hold that lapsed | the module's event hub, and the driver's log |
+
+**Records** (`carriers.rs`). Each statement and listing is written to the container `reinsurance-records` under the name the module gave it (`reinsurance/<treaty>/<reinsurer>/statement-<n>.json`), byte for byte; its SHA-256 is in the module's state with the statement. Each release of information to a reinsurer is written as `reinsurance/releases/<notice number>.json` with what was released, to whom, why, and the date it was filed. The container has a time-based retention policy (`infra/reinsurance.bicep`), and the driver only ever creates: a name that exists is read back, accepted if it holds the same thing, and refused as `record_conflict` for a person if it does not. A document that does not have the hash it was issued with is refused as `record_damaged` and not written. While storage is away the notices wait.
+
+**Staff.** Each notice is sent to partition 0 of the event hub `reinsurance-events` as `{"seq", "on", "notice"}` with the properties `event-id` (`reinsurance-notice-<seq>`, the same on every try, so a consumer drops a repeat) and `kind`. The same notice is written to the driver's log at warning level under the target `reinsurance.notice`, where an alert rule can read it. The hub keeps seven days; the open exceptions themselves stay in the module (`Query::Exceptions`) whatever happens to the hub.
+
+Settings: `IC_NODES` and the cluster token as for every process; `IC_BLOB_ENDPOINT` and `IC_EVENT_HUBS_ENDPOINT` (both required: the driver does not start with nowhere to file statements or nobody to tell); and optionally `IC_REINSURANCE_CYCLE_MS` (2000), `IC_REINSURANCE_PATIENCE_MS` (10000), `IC_REINSURANCE_BATCH` (100), `IC_REINSURANCE_RECORDS_CONTAINER` (`reinsurance-records`) and `IC_REINSURANCE_EVENT_HUB` (`reinsurance-events`). It signs in to Azure with its pod's workload identity, which `infra/reinsurance.bicep` creates with three rights: write to that container, send to that hub, read the cluster token. `tests/cluster.rs` runs the hosted module, the host's feed and the shipped binary against a real node and a stand-in for Azure; `tests/carriers.rs` covers the records and the staff feed.
 
 ## Settlements
 
@@ -57,7 +70,9 @@ The payments module's driver tells this module what the bank did with the paymen
 
 ## Known gaps
 
-- **Notices for records and staff are not carried.** Every notice is kept numbered in the outbox with the audience it is for (`Notice::audience`). The driver hands underwritten-excess notices to the group module, facultative answers to underwriting and settlements due to payments (`crates/node/tests/between_modules.rs` proves the wire formats against the real modules), and sends notices for claims to the core (below). Notices for records (statements and listings to file in write-once Blob Storage) and staff (exceptions, lapsed capacity holds, supplementary listings due) wait in the outbox, where `Query::Notices` shows them. Nobody is told about them yet.
+- **Nothing in this repository reads the staff notices yet.** They are on the event hub `reinsurance-events` and in the driver's log, and the alert rule or operations screen that puts them in front of a person is not built: the operations console in `ic-channels` shows regions and held balances, not module exceptions. Until one is, reinsurance operations see open exceptions by asking the module (`Query::Exceptions`), and month-end sees what blocks the close through `Query::SweepCheck`.
+- **`infra/reinsurance.bicep` has not been deployed.** CI compiles it with the other templates. Like the other modules' templates it is deployed on its own into the resource group `main.bicep` created, and the retention policy on the records container is created unlocked; locking it in production is a deliberate step for an operator.
+- **Statements are filed, not sent.** The filed document is what goes to the reinsurer; sending it (by email, a portal or the reinsurer's bordereau upload) is done by people.
 - **A reversed admission that claims later reopens stays reversed here.** Its disputed items are with people, and recoveries on the reopened claim are not worked out again until they settle them.
 - **A module added to a running cluster** starts at the oldest event each partition still holds and raises `events_not_seen` for that partition. Loading the earlier cover from Event Hubs or the cold tier is not built, here or in the host. Hosted from a cluster's first start, as it is now, it misses nothing.
 - **One refused instruction stops all delivery**, not only delivery for the cover or reinsurer it concerns. That is deliberate while refusals are expected to be defects, and it is the first thing to revisit if they turn out not to be.

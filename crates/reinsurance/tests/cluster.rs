@@ -35,7 +35,10 @@ fn core_envelope(key: &str, caller: &str, command: ic_core::Command) -> ic_core:
 
 /// Purpose: on a real node the host shows the module the events of a policy issued on a
 /// partition, the driver carries the cession and the premium entries back over the
-/// cluster's routes, and the policy on the partition then records what was ceded.
+/// cluster's routes, and the policy on the partition then records what was ceded. The
+/// shipped binary does the same from its environment alone, and under its workload identity
+/// files a statement and its release in the records container and tells staff of an
+/// exception on the module's event hub.
 /// Why it matters: every other test drives the module in process. This is the one that
 /// proves the deployed pieces fit: the module's name and wire format, the host's event
 /// feed, the outbox read through a linearizable query, and the core's two commands
@@ -201,12 +204,69 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
         .await
         .unwrap();
     assert_eq!(reply.rejected, None);
+    // Its Azure identity is a workload identity, as in the pod; Azure is a stand-in.
+    let azure = ic_azure::testing::FakeAzure::start().await;
+    let token_file = dir.join("federated-token");
+    std::fs::write(&token_file, "a-projected-service-account-token").unwrap();
+    let authority = format!("{}/", azure.base);
+    // Month-end leaves it a statement to file and, the bank having paid the wrong amount,
+    // an exception to tell staff of.
+    let month_end = [
+        (
+            "month-end",
+            Command::CutStatement {
+                treaty: "retail-life-surplus".into(),
+                reinsurer: "reinsurer-north".into(),
+                period_end: d(2027, 2, 28),
+            },
+        ),
+        (
+            "reinsurance-ops",
+            Command::AgreeStatement {
+                number: 1,
+                reference: "RE-1".into(),
+            },
+        ),
+        (
+            "finance",
+            Command::InstructSettlement {
+                number: 1,
+                prepared_by: "kim".into(),
+                approved_by: "lee".into(),
+            },
+        ),
+        (
+            "payments",
+            Command::RecordSettlement {
+                number: 1,
+                payment_ref: "ri-stmt-1".into(),
+                amount_minor: 1,
+            },
+        ),
+    ];
+    for (n, (caller, command)) in month_end.into_iter().enumerate() {
+        let applied = driver.module.propose(tell(&format!("month-end-{n}"), caller, command)).await.unwrap();
+        assert_eq!(applied.result, Ok(()));
+    }
+    let waiting = |audience| Query::Notices {
+        audience: Some(audience),
+        limit: 100,
+    };
+    use ic_reinsurance::machine::Audience;
+    assert_eq!(driver.module.ask(waiting(Audience::Records)).await.unwrap().as_array().unwrap().len(), 2);
+    assert_eq!(driver.module.ask(waiting(Audience::Staff)).await.unwrap().as_array().unwrap().len(), 1);
     let mut process = Process::new(env!("CARGO_BIN_EXE_ic-reinsurance"))
         .env_clear()
         .envs([
             ("IC_NODES", addr.as_str()),
             ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef"),
             ("IC_REINSURANCE_CYCLE_MS", "50"),
+            ("IC_BLOB_ENDPOINT", azure.base.as_str()),
+            ("IC_EVENT_HUBS_ENDPOINT", azure.base.as_str()),
+            ("AZURE_FEDERATED_TOKEN_FILE", token_file.to_str().unwrap()),
+            ("AZURE_TENANT_ID", "tenant-1"),
+            ("AZURE_CLIENT_ID", "client-1"),
+            ("AZURE_AUTHORITY_HOST", authority.as_str()),
         ])
         .envs(std::env::vars().filter(|(k, _)| k.starts_with("LLVM_") || k.starts_with("CARGO_LLVM_COV")))
         .stdout(std::process::Stdio::null())
@@ -227,6 +287,24 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
     }
     let second = second.expect("the driver process carried the cession");
     assert_eq!((second.retained_minor, second.ceded.iter().map(|(_, a)| a).sum::<i64>()), (0, 100_000_00));
+    // And it filed the statement and its release under its own identity, and told staff.
+    for _ in 0..200 {
+        let left = driver.module.ask(Query::Notices { audience: None, limit: 100 }).await.unwrap();
+        if left.as_array().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(
+        azure.blobs().keys().cloned().collect::<Vec<_>>(),
+        vec![
+            format!("reinsurance-records/{}", ic_reinsurance::carriers::release_record(1)),
+            "reinsurance-records/reinsurance/retail-life-surplus/reinsurer-north/statement-1.json".to_string(),
+        ]
+    );
+    assert!(azure.events_sent("reinsurance-events", 0) >= 1);
+    assert!(azure.seen().iter().any(|line| line.starts_with("token ") && line.contains("client-1")));
+    assert_eq!(driver.module.ask(waiting(Audience::Staff)).await.unwrap(), json!([]));
     assert!(Process::new("kill").args(["-TERM", &process.id().to_string()]).status().unwrap().success());
     assert!(process.wait().unwrap().success(), "the driver stops cleanly on SIGTERM");
 
@@ -252,7 +330,8 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
 }
 
 /// Purpose: the driver binary started with no settings exits with an error naming the
-/// setting it needs, and one given the cluster but no token says that instead.
+/// setting it needs; one given the cluster but no storage account, no token, or half an
+/// Azure identity says that instead.
 /// Why it matters: a driver that started on defaults would talk to no cluster and look
 /// healthy. A misconfigured pod must fail where the operator can read why.
 #[test]
@@ -267,8 +346,14 @@ fn the_binary_says_what_it_needs() {
         String::from_utf8_lossy(&output.stderr).to_string()
     };
     assert!(run(&[]).contains("IC_NODES"));
-    assert!(run(&[("IC_NODES", "127.0.0.1:1")]).contains("IC_CLUSTER_TOKEN"));
-    assert!(run(&[("IC_NODES", " , "), ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef")]).contains("no node addresses"));
+    assert!(run(&[("IC_NODES", "127.0.0.1:1")]).contains("IC_BLOB_ENDPOINT"));
+    let azure = [("IC_BLOB_ENDPOINT", "http://127.0.0.1:1"), ("IC_EVENT_HUBS_ENDPOINT", "http://127.0.0.1:1")];
+    let with = |more: &[(&'static str, &'static str)]| run(&[&azure[..], more].concat());
+    assert!(with(&[("IC_NODES", "127.0.0.1:1")]).contains("IC_CLUSTER_TOKEN"));
+    let token = ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef");
+    assert!(with(&[("IC_NODES", " , "), token]).contains("no node addresses"));
+    // Half a workload identity is a mistake in the pod, not a reason to try another identity.
+    assert!(with(&[("IC_NODES", "127.0.0.1:1"), token, ("AZURE_FEDERATED_TOKEN_FILE", "/nowhere")]).contains("AZURE_TENANT_ID"));
 }
 
 /// Purpose: the driver binary, running with no cluster to reach, keeps running, and exits
@@ -286,6 +371,8 @@ fn the_binary_outlasts_a_missing_cluster_and_stops_on_an_interrupt() {
         .envs([
             ("IC_NODES", "127.0.0.1:1"),
             ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef"),
+            ("IC_BLOB_ENDPOINT", "http://127.0.0.1:1"),
+            ("IC_EVENT_HUBS_ENDPOINT", "http://127.0.0.1:1"),
             ("IC_REINSURANCE_CYCLE_MS", "20"),
             ("IC_REINSURANCE_PATIENCE_MS", "50"),
         ])
@@ -315,16 +402,22 @@ async fn the_served_loop_stops_when_told_even_with_no_cluster() {
         cycle_every: Duration::from_millis(5),
         patience: Duration::from_millis(20),
         batch: 10,
+        records_endpoint: String::new(),
+        records_container: String::new(),
+        event_hubs: String::new(),
+        event_hub: String::new(),
     };
+    let records = ic_azure::blob::MemoryWormStore::default;
+    let staff = || ic_azure::eventhubs::EventHubsSink::new("http://127.0.0.1:1", "h", ic_azure::credential::AzureCredential::static_token("t"));
     let auth = || ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let served = tokio::spawn(ic_reinsurance::service::serve(config("127.0.0.1:1"), auth(), async {
+    let served = tokio::spawn(ic_reinsurance::service::serve(config("127.0.0.1:1"), auth(), records(), staff(), async {
         let _ = stopped.await;
     }));
     tokio::time::sleep(Duration::from_millis(60)).await;
     assert!(!served.is_finished(), "the loop runs until it is told to stop");
     stop.send(()).unwrap();
     assert_eq!(served.await.unwrap(), Ok(()));
-    let nowhere = ic_reinsurance::service::serve(config(","), auth(), std::future::ready(())).await;
+    let nowhere = ic_reinsurance::service::serve(config(","), auth(), records(), staff(), std::future::ready(())).await;
     assert_eq!(nowhere, Err("no node addresses given".to_string()));
 }

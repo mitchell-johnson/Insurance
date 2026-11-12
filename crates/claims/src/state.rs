@@ -502,11 +502,12 @@ impl ClaimsState {
             }
             Due::Review(kind) => {
                 open_task(claim, cx, format!("review/{kind:?}/{on}"), kind, Some(on));
-                claim.due.insert((plus_days(on, self.rules.review_grace_days), Due::ReviewOverdue(kind)));
-                let months = match kind {
-                    TaskKind::MedicalReview => self.rules.medical_review_months,
-                    _ => self.rules.income_declaration_months,
+                let (grace, months) = match kind {
+                    TaskKind::ProofOfLife => (self.rules.proof_of_life_grace_days, self.rules.proof_of_life_months),
+                    TaskKind::MedicalReview => (self.rules.review_grace_days, self.rules.medical_review_months),
+                    _ => (self.rules.review_grace_days, self.rules.income_declaration_months),
                 };
+                claim.due.insert((plus_days(on, grace), Due::ReviewOverdue(kind)));
                 if let Some(s) = claim.schedule.as_mut() {
                     let next = plus_months(on, months.max(1));
                     if next < s.end {
