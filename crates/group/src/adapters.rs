@@ -5,7 +5,7 @@
 
 use std::time::Duration;
 
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use ic_azure::blob::{BlobContainer, WormStore, MALWARE_SCAN_CLEAN, MALWARE_SCAN_TAG};
 use ic_azure::eventhubs::EventHubsSink;
 use ic_azure::AzureError;
@@ -14,8 +14,8 @@ use ic_core::{Command as CoreCommand, GroupId};
 use ic_raft::ClusterClient;
 use serde_json::{json, Value};
 
-use crate::command::Envelope;
-use crate::driver::{Core, DriverError, FileStore, Module, Peers, Scan};
+use crate::command::{Envelope, ExcessDecision};
+use crate::driver::{Answers, Core, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
 use crate::event::{GroupEvent, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{Question, MODULE};
 use crate::state::Outcome;
@@ -89,22 +89,31 @@ impl ClusterCore {
     }
 }
 
+/// Send a command to a group's home partition and, if its policies were
+/// moved, to whichever partition holds them now. `propose` gives the
+/// core's refusal code, or `None` when it accepted.
+pub async fn follow_transfer<F, Fut>(home: u16, partitions: u16, mut propose: F) -> Result<Option<String>, String>
+where
+    F: FnMut(u16) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<String>, String>>,
+{
+    let answer = propose(home).await?;
+    if answer.as_deref() != Some("policy_transferred") {
+        return Ok(answer);
+    }
+    for partition in (0..partitions).filter(|p| *p != home) {
+        let elsewhere = propose(partition).await?;
+        if !matches!(elsewhere.as_deref(), Some("unknown_policy" | "policy_transferred")) {
+            return Ok(elsewhere);
+        }
+    }
+    Ok(answer)
+}
+
 impl Core for ClusterCore {
     async fn submit(&self, key: &str, group: &GroupId, command: &CoreCommand) -> Result<Option<String>, String> {
         let home = home_partition(group) % self.partitions;
-        let answer = self.propose(home, key, command).await?;
-        if answer.as_deref() != Some("policy_transferred") {
-            return Ok(answer);
-        }
-        // The group's policies were moved to another partition: the command
-        // goes to whichever partition holds them now.
-        for partition in (0..self.partitions).filter(|p| *p != home) {
-            let elsewhere = self.propose(partition, key, command).await?;
-            if !matches!(elsewhere.as_deref(), Some("unknown_policy" | "policy_transferred")) {
-                return Ok(elsewhere);
-            }
-        }
-        Ok(answer)
+        follow_transfer(home, self.partitions, |partition| self.propose(partition, key, command)).await
     }
 
     async fn business_date(&self) -> Result<Option<NaiveDate>, String> {
@@ -139,6 +148,92 @@ pub fn reinsurance_envelope(key: &str, on: NaiveDate, notice: &ReinsuranceNotice
     json!({ "key": key, "caller": crate::command::caller::STAFF, "on": on, "command": command })
 }
 
+/// A request for a member's excess as the underwriting module's proposal:
+/// one life, one cover, the amount above the automatic limit. `None` while
+/// the member is not linked to a person. The proposal is named by the key,
+/// `grp-uw:{scheme}:{case}`, which is how the answer finds its case.
+///
+/// The scheme policy is in force and its premium is the scheme's, so there
+/// is no quote to bind: the quote names the product version and no premium.
+/// The policy number is the policy's ID, which is all this module holds.
+pub fn underwriting_envelope(key: &str, at: DateTime<Utc>, today: NaiveDate, request: &UnderwritingRequest) -> Option<Value> {
+    let party = request.party.as_ref()?;
+    let proposal = json!({
+        "proposal": key,
+        "entry": { "entry": "group_excess", "policy": request.policy },
+        "policy": request.policy,
+        "policy_number": request.policy.to_string(),
+        "group": request.group,
+        "policyholder": request.policyholder,
+        "product_code": request.product_code,
+        "frequency": "monthly",
+        "channel": "group-scheme",
+        "quote": { "product_hash": request.product_hash, "rate_tables": [], "premium_minor": 0, "quoted_on": today },
+        "lives": [{
+            "life": request.life,
+            "party": party,
+            "factors": { "date_of_birth": request.date_of_birth, "sex": request.sex, "smoker": request.smoker },
+        }],
+        "covers": [{
+            "code": request.cover,
+            "cover_type": request.cover_type,
+            "life": request.life,
+            "sum_insured_minor": request.excess_minor,
+        }],
+    });
+    Some(underwriting_command(key, at, today, json!({ "open_proposal": proposal })))
+}
+
+/// The withdrawal of a request underwriting has not answered.
+pub fn underwriting_withdrawal(key: &str, at: DateTime<Utc>, today: NaiveDate, request_key: &str) -> Value {
+    underwriting_command(key, at, today, json!({ "withdraw": { "proposal": request_key } }))
+}
+
+fn underwriting_command(key: &str, at: DateTime<Utc>, today: NaiveDate, command: Value) -> Value {
+    json!({ "key": key, "caller": crate::command::caller::STAFF, "at": at, "today": today, "command": command })
+}
+
+/// The scheme and case a proposal named `grp-uw:{scheme}:{case}` answers.
+fn case_of(proposal: &str) -> Option<(String, u64)> {
+    let (scheme, case) = proposal.strip_prefix("grp-uw:")?.rsplit_once(':')?;
+    Some((scheme.to_string(), case.parse().ok()?))
+}
+
+/// One of underwriting's effects as an answer to a request of this
+/// module's, or `None` when it is something else. Terms are accepted cover
+/// with its loadings and exclusions; a proposal that ended without terms
+/// was declined, or was not proceeded with.
+///
+/// Underwriting does not say whether the member agreed to the employer
+/// seeing a loading, so an answer never claims that consent.
+pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
+    let group_excess = |body: &Value| body["entry"]["entry"] == "group_excess";
+    let (body, decision) = if let Some(body) = effect.get("apply_terms").filter(|b| group_excess(b)) {
+        let cover = body["covers"].get(0)?;
+        let decision = ExcessDecision::Accepted {
+            sum_insured_minor: cover["sum_insured_minor"].as_i64()?,
+            loadings: serde_json::from_value(cover["loadings"].clone()).ok()?,
+            exclusions: serde_json::from_value(cover["exclusions"].clone()).ok()?,
+            member_consents_to_itemising: false,
+        };
+        (body, decision)
+    } else {
+        let body = effect.get("proposal_ended").filter(|b| group_excess(b))?;
+        let decision = match body["outcome"].as_str()? {
+            "declined" => ExcessDecision::Declined,
+            _ => ExcessDecision::NotProceeded,
+        };
+        (body, decision)
+    };
+    let (scheme, case) = case_of(body["proposal"].as_str()?)?;
+    Some(ExcessAnswer {
+        key: body["key"].as_str()?.to_string(),
+        scheme,
+        case,
+        decision,
+    })
+}
+
 /// The event as it is put on the stream, with what a consumer needs to
 /// order and de-duplicate it without reading the body.
 pub fn event_message(seq: u64, date: NaiveDate, event: &GroupEvent) -> (Value, Value) {
@@ -154,16 +249,34 @@ pub struct ClusterPeers {
     patience: Duration,
     /// The name the reinsurance module is hosted under.
     reinsurance: String,
+    /// The name the underwriting module is hosted under.
+    underwriting: String,
     events: EventHubsSink,
 }
 
 impl ClusterPeers {
-    pub fn new(client: ClusterClient, patience: Duration, reinsurance: &str, events: EventHubsSink) -> Self {
+    pub fn new(client: ClusterClient, patience: Duration, reinsurance: &str, underwriting: &str, events: EventHubsSink) -> Self {
         Self {
             client,
             patience,
             reinsurance: reinsurance.to_string(),
+            underwriting: underwriting.to_string(),
             events,
+        }
+    }
+
+    /// Send one command to underwriting. Its refusal comes back as the
+    /// code; `settled` names the refusals that mean the work is done.
+    async fn to_underwriting(&self, command: Value, settled: &[&str]) -> Result<(), String> {
+        let reply = self
+            .client
+            .propose_module_until(&self.underwriting, &command, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        let answer = reply.result.map_err(|e| format!("underwriting could not read the command: {e}"))?;
+        match answer["Err"]["code"].as_str() {
+            Some(code) if !settled.contains(&code) => Err(format!("underwriting refused: {code}")),
+            _ => Ok(()),
         }
     }
 }
@@ -181,12 +294,29 @@ impl Peers for ClusterPeers {
         reply.result.map(|_| ()).map_err(|e| format!("reinsurance could not read the notice: {e}"))
     }
 
-    async fn underwriting(&self, _key: &str, request: &UnderwritingRequest) -> Result<(), String> {
-        // The underwriting module has no intake for a scheme member's
-        // excess yet. The request stays in the outbox, counted as not
-        // delivered, and is on the event stream as
-        // `excess_underwriting_requested`.
-        Err(format!("underwriting has no intake for scheme excess (case {})", request.case))
+    async fn underwriting(&self, key: &str, today: NaiveDate, request: &UnderwritingRequest) -> Result<(), String> {
+        let command = underwriting_envelope(key, Utc::now(), today, request).ok_or("the member is not linked to a person")?;
+        // A refusal is not stored under the key there, so the request stays
+        // in the outbox and goes again: with no rules active for the
+        // product, say, until they are.
+        self.to_underwriting(command, &["duplicate_proposal"]).await
+    }
+
+    async fn withdraw_underwriting(&self, key: &str, today: NaiveDate, request_key: &str) -> Result<(), String> {
+        // Answered, ended or never opened: there is nothing left to withdraw.
+        self.to_underwriting(underwriting_withdrawal(key, Utc::now(), today, request_key), &["closed", "unknown_proposal"])
+            .await
+    }
+
+    async fn underwriting_answers(&self, after: u64, max: usize) -> Result<Answers, String> {
+        let question = json!({ "query": "outbox", "after": after, "max": max });
+        let answer = self.client.query_module(&self.underwriting, &question).await.map_err(|e| e.to_string())??;
+        let effects: Vec<(u64, Value)> = serde_json::from_value(answer).map_err(|e| e.to_string())?;
+        Ok(Answers {
+            through: effects.last().map_or(after, |(n, _)| *n),
+            more: effects.len() >= max,
+            answers: effects.iter().filter_map(|(_, effect)| excess_answer(effect)).collect(),
+        })
     }
 
     async fn publish(&self, seq: u64, date: NaiveDate, event: &GroupEvent) -> Result<(), String> {

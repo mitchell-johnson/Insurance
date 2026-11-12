@@ -666,14 +666,26 @@ impl EventHubsPublisher {
 
 impl EventPublisher for EventHubsPublisher {
     async fn publish(&self, events: &[EventRecord]) -> Result<(), String> {
-        let token = self.credential.token(ic_azure::credential::SCOPE_EVENT_HUBS).await.map_err(|e| e.to_string())?;
-        let batch: Vec<Value> = events
+        let items: Vec<(&str, u64, String)> = events
             .iter()
-            .map(|e| {
+            .map(|e| (e.id.as_str(), e.seq, serde_json::to_string(e).unwrap_or_default()))
+            .collect();
+        self.publish_items(&items).await
+    }
+}
+
+impl EventHubsPublisher {
+    /// Publish a batch of `(event id, sequence, body)` in order, all or
+    /// nothing.
+    pub async fn publish_items(&self, items: &[(&str, u64, String)]) -> Result<(), String> {
+        let token = self.credential.token(ic_azure::credential::SCOPE_EVENT_HUBS).await.map_err(|e| e.to_string())?;
+        let batch: Vec<Value> = items
+            .iter()
+            .map(|(id, seq, body)| {
                 serde_json::json!({
-                    "Body": serde_json::to_string(e).unwrap_or_default(),
+                    "Body": body,
                     // Consumers de-duplicate and detect gaps from these.
-                    "UserProperties": { "event-id": e.id, "seq": e.seq },
+                    "UserProperties": { "event-id": id, "seq": seq },
                 })
             })
             .collect();

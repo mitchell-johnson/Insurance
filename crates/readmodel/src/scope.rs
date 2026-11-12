@@ -29,6 +29,13 @@ pub enum Relationship {
     Adviser,
     EmployerAdmin,
     Assignee,
+    /// Someone the policyholder lets look: a relative, say. Reads only.
+    Viewer,
+    /// Someone the policyholder lets see the money side only: an accountant.
+    FinancialViewer,
+    /// A support person the policyholder has named. Reads only; every
+    /// signed step is still the policyholder's own.
+    SupportPerson,
 }
 
 impl Relationship {
@@ -40,6 +47,9 @@ impl Relationship {
             Relationship::Adviser => "adviser",
             Relationship::EmployerAdmin => "employer_admin",
             Relationship::Assignee => "assignee",
+            Relationship::Viewer => "viewer",
+            Relationship::FinancialViewer => "financial_viewer",
+            Relationship::SupportPerson => "support_person",
         }
     }
 }
@@ -226,6 +236,33 @@ mod tests {
         assert!(s.may_view("party-hr", &[Relationship::EmployerAdmin], &invoice, true).unwrap());
         assert!(!s.may_view("party-hr", &[Relationship::EmployerAdmin], &claim, true).unwrap());
         assert!(!s.may_view("party-hr", &[Relationship::EmployerAdmin], &cover, true).unwrap());
+    }
+
+    /// Purpose: the people a policyholder lets look see what that kind of access is for: a viewer and a support person every row
+    /// that implies nothing about health, an accountant the policy, its billing and its documents and nothing about cover.
+    /// Why it matters: these people are let in by the policyholder, who cannot give away what is not theirs to give: another
+    /// person's health information, or more of the policy than the purpose needs.
+    #[test]
+    fn people_the_policyholder_lets_look_see_only_what_that_access_is_for() {
+        let s = scope();
+        let row = |kind: &'static str, sensitive| RowScope {
+            kind,
+            subject: Some("party-owner"),
+            sensitive,
+        };
+        for who in [Relationship::Viewer, Relationship::SupportPerson] {
+            assert!(s.may_view("party-x", &[who], &row("cover", false), true).unwrap());
+            assert!(s.may_view("party-x", &[who], &row("billing", false), true).unwrap());
+            assert!(!s.may_view("party-x", &[who], &row("claim", true), true).unwrap());
+        }
+        for kind in ["policy", "billing", "notice", "document"] {
+            assert!(
+                s.may_view("party-x", &[Relationship::FinancialViewer], &row(kind, false), true).unwrap(),
+                "{kind}"
+            );
+        }
+        assert!(!s.may_view("party-x", &[Relationship::FinancialViewer], &row("cover", false), true).unwrap());
+        assert!(!s.may_view("party-x", &[Relationship::FinancialViewer], &row("billing", true), true).unwrap());
     }
 
     /// Purpose: a caller with no relationship to a policy sees nothing, and a sensitive row is

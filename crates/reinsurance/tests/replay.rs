@@ -376,7 +376,148 @@ fn every_command() -> Vec<Command> {
             amount_minor: 1,
             reference: "r".into(),
         },
+        Command::AcknowledgeInstructions { through: 0 },
+        Command::InstructionRefused {
+            seq: 1,
+            code: "c".into(),
+            message: "m".into(),
+        },
+        Command::AbandonInstruction {
+            seq: 1,
+            reason: "r".into(),
+            approved_by: "a".into(),
+        },
+        Command::AcknowledgeNotices { seqs: vec![] },
+        Command::NoticeRefused {
+            seq: 1,
+            code: "c".into(),
+            message: "m".into(),
+        },
+        Command::RetryNotice { seq: 1 },
+        Command::AbandonNotice {
+            seq: 1,
+            reason: "r".into(),
+            approved_by: "a".into(),
+        },
     ]
+}
+
+/// Purpose: every kind of notice names the audience it is for.
+/// Why it matters: the audience decides who is told. A consent request filed under staff
+/// would never reach claims, and the claim would be paid without the reinsurer's agreement.
+#[test]
+fn every_notice_names_its_audience() {
+    use ic_reinsurance::machine::Audience;
+    use ic_reinsurance::Notice;
+    let claim: ic_reinsurance::ClaimId = "C1".into();
+    let cases = [
+        (
+            Notice::ExceptionOpened {
+                id: "x".into(),
+                code: "c".into(),
+                detail: "d".into(),
+            },
+            Audience::Staff,
+        ),
+        (Notice::ExceptionClosed { id: "x".into() }, Audience::Staff),
+        (Notice::SupplementaryListingDue { statement: 1 }, Audience::Staff),
+        (
+            Notice::CapacityReleased {
+                reservation_id: "R".into(),
+                reason: "r".into(),
+            },
+            Audience::Staff,
+        ),
+        (
+            Notice::RequireUnderwrittenExcess {
+                policy: PolicyId::from("S1"),
+                life: "M1".into(),
+                cover: "group-life".into(),
+                excess_minor: 1,
+                reference: "r".into(),
+            },
+            Audience::Group,
+        ),
+        (
+            Notice::FacultativeTermsRecorded {
+                reservation_id: "R".into(),
+                offered: true,
+                reference: "F".into(),
+            },
+            Audience::Underwriting,
+        ),
+        (
+            Notice::LargeClaimNotification {
+                claim: claim.clone(),
+                treaty: retail(),
+                reinsurers: vec![north()],
+            },
+            Audience::Claims,
+        ),
+        (
+            Notice::ReinsurerConsentRequired {
+                claim: claim.clone(),
+                treaty: retail(),
+                due_by: d(2027, 3, 1),
+            },
+            Audience::Claims,
+        ),
+        (
+            Notice::ReinsurerConsent {
+                claim: claim.clone(),
+                reinsurer: north(),
+                agreed: true,
+                reference: "r".into(),
+            },
+            Audience::Claims,
+        ),
+        (
+            Notice::DisputedItemRaised {
+                claim,
+                reinsurer: north(),
+                reference: "r".into(),
+            },
+            Audience::Claims,
+        ),
+        (
+            Notice::DisputeResolved {
+                reference: "r".into(),
+                repay_minor: 0,
+            },
+            Audience::Claims,
+        ),
+        (
+            Notice::SettlementDue {
+                statement: 1,
+                treaty: retail(),
+                reinsurer: north(),
+                currency: ic_money::Currency::NZD,
+                net_minor: 1,
+            },
+            Audience::Payments,
+        ),
+        (
+            Notice::Document {
+                name: "n".into(),
+                sha256: "h".into(),
+                body: "b".into(),
+            },
+            Audience::Records,
+        ),
+        (
+            Notice::ReleaseLogged {
+                subject: "s".into(),
+                treaty: retail(),
+                reinsurer: north(),
+                purpose: "p".into(),
+                documents: vec![],
+            },
+            Audience::Records,
+        ),
+    ];
+    for (notice, audience) in cases {
+        assert_eq!(notice.audience(), audience, "{notice:?}");
+    }
 }
 
 /// Purpose: every command has a name of its own and a list of modules allowed to send it, and

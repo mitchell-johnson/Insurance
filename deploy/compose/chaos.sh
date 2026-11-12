@@ -30,6 +30,8 @@ step() { printf '\n== %s\n' "$*"; }
 fail() {
   printf '\nFAILED: %s\n' "$*" >&2
   "${COMPOSE[@]}" ps >&2 || true
+  # The cluster is torn down on exit, so this is the only look at its logs.
+  "${COMPOSE[@]}" logs --no-color --tail 40 >&2 || true
   exit 1
 }
 
@@ -151,7 +153,10 @@ docker compose -f docker-compose.yml up -d node-3
 issue_range 31 35
 shut_out=0
 for _ in $(seq 1 30); do
-  if "${COMPOSE[@]}" logs node-3 2>&1 | grep -q 'another incarnation'; then shut_out=1; break; fi
+  # To a file first: grep -q stops reading at the first match, and with
+  # pipefail a log longer than the pipe then counts as a failure.
+  "${COMPOSE[@]}" logs --no-color node-3 >"$WORK/node-3.log" 2>&1 || true
+  if grep -q 'another incarnation' "$WORK/node-3.log"; then shut_out=1; break; fi
   sleep 2
 done
 [[ $shut_out == 1 ]] || fail "the wiped node was not shut out under its old number"

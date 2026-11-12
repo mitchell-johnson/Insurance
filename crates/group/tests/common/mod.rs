@@ -153,6 +153,8 @@ pub struct Harness {
     pub published: Vec<GroupEvent>,
     pub notices: Vec<ReinsuranceNotice>,
     pub requests: Vec<UnderwritingRequest>,
+    /// The requests withdrawn from underwriting, by the key each went under.
+    pub withdrawals: Vec<String>,
     pub to_resolve: Vec<(String, Vec<String>)>,
     /// Answers given in place of the core's, one per command sent to it.
     pub core_faults: VecDeque<Option<String>>,
@@ -208,6 +210,7 @@ impl Harness {
             published: vec![],
             notices: vec![],
             requests: vec![],
+            withdrawals: Vec::new(),
             to_resolve: vec![],
             core_faults: VecDeque::new(),
             sent: vec![],
@@ -318,6 +321,10 @@ impl Harness {
                 }
                 Outbound::Underwriting { request, .. } => {
                     self.requests.push(request);
+                    acked.push(id);
+                }
+                Outbound::WithdrawUnderwriting { request_key, .. } => {
+                    self.withdrawals.push(request_key);
                     acked.push(id);
                 }
                 Outbound::ResolveParties { file, employee_ids, .. } => {
