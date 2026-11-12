@@ -438,12 +438,29 @@ impl<M: Module, C: Core> Driver<M, C> {
         Ok(Some(on))
     }
 
-    /// Hand on the notices for every audience `audiences` reaches. A notice
+    /// Send the core the command that tells claims of one notice.
+    async fn tell_claims(&self, seq: u64) -> Result<Handed, DriverError> {
+        let answer = self.module.ask(Query::NoticeDelivery { seq }).await?;
+        let (partition, key, _, command): (PartitionId, String, String, ic_core::Command) =
+            serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
+        let delivery = CoreDelivery {
+            partition,
+            key,
+            caller: crate::delivery::CALLER,
+            command,
+        };
+        Ok(self.core.send(&delivery).await?.map_or_else(Handed::Refused, |()| Handed::Taken))
+    }
+
+    /// Hand on the notices for every audience `audiences` reaches, and the
+    /// notices for claims, which go to the core. A notice
     /// that is refused is set aside in the module, with an exception, and
     /// the ones behind it carry on.
     pub async fn hand_on<A: Audiences>(&self, audiences: &A, on: NaiveDate) -> Result<Round, DriverError> {
         let mut round = Round::default();
-        for audience in audiences.reached() {
+        // Claims lives in the core, which this driver already reaches.
+        let reached = audiences.reached().into_iter().filter(|a| *a != Audience::Claims);
+        for audience in reached.chain([Audience::Claims]) {
             loop {
                 let query = Query::Notices {
                     audience: Some(audience),
@@ -456,7 +473,11 @@ impl<M: Module, C: Core> Driver<M, C> {
                 let mut taken = Vec::new();
                 let mut stopped = None;
                 for (seq, notice) in &waiting {
-                    match audiences.hand_on(*seq, notice, on).await {
+                    let handed = match audience {
+                        Audience::Claims => self.tell_claims(*seq).await,
+                        _ => audiences.hand_on(*seq, notice, on).await,
+                    };
+                    match handed {
                         Ok(Handed::Taken) => taken.push(*seq),
                         Ok(Handed::Refused(refusal)) => {
                             let told = Command::NoticeRefused {

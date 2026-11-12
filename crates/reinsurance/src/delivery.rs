@@ -6,12 +6,14 @@
 //! the driver that sends the result is outside the state machine.
 
 use chrono::NaiveDate;
+use ic_core::claims_module::command::ReinsuranceNotice;
+use ic_core::claims_module::Command as ClaimsCommand;
 use ic_core::reinsurance::{CessionRecord, CessionSegment, FacultativeShare, ReinsurancePosting};
 use ic_ledger::PartitionId;
 use ic_money::Currency;
 
 use crate::cession::Cession;
-use crate::machine::{Instruction, InstructionBody, PostingKind, Reinsurance};
+use crate::machine::{Instruction, InstructionBody, Notice, PostingKind, Reinsurance};
 use crate::TreatyId;
 
 /// The name the core knows this module by.
@@ -59,7 +61,77 @@ fn posting(kind: PostingKind) -> ReinsurancePosting {
     }
 }
 
+/// What claims is told, in the claims module's own words.
+fn for_claims(notice: &Notice) -> Option<(&crate::ClaimId, ReinsuranceNotice)> {
+    Some(match notice {
+        Notice::LargeClaimNotification { claim, treaty, .. } => (
+            claim,
+            ReinsuranceNotice::LargeClaimNotification {
+                claim: claim.to_string(),
+                treaty: treaty.to_string(),
+            },
+        ),
+        Notice::ReinsurerConsentRequired { claim, treaty, due_by } => (
+            claim,
+            ReinsuranceNotice::ReinsurerConsentRequired {
+                claim: claim.to_string(),
+                treaty: treaty.to_string(),
+                due_by: *due_by,
+            },
+        ),
+        Notice::ReinsurerConsent {
+            claim,
+            reinsurer,
+            agreed,
+            reference,
+        } => (
+            claim,
+            ReinsuranceNotice::ReinsurerConsent {
+                claim: claim.to_string(),
+                reinsurer: reinsurer.to_string(),
+                agreed: *agreed,
+                reference: reference.clone(),
+                treaty: None,
+            },
+        ),
+        Notice::DisputedItemRaised { claim, reinsurer, reference } => (
+            claim,
+            ReinsuranceNotice::DisputedItemRaised {
+                claim: claim.to_string(),
+                reinsurer: reinsurer.to_string(),
+                reference: reference.clone(),
+            },
+        ),
+        Notice::DisputeResolved { claim, reference, repay_minor } => (
+            claim,
+            ReinsuranceNotice::DisputeResolved {
+                claim: claim.to_string(),
+                reference: reference.clone(),
+                repay_minor: *repay_minor,
+            },
+        ),
+        _ => return None,
+    })
+}
+
 impl Reinsurance {
+    /// The core command that tells the claims module of a notice still
+    /// waiting, sent to the partition that holds the claim's policy. `None`
+    /// for a notice that is not waiting or is not for claims. The key is the
+    /// notice's number, with the count of times a person has sent it again
+    /// after a refusal: the core answers a key it refused with that refusal.
+    pub fn notice_to_core(&self, seq: u64) -> Option<CoreDelivery> {
+        let (claim, notice) = for_claims(self.notice_box.get(&seq)?)?;
+        let policy = self.claims.get(claim).map(|book| &book.policy);
+        let retries = self.notice_retries.get(&seq).copied().unwrap_or(0);
+        Some(CoreDelivery {
+            partition: policy.and_then(|p| self.policies.get(p)).map_or(0, |p| p.partition),
+            key: format!("reinsurance:notice:{seq}:{retries}"),
+            caller: CALLER,
+            command: ic_core::Command::Claims(Box::new(ClaimsCommand::Reinsurance(notice))),
+        })
+    }
+
     /// The currency a treaty, or an aggregate treaty, settles in.
     pub fn treaty_currency(&self, treaty: &TreatyId) -> Option<Currency> {
         self.latest_treaty(treaty)

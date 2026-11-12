@@ -137,6 +137,7 @@ impl Reinsurance {
             // One set aside as refused leaves only by a person's decision.
             if !self.notices_refused.contains(seq) {
                 self.notice_box.remove(seq);
+                self.notice_retries.remove(seq);
             }
         }
         Ok(())
@@ -159,6 +160,7 @@ impl Reinsurance {
         if !self.notices_refused.remove(&seq) {
             return Err(Reject::new("not_refused", format!("notice {seq} has not been refused")));
         }
+        *self.notice_retries.entry(seq).or_default() += 1;
         self.set_exception(ctx, notice_refusal(seq), "notice_refused", None);
         Ok(())
     }
@@ -174,6 +176,7 @@ impl Reinsurance {
             ));
         }
         self.notices_refused.remove(&seq);
+        self.notice_retries.remove(&seq);
         if let Some(notice) = self.notice_box.remove(&seq) {
             self.notices_abandoned.push(AbandonedNotice {
                 seq,
