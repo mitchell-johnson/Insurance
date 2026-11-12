@@ -108,7 +108,7 @@ async fn open(ledger: &Ledger, app: &Router) {
 /// two-partition ledger: readiness, configuration activated on every partition, quotes,
 /// policies issued onto the partition their group hashes to, policy views, payments matched
 /// across partitions and applied once, a command routed by policy alone, reconciliation,
-/// and the close, which a gateway declines because it runs as a workflow.
+/// a claims question put to every partition, and the close, which a gateway declines because it runs as a workflow.
 /// Why it matters: this is what an insurer's other systems actually call in production.
 /// The single-process tests prove the handlers; this proves the same handlers give the
 /// same answers when the state lives in Raft groups on other machines, including the
@@ -236,6 +236,14 @@ async fn the_gateway_serves_the_api_from_replicated_nodes() {
     assert_eq!(status, StatusCode::OK, "{recon}");
     assert_eq!(recon["clean"], true, "{recon}");
     assert_eq!(recon["business_date"], "2027-11-15");
+
+    // Claims questions are asked of every partition. Nothing has been notified, so each
+    // partition answers with an empty report and no partition knows the claim.
+    let (status, report) = Call::new("GET", "/v1/claims/report").roles("claims").send(&app).await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    assert_eq!(report["partitions"].as_array().map(Vec::len), Some(PARTITIONS as usize), "{report}");
+    let (status, _) = Call::new("GET", "/v1/claims/clm-none").roles("claims").send(&app).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     // The close of a replicated ledger is the workflow's job, and the gateway says so.
     let (status, close) = Call::new("POST", "/v1/admin/end-of-day").roles("operations").send(&app).await;

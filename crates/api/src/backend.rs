@@ -309,6 +309,28 @@ impl Backend {
         }
     }
 
+    /// Ask every partition a claims question. A partition whose business
+    /// date is not open has nothing to say.
+    pub async fn claims(&self, question: &ic_core::claims_module::report::Question) -> Result<Vec<ic_core::claims_module::report::Reply>, Unavailable> {
+        match self {
+            Self::Single(engine) => {
+                let engine = engine.lock().await;
+                Ok((0..engine.cluster.partitions())
+                    .filter_map(|p| {
+                        let state = engine.cluster.state(p);
+                        state.business_date.map(|today| state.claims.answer(question, today))
+                    })
+                    .collect())
+            }
+            Self::Cluster(gateway) => Ok(gateway
+                .every_partition(|p| gateway.client.claims(p, question))
+                .await?
+                .into_iter()
+                .flatten()
+                .collect()),
+        }
+    }
+
     pub async fn end_of_day(&self) -> Result<CloseReport, CloseError> {
         match self {
             Self::Single(engine) => engine.lock().await.end_of_day().await.map_err(CloseError::Failed),

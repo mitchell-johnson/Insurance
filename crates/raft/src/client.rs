@@ -401,6 +401,16 @@ impl ClusterClient {
         self.ask(partition, &Query::Locate { policy: policy.clone() }).await
     }
 
+    /// A question for the claims held on a partition. `None` while the
+    /// partition's business date is not open.
+    pub async fn claims(
+        &self,
+        partition: PartitionId,
+        question: &ic_core::claims_module::report::Question,
+    ) -> Result<Option<ic_core::claims_module::report::Reply>, ClientError> {
+        self.ask(partition, &Query::Claims { question: question.clone() }).await
+    }
+
     /// What this partition's policies offer as matches for a payment.
     pub async fn payment_candidates(&self, partition: PartitionId, matcher: &Matcher, payment: &IncomingPayment) -> Result<Candidates, ClientError> {
         let query = Query::PaymentCandidates {

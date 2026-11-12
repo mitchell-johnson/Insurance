@@ -102,7 +102,66 @@ pub struct Totals {
     pub receivable_minor: i64,
 }
 
+/// A question about the claims on a partition. Answering changes nothing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Question {
+    /// One claim, as its claimant may see it.
+    Claim {
+        claim: ClaimId,
+    },
+    /// A work queue's open claims.
+    Queue {
+        queue: Queue,
+    },
+    /// The claims in payment as a portfolio. Carries cause analysis: for the
+    /// claims module's own staff only.
+    Book,
+    Report,
+    Remittance {
+        run: String,
+    },
+}
+
+/// A claim for someone outside the module, with what the caller needs to
+/// decide who may see it. Existence of a claim implies health, so the party
+/// it is about goes with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimRow {
+    pub policy: String,
+    /// The person the claim is about: the claimant, else the life, else the policyholder.
+    pub party: String,
+    pub view: ClaimantView,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reply {
+    Claim(Option<Box<ClaimRow>>),
+    Queue(Vec<QueueRow>),
+    Book(Box<Book>),
+    Report(Box<Report>),
+    Remittance(BTreeMap<String, (u32, i64)>),
+}
+
 impl ClaimsState {
+    /// Answer a question as at `today`, the partition's business date.
+    pub fn answer(&self, question: &Question, today: NaiveDate) -> Reply {
+        match question {
+            Question::Claim { claim } => Reply::Claim(self.claims.get(claim).and_then(|c| {
+                Some(Box::new(ClaimRow {
+                    policy: c.policy.clone(),
+                    party: c.subject_party().to_string(),
+                    view: self.claimant_view(claim)?,
+                }))
+            })),
+            Question::Queue { queue } => Reply::Queue(self.queue(*queue, today)),
+            Question::Book => Reply::Book(Box::new(self.book(today))),
+            Question::Report => Reply::Report(Box::new(self.report())),
+            Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
+        }
+    }
+
     pub fn status_view(&self, claim: &str) -> Option<StatusView> {
         self.claims.get(claim).map(|c| StatusView {
             claim: c.id.clone(),

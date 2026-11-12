@@ -587,6 +587,12 @@ pub struct Claim {
 }
 
 impl Claim {
+    /// The person the claim is about, for anyone deciding who may see it or
+    /// who owes an overpayment: the claimant, else the life, else the policyholder.
+    pub fn subject_party(&self) -> &str {
+        self.claimant.as_deref().or(self.life_party.as_deref()).unwrap_or(&self.policyholder)
+    }
+
     pub fn line(&self) -> Line {
         self.claim_type.line()
     }
