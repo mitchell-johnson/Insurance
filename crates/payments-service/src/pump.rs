@@ -279,6 +279,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         for (entry, work) in outbox {
             let outcome = match work.instruction {
                 Instruction::Core { caller, command } => self.core.send(&work.key, &caller, *command).await,
+                Instruction::CoreAt { policy, caller, command } => self.core.send_to(&policy, &work.key, &caller, *command).await,
                 Instruction::Match {
                     amount_minor,
                     currency,

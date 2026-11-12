@@ -84,11 +84,10 @@ struct SimCore {
 }
 
 impl Core for SimCore {
-    async fn send(&self, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
+    async fn send_to(&self, _policy: &PolicyId, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
         if self.down.load(Ordering::SeqCst) {
             return Err("the core cannot be reached".to_string());
         }
-        assert!(policy_of(&command).is_some(), "the pump only sends commands about a policy");
         let applied = self.cluster.lock().unwrap().submit_keyed(0, key, caller, command);
         Ok(applied.result.err().map(|r| r.code))
     }
@@ -574,6 +573,48 @@ async fn an_unclear_answer_is_resolved_by_asking_the_bank() {
     assert!(pass.problems.len() >= 2, "{:?}", pass.problems);
     assert_eq!((pass.sent, pass.failed, pass.messages), (0, 0, 0));
     assert_eq!(world.state().submissions[&unsure].status, SubmissionStatus::Sending);
+}
+
+/// Purpose: an instruction for the claims module, which does not itself
+/// name a policy, is carried to the core under the policy it is held for;
+/// when the core refuses it the refusal is recorded against the instruction
+/// and a person is given the exception.
+/// Why it matters: this is how claims hears that a bank refused a benefit.
+/// A pump that could not route it, or dropped a refusal, would leave the
+/// payment showing as with the bank for ever.
+#[tokio::test]
+async fn a_notice_for_claims_is_carried_to_the_policys_partition() {
+    use ic_payments::model::{About, Instruction, OutboxEntry};
+    let world = World::new().await;
+    let pump = world.pump("akl", "a");
+    {
+        let mut guard = world.module.state.lock().unwrap();
+        let state = &mut guard.0;
+        let entry = OutboxEntry {
+            key: "claim-payment-failed-pay-a".to_string(),
+            instruction: Instruction::CoreAt {
+                policy: world.policy.clone(),
+                caller: "payments".to_string(),
+                command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+                    claim: "clm-nobody".to_string(),
+                    payment_ref: "pay-a".to_string(),
+                }))),
+            },
+            about: Some(About::Item("pay-a".to_string())),
+        };
+        state.outbox.insert(state.next_outbox, entry);
+        state.next_outbox += 1;
+    }
+    let pass = pump.pass().await;
+    assert_eq!(pass.instructions, 1, "{:?}", pass.problems);
+    let state = world.state();
+    assert!(state.outbox.is_empty());
+    // The core has no such claim, and says so; nobody is left guessing.
+    assert!(
+        state.exceptions.values().any(|e| e.kind == ExceptionKind::CoreRefused),
+        "{:?}",
+        state.exceptions
+    );
 }
 
 /// Purpose: when the module stops answering part way through a pass, or

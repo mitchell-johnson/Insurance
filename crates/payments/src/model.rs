@@ -415,6 +415,13 @@ pub enum Instruction {
     /// Send this command to the partition that holds the policy. The key
     /// of the outbox entry is the idempotency key.
     Core { caller: String, command: Box<ic_core::Command> },
+    /// A command that does not itself name its policy (one for the claims
+    /// module): send it to the partition that holds this policy.
+    CoreAt {
+        policy: PolicyId,
+        caller: String,
+        command: Box<ic_core::Command>,
+    },
     /// A credit nobody was expecting: hand it to cash matching.
     Match {
         exception: Id,

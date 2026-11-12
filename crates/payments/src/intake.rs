@@ -10,7 +10,7 @@ use ic_core::{PayableKind, PolicyId};
 use serde::{Deserialize, Serialize};
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{Counterparty, Id, NewItem, Reject, Role};
+use crate::model::{About, Counterparty, Id, Instruction, NewItem, OutboxEntry, Reject, Role};
 
 /// One released payment that has not yet been settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +35,10 @@ pub struct Waiting {
     /// another counterparty is not policy money.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyId>,
+    /// The claim it pays, when claims released it: claims is told if the
+    /// bank refuses it before it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -135,6 +139,28 @@ impl PaymentsState {
             });
         }
         self.add_run_items(tx, run, items)
+    }
+
+    /// The bank refused or sent back an item before it settled. Its
+    /// reference is spent. If claims released it, claims is told the payment
+    /// failed, so the money goes back to benefit payable there and a task is
+    /// raised to release it again under a new reference.
+    pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
+        let Some(waiting) = self.waiting.remove(&n.item) else { return };
+        if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
+            self.push_outbox(OutboxEntry {
+                key: format!("claim-payment-failed-{}", n.item),
+                instruction: Instruction::CoreAt {
+                    policy,
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+                        claim,
+                        payment_ref: n.item.clone(),
+                    }))),
+                },
+                about: Some(About::Item(n.item.clone())),
+            });
+        }
     }
 
     /// Released payments that are in no run.
