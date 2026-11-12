@@ -649,9 +649,9 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
         let opened = w.ok("new-business", Command::OpenProposal(Box::new(open)));
         assert!(opened.effects.is_empty());
         let disclosed = w.disclose(id, "L1", &clean());
-        // A change of terms alone reserves no capacity: the cover is already ceded, so the
-        // terms are ready as soon as they are decided.
-        let alteration = matches!(entry, Entry::Alteration { .. });
+        // A change of terms alone, or cover coming back from a lapse, reserves no capacity:
+        // the cover is already ceded, so the terms are ready as soon as they are decided.
+        let alteration = matches!(entry, Entry::Alteration { .. } | Entry::Reinstatement { .. });
         assert_eq!(World::reservations(&disclosed).is_empty(), alteration);
         let applied = if alteration { disclosed } else { w.automatic(&disclosed) };
         assert!(

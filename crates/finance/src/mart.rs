@@ -622,7 +622,7 @@ impl Mart {
                 };
                 self.change(partition, policy, date, None, &kind, |row| row.statuses.push((date, *to)));
             }
-            Event::LayerAdded { policy, layer, origin } => {
+            Event::LayerAdded { policy, layer, origin, .. } => {
                 self.change(partition, policy, date, Some(layer.start), origin_name(*origin), |row| {
                     row.open_layer(date, layer)
                 });

@@ -154,6 +154,20 @@ pub struct AlteredTerms {
     pub reference: String,
 }
 
+/// Underwriting's decision that a lapsed policy may be reinstated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReinstatementTerms {
+    pub policy: PolicyId,
+    /// The underwriting decision.
+    pub reference: String,
+    /// The last day the decision can be relied on.
+    pub valid_until: NaiveDate,
+    /// Terms that differ from the ones the cover lapsed on, applied from
+    /// the day of reinstatement. Empty: reinstated on the terms it had.
+    #[serde(default)]
+    pub terms: Vec<crate::policy::LayerTerms>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged: internally tagged enums cannot carry 128-bit integers in JSON.
 #[serde(rename_all = "snake_case")]
@@ -296,6 +310,10 @@ pub enum Command {
     /// and rating date and the new terms; the days left of a period already
     /// billed are billed or credited as an adjustment.
     AlterUnderwrittenTerms(Box<AlteredTerms>),
+    /// Record underwriting's decision on a lapsed policy. `Reinstate` needs
+    /// it once the lapse has run longer than the product's evidence-free
+    /// days, and applies its terms from the day of reinstatement.
+    ApproveReinstatement(Box<ReinstatementTerms>),
     /// Reduce or give up one life's cover on a retail policy from today,
     /// newest layer first, with the billed premium for the days left
     /// credited back.
@@ -457,7 +475,7 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
-            Command::AddUnderwrittenLayer(_) | Command::AlterUnderwrittenTerms(_) => &["underwriting"],
+            Command::AddUnderwrittenLayer(_) | Command::AlterUnderwrittenTerms(_) | Command::ApproveReinstatement(_) => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -500,6 +518,7 @@ impl Command {
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
+            Command::ApproveReinstatement(_) => "approve_reinstatement",
             Command::ReduceCover(_) => "reduce_cover",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",

@@ -226,6 +226,7 @@ impl Bench {
                 policy: PolicyId::from(policy),
                 layer: l,
                 origin: LayerOrigin::Increase,
+                continues: None,
             }],
         )
     }
