@@ -71,6 +71,7 @@ fn a_statement_nets_the_account_and_lists_only_what_the_treaty_allows() {
     let (name, body) = document(&applied);
     assert_eq!(name, "reinsurance/retail-life-surplus/reinsurer-north/statement-1.json");
     assert_eq!(name, s.document);
+    assert_eq!(body["payment_reference"], "ri-stmt-1", "the reference the reinsurer quotes when it pays");
     assert_eq!(body["net_owed_to_reinsurer_minor"], 7_18);
     let row = &body["listing"][0];
     assert_eq!(

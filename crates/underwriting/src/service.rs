@@ -9,6 +9,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use ic_azure::credential::AzureCredential;
+use ic_azure::eventhubs::EventHubsSink;
 use ic_ledger::PartitionId;
 use ic_raft::{ClusterAuth, ClusterClient};
 use ic_reinsurance::capacity::Outcome;
@@ -17,7 +19,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::command::{Applied, Envelope, Reject};
-use crate::driver::{Core, CoreAnswer, Driver, DriverError, NothingConnected, Refusal, Reinsurer, Schemes, Underwriting};
+use crate::driver::{Core, CoreAnswer, Driver, DriverError, Forward, Refusal, Reinsurer, Schemes, Underwriting};
+use crate::notices::StaffNotices;
 use crate::special::Query;
 
 /// Settings of the driver process.
@@ -33,10 +36,16 @@ pub struct Config {
     pub batch: usize,
     /// Open proposals the daily sweep takes in one command.
     pub sweep_page: u32,
+    /// The Event Hubs namespace, `https://<namespace>.servicebus.windows.net`.
+    pub event_hubs: String,
+    /// The hub staff notices are published to.
+    pub event_hub: String,
 }
 
 impl Config {
-    /// Read the settings. `IC_NODES` is required; the rest have defaults:
+    /// Read the settings. `IC_NODES` and `IC_EVENT_HUBS_ENDPOINT` are
+    /// required: staff notices have nowhere else to go. The rest have
+    /// defaults: `IC_UNDERWRITING_EVENT_HUB` (`underwriting-notices`),
     /// `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS`
     /// (10000), `IC_UNDERWRITING_BATCH` (100) and
     /// `IC_UNDERWRITING_SWEEP_PAGE` (200, at most 1000).
@@ -56,6 +65,8 @@ impl Config {
             patience: Duration::from_millis(number("IC_UNDERWRITING_PATIENCE_MS", 10_000, 3_600_000)?),
             batch: number("IC_UNDERWRITING_BATCH", 100, 10_000)? as usize,
             sweep_page: number("IC_UNDERWRITING_SWEEP_PAGE", 200, 1_000)? as u32,
+            event_hubs: get("IC_EVENT_HUBS_ENDPOINT").ok_or("set IC_EVENT_HUBS_ENDPOINT to the Event Hubs namespace")?,
+            event_hub: get("IC_UNDERWRITING_EVENT_HUB").unwrap_or_else(|| "underwriting-notices".into()),
         })
     }
 }
@@ -167,13 +178,13 @@ impl Schemes for Cluster {
 }
 
 /// The driver over the cluster, once the nodes have said how many
-/// partitions there are. Notices, evidence requests and delegate file
-/// requests have no receiver yet and are parked with that reason.
-pub async fn connect(
+/// partitions there are, handing to `forward` what has no module of its own.
+pub async fn connect<F: Forward>(
     client: ClusterClient,
     config: &Config,
     clock: fn() -> DateTime<Utc>,
-) -> Result<Driver<Cluster, Cluster, Cluster, Cluster, NothingConnected>, String> {
+    forward: F,
+) -> Result<Driver<Cluster, Cluster, Cluster, Cluster, F>, String> {
     let partitions = client.partitions(config.patience).await?;
     let cluster = Cluster::new(client, partitions, config.patience);
     Ok(Driver {
@@ -181,20 +192,25 @@ pub async fn connect(
         reinsurer: cluster.clone(),
         core: cluster.clone(),
         schemes: cluster,
-        forward: NothingConnected,
+        forward,
         batch: config.batch,
         clock,
     })
 }
 
 /// The process: settings from `get`, the cluster token from `get` or the
-/// file it names, and cycles until `stop`. It ends with an error, for the
+/// file it names, the process's Azure identity for the staff notices, and
+/// cycles until `stop`. It ends with an error, for the
 /// platform to start it again, when no node answers at the start.
 pub async fn serve(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>, stop: impl Future<Output = ()>) -> Result<(), String> {
     let config = Config::from_lookup(&get)?;
     let auth = ClusterAuth::from_lookup(&get, read)?;
+    let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
+    let staff = StaffNotices {
+        staff: EventHubsSink::new(&config.event_hubs, &config.event_hub, credential),
+    };
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
-    let driver = connect(client, &config, Utc::now).await?;
+    let driver = connect(client, &config, Utc::now, staff).await?;
     tracing::info!(?config, "underwriting driver started");
     driver.run(config.cycle_every, config.sweep_page, stop, |_, _| {}).await;
     tracing::info!("underwriting driver stopped");

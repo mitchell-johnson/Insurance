@@ -16,7 +16,7 @@ use ic_raft::{ClusterAuth, ClusterClient};
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_sim::config::shipped_activations;
 use ic_underwriting::command::Command;
-use ic_underwriting::driver::{DriverError, Underwriting};
+use ic_underwriting::driver::{DriverError, NothingConnected, Underwriting};
 use ic_underwriting::model::{Entry, Proposal, ProposalStatus};
 use ic_underwriting::service::{connect, serve, Cluster, Config};
 use ic_underwriting::special::Query;
@@ -30,7 +30,7 @@ fn clock() -> DateTime<Utc> {
 }
 
 /// Purpose: the driver's settings come from the environment with sensible defaults; the nodes'
-/// addresses are required; and a pause, patience, batch or sweep page that is not a whole
+/// addresses and the Event Hubs namespace are required; and a pause, patience, batch or sweep page that is not a whole
 /// number in range is refused by name, with the value that was given.
 /// Why it matters: a driver that started with a zero pause would spin against the cluster, and
 /// one that started with a sweep page the module refuses would never lapse a proposal or chase
@@ -41,18 +41,23 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
         let map: BTreeMap<String, String> = pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
         Config::from_lookup(|key| map.get(key).cloned())
     };
+    const HUBS: (&str, &str) = ("IC_EVENT_HUBS_ENDPOINT", "https://hubs.example");
     assert_eq!(
-        from(&[("IC_NODES", " n1:7000,n2:7000 ")]).unwrap(),
+        from(&[("IC_NODES", " n1:7000,n2:7000 "), HUBS]).unwrap(),
         Config {
             cluster: "n1:7000,n2:7000".into(),
             cycle_every: Duration::from_millis(2_000),
             patience: Duration::from_millis(10_000),
             batch: 100,
             sweep_page: 200,
+            event_hubs: "https://hubs.example".into(),
+            event_hub: "underwriting-notices".into(),
         }
     );
     let set = from(&[
         ("IC_NODES", "n1:7000"),
+        HUBS,
+        ("IC_UNDERWRITING_EVENT_HUB", "uw-staff"),
         ("IC_UNDERWRITING_CYCLE_MS", "250"),
         ("IC_UNDERWRITING_PATIENCE_MS", "500"),
         ("IC_UNDERWRITING_BATCH", "7"),
@@ -60,19 +65,20 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
     ])
     .unwrap();
     assert_eq!(
-        (set.cycle_every, set.patience, set.batch, set.sweep_page),
-        (Duration::from_millis(250), Duration::from_millis(500), 7, 1000)
+        (set.cycle_every, set.patience, set.batch, set.sweep_page, set.event_hub.as_str()),
+        (Duration::from_millis(250), Duration::from_millis(500), 7, 1000, "uw-staff")
     );
 
-    assert!(from(&[]).unwrap_err().contains("IC_NODES"));
-    assert!(from(&[("IC_NODES", "  ")]).unwrap_err().contains("IC_NODES"));
+    assert!(from(&[HUBS]).unwrap_err().contains("IC_NODES"));
+    assert!(from(&[("IC_NODES", "  "), HUBS]).unwrap_err().contains("IC_NODES"));
+    assert!(from(&[("IC_NODES", "n1:7000")]).unwrap_err().contains("IC_EVENT_HUBS_ENDPOINT"));
     for (key, value) in [
         ("IC_UNDERWRITING_CYCLE_MS", "0"),
         ("IC_UNDERWRITING_PATIENCE_MS", "soon"),
         ("IC_UNDERWRITING_BATCH", "-1"),
         ("IC_UNDERWRITING_SWEEP_PAGE", "1001"),
     ] {
-        let refused = from(&[("IC_NODES", "n1:7000"), (key, value)]).unwrap_err();
+        let refused = from(&[("IC_NODES", "n1:7000"), HUBS, (key, value)]).unwrap_err();
         assert!(refused.contains(key) && refused.contains(value), "{refused}");
     }
 }
@@ -196,8 +202,13 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     sent = w.log.len();
     assert!(sent > 0);
 
-    let config = Config::from_lookup(|key| (key == "IC_NODES").then(|| addr.clone())).unwrap();
-    let carrier = connect(client.clone(), &config, clock).await.unwrap();
+    let config = Config::from_lookup(|key| match key {
+        "IC_NODES" => Some(addr.clone()),
+        "IC_EVENT_HUBS_ENDPOINT" => Some("https://hubs.example".into()),
+        _ => None,
+    })
+    .unwrap();
+    let carrier = connect(client.clone(), &config, clock, NothingConnected).await.unwrap();
     let mut swept = None;
     let (pass, sweep) = carrier.cycle(&mut swept, config.sweep_page).await;
     let pass = pass.unwrap();
@@ -219,7 +230,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         .filter(|(_, why)| why.starts_with("group administration refused the decision"))
         .collect();
     assert_eq!(refused.len(), 1, "{pass:?}");
-    // Notices have no receiver yet.
+    // Letters to the customer and adviser have no receiver yet.
     assert!(pass.parked.iter().any(|(_, why)| why == "correspondence is not connected to underwriting"));
 
     // The same day again: no sweep, nothing to carry.
@@ -234,8 +245,8 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         patience: Duration::from_millis(200),
         ..config.clone()
     };
-    assert!(connect(nowhere.clone(), &impatient, clock).await.is_err());
-    let mut lost = connect(client.clone(), &impatient, clock).await.unwrap();
+    assert!(connect(nowhere.clone(), &impatient, clock, NothingConnected).await.is_err());
+    let mut lost = connect(client.clone(), &impatient, clock, NothingConnected).await.unwrap();
     let away = Cluster::new(nowhere, 1, impatient.patience);
     (lost.underwriting, lost.reinsurer, lost.core, lost.schemes) = (away.clone(), away.clone(), away.clone(), away);
     let mut never = None;
@@ -247,9 +258,13 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     // The process: refuses to start without settings or a token, and runs until told to stop.
     let no_file = |_: &str| -> std::io::Result<String> { Err(std::io::Error::other("no file")) };
     assert!(serve(|_| None, no_file, async {}).await.unwrap_err().contains("IC_NODES"));
-    assert!(serve(|key| (key == "IC_NODES").then(|| addr.clone()), no_file, async {}).await.is_err());
+    assert!(serve(|key| (key == "IC_NODES").then(|| addr.clone()), no_file, async {})
+        .await
+        .unwrap_err()
+        .contains("IC_EVENT_HUBS_ENDPOINT"));
     let env = |key: &str| match key {
         "IC_NODES" => Some(addr.clone()),
+        "IC_EVENT_HUBS_ENDPOINT" => Some("https://hubs.example".into()),
         "IC_CLUSTER_TOKEN" => Some(TOKEN.to_string()),
         "IC_UNDERWRITING_CYCLE_MS" => Some("50".to_string()),
         _ => None,
@@ -271,6 +286,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
 
     let mut child = binary()
         .env("IC_NODES", &addr)
+        .env("IC_EVENT_HUBS_ENDPOINT", "https://hubs.example")
         .env("IC_CLUSTER_TOKEN", TOKEN)
         .env("IC_UNDERWRITING_CYCLE_MS", "50")
         .spawn()

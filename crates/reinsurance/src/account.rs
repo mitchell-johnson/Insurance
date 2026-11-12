@@ -334,6 +334,8 @@ impl Reinsurance {
             "totals": totals.iter().map(|(k, v)| (serde_json::json!(k), *v)).collect::<Vec<_>>(),
             "prior_period_minor": prior,
             "net_owed_to_reinsurer_minor": net,
+            // What either side quotes when it pays, so the bank line finds the statement.
+            "payment_reference": format!("ri-stmt-{number}"),
             "listing": rows,
         })
         .to_string();

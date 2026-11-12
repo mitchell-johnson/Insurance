@@ -1,8 +1,9 @@
 # The underwriting effects driver: carries the underwriting module's effects
 # from its group on the ledger nodes to reinsurance, the core and group
-# administration, and runs the daily sweep (docs/underwriting.md). It holds no
-# state. It talks only to the ledger nodes, with the cluster token, so it runs
-# under the workers' identity, which may read that one secret.
+# administration, publishes notices for staff to the `underwriting-notices`
+# event hub, and runs the daily sweep (docs/underwriting.md). It holds no
+# state. It runs under the workers' identity, which may read the cluster
+# token and send to that hub (infra/underwriting.bicep).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -35,6 +36,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: ic-ledger
+            # IC_EVENT_HUBS_ENDPOINT. The hub has the name
+            # infra/underwriting.bicep gives it, the driver's default.
+            - configMapRef:
+                name: ic-azure
           resources:
             requests:
               cpu: 50m
