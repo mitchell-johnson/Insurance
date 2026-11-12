@@ -29,6 +29,7 @@ mod claims;
 mod earning;
 mod group;
 mod lifecycle;
+mod nondisclosure;
 mod postings;
 mod reduce;
 mod reopen;
