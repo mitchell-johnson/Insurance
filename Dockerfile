@@ -14,11 +14,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends clang protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
+# The profile the binaries are built in. `release` is what ships. CI's
+# failure drill passes `drill` (see Cargo.toml).
+ARG CARGO_PROFILE=release
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release --workspace --locked \
+    cargo build --profile "$CARGO_PROFILE" --workspace --locked \
     && mkdir -p /out/bin /out/state/data /out/state/cold /out/state/roots \
-    && find target/release -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/bin/ \;
+    && find "target/$CARGO_PROFILE" -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/bin/ \;
 
 # --- test -------------------------------------------------------------------
 # `docker build --target test .` runs formatting, lints and the test suite in

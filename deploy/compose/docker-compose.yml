@@ -18,6 +18,9 @@ x-image: &image
   build:
     context: ../..
     target: runtime
+    args:
+      # `release` unless the caller asks otherwise; CI's drill asks for `drill`.
+      CARGO_PROFILE: ${CARGO_PROFILE:-release}
 
 x-cluster: &cluster
   IC_NODES: node-1:7000,node-2:7000,node-3:7000,node-4:7000
