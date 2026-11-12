@@ -34,7 +34,7 @@ use crate::directory::{Actor, DirectoryCommand};
 use crate::identity::{action_hash, Enrolment, IdentityCommand, MAX_CHALLENGE_SECS};
 use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
-use crate::staff::{At, Purpose, PurposeKind, StaffCommand};
+use crate::staff::{AccessRequest, At, Decision, Purpose, PurposeKind, StaffCommand};
 use crate::state::{ChannelState, Command, Envelope, Output, GATEWAY};
 use crate::ui::UiConfig;
 use crate::workbench::WorkbenchCommand;
@@ -291,6 +291,14 @@ impl AppState {
             .await?;
         if answer["known"] != true {
             return Err(Problem::forbidden("this sign-in is not registered with the insurer"));
+        }
+        if answer["device_revoked"] == true {
+            // Said before anything else, and whatever the token: this is the app's signal to wipe its local data.
+            return Err(Problem::new(
+                StatusCode::UNAUTHORIZED,
+                "device_revoked",
+                "this device is no longer enrolled: remove everything it holds",
+            ));
         }
         if answer["valid"] != true {
             return Err(Problem::new(
@@ -722,6 +730,31 @@ async fn staff_admin(State(s): State<Shared>, headers: HeaderMap, method: Method
 }
 
 /// A refusal by the four questions, with the reason the person is given.
+impl AppState {
+    /// Write a staff read to the access log, then refuse it if it was not
+    /// allowed. The log is written first and the read fails if it cannot be:
+    /// nobody sees a customer's data without a line saying who, what and why.
+    /// Refusals are logged too.
+    async fn logged(&self, view: Value) -> Result<Value, Problem> {
+        // A node from before the access log was wired in answers without the request. Fail closed until it is upgraded.
+        let (request, decision): (AccessRequest, Decision) = serde_json::from_value(json!([view["request"], view["decision"]]))
+            .map_err(|_| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "the access log cannot be written yet"))?;
+        let key = format!(
+            "access:{}:{}:{}:{}",
+            request.staff,
+            request.at,
+            request.action,
+            request.record.as_deref().unwrap_or_default()
+        );
+        let actor = Actor::Staff(request.staff.clone());
+        self.propose(key, actor, Command::Staff(StaffCommand::Record { request, decision })).await?;
+        match denied(&view) {
+            Some(problem) => Err(problem),
+            None => Ok(view),
+        }
+    }
+}
+
 fn denied(view: &Value) -> Option<Problem> {
     (view["decision"]["allowed"] != true).then(|| Problem::new(StatusCode::FORBIDDEN, "not_authorised", view["explanation"].as_str().unwrap_or("not allowed")))
 }
@@ -756,9 +789,7 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
             at: session.at,
         })
         .await?;
-    if let Some(problem) = denied(&view) {
-        return Err(problem);
-    }
+    let view = s.logged(view).await?;
     if view["found"] != true {
         return Err(Problem::not_found());
     }
@@ -770,6 +801,10 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
 async fn staff_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.staff(&headers, &method, &uri, &body).await?;
     let command: StaffCommand = parse(&body)?;
+    if matches!(command, StaffCommand::Record { .. }) {
+        // The access log is written by this service as it serves a read, never by the person read about.
+        return Err(Problem::new(StatusCode::FORBIDDEN, "forbidden", "the access log is not written by hand"));
+    }
     ok(
         s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), Command::Staff(command))
             .await?,
@@ -800,10 +835,7 @@ async fn workbench(State(s): State<Shared>, headers: HeaderMap, method: Method, 
             at: session.at,
         })
         .await?;
-    match denied(&view) {
-        Some(problem) => Err(problem),
-        None => ok(view),
-    }
+    ok(s.logged(view).await?)
 }
 
 async fn workbench_party(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(party): Path<String>) -> Answer {
@@ -815,9 +847,7 @@ async fn workbench_party(State(s): State<Shared>, headers: HeaderMap, method: Me
             at: session.at,
         })
         .await?;
-    if let Some(problem) = denied(&view) {
-        return Err(problem);
-    }
+    let view = s.logged(view).await?;
     if view["position"].is_null() {
         return Err(Problem::not_found());
     }
@@ -833,9 +863,7 @@ async fn proof_of_debt(State(s): State<Shared>, headers: HeaderMap, method: Meth
             at: session.at,
         })
         .await?;
-    if let Some(problem) = denied(&view) {
-        return Err(problem);
-    }
+    let view = s.logged(view).await?;
     if view["extract"].is_null() {
         return Err(Problem::not_found());
     }

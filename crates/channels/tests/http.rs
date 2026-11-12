@@ -507,6 +507,37 @@ async fn devices_are_managed_by_their_owner() {
         StatusCode::OK
     );
     assert!(!portal.get("sub-kiri", "/app/v1/devices").await.1[0]["revoked"].is_null());
+
+    // The phone is lost. After fresh verification the identity service enrols its replacement as a recovery.
+    let replacement = Key::new();
+    let recover = json!({ "identity": { "enrol_device": { "device": "phone-2", "party": KIRI, "public_key": replacement.public, "hardware_backed": true,
+        "enrolment": { "via": "recovery", "reference": "idv-9" } } } });
+    let identity = [
+        ("x-dev-subject", "svc".to_string()),
+        ("x-dev-roles", "identity".to_string()),
+        ("x-module", "identity".to_string()),
+        ("idempotency-key", "recover-1".to_string()),
+    ];
+    let (status, answer) = portal.send("POST", "/internal/v1/commands", &identity, Some(recover)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // The old phone is told to wipe, whatever token it presents; a session from before the recovery is closed.
+    portal.clock.fetch_add(5, Ordering::SeqCst);
+    let mut old = portal.proof(&portal.phone, "GET", "/app/v1/sync", "");
+    old.push(("x-dev-issued", (portal.now() + 1).to_string()));
+    let (status, problem) = portal.send("GET", "/app/v1/sync", &old, None).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_revoked")));
+    let stale = [("x-dev-subject", "sub-kiri".to_string()), ("x-dev-issued", (portal.now() - 60).to_string())];
+    assert_eq!(portal.send("GET", "/app/v1/me", &stale, None).await.1["title"], "session_revoked");
+    // The replacement syncs after signing in again.
+    let now = portal.now();
+    let signature = replacement.sign(&proof_message(now, "GET", "/app/v1/sync", b""));
+    let fresh = [
+        ("x-dev-subject", "sub-kiri".to_string()),
+        ("x-dev-issued", (now + 1).to_string()),
+        ("x-device-id", "phone-2".to_string()),
+        ("x-device-proof", format!("{now}.{signature}")),
+    ];
+    assert_eq!(portal.send("GET", "/app/v1/sync", &fresh, None).await.0, StatusCode::OK);
 }
 
 /// Purpose: an employer administrator sees their schemes and manages the scheme's administrators and its second-administrator rule; nobody else can.
@@ -630,6 +661,80 @@ async fn the_staff_console_asks_the_four_questions() {
         portal.local.with(|s| serde_json::to_value(&s.data.requests["r1"]).unwrap())["status"],
         "awaiting_approval"
     );
+}
+
+/// Purpose: a staff read of a policy or of the workbench leaves a line in the access log, a refusal does too, and nobody can write the log by hand.
+/// Why it matters: the access log is how misuse of customer data is found and how a person sees what was done in their name; a read that left no line, or a line anyone could forge, would make it worthless.
+#[tokio::test]
+async fn every_staff_read_is_in_the_access_log() {
+    let portal = portal();
+    let policy = &portal.retail;
+    let recent = |me: &Value| me["recent"].as_array().cloned().unwrap_or_default();
+    assert!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).is_empty());
+
+    assert_eq!(
+        portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-7")).await.0,
+        StatusCode::OK
+    );
+    portal.clock.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(portal.get("sub-sue", &format!("/staff/v1/policies/{policy}")).await.0, StatusCode::FORBIDDEN);
+    let log = recent(&portal.get("sub-sue", "/staff/v1/me").await.1);
+    // Newest first.
+    assert_eq!(log.len(), 2);
+    assert_eq!(
+        (log[1]["action"].as_str(), log[1]["record"].as_str(), log[1]["decision"]["allowed"].as_bool()),
+        (Some("policy.view"), Some(format!("policy:{policy}").as_str()), Some(true))
+    );
+    assert_eq!(log[1]["purpose"]["reference"], "case-7");
+    assert_eq!(
+        (log[0]["decision"]["allowed"].as_bool(), log[0]["decision"]["denied"].as_str()),
+        (Some(false), Some("why"))
+    );
+
+    // The same read retried within the second is one line, not two.
+    assert_eq!(portal.get("sub-sue", &format!("/staff/v1/policies/{policy}")).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 2);
+
+    // The workbench list, one party and the proof of debt are each logged against the party read.
+    for path in ["/staff/v1/workbench", "/staff/v1/workbench/adv-1", "/staff/v1/workbench/adv-1/proof-of-debt"] {
+        portal.clock.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(portal.get("sub-fin1", path).await.0, StatusCode::OK, "{path}");
+    }
+    let records: Vec<String> = recent(&portal.get("sub-fin1", "/staff/v1/me").await.1)
+        .iter()
+        .map(|r| r["record"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(records, ["counterparty:adv-1", "counterparty:adv-1", "counterparty:*"]);
+
+    // Sue is also a customer: she declares her connection to Kiri, and from then on Kiri's policy is not hers to open.
+    portal.clock.fetch_add(1, Ordering::SeqCst);
+    let declare = json!({ "declare_connection": { "party": KIRI } });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", declare).await.0, StatusCode::OK);
+    let (status, problem) = portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-8")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("personal connection"));
+    let log = recent(&portal.get("sub-sue", "/staff/v1/me").await.1);
+    assert_eq!((log.len(), log[0]["flag"].as_str()), (3, Some("personal")));
+    // She cannot take the declaration back herself.
+    let end = json!({ "end_connection": { "staff": "sue", "party": KIRI } });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", end).await.0, StatusCode::FORBIDDEN);
+
+    // Kiri joins the staff. Her own policy is for the customer app, never for the staff console.
+    let employ = json!({ "employ": { "party": KIRI, "team": "ops", "manager": null, "templates": ["service"] } });
+    assert_eq!(portal.write("POST", "sub-alice", "/staff/v1/access", employ).await.0, StatusCode::OK);
+    let (status, _) = portal.get("sub-kiri", &format!("/staff/v1/policies/{policy}?case=case-9")).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(recent(&portal.get("sub-kiri", "/staff/v1/me").await.1)[0]["flag"], "personal");
+    assert_eq!(portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::OK);
+
+    // Nobody writes the log by hand, not even about themselves.
+    let forged = json!({ "record": {
+        "request": { "staff": "sue", "action": "policy.view", "class": "personal", "decides": false, "fresh": true, "at": portal.now() },
+        "decision": { "allowed": true, "denied": null, "template": null, "profile": null, "grant": null, "classes": [] },
+    } });
+    let (status, problem) = portal.write("POST", "sub-sue", "/staff/v1/access", forged).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")));
+    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 3);
 }
 
 /// Purpose: finance staff work the held balance workbench over HTTP: the list, one party, the proof of debt, and prepare then approve by a second person; the console cannot send the commands that belong to the owning modules.

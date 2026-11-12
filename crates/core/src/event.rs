@@ -255,6 +255,10 @@ pub enum Event {
         receipt: String,
         allocated_minor: i64,
         to_suspense_minor: i64,
+        /// The part that paid for cover, by cover type, without the policy
+        /// fee, GST and levies. Commission is earned on it.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     ReceiptReversed {
         policy: PolicyId,
@@ -271,6 +275,18 @@ pub enum Event {
     SuspenseApplied {
         policy: PolicyId,
         amount_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
+    /// Premium already paid for periods whose billing was reversed is the
+    /// policyholder's money again, in suspense. The amounts are the part that
+    /// had paid for cover, by cover type, as on `ReceiptApplied`: commission
+    /// earned on it is taken back.
+    PremiumUnapplied {
+        policy: PolicyId,
+        reference: String,
+        net_by_cover_type: BTreeMap<String, i64>,
     },
     SuspenseRefunded {
         policy: PolicyId,
@@ -474,6 +490,19 @@ pub enum Event {
     TransferAborted {
         policy: PolicyId,
         transfer_id: String,
+    },
+
+    /// A balanced entry on counterparty accounts. Carries the lines, so the
+    /// module that keeps each party's position builds it from this alone.
+    CounterpartyPosted {
+        entry: EntryId,
+        reference: String,
+        kind: String,
+        currency: ic_money::Currency,
+        value_date: NaiveDate,
+        policy: Option<PolicyId>,
+        reverses: Option<String>,
+        lines: Vec<crate::counterparty::CounterpartyLine>,
     },
 }
 

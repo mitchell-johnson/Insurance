@@ -10,6 +10,7 @@ pub mod accounts;
 pub mod bitemporal;
 pub mod catalog;
 pub mod command;
+pub mod counterparty;
 pub mod event;
 pub mod ids;
 pub mod machine;

@@ -13,6 +13,7 @@ resources:
   - settings.yaml
   - node.yaml
   - api.yaml
+  - portal.yaml
   - worker.yaml
   - reinsurance.yaml
   - bootstrap.yaml

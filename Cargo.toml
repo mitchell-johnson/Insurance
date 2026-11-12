@@ -60,7 +60,10 @@ too_many_arguments = "allow"
 lto = "thin"
 codegen-units = 1
 
-# Smaller, faster debug builds: line numbers for backtraces, nothing more.
+# Small, fast debug builds. The workspace has many test executables and each
+# one links every dependency, so debug information is left out altogether:
+# with it a full test build needs tens of gigabytes of disk. Backtraces still
+# name functions.
 # Test-only RSA key generation is unusably slow unoptimised.
 [profile.dev.package.rsa]
 opt-level = 3
@@ -68,9 +71,9 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev]
-debug = "line-tables-only"
+debug = false
 incremental = false
 
 [profile.test]
-debug = "line-tables-only"
+debug = false
 incremental = false
