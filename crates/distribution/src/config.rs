@@ -657,9 +657,11 @@ impl DistributionState {
     }
 
     pub(crate) fn propose_change(&mut self, ctx: &mut Ctx, actor: &Actor, id: String, changes: Vec<Change>, instructions_ref: String) -> Result<(), Reject> {
-        let (Actor::Staff(_), Some(maker)) = (actor, ctx.decision.clone()) else {
-            return reject("caller_not_allowed", "a change is proposed by a person");
-        };
+        actor.person()?;
+        let maker = ctx
+            .decision
+            .clone()
+            .ok_or_else(|| Reject::new("caller_not_allowed", "a change is proposed by a person"))?;
         if self.change_sets.contains_key(&id) {
             return reject("duplicate_change", format!("change {id} already exists"));
         }
@@ -708,9 +710,7 @@ impl DistributionState {
     }
 
     pub(crate) fn approve_change(&mut self, ctx: &mut Ctx, actor: &Actor, id: &str, compliance: bool) -> Result<(), Reject> {
-        let Actor::Staff(staff) = actor else {
-            return reject("caller_not_allowed", "a change is approved by a person");
-        };
+        let staff = actor.person()?;
         let set = self
             .change_sets
             .get(id)

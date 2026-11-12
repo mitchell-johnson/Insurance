@@ -1,0 +1,551 @@
+//! The driver that carries the module's effects to where they take effect.
+//!
+//! The state machine decides; the driver carries. Each pass reads the oldest
+//! effects from the module's outbox and delivers them in order: capacity to
+//! the reinsurance module, policies to the core, a scheme member's excess
+//! decision to group administration, and everything else to whatever is
+//! connected for it. What a receiver answers comes back to the module as a
+//! command, and what has been delivered is acknowledged.
+//!
+//! Every delivery carries a key taken from the effect, so a driver that
+//! stops anywhere is restarted and carries on: each receiver applies a
+//! repeat once. An effect nothing can take, or that its receiver refuses, is
+//! parked in the module with the reason, where a person can see it and put
+//! it back. Nothing is dropped and nothing waits behind it. Only a receiver
+//! that cannot be reached stops a pass, and the next pass starts again from
+//! the same effect.
+
+use std::future::Future;
+
+use chrono::{DateTime, NaiveDate, Utc};
+use ic_core::event::Event as CoreEvent;
+use ic_core::{home_partition, GroupId};
+use ic_group::command::{ExcessDecision, GroupCommand};
+use ic_ledger::PartitionId;
+use ic_reinsurance::capacity::{CapacityRequest, Outcome};
+use ic_reinsurance::treaty::RiskFactors;
+use serde_json::Value;
+
+use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject};
+use crate::model::{Entry, Proposal, ProposalId};
+use crate::special::Query;
+
+/// The callers the driver acts as when it brings an answer back.
+pub const DRIVER: &str = "effects-driver";
+const AS_REINSURANCE: &str = "reinsurance";
+const AS_ISSUER: &str = "issuer";
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum DriverError {
+    /// Something could not be reached. Nothing is known to have happened:
+    /// the next pass does the same again.
+    #[error("unavailable: {0}")]
+    Unavailable(String),
+    #[error("unexpected answer: {0}")]
+    Answer(String),
+}
+
+/// A receiver's own "no", as opposed to not being reachable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Refusal {
+    pub code: String,
+    pub message: String,
+}
+
+impl Refusal {
+    pub fn new(code: &str, message: impl Into<String>) -> Self {
+        Self {
+            code: code.to_string(),
+            message: message.into(),
+        }
+    }
+}
+
+/// The underwriting module, wherever it runs.
+pub trait Underwriting: Send + Sync {
+    fn propose(&self, envelope: Envelope) -> impl Future<Output = Result<Result<Applied, Reject>, DriverError>> + Send;
+    fn ask(&self, query: Query) -> impl Future<Output = Result<Value, DriverError>> + Send;
+}
+
+/// The reinsurance module.
+pub trait Reinsurer: Send + Sync {
+    fn propose(&self, envelope: ic_reinsurance::Envelope) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
+    /// The capacity answer for a reservation as it stands. `None` once the
+    /// reservation has been released or its cover has arrived.
+    fn capacity(&self, reservation: &str) -> impl Future<Output = Result<Option<Outcome>, DriverError>> + Send;
+}
+
+/// What the core made of a command.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CoreAnswer {
+    pub refused: Option<Refusal>,
+    pub events: Vec<CoreEvent>,
+}
+
+/// The core's partitions.
+pub trait Core: Send + Sync {
+    fn send(&self, partition: PartitionId, key: &str, caller: &str, command: ic_core::Command) -> impl Future<Output = Result<CoreAnswer, DriverError>> + Send;
+}
+
+/// The group administration module.
+pub trait Schemes: Send + Sync {
+    fn propose(&self, envelope: ic_group::command::Envelope) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
+}
+
+/// Everything with no module of its own yet behind it: evidence providers,
+/// delegates and correspondence. `Ok(None)` is taken; `Ok(Some(reason))` is
+/// why it could not be.
+pub trait Forward: Send + Sync {
+    fn forward(&self, effect: &Effect) -> impl Future<Output = Result<Option<String>, DriverError>> + Send;
+}
+
+/// Nothing is connected: every effect offered is parked with the reason.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NothingConnected;
+
+impl Forward for NothingConnected {
+    async fn forward(&self, effect: &Effect) -> Result<Option<String>, DriverError> {
+        Ok(Some(
+            match effect {
+                Effect::RequestEvidence { .. } | Effect::ChaseEvidence { .. } | Effect::CancelEvidence { .. } => "no evidence provider is connected",
+                Effect::RequestDelegateFile { .. } => "no delegate is connected",
+                _ => "correspondence is not connected to underwriting",
+            }
+            .to_string(),
+        ))
+    }
+}
+
+/// What one pass did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Pass {
+    /// Effects delivered and acknowledged.
+    pub delivered: u32,
+    /// Effects whose answer the module no longer wanted: the proposal had
+    /// moved on while the effect was in flight.
+    pub stale: u32,
+    /// Effects parked, with the number each had and the reason.
+    pub parked: Vec<(u64, String)>,
+}
+
+enum Step {
+    Delivered,
+    Stale,
+    Park(String),
+}
+
+/// Where a group excess proposal came from: `grp-uw:{scheme}:{case}`.
+pub fn excess_case(proposal: &ProposalId) -> Option<(String, u64)> {
+    let rest = proposal.to_string();
+    let rest = rest.strip_prefix("grp-uw:")?;
+    let (scheme, case) = rest.rsplit_once(':')?;
+    if scheme.is_empty() {
+        return None;
+    }
+    Some((scheme.to_string(), case.parse().ok()?))
+}
+
+fn answer_of(outcome: &Outcome) -> CapacityAnswer {
+    match outcome {
+        Outcome::Automatic { .. } => CapacityAnswer::Automatic,
+        Outcome::FacultativeRequired { .. } => CapacityAnswer::FacultativeRequired,
+        Outcome::Excluded { .. } => CapacityAnswer::Excluded,
+    }
+}
+
+/// The layers of an issued policy, from the core's reply.
+fn issued_layers(events: &[CoreEvent]) -> Vec<IssuedLayer> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            CoreEvent::PolicyIssued { layers, .. } => Some(layers),
+            _ => None,
+        })
+        .flatten()
+        .map(|l| IssuedLayer {
+            life: l.life.clone(),
+            cover: l.cover.clone(),
+            layer: l.layer,
+        })
+        .collect()
+}
+
+pub struct Driver<U, R, C, S, F> {
+    pub underwriting: U,
+    pub reinsurer: R,
+    pub core: C,
+    pub schemes: S,
+    pub forward: F,
+    /// Effects read from the outbox at a time.
+    pub batch: usize,
+    /// The time, read once per command sent to the module.
+    pub clock: fn() -> DateTime<Utc>,
+}
+
+impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R, C, S, F> {
+    fn today(&self) -> NaiveDate {
+        (self.clock)().date_naive()
+    }
+
+    /// Bring an answer back to the module. `Ok(false)` when the module no
+    /// longer wants it.
+    async fn tell(&self, key: String, caller: &str, command: Command) -> Result<Result<Applied, Reject>, DriverError> {
+        let at = (self.clock)();
+        self.underwriting
+            .propose(Envelope {
+                key,
+                caller: caller.to_string(),
+                at,
+                today: at.date_naive(),
+                command,
+            })
+            .await
+    }
+
+    /// The driver's own housekeeping, which the module never refuses.
+    async fn housekeeping(&self, key: String, command: Command) -> Result<(), DriverError> {
+        self.tell(key, DRIVER, command)
+            .await?
+            .map(|_| ())
+            .map_err(|e| DriverError::Answer(format!("the module refused the driver: {}: {}", e.code, e.message)))
+    }
+
+    async fn reinsure(&self, key: String, caller: &str, command: ic_reinsurance::Command) -> Result<Result<(), Refusal>, DriverError> {
+        self.reinsurer
+            .propose(ic_reinsurance::Envelope {
+                key,
+                caller: caller.to_string(),
+                on: self.today(),
+                command,
+            })
+            .await
+    }
+
+    async fn group_of(&self, proposal: &ProposalId) -> Result<Option<GroupId>, DriverError> {
+        let answer = self.underwriting.ask(Query::Proposal { proposal: proposal.clone() }).await?;
+        let found: Option<Proposal> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
+        Ok(found.map(|p| p.group))
+    }
+
+    /// Carry the outbox until it is empty. What was delivered before a stop
+    /// is acknowledged.
+    pub async fn deliver(&self) -> Result<Pass, DriverError> {
+        let mut pass = Pass::default();
+        loop {
+            let answer = self
+                .underwriting
+                .ask(Query::Outbox {
+                    after: 0,
+                    max: self.batch.max(1),
+                })
+                .await?;
+            let outbox: Vec<(u64, Effect)> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
+            if outbox.is_empty() {
+                return Ok(pass);
+            }
+            let mut through = None;
+            let mut stopped = None;
+            for (seq, effect) in &outbox {
+                match self.one(effect).await {
+                    Ok(Step::Delivered) => pass.delivered += 1,
+                    Ok(Step::Stale) => pass.stale += 1,
+                    Ok(Step::Park(reason)) => {
+                        // Parking takes the effect out of the outbox itself.
+                        if let Err(e) = self
+                            .housekeeping(
+                                format!("park:{seq}"),
+                                Command::ParkEffect {
+                                    effect: *seq,
+                                    reason: reason.clone(),
+                                },
+                            )
+                            .await
+                        {
+                            stopped = Some(e);
+                            break;
+                        }
+                        pass.parked.push((*seq, reason));
+                        continue;
+                    }
+                    Err(e) => {
+                        stopped = Some(e);
+                        break;
+                    }
+                }
+                through = Some(*seq);
+            }
+            if let Some(through) = through {
+                self.housekeeping(format!("ack:{through}"), Command::AcknowledgeEffects { through }).await?;
+            }
+            if let Some(e) = stopped {
+                return Err(e);
+            }
+        }
+    }
+
+    async fn one(&self, effect: &Effect) -> Result<Step, DriverError> {
+        Ok(match effect {
+            Effect::ReserveCapacity {
+                reservation,
+                party,
+                product_code,
+                cover_code,
+                cover_type,
+                sum_insured_minor,
+                commencement,
+                proposal_expires,
+            } => {
+                let request = CapacityRequest {
+                    reservation_key: reservation.clone(),
+                    party: party.clone(),
+                    product_code: product_code.clone(),
+                    cover_code: cover_code.clone(),
+                    cover_type: cover_type.clone(),
+                    sum_insured_minor: *sum_insured_minor,
+                    commencement: *commencement,
+                    proposal_expires: *proposal_expires,
+                    risk_codes: vec![],
+                };
+                let reserved = self
+                    .reinsure(
+                        format!("uw:{reservation}:reserve"),
+                        "underwriting",
+                        ic_reinsurance::Command::ReserveCapacity(Box::new(request)),
+                    )
+                    .await?;
+                match reserved {
+                    Ok(()) => {}
+                    // Reserved on an earlier pass under another key: the answer is still wanted.
+                    Err(r) if r.code == "reservation_exists" => {}
+                    Err(r) => return Ok(Step::Park(format!("reinsurance refused the reservation: {}: {}", r.code, r.message))),
+                }
+                let Some(outcome) = self.reinsurer.capacity(reservation).await? else {
+                    // Released already: the module asked for that itself, later in the outbox.
+                    return Ok(Step::Stale);
+                };
+                let told = self
+                    .tell(
+                        format!("cap:{reservation}"),
+                        AS_REINSURANCE,
+                        Command::CapacityAnswered {
+                            reservation: reservation.clone(),
+                            answer: answer_of(&outcome),
+                        },
+                    )
+                    .await?;
+                match told {
+                    Ok(_) => Step::Delivered,
+                    Err(e) if matches!(e.code.as_str(), "unknown_reservation" | "stale_reservation" | "closed") => Step::Stale,
+                    Err(e) => Step::Park(format!("the module refused the capacity answer: {}: {}", e.code, e.message)),
+                }
+            }
+            Effect::ReleaseCapacity { reservation, reason } => {
+                let released = self
+                    .reinsure(
+                        format!("uw:{reservation}:release"),
+                        "underwriting",
+                        ic_reinsurance::Command::ReleaseCapacity {
+                            reservation_id: reservation.clone(),
+                            reason: reason.clone(),
+                        },
+                    )
+                    .await?;
+                match released {
+                    Ok(()) => Step::Delivered,
+                    // Never reserved, or gone already: there is nothing to release.
+                    Err(r) if matches!(r.code.as_str(), "unknown_reservation" | "reservation_released" | "reservation_not_held") => Step::Stale,
+                    Err(r) => Step::Park(format!("reinsurance refused the release: {}: {}", r.code, r.message)),
+                }
+            }
+            Effect::ConfirmCapacity {
+                reservation,
+                policy,
+                cover,
+                layers,
+                ..
+            } => {
+                let confirmed = self
+                    .reinsure(
+                        format!("uw:{reservation}:confirm"),
+                        "underwriting",
+                        ic_reinsurance::Command::ConfirmCapacity {
+                            reservation_id: reservation.clone(),
+                            policy: policy.clone(),
+                            cover: cover.clone(),
+                            layers: layers.clone(),
+                        },
+                    )
+                    .await?;
+                match confirmed {
+                    Ok(()) => Step::Delivered,
+                    Err(r) if r.code == "reservation_confirmed" => Step::Stale,
+                    Err(r) => Step::Park(format!("reinsurance refused the confirmation: {}: {}", r.code, r.message)),
+                }
+            }
+            Effect::RecordRiskFactors {
+                policy,
+                life,
+                date_of_birth,
+                sex,
+                smoker,
+            } => {
+                let recorded = self
+                    .reinsure(
+                        format!("uw:{policy}:{life}:factors"),
+                        "new-business",
+                        ic_reinsurance::Command::RecordRiskFactors {
+                            policy: policy.clone(),
+                            life: life.clone(),
+                            factors: RiskFactors {
+                                date_of_birth: *date_of_birth,
+                                sex: *sex,
+                                smoker: *smoker,
+                            },
+                        },
+                    )
+                    .await?;
+                match recorded {
+                    Ok(()) => Step::Delivered,
+                    Err(r) => Step::Park(format!("reinsurance refused the rating factors: {}: {}", r.code, r.message)),
+                }
+            }
+            Effect::IssuePolicy {
+                key,
+                proposal,
+                expected_product_hash,
+                command,
+                ..
+            } => {
+                let issue = ic_core::Command::IssueQuoted {
+                    expected_product_hash: expected_product_hash.clone(),
+                    issue: command.clone(),
+                };
+                let answer = self.core.send(home_partition(&command.group), key, "new-business", issue).await?;
+                let (suffix, back) = match answer.refused {
+                    None => (
+                        "issued",
+                        Command::PolicyIssued {
+                            proposal: proposal.clone(),
+                            layers: issued_layers(&answer.events),
+                        },
+                    ),
+                    Some(r) => (
+                        "rejected",
+                        Command::IssueRejected {
+                            proposal: proposal.clone(),
+                            code: r.code,
+                        },
+                    ),
+                };
+                match self.tell(format!("{key}/{suffix}"), AS_ISSUER, back).await? {
+                    Ok(_) => Step::Delivered,
+                    Err(e) if e.code == "not_issuing" => Step::Stale,
+                    Err(e) => Step::Park(format!("the module refused the core's answer: {}: {}", e.code, e.message)),
+                }
+            }
+            Effect::IssueInterim { key, proposal, command } => {
+                let answer = self
+                    .core
+                    .send(
+                        home_partition(&command.group),
+                        key,
+                        "new-business",
+                        ic_core::Command::IssuePolicy(command.clone()),
+                    )
+                    .await?;
+                if let Some(r) = answer.refused {
+                    return Ok(Step::Park(format!("the core refused interim cover: {}: {}", r.code, r.message)));
+                }
+                match self
+                    .tell(format!("{key}/issued"), AS_ISSUER, Command::InterimIssued { proposal: proposal.clone() })
+                    .await?
+                {
+                    Ok(_) => Step::Delivered,
+                    Err(e) => Step::Park(format!(
+                        "interim cover is in force but the module refused to record it: {}: {}",
+                        e.code, e.message
+                    )),
+                }
+            }
+            Effect::EndInterim { key, proposal, policy } => {
+                let Some(group) = self.group_of(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let answer = self
+                    .core
+                    .send(
+                        home_partition(&group),
+                        key,
+                        "underwriting",
+                        ic_core::Command::CancelPolicy { policy: policy.clone() },
+                    )
+                    .await?;
+                match answer.refused {
+                    None => Step::Delivered,
+                    // Never issued, or ended already.
+                    Some(r) if matches!(r.code.as_str(), "unknown_policy" | "not_in_force") => Step::Stale,
+                    Some(r) => Step::Park(format!("the core refused to end interim cover: {}: {}", r.code, r.message)),
+                }
+            }
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry: Entry::GroupExcess { .. },
+                covers,
+                ..
+            } => {
+                let (Some((scheme, case)), [cover]) = (excess_case(proposal), covers.as_slice()) else {
+                    return Ok(Step::Park("not one excess cover on a proposal group administration opened".to_string()));
+                };
+                let decision = ExcessDecision::Accepted {
+                    sum_insured_minor: cover.sum_insured_minor,
+                    loadings: cover.loadings.clone(),
+                    exclusions: cover.exclusions.clone(),
+                    member_consents_to_itemising: false,
+                };
+                self.excess_decision(key, scheme, case, decision).await?
+            }
+            Effect::ProposalEnded {
+                key,
+                proposal,
+                entry: Entry::GroupExcess { .. },
+                outcome,
+                ..
+            } => {
+                let Some((scheme, case)) = excess_case(proposal) else {
+                    return Ok(Step::Park("not a proposal group administration opened".to_string()));
+                };
+                let decision = if outcome == "declined" {
+                    ExcessDecision::Declined
+                } else {
+                    ExcessDecision::NotProceeded
+                };
+                self.excess_decision(key, scheme, case, decision).await?
+            }
+            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for revised terms on a policy in force".to_string()),
+            Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
+            Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
+            other => match self.forward.forward(other).await? {
+                None => Step::Delivered,
+                Some(reason) => Step::Park(reason),
+            },
+        })
+    }
+
+    async fn excess_decision(&self, key: &str, scheme: String, case: u64, decision: ExcessDecision) -> Result<Step, DriverError> {
+        let sent = self
+            .schemes
+            .propose(ic_group::command::Envelope {
+                key: format!("uw:{key}"),
+                caller: "underwriting".to_string(),
+                actor: DRIVER.to_string(),
+                today: self.today(),
+                command: GroupCommand::RecordExcessDecision { scheme, case, decision },
+            })
+            .await?;
+        Ok(match sent {
+            Ok(()) => Step::Delivered,
+            Err(r) => Step::Park(format!("group administration refused the decision: {}: {}", r.code, r.message)),
+        })
+    }
+}
