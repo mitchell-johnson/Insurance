@@ -530,3 +530,33 @@ fn the_financial_close_is_told_what_cash_is_outstanding() {
     desk.settle(&submission, d(2027, 11, 18));
     assert_eq!(ask(&desk, "fund_cash_settlement", "2027-11-30")["count"], json!(2));
 }
+
+/// Purpose: the place a driver has read a bank's messages to is kept per
+/// channel and only moves forward; an older place from a slower driver
+/// changes nothing; a channel that does not exist and a caller that is not
+/// a driver are refused.
+/// Why it matters: drivers run in every region at once. If the slower one
+/// could move the place back, every restart would re-read what the faster
+/// one finished; if a person could move it forward, the bank's answers in
+/// between would never be read at all.
+#[test]
+fn the_place_in_a_banks_messages_only_moves_forward() {
+    let mut desk = Desk::new();
+    let note = |through| Command::NoteMessagesRead {
+        channel: "anz-file".to_string(),
+        through,
+    };
+    assert_eq!(answer(&desk.state, json!({"q": "messages_read"})).unwrap(), json!({}));
+    desk.ok(&svc(), note(7));
+    desk.ok(&svc(), note(4));
+    assert_eq!(answer(&desk.state, json!({"q": "messages_read"})).unwrap(), json!({"anz-file": 7}));
+    desk.ok(&svc(), note(9));
+    assert_eq!(desk.state.messages_read["anz-file"], 9);
+    assert_eq!(desk.code(&mia(), note(99)), "not_permitted");
+    let elsewhere = Command::NoteMessagesRead {
+        channel: "no-such".to_string(),
+        through: 1,
+    };
+    assert_eq!(desk.code(&svc(), elsewhere), "unknown_channel");
+    assert_eq!(desk.state.messages_read["anz-file"], 9);
+}

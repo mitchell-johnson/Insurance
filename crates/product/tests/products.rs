@@ -139,8 +139,8 @@ fn bad_products_are_rejected() {
 fn each_product_rule_refuses_the_file_that_breaks_it() {
     let cases: [(&str, &str, &str); 13] = [
         (
-            "reinstatement_days = 180",
-            "reinstatement_days = 180, reinstatement_evidence_free_days = 181",
+            "reinstatement_evidence_free_days = 60",
+            "reinstatement_evidence_free_days = 181",
             "reinstatement_evidence_free_days is longer than reinstatement_days",
         ),
         ("version = 1,", "version = 0,", "version of at least 1"),
@@ -184,7 +184,7 @@ fn each_product_rule_refuses_the_file_that_breaks_it() {
 }
 
 /// Purpose: a product can say how long after a lapse paying the arrears is enough to
-/// reinstate; a product that does not say leaves the whole window free of evidence; and
+/// reinstate, as shipped term life does (sixty days of its 180-day window); a product that does not say leaves the whole window free of evidence; and
 /// saying nothing leaves the product's file, and so its hash, as it was.
 /// Why it matters: the setting decides whether a policy lapsed for months comes back on risk
 /// with no question about the life's health. A default that silently started demanding
@@ -193,12 +193,13 @@ fn each_product_rule_refuses_the_file_that_breaks_it() {
 #[test]
 fn a_product_can_limit_reinstatement_on_payment_alone() {
     let shipped = load_product("term_life.star", TERM).unwrap();
-    assert_eq!(shipped.arrears().unwrap().reinstatement_evidence_free_days, None);
-    assert!(!serde_json::to_string(&shipped).unwrap().contains("reinstatement_evidence_free_days"));
+    let rules = shipped.arrears().unwrap();
+    assert_eq!((rules.reinstatement_days, rules.reinstatement_evidence_free_days), (180, Some(60)));
 
-    let limited = TERM.replace("reinstatement_days = 180", "reinstatement_days = 180, reinstatement_evidence_free_days = 30");
-    let rules = load_product("term_life.star", &limited).unwrap().arrears().unwrap();
-    assert_eq!((rules.reinstatement_days, rules.reinstatement_evidence_free_days), (180, Some(30)));
+    let open = TERM.replace(", reinstatement_evidence_free_days = 60", "");
+    let unlimited = load_product("term_life.star", &open).unwrap();
+    assert_eq!(unlimited.arrears().unwrap().reinstatement_evidence_free_days, None);
+    assert!(!serde_json::to_string(&unlimited).unwrap().contains("reinstatement_evidence_free_days"));
 }
 
 /// Purpose: a file that does not define the expected symbol, or is not valid Starlark,

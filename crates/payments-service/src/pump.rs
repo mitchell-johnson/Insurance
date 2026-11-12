@@ -235,8 +235,15 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
     }
 
     async fn collect_messages(&self, config: &Config, pass: &mut Pass) {
+        // What any driver has already recorded is not read again, so a
+        // restart does not walk a bank's whole history.
+        let recorded: BTreeMap<String, u64> = self.ask(json!({"q": "messages_read"})).await.unwrap_or_default();
         for channel in config.channels.keys() {
-            let after = self.cursors.lock().map(|c| c.get(channel).copied().unwrap_or(0)).unwrap_or(0);
+            let held = self.cursors.lock().map(|c| c.get(channel).copied().unwrap_or(0)).unwrap_or(0);
+            let after = held.max(recorded.get(channel).copied().unwrap_or(0));
+            // The module is told how far only up to the first message it
+            // did not take, so a restart offers that message again.
+            let (mut through, mut unbroken) = (after, true);
             let messages = match self.target(config, channel) {
                 Ok(to) => self.bank.messages(&to, after).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
@@ -259,6 +266,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                         // That is a break between us and the bank: tell
                         // someone, and do not read it again.
                         Err(e) => {
+                            unbroken = false;
                             let detail = format!("channel {channel} message {}: {e}", numbered.seq);
                             if let Err(n) = self.notifier.notify(Role::Reconciler, "bank_message_refused", &detail).await {
                                 pass.problems.push(n);
@@ -267,9 +275,19 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                         }
                     }
                 }
+                if unbroken {
+                    through = numbered.seq;
+                }
                 if let Ok(mut cursors) = self.cursors.lock() {
                     cursors.insert(channel.clone(), numbered.seq);
                 }
+            }
+            if through > recorded.get(channel).copied().unwrap_or(0) {
+                let note = Command::NoteMessagesRead {
+                    channel: channel.clone(),
+                    through,
+                };
+                pass.problems.extend(self.tell(format!("read-{channel}-{through}"), note).await.err());
             }
         }
     }
