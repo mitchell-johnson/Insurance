@@ -197,6 +197,37 @@ async fn the_portal_service_on_real_nodes() {
     let write = [("x-dev-subject", "sub-kiri"), ("idempotency-key", "w-1")];
     assert_eq!(call(&app, "POST", "/app/v1/requests", &write, Some(request)).await.0, StatusCode::NOT_FOUND);
 
+    // The claims console's reach into the core: questions, where a policy lives, and a person's command on its partition.
+    {
+        use ic_channels::claims::Partitions;
+        use ic_core::claims_module::report::{Question as Claims, Reply};
+        let claims = ic_channels::claims::Hosted {
+            client: nodes.client.clone(),
+            partitions: 1,
+            patience: Duration::from_secs(10),
+        };
+        assert_eq!(claims.count(), 1);
+        assert!(matches!(claims.ask(0, Claims::Book).await.unwrap(), Some(Reply::Book(_))));
+        assert_eq!(claims.locate(0, ic_core::PolicyId::from("pol-00000001")).await.unwrap(), Some(0));
+        assert_eq!(claims.locate(0, ic_core::PolicyId::from("pol-nope")).await.unwrap(), None);
+        let staff = ic_core::PartyId::from("cl-1");
+        let (_, _, command) = ic_channels::claims::command(&staff, "first contact", None, json!({ "record_contact": { "claim": "c-1" } })).unwrap();
+        let envelope = ic_channels::claims::envelope("cluster-claims-1".into(), command);
+        // No claims rules or authority are shipped, so the partition refuses claims work; it is the core's answer that comes back.
+        let first = claims.propose(0, envelope.clone()).await.unwrap();
+        assert!(first.rejected.is_some() && !first.duplicate, "{first:?}");
+        assert!(claims.propose(0, envelope).await.unwrap().duplicate);
+        let unreachable = ic_channels::claims::Hosted {
+            client: ClusterClient::new(vec![format!("127.0.0.1:{}", free_port())]).with_attempt_timeout(Duration::from_millis(200)),
+            partitions: 1,
+            patience: Duration::from_millis(300),
+        };
+        assert!(unreachable.ask(0, Claims::Book).await.is_err());
+        assert!(unreachable.locate(0, ic_core::PolicyId::from("pol-00000001")).await.is_err());
+        let (_, _, command) = ic_channels::claims::command(&staff, "p", None, json!({ "record_contact": { "claim": "c-1" } })).unwrap();
+        assert!(unreachable.propose(0, ic_channels::claims::envelope("k".into(), command)).await.is_err());
+    }
+
     // The heartbeat: the module is current, so the gateway says so and the data is fresh.
     assert!(module_current(&nodes.client).await);
     assert!(beat(channel.as_ref(), &nodes.client, wall_clock()).await);
