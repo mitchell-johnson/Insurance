@@ -788,13 +788,7 @@ fn with_group_notices(w: &mut World) -> Vec<u64> {
             product_code: "group-life".into(),
             product_hash: "hash".into(),
             inception: d(2027, 2, 1),
-            lives: ["M1", "M2"]
-                .iter()
-                .map(|m| ic_core::event::LifeInfo {
-                    life: (*m).into(),
-                    party: None,
-                })
-                .collect(),
+            lives: ["M1", "M2"].iter().map(|m| ic_core::event::LifeInfo::new((*m).into(), None)).collect(),
             layers: vec![],
             members: vec![member_cover("M1", 700 * K), member_cover("M2", 900 * K)],
         },

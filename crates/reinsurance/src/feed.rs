@@ -307,7 +307,7 @@ impl Reinsurance {
                 covers,
                 party,
             } => {
-                self.set_lives(ctx, &policy, &[LifeInfo { life: life.clone(), party }]);
+                self.set_lives(ctx, &policy, &[LifeInfo::new(life.clone(), party)]);
                 self.set_member(ctx, &policy, partition, &life, effective, &covers);
             }
             Event::MemberChanged {
@@ -319,7 +319,7 @@ impl Reinsurance {
             } => self.set_member(ctx, &policy, partition, &life, effective, &covers),
             Event::MemberLeft { policy, life, effective } => self.set_member(ctx, &policy, partition, &life, effective, &[]),
             Event::MemberIdentified { policy, life, party } => {
-                self.set_lives(ctx, &policy, &[LifeInfo { life, party: Some(party) }]);
+                self.set_lives(ctx, &policy, &[LifeInfo::new(life, Some(party))]);
             }
             Event::PremiumDue {
                 policy,
