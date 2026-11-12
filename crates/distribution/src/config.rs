@@ -196,6 +196,11 @@ impl Config {
         self.schedules.get(id)?.iter().rev().find(|s| s.effective_from <= day)
     }
 
+    /// One version of a schedule: the one a layer was written under.
+    pub fn schedule_version(&self, id: &str, version: u32) -> Option<&Schedule> {
+        self.schedules.get(id)?.iter().find(|s| s.version == version)
+    }
+
     pub fn fragment_on(&self, id: &FragmentId, day: NaiveDate) -> Option<&Fragment> {
         self.fragments.get(id)?.iter().rev().find(|f| f.effective_from <= day)
     }
