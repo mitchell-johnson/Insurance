@@ -187,6 +187,7 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | `delivery:<seq>` | Abandon the instruction (`abandon_instruction`, two people). The page warns that the core's ledger and the reinsurance ledger then stay apart by its amount. |
 | `settlement_mismatch:<n>`, `settlement_returned:<n>` | Record the settlement with its payment reference and the statement's net (`record_settlement`). |
 | `facultative_terms_altered:<policy>/<cover>/<layer>/<life>` | Record that the reinsurer was told, and where its answer is filed (`facultative_reinsurer_told`). |
+| `reopened_after_reversal:<claim>` | Resume recoveries with a note (`resume_recoveries`) once every disputed item on the claim is resolved; the module refuses it before then (`disputes_open`). |
 | `claim_fact:...`, `possible_match:...` | Shown; they close when the facts arrive. |
 
 Commands go under the caller `reinsurance-ops` on the latest business date any partition has reported. That module keeps no actor beyond an abandonment's `approved_by`, so the portal enforces who may act:

@@ -1679,6 +1679,9 @@ async fn the_reinsurance_exceptions_console() {
     // What one person sends alone goes straight to the module, which decides.
     let (status, problem) = tell("sub-ri1", json!({ "retry_notice": { "seq": 999 } })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_refused")), "{problem}");
+    // Resuming recoveries on a claim reopened after a reversed admission is one person's to do; the module checks the claim.
+    let (status, problem) = tell("sub-ri1", json!({ "resume_recoveries": { "claim": "C1", "reference": "reviewed" } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_reopened")), "{problem}");
 
     // The other questions.
     assert_eq!(ask("sub-riview", "notices").await.0, StatusCode::OK);
