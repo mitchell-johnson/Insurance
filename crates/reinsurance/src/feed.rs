@@ -453,6 +453,30 @@ impl Reinsurance {
                     self.reprice(ctx, &policy, start);
                 }
             }
+            // Avoided for non-disclosure: the policy is treated as never in
+            // force, so no cover on it was ever ceded. Each cover ends on the
+            // day it started, which frees the retention it used on the life
+            // from inception, takes back every premium ceded for it, and
+            // works out again (to nothing) the recoveries on its claims.
+            Event::PolicyAvoided { policy, .. } => {
+                for key in self.policy_risks(&policy) {
+                    if let Some(risk) = self.risk_mut(ctx, &key) {
+                        risk.end = Some(risk.start);
+                    }
+                }
+                let starts: Vec<NaiveDate> = self
+                    .periods
+                    .range_mut((policy.clone(), NaiveDate::MIN)..)
+                    .take_while(|((p, _), _)| *p == policy)
+                    .map(|((_, start), period)| {
+                        period.reversed = true;
+                        *start
+                    })
+                    .collect();
+                for start in starts {
+                    self.reprice(ctx, &policy, start);
+                }
+            }
             // The day of the event was the last day of cover.
             Event::PolicyTerminated { policy, effective, .. } => {
                 let ends = effective.succ_opt().unwrap_or(effective);

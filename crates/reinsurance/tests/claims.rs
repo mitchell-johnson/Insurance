@@ -1006,3 +1006,67 @@ fn notices_for_claims_are_the_commands_claims_reads() {
     ];
     assert_eq!(sent, expected);
 }
+
+/// Purpose: a policy avoided for non-disclosure is treated as never ceded: its covers leave
+/// the cession record from the day they started, the retention they used on the life goes to
+/// the person's other policy from that day, every premium ceded for it comes back, and the
+/// recoveries billed on its claim are taken back from the reinsurers. The same event delivered
+/// again changes nothing.
+/// Why it matters: the core treats an avoided policy as never in force and refunds or keeps
+/// the customer's premium. If reinsurance kept its cessions, reinsurers would hold premium for
+/// a risk that never existed, would have paid a claim they never owed, and the person's other
+/// policy would stay over-ceded for want of retention the avoided policy still held.
+#[test]
+fn an_avoided_policy_is_reversed_from_inception() {
+    use ic_core::event::Event;
+    use ic_core::policy::PremiumOnAvoidance;
+    use ic_core::{PartyId, PolicyStatus};
+    use ic_reinsurance::LifeKey;
+    let mut b = anna();
+    b.factors("P1", "L1", d(1990, 3, 10), false);
+    b.issue(1, "P2", "anna", vec![layer("life", "life", 1, "L1", 300 * K, d(2027, 3, 1))]);
+    let anna_life = LifeKey::Party(PartyId::from("anna"));
+    assert_eq!(b.ri.retained_on(&anna_life, d(2027, 3, 1)), 500 * K);
+    b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    assert!(b.posted(PostingKind::CededPremium, &north()) > 0);
+    fact(&mut b, reserved("C1", "P1", "life", 800 * K));
+    fact(&mut b, paid("C1", "PAY-1", 800 * K, false));
+    assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 180 * K);
+
+    let avoided = || {
+        vec![
+            Event::PolicyStatusChanged {
+                policy: PolicyId::from("P1"),
+                from: PolicyStatus::InForce,
+                to: PolicyStatus::Avoided,
+            },
+            Event::PolicyAvoided {
+                policy: PolicyId::from("P1"),
+                case: "nd-1".into(),
+                premium: PremiumOnAvoidance::Retain,
+                refunded_minor: 0,
+            },
+        ]
+    };
+    b.feed(1, avoided());
+    for on in [d(2027, 2, 1), d(2027, 3, 1), d(2027, 6, 10)] {
+        assert!(b.ri.cession(&key("P1", "life", 1, "L1"), on).is_none());
+    }
+    // The other policy now has the whole retention from its own first day.
+    assert_eq!(b.ri.retained_on(&anna_life, d(2027, 2, 1)), 0);
+    assert_eq!(b.ri.retained_on(&anna_life, d(2027, 3, 1)), 300 * K);
+    assert!(b.ri.charged(&PolicyId::from("P1"), d(2027, 2, 1)).unwrap().is_empty());
+    for reinsurer in [north(), south()] {
+        assert_eq!(b.posted(PostingKind::CededPremium, &reinsurer), 0);
+        assert_eq!(b.posted(PostingKind::Commission, &reinsurer), 0);
+        assert_eq!(b.posted(PostingKind::RecoveryDue, &reinsurer), 0);
+        assert_eq!(b.posted(PostingKind::Recoverable, &reinsurer), 0);
+        assert_eq!(b.ri.balance(&retail(), &reinsurer), 0);
+    }
+    assert!(claim(&b, "C1").due.values().all(|v| *v == 0));
+    assert!(b.ri.exposure(d(2027, 6, 10)).values().all(|e| e.ceded_sum_at_risk_minor == 0));
+    b.assert_reconciles();
+    let again = b.feed(1, avoided());
+    assert!(again.instructions.is_empty());
+    assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
+}
