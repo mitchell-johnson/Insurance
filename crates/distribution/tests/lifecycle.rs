@@ -716,8 +716,10 @@ fn a_layer_removed_while_the_policy_continues_is_clawed_back_once() {
 /// commission on the part given up is clawed back from the liable party (or, inside
 /// cooling-off, reversed from the payees who received it); the part kept carries on with its
 /// terms, its share of the premium and its share of the clawback exposure; it is not treated
-/// as new business, so it needs no new terms and earns no second initial commission; later
-/// premium earns renewal on it; and the module's balances agree with the core's ledgers.
+/// as new business, so it needs no new terms and earns no second initial commission; the
+/// renewal commission on premium the core hands back for the rest of the paid month goes back
+/// too; later premium earns renewal on the kept layer; and the module's balances agree with
+/// the core's ledgers.
 /// Why it matters: the core records a partial cut as one layer ending and a smaller one
 /// starting. Read naively that claws back the whole layer and then leaves the kept cover
 /// with no commission terms at all, so the adviser loses commission on cover the customer
@@ -745,7 +747,7 @@ fn a_cover_reduced_in_part_is_clawed_back_in_proportion_and_carries_on() {
     };
 
     // Three weeks in, past cooling-off: 500,000 of cover reduced to 300,000.
-    let (mut w, policy, _) = advised_in(worked_example());
+    let (mut w, policy, first_renewal) = advised_in(worked_example());
     w.days(20);
     let (a_before, fap_before) = (w.payable("a-co"), w.payable("fap-one"));
     let before = w.events.len();
@@ -759,11 +761,21 @@ fn a_cover_reduced_in_part_is_clawed_back_in_proportion_and_carries_on() {
         })
         .sum();
     assert_eq!(clawed, 480_00, "two fifths of the 1,200.00 initial commission");
-    assert_eq!(
-        (w.payable("a-co"), w.payable("fap-one")),
-        (a_before, fap_before - 480_00),
-        "from the liable party alone"
-    );
+    // The core also hands back the premium for the cover given up over the rest of the paid
+    // month, and the renewal commission it earned goes back from both payees.
+    let renewal_back: i64 = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::CommissionReversed { reference, .. } if reference.starts_with("cu:") => {
+                Some(-w.dist.allocations[reference].lines.iter().map(|l| l.amount_minor).sum::<i64>())
+            }
+            _ => None,
+        })
+        .sum();
+    assert!(renewal_back > 0 && renewal_back < first_renewal * 2 / 5, "{renewal_back} of {first_renewal}");
+    let (a_lost, fap_lost) = (a_before - w.payable("a-co"), fap_before - w.payable("fap-one"));
+    assert_eq!(a_lost + fap_lost, 480_00 + renewal_back);
+    assert!(a_lost > 0 && a_lost < renewal_back, "the clawback is from the liable party alone: {a_lost}");
     assert!(
         !events
             .iter()
@@ -809,7 +821,11 @@ fn a_cover_reduced_in_part_is_clawed_back_in_proportion_and_carries_on() {
     let (a_before, fap_before) = (w.payable("a-co"), w.payable("fap-one") + w.held("fap-one"));
     reduce(&mut w, &policy, 300_000_00);
     let back = (a_before - w.payable("a-co"), fap_before - w.payable("fap-one") - w.held("fap-one"));
-    assert_eq!(back.0 + back.1, 480_00, "two fifths of the initial commission is reversed");
+    let both = back.0 + back.1;
+    assert!(
+        both > 480_00 && both < 480_00 + 558,
+        "two fifths of the initial commission, and the renewal on the premium handed back: {back:?}"
+    );
     assert!(back.0 > 0 && back.1 > 0, "from each payee who received it: {back:?}");
     assert_eq!(initial(&w, &policy), 720_00);
     w.assert_reconciled();

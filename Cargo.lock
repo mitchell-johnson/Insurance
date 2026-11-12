@@ -1996,6 +1996,7 @@ dependencies = [
  "ic-complaints",
  "ic-core",
  "ic-distribution",
+ "ic-finance",
  "ic-ledger",
  "ic-log",
  "ic-money",
