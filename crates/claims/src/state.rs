@@ -247,6 +247,12 @@ impl ClaimsState {
                 actor,
             } => self.pay_cost(cx, &claim, payment_ref, &item, &provider, &actor),
             Command::StartWaiver { claim, from, actor } => self.start_waiver(cx, &claim, from, &actor),
+            Command::PayInterest {
+                claim,
+                payment_ref,
+                party,
+                actor,
+            } => self.pay_interest(cx, &claim, payment_ref, &party, &actor),
             Command::PaymentReturned { claim, payment_ref } => self.payment_returned(cx, &claim, &payment_ref),
             Command::DeclareIncome {
                 claim,
