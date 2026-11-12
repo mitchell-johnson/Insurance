@@ -24,6 +24,7 @@ CHART = chart(
         account("1400", "Reinsurance assets (actuarial)", "asset"),
         account("1410", "Reinsurance recoverable on claims", "asset", control = True, roles = ["reinsurance_recoverable"]),
         account("1420", "Reinsurance migration control", "asset", control = True, roles = ["reinsurance_migration_control"]),
+        account("1430", "Claims migration control", "asset", control = True, roles = ["claims_migration_control"]),
         account("1500", "Prepayments", "asset"),
         account("1600", "Interfund receivable", "asset"),
         # Liabilities

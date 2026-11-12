@@ -29,6 +29,7 @@ pub mod role {
     pub const EX_GRATIA: &str = "ex_gratia";
     pub const CLAIMS_HANDLING: &str = "claims_handling";
     pub const CLAIM_INTEREST: &str = "claim_interest";
+    pub const CLAIMS_MIGRATION_CONTROL: &str = "claims_migration_control";
     pub const CLAIM_RECOVERY_WRITE_OFF: &str = "claim_recovery_write_off";
 
     pub const SETTLEMENT: &str = "settlement";
@@ -358,6 +359,16 @@ pub fn reinsurance_settlement_clearing(c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::REINSURANCE_SETTLEMENT_CLEARING,
+    )
+}
+/// The other side of claims loaded from another system. Its balance is the
+/// outstanding claims brought in, reconciled to the old system's total.
+pub fn claims_migration_control(c: Currency) -> Account {
+    acct(
+        format!("int/claims_migration_control/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::CLAIMS_MIGRATION_CONTROL,
     )
 }
 pub fn reinsurance_migration_control(c: Currency) -> Account {

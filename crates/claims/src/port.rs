@@ -150,6 +150,19 @@ pub enum Instruction {
     },
     /// A cost of handling the claim owed to a third party: a report fee, a
     /// rehabilitation provider. Its own expense account, never claims incurred.
+    /// A claim brought in from another system: its outstanding reserve,
+    /// unpaid admitted money and overpayment become opening entries against
+    /// the migration control account, to be reconciled to the old system.
+    OpenMigrated {
+        claim: String,
+        policy: String,
+        cover: String,
+        reserve_minor: i64,
+        admitted_minor: i64,
+        payable_minor: i64,
+        receivable_minor: i64,
+        open: bool,
+    },
     /// Pay the premiums billed for periods starting in a window from claims
     /// expense. Nothing is posted where nothing is owing.
     WaivePremium {
@@ -217,6 +230,7 @@ impl Instruction {
             | Instruction::ExGratia { policy, .. }
             | Instruction::HandlingCost { policy, .. }
             | Instruction::WaivePremium { policy, .. }
+            | Instruction::OpenMigrated { policy, .. }
             | Instruction::Close { policy, .. }
             | Instruction::Reopen { policy, .. }
             | Instruction::RaiseOverpayment { policy, .. }
