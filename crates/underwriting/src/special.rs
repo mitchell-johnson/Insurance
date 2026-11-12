@@ -186,6 +186,8 @@ pub enum Query {
         after: u64,
         max: usize,
     },
+    /// Effects set aside as undeliverable, with the reason for each.
+    Parked,
 }
 
 /// Answer a query from the state. The function the module host calls.
@@ -200,6 +202,7 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         Query::Report { from, to } => json(serde_json::to_value(state.report(from, to))),
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
         Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
+        Query::Parked => json(serde_json::to_value(state.parked())),
     }
 }
 

@@ -18,6 +18,7 @@ pub mod case;
 pub mod codes;
 pub mod command;
 pub mod config;
+pub mod driver;
 pub mod evidence;
 pub mod host;
 pub mod load;

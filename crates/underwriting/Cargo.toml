@@ -14,6 +14,9 @@ ic-readmodel.workspace = true
 ic-log.workspace = true
 ic-raft.workspace = true
 ic-azure.workspace = true
+ic-ledger.workspace = true
+ic-reinsurance = { path = "../reinsurance" }
+ic-group = { path = "../group" }
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,7 +32,7 @@ aes-gcm = "0.10"
 
 [dev-dependencies]
 tokio.workspace = true
-ic-ledger.workspace = true
+ic-sim.workspace = true
 
 [lints]
 workspace = true

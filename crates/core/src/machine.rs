@@ -386,6 +386,19 @@ impl CoreState {
                 }
                 r
             }
+            Command::IssueQuoted { expected_product_hash, issue } => {
+                let in_force = self.catalog.product_on(&issue.product_code, issue.inception).map(|p| p.content_hash.as_str());
+                if in_force != Some(expected_product_hash.as_str()) {
+                    return Err(Reject::new(
+                        "product_changed",
+                        format!(
+                            "{} for {} is no longer the version the quote was priced on",
+                            issue.product_code, issue.inception
+                        ),
+                    ));
+                }
+                self.dispatch(ctx, Command::IssuePolicy(issue))
+            }
             Command::CancelPolicy { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| lifecycle::cancel(&mut s.ledger, &s.catalog, p, ctx)),
             Command::Reinstate { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| lifecycle::reinstate(&mut s.ledger, &s.catalog, p, ctx)),
             Command::DeclineIndexation { policy, declined } => self.with_policy(&policy, true, |_, p| {
