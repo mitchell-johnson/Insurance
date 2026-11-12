@@ -645,9 +645,7 @@ impl DistributionState {
         reason_code: String,
         document_ref: String,
     ) -> Result<(), Reject> {
-        let Actor::Staff(staff) = actor else {
-            return reject("caller_not_allowed", "a workbench action is prepared by a person");
-        };
+        let staff = actor.person()?;
         let today = self.date()?;
         if self.actions.contains_key(&id) {
             return reject("duplicate_action", format!("action {id} already exists"));
@@ -688,9 +686,7 @@ impl DistributionState {
     }
 
     pub(crate) fn reject_action(&mut self, ctx: &mut Ctx, actor: &Actor, id: &str, reason: String) -> Result<(), Reject> {
-        let Actor::Staff(staff) = actor else {
-            return reject("caller_not_allowed", "a workbench action is rejected by a person");
-        };
+        let staff = actor.person()?;
         let record = self
             .actions
             .get(id)
@@ -708,9 +704,7 @@ impl DistributionState {
     }
 
     pub(crate) fn approve_action(&mut self, ctx: &mut Ctx, actor: &Actor, id: &str, as_role: Role) -> Result<(), Reject> {
-        let Actor::Staff(staff) = actor else {
-            return reject("caller_not_allowed", "a workbench action is approved by a person");
-        };
+        let staff = actor.person()?;
         let today = self.date()?;
         let record = self
             .actions

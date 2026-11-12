@@ -65,6 +65,10 @@ pub struct UnderwritingState {
     /// The number of the last effect ever put in the outbox.
     #[serde(default)]
     pub(crate) outbox_last: u64,
+    /// Effects that could not be delivered, each with the reason, by the
+    /// number it had in the outbox.
+    #[serde(default)]
+    pub(crate) parked: BTreeMap<u64, (Effect, String)>,
 }
 
 /// What a handler works with: the time the driver read, and what to hand back.
@@ -147,6 +151,32 @@ impl UnderwritingState {
             return reject("unknown_effect", format!("no effect numbered {through} has been produced"));
         }
         self.outbox = self.outbox.split_off(&(through + 1));
+        Ok(())
+    }
+
+    /// Effects set aside as undeliverable, with the reason, oldest first.
+    pub fn parked(&self) -> Vec<(u64, Effect, String)> {
+        self.parked.iter().map(|(n, (e, why))| (*n, e.clone(), why.clone())).collect()
+    }
+
+    fn park_effect(&mut self, effect: u64, reason: String) -> Result<(), Reject> {
+        if reason.trim().is_empty() {
+            return reject("reason", "an effect is parked with the reason it could not be delivered");
+        }
+        let Some(parked) = self.outbox.remove(&effect) else {
+            return reject("unknown_effect", format!("effect {effect} is not waiting in the outbox"));
+        };
+        self.parked.insert(effect, (parked, reason));
+        Ok(())
+    }
+
+    fn requeue_effect(&mut self, cx: &mut Cx, effect: u64, by: &str) -> Result<(), Reject> {
+        self.profile(by)?;
+        let Some((parked, _)) = self.parked.remove(&effect) else {
+            return reject("unknown_effect", format!("effect {effect} is not parked"));
+        };
+        // Through the command's own effects, so it is numbered and stored like any other.
+        cx.effect(parked);
         Ok(())
     }
 
@@ -429,11 +459,13 @@ impl UnderwritingState {
             }),
 
             InterimIssued { proposal } => self.with(&proposal, cx, |_, p, _| crate::external::interim_issued(p)),
-            PolicyIssued { proposal } => self.with(&proposal, cx, |_, p, cx| crate::external::policy_issued(p, cx)),
+            PolicyIssued { proposal, layers } => self.with(&proposal, cx, |_, p, cx| crate::external::policy_issued(p, cx, &layers)),
             IssueRejected { proposal, code } => self.with(&proposal, cx, |_, p, cx| crate::external::issue_rejected(p, cx, code)),
 
             Sweep { after, max } => self.sweep(cx, after, max),
             AcknowledgeEffects { through } => self.acknowledge_effects(through),
+            ParkEffect { effect, reason } => self.park_effect(effect, reason),
+            RequeueEffect { effect, by } => self.requeue_effect(cx, effect, &by),
             LicenceChanged {
                 subject,
                 status,
