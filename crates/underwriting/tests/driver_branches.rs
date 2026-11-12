@@ -14,7 +14,7 @@ use ic_core::{GroupId, PolicyId};
 use ic_group::command::{ExcessDecision, GroupCommand};
 use ic_ledger::PartitionId;
 use ic_reinsurance::capacity::Outcome;
-use ic_underwriting::command::{Applied, CapacityAnswer, Command, Effect, Envelope, NonDisclosureOutcome, NoticeKind, Recipient, Reject};
+use ic_underwriting::command::{Applied, CapacityAnswer, Command, Effect, Envelope, NonDisclosureOutcome, NoticeKind, PremiumOnAvoidance, Recipient, Reject};
 use ic_underwriting::driver::{excess_case, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::evidence::EvidenceKind;
 use ic_underwriting::model::Entry;
@@ -259,6 +259,25 @@ fn reinstatement() -> Entry {
     Entry::Reinstatement { policy: "POL-1".into() }
 }
 
+fn remedy(proposal: Option<&str>, outcome: NonDisclosureOutcome, premium: Option<PremiumOnAvoidance>) -> Effect {
+    Effect::NonDisclosureRemedy {
+        key: "nd/1".into(),
+        proposal: proposal.map(Into::into),
+        policy: "POL-1".into(),
+        life: "L1".into(),
+        outcome,
+        review: "ndr/CLM-1/L1".into(),
+        decision: None,
+        terms: vec![ic_core::policy::LayerTerms {
+            cover: "life".into(),
+            life: "L1".into(),
+            loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
+            exclusions: vec![],
+        }],
+        premium,
+    }
+}
+
 fn increase() -> Entry {
     Entry::Increase { policy: "POL-1".into() }
 }
@@ -289,8 +308,9 @@ async fn carry(effect: Effect, capacity: Option<Outcome>, proposal: Value, refus
 /// Purpose: for every effect the driver routes, a refusal the driver has no answer for (from
 /// reinsurance, the core, group administration's naming, or the module itself when an answer
 /// is brought back) parks that effect with a reason that names who refused and the code they
-/// gave. Effects with no receiver yet (revised terms on a policy in force, a non-disclosure
-/// remedy, an ended proposal for policy servicing) are parked with a reason that says so.
+/// gave. Effects with no receiver yet (an ended proposal for policy servicing), and a remedy
+/// that does not say where its policy is held or gives the core nothing to act on, are parked
+/// with a reason that says so.
 /// Why it matters: a parked effect is the only trace of an instruction that did not take
 /// effect. The reason is what the person looking at it has to go on; a missing or wrong one
 /// sends them to the wrong team, and an effect that was neither delivered nor parked would be
@@ -406,20 +426,32 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             "policy servicing is not connected to underwriting",
         ),
         (
-            Effect::NonDisclosureRemedy {
-                key: "nd/1".into(),
-                policy: "POL-1".into(),
-                life: "L1".into(),
-                outcome: NonDisclosureOutcome::Avoid,
-                review: "ND-1".into(),
-                decision: None,
-                terms: vec![],
-                premium: Some(ic_underwriting::command::PremiumOnAvoidance::Refund),
-            },
+            remedy(None, NonDisclosureOutcome::Avoid, Some(PremiumOnAvoidance::Refund)),
+            None,
+            known.clone(),
+            vec![],
+            "the remedy does not say which proposal",
+        ),
+        (
+            remedy(Some("P1"), NonDisclosureOutcome::Avoid, Some(PremiumOnAvoidance::Refund)),
             None,
             Value::Null,
             vec![],
-            "the core has no command yet to vary or avoid a policy",
+            "the remedy does not say which proposal",
+        ),
+        (
+            remedy(Some("P1"), NonDisclosureOutcome::Avoid, None),
+            None,
+            known.clone(),
+            vec![],
+            "a avoid remedy with nothing the core can act on",
+        ),
+        (
+            remedy(Some("P1"), NonDisclosureOutcome::Vary, None),
+            None,
+            known.clone(),
+            vec![("nd/1", "claim_in_payment")],
+            "the core refused the remedy: claim_in_payment",
         ),
         (
             terms("P1", excess(), vec![cover(1)]),
@@ -505,7 +537,8 @@ async fn done_already_or_no_longer_wanted_is_not_a_fault() {
 /// "underwriting" and rating factors as "new-business"; the issue goes to the core as a quoted
 /// issue from "new-business" and interim cover is ended as "underwriting"; a group excess
 /// answer carries the sum, loadings and exclusions for an acceptance, and a decline or a lapse
-/// as declined or not proceeded with.
+/// as declined or not proceeded with; a non-disclosure remedy goes to the core as an avoidance
+/// with the seniors' choice on the premiums, or a variation with its terms, the review as the case.
 /// Why it matters: every receiver checks its caller and refuses the wrong one, and each of
 /// these mappings is a place where a wrong word turns a decline into "not proceeded with" or a
 /// facultative referral into an automatic acceptance. Those are decisions about a person's
@@ -651,6 +684,44 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
         matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "window_closed"),
         "{told:?}"
     );
+
+    // A non-disclosure remedy: one command to the core under the effect's own key, the review
+    // as the case. The core does nothing twice for a case, so a repeat is safe.
+    for (effect, expected) in [
+        (
+            remedy(Some("P1"), NonDisclosureOutcome::Avoid, Some(PremiumOnAvoidance::Retain)),
+            "avoid_policy",
+        ),
+        (remedy(Some("P1"), NonDisclosureOutcome::Vary, None), "vary_for_non_disclosure"),
+    ] {
+        let (pass, script) = carry(effect, None, a_proposal(), &[]).await;
+        assert_eq!(pass.delivered, 1);
+        let sent = script.with(|s| s.core.clone());
+        assert_eq!(sent.len(), 1);
+        let (key, caller, command) = &sent[0];
+        assert_eq!((key.as_str(), caller.as_str(), command.name()), ("nd/1", "underwriting", expected));
+        match command {
+            ic_core::Command::AvoidPolicy { case, premium, .. } => {
+                assert_eq!((case.as_str(), *premium), ("ndr/CLM-1/L1", ic_core::policy::PremiumOnAvoidance::Retain))
+            }
+            ic_core::Command::VaryForNonDisclosure { case, terms, .. } => assert!(case == "ndr/CLM-1/L1" && terms[0].loadings[0].as_str() == "0.5"),
+            other => panic!("{other:?}"),
+        }
+    }
+    let (_, script) = carry(
+        remedy(Some("P1"), NonDisclosureOutcome::Avoid, Some(PremiumOnAvoidance::Refund)),
+        None,
+        a_proposal(),
+        &[],
+    )
+    .await;
+    assert!(matches!(
+        &script.with(|s| s.core.clone())[0].2,
+        ic_core::Command::AvoidPolicy {
+            premium: ic_core::policy::PremiumOnAvoidance::Refund,
+            ..
+        }
+    ));
 
     let (_, script) = carry(interim(), None, Value::Null, &[]).await;
     let told = script.with(|s| s.told.clone());
