@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::benefit::{known_category, member_cover};
 use crate::command::{ExcessDecision, GroupCommand, MatchDecision, Resolution};
-use crate::event::{ExceptionKind, GroupEvent, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{ExceptionKind, GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::mapping::RowReject;
 use crate::model::{ChangeKind, JoinAs, Proposed};
 use crate::record::MemberAttrs;
@@ -434,6 +434,12 @@ impl GroupState {
                 if let Some(c) = s.cases.get_mut(case) {
                     c.status = CaseStatus::NotProceeded;
                     let life = c.life.clone();
+                    let request_key = format!("grp-uw:{}:{case}", s.id);
+                    self.send(Outbound::UnderwritingOutcome {
+                        key: format!("{request_key}/excess-rejected"),
+                        request_key,
+                        outcome: IssueOutcome::Rejected { code: code.to_string() },
+                    });
                     self.emit(GroupEvent::ExcessCoverDecided {
                         scheme: s.id.clone(),
                         case: *case,
@@ -1235,6 +1241,16 @@ impl GroupState {
                         .find(|c| c.life == layer.life && c.cover == layer.cover && c.layer.is_none());
                     if let Some(c) = waiting {
                         c.layer = Some(layer.layer);
+                        let request_key = format!("grp-uw:{}:{}", s.id, c.id);
+                        st.send(Outbound::UnderwritingOutcome {
+                            key: format!("{request_key}/excess-issued"),
+                            request_key,
+                            outcome: IssueOutcome::Issued {
+                                life: layer.life.clone(),
+                                cover: layer.cover.clone(),
+                                layer: layer.layer,
+                            },
+                        });
                         if let (Some(from), CaseStatus::Accepted, id) = (c.end_from, c.status, c.id) {
                             st.end_layer(s, id, from);
                             st.pump(s);
