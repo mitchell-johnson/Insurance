@@ -621,6 +621,9 @@ pub struct Claim {
     /// Times an earlier decision on this claim was overturned on review.
     pub overturns: u32,
     pub closed_on: Option<NaiveDate>,
+    /// Brought in from the system before this one, with the state it had there.
+    #[serde(default)]
+    pub migrated: bool,
     /// Lenders and assignees paid before the claimant, in priority order.
     #[serde(default)]
     pub interests: Vec<InterestDue>,

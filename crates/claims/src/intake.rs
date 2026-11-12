@@ -160,6 +160,7 @@ impl ClaimsState {
             cost_payable_minor: 0,
             waiver_from: None,
             interests: vec![],
+            migrated: false,
             in_run: None,
             decisions: vec![],
             pending: None,
@@ -665,4 +666,81 @@ pub(crate) fn finish_task(
     t.vault_ref = vault_ref;
     t.spend_minor = spend_minor;
     std::mem::take(&mut t.overdue)
+}
+
+impl ClaimsState {
+    /// Load one claim from the old system. Its money is opened in the core
+    /// against the migration control account in the same step, so the
+    /// record and the ledger arrive together or not at all. What cannot be
+    /// carried consistently is refused, never repaired by guessing.
+    pub(crate) fn load_migrated(&mut self, cx: &mut Cx<'_>, mut claim: Claim, health_used: BTreeMap<String, i64>) -> Result<(), Reject> {
+        self.configured()?;
+        let bad = |why: &str| Err(Reject::new("invalid_migration", why));
+        if self.claims.contains_key(&claim.id) || self.in_transfer.values().any(|m| m.claims.iter().any(|c| c.id == claim.id)) {
+            return Err(Reject::new("claim_exists", format!("claim {} is already here", claim.id)));
+        }
+        // The policy is on this partition and the cover is one it has or had.
+        cx.core.cover_facts(&claim.policy, &claim.cover, claim.life.as_deref(), claim.event_date)?;
+        let receivable: i64 = claim.overpayments.iter().map(crate::Overpayment::outstanding_minor).sum();
+        let money = [claim.reserve_minor, claim.admitted_minor, claim.payable_minor, receivable];
+        if money.iter().any(|m| *m < 0) || claim.cost_payable_minor != 0 || claim.payable_minor > claim.admitted_minor {
+            return bad("reserve, admitted, payable and overpayments are not negative, and no more is payable than was admitted");
+        }
+        if claim.in_run.is_some() || claim.pending.is_some() {
+            return bad("a claim is loaded outside any payment run and with no decision waiting for a signature");
+        }
+        let open = claim.status.is_open();
+        let fits = match claim.status {
+            Status::InPayment => claim.schedule.as_ref().is_some_and(|s| s.ended.is_none() && s.next_period < s.end),
+            _ if open => claim.schedule.is_none() || claim.status == Status::Admitted,
+            _ => claim.reserve_minor == 0 && claim.payable_minor == 0 && claim.closed_on.is_some(),
+        };
+        if !fits {
+            return bad("the status does not fit the schedule, the money or the closing date");
+        }
+        if health_used.keys().any(|k| !k.starts_with(&format!("{}/", claim.policy))) {
+            return bad("health limits used are keyed by the claim's own policy");
+        }
+        cx.core.execute(Instruction::OpenMigrated {
+            claim: claim.id.clone(),
+            policy: claim.policy.clone(),
+            cover: claim.cover.clone(),
+            reserve_minor: claim.reserve_minor,
+            admitted_minor: claim.admitted_minor,
+            payable_minor: claim.payable_minor,
+            receivable_minor: receivable,
+            open,
+        })?;
+        claim.migrated = true;
+        // What the old system would have remembered is put on the calendar here.
+        if let Some(s) = claim.schedule.as_ref().filter(|_| claim.status == Status::InPayment) {
+            let reviews: Vec<_> = s
+                .reviews
+                .iter()
+                .map(|(kind, on)| ((*on).max(cx.today), crate::model::Due::Review(*kind)))
+                .collect();
+            claim.due.extend(reviews);
+            claim.due.insert((s.expected_end.max(cx.today), crate::model::Due::ExpectedEnd));
+            if claim.waiver_from.is_some() {
+                claim.due.insert((cx.today, crate::model::Due::Waiver));
+            }
+        }
+        for (key, used) in health_used {
+            *self.health_used.entry(key).or_default() += used;
+        }
+        note(&mut claim, cx, None, "migrated");
+        cx.notify(
+            "claim_migrated",
+            &claim.id,
+            &[
+                ("policy", claim.policy.clone()),
+                ("status", claim.status.code().to_string()),
+                ("reserve_minor", claim.reserve_minor.to_string()),
+                ("payable_minor", claim.payable_minor.to_string()),
+                ("receivable_minor", receivable.to_string()),
+            ],
+        );
+        self.commit(claim);
+        Ok(())
+    }
 }

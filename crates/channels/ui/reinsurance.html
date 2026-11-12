@@ -45,6 +45,10 @@ function actionsFor(id) {
       return [["Record that the reinsurer was told", "facultative_reinsurer_told", [["reference", "Where the reinsurer's answer is filed", "text"]],
         (f) => ({ facultative_reinsurer_told: { key: { policy, cover, layer: Number(layer), life }, reference: f.reference } })]];
     }
+    case "reopened_after_reversal": return [
+      ["Resume recoveries", "resume_recoveries", [["reference", "Your note: why recoveries may go on", "text"]],
+        (f) => ({ resume_recoveries: { claim: subject, reference: f.reference } }), "Every disputed item on the claim must be resolved first."],
+    ];
     default: return [];
   }
 }

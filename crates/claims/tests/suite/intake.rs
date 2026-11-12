@@ -752,3 +752,145 @@ fn a_late_notified_death_prompts_a_register_check() {
     w.complete("c-late", "death-register-cadence", "feed_daily", "sam")
         .expect("a lead closes the check");
 }
+
+fn load(claim: &ic_claims::Claim) -> Command {
+    Command::LoadMigrated {
+        claim: Box::new(claim.clone()),
+        health_used: Default::default(),
+    }
+}
+
+/// Purpose: a claim in payment loaded from another system arrives at the step it had reached:
+/// its reserve is opened in the core in the same command, it is marked as migrated, its reviews
+/// are on the calendar, and the next run pays the period after the last one the old system paid.
+/// Why it matters: the design promises that the first payment from the new platform matches the
+/// last from the old. A loader that reopened the claim as new, or lost the review dates, would
+/// pay a period twice or let a claim run unreviewed.
+#[test]
+fn a_migrated_claim_in_payment_carries_on_where_it_was() {
+    // The old system: a benefit in payment with March paid.
+    let mut old = World::new();
+    old.benefit_in_payment("ip-1");
+    old.pay_run("run-old", d(2027, 3, 1));
+    let mut legacy = old.claim("ip-1").clone();
+    legacy.reserve_minor = 50_000;
+
+    let mut w = World::new();
+    w.core.refuse_next = 1;
+    assert_eq!(w.refused(load(&legacy)), "ledger");
+    w.ok(load(&legacy));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::OpenMigrated {
+            reserve_minor: 50_000,
+            payable_minor: 0,
+            receivable_minor: 0,
+            open: true,
+            ..
+        })
+    ));
+    let c = w.claim("ip-1");
+    assert!(c.migrated && w.state.in_payment.contains("ip-1"));
+    assert!(c.history.iter().any(|h| h.action == "migrated"));
+    assert_eq!(w.core.noticed("claim_migrated")[0]["status"], "in_payment");
+    assert!(c
+        .due
+        .iter()
+        .any(|(on, due)| *on == d(2027, 6, 1) && matches!(due, ic_claims::model::Due::Review(_))));
+    assert_eq!(w.refused(load(&legacy)), "claim_exists");
+
+    w.on(d(2027, 4, 1));
+    w.pay_run("run-1", d(2027, 4, 1));
+    assert_eq!(w.state.runs["run-1"].count, 1, "April only: March was paid before the move");
+    assert_eq!(w.claim("ip-1").schedule.as_ref().expect("in payment").periods.len(), 2);
+}
+
+/// Purpose: a closed claim loads with the health limits it used, and a record that cannot be
+/// carried consistently is refused whole: money below zero, more payable than admitted, a
+/// claim in a run or with a decision waiting, a status that does not fit its money or its
+/// schedule, limits keyed by another policy, or a policy this partition does not hold.
+/// Why it matters: earlier claims limit later ones, so closed claims must come across. And a
+/// loader that accepted a half-consistent record would put a wrong opening entry in the ledger
+/// that nobody could trace back to the old system's total.
+#[test]
+fn a_migration_record_is_loaded_whole_or_refused() {
+    let mut old = World::new();
+    old.open_claim("c-1");
+    old.assess("c-1", "CC-0003");
+    old.decided("c-1", "ana", World::admit_lump(Some(200_000)), "R-OK");
+    let admitted = old.claim("c-1").clone();
+    old.verify_payee("c-1", "ana");
+    old.ok(Command::Pay {
+        claim: "c-1".into(),
+        payment_ref: "p-1".into(),
+        amount_minor: 200_000,
+        reissue_of: None,
+        actor: actor("ana"),
+    });
+    let paid = old.claim("c-1").clone();
+
+    let mut w = World::new();
+    let broken = |change: &dyn Fn(&mut ic_claims::Claim)| {
+        let mut c = admitted.clone();
+        change(&mut c);
+        load(&c)
+    };
+    for command in [
+        broken(&|c| c.reserve_minor = -1),
+        broken(&|c| c.payable_minor = c.admitted_minor + 1),
+        broken(&|c| c.cost_payable_minor = 5),
+        broken(&|c| c.in_run = Some("run-9".into())),
+        // Closed, yet money still owed on it.
+        broken(&|c| c.status = Status::Paid),
+        // In payment with no schedule.
+        broken(&|c| c.status = Status::InPayment),
+    ] {
+        assert_eq!(w.refused(command), "invalid_migration");
+    }
+    assert_eq!(w.refused(broken(&|c| c.policy = "pol-elsewhere".into())), "unknown_policy");
+    let other_policy = Command::LoadMigrated {
+        claim: Box::new(paid.clone()),
+        health_used: [("pol-9/life-1/dental".to_string(), 100)].into(),
+    };
+    assert_eq!(w.refused(other_policy), "invalid_migration");
+
+    // Admitted and unpaid: the money owed is opened as payable.
+    w.ok(load(&admitted));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::OpenMigrated {
+            admitted_minor: 200_000,
+            payable_minor: 200_000,
+            open: true,
+            ..
+        })
+    ));
+    w.verify_payee("c-1", "ana");
+    w.ok(Command::Pay {
+        claim: "c-1".into(),
+        payment_ref: "p-new".into(),
+        amount_minor: 200_000,
+        reissue_of: None,
+        actor: actor("ana"),
+    });
+    assert_eq!(w.claim("c-1").status, Status::Paid);
+
+    // Closed and paid, with the limits it used.
+    let mut closed = paid;
+    closed.id = "c-2".into();
+    w.ok(Command::LoadMigrated {
+        claim: Box::new(closed),
+        health_used: [("pol-1/life-1/dental".to_string(), 100)].into(),
+    });
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::OpenMigrated {
+            reserve_minor: 0,
+            payable_minor: 0,
+            open: false,
+            ..
+        })
+    ));
+    assert_eq!(w.state.health_used["pol-1/life-1/dental"], 100);
+    assert!(w.claim("c-2").migrated);
+}

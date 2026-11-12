@@ -198,6 +198,14 @@ pub enum Command {
 
     // --- intake ---
     Notify(Box<Notification>),
+    /// Load a claim from the system before this one, at the step it had
+    /// reached: open, in payment, closed or declined. Sent by the migration
+    /// load only. Health limits already used travel with a closed claim.
+    LoadMigrated {
+        claim: Box<crate::Claim>,
+        #[serde(default)]
+        health_used: std::collections::BTreeMap<String, i64>,
+    },
     Acknowledge {
         claim: String,
         /// Proof of delivery from the notifications service.
@@ -425,6 +433,7 @@ impl Command {
             Command::NonDisclosureOutcome { .. } => &["underwriting"],
             Command::ExclusionControl { .. } | Command::DrainDue => &["claims", "end-of-day"],
             Command::RecordDeath { .. } => &["claims", "customer-master"],
+            Command::LoadMigrated { .. } => &["migration"],
             _ => &["claims"],
         }
     }
@@ -465,6 +474,7 @@ impl Command {
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
+            Command::LoadMigrated { .. } => "load_migrated",
             Command::Reinsurance(_) => "reinsurance",
             Command::NonDisclosureOutcome { .. } => "non_disclosure_outcome",
             Command::DrainDue => "drain_due",

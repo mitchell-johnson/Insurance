@@ -17,6 +17,8 @@ ic-log.workspace = true
 ic-readmodel.workspace = true
 ic-api = { path = "../api" }
 ic-raft.workspace = true
+ic-azure.workspace = true
+reqwest.workspace = true
 cedar-policy.workspace = true
 chrono.workspace = true
 serde.workspace = true

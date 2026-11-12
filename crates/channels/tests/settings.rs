@@ -130,6 +130,25 @@ fn bad_values_are_refused_at_start() {
             "{bad}"
         );
     }
+    // The customer master: off unless both are set, and never over plain HTTP to another host.
+    assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().master, None);
+    let scope = ("IC_CUSTOMERS_SCOPE", "api://ic-customers/.default");
+    for url in ["https://customers.internal", "http://localhost:8090"] {
+        assert_eq!(
+            load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", url), scope]).unwrap().master,
+            Some((url.to_string(), scope.1.to_string()))
+        );
+    }
+    for url in ["http://customers.internal", "http://localhost.example.com"] {
+        assert!(
+            load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", url), scope]).unwrap_err().contains("https"),
+            "{url}"
+        );
+    }
+    assert!(load(&[NODES, OPEN, DEV, scope]).unwrap_err().contains("together"));
+    assert!(load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", "https://customers.internal")])
+        .unwrap_err()
+        .contains("together"));
     assert!(load(&[NODES, OPEN, DEV, ("IC_LEDGER_PATIENCE_SECS", "soon")])
         .unwrap_err()
         .contains("IC_LEDGER_PATIENCE_SECS"));
