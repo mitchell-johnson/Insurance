@@ -310,9 +310,11 @@ impl UnderwritingState {
             .ok_or_else(|| Reject::new("no_profile", format!("{underwriter} has no authority profile")))
     }
 
-    /// Whether the underwriter has declared a relationship with anyone on the proposal.
+    /// Whether the underwriter has declared a relationship with anyone on
+    /// the proposal, or is on it themselves.
     pub(crate) fn conflicted(&self, underwriter: &str, p: &Proposal) -> bool {
-        let has = |party: &PartyId| self.conflicts.contains(&(underwriter.to_string(), party.clone()));
+        let own = self.config.profiles.get(underwriter).and_then(|profile| profile.party.as_ref());
+        let has = |party: &PartyId| own == Some(party) || self.conflicts.contains(&(underwriter.to_string(), party.clone()));
         has(&p.policyholder) || p.lives.values().any(|f| has(&f.party))
     }
 

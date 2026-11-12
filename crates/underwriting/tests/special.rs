@@ -1063,3 +1063,57 @@ fn a_peer_review_draw_reads_only_its_period_and_old_states_draw_the_same() {
     assert_eq!(replayed.view, earlier.view);
     assert!(replica == w.s, "the replica built the same index and marked the same decision");
 }
+
+/// Purpose: an underwriter whose profile names them as a party cannot take, be handed, or be
+/// asked for an opinion on an application on which they are a life, without declaring
+/// anything; other applications are untouched. The shipped profile function carries the party.
+/// Why it matters: staff policies are the first cohort on the platform, so underwriters will be
+/// on applications in the queue they work. A declaration is something a person can forget; that
+/// nobody decides their own cover has to hold without one.
+#[test]
+fn an_underwriter_never_acts_on_their_own_application() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    w.disclose("P1", "L1", &yes("heart_condition"));
+    w.open("P2", 500_000_00);
+    let mut other = w.open_command("P3", &["L7"], &[("L7", "life", "life", 500_000_00)], false);
+    other.policyholder = PartyId::from("PTY-L8");
+    w.ok("new-business", Command::OpenProposal(Box::new(other)));
+    w.disclose("P3", "L7", &yes("heart_condition"));
+    let mut own = w.s.config.profiles["amy"].clone();
+    own.version += 1;
+    own.party = Some(PartyId::from("PTY-L1"));
+    w.ok(
+        "config",
+        Command::ActivateProfile {
+            profile: Box::new(own),
+            approval: approval(),
+        },
+    );
+    let take = |case: &str, who: &str| Command::TakeCase {
+        case: case.into(),
+        underwriter: who.into(),
+    };
+    assert_eq!(console(&mut w, take("P1/L1/case/1", "amy")).unwrap_err().code, "not_authorised");
+    console(&mut w, take("P3/L7/case/1", "amy")).unwrap();
+    w.take("P1", "L1", "abe");
+    let handover = Command::HandOver {
+        case: "P1/L1/case/1".into(),
+        by: "abe".into(),
+        to: "amy".into(),
+    };
+    assert_eq!(console(&mut w, handover).unwrap_err().code, "not_authorised");
+    let opinion = Command::AskOpinion {
+        case: "P1/L1/case/1".into(),
+        underwriter: "abe".into(),
+        of: "amy".into(),
+    };
+    assert_eq!(console(&mut w, opinion).unwrap_err().code, "not_authorised");
+
+    let loaded = ic_underwriting::authority::load_profiles(
+        "p.star",
+        r#"PROFILES = [profile("u9", 1, {"life": 1}, ["term-life"], ["medical"], party = "PTY-9"), profile("u8", 1, {"life": 1}, ["term-life"], ["medical"])]"#,
+    )
+    .unwrap();
+    assert_eq!((loaded[0].party.clone(), loaded[1].party.clone()), (Some(PartyId::from("PTY-9")), None));
+}
