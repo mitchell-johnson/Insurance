@@ -118,6 +118,8 @@ fn settings_are_required_defaulted_and_never_printed() {
         ("documents-vault", "print-outbox")
     );
     assert_eq!((config.key_name.as_str(), config.event_hub.as_str()), ("documents-kek", "documents-events"));
+    assert_eq!(config.complaints_event_hub, "complaints-events");
+    assert_eq!(config.conduct_officer, "conduct-officer");
     assert_eq!((config.listen.as_str(), config.cycle_every), ("0.0.0.0:8080", Duration::from_secs(15)));
     let printed = format!("{config:?}");
     assert!(printed.contains("node-0:7000") && !printed.contains(KEY));
@@ -125,7 +127,9 @@ fn settings_are_required_defaulted_and_never_printed() {
     let mut custom = env.clone();
     custom.insert("IC_DOCUMENTS_CYCLE_SECONDS", "60".into());
     custom.insert("IC_DOCUMENTS_LISTEN", "127.0.0.1:9000".into());
+    custom.insert("IC_COMPLAINTS_EVENT_HUB", "complaints-test".into());
     let config = Config::from_lookup(|k| custom.get(k).cloned()).unwrap();
+    assert_eq!(config.complaints_event_hub, "complaints-test");
     assert_eq!((config.listen.as_str(), config.cycle_every), ("127.0.0.1:9000", Duration::from_secs(60)));
 
     for key in env.keys() {
