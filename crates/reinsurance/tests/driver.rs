@@ -15,10 +15,12 @@ use ic_ledger::PartitionId;
 use ic_money::Currency::NZD;
 use ic_product::{Frequency, Sex};
 use ic_reinsurance::delivery::CoreDelivery;
-use ic_reinsurance::driver::{Core, Driver, DriverError, LocalModule, Module, Pass, DRIVER};
+use ic_reinsurance::driver::{group_command, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
 use ic_reinsurance::host::{answer, module_spec, react, Query, MAX_ANSWER, MODULE};
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
+use ic_reinsurance::machine::Audience;
 use ic_reinsurance::service::Config;
+use ic_reinsurance::treaty::ExcessPath;
 use ic_reinsurance::treaty::RiskFactors;
 use ic_reinsurance::{Command, Envelope, Instruction, InstructionBody, Notice};
 use ic_sim::config::shipped_activations;
@@ -38,6 +40,9 @@ struct SimCore {
 
 impl Core for SimCore {
     async fn business_date(&self, partition: PartitionId) -> Result<Option<NaiveDate>, DriverError> {
+        if *self.down.lock().unwrap() {
+            return Err(DriverError::Unavailable("no node answered".into()));
+        }
         if *self.unopened.lock().unwrap() == Some(partition) {
             return Ok(None);
         }
@@ -431,8 +436,8 @@ fn the_outbox_gives_up_only_what_is_acknowledged() {
     let notices = b.ri.notices(usize::MAX).len() as u64;
     assert!(notices >= 1, "the unpriced first period raised an exception");
     assert_eq!(b.ri.notices(1).len(), 1);
-    assert_eq!(b.refused(DRIVER, Command::AcknowledgeNotices { through: notices + 1 }), "unknown_notice");
-    b.ok(DRIVER, Command::AcknowledgeNotices { through: notices });
+    assert_eq!(b.refused(DRIVER, Command::AcknowledgeNotices { seqs: vec![notices + 1] }), "unknown_notice");
+    b.ok(DRIVER, Command::AcknowledgeNotices { seqs: (1..=notices).collect() });
     assert!(b.ri.notices(usize::MAX).is_empty());
     assert_eq!(b.replayed(), b.ri);
 }
@@ -465,7 +470,7 @@ fn the_hosted_module_answers_its_questions() {
     assert_eq!(outbox[0][1]["id"], b.instructions[0].id.as_str());
     assert!(outbox.as_array().unwrap().len() <= MAX_ANSWER);
     assert_eq!(ask(&b, Query::Outbox { limit: 1 }).as_array().unwrap().len(), 1);
-    assert_eq!(ask(&b, Query::Notices { limit: 1 }).as_array().unwrap().len(), 1);
+    assert_eq!(ask(&b, Query::Notices { audience: None, limit: 1 }).as_array().unwrap().len(), 1);
 
     let delivery = ask(&b, Query::Delivery { seq: 1, on: d(2027, 4, 2) });
     assert_eq!((&delivery[0], &delivery[2]), (&json!(3), &json!("reinsurance")));
@@ -624,13 +629,17 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
     let mut seen = Vec::new();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let mut stop = Some(stop);
+    let audiences = TestAudiences::default();
     w.driver
         .run(
+            &audiences,
             Duration::from_millis(1),
             async {
                 let _ = stopped.await;
             },
-            |pass| {
+            |pass, round| {
+                // Notices cannot be dated while the core is away, and are once it is back.
+                assert_eq!(round.is_ok(), pass.is_ok());
                 seen.push(pass.clone());
                 match seen.len() {
                     1 => *core.down.lock().unwrap() = false,
@@ -650,4 +659,238 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
     assert!(matches!(&seen[1], Ok(pass) if pass.clear() && pass.delivered > 0));
     assert_eq!(seen[2], Ok(Pass::default()), "nothing new to carry");
     assert!(w.module.state().outbox(usize::MAX).is_empty());
+}
+
+/// An audience that records what it is handed, and can refuse or be away.
+#[derive(Clone, Default)]
+struct TestAudiences {
+    taken: Arc<Mutex<Vec<(u64, Notice, NaiveDate)>>>,
+    refuse: Arc<Mutex<Option<Reject>>>,
+    away: Arc<Mutex<bool>>,
+}
+
+impl Audiences for TestAudiences {
+    fn reached(&self) -> Vec<Audience> {
+        vec![Audience::Group]
+    }
+
+    async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
+        if *self.away.lock().unwrap() {
+            return Err(DriverError::Unavailable("the group module did not answer".into()));
+        }
+        if let Some(refusal) = self.refuse.lock().unwrap().clone() {
+            return Ok(Handed::Refused(refusal));
+        }
+        self.taken.lock().unwrap().push((seq, notice.clone(), on));
+        Ok(Handed::Taken)
+    }
+}
+
+/// A scheme whose two members are each found to be a person already insured, so
+/// each raises an underwritten-excess notice for group administration.
+fn with_group_notices(w: &mut World) -> Vec<u64> {
+    let feed = |w: &mut World, seq: u64, event: ic_core::event::Event| {
+        let record = ic_core::EventRecord {
+            id: format!("77-{seq}"),
+            partition: 77,
+            seq,
+            business_date: d(2027, 3, 1),
+            log_index: seq,
+            traceparent: None,
+            event,
+        };
+        assert_eq!(w.module.apply(react(&record)[0].clone()).result, Ok(()));
+    };
+    feed(
+        w,
+        1,
+        ic_core::event::Event::PolicyIssued {
+            policy: PolicyId::from("S1"),
+            number: "N-S1".into(),
+            group: GroupId::from("S1"),
+            policyholder: PartyId::from("employer"),
+            product_code: "group-life".into(),
+            product_hash: "hash".into(),
+            inception: d(2027, 2, 1),
+            lives: ["M1", "M2"]
+                .iter()
+                .map(|m| ic_core::event::LifeInfo {
+                    life: (*m).into(),
+                    party: None,
+                })
+                .collect(),
+            layers: vec![],
+            members: vec![member_cover("M1", 700 * K), member_cover("M2", 900 * K)],
+        },
+    );
+    w.tell(
+        "group-admin",
+        Command::SetSchemeTerms {
+            policy: PolicyId::from("S1"),
+            excess_path: ExcessPath::UnderwrittenExcess,
+            sites: vec![],
+        },
+    )
+    .unwrap();
+    for (seq, (member, party)) in [("M1", "anna"), ("M2", "ben")].into_iter().enumerate() {
+        feed(
+            w,
+            seq as u64 + 2,
+            ic_core::event::Event::MemberIdentified {
+                policy: PolicyId::from("S1"),
+                life: member.into(),
+                party: PartyId::from(party),
+            },
+        );
+    }
+    let state = w.module.state();
+    let waiting: Vec<u64> = state.notices_for(Audience::Group, usize::MAX).iter().map(|(s, _)| *s).collect();
+    assert_eq!(waiting.len(), 2);
+    waiting
+}
+
+/// Purpose: notices for an audience the carrier reaches are handed on once each, in order,
+/// with their outbox number and the business date, and leave the outbox; notices for
+/// audiences it does not reach stay where they are.
+/// Why it matters: the underwritten-excess notice is the only thing that starts
+/// underwriting for cover above the retention. Lost, the excess sits unplaced; sent twice
+/// without a stable number, group administration would open two cases.
+#[tokio::test]
+async fn notices_are_handed_to_the_audience_they_are_for() {
+    let mut w = World::new();
+    let waiting = with_group_notices(&mut w);
+    let others = w.module.state().notices(usize::MAX).len() - 2;
+    assert!(others >= 2, "the over-retention exceptions are for staff");
+    let audiences = TestAudiences::default();
+
+    let round = w.driver.hand_on(&audiences, d(2027, 3, 2)).await.unwrap();
+    assert_eq!(round, Round { taken: 2, refused: 0 });
+    let taken = audiences.taken.lock().unwrap().clone();
+    assert_eq!(
+        taken.iter().map(|(s, _, on)| (*s, *on)).collect::<Vec<_>>(),
+        vec![(waiting[0], d(2027, 3, 2)), (waiting[1], d(2027, 3, 2))]
+    );
+    assert!(matches!(&taken[0].1, Notice::RequireUnderwrittenExcess { life, excess_minor, .. } if life.0 == "M1" && *excess_minor == 200 * K));
+    let state = w.module.state();
+    assert!(state.notices_for(Audience::Group, usize::MAX).is_empty());
+    assert_eq!(state.notices(usize::MAX).len(), others, "nobody reaches staff yet, so their notices wait");
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await.unwrap(), Round::default());
+
+    // The command group administration is sent, in its own wire format.
+    let command = group_command(waiting[0], &taken[0].1, d(2027, 3, 2)).unwrap();
+    assert_eq!(
+        command,
+        json!({
+            "key": format!("ri-notice:{}", waiting[0]),
+            "caller": "reinsurance",
+            "actor": "reinsurance-driver",
+            "today": "2027-03-02",
+            "command": {"require_underwritten_excess": {
+                "policy": "S1", "life": "M1", "cover": "group-life", "excess_minor": 200 * K,
+                "reference": format!("UWX/S1/group-life/0/M1/{}", 200 * K),
+            }},
+        })
+    );
+    assert_eq!(group_command(1, &Notice::ExceptionClosed { id: "x".into() }, d(2027, 3, 2)), None);
+}
+
+/// Purpose: a notice its audience refuses is set aside with an exception and does not hold
+/// up the notice behind it; operations can send it again or abandon it with a reason, and
+/// an audience that is away loses nothing.
+/// Why it matters: group administration refuses an excess larger than the member's cover,
+/// which happens when the membership changed in between. One stale notice must not stop
+/// every later member's underwriting, and it must not vanish without a person deciding.
+#[tokio::test]
+async fn a_refused_notice_is_set_aside_for_a_person_and_the_rest_carry_on() {
+    let mut w = World::new();
+    let waiting = with_group_notices(&mut w);
+    let audiences = TestAudiences::default();
+
+    *audiences.away.lock().unwrap() = true;
+    assert!(matches!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await, Err(DriverError::Unavailable(_))));
+    assert_eq!(w.module.state().notices_for(Audience::Group, usize::MAX).len(), 2);
+    *audiences.away.lock().unwrap() = false;
+
+    *audiences.refuse.lock().unwrap() = Some(Reject::new("invalid_amount", "more than the member's automatic cover"));
+    let round = w.driver.hand_on(&audiences, d(2027, 3, 2)).await.unwrap();
+    assert_eq!(round, Round { taken: 0, refused: 2 });
+    let state = w.module.state();
+    assert!(state.notices_for(Audience::Group, usize::MAX).is_empty(), "set aside, not offered again");
+    let exception = &state.exceptions()[&format!("notice:{}", waiting[0])];
+    assert_eq!(exception.code, "notice_refused");
+    assert!(
+        exception.detail.contains("Group") && exception.detail.contains("invalid_amount: more than"),
+        "{}",
+        exception.detail
+    );
+    *audiences.refuse.lock().unwrap() = None;
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await.unwrap(), Round::default());
+
+    // An acknowledgement does not remove a notice that was set aside.
+    w.tell(DRIVER, Command::AcknowledgeNotices { seqs: vec![waiting[0]] }).unwrap();
+    assert!(w.module.state().notices(usize::MAX).iter().any(|(s, _)| *s == waiting[0]));
+
+    let (first, second) = (waiting[0], waiting[1]);
+    assert_eq!(w.tell(DRIVER, Command::RetryNotice { seq: first }), Err("caller_not_allowed".into()));
+    assert_eq!(w.tell("reinsurance-ops", Command::RetryNotice { seq: 9_999 }), Err("not_refused".into()));
+    w.tell("reinsurance-ops", Command::RetryNotice { seq: first }).unwrap();
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 3)).await.unwrap(), Round { taken: 1, refused: 0 });
+    assert!(!w.module.state().exceptions().contains_key(&format!("notice:{first}")));
+
+    let abandon = |seq, reason: &str, by: &str| Command::AbandonNotice {
+        seq,
+        reason: reason.into(),
+        approved_by: by.into(),
+    };
+    assert_eq!(w.tell("reinsurance-ops", abandon(first, "r", "lee")), Err("not_refused".into()));
+    assert_eq!(w.tell("reinsurance-ops", abandon(second, "", "lee")), Err("reason_required".into()));
+    assert_eq!(w.tell("reinsurance-ops", abandon(second, "r", " ")), Err("reason_required".into()));
+    w.tell("reinsurance-ops", abandon(second, "member left the scheme on 1 March", "lee")).unwrap();
+    let state = w.module.state();
+    assert!(!state.exceptions().contains_key(&format!("notice:{second}")));
+    assert!(!state.notices(usize::MAX).iter().any(|(s, _)| *s == second));
+    assert_eq!(state.notices_abandoned().len(), 1);
+    assert_eq!(w.ask(Query::AbandonedNotices)[0]["reason"], "member left the scheme on 1 March");
+    assert_eq!(
+        w.ask(Query::Notices {
+            audience: Some(Audience::Group),
+            limit: 5
+        }),
+        json!([])
+    );
+
+    // Refusals the module itself turns away.
+    let refused = |seq, code: &str| Command::NoticeRefused {
+        seq,
+        code: code.into(),
+        message: "m".into(),
+    };
+    assert_eq!(w.tell(DRIVER, refused(second, "x")), Err("unknown_notice".into()));
+    let staff = w.module.state().notices(1)[0].0;
+    assert_eq!(w.tell(DRIVER, refused(staff, " ")), Err("reason_required".into()));
+}
+
+/// Purpose: a cycle carries instructions and then hands notices on, and holds the notices
+/// back while the first partition has no business date or cannot be asked for one.
+/// Why it matters: a notice is dated with the business date when it is handed on. Sending
+/// it before the insurer's first day is open would date it by a clock the system does not
+/// otherwise trust.
+#[tokio::test]
+async fn a_cycle_delivers_then_hands_on_and_waits_for_a_business_date() {
+    let mut w = World::new();
+    with_group_notices(&mut w);
+    let audiences = TestAudiences::default();
+    *w.core.unopened.lock().unwrap() = Some(0);
+    let (pass, round) = w.driver.cycle(&audiences).await;
+    assert!(pass.is_ok());
+    assert_eq!(round, Ok(Round::default()));
+    assert!(audiences.taken.lock().unwrap().is_empty());
+    *w.core.unopened.lock().unwrap() = None;
+    *w.core.down.lock().unwrap() = true;
+    let (_, round) = w.driver.cycle(&audiences).await;
+    assert!(matches!(round, Err(DriverError::Unavailable(_))));
+    *w.core.down.lock().unwrap() = false;
+    let (_, round) = w.driver.cycle(&audiences).await;
+    assert_eq!(round, Ok(Round { taken: 2, refused: 0 }));
+    assert_eq!(audiences.taken.lock().unwrap()[0].2, d(2027, 3, 1));
 }

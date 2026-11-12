@@ -102,8 +102,14 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - name: Compile the Bicep template
-        run: az bicep build --file infra/main.bicep --stdout > /dev/null
+      # Every template in infra/, so one a module adds beside main.bicep is
+      # compiled too.
+      - name: Compile the Bicep templates
+        run: |
+          for template in infra/*.bicep; do
+            echo "$template"
+            az bicep build --file "$template" --stdout > /dev/null
+          done
       - name: Compile its parameters
         run: az bicep build-params --file infra/main.bicepparam --stdout > /dev/null
       - name: Render the Kubernetes manifests

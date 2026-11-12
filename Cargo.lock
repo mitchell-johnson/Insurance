@@ -2180,8 +2180,10 @@ dependencies = [
 name = "ic-node"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "ic-channels",
  "ic-complaints",
+ "ic-core",
  "ic-distribution",
  "ic-documents",
  "ic-finance",
@@ -2348,6 +2350,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",
