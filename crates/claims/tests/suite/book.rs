@@ -1247,3 +1247,59 @@ fn a_whole_interest_takes_all_of_the_proceeds() {
     w.ok(to_bank);
     assert_eq!(w.claim("c-1").status, Status::Paid);
 }
+
+/// Purpose: where the rules ask for proof of life, the check falls due on its interval; once
+/// its grace has passed with no proof on file the benefit is held, not cancelled or ended; and
+/// when the proof is filed the next run pays every held period in full.
+/// Why it matters: a benefit paid for life is paid after death unless someone checks, and the
+/// money is then hard to get back from an estate. Holding instead of stopping means a living
+/// person who was slow to answer loses nothing, which is what the design promises them.
+#[test]
+fn an_overdue_proof_of_life_holds_the_benefit_until_it_is_filed() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.proof_of_life_months = 3;
+    r.proof_of_life_grace_days = 10;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+
+    w.on(d(2027, 6, 1));
+    w.ok(Command::DrainDue);
+    let task = "review/ProofOfLife/2027-06-01";
+    assert!(w.claim("ip-1").tasks.iter().any(|t| t.id == task && t.kind == TaskKind::ProofOfLife));
+    // Inside the grace the benefit is paid as usual.
+    w.pay_run("run-2", d(2027, 6, 1));
+    assert_eq!(w.state.runs["run-2"].count, 3);
+
+    w.on(d(2027, 6, 11));
+    w.ok(Command::DrainDue);
+    let c = w.claim("ip-1");
+    assert!(c.held_for_proof_of_life());
+    assert_eq!(c.status, Status::InPayment, "held, not ended");
+    assert!(w.core.noticed("review_overdue").iter().any(|n| n["review"] == "ProofOfLife"));
+    w.on(d(2027, 8, 1));
+    assert_eq!(w.refused(prepare("run-3", d(2027, 8, 1))), "nothing_to_pay");
+
+    let file = |vault: Option<&str>| Command::CompleteTask {
+        claim: "ip-1".into(),
+        task: task.into(),
+        outcome: "signed_declaration".into(),
+        attendees: vec![],
+        vault_ref: vault.map(str::to_string),
+        spend_minor: 0,
+        actor: actor("ana"),
+    };
+    // Saying so is not proof: the certificate, declaration or register match is on file.
+    assert_eq!(w.refused(file(None)), "not_authorised");
+    w.ok(file(Some("vault-declaration-1")));
+    assert!(!w.claim("ip-1").held_for_proof_of_life());
+    w.pay_run("run-3", d(2027, 8, 1));
+    assert_eq!(w.state.runs["run-3"].count, 2, "July and August, both in full");
+    // The next check is already on the plan.
+    assert_eq!(
+        w.claim("ip-1").schedule.as_ref().expect("in payment").reviews[&TaskKind::ProofOfLife],
+        d(2027, 9, 1)
+    );
+}

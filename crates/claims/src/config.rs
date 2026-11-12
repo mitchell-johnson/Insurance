@@ -254,6 +254,13 @@ pub struct Rules {
     /// A death notified more than this many days after it happened prompts a
     /// check of the death register feed.
     pub late_death_days: u32,
+    /// How often a person paid a benefit is asked to prove they are alive.
+    /// Zero: never.
+    #[serde(default)]
+    pub proof_of_life_months: u32,
+    /// Days after the proof falls due before payments are held.
+    #[serde(default)]
+    pub proof_of_life_grace_days: u32,
     /// Interest on a lump sum paid late, where the law or the product
     /// requires it. Absent: no interest is paid.
     #[serde(default)]
