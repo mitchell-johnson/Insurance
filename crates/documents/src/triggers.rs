@@ -18,6 +18,7 @@ fn trigger(record: &EventRecord, policy: &ic_core::PolicyId, kind: DocumentKind,
         kind,
         purpose: purpose.map(str::to_string),
         business_date: record.business_date,
+        copy_to: vec![],
     }
 }
 
