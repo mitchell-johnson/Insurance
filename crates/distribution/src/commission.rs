@@ -189,6 +189,13 @@ impl DistributionState {
                     l.sum_insured_minor = sum_insured_minor;
                 }
             }
+            CoreEvent::LayerEnded {
+                policy,
+                cover,
+                layer,
+                effective,
+                ..
+            } => self.layer_ended(ctx, &policy, &layer_key(&policy, &cover, layer), &cause, effective, date),
             CoreEvent::LayerUnwound {
                 policy, cover, layer, start, ..
             } => {
@@ -778,10 +785,62 @@ impl DistributionState {
             }
             return;
         }
+        if let Some(reference) = self.claw_back(ctx, policy, partition, cause, date, date, &open) {
+            if let Some(p) = self.policies.get_mut(policy) {
+                p.last_clawback = Some(reference);
+            }
+        }
+    }
+
+    /// One layer of a cover ended while the policy carries on: the cover was
+    /// reduced or removed. Commission is clawed back on that layer alone, as
+    /// at the day the reduction took effect, from whoever its exposure items
+    /// name as liable. Inside the cooling-off period the layer's initial
+    /// commission is reversed in full, from whoever received it. The layer
+    /// earns nothing from that day. A layer that ends with the whole policy
+    /// is handled by the policy's own ending, and a claim never claws back.
+    fn layer_ended(&mut self, ctx: &mut Ctx, policy: &PolicyId, key: &str, cause: &str, effective: NaiveDate, date: NaiveDate) {
+        let Some(partition) = self.policies.get(policy).filter(|p| p.ended.is_none()).map(|p| p.partition) else {
+            return;
+        };
+        let Some(layer) = self.layers.get_mut(key).filter(|l| l.ended.is_none()) else {
+            return;
+        };
+        layer.ended = Some(effective);
+        let (start, paid) = (layer.start, layer.initial_paid.clone());
+        let open: Vec<Exposure> = self.exposures.values().filter(|e| e.layer == key && e.open).cloned().collect();
+        let cooling_off = open.iter().any(|e| (effective - start).num_days() <= e.cooling_off_days as i64);
+        match paid {
+            Some(reference) if cooling_off => self.reverse_allocation(ctx, &reference, cause, date, Some(key)),
+            _ => {
+                self.claw_back(ctx, policy, partition, cause, effective, date, &open);
+            }
+        }
+        // The layer is gone: nothing more can be clawed back on it.
+        for e in open {
+            if let Some(x) = self.exposures.get_mut(&e.id) {
+                x.open = false;
+            }
+        }
+    }
+
+    /// Claw back what is still at risk on these exposure items as at a day,
+    /// from whoever each names as liable. Returns the reference of the
+    /// clawback, if anything was at risk.
+    fn claw_back(
+        &mut self,
+        ctx: &mut Ctx,
+        policy: &PolicyId,
+        partition: PartitionId,
+        cause: &str,
+        as_at: NaiveDate,
+        date: NaiveDate,
+        open: &[Exposure],
+    ) -> Option<String> {
         let mut lines = vec![];
         let mut touched = vec![];
-        for e in &open {
-            let amount = e.at_risk(date) - e.clawed_minor;
+        for e in open {
+            let amount = e.at_risk(as_at) - e.clawed_minor;
             if amount <= 0 {
                 continue;
             }
@@ -806,7 +865,7 @@ impl DistributionState {
             touched.push((e.id.clone(), amount));
         }
         if lines.is_empty() {
-            return;
+            return None;
         }
         for (id, amount) in &touched {
             if let Some(x) = self.exposures.get_mut(id) {
@@ -819,13 +878,10 @@ impl DistributionState {
             policy: policy.clone(),
             total_minor: -lines.iter().map(|l| l.amount_minor).sum::<i64>(),
         });
-        if let Some(p) = self.policies.get_mut(policy) {
-            p.last_clawback = Some(reference.clone());
-        }
         self.record_allocation(
             ctx,
             Allocation {
-                reference,
+                reference: reference.clone(),
                 partition,
                 policy: policy.clone(),
                 kind: "commission_clawback".into(),
@@ -837,6 +893,7 @@ impl DistributionState {
                 reversed_by: None,
             },
         );
+        Some(reference)
     }
 
     /// Reinstatement reverses the clawback entry, so the same parties are

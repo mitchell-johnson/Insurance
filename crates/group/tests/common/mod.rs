@@ -155,6 +155,8 @@ pub struct Harness {
     pub requests: Vec<UnderwritingRequest>,
     /// The requests withdrawn from underwriting, by the key each went under.
     pub withdrawals: Vec<String>,
+    /// What underwriting was told the core made of accepted terms.
+    pub outcomes: Vec<(String, ic_group::event::IssueOutcome)>,
     pub to_resolve: Vec<(String, Vec<String>)>,
     /// Answers given in place of the core's, one per command sent to it.
     pub core_faults: VecDeque<Option<String>>,
@@ -211,6 +213,7 @@ impl Harness {
             notices: vec![],
             requests: vec![],
             withdrawals: Vec::new(),
+            outcomes: Vec::new(),
             to_resolve: vec![],
             core_faults: VecDeque::new(),
             sent: vec![],
@@ -321,6 +324,10 @@ impl Harness {
                 }
                 Outbound::Underwriting { request, .. } => {
                     self.requests.push(request);
+                    acked.push(id);
+                }
+                Outbound::UnderwritingOutcome { request_key, outcome, .. } => {
+                    self.outcomes.push((request_key, outcome));
                     acked.push(id);
                 }
                 Outbound::WithdrawUnderwriting { request_key, .. } => {
