@@ -21,6 +21,7 @@ pub mod classes;
 pub mod complaints;
 pub mod directory;
 pub mod feed;
+pub mod finance;
 pub mod forward;
 pub mod http;
 pub mod identity;

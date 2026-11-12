@@ -137,6 +137,8 @@ pub struct AppState {
     pub ui: UiConfig,
     /// The unit pricing module, for the staff console.
     pub pricing: Arc<dyn crate::forward::Source>,
+    /// The finance ledger, for the finance console.
+    pub finance: Arc<dyn crate::forward::Source>,
     /// The complaints module, for the complaints and conduct workbench.
     pub complaints: Arc<dyn crate::forward::Source>,
 }
@@ -874,6 +876,78 @@ async fn complaints_command(State(s): State<Shared>, headers: HeaderMap, method:
     ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["events"] }))
 }
 
+impl AppState {
+    /// What this person may do in the finance console. Nobody without a
+    /// finance action gets as far as that module.
+    async fn finance_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::FinanceStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include finance"));
+        }
+        Ok((session, standing))
+    }
+}
+
+/// One of the console's questions to the finance ledger: the close
+/// dashboard, checks, the trial balance, journals, returns, extracts. `me`
+/// answers from here.
+async fn finance_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.finance_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::finance::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s
+        .finance
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// One person's command to the finance ledger, as that person with the
+/// roles they hold. That module decides what each role may do, keeps maker
+/// and checker apart, and records who did what.
+async fn finance_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.finance_standing(&headers, &method, &uri, &body).await?;
+    if !standing["roles"].as_array().is_some_and(|held| !held.is_empty()) {
+        return Err(Problem::forbidden("you may read the finance console but hold no role to act in it"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let envelope = crate::finance::envelope(&key, &session.party, &standing["roles"], parse(&body)?).map_err(Problem::bad_request)?;
+    let output = s
+        .finance
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        let status = if code == "authority" { StatusCode::FORBIDDEN } else { StatusCode::CONFLICT };
+        return Err(Problem::new(
+            status,
+            code,
+            refused["message"].as_str().unwrap_or("the finance ledger refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["events"] }))
+}
+
 /// One of the console's questions to the unit pricing module: the work
 /// queue, funds, prices, valuations, errors. `me` answers from here.
 async fn pricing_question(
@@ -1192,6 +1266,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/workbench/{party}/proof-of-debt", get(proof_of_debt))
         .route("/staff/v1/complaints/commands", post(complaints_command))
         .route("/staff/v1/complaints/{question}", get(complaints_question))
+        .route("/staff/v1/finance/commands", post(finance_command))
+        .route("/staff/v1/finance/{question}", get(finance_question))
         .route("/staff/v1/unit-pricing/commands", post(pricing_command))
         .route("/staff/v1/unit-pricing/{question}", get(pricing_question))
         .route("/internal/v1/commands", post(module_command))
@@ -1205,6 +1281,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
         .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
         .route("/complaints", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS) }))
+        .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))

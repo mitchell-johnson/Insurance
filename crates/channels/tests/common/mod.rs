@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod complaints;
+pub mod finance;
 pub mod pricing;
 
 use base64::Engine;

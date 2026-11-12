@@ -137,6 +137,33 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "Owner con-1");
   } });
   await visit(browser, "/complaints", { subject: "sub-fin1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/finance", { subject: "sub-gl1" }, { run: async (p) => {
+    await p.fill("#p-id", "2027-11"); await p.locator("#period button").click();
+    await p.locator("#dash:not([hidden])").waitFor();
+    await sees(p, "Stopping the close");
+    await p.selectOption("#r-check", "tax_reconciliation"); await p.locator("#report button").click();
+    await sees(p, "Reported.");
+    await p.getByRole("tab", { name: "Journals" }).click();
+    await p.fill("#j-id", "bj1"); await p.fill("#j-period", "2027-11"); await p.fill("#j-date", "2027-11-30");
+    await p.fill("#j-reason", "month-end accrual"); await p.fill("#j-evidence", "vault://evidence/1");
+    await p.fill("#j-lines", "6500, 250.00, SF1-life\n2500, -250.00, SF1-life");
+    await p.locator("#journal button").click();
+    await sees(p, "Someone else approves it.");
+    await p.locator("#jview:not([hidden])").waitFor();
+    // An operator holds no approver role, so the page does not offer approval.
+    if (!(await p.locator("#j-approve").isDisabled())) throw new Error("an operator was offered approval");
+  } });
+  await visit(browser, "/finance", { subject: "sub-gl2" }, { run: async (p) => {
+    await p.getByRole("tab", { name: "Journals" }).click();
+    await p.fill("#jl-id", "bj1"); await p.locator("#jlookup button").click();
+    await p.locator("#jview:not([hidden])").waitFor();
+    await p.locator("#j-approve").click();
+    await sees(p, "Approved and posted.");
+    await p.getByRole("tab", { name: "Books" }).click();
+    await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
+    await p.locator("#tb-out").getByText("6500").first().waitFor();
+  } });
+  await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
   console.log("all pages check out");
