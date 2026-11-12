@@ -193,6 +193,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         reopen_windows: BTreeMap::new(),
         notices: BTreeMap::new(),
         cancellation: None,
+        migrated: cmd.migrated,
         declined_anniversaries: Vec::new(),
         periods_billed: 0,
         next_receivable_id: 1,
@@ -229,6 +230,12 @@ pub fn quote(catalog: &Catalog, application: IssuePolicy, today: NaiveDate) -> R
 pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) -> Result<(), Reject> {
     if state.policies.contains_key(&cmd.policy) {
         return Err(Reject::new("policy_exists", format!("policy {} already exists", cmd.policy)));
+    }
+    if cmd.migrated != (ctx.caller == "migration") {
+        return Err(Reject::new(
+            "migrated",
+            "a migrated policy is issued by the migration load, and the migration load issues nothing else",
+        ));
     }
     let (mut policy, product) = build_policy(&state.catalog, cmd, ctx.date, ctx.index)?;
     // Rate everything before anything is written, so a policy that cannot be

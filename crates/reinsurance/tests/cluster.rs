@@ -196,7 +196,7 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
         command: ic_core::Command::OpenBusinessDate { date: today },
     };
     assert!(matches!(gone.core.send(&delivery).await, Err(DriverError::Unavailable(_))));
-    let late = gone.module.propose(tell("late", "driver", Command::AcknowledgeNotices { through: 0 })).await;
+    let late = gone.module.propose(tell("late", "driver", Command::AcknowledgeNotices { seqs: vec![] })).await;
     assert!(matches!(late, Err(DriverError::Unavailable(_))));
     let _ = std::fs::remove_dir_all(&dir);
 }

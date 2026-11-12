@@ -13,6 +13,7 @@ ic-product.workspace = true
 ic-readmodel.workspace = true
 ic-log.workspace = true
 ic-raft.workspace = true
+ic-azure.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

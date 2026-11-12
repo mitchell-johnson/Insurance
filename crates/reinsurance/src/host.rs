@@ -7,7 +7,7 @@ use ic_raft::{hosted_reading, ModuleSpec, ModuleState};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::machine::{Command, Envelope, Reinsurance};
+use crate::machine::{Audience, Command, Envelope, Reinsurance};
 use crate::{ClaimId, LifeKey, ReinsurerId, RiskKey, TreatyId};
 
 /// The module's permanent name on the cluster.
@@ -25,8 +25,11 @@ pub enum Query {
     Outbox {
         limit: usize,
     },
-    /// The oldest notices not yet handed on: `[seq, notice]`.
+    /// The oldest notices not yet handed on: `[seq, notice]`. With an
+    /// audience, only that audience's, leaving out any it refused.
     Notices {
+        #[serde(default)]
+        audience: Option<Audience>,
         limit: usize,
     },
     /// The core command for an instruction still in the outbox.
@@ -69,6 +72,7 @@ pub enum Query {
     },
     Exceptions,
     Abandoned,
+    AbandonedNotices,
     /// The module's own invariants: an empty list when they hold.
     Reconcile,
     StateHash,
@@ -83,7 +87,11 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
     let query: Query = serde_json::from_value(question).map_err(|e| format!("not a question of this module: {e}"))?;
     match query {
         Query::Outbox { limit } => json(state.outbox(limit.min(MAX_ANSWER))),
-        Query::Notices { limit } => json(state.notices(limit.min(MAX_ANSWER))),
+        Query::Notices { audience: None, limit } => json(state.notices(limit.min(MAX_ANSWER))),
+        Query::Notices {
+            audience: Some(audience),
+            limit,
+        } => json(state.notices_for(audience, limit.min(MAX_ANSWER))),
         Query::Delivery { seq, on } => {
             let found = state.outbox(usize::MAX).into_iter().find(|(s, _)| *s == seq);
             let (_, instruction) = found.ok_or_else(|| format!("instruction {seq} is not waiting to be delivered"))?;
@@ -111,6 +119,7 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
         Query::ConsentStatus { claim } => json(state.consent_status(&claim)),
         Query::Exceptions => json(state.exceptions()),
         Query::Abandoned => json(state.abandoned()),
+        Query::AbandonedNotices => json(state.notices_abandoned()),
         Query::Reconcile => json(state.reconcile()),
         Query::StateHash => json(hex::encode(state.state_hash().0)),
     }
