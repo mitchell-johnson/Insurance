@@ -14,7 +14,7 @@ use crate::billing::{raise_receivable, Bill};
 use crate::bitemporal::Bitemporal;
 use crate::catalog::Catalog;
 use crate::command::{ExcessLayer, MemberChange};
-use crate::event::{Event, LayerInfo, MemberCover};
+use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::lifecycle::{member_covers, BACKDATING_LIMIT_DAYS};
 use crate::machine::{CoreState, Ctx, Reject, APPLY_BUDGET, MAX_MEMBERSHIP_CHUNK, SCHEME_BILLING_CHUNK};
 use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, PendingInvoice, Policy, PolicyStatus, ReceivableKind};
@@ -478,6 +478,10 @@ pub(crate) fn apply_membership(
     policy.lives = scratch.lives;
     policy.covers = scratch.covers;
     for s in staged {
+        let info = policy
+            .lives
+            .get(&s.life)
+            .map(|l| LifeInfo::with_factors(l.id.clone(), party_of(&l.kind), l.factors.as_of(NaiveDate::MAX)));
         ctx.emit(match s.outcome {
             Outcome::Joined { covers, party } => Event::MemberJoined {
                 policy: policy.id.clone(),
@@ -485,6 +489,7 @@ pub(crate) fn apply_membership(
                 effective: s.effective,
                 covers,
                 party,
+                info,
             },
             Outcome::Left => Event::MemberLeft {
                 policy: policy.id.clone(),
@@ -496,6 +501,7 @@ pub(crate) fn apply_membership(
                 life: s.life.clone(),
                 effective: s.effective,
                 covers,
+                info,
             },
         });
         for (cover, layer, sum_insured_minor) in s.ended {

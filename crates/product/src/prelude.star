@@ -100,8 +100,16 @@ def product(code, name, version, effective_from, line, currency, statutory_fund,
         "features": features,
     }
 
-def rate(annual_rate, age_from = 0, age_to = 150, sex = None, smoker = None, category = None):
-    return {"age_from": age_from, "age_to": age_to, "sex": sex, "smoker": smoker, "category": category, "annual_rate": annual_rate}
+def rate(annual_rate, age_from = 0, age_to = 150, sex = None, smoker = None, category = None, occupation_class = None):
+    return {
+        "age_from": age_from,
+        "age_to": age_to,
+        "sex": sex,
+        "smoker": smoker,
+        "category": category,
+        "occupation_class": occupation_class,
+        "annual_rate": annual_rate,
+    }
 
 def rate_table(id, version, effective_from, rows, scope = None):
     return {"id": id, "version": version, "effective_from": effective_from, "rows": rows, "scope": scope}

@@ -139,6 +139,21 @@ pub struct ReduceCover {
     pub sum_insured_minor: i64,
 }
 
+/// New underwriting terms on cover a life already has on a retail policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlteredTerms {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// The terms from today. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The underwriting decision the terms come from.
+    pub reference: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged: internally tagged enums cannot carry 128-bit integers in JSON.
 #[serde(rename_all = "snake_case")]
@@ -276,6 +291,11 @@ pub enum Command {
     /// the terms underwriting decided. The rest of a period already billed
     /// is billed as an adjustment, due today.
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
+    /// Change the underwriting terms on a life's cover from today. Each
+    /// layer ends and is written again with the same sum insured, origin
+    /// and rating date and the new terms; the days left of a period already
+    /// billed are billed or credited as an adjustment.
+    AlterUnderwrittenTerms(Box<AlteredTerms>),
     /// Reduce or give up one life's cover on a retail policy from today,
     /// newest layer first, with the billed premium for the days left
     /// credited back.
@@ -437,7 +457,7 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
-            Command::AddUnderwrittenLayer(_) => &["underwriting"],
+            Command::AddUnderwrittenLayer(_) | Command::AlterUnderwrittenTerms(_) => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -479,6 +499,7 @@ impl Command {
             Command::AddExcessLayer(_) => "add_excess_layer",
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
+            Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ReduceCover(_) => "reduce_cover",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",

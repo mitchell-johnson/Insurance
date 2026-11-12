@@ -300,6 +300,10 @@ pub struct RateRow {
     pub smoker: Option<bool>,
     #[serde(default)]
     pub category: Option<String>,
+    /// The occupation class the row applies to. A row without one applies
+    /// to every class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
     pub annual_rate: DecStr,
 }
 

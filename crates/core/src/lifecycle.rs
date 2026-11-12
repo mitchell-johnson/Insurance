@@ -27,18 +27,12 @@ pub(crate) fn life_infos(policy: &Policy) -> Vec<LifeInfo> {
         .lives
         .values()
         .map(|l| {
-            let factors = l.factors.as_of(NaiveDate::MAX);
-            LifeInfo {
-                life: l.id.clone(),
-                party: match &l.kind {
-                    LifeKind::Named { party } => Some(party.clone()),
-                    LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
-                    LifeKind::Pool { .. } => None,
-                },
-                date_of_birth: factors.and_then(|f| f.date_of_birth),
-                sex: factors.and_then(|f| f.sex),
-                smoker: factors.and_then(|f| f.smoker),
-            }
+            let party = match &l.kind {
+                LifeKind::Named { party } => Some(party.clone()),
+                LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+                LifeKind::Pool { .. } => None,
+            };
+            LifeInfo::with_factors(l.id.clone(), party, l.factors.as_of(NaiveDate::MAX))
         })
         .collect()
 }
