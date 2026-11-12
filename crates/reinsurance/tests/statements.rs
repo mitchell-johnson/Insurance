@@ -268,6 +268,65 @@ fn settlement_is_agreed_checked_and_paid_once() {
     b.assert_reconciles();
 }
 
+/// Purpose: the payments module records that the bank settled a statement, and when the bank
+/// later sends that payment back the statement is owed again with an exception for a person;
+/// a second settlement closes the exception. A return of a payment that did not settle the
+/// statement, or of a statement not yet sent for payment, is refused.
+/// Why it matters: a returned payment that left the statement "settled" would show the
+/// reinsurer as paid when it holds nothing, and the balance and the month-end close would both
+/// be wrong by the whole settlement until the reinsurer chased it.
+#[test]
+fn a_settlement_the_bank_returns_is_owed_again() {
+    let mut g = Bench::new();
+    g.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K)]);
+    g.premium_due(2, "S1", 1, d(2027, 2, 1), d(2027, 3, 1), &[("group_life", 100_00)]);
+    g.today = d(2027, 3, 2);
+    g.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: group(),
+            reinsurer: north(),
+            period_end: d(2027, 2, 28),
+        },
+    );
+    let returned = |payment_ref: &str| Command::SettlementReturned {
+        number: 1,
+        payment_ref: payment_ref.into(),
+        reason: "account closed".into(),
+    };
+    let settled = |payment_ref: &str| Command::RecordSettlement {
+        number: 1,
+        payment_ref: payment_ref.into(),
+        amount_minor: 25_50,
+    };
+    assert_eq!(g.refused("payments", returned("ri-stmt-1")), "not_settled");
+    g.ok("finance", instruct(1));
+    assert_eq!(g.refused("payments", returned("")), "not_settled");
+    assert_eq!(g.refused("claims", settled("ri-stmt-1")), "caller_not_allowed");
+    g.ok("payments", settled("ri-stmt-1"));
+    assert_eq!(g.ri.balance(&group(), &north()), 0);
+    assert_eq!(g.refused("payments", returned("some-other-payment")), "not_settled");
+
+    let applied = g.ok("payments", returned("ri-stmt-1"));
+    assert!(matches!(&applied.notices[..], [Notice::ExceptionOpened { id, code, detail }]
+        if id == "settlement_returned:1" && code == "settlement_returned" && detail.contains("account closed")));
+    assert_eq!(g.ri.statement(1).unwrap().status, StatementStatus::Instructed);
+    assert_eq!(g.ri.balance(&group(), &north()), 25_50, "the reinsurer is owed again");
+    // Told again while still owed (the bank file read twice): one exception.
+    let again = g.ok("payments", returned("ri-stmt-1"));
+    assert!(again.notices.is_empty());
+
+    let applied = g.ok("payments", settled("ri-stmt-1b"));
+    assert!(matches!(&applied.notices[..], [Notice::ExceptionClosed { id }] if id == "settlement_returned:1"));
+    assert_eq!(
+        g.ri.statement(1).unwrap().status,
+        StatementStatus::Settled {
+            payment_ref: "ri-stmt-1b".into()
+        }
+    );
+    assert!(g.ri.exceptions().is_empty());
+}
+
 /// Purpose: statements that cannot be cut, and operations on statements that do not exist, are
 /// refused with their own codes.
 /// Why it matters: month-end runs unattended. A second statement for a period already cut, or

@@ -109,7 +109,7 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 - against the previous version: a small uniform change passes, a larger move in a cell is listed for the actuary, and a cell that moves by more than the blocking factor blocks;
 - `cross_check` for tables that must line up, such as a premium table and the reinsurer's.
 
-A blocking finding stops activation. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
+A blocking finding stops activation. After validation a proposed version is priced against the book: the question `{"q":"table_dry_run","as_at","request":{covers, per_life, age_at_start, current, proposed}}` prices every cover in force on a closed date under both versions and answers with the annual premium under each, the movement by age band, sex and smoker status, the twenty covers that move most, and the covers the proposed version leaves without a rate (which fails the run). Premiums are before loadings, discounts, fees and tax, so the figures show the movement and are not a bill. A scheme's benefit category is not published to finance, so category tables are not priced. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
 
 ## Who may send what
 
@@ -137,4 +137,3 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 - Rating factors for members who join a scheme after issue, occupation class, and claims that do not end a policy, on the extracts. They need those facts on the core's or the claims module's events.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
-- The dry-run compare tool for a new table against the in-force book.

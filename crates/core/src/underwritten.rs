@@ -15,7 +15,7 @@ use crate::command::UnderwrittenLayer;
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
 use crate::policy::{CoverStatus, Layer, LayerOrigin, Policy, PolicyStatus, ReceivableKind};
-use crate::premium::{retail_period_premium, retail_premium_with};
+use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 
 pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: UnderwrittenLayer) -> Result<(), Reject> {
     if policy.status != PolicyStatus::InForce {
@@ -105,7 +105,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     });
 
     if let (Some(start), Some(without)) = (billed_from, without) {
-        let with = retail_premium_with(catalog, &product, policy, start, &mut ctx.work, Some((&spec.cover, id)))?;
+        let with = retail_premium_with(catalog, &product, policy, start, &mut ctx.work, Layers::With(&spec.cover, id))?;
         let days_left = (next - effective).num_days() as i128;
         let days = (next - start).num_days().max(1) as i128;
         let delta = Bill::from_modal(policy, &with)

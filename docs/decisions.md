@@ -68,7 +68,7 @@ No bank is connected. The payments module, the pump and the drill are complete a
 
 ### A lender's interest in a policy is recorded; some of what it should restrict does not exist yet
 
-`Command::Interest` records an assignee's interest from a notice of assignment (party, date notice arrived, extent, effective date, vault reference), a consent to one restricted action, and a release on the party's discharge. `ic_core::interest::ranked(policy, on)` gives the interests standing on a date, first notice first, for claims to pay in that order. While an interest stands the core refuses a unit-linked withdrawal or surrender payout and a cancellation at the owner's request (caller `policy-servicing`) until every interested party has a recorded consent to that action; the consent is used up by it. Not built: a policy loan and a change of owner do not exist as commands, so there is nothing yet to restrict; there is no command for an owner to reduce one cover, and ending a group excess layer (sent by group administration or underwriting) is not treated as the owner's act; the claims module does not read the interests yet; and arrears, suspension and lapse notices are not yet copied to the interested party (the documents module can follow `Event::Interest`).
+`Command::Interest` records an assignee's interest from a notice of assignment (party, date notice arrived, extent, effective date, vault reference), a consent to one restricted action, and a release on the party's discharge. `ic_core::interest::ranked(policy, on)` gives the interests standing on a date, first notice first, for claims to pay in that order. While an interest stands the core refuses a unit-linked withdrawal or surrender payout and a cancellation at the owner's request (caller `policy-servicing`) until every interested party has a recorded consent to that action; the consent is used up by it. Not built: a policy loan and a change of owner do not exist as commands, so there is nothing yet to restrict; an owner's reduction of cover (`ReduceCover`) needs consent, but ending a group excess layer (sent by group administration or underwriting) is not treated as the owner's act; and the claims module does not read the interests yet. The documents module copies lapse, suspension and policy-ended notices to interested parties.
 
 ### Unit-linked business is part built
 
@@ -83,3 +83,13 @@ The core's investment ledger holds funds, unit prices, unit orders and unit hold
 - **Opening loads** for migrated holdings.
 
 Unit pricing itself (valuation intake, checks, maker and checker, suspension, price error correction and the holdings extract) is a separate module, `crates/pricing`, with its own driver `ic-unit-pricing`; its gaps are in `docs/unit-pricing.md`.
+
+### Alterations to retail cover are part built
+
+The design lists increase, add a cover, decrease or remove, change of terms, future insurability options and conversion.
+
+- **Built**: an increase accepted by underwriting (`AddUnderwrittenLayer`), and a decrease or removal at the owner's request (`ReduceCover`, caller `policy-servicing`). A reduction takes the newest layer first, ends each layer it touches from today with `LayerEnded`, and replaces a part-cut layer with a smaller one on the same terms and rating date. The premium billed for the days left is a credit adjustment; where the period was paid it becomes a credit in policy suspense, which is refunded by the existing suspense refund and is not paid out automatically. A standing lender's interest must have consented.
+- **Level premium** is priced on each layer's rating date (`Layer.rated_from`, otherwise its start) until the cover's `level_to_age`, then on attained age. No shipped product uses a level premium; it is tested on a copy of term life.
+- **Order of reduction** is always newest first. The design lets a product declare another order; no product setting for that exists.
+- **A cover given up for every life** stays on the policy with no layer in force, so it prices at nothing and can be taken up again by an underwritten increase. It is not marked ended.
+- **Not built**: adding a cover that was not on the policy at issue, a change of terms on a layer in force (the shape is agreed with underwriting, which is writing it), future insurability options, and conversion to another product.
