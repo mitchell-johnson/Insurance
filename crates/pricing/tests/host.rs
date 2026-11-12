@@ -195,6 +195,7 @@ fn core_events_become_movements() {
         fund: fund_id("growth"),
         version: 1,
         content_hash: "x".into(),
+        definition: None,
     });
     assert!(react(&other).is_empty());
 }

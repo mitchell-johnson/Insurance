@@ -66,6 +66,10 @@ Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a 
 
 No bank is connected. The payments module, the pump and the drill are complete and tested against a fake bank that checks what a bank checks, in the module's own batch format over HTTPS. A real bank's file layout, transport and mutual TLS are one trait per bank and are not built. `docs/payments.md`, "What is not built", lists this and the module's other gaps.
 
+### A lender's interest in a policy is recorded; some of what it should restrict does not exist yet
+
+`Command::Interest` records an assignee's interest from a notice of assignment (party, date notice arrived, extent, effective date, vault reference), a consent to one restricted action, and a release on the party's discharge. `ic_core::interest::ranked(policy, on)` gives the interests standing on a date, first notice first, for claims to pay in that order. While an interest stands the core refuses a unit-linked withdrawal or surrender payout and a cancellation at the owner's request (caller `policy-servicing`) until every interested party has a recorded consent to that action; the consent is used up by it. Not built: a policy loan and a change of owner do not exist as commands, so there is nothing yet to restrict; there is no command for an owner to reduce one cover, and ending a group excess layer (sent by group administration or underwriting) is not treated as the owner's act; the claims module does not read the interests yet; and arrears, suspension and lapse notices are not yet copied to the interested party (the documents module can follow `Event::Interest`).
+
 ### Unit-linked business is part built
 
 The core's investment ledger holds funds, unit prices, unit orders and unit holdings: a fund and a price are activated through the log, an order waits with its cash in pending investment cash until the price for its date is active, executes once in an entry that balances in dollars and in units, and a switch places its buy when its sell executes. The reconciliation checks each fund's units on issue against what policies hold. What is not built, so no unit-linked product can be sold yet:

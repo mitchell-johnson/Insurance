@@ -1185,6 +1185,17 @@ fn funds_are_loaded_from_files_and_bad_files_are_refused() {
         }
     }
     assert_eq!(c.state(1).investment.fund(&fund_id("balanced")).unwrap().buy_spread_bps, 15);
+    // Each activation's event carries the definition, once per partition, for the unit
+    // pricing module to follow; the repeat produced none.
+    let carried: Vec<FundDefinition> = invest_events(&mut c)
+        .into_iter()
+        .filter_map(|e| match e {
+            InvestEvent::FundActivated { definition, .. } => definition.map(|d| *d),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(carried.len(), 6);
+    assert!(carried.iter().all(|f| funds.contains(f)));
 
     let source = |cut_off: &str, rounding: &str| {
         format!(
