@@ -341,6 +341,7 @@ fn an_advisers_book_shows_standing_and_held_money() {
             }],
             documents: vec![],
             cases: vec![],
+            conduct: None,
         }),
     )
     .unwrap();
@@ -440,6 +441,7 @@ fn the_workbench_is_answered_for_finance_only() {
             }],
             documents: vec![],
             cases: vec![],
+            conduct: None,
         }),
     )
     .unwrap();

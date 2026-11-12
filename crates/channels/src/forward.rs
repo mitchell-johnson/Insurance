@@ -14,6 +14,7 @@
 //! the cursor lives in memory, a restart republishes everything once, and
 //! two copies of the service doing the same work do no harm.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use ic_raft::ClusterClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-use crate::directory::{Actor, DirectoryCommand, Engagement, LicenceStatus};
+use crate::directory::{Actor, DirectoryCommand, Engagement, LicenceStatus, StructureLink};
 use crate::http::Channel;
 use crate::query::Question;
 use crate::staff::At;
@@ -138,6 +139,27 @@ struct Engaged {
     to: Option<NaiveDate>,
 }
 
+#[derive(Debug, Deserialize)]
+struct Relation {
+    child: PartyId,
+    parent: PartyId,
+    kind: String,
+    from: NaiveDate,
+    to: Option<NaiveDate>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ConductCase {
+    case: String,
+    party: PartyId,
+    #[serde(default)]
+    advisers: Vec<PartyId>,
+    #[serde(default)]
+    payees: Vec<PartyId>,
+    #[serde(default)]
+    closed: Option<Value>,
+}
+
 fn read<T: serde::de::DeserializeOwned>(what: &str, answer: Value) -> Result<T, String> {
     serde_json::from_value(answer).map_err(|e| format!("the commission module's {what} answer was not understood: {e}"))
 }
@@ -149,7 +171,14 @@ fn period_start(period: &str, fallback: NaiveDate) -> NaiveDate {
 
 /// The channel commands that record one party as the commission module
 /// describes it on `today`, each with the module it is sent as.
-pub fn commands_for(party: &PartyId, position: Value, engagements: Value, today: NaiveDate, currency: &str) -> Result<Vec<(&'static str, Command)>, String> {
+pub fn commands_for(
+    party: &PartyId,
+    position: Value,
+    engagements: Value,
+    today: NaiveDate,
+    currency: &str,
+    conduct: Vec<String>,
+) -> Result<Vec<(&'static str, Command)>, String> {
     let position: Position = read("position", position)?;
     let engagements: Engagements = read("engagements", engagements)?;
     let mut out = Vec::new();
@@ -271,9 +300,61 @@ pub fn commands_for(party: &PartyId, position: Value, engagements: Value, today:
                 })
                 .collect(),
             cases: position.open_cases,
+            conduct: Some(conduct),
         }),
     ));
     Ok(out)
+}
+
+/// The conduct cases open on each party: the body whose licence event opened
+/// the case, and every adviser and payee it reaches.
+pub fn conduct_by_party(cases: Value) -> Result<BTreeMap<PartyId, Vec<String>>, String> {
+    let cases: Vec<ConductCase> = read("conduct_cases", cases)?;
+    let mut out: BTreeMap<PartyId, Vec<String>> = BTreeMap::new();
+    for c in cases.into_iter().filter(|c| c.closed.as_ref().is_none_or(Value::is_null)) {
+        let reached: BTreeSet<PartyId> = std::iter::once(c.party).chain(c.advisers).chain(c.payees).collect();
+        for party in reached {
+            out.entry(party).or_default().push(c.case.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// The structure above the advice businesses, as directory commands: who
+/// sits under whom and who operates under whose licence. `only` keeps the
+/// links that touch one of those parties. Who is paid for whom is not
+/// structure a licence follows, and is left out.
+pub fn structure_for(relations: Value, only: Option<&[PartyId]>) -> Result<Vec<Command>, String> {
+    let relations: Vec<Relation> = read("relations", relations)?;
+    Ok(relations
+        .into_iter()
+        .filter(|r| matches!(r.kind.as_str(), "under" | "licensed_by"))
+        .filter(|r| only.is_none_or(|parties| parties.contains(&r.child) || parties.contains(&r.parent)))
+        .map(|r| {
+            Command::Directory(DirectoryCommand::RecordStructure {
+                child: r.child,
+                link: StructureLink {
+                    parent: r.parent,
+                    from: r.from,
+                    to: r.to,
+                },
+            })
+        })
+        .collect())
+}
+
+async fn send(channel: &dyn Channel, key: String, at: At, module: &str, command: Command, about: &str) -> Result<(), String> {
+    let envelope = Envelope {
+        key,
+        at,
+        actor: Actor::Module(module.to_string()),
+        command,
+    };
+    let output = channel.propose(envelope).await.map_err(|e| e.0)?;
+    output
+        .result
+        .map(|_| ())
+        .map_err(|refusal| format!("the channel module refused what was forwarded for {about}: {refusal:?}"))
 }
 
 /// One pass: forward every party changed since `cursor`. Returns the cursor
@@ -287,20 +368,28 @@ pub async fn pass(source: &dyn Source, channel: &dyn Channel, cursor: u64, at: A
         .as_str()
         .and_then(|d| d.parse::<NaiveDate>().ok())
         .ok_or("the commission module has no business date yet")?;
+    // The structure first, so a licence lost above a provider reaches the advisers under it. A fresh
+    // forwarder sends all of it; after that, the links that touch a party that changed.
+    let relations = source.ask(json!("relations")).await?;
+    let only = (cursor > 0).then_some(changed.parties.as_slice());
+    for (n, command) in structure_for(relations, only)?.into_iter().enumerate() {
+        send(
+            channel,
+            format!("forward:structure:{}:{n}", changed.seq),
+            at,
+            STRUCTURE,
+            command,
+            "the structure",
+        )
+        .await?;
+    }
+    let mut conduct = conduct_by_party(source.ask(json!("conduct_cases")).await?)?;
     for party in &changed.parties {
         let position = source.ask(json!({ "position": { "party": party, "as_at": today } })).await?;
         let engagements = source.ask(json!({ "engagements": { "adviser": party, "as_at": today } })).await?;
-        for (n, (module, command)) in commands_for(party, position, engagements, today, currency)?.into_iter().enumerate() {
-            let envelope = Envelope {
-                key: format!("forward:{party}:{}:{n}", changed.seq),
-                at,
-                actor: Actor::Module(module.to_string()),
-                command,
-            };
-            let output = channel.propose(envelope).await.map_err(|e| e.0)?;
-            output
-                .result
-                .map_err(|refusal| format!("the channel module refused what was forwarded for {party}: {refusal:?}"))?;
+        let open = conduct.remove(party).unwrap_or_default();
+        for (n, (module, command)) in commands_for(party, position, engagements, today, currency, open)?.into_iter().enumerate() {
+            send(channel, format!("forward:{party}:{}:{n}", changed.seq), at, module, command, &party.to_string()).await?;
         }
     }
     Ok(changed.seq)
@@ -343,7 +432,11 @@ pub fn envelopes_for(proposal: &Proposal, people: &Value) -> Vec<Value> {
         } },
     })];
     for approval in &proposal.approvals {
-        let role = if approval.legal { "legal" } else { "counterparty_finance_approver" };
+        let role = match (approval.legal, approval.conduct) {
+            (true, _) => "legal",
+            (_, true) => "conduct_officer",
+            _ => "counterparty_finance_approver",
+        };
         out.push(json!({
             "key": format!("workbench:{id}:approve:{}", approval.by),
             "actor": { "staff": people[approval.by.to_string()] },
@@ -351,6 +444,11 @@ pub fn envelopes_for(proposal: &Proposal, people: &Value) -> Vec<Value> {
         }));
     }
     out
+}
+
+/// The role an approval envelope signs in.
+fn envelope_role(envelope: &Value) -> Option<&str> {
+    envelope["command"]["approve_action"]["as_role"].as_str()
 }
 
 /// Why the commission module refused a command, if it did.
@@ -377,9 +475,15 @@ pub async fn carry_actions(source: &dyn Source, channel: &dyn Channel, at: At) -
         // Each envelope has its own key, so an action half sent before a restart carries on where it stopped.
         let mut refused = None;
         for envelope in envelopes_for(&proposal, &entry["people"]) {
+            let sent = envelope.clone();
             let output = source.tell(envelope).await?;
             // A repeat of something already done answers with the first result, so a refusal here is a real one.
             if let Some(why) = refusal(&output) {
+                // The workbench asks for the conduct officer whenever a conduct case is open; that module asks
+                // only where its own rules do. A signature it did not need is not a failure of the action.
+                if why.0 == "approval_not_needed" && envelope_role(&sent) == Some("conduct_officer") {
+                    continue;
+                }
                 refused = Some(why);
                 break;
             }
