@@ -388,6 +388,27 @@ impl Structure {
         (engagements, payees)
     }
 
+    /// A party and everything it sits under or is licensed by on a day.
+    fn above(&self, party: &PartyId, day: NaiveDate) -> BTreeSet<PartyId> {
+        let mut seen = BTreeSet::new();
+        let mut queue = vec![party.clone()];
+        while let Some(p) = queue.pop() {
+            if !seen.insert(p.clone()) {
+                continue;
+            }
+            for r in self.relations.iter().filter(|r| r.child == p && r.kind != RelationKind::PayeeFor && r.on(day)) {
+                queue.push(r.parent.clone());
+            }
+        }
+        seen
+    }
+
+    /// Two providers are related on a day when they are the same, one sits
+    /// under the other, or both sit under the same provider or group.
+    pub fn related(&self, a: &PartyId, b: &PartyId, day: NaiveDate) -> bool {
+        !self.above(a, day).is_disjoint(&self.above(b, day))
+    }
+
     /// Everything at or below a party on a day: who a provider or group sees.
     pub fn below(&self, top: &PartyId, day: NaiveDate) -> BTreeSet<PartyId> {
         let mut seen = BTreeSet::new();

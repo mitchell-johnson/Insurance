@@ -160,6 +160,22 @@ pub enum Command {
         policy: PolicyId,
         replaces: PolicyId,
     },
+    /// The writing adviser disputes a match made by the replacement rule.
+    /// The initial commission on the matched amount is held until decided.
+    DisputeReplacement {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        /// The dispute in the system that carries it.
+        reference: String,
+    },
+    /// The decision on a disputed match: it was a replacement, or it was not.
+    DecideReplacement {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        replacement: bool,
+    },
     /// The engagement submitting an alteration (a reduction, a cover given
     /// up) to a policy today. Sent before the core is asked to carry the
     /// alteration out, so that a clawback it sets off can be put on the
@@ -249,6 +265,7 @@ impl Command {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
+            Command::DisputeReplacement { .. } => &["new-business", "policy-servicing"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
             Command::PaymentSettled { .. } | Command::PaymentReturned { .. } => &["payments"],
             Command::DescribePosition { .. } => &["claims", "reinsurance", "group-admin", "collections", "payments"],
@@ -284,7 +301,8 @@ impl Command {
             Command::CutStatement { payee } => ("statement.cut", payee.0.clone()),
             Command::AttachDocument { party, .. } => ("workbench.document", party.0.clone()),
             Command::CompleteTask { .. } => ("workbench.view", any()),
-            Command::CloseCase { .. } => ("case.manage", any()),
+            Command::CloseCase { .. } | Command::DecideReplacement { .. } => ("case.manage", any()),
+            Command::DisputeReplacement { .. } => ("policy.assign", any()),
             // Checked where they are handled, because what they need depends on state.
             Command::ApproveChange { .. } | Command::ProposeAction { .. } | Command::ApproveAction { .. } | Command::RejectAction { .. } => return None,
             _ => return None,
@@ -389,6 +407,24 @@ pub enum Event {
         layer: String,
         books: Vec<(BookId, u32)>,
         from: NaiveDate,
+    },
+    /// The replacement rule matched a new layer to cover given up on the
+    /// same life. The writing adviser is told, with the reason.
+    ReplacementMatched {
+        policy: PolicyId,
+        layer: String,
+        matched_minor: i64,
+        reason: crate::model::MatchReason,
+        replaced: Vec<String>,
+    },
+    ReplacementDisputed {
+        layer: String,
+        reference: String,
+    },
+    /// A disputed match was decided: it stands, or the layer is new business.
+    ReplacementDecided {
+        layer: String,
+        replacement: bool,
     },
     /// Customers are told when their servicing adviser changes.
     ServicingChanged {
@@ -575,6 +611,23 @@ pub struct Settings {
     /// this amount blocks sign-off.
     pub month_end_held_age_days: u32,
     pub month_end_held_threshold_minor: i64,
+    /// New cover on a life within this many months of cover given up on the
+    /// same life is looked at as a replacement nobody declared. Zero turns
+    /// the rule off.
+    #[serde(default = "twelve")]
+    pub replacement_window_months: u32,
+    /// How far the new amount may be from the amount given up and still
+    /// match when the advisers are unrelated, in parts per million.
+    #[serde(default = "five_percent")]
+    pub replacement_amount_tolerance_ppm: u32,
+}
+
+fn twelve() -> u32 {
+    12
+}
+
+fn five_percent() -> u32 {
+    50_000
 }
 
 impl Default for Settings {
@@ -590,6 +643,8 @@ impl Default for Settings {
             watch_months_after_move: 12,
             month_end_held_age_days: 90,
             month_end_held_threshold_minor: 10_000_00,
+            replacement_window_months: twelve(),
+            replacement_amount_tolerance_ppm: five_percent(),
         }
     }
 }
@@ -1022,6 +1077,18 @@ impl DistributionState {
                 Ok(())
             }
 
+            Command::DisputeReplacement {
+                policy,
+                cover,
+                layer,
+                reference,
+            } => self.dispute_replacement(ctx, &layer_key(&policy, &cover, layer), reference),
+            Command::DecideReplacement {
+                policy,
+                cover,
+                layer,
+                replacement,
+            } => self.decide_replacement(ctx, &layer_key(&policy, &cover, layer), replacement),
             Command::AttributeAlteration { policy, engagement } => {
                 let today = self.date()?;
                 if !self.config.structure.engagements.contains_key(&engagement) {

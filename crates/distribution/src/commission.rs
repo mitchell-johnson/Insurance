@@ -33,6 +33,17 @@ fn split(total: i64, weights: &[i64]) -> Vec<i64> {
     out
 }
 
+/// Which share of a matched layer a piece of commission is for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// The layer's own business, on its own books.
+    Own,
+    /// Trail on the matched amount, on the books of the cover replaced.
+    Replaced,
+    /// Initial commission on the matched amount; true while it is disputed.
+    Matched(bool),
+}
+
 /// The claims events that carry an overpayment's whole position.
 const CLAIMS_OVERPAYMENT_KINDS: [&str; 4] = [
     "overpayment_raised",
@@ -153,6 +164,7 @@ impl DistributionState {
                 policy,
                 product_code,
                 inception,
+                lives,
                 layers,
                 ..
             } => {
@@ -168,6 +180,7 @@ impl DistributionState {
                     last_clawback: None,
                     adviser_change_setting: None,
                     altered_by: None,
+                    lives: lives.into_iter().filter_map(|l| l.party.map(|p| (l.life.0, p))).collect(),
                 });
                 for info in layers {
                     self.add_layer(ctx, &policy, info, LayerOrigin::Original, date);
@@ -330,6 +343,10 @@ impl DistributionState {
             terms: None,
             initial_paid: None,
             ended: None,
+            life: Some(info.life.0.clone()),
+            given_up: None,
+            matched_away_minor: 0,
+            replacement: None,
         };
         if origin == LayerOrigin::Indexation {
             // An indexation step inherits the cover's terms and book. It
@@ -411,6 +428,7 @@ impl DistributionState {
         let mut lines: Vec<AllocLine> = vec![];
         let mut exposures: Vec<Exposure> = vec![];
         let mut initial_layers: Vec<String> = vec![];
+        let mut matched_exposures: Vec<(String, String)> = vec![];
         let mut problems: Vec<String> = vec![];
         for (cover_type, amount) in net {
             let layers: Vec<&LayerRecord> = record
@@ -441,20 +459,53 @@ impl DistributionState {
                 {
                     continue;
                 }
-                let books = layer.books_on(date);
-                let mut parts: Vec<(CommissionType, i64, i64)> = vec![];
-                if terms.rates.initial_ppm > 0 && layer.initial_paid.is_none() && premium > 0 && !waived {
-                    parts.push((
-                        CommissionType::Initial,
-                        portion(terms.annual_premium_minor, terms.rates.initial_ppm),
-                        terms.annual_premium_minor,
-                    ));
+                let own: Vec<(BookId, i64)> = layer.books_on(date).iter().map(|(b, s)| (b.clone(), *s as i64)).collect();
+                // A layer the replacement rule matched: the matched amount
+                // earns no initial commission and its trail follows the
+                // books of the cover it replaced. Above it is new business.
+                let matched = layer.replacement.as_ref();
+                let live = matched.filter(|m| !m.overturned);
+                let new_share = |amount: i64| match live {
+                    Some(m) => amount - (amount as i128 * m.matched_minor as i128 / layer.sum_insured_minor.max(1) as i128) as i64,
+                    None => amount,
+                };
+                let mut parts: Vec<(CommissionType, i64, Part)> = vec![];
+                if terms.rates.initial_ppm > 0 && premium > 0 && !waived {
+                    // Initial commission on the matched amount is its own
+                    // payment, if it is paid at all: into held while the
+                    // match is disputed, in the ordinary way once a dispute
+                    // is decided for the adviser, and never twice.
+                    let apart = matched.filter(|m| !m.initial_on_whole);
+                    let on_matched = apart.map_or(0, |m| {
+                        (terms.annual_premium_minor as i128 * m.matched_minor as i128 / layer.sum_insured_minor.max(1) as i128) as i64
+                    });
+                    let new_business = terms.annual_premium_minor - on_matched;
+                    if layer.initial_paid.is_none() && new_business > 0 {
+                        parts.push((CommissionType::Initial, new_business, Part::Own));
+                    }
+                    if let Some(m) = apart.filter(|m| (m.disputed.is_some() || m.overturned) && m.matched_initial.is_none()) {
+                        parts.push((CommissionType::Initial, on_matched, Part::Matched(m.disputed.is_some())));
+                    }
                 }
                 if months_between(layer.start, date) >= terms.rates.renewal_from_month {
-                    parts.push((CommissionType::Renewal, portion(premium, terms.rates.renewal_ppm), premium));
+                    let new_business = new_share(premium);
+                    parts.push((CommissionType::Renewal, new_business, Part::Own));
+                    if premium != new_business {
+                        parts.push((CommissionType::Renewal, premium - new_business, Part::Replaced));
+                    }
                 }
-                for (ctype, gross, basis) in parts {
-                    let shares: Vec<i64> = books.iter().map(|(_, s)| *s as i64).collect();
+                for (ctype, basis, part) in parts {
+                    let rate = if ctype == CommissionType::Initial {
+                        terms.rates.initial_ppm
+                    } else {
+                        terms.rates.renewal_ppm
+                    };
+                    let gross = portion(basis, rate);
+                    let books = match (part, live) {
+                        (Part::Replaced, Some(m)) => &m.books,
+                        _ => &own,
+                    };
+                    let shares: Vec<i64> = books.iter().map(|(_, s)| *s).collect();
                     let grosses = split(gross, &shares);
                     let bases = split(basis, &shares);
                     for (((book, _), gross), basis) in books.iter().zip(grosses).zip(bases) {
@@ -479,8 +530,15 @@ impl DistributionState {
                             allocated.extend(composed.allocate_extra(&component, basis, ctype == CommissionType::Initial, ctype, date));
                         }
                         for a in allocated.into_iter().filter(|a| a.amount_minor != 0) {
-                            let dest = self.destination(&a, date);
+                            let dest = if part == Part::Matched(true) {
+                                Dest::Held(HeldReason::Dispute)
+                            } else {
+                                self.destination(&a, date)
+                            };
                             if ctype == CommissionType::Initial {
+                                if matches!(part, Part::Matched(_)) {
+                                    matched_exposures.push((layer.key(), format!("{reference}#{}", exposures.len() + 1)));
+                                }
                                 let mut liable = composed.liable(&a.component, date);
                                 if liable.is_empty() {
                                     liable = vec![(a.payee.clone(), WHOLE, None)];
@@ -502,6 +560,7 @@ impl DistributionState {
                                     cover_type: cover_type.clone(),
                                     open: true,
                                     clawed_minor: 0,
+                                    last_clawback: None,
                                 });
                             }
                             lines.push(AllocLine {
@@ -519,7 +578,7 @@ impl DistributionState {
                             });
                         }
                     }
-                    if ctype == CommissionType::Initial {
+                    if ctype == CommissionType::Initial && part == Part::Own {
                         initial_layers.push(layer.key());
                     }
                 }
@@ -539,6 +598,12 @@ impl DistributionState {
         for key in initial_layers {
             if let Some(l) = self.layers.get_mut(&key) {
                 l.initial_paid = Some(reference.clone());
+            }
+        }
+        for (key, exposure) in matched_exposures {
+            if let Some(m) = self.layers.get_mut(&key).and_then(|l| l.replacement.as_mut()) {
+                m.matched_initial = Some(reference.clone());
+                m.matched_exposures.push(exposure);
             }
         }
         let allocation = Allocation {
@@ -565,7 +630,7 @@ impl DistributionState {
         Some(reference)
     }
 
-    fn record_allocation(&mut self, ctx: &mut Ctx, allocation: Allocation) {
+    pub(crate) fn record_allocation(&mut self, ctx: &mut Ctx, allocation: Allocation) {
         if let Some(posting) = posting_of(&allocation, self.currency_of(&allocation.policy)) {
             self.request(ctx, allocation.partition, posting, None);
         }
@@ -691,7 +756,7 @@ impl DistributionState {
         );
     }
 
-    fn reverse_allocation(&mut self, ctx: &mut Ctx, reference: &str, cause: &str, date: NaiveDate, only_layer: Option<&str>) {
+    pub(crate) fn reverse_allocation(&mut self, ctx: &mut Ctx, reference: &str, cause: &str, date: NaiveDate, only_layer: Option<&str>) {
         // Unknown, or already reversed: there is nothing to take back.
         let Some(original) = self.allocations.get(reference).filter(|a| a.reversed_by.is_none()).cloned() else {
             return;
@@ -807,6 +872,16 @@ impl DistributionState {
             }
             return;
         }
+        // Cover given up: what the replacement rule looks back at.
+        if replaced_by.is_none() {
+            for l in self
+                .layers
+                .values_mut()
+                .filter(|l| &l.policy == policy && l.ended.is_none() && l.terms.is_some())
+            {
+                l.given_up = Some((date, l.sum_insured_minor));
+            }
+        }
         if let Some(reference) = self.claw_back(ctx, policy, partition, cause, date, date, &open, None) {
             if let Some(p) = self.policies.get_mut(policy) {
                 p.last_clawback = Some(reference);
@@ -837,6 +912,9 @@ impl DistributionState {
             _ => {
                 let altered_by = self.altered_by(policy, date);
                 self.claw_back(ctx, policy, partition, cause, effective, date, &open, altered_by.as_ref());
+                if let Some(l) = self.layers.get_mut(key).filter(|l| l.terms.is_some()) {
+                    l.given_up = Some((effective, l.sum_insured_minor));
+                }
             }
         }
         // The layer is gone: nothing more can be clawed back on it.
@@ -909,6 +987,9 @@ impl DistributionState {
             None => {
                 let altered_by = self.altered_by(policy, date);
                 self.claw_back(ctx, policy, partition, cause, effective, date, &given_up, altered_by.as_ref());
+                if let Some(l) = self.layers.get_mut(from).filter(|l| l.terms.is_some()) {
+                    l.given_up = Some((effective, whole - kept));
+                }
             }
             Some(original) => {
                 let lines: Vec<AllocLine> = original
@@ -992,7 +1073,7 @@ impl DistributionState {
     /// from whoever each names as liable, or from the altering engagement's
     /// payees where clawback by cause applies. Returns the reference of the
     /// clawback, if anything was at risk.
-    fn claw_back(
+    pub(crate) fn claw_back(
         &mut self,
         ctx: &mut Ctx,
         policy: &PolicyId,
@@ -1035,12 +1116,13 @@ impl DistributionState {
         if lines.is_empty() {
             return None;
         }
+        let reference = format!("cb:{cause}");
         for (id, amount) in &touched {
             if let Some(x) = self.exposures.get_mut(id) {
                 x.clawed_minor += amount;
+                x.last_clawback = Some((reference.clone(), *amount));
             }
         }
-        let reference = format!("cb:{cause}");
         ctx.emit(Event::ClawbackRaised {
             reference: reference.clone(),
             policy: policy.clone(),
@@ -1071,6 +1153,25 @@ impl DistributionState {
             return;
         };
         record.ended = None;
+        let keys = record.layers.clone();
+        if keys.iter().filter_map(|k| self.layers.get(k)).any(|l| l.matched_away_minor > 0) {
+            // Its cover was matched to a replacement and the clawback has
+            // already been dealt with layer by layer: a person decides.
+            self.task(
+                ctx,
+                "reinstated_after_replacement",
+                &policy.0,
+                date,
+                "a policy whose cover was matched to a replacement was reinstated; review its clawback".into(),
+            );
+            return;
+        }
+        for l in self.layers.values_mut().filter(|l| &l.policy == policy && l.ended.is_none()) {
+            l.given_up = None;
+        }
+        let Some(record) = self.policies.get_mut(policy) else {
+            return;
+        };
         let Some((reference, clawback)) = record.last_clawback.take().and_then(|r| self.allocations.get(&r).cloned().map(|a| (r, a))) else {
             return;
         };

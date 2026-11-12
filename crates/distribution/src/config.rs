@@ -938,6 +938,10 @@ impl DistributionState {
                 self.set_servicing(ctx, &w.policy, Some(e), from);
             }
         }
+        if !w.replacement && !self.layers.get(&key).is_some_and(|l| l.indexation) {
+            let today = self.date()?;
+            self.match_replacement(ctx, &key, today);
+        }
         ctx.emit(Event::LayerAssigned {
             policy: w.policy,
             layer: key,
