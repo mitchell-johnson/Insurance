@@ -93,6 +93,47 @@ What is and is not built is in [decisions.md](decisions.md).
 
 A module whose state spans partitions runs as its own Raft group on the ledger nodes (`ic_raft::module`), with the same durable log, snapshots, membership changes and failover as a partition. A module that reads the core's events is fed them by the leader of its group: every member is shown each event of each partition once, in sequence, and the checkpoint is part of the group's replicated state. Each partition keeps its events until they are on the stream and every registered reader has them. `docs/modules.md` is the contract.
 
+## Portal and app services (`ic-channels`, `ic-portal`)
+
+Owned by the thread "Build portal and app services". Full description: [channels.md](channels.md); this section is the hand-over.
+
+### What is built (on main)
+
+- **Channel module** (`crates/channels`, library `ic-channels`): a deterministic state machine (`src/state.rs`, `ChannelState`) hosted on the ledger nodes as the module `channels` in its own Raft group, fed the core's events. It holds the directory of who relates to which policy (`src/directory.rs`), identity bindings, devices and signed approvals (`src/identity.rs`), staff authorisation with Cedar (`src/staff.rs`, `config/cedar/staff.cedar`), audience-scoped read models and per-party feeds for offline sync (`src/feed.rs`, scoping in `crates/readmodel/src/scope.rs` and `config/cedar/audience.cedar`, which the core thread owns; the channels thread made additive changes only), servicing requests that wait for the customer's signature, the held balance workbench (`src/workbench.rs`, addendum entry 4), and countersigned commands for other modules (`src/countersign.rs`).
+- **Gateway** (`src/http.rs`, binary `ic-portal`, `src/main.rs`, settings in `src/settings.rs`): `/app/v1` (customer app API and sync protocol), `/adviser/v1`, `/employer/v1`, `/staff/v1`, `/ops/v1`, `/internal/v1` (module-to-channel commands), RFC 9457 problems, `Idempotency-Key` on every write, Entra ID for staff and modules, Entra External ID for customers, advisers and employers, dev identity headers only with `Identity::Dev`.
+- **Web pages** (`ui/`, compiled in by `src/ui.rs`, run under a strict content security policy): `/adviser`, `/employer`, `/staff` (servicing console and workbench), `/ops` and `/status` (addendum entry 6), and staff consoles for other modules: `/pricing` (unit pricing), `/complaints` (complaints and conduct), `/finance` (month-end close, journals, books), `/claims` (queues, a claim, every claims action), `/reinsurance` (exceptions). The customer app is an API only; the native app belongs with the bank's app (the thread's own decision, not yet confirmed by Mitchell).
+- **Console pattern for other modules.** No crate dependency on the module. `ic-portal` passes whitelisted questions and people's commands to the module on the nodes as JSON (`forward::Source`, `forward::Hosted`), under a console caller, with the person as actor and roles or seat derived from channels staff actions (`unit_pricing.*`, `complaints.*`, `finance.*`, `claims.work`, `reinsurance.*`). Commands only a module's own services send are refused at the portal. `tests/http.rs` runs each console against the module's real state machine through dev-dependencies and doubles in `tests/common/`. Claims are different: they live inside the core, so `src/claims.rs` asks every partition (`claims::Partitions`, needs `IC_PARTITIONS`) and sends `Command::Claims` under the caller `claims` to the partition holding the claim, replacing every `actor` with the signed-in staff ID and purpose.
+- **Commission forwarder** (`src/forward.rs`): reads the commission module (`distribution`) and records engagements, licences, adviser structure, party status, held money, memo lines (claim overpayments, with their recovery status) and open conduct cases in the channel module; replays approved workbench actions there as each signer's own command.
+- **Deployment**: `deploy/k8s/portal.yaml` (AKS, workload identity `portalClientId` in Bicep), compose service on port 8090. Line coverage of the crate 98.50% (2026-11-12); every test has a documented purpose.
+
+### Seams with other areas
+
+- **Core**: event stream to the channel module; `crates/readmodel` scope and the audience Cedar policy are the core thread's files.
+- **Commission (`ic-distribution`)**: JSON contract tested in `tests/forward.rs`; the workbench and that module each count signatures (both ask legal above the threshold, for a new account of a party in liquidation or deceased, and for a release that leaves less held than claims is collecting). A refusal at replay closes the workbench action as failed with that module's code.
+- **Claims**: questions `Queue`, `Claim`, `Work` (staff view), `Book`, `Report`, `Remittance`; StaffId in the claims authority book must equal the workforce directory ID.
+- **Reinsurance**: reads exceptions from the module (not the event hub); abandonments need two people here, sent with `approved_by`.
+- **Finance, unit pricing, complaints**: callers `finance-console`, `unit-pricing-console`, the complaints seats; details in channels.md.
+
+### Not finished, in the order to take them
+
+1. **Claims staff view on the page** (in progress at hand-over): `claims::question` gains `work`, `/claims` renders `WorkView` (tasks, evidence, waiting decision, payments, benefit, overpayments, timers). Clinical detail must only show after the person sends `open_file`; the claims module has no clinical question yet, so ask the claims thread for one before showing any.
+2. **Customer master self-service** (`crates/customers`, `docs/customers.md`): the app's profile, contact details and consents through the master's `POST /v1/parties/{id}/commands` with app role `portal` and header `x-ic-party` set to the signed-in party; subject access export (`?purpose=subject_access`); `GET /v1/parties/{id}/routing` to send vulnerable customers to a person. The relay of relationship changes from the master into the channel directory (`BindSubject`, `RecordOwnership`, `RecordAssignment`, `RecordDependant`) is not written; agree with the customer master thread who writes it.
+3. **Adviser replacements and clawback attribution** (commission, `docs/distribution.md`): show `ReplacementMatched` to the adviser at submission and offer `DisputeReplacement`; a staff page over the `replacement_matches` question with `DecideReplacement` (staff with `case.manage`); when the portal submits a reduction or a cover given up on an adviser's behalf, send `AttributeAlteration {policy, engagement}` as `policy-servicing` on the same business date before the core command.
+4. **Document download**: the documents thread will add an HTTP route for `Driver::pdf` on request; the portal must say how it proves who is asking (staff seat or the customer's own party ID).
+5. **Screens still missing**: group employer membership file upload, commission staff commands, underwriting, payments, investment ledger (unit holdings for the customer and adviser).
+6. **Workbench positions from other modules**: finance, reinsurance, group administration and claims do not yet publish their held or owed money to the workbench through `/internal/v1/commands`.
+
+### Open questions for Mitchell
+
+- Confirm the interface decision: web pages in this repo for advisers, employers, staff and operations; the customer app as an API and sync protocol only.
+- Commission balances are assumed to be in one currency (`IC_PORTAL_CURRENCY`).
+
+### Checks
+
+- `cargo test -p ic-channels`; coverage `cargo llvm-cov -p ic-channels --summary-only` (CI floor 98% workspace-wide).
+- Browser check, not run by CI: `cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &` then `POLICY=pol-00000001 node crates/channels/tests/browser/check.js`. All pages passed on 2026-11-12.
+- No known failing checks in this crate at hand-over.
+
 ## Privacy
 
 Command payloads carry personal and health information. They never go to logs: a log line names a command, its sender and its key only. Ledger entries carry salted commitments to their payloads, so the chain can be verified without the payloads being readable from it.
