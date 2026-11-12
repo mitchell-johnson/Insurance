@@ -160,8 +160,8 @@ fn extracts_reconcile_are_frozen_and_satisfy_the_close() {
     );
 
     // The files as they would be stored, registered with the ledger.
-    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v3.csv");
-    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v3");
+    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v4.csv");
+    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v4");
     assert_eq!(in_force_nov.bytes().iter().filter(|b| **b == b'\n').count() as u64, in_force_nov.rows() + 1);
     let red = |w: &World| {
         let checks = w.books.state.checks(nov);
@@ -811,4 +811,132 @@ fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
     assert_eq!(cell(day(2), day(4), "2").as_deref(), Some("3"));
     assert_eq!(cell(day(2), day(5), "4_heavy").as_deref(), Some("4"));
     assert_eq!(cell(day(2), day(5), "2"), None);
+}
+
+/// A fact as the claims module publishes it through the core.
+fn claim_fact(kind: &str, claim: &str, detail: &[(&str, &str)]) -> Event {
+    Event::Module {
+        module: "claims".to_string(),
+        kind: kind.to_string(),
+        subject: claim.to_string(),
+        detail: detail.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    }
+}
+
+/// Purpose: a policy with life and trauma cover on a 39 year old male smoker has a trauma
+/// claim admitted for 100 on 2 March and a benefit in payment of 50 a month admitted on
+/// the life cover on 3 March; neither ends the policy. A further 20 is admitted on the
+/// trauma claim on 4 March and the whole admission is reversed on 5 March. The experience
+/// extract counts each claim once in its rating cell on the day it was admitted, with the
+/// sum admitted and the monthly benefit; the further admission adds money and no claim;
+/// the reversal takes one claim and 120 back on the day it was decided, so the extract for
+/// 1 to 3 March is the same file afterwards and the whole period nets to nothing for
+/// trauma. Exposure is untouched throughout. Facts the mart cannot place (an admission
+/// for a claim never registered, an amount that is not a number, a second registration, a
+/// reversal of nothing) change no cell that has a product.
+/// Why it matters: trauma, income and health claims leave the policy in force, so an
+/// experience study built from terminations alone sees none of them and understates
+/// morbidity for every product that is not plain death cover.
+#[test]
+fn claims_that_leave_the_policy_in_force_are_on_the_experience_extract() {
+    let day = |n: u32| d(2028, 3, n);
+    let pol = PolicyId::from("pol-1");
+    let mut s = Stream::new(day(1));
+    s.push(Event::PolicyIssued {
+        policy: pol.clone(),
+        number: "N".to_string(),
+        group: "grp".into(),
+        policyholder: "party-x".into(),
+        product_code: "term-life".to_string(),
+        product_hash: "h".to_string(),
+        inception: day(1),
+        lives: vec![LifeInfo {
+            date_of_birth: Some(d(1988, 6, 5)),
+            sex: Some(Sex::Male),
+            smoker: Some(true),
+            ..LifeInfo::new("l1".into(), None)
+        }],
+        layers: vec![layer("life", 1, "l1", 500, day(1)), layer("trauma", 1, "l1", 100, day(1))],
+        members: vec![],
+    });
+    s.close(day(2));
+    let reserved = |claim: &str, cover: &str, life: &str| {
+        claim_fact(
+            "claim_reserved",
+            claim,
+            &[
+                ("policy", "pol-1"),
+                ("cover", cover),
+                ("life", life),
+                ("event_date", "2028-03-01"),
+                ("gross_reserve_minor", "100"),
+            ],
+        )
+    };
+    s.push(reserved("clm-1", "trauma", "l1"));
+    s.push(claim_fact("claim_admitted", "clm-1", &[("admitted_minor", "100")]));
+    s.close(day(3));
+    // No life named: the cover is on one life, so the claim is hers.
+    s.push(reserved("clm-2", "life", ""));
+    s.push(claim_fact("claim_admitted", "clm-2", &[("admitted_minor", "0"), ("monthly_minor", "50")]));
+    s.close(day(4));
+    let early = mart_of(1, &s.events).experience(day(1), day(3)).unwrap();
+    let cell = |x: &Extract, cover_type: &str| {
+        let r = rows(x)
+            .into_iter()
+            .find(|r| r["product"] == "term-life" && r["cover_type"] == cover_type)
+            .unwrap();
+        assert_eq!((r["age_band"].as_str(), r["sex"].as_str(), r["smoker"].as_str()), ("35-39", "male", "true"));
+        (
+            r["cover_days"].clone(),
+            r["admitted_claims"].clone(),
+            r["admitted_minor"].clone(),
+            r["admitted_monthly_minor"].clone(),
+        )
+    };
+    let of = |a: &str, b: &str, c: &str, e: &str| (a.to_string(), b.to_string(), c.to_string(), e.to_string());
+    assert!(early.reconciled);
+    assert_eq!(cell(&early, "trauma-type"), of("3", "1", "100", "0"));
+    assert_eq!(cell(&early, "life-type"), of("3", "1", "0", "50"));
+    assert_eq!(
+        (
+            total(&early, "admitted_claims"),
+            total(&early, "admitted_minor"),
+            total(&early, "ending_claims")
+        ),
+        (2, 100, 0)
+    );
+
+    // 4 March: more admitted on the same claim, and facts the mart cannot place.
+    s.push(claim_fact("claim_admitted", "clm-1", &[("admitted_minor", "20")]));
+    s.push(reserved("clm-1", "life", "l1"));
+    s.push(claim_fact("claim_admitted", "clm-lost", &[("admitted_minor", "not-a-number")]));
+    s.push(claim_fact("admission_reversed", "clm-never", &[("decided_on", "2028-03-04")]));
+    s.push(claim_fact("claim_closed", "clm-2", &[("outcome", "paid")]));
+    s.close(day(5));
+    s.push(claim_fact("admission_reversed", "clm-1", &[("decided_on", "2028-03-05")]));
+    s.close(day(6));
+
+    let mart = mart_of(1, &s.events);
+    assert_eq!(
+        mart.experience(day(1), day(3)).unwrap().bytes(),
+        early.bytes(),
+        "the extract for 1 to 3 March changed"
+    );
+    let late = mart.experience(day(4), day(5)).unwrap();
+    assert_eq!(cell(&late, "trauma-type"), of("2", "-1", "-100", "0"));
+    assert_eq!(cell(&late, "life-type"), of("2", "0", "0", "0"));
+    // The claim nobody registered is counted where it can be seen, with no product.
+    let lost = rows(&late).into_iter().find(|r| r["product"].is_empty()).unwrap();
+    assert_eq!(
+        (lost["admitted_claims"].as_str(), lost["admitted_minor"].as_str(), lost["cover_days"].as_str()),
+        ("1", "0", "0")
+    );
+    let whole = mart.experience(day(1), day(5)).unwrap();
+    assert_eq!(cell(&whole, "trauma-type"), of("5", "0", "0", "0"));
+    assert_eq!(cell(&whole, "life-type"), of("5", "1", "0", "50"));
+    assert!(whole.reconciled);
+    // A snapshot of the mart carries the claims with it.
+    let copy: Mart = serde_json::from_value(serde_json::to_value(&mart).unwrap()).unwrap();
+    assert_eq!(copy.experience(day(1), day(5)).unwrap().bytes(), whole.bytes());
 }
