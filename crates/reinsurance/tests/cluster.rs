@@ -268,4 +268,63 @@ fn the_binary_says_what_it_needs() {
     };
     assert!(run(&[]).contains("IC_NODES"));
     assert!(run(&[("IC_NODES", "127.0.0.1:1")]).contains("IC_CLUSTER_TOKEN"));
+    assert!(run(&[("IC_NODES", " , "), ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef")]).contains("no node addresses"));
+}
+
+/// Purpose: the driver binary, running with no cluster to reach, keeps running, and exits
+/// cleanly when it is sent SIGINT, the signal a terminal sends, as it does for the SIGTERM
+/// the cluster test sends.
+/// Why it matters: a driver that died when the ledger was briefly away would need restarting
+/// by hand, and one that ignored a stop signal would be killed part way through a pass at
+/// every deployment. Both signals are registered before the process says it has started, so
+/// neither can be missed.
+#[test]
+fn the_binary_outlasts_a_missing_cluster_and_stops_on_an_interrupt() {
+    use std::io::{BufRead, BufReader};
+    let mut process = Process::new(env!("CARGO_BIN_EXE_ic-reinsurance"))
+        .env_clear()
+        .envs([
+            ("IC_NODES", "127.0.0.1:1"),
+            ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef"),
+            ("IC_REINSURANCE_CYCLE_MS", "20"),
+            ("IC_REINSURANCE_PATIENCE_MS", "50"),
+        ])
+        .envs(std::env::vars().filter(|(k, _)| k.starts_with("LLVM_") || k.starts_with("CARGO_LLVM_COV")))
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(process.stdout.take().unwrap()).lines().map(Result::unwrap);
+    assert!(lines.any(|line| line.contains("reinsurance driver started")));
+    // A pass against the missing cluster fails and is logged; the process carries on.
+    assert!(lines.any(|line| line.contains("could not finish")));
+    assert_eq!(process.try_wait().unwrap(), None, "still running without a cluster");
+    assert!(Process::new("kill").args(["-INT", &process.id().to_string()]).status().unwrap().success());
+    assert!(lines.any(|line| line.contains("reinsurance driver stopped")));
+    assert!(process.wait().unwrap().success(), "the driver stops cleanly on SIGINT");
+}
+
+/// Purpose: the driver loop as the process runs it, started in this process against a
+/// cluster that is not there, returns cleanly when its stop future resolves, and refuses to
+/// start on a node list with no addresses in it.
+/// Why it matters: this is the function the binary is a thin call into. Stopping must not
+/// depend on the cluster answering, or a pod could not be drained during an outage.
+#[tokio::test]
+async fn the_served_loop_stops_when_told_even_with_no_cluster() {
+    let config = |cluster: &str| ic_reinsurance::service::Config {
+        cluster: cluster.to_string(),
+        cycle_every: Duration::from_millis(5),
+        patience: Duration::from_millis(20),
+        batch: 10,
+    };
+    let auth = || ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(ic_reinsurance::service::serve(config("127.0.0.1:1"), auth(), async {
+        let _ = stopped.await;
+    }));
+    tokio::time::sleep(Duration::from_millis(60)).await;
+    assert!(!served.is_finished(), "the loop runs until it is told to stop");
+    stop.send(()).unwrap();
+    assert_eq!(served.await.unwrap(), Ok(()));
+    let nowhere = ic_reinsurance::service::serve(config(","), auth(), std::future::ready(())).await;
+    assert_eq!(nowhere, Err("no node addresses given".to_string()));
 }

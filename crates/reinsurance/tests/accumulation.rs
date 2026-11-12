@@ -724,3 +724,141 @@ fn an_underwritten_excess_layer_is_ceded_and_follows_the_member() {
     assert_eq!(b.ri.retained_on(&party("anna"), d(2027, 5, 31)), 500 * K);
     b.assert_reconciles();
 }
+
+/// Purpose: when a member first matched to one person is corrected to another, the scheme
+/// cover leaves the first person's accumulation, their own cover gets its retention back, and
+/// the member's cover is ceded again on the second person's life.
+/// Why it matters: matches are made by people and are sometimes wrong. A correction that
+/// left the cover counted against the first person would under-retain on them for good, and
+/// one that lost the cover in the move would leave it with no cession at all.
+#[test]
+fn a_corrected_identification_moves_the_cover_to_the_right_person() {
+    let mut b = Bench::new();
+    b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 450 * K, d(2027, 2, 1))]);
+    b.today = d(2027, 3, 1);
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 700 * K)]);
+    let m1 = key("S1", "group-life", 0, "M1");
+    let identified = |who: &str| Event::MemberIdentified {
+        policy: PolicyId::from("S1"),
+        life: LifeId::from("M1"),
+        party: PartyId::from(who),
+    };
+    b.feed(2, vec![identified("anna")]);
+    assert_eq!(b.ri.cession(&m1, d(2027, 3, 1)).unwrap().retained_minor, 50 * K);
+    assert_eq!(b.ri.retained_on(&party("anna"), d(2027, 3, 1)), 500 * K);
+
+    let corrected = b.feed(2, vec![identified("ben")]);
+    assert_eq!(b.ri.retained_on(&party("anna"), d(2027, 3, 1)), 450 * K);
+    assert_eq!(b.ri.retained_on(&party("ben"), d(2027, 3, 1)), 500 * K);
+    let c = b.ri.cession(&m1, d(2027, 3, 1)).unwrap();
+    assert_eq!(
+        (c.retained_minor, c.treaty_ceded() + c.facultative_ceded(), c.unplaced_minor),
+        (500 * K, 200 * K, 0)
+    );
+    assert!(corrected
+        .instructions
+        .iter()
+        .any(|i| matches!(&i.body, InstructionBody::RecordCession { key, .. } if *key == m1)));
+    let unmatched = LifeKey::Unmatched {
+        policy: PolicyId::from("S1"),
+        life: LifeId::from("M1"),
+    };
+    assert_eq!(b.ri.retained_on(&unmatched, d(2027, 3, 1)), 0);
+    assert_eq!(unmatched.to_string(), "member:S1/M1");
+    b.assert_reconciles();
+}
+
+/// Purpose: merging two layers of a cover ends the one removed and moves its sum to the
+/// survivor, and a third layer of the same cover that the merge does not name is left exactly
+/// as it was.
+/// Why it matters: the merge event names the cover, and every layer of that cover is looked
+/// at. A layer swept up by mistake would lose or change a cession nobody asked to change.
+#[test]
+fn a_merge_leaves_the_layers_it_does_not_name_alone() {
+    let mut b = Bench::new();
+    b.issue(
+        1,
+        "P1",
+        "anna",
+        vec![
+            layer("life", "life", 1, "L1", 300 * K, d(2027, 2, 1)),
+            layer("life", "life", 2, "L1", 300 * K, d(2027, 2, 1)),
+            layer("life", "life", 3, "L1", 300 * K, d(2027, 2, 1)),
+        ],
+    );
+    let third = key("P1", "life", 3, "L1");
+    let before = b.ri.cession_record(&third).to_vec();
+    b.today = d(2027, 7, 1);
+    b.feed(
+        1,
+        vec![Event::LayersMerged {
+            policy: PolicyId::from("P1"),
+            cover: "life".into(),
+            removed: vec![2],
+            into: 1,
+            sum_insured_minor: 600 * K,
+        }],
+    );
+    assert!(b.ri.cession(&key("P1", "life", 2, "L1"), d(2027, 7, 1)).is_none());
+    assert_eq!(b.ri.cession(&key("P1", "life", 1, "L1"), d(2027, 7, 1)).unwrap().sum_at_risk_minor, 600 * K);
+    assert_eq!(b.ri.cession_record(&third), &before[..]);
+    assert_eq!(b.ri.cession(&third, d(2027, 7, 1)).unwrap().sum_at_risk_minor, 300 * K);
+    b.assert_reconciles();
+}
+
+/// Purpose: cover under a treaty with its own retention does not count against the retention
+/// two other treaties share, and is not reduced by what they hold.
+/// Why it matters: the retention is per life "across the treaties that share it". Pooling a
+/// treaty that does not share it would cede cover its reinsurers never agreed to take, or
+/// keep more on one life than the insurer's retention allows.
+#[test]
+fn a_treaty_with_its_own_retention_is_not_pooled_with_the_others() {
+    let mut b = Bench::new();
+    let own = RETAIL
+        .replace("id = \"retail-life-surplus\"", "id = \"retail-tpd-surplus\"")
+        .replace("scope(\"term-life\", [\"life\", \"trauma\"])", "scope(\"term-life\", [\"tpd\"])")
+        .replace("    retention_group = \"life\",\n", "");
+    let treaty = Box::new(ic_reinsurance::loader::load_treaty("retail_tpd_surplus.star", &own).unwrap());
+    assert_eq!(treaty.retention_key(), "retail-tpd-surplus");
+    b.ok("config", Command::ActivateTreaty { treaty });
+    b.issue(
+        1,
+        "P1",
+        "anna",
+        vec![
+            layer("life", "life", 1, "L1", 450 * K, d(2027, 2, 1)),
+            layer("tpd", "tpd", 1, "L1", 450 * K, d(2027, 3, 1)),
+            layer("trauma", "trauma", 1, "L1", 450 * K, d(2027, 4, 1)),
+        ],
+    );
+    let on = d(2027, 4, 1);
+    let tpd = b.ri.cession(&key("P1", "tpd", 1, "L1"), on).unwrap();
+    assert_eq!((tpd.retained_minor, tpd.treaty_ceded()), (450 * K, 0), "its own 500,000 is untouched");
+    let trauma = b.ri.cession(&key("P1", "trauma", 1, "L1"), on).unwrap();
+    assert_eq!(
+        (trauma.retained_minor, trauma.treaty_ceded()),
+        (50 * K, 400 * K),
+        "shares 500,000 with life only"
+    );
+    b.assert_reconciles();
+}
+
+/// Purpose: a scheme treaty that cedes members not linked to a person as an excess over a
+/// limit per member keeps each member's cover up to the limit and cedes the rest.
+/// Why it matters: this is the second of the two bases a treaty can name for unlinked
+/// members, and no shipped treaty uses it. A treaty file choosing it must cede what it says,
+/// not fall back to the scheme share.
+#[test]
+fn unlinked_members_can_be_ceded_as_an_excess_per_member() {
+    let mut b = Bench::empty();
+    let source = GROUP.replace("scheme_share(\"0.30\")", "excess_per_member(dollars(140000))");
+    let treaty = Box::new(ic_reinsurance::loader::load_treaty("group_life_surplus.star", &source).unwrap());
+    b.ok("config", Command::ActivateTreaty { treaty });
+    b.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K), member_cover("M2", 100 * K)]);
+    let on = d(2027, 2, 1);
+    let over = b.ri.cession(&key("S1", "group-life", 0, "M1"), on).unwrap();
+    assert_eq!((over.retained_minor, over.treaty_ceded(), over.unplaced_minor), (140 * K, 60 * K, 0));
+    let under = b.ri.cession(&key("S1", "group-life", 0, "M2"), on).unwrap();
+    assert_eq!((under.retained_minor, under.treaty_ceded()), (100 * K, 0));
+    b.assert_reconciles();
+}
