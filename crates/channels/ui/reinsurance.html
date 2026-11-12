@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reinsurance exceptions</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Reinsurance exceptions</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<section><h2>Open exceptions</h2><p class="muted">An exception closes itself once its cause is cured. Abandoning something takes a second person.</p><div id="ex-msg" aria-live="polite"></div><div id="exceptions"></div></section>
+<section id="act" hidden><h2 id="act-title"></h2><p id="act-warn" class="banner warn" hidden></p><form id="act-form"><div class="row" id="act-fields"></div><p><button>Send</button> <button class="quiet" type="button" id="act-cancel">Cancel</button></p></form><div id="act-msg" aria-live="polite"></div></section>
+<section><h2>Waiting for a second person</h2><div id="p-msg" aria-live="polite"></div><div id="pending"></div></section>
+<section><h2>Notices for staff</h2><div id="notices"></div></section>
+<section><h2>Abandoned</h2><div id="abandoned"></div></section>
+<section><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/reinsurance/";
+let me = {};
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+
+// What a person can do about each kind of exception: [label, command name, fields, build, warning].
+function actionsFor(id) {
+  const [kind, subject] = [id.slice(0, id.indexOf(":")), id.slice(id.indexOf(":") + 1)];
+  const seq = Number(subject);
+  const reason = [["reason", "Why it is being abandoned", "text"]];
+  switch (kind) {
+    case "notice": return [
+      ["Send the notice again", "retry_notice", [], () => ({ retry_notice: { seq } })],
+      ["Abandon the notice", "abandon_notice", reason, (f) => ({ abandon_notice: { seq, reason: f.reason } }), "Claims will not hear of this notice. A second person signs before it goes."],
+    ];
+    case "delivery": return [
+      ["Abandon the instruction", "abandon_instruction", reason, (f) => ({ abandon_instruction: { seq, reason: f.reason } }), "The core's ledger and the reinsurance ledger stay apart by this instruction's amount. A second person signs before it goes."],
+    ];
+    case "settlement_mismatch": case "settlement_returned": return [
+      ["Record the settlement", "record_settlement", [["payment_ref", "Payment reference", "text"], ["amount", "Amount, the statement's net", "money"]],
+        (f) => ({ record_settlement: { number: seq, payment_ref: f.payment_ref, amount_minor: Math.round(Number(f.amount) * 100) } })],
+    ];
+    case "facultative_terms_altered": {
+      const [policy, cover, layer, life] = subject.split("/");
+      return [["Record that the reinsurer was told", "facultative_reinsurer_told", [["reference", "Where the reinsurer's answer is filed", "text"]],
+        (f) => ({ facultative_reinsurer_told: { key: { policy, cover, layer: Number(layer), life }, reference: f.reference } })]];
+    }
+    default: return [];
+  }
+}
+function open(id, [label, , spec, build, warning]) {
+  $("act").hidden = false; $("act-title").textContent = `${label}: ${id}`;
+  $("act-warn").hidden = !warning; $("act-warn").textContent = warning || "";
+  put($("act-fields"), spec.map(([key, text, kind]) => h("div", {}, h("label", { for: "a-" + key }, text), h("input", { id: "a-" + key, required: true, type: kind === "money" ? "number" : "text", step: kind === "money" ? "0.01" : null }))));
+  $("act-form").dataset.id = id;
+  current = { spec, build };
+  if (!spec.length) $("act-form").requestSubmit();
+}
+let current = null;
+$("act-cancel").addEventListener("click", () => { $("act").hidden = true; });
+$("act-form").addEventListener("submit", run($("ex-msg"), async () => {
+  const fields = Object.fromEntries(current.spec.map(([key]) => [key, $("a-" + key).value]));
+  const answer = await send(current.build(fields));
+  await refresh();
+  $("act").hidden = true;
+  return answer.prepared ? "Prepared. Someone else signs it before it is sent." : "Done.";
+}));
+
+async function refresh() {
+  me = await ask("me");
+  const exceptions = Object.entries(await ask("exceptions"));
+  put($("exceptions"), exceptions.length ? table(["Exception", "Code", "Detail", "Opened", ""], exceptions.map(([id, e]) => [id, words(e.code), e.detail, e.opened_on,
+    me.operate ? h("span", {}, actionsFor(id).map((a) => h("button", { class: "quiet", type: "button", on: { click: () => open(id, a) } }, a[0]))) : ""])) : h("p", { class: "muted" }, "No exceptions are open."));
+  const pending = me.pending || [];
+  put($("pending"), pending.length ? table(["Prepared", "By", "Command", "Reason", ""], pending.map((p) => [p.id, p.by, cell(p.command), p.reason,
+    p.by === me.staff ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { await api(R, "POST", BASE + "withdraw/" + encodeURIComponent(p.id)); await refresh(); return "Withdrawn."; }) } }, "Withdraw")
+      : me.approve ? h("button", { class: "quiet", type: "button", on: { click: run($("p-msg"), async () => { await api(R, "POST", BASE + "sign/" + encodeURIComponent(p.id)); await refresh(); return "Signed and sent."; }) } }, "Sign and send") : ""]))
+    : h("p", { class: "muted" }, "Nothing is waiting."));
+  const notices = await ask("notices");
+  put($("notices"), notices.length ? table(["Notice", "What"], notices.map(([seq, n]) => [seq, cell(n)])) : h("p", { class: "muted" }, "None waiting."));
+  const [abandoned, abandonedNotices] = await Promise.all([ask("abandoned"), ask("abandoned_notices")]);
+  put($("abandoned"), h("pre", {}, JSON.stringify({ instructions: abandoned, notices: abandonedNotices }, null, 2)));
+}
+$("sweep").addEventListener("submit", run($("s-msg"), async () => {
+  const check = await ask("sweep_check", { period_end: $("s-date").value });
+  put($("s-out"), h("div", { class: check.green ? "banner ok" : "banner warn" }, check.green ? "Nothing stops the close." : "Stopping the close:"), check.green ? null : table(["Item"], (check.items || []).map((i) => [cell(i)])));
+}));
+signIn(R).then(async () => {
+  await refresh();
+  $("me").textContent = `You are ${me.staff}: ${[me.operate ? "you act on exceptions" : null, me.approve ? "you sign abandonments" : null].filter(Boolean).join(", ") || "view only"}. Commands are made on ${me.today || "today's date"}.`;
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

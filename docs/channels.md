@@ -6,7 +6,7 @@
 
 - **The channel module** (`state.rs`) runs as a Raft group named `channels` on the ledger nodes, registered in `crates/node`. It reads the core's events and is told the rest by the other modules. Nothing in it reads a clock: every command carries its time.
 - **The portal service** (`http.rs`, `main.rs`, binary `ic-portal`) is a gateway with no state of its own. It checks the caller's token, asks the module a question or proposes a command, and answers. Any number of copies can run; losing one loses nothing.
-- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/ops`, `/status`. They load nothing from anywhere else.
+- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/reinsurance`, `/ops`, `/status`. They load nothing from anywhere else.
 - **The customer app** is not in this repository. Its whole contract is the `/app/v1` API below, including the offline sync protocol. The native app belongs with the bank's app.
 
 ## Who signs in, and how
@@ -169,6 +169,35 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | `POST /staff/v1/claims/commands` | `{ "purpose", "partition"?, "command" }`, the command in the claims module's own JSON, with an `Idempotency-Key`. |
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
+
+## The reinsurance exceptions console
+
+`/reinsurance` shows the reinsurance module's open exceptions (`docs/reinsurance.md`) and what a person can do about each. That module is the source of truth: an exception closes itself once its cause is cured, so there is nothing to acknowledge. The portal reads the module itself, not the event hub the exceptions are also sent to.
+
+| Exception | What a person does |
+| --- | --- |
+| `notice:<seq>` | Send the notice to claims again (`retry_notice`), or abandon it (`abandon_notice`, two people). |
+| `delivery:<seq>` | Abandon the instruction (`abandon_instruction`, two people). The page warns that the core's ledger and the reinsurance ledger then stay apart by its amount. |
+| `settlement_mismatch:<n>`, `settlement_returned:<n>` | Record the settlement with its payment reference and the statement's net (`record_settlement`). |
+| `facultative_terms_altered:<policy>/<cover>/<layer>/<life>` | Record that the reinsurer was told, and where its answer is filed (`facultative_reinsurer_told`). |
+| `claim_fact:...`, `possible_match:...` | Shown; they close when the facts arrive. |
+
+Commands go under the caller `reinsurance-ops` on the latest business date any partition has reported. That module keeps no actor beyond an abandonment's `approved_by`, so the portal enforces who may act:
+
+| Staff action | What it allows |
+| --- | --- |
+| `reinsurance.view` | Read the exceptions, staff notices, abandonments and the month-end check (`sweep_check`). |
+| `reinsurance.operate` | Send what one person may (retry, settlement, reinsurer told) and prepare an abandonment. |
+| `reinsurance.approve` | Sign an abandonment someone else prepared. |
+
+**Two people.** An abandonment is prepared by one person and kept in the replicated channel state (`src/countersign.rs`) with its reason. A different person with `reinsurance.approve` signs it, and only then is it sent, with the signer as `approved_by`; the page cannot type an approver. The person who prepared it can take it back until it is signed. If the module cannot be reached when it is signed, it stays signed and the signer signs again to finish it; the module's key is the proposal's, so it applies once. A refusal from the module ends it, and it is prepared again if still needed.
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/reinsurance/me` | What you may do, and the abandonments waiting for a signature. |
+| `GET /staff/v1/reinsurance/{question}` | `exceptions`, `notices`, `abandoned`, `abandoned_notices`, `sweep_check?period_end=`, `statement?number=`, `notice_retries?seq=`. |
+| `POST /staff/v1/reinsurance/commands` | One of the commands above, in that module's own JSON, with an `Idempotency-Key`. An abandonment answers `{prepared}`. |
+| `POST /staff/v1/reinsurance/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared abandonment. |
 
 ## The finance console
 

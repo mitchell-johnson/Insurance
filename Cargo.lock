@@ -2134,6 +2134,7 @@ dependencies = [
  "ic-product",
  "ic-raft",
  "ic-readmodel",
+ "ic-reinsurance",
  "ic-sim",
  "reqwest 0.12.28",
  "ring",
