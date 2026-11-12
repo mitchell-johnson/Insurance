@@ -9,6 +9,7 @@ use chrono::{Days, Months, NaiveDate};
 use ic_core::command::{CoverSpec, ExcessLayer, IssuePolicy, LifeSpec, MemberChange};
 use ic_core::event::Event as CoreEvent;
 use ic_core::machine::MAX_MEMBERSHIP_CHUNK;
+use ic_core::policy::MemberPays;
 use ic_core::{Command, GroupId, LayerOrigin, LifeFactors, LifeId, LifeKind, PartyId, PolicyId, PoolAggregate, Reject};
 use ic_product::schedule::age_on;
 use serde::{Deserialize, Serialize};
@@ -883,6 +884,20 @@ impl GroupState {
     fn record_excess_decision(&mut self, s: &mut Scheme, case: u64, decision: ExcessDecision) -> Result<(), Reject> {
         let itemised_terms = s.terms.excess_loading == ExcessLoading::EmployerItemised;
         let policy = s.policy.clone();
+        // Members who would be in the employer's total with this one.
+        let mut holders: BTreeSet<&str> = s
+            .cases
+            .values()
+            .filter(|c| matches!(c.status, CaseStatus::Writing | CaseStatus::Accepted))
+            .map(|c| c.employee_id.as_str())
+            .collect();
+        holders.extend(s.cases.get(&case).map(|c| c.employee_id.as_str()));
+        let too_few_for_a_total = (holders.len() as u32) < s.terms.excess_loading_min_count;
+        let member_pays_loading = match s.terms.excess_loading {
+            ExcessLoading::MemberPays => true,
+            ExcessLoading::EmployerTotal => too_few_for_a_total,
+            ExcessLoading::EmployerItemised => false,
+        };
         let c = s
             .cases
             .get_mut(&case)
@@ -912,6 +927,7 @@ impl GroupState {
                 }
                 c.status = CaseStatus::Writing;
                 c.accepted_minor = sum_insured_minor;
+                let has_loading = !loadings.is_empty();
                 let layer = ExcessLayer {
                     policy,
                     cover: c.cover.clone(),
@@ -921,7 +937,14 @@ impl GroupState {
                     loadings,
                     exclusions,
                     loading_itemised: itemised_terms && member_consents_to_itemising,
-                    member_pays: Default::default(),
+                    // Who pays is settled here, when the terms are accepted,
+                    // because it is what the member was told in the offer.
+                    // The standard rate stays on the scheme invoice.
+                    member_pays: if member_pays_loading && has_loading {
+                        MemberPays::Loading
+                    } else {
+                        MemberPays::Nothing
+                    },
                     reference: c.reference.clone().unwrap_or_else(|| format!("grp-case:{case}")),
                 };
                 self.enqueue_core(s, Command::AddExcessLayer(Box::new(layer)), After::LayerWritten { case });
