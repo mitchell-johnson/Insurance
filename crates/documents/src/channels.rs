@@ -13,6 +13,8 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use ic_azure::credential::AzureCredential;
 use ic_core::PartyId;
 use serde::{Deserialize, Serialize};
@@ -20,6 +22,7 @@ use serde_json::{json, Value};
 
 use crate::kinds::{DataClass, DocumentKind};
 use crate::model::Channel;
+use crate::pdf::{Fonts, Letter, PdfError};
 use crate::template::{sha256_hex, AlternateFormat};
 use crate::vault::{ObjectStore, VaultError};
 
@@ -176,6 +179,8 @@ pub struct Outbound {
     /// The document exactly as issued.
     pub text: String,
     pub format: Option<AlternateFormat>,
+    /// The language of the text, as the document records it.
+    pub language: String,
     pub contact: Contact,
     /// Which attempt on this channel this is, from one.
     pub attempt: u32,
@@ -198,6 +203,37 @@ impl Outbound {
             Channel::Post | Channel::InApp => true,
             Channel::Email => self.data_class < DataClass::InsuranceSensitive,
             Channel::Sms | Channel::Push => false,
+        }
+    }
+
+    /// The document as a PDF for this recipient: addressed for the
+    /// envelope when it is posted, and in large print when that was asked for.
+    pub fn pdf(&self, fonts: &Fonts) -> Result<Vec<u8>, PdfError> {
+        let address: Vec<String> = match self.channel {
+            Channel::Post => self.contact.destination.lines().map(str::to_string).collect(),
+            _ => vec![],
+        };
+        let letter = Letter {
+            document: &self.document,
+            title: &self.title,
+            name: if address.is_empty() { "" } else { &self.contact.name },
+            address: &address,
+            text: &self.text,
+            language: &self.language,
+            large_print: self.format == Some(AlternateFormat::LargePrint),
+        };
+        crate::pdf::pdf(&letter, fonts)
+    }
+
+    /// The PDF, or nothing when the text has a character the font cannot
+    /// draw. The text still goes, so nothing is held up; the gap is logged.
+    fn pdf_or_none(&self, fonts: &Fonts) -> Option<Vec<u8>> {
+        match self.pdf(fonts) {
+            Ok(file) => Some(file),
+            Err(e) => {
+                tracing::warn!(document = %self.document, error = %e, "the document goes without a PDF");
+                None
+            }
         }
     }
 
@@ -234,6 +270,7 @@ pub struct AzureChannels<P: ObjectStore> {
     sms_from: String,
     credential: AzureCredential,
     print: P,
+    fonts: Fonts,
     http: reqwest::Client,
 }
 
@@ -245,8 +282,15 @@ impl<P: ObjectStore> AzureChannels<P> {
             sms_from: sms_from.to_string(),
             credential,
             print,
+            fonts: Fonts::bundled(),
             http: ic_azure::http_client(),
         }
+    }
+
+    /// Set documents in the insurer's own faces instead of the bundled ones.
+    pub fn with_fonts(mut self, fonts: Fonts) -> Self {
+        self.fonts = fonts;
+        self
     }
 
     async fn post(&self, path: &str, id: &str, body: Value) -> Result<Value, SendError> {
@@ -273,12 +317,20 @@ impl<P: ObjectStore> AzureChannels<P> {
 
     async fn email(&self, m: &Outbound) -> Result<String, SendError> {
         let text = if m.carries_text() { m.text.clone() } else { m.pointer() };
-        let body = json!({
+        let mut body = json!({
             "senderAddress": self.email_from,
             "content": { "subject": m.title, "plainText": text },
             "recipients": { "to": [{ "address": m.contact.destination, "displayName": m.contact.name }] },
             "userEngagementTrackingDisabled": true,
         });
+        // The same document to keep or print, when it may travel by email.
+        if let Some(file) = m.carries_text().then(|| m.pdf_or_none(&self.fonts)).flatten() {
+            body["attachments"] = json!([{
+                "name": format!("{}.pdf", m.document),
+                "contentType": "application/pdf",
+                "contentInBase64": STANDARD.encode(file),
+            }]);
+        }
         let id = m.idempotency_id();
         let accepted = self.post("/emails:send?api-version=2023-03-31", &id, body).await?;
         Ok(accepted["id"].as_str().map_or(id, str::to_string))
@@ -306,7 +358,20 @@ impl<P: ObjectStore> AzureChannels<P> {
 
     async fn print(&self, m: &Outbound) -> Result<String, SendError> {
         let name = format!("print/{}/{}-{}.json", m.document, m.party, m.attempt);
+        // The pages first, so that an instruction never names a file that
+        // is not there. Written once: a retry finds it and carries on.
+        let pages = match m.pdf_or_none(&self.fonts) {
+            Some(file) => {
+                let pages = format!("print/{}/{}-{}.pdf", m.document, m.party, m.attempt);
+                match self.print.put_new(&pages, file, None).await {
+                    Ok(()) | Err(VaultError::AlreadyExists(_)) => Some(pages),
+                    Err(e) => return Err(SendError::Temporary(e.to_string())),
+                }
+            }
+            None => None,
+        };
         let file = json!({
+            "pdf": pages,
             "document": m.document,
             "name": m.contact.name,
             "address": m.contact.destination.lines().collect::<Vec<_>>(),

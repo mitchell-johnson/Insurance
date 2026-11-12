@@ -492,7 +492,8 @@ impl UnderwritingState {
                 countersigned_by,
                 reasons,
                 varied_terms,
-            } => self.close_review(cx, &review, outcome, &decided_by, countersigned_by, reasons, varied_terms),
+                premium,
+            } => self.close_review(cx, &review, outcome, &decided_by, countersigned_by, reasons, varied_terms, premium),
 
             DelegatedDecision(d) => self.delegated_decision(cx, *d),
             RequestDelegateFile {

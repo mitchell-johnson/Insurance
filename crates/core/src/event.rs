@@ -217,6 +217,11 @@ pub enum Event {
         policy: PolicyId,
         layer: LayerInfo,
         origin: LayerOrigin,
+        /// The layer this one takes the place of when underwriting changed
+        /// its terms and nothing else: the same cover carried on, not new
+        /// business.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<u32>,
     },
     /// A layer stopped from a date: an underwritten layer given up, reduced
     /// or ended because the member left.

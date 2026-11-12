@@ -36,7 +36,10 @@ use serde::{Deserialize, Serialize};
 use crate::books::ExtractRecord;
 
 /// Version of the extract layouts below. A change to a column is a new version.
-pub const DEFINITION_VERSION: u32 = 3;
+/// The claims module's name on the facts it publishes through the core.
+const CLAIMS_MODULE: &str = "claims";
+
+pub const DEFINITION_VERSION: u32 = 4;
 
 pub const IN_FORCE: &str = "in_force";
 pub const MOVEMENT: &str = "movement";
@@ -312,6 +315,35 @@ struct EndingClaim {
     occupation_class: String,
 }
 
+/// A claim the claims module has registered: the rating cell it falls in,
+/// fixed when it was registered, and what has been admitted on it so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct KnownClaim {
+    product_code: String,
+    cover_type: String,
+    /// The life's age on the event date.
+    age: Option<u32>,
+    sex: Option<Sex>,
+    smoker: Option<bool>,
+    occupation_class: String,
+    /// Whether an admission is standing.
+    admitted: bool,
+    admitted_minor: i64,
+    monthly_minor: i64,
+}
+
+/// An admission, a further admission or the reversal of one, on the business
+/// date it was decided. A reversal takes back what stood.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct Admission {
+    business_date: NaiveDate,
+    partition: PartitionId,
+    claim: String,
+    claims: i64,
+    admitted_minor: i64,
+    monthly_minor: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PartitionFeed {
     next_seq: u64,
@@ -333,6 +365,12 @@ pub struct Mart {
     /// Money held in suspense for each policy, and since when.
     #[serde(default, with = "crate::pairs")]
     suspense: BTreeMap<(PartitionId, PolicyId), Held>,
+    /// Every claim the claims module has registered.
+    #[serde(default, with = "crate::pairs")]
+    known_claims: BTreeMap<(PartitionId, String), KnownClaim>,
+    /// Admissions and reversals in the order they were decided.
+    #[serde(default)]
+    admissions: Vec<Admission>,
 }
 
 /// Money held for a policy: what the core owes back or has yet to apply.
@@ -444,6 +482,8 @@ impl Mart {
             movements: Vec::new(),
             claims: Vec::new(),
             suspense: BTreeMap::new(),
+            known_claims: BTreeMap::new(),
+            admissions: Vec::new(),
         }
     }
 
@@ -582,7 +622,7 @@ impl Mart {
                 };
                 self.change(partition, policy, date, None, &kind, |row| row.statuses.push((date, *to)));
             }
-            Event::LayerAdded { policy, layer, origin } => {
+            Event::LayerAdded { policy, layer, origin, .. } => {
                 self.change(partition, policy, date, Some(layer.start), origin_name(*origin), |row| {
                     row.open_layer(date, layer)
                 });
@@ -724,12 +764,83 @@ impl Mart {
                     }
                 }
             }
+            Event::Module { module, kind, subject, detail } if module == CLAIMS_MODULE => self.claim_fact(partition, date, kind, subject, detail),
             _ => {}
         }
         Ok(())
     }
 
     /// A policy the partition has not held before.
+    /// A fact the claims module published. A claim is placed in its rating
+    /// cell when it is registered; an admission and a reversal are counted
+    /// on the day they are decided. A value that cannot be read counts as
+    /// nothing, and a claim never registered falls in a cell with no product,
+    /// so that the feed never stops on another module's fact.
+    fn claim_fact(&mut self, partition: PartitionId, date: NaiveDate, kind: &str, claim: &str, detail: &BTreeMap<String, String>) {
+        let text = |key: &str| detail.get(key).filter(|v| !v.is_empty());
+        let amount = |key: &str| text(key).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+        let key = (partition, claim.to_string());
+        match kind {
+            "claim_reserved" if !self.known_claims.contains_key(&key) => {
+                let policy = text("policy").map(|p| PolicyId::from(p.as_str()));
+                let row = policy.and_then(|p| self.policies.get(&(partition, p)));
+                let cover = text("cover").cloned().unwrap_or_default();
+                let on_cover = |row: &PolicyRow| -> Vec<Span> { row.spans.iter().filter(|s| s.cover == cover).cloned().collect() };
+                let spans = row.map(on_cover).unwrap_or_default();
+                // The life named, or the life the cover is on where it is on one only.
+                let mut lives: Vec<LifeId> = match text("life") {
+                    Some(life) => vec![LifeId::from(life.as_str())],
+                    None => spans.iter().map(|s| s.life.clone()).collect(),
+                };
+                lives.dedup();
+                let factors = match (row, lives.as_slice()) {
+                    (Some(row), [life]) => row.factors(life, date),
+                    _ => Factors::default(),
+                };
+                let event_date = text("event_date").and_then(|d| d.parse::<NaiveDate>().ok()).unwrap_or(date);
+                let known = KnownClaim {
+                    product_code: row.map(|r| r.product_code.clone()).unwrap_or_default(),
+                    cover_type: spans.first().map(|s| s.cover_type.clone()).unwrap_or_default(),
+                    age: factors.age(event_date),
+                    sex: factors.sex,
+                    smoker: factors.smoker,
+                    occupation_class: factors.class(),
+                    ..KnownClaim::default()
+                };
+                self.known_claims.insert(key, known);
+            }
+            "claim_admitted" => {
+                let known = self.known_claims.entry(key).or_default();
+                let (admitted_minor, monthly_minor) = (amount("admitted_minor"), amount("monthly_minor"));
+                self.admissions.push(Admission {
+                    business_date: date,
+                    partition,
+                    claim: claim.to_string(),
+                    claims: i64::from(!known.admitted),
+                    admitted_minor,
+                    monthly_minor,
+                });
+                known.admitted = true;
+                known.admitted_minor = known.admitted_minor.saturating_add(admitted_minor);
+                known.monthly_minor = known.monthly_minor.saturating_add(monthly_minor);
+            }
+            "admission_reversed" => {
+                if let Some(known) = self.known_claims.get_mut(&key).filter(|k| k.admitted) {
+                    self.admissions.push(Admission {
+                        business_date: date,
+                        partition,
+                        claim: claim.to_string(),
+                        claims: -1,
+                        admitted_minor: -known.admitted_minor,
+                        monthly_minor: -known.monthly_minor,
+                    });
+                    (known.admitted, known.admitted_minor, known.monthly_minor) = (false, 0, 0);
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn arrive(&mut self, partition: PartitionId, policy: &PolicyId, row: PolicyRow, date: NaiveDate, effective: Option<NaiveDate>, kind: &str) {
         let key = (partition, policy.clone());
         let before = self.policies.get(&key).map(PolicyRow::contribution);
@@ -1034,6 +1145,9 @@ impl Mart {
             sum_insured_days_minor: i128,
             claims: i128,
             claim_sum_insured_minor: i128,
+            admitted_claims: i128,
+            admitted_minor: i128,
+            admitted_monthly_minor: i128,
         }
         // Product, cover type, age band at the end of the period, sex, smoker,
         // occupation class.
@@ -1084,16 +1198,35 @@ impl Mart {
             cell.claims += 1;
             cell.claim_sum_insured_minor += i128::from(claim.sum_insured_minor);
         }
+        for a in self.admissions.iter().filter(|a| a.business_date >= from && a.business_date <= to) {
+            let Some(known) = self.known_claims.get(&(a.partition, a.claim.clone())) else {
+                continue;
+            };
+            let key = (
+                known.product_code.clone(),
+                known.cover_type.clone(),
+                age_band(known.age),
+                sex_name(known.sex),
+                opt(&known.smoker),
+                known.occupation_class.clone(),
+            );
+            let cell = cells.entry(key).or_default();
+            cell.admitted_claims += i128::from(a.claims);
+            cell.admitted_minor += i128::from(a.admitted_minor);
+            cell.admitted_monthly_minor += i128::from(a.monthly_minor);
+        }
         let mut lines = vec![
-            "product,cover_type,age_band,sex,smoker,occupation_class,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor"
+            "product,cover_type,age_band,sex,smoker,occupation_class,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor,admitted_claims,admitted_minor,admitted_monthly_minor"
                 .to_string(),
         ];
         let mut control: BTreeMap<String, i128> = BTreeMap::new();
         for ((product, cover_type, band, sex, smoker, class), c) in &cells {
             lines.push(format!(
-                "{product},{cover_type},{band},{sex},{smoker},{class},{},{},{},{}",
-                c.cover_days, c.sum_insured_days_minor, c.claims, c.claim_sum_insured_minor
+                "{product},{cover_type},{band},{sex},{smoker},{class},{},{},{},{},{},{},{}",
+                c.cover_days, c.sum_insured_days_minor, c.claims, c.claim_sum_insured_minor, c.admitted_claims, c.admitted_minor, c.admitted_monthly_minor
             ));
+            *control.entry("admitted_claims".to_string()).or_insert(0) += c.admitted_claims;
+            *control.entry("admitted_minor".to_string()).or_insert(0) += c.admitted_minor;
             *control.entry("cover_days".to_string()).or_insert(0) += c.cover_days;
             *control.entry("sum_insured_days_minor".to_string()).or_insert(0) += c.sum_insured_days_minor;
             *control.entry("ending_claims".to_string()).or_insert(0) += c.claims;

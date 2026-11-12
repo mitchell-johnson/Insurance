@@ -150,6 +150,7 @@ fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, 
         r.closed = true;
     }
     policy.lapse = Some(LapseRecord {
+        approval: None,
         lapsed_on: ctx.date,
         postings,
         receivables_before: before,

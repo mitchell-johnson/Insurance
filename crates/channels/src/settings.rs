@@ -50,6 +50,8 @@ pub struct PortalSettings {
     pub forward: Duration,
     /// The currency of the commission module's balances.
     pub currency: String,
+    /// How many partitions the ledger has: the claims console asks each.
+    pub partitions: ic_ledger::PartitionId,
 }
 
 impl PortalSettings {
@@ -81,6 +83,8 @@ impl PortalSettings {
     ///   (engagements, licences, held money) are carried to the channels;
     ///   default 15. `IC_PORTAL_CURRENCY`: the currency of those balances;
     ///   default `NZD`.
+    /// - `IC_PARTITIONS`: how many partitions the ledger has, as the core
+    ///   gateway is told; default 64.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
         let raw = &get;
         let get = |key: &str| raw(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
@@ -163,6 +167,13 @@ impl PortalSettings {
             heartbeat: Duration::from_secs(seconds("IC_PORTAL_HEARTBEAT_SECS", 15)?),
             ui,
             forward: Duration::from_secs(seconds("IC_PORTAL_FORWARD_SECS", 15)?),
+            partitions: match get("IC_PARTITIONS") {
+                None => ic_ledger::PARTITION_COUNT,
+                Some(p) => match p.parse::<ic_ledger::PartitionId>() {
+                    Ok(n) if (1..=ic_ledger::PARTITION_COUNT).contains(&n) => n,
+                    _ => return Err(format!("IC_PARTITIONS must be between 1 and {}, not {p:?}", ic_ledger::PARTITION_COUNT)),
+                },
+            },
             currency: match get("IC_PORTAL_CURRENCY") {
                 Some(c) if c.len() == 3 && c.chars().all(|ch| ch.is_ascii_uppercase()) => c,
                 Some(c) => return Err(format!("IC_PORTAL_CURRENCY must be a three-letter code such as NZD, not {c:?}")),

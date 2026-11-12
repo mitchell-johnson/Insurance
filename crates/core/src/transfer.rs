@@ -54,6 +54,10 @@ pub struct TransferRecord {
     pub balances: Vec<TransferBalance>,
     /// Scoped configuration travels with the policy.
     pub scoped_tables: Vec<RateTable>,
+    /// The policy's claims with their schedules, timers and limits. They
+    /// are registered again on the target as they left.
+    #[serde(default)]
+    pub claims: ic_claims::Moved,
     pub hash: String,
 }
 
@@ -70,6 +74,7 @@ impl TransferRecord {
             &self.policy,
             &self.balances,
             &self.scoped_tables,
+            &self.claims,
         );
         h.update(serde_json::to_vec(&body).unwrap_or_else(|_| b"unencodable".to_vec()));
         hex::encode(h.finalize())
@@ -84,6 +89,7 @@ pub(crate) fn begin(
     transfer_id: String,
     target_group: GroupId,
     target_partition: PartitionId,
+    claims: ic_claims::Moved,
 ) -> Result<(), Reject> {
     if !matches!(policy.status, PolicyStatus::InForce | PolicyStatus::Lapsed) {
         return Err(Reject::new("not_transferable", "only a policy in force or lapsed can be transferred"));
@@ -126,6 +132,7 @@ pub(crate) fn begin(
         policy: policy.clone(),
         balances,
         scoped_tables: catalog.scoped_tables_for(&policy.group),
+        claims,
         hash: String::new(),
     };
     record.hash = record.compute_hash();
@@ -247,6 +254,7 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
         },
     });
     state.policies.insert(id, policy);
+    state.claims.attach(record.claims);
     Ok(())
 }
 
@@ -263,6 +271,7 @@ pub(crate) fn complete(policy: &mut Policy, ctx: &mut Ctx<'_>, transfer_id: &str
     policy.receipts.clear();
     policy.refunds_raised.clear();
     policy.payments.clear();
+    policy.claims.clear();
     policy.lapse = None;
     policy.standing = None;
     ctx.emit(Event::PolicyStatusChanged {

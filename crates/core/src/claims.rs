@@ -94,17 +94,11 @@ pub(crate) fn policies_with_work_due(state: &CoreState, today: NaiveDate) -> Vec
     policies
 }
 
-/// A policy stays on its partition while a claim on it is open or has money
-/// outstanding: the claim record lives here.
-pub(crate) fn may_transfer(policy: &Policy) -> Result<(), Reject> {
-    let busy = |c: &ClaimLedger| c.open || c.reserve_minor != 0 || c.payable_minor != 0 || c.receivable_minor != 0;
-    if policy.claims.values().any(busy) {
-        return Err(Reject::new(
-            "open_claim",
-            "the policy has a claim that is open or has money outstanding; it cannot be transferred yet",
-        ));
-    }
-    Ok(())
+/// What claims holds for a policy, to travel with it. Open claims, benefit
+/// schedules and timers move with the policy; only a claim sitting in a
+/// payment run holds it back, until the run is approved or cancelled.
+pub(crate) fn moving(state: &CoreState, policy: &Policy) -> Result<ic_claims::Moved, Reject> {
+    state.claims.moving(&policy.id.to_string()).map_err(|e| Reject::new(&e.code, e.message))
 }
 
 fn status_code(status: PolicyStatus) -> String {
