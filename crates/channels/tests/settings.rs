@@ -122,6 +122,14 @@ fn bad_values_are_refused_at_start() {
             .forward,
         Duration::from_secs(3)
     );
+    assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().partitions, 64);
+    assert_eq!(load(&[NODES, OPEN, DEV, ("IC_PARTITIONS", "8")]).unwrap().partitions, 8);
+    for bad in ["0", "65", "many"] {
+        assert!(
+            load(&[NODES, OPEN, DEV, ("IC_PARTITIONS", bad)]).unwrap_err().contains("IC_PARTITIONS"),
+            "{bad}"
+        );
+    }
     assert!(load(&[NODES, OPEN, DEV, ("IC_LEDGER_PATIENCE_SECS", "soon")])
         .unwrap_err()
         .contains("IC_LEDGER_PATIENCE_SECS"));

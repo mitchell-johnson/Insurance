@@ -114,6 +114,11 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// Whether a member of staff may open the claims console.
+    ClaimsStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// What a member of staff may do in the unit pricing console.
     PricingStaff {
         staff: PartyId,
@@ -409,6 +414,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             "other": about.map(|other| crate::complaints::standing(&d.staff, &other, at)),
         }),
         Question::FinanceStaff { staff, at } => crate::finance::standing(&d.staff, &staff, at),
+        Question::ClaimsStaff { staff, at } => crate::claims::standing(&d.staff, &staff, at),
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
         Question::Workbench { staff, party, at } => {
             let record = party.as_ref().map_or_else(|| "counterparty:*".to_string(), |p| format!("counterparty:{p}"));
