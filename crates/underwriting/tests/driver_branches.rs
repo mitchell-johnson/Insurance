@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use common::*;
 use ic_core::command::{CoverSpec, IssuePolicy};
 use ic_core::{GroupId, PolicyId};
@@ -233,6 +233,7 @@ fn terms(proposal: &str, entry: Entry, covers: Vec<CoverSpec>) -> Effect {
         policy: "POL-1".into(),
         effective: d(2027, 2, 1),
         covers,
+        employer_may_see_loading: false,
     }
 }
 
@@ -252,6 +253,10 @@ fn excess() -> Entry {
 
 fn alteration() -> Entry {
     Entry::Alteration { policy: "POL-1".into() }
+}
+
+fn reinstatement() -> Entry {
+    Entry::Reinstatement { policy: "POL-1".into() }
 }
 
 fn increase() -> Entry {
@@ -359,11 +364,25 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             "the core refused to end interim cover: odd",
         ),
         (
-            terms("P1", alteration(), vec![cover(1)]),
+            terms("P1", reinstatement(), vec![cover(1)]),
             None,
             Value::Null,
             vec![],
-            "the core has no command yet for an alteration or a reinstatement",
+            "proposal P1 is not known to the module",
+        ),
+        (
+            terms("P1", reinstatement(), vec![CoverSpec { life: None, ..cover(1) }]),
+            None,
+            known.clone(),
+            vec![],
+            "the reinstatement of life names no life",
+        ),
+        (
+            terms("P1", alteration(), vec![CoverSpec { life: None, ..cover(1) }]),
+            None,
+            known.clone(),
+            vec![],
+            "the alteration on life names no life",
         ),
         (
             terms("P1", increase(), vec![cover(1)]),
@@ -394,6 +413,8 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
                 outcome: NonDisclosureOutcome::Avoid,
                 review: "ND-1".into(),
                 decision: None,
+                terms: vec![],
+                premium: Some(ic_underwriting::command::PremiumOnAvoidance::Refund),
             },
             None,
             Value::Null,
@@ -574,6 +595,63 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
         "{told:?}"
     );
 
+    // An alteration: the same, as a change of terms on the cover held. A cover already on
+    // the terms is nothing to write, and the rest still goes.
+    let two = terms(
+        "P1",
+        alteration(),
+        vec![
+            cover(1),
+            CoverSpec {
+                code: "trauma".into(),
+                ..cover(2)
+            },
+        ],
+    );
+    let (_, script) = carry(two.clone(), None, a_proposal(), &[("P1/alteration/L1/life", "no_change")]).await;
+    let sent = script.with(|s| s.core.clone());
+    let keys: Vec<_> = sent.iter().map(|(key, caller, _)| (key.as_str(), caller.as_str())).collect();
+    assert_eq!(keys, [("P1/alteration/L1/life", "underwriting"), ("P1/alteration/L1/trauma", "underwriting")]);
+    assert!(
+        matches!(&sent[1].2, ic_core::Command::AlterUnderwrittenTerms(t) if t.cover == "trauma" && t.loadings == cover(2).loadings && t.reference == "P1/terms")
+    );
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::PolicyIssued { .. })] if key == "P1/terms/issued" && caller == "issuer"),
+        "{told:?}"
+    );
+    let (_, script) = carry(two, None, a_proposal(), &[("P1/alteration/L1/life", "billing_behind")]).await;
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "billing_behind"),
+        "{told:?}"
+    );
+    assert_eq!(script.with(|s| s.core.len()), 1);
+
+    // A reinstatement: one decision for the policy as "underwriting", good for as long as
+    // the proposal is, answered like an issue either way.
+    let back = terms("P1", reinstatement(), vec![cover(1)]);
+    let expires: NaiveDate = serde_json::from_value(a_proposal()["expires_on"].clone()).unwrap();
+    let (_, script) = carry(back.clone(), None, a_proposal(), &[]).await;
+    let sent = script.with(|s| s.core.clone());
+    assert!(
+        matches!(&sent[..], [(key, caller, ic_core::Command::ApproveReinstatement(r))]
+            if key == "P1/reinstatement" && caller == "underwriting" && r.reference == "P1/terms" && r.valid_until == expires
+                && r.terms.len() == 1 && r.terms[0].cover == "life" && r.terms[0].loadings == cover(1).loadings),
+        "{sent:?}"
+    );
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::PolicyIssued { layers, .. })] if key == "P1/terms/issued" && caller == "issuer" && layers.is_empty()),
+        "{told:?}"
+    );
+    let (_, script) = carry(back, None, a_proposal(), &[("P1/reinstatement", "window_closed")]).await;
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "window_closed"),
+        "{told:?}"
+    );
+
     let (_, script) = carry(interim(), None, Value::Null, &[]).await;
     let told = script.with(|s| s.told.clone());
     assert!(
@@ -597,6 +675,34 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                 loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
                 exclusions: vec!["EX-BACK".into()],
                 member_consents_to_itemising: false,
+            },
+        ),
+        (
+            match terms("grp-uw:north:shore:12", excess(), vec![cover(300_000_00)]) {
+                Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    ..
+                } => Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    employer_may_see_loading: true,
+                },
+                other => other,
+            },
+            ExcessDecision::Accepted {
+                sum_insured_minor: 300_000_00,
+                loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
+                exclusions: vec!["EX-BACK".into()],
+                member_consents_to_itemising: true,
             },
         ),
         (ended("grp-uw:north:shore:12", excess(), "declined"), ExcessDecision::Declined),

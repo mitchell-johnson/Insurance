@@ -35,6 +35,10 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 # For the forwarder's contract test only: the service itself reads that module as JSON.
 ic-distribution = { path = "../distribution" }
+# For the unit pricing console's contract test only, as above.
+ic-pricing = { path = "../pricing" }
+ic-complaints = { path = "../complaints" }
+ic-finance = { path = "../finance" }
 ic-sim.workspace = true
 ic-product.workspace = true
 ic-money.workspace = true

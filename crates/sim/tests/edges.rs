@@ -306,6 +306,51 @@ fn a_level_premium_keeps_each_layers_rating_age_and_such_layers_do_not_merge() {
     assert_eq!(c.state(0).policies[&level].covers["life"].layers.len(), 3);
 }
 
+/// Purpose: a rate table can carry rows for an occupation class. A life in that class is
+/// priced on its row, a life with no class or another class on the general row, and the
+/// class the life was priced on is published with the policy.
+/// Why it matters: occupation is a rating factor in the design. A table that could not be
+/// split by it would force every hazardous occupation onto a manual loading, and a life
+/// priced on a class the extracts cannot see could never be checked against experience.
+#[test]
+fn a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class() {
+    let mut c = cluster(1);
+    let rates = include_str!("../../../products/rates/life_base.star")
+        .replace("id = \"life-base\"", "id = \"life-occ\"")
+        .replace(
+            "rows = [",
+            "rows = [\n        rate(\"2.5770\", age_from = 33, age_to = 37, sex = \"female\", smoker = False, occupation_class = \"4\"),",
+        );
+    let table = ic_product::load_rate_table("life_occ.star", &rates).unwrap();
+    c.activate_everywhere(Command::ActivateRateTable { table: Box::new(table) }).unwrap();
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", "code = \"term-life-occ\"")
+        .replace("stepped(\"life-base\")", "stepped(\"life-occ\")");
+    let product = load_product("term_life_occ.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+
+    let mut issue = |n: u64, class: Option<&str>| {
+        let mut issue = term_life(n, start(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+        issue.product_code = "term-life-occ".into();
+        issue.lives[0].factors.occupation_class = class.map(str::to_string);
+        let id = issue.policy.clone();
+        c.submit(0, "new-business", issue_command(issue)).unwrap();
+        id
+    };
+    let (plain, office, miner) = (issue(1, None), issue(2, Some("1")), issue(3, Some("4")));
+    // The general rate is 1.2885 per thousand and the class 4 row is twice it: premium
+    // 55.84 against 111.67 a month, each with the 6.00 fee.
+    assert_eq!(outstanding(&c, &plain), MONTHLY);
+    assert_eq!(outstanding(&c, &office), MONTHLY);
+    assert_eq!(outstanding(&c, &miner), 111_67 + 6_00);
+    let published = events(&c).into_iter().find_map(|e| match e {
+        Event::PolicyIssued { policy, lives, .. } if *policy == miner => lives[0].occupation_class.clone(),
+        _ => None,
+    });
+    assert_eq!(published.as_deref(), Some("4"));
+    days(&mut c, 2);
+}
+
 /// Purpose: cancellation and reinstatement refuse a policy in the wrong state, and every
 /// policy command refuses a policy that is not on the partition.
 /// Why it matters: cancelling twice would refund twice. Reinstating a policy that never

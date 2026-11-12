@@ -77,6 +77,114 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#lookup button").click();
     await p.locator("#lookup-msg .banner.bad, #pol-view:not([hidden])").first().waitFor();
   }, expectStatus: [403, 404, 422] });
+  await visit(browser, "/pricing", { subject: "sub-up1" }, { run: async (p) => {
+    await sees(p, "preparer, approver");
+    await sees(p, "valuations/bad.csv");
+    await p.selectOption("#pfund", "growth"); await p.fill("#pdate", "2027-11-12");
+    await p.locator("#show-val").click();
+    await sees(p, "1010000");
+    await p.locator("#prepare button").first().click();
+    await sees(p, "Someone else approves it.");
+    await p.locator("#work").getByText("growth:2027-11-12.1").waitFor();
+    await p.getByRole("button", { name: "Details" }).first().click();
+    await p.locator("#detail:not([hidden])").waitFor();
+    await sees(p, "units on issue");
+    // The preparer cannot approve their own price.
+    await p.getByRole("button", { name: "Approve", exact: true }).click();
+    await p.locator("#work-msg .banner.bad").waitFor();
+  }, expectStatus: [409] });
+  await visit(browser, "/pricing", { subject: "sub-lead" }, { run: async (p) => {
+    await sees(p, "lead");
+    await p.selectOption("#sfund", "cash"); await p.fill("#sfrom", "2027-11-15"); await p.fill("#sreason", "administrator outage");
+    await p.locator("#suspend button").click();
+    await sees(p, "Suspended.");
+    await sees(p, "administrator outage (lead-1)");
+  } });
+  await visit(browser, "/pricing", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/complaints", { subject: "sub-front" }, { run: async (p) => {
+    await sees(p, "intake");
+    await p.fill("#i-id", "c-100"); await p.fill("#i-who", "party-00000001"); await p.fill("#i-doc", "doc-100");
+    await p.locator("#intake button").click();
+    await sees(p, "Recorded c-100");
+  } });
+  await visit(browser, "/complaints", { subject: "sub-cmp1" }, { run: async (p) => {
+    await sees(p, "trained to work with vulnerable customers");
+    await p.getByRole("tab", { name: "Queue" }).click();
+    await p.locator("#queue").getByText("c-100").waitFor();
+    await p.selectOption("#a-command", "assign");
+    await p.fill("#f-0", "c-100"); await p.fill("#f-1", "cmp-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: assign.");
+    await p.locator("#queue").getByRole("button", { name: "Open" }).first().click();
+    await p.locator("#file:not([hidden])").waitFor();
+    await sees(p, "doc-100");
+    await p.getByRole("tab", { name: "Register and report" }).click();
+    await p.fill("#p-from", "2027-11-01"); await p.fill("#p-to", "2027-11-30");
+    await p.locator("#period button").click();
+    await p.locator("#register").getByText("c-100").waitFor();
+    await p.getByRole("tab", { name: "Conduct cases" }).click();
+    await p.locator("#case-msg .banner.bad").waitFor();
+  } });
+  await visit(browser, "/complaints", { subject: "sub-con" }, { run: async (p) => {
+    await p.getByRole("tab", { name: "Queue" }).click();
+    await p.selectOption("#a-command", "open_conduct_case");
+    await p.fill("#f-0", "b-100"); await p.fill("#f-2", "con-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: open conduct case.");
+    await p.getByRole("tab", { name: "Conduct cases" }).click();
+    await p.locator("#cases").getByRole("button", { name: "Open" }).first().click();
+    await p.locator("#case:not([hidden])").waitFor();
+    await sees(p, "Owner con-1");
+  } });
+  await visit(browser, "/complaints", { subject: "sub-fin1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/finance", { subject: "sub-gl1" }, { run: async (p) => {
+    await p.fill("#p-id", "2027-11"); await p.locator("#period button").click();
+    await p.locator("#dash:not([hidden])").waitFor();
+    await sees(p, "Stopping the close");
+    await p.selectOption("#r-check", "tax_reconciliation"); await p.locator("#report button").click();
+    await sees(p, "Reported.");
+    await p.getByRole("tab", { name: "Journals" }).click();
+    await p.fill("#j-id", "bj1"); await p.fill("#j-period", "2027-11"); await p.fill("#j-date", "2027-11-30");
+    await p.fill("#j-reason", "month-end accrual"); await p.fill("#j-evidence", "vault://evidence/1");
+    await p.fill("#j-lines", "6500, 250.00, SF1-life\n2500, -250.00, SF1-life");
+    await p.locator("#journal button").click();
+    await sees(p, "Someone else approves it.");
+    await p.locator("#jview:not([hidden])").waitFor();
+    // An operator holds no approver role, so the page does not offer approval.
+    if (!(await p.locator("#j-approve").isDisabled())) throw new Error("an operator was offered approval");
+  } });
+  await visit(browser, "/finance", { subject: "sub-gl2" }, { run: async (p) => {
+    await p.getByRole("tab", { name: "Journals" }).click();
+    await p.fill("#jl-id", "bj1"); await p.locator("#jlookup button").click();
+    await p.locator("#jview:not([hidden])").waitFor();
+    await p.locator("#j-approve").click();
+    await sees(p, "Approved and posted.");
+    await p.getByRole("tab", { name: "Books" }).click();
+    await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
+    await p.locator("#tb-out").getByText("6500").first().waitFor();
+  } });
+  await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
+    await sees(p, "You act as cl-lead");
+    await p.selectOption("#a-command", "notify");
+    await p.fill("#f-0", "c-b1"); await p.fill("#f-1", "pol-c1"); await p.fill("#f-2", "trauma");
+    await p.selectOption("#f-4", "trauma"); await p.fill("#f-5", "2027-02-20");
+    await p.locator("#act button").click();
+    await sees(p, "Done: notify.");
+    await sees(p, "c-b1: trauma");
+    await p.selectOption("#q-name", "lump_sum"); await p.locator("#queue button").click();
+    await p.locator("#q-rows").getByText("c-b1").waitFor();
+    await p.fill("#a-purpose", "allocating lump sum work");
+    await p.selectOption("#a-command", "assign"); await p.fill("#f-1", "cl-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: assign.");
+    await p.locator("#c-summary").getByText("cl-1").waitFor();
+    // The lead does not own the claim, so the claims module refuses their cause.
+    await p.selectOption("#a-command", "record_cause"); await p.fill("#f-1", "CC-0003");
+    await p.locator("#act button").click();
+    await p.locator("#act-msg .banner.bad").waitFor();
+  }, expectStatus: [403] });
+  await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
   console.log("all pages check out");

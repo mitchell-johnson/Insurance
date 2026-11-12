@@ -79,9 +79,10 @@ The documents service (`ic-documents`, see `docs/documents.md`) runs the complai
 
 A step that fails is logged and tried again on the next pass, and does not stop the other steps.
 
+Idempotency keys are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotten as `Tick` passes, at most 500 a tick. `Tick` and `MarkPublished` leave none.
+
 ## Not built, or waiting on others
 
-- **The workbench.** The complaints and conduct screens belong to the portal and app services, which do not yet call this module.
+- **The workbench** is built by the portal service: page `/complaints` and the routes under `/staff/v1/complaints` (`docs/channels.md`). It reads this module as JSON, and `crates/channels/tests/http.rs` runs it against `ComplaintsState`, so renaming a command, question or field here fails that test.
 - **Issuing letters.** The documents service does not yet answer `AcknowledgementDue`, `DeadlockReached` or `PopulationComplete` by issuing a document: that needs the complainant's contact details and the wording, which come from the customer master and templates not yet written.
-- **Idempotency keys are kept for ever**, except for `Tick` and `MarkPublished`, which are sent every few seconds and leave none. The rest are small, but there is no pruning.
 - **The timer values** in tests are short for testing. The real periods come from the conduct regime and the scheme's terms and need compliance sign-off before go-live.

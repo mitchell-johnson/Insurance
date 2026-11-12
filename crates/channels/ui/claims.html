@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claims console</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Claims console</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<section><h2>Work queue</h2><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
+<section><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required></div><button>Show</button></div></form><div id="c-msg" aria-live="polite"></div>
+<div id="claim" hidden><h2 id="c-title"></h2><div id="c-summary"></div><h2>Evidence outstanding</h2><div id="c-evidence"></div></div></section>
+<section><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
+<p class="muted">You act as yourself: the claims module records you and your purpose, and your authority there decides what you may do. A decision above your limits waits for a second signature.</p></form><div id="act-msg" aria-live="polite"></div></section>
+<section><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition (for a run)</label><input id="b-part" type="number" min="0"></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><pre id="b-out"></pre></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/claims/";
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (body) => api(R, "POST", BASE + "commands", body);
+const list = (text) => String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
+const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+
+const QUEUES = ["health", "lump_sum", "income_protection_new", "income_protection_ongoing", "group", "complex_large", "medical_officer", "rehabilitation", "recoveries", "quality_review"];
+const TASKS = ["claimant_conversation", "case_conference", "medical_opinion", "membership_evidence", "rehabilitation", "medical_review", "income_declaration", "return_to_work", "senior_review", "quality_review", "repayment_arrangement", "proof_of_life"];
+const TYPES = ["death", "terminal_illness", "trauma", "total_permanent_disability", "income_protection", "health", "premium_waiver"];
+// Every action a person takes. A field is [key, label, kind, options]; a dotted key nests. "partition" goes beside the command.
+const C = ["claim", "Claim", "text"];
+const ACTIONS = {
+  notify: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", TYPES], ["event_date", "Event date", "date"],
+    ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
+  assign: [C, ["to", "To (staff reference)", "text"]],
+  record_contact: [C], escalate: [C], open_file: [C],
+  identify_life: [C, ["party", "Life (customer reference)", "text"]],
+  record_cause: [C, ["cause_code", "Cause code", "text"]],
+  cover_check: [C, ["relied_on", "Facts relied on (comma separated)", "list"]],
+  request_evidence: [C, ["evidence", "Evidence reference", "text"], ["kind", "Kind", "text"], ["from", "From", "text"]],
+  receive_evidence: [C, ["evidence", "Evidence reference", "text"], ["vault_ref", "Document in the vault", "text"], ["cost_minor", "Cost to pay the provider", "money"]],
+  open_task: [C, ["task", "Task reference", "text"], ["kind", "Kind", "select", TASKS], ["due", "Due (optional)", "optdate"]],
+  complete_task: [C, ["task", "Task reference", "text"], ["outcome", "Outcome", "text"], ["attendees", "Attendees (comma separated)", "list"], ["vault_ref", "Record in the vault (optional)", "optional"]],
+  decide_reserve: [C, ["request.reserve.amount_minor", "Reserve", "money"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_admit: [C, ["request.admit.amount_minor", "Amount (blank for the sum insured)", "optmoney"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_decline: [C, ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_withdraw: [C, ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_end_benefit: [C, ["request.end_benefit.end", "Ends on", "date"], ["request.end_benefit.reason", "Reason", "select", ["recovered", "benefit_period_end", "expiry_age", "death"]], ["reasons", "Reason codes (comma separated)", "list"]],
+  approve: [C], refuse: [C],
+  reopen: [C, ["basis", "Basis", "select", ["internal_review", "dispute_scheme", "recurrence", "new_evidence"]], ["reserve_minor", "Reserve", "money"]],
+  verify_payee: [C, ["party", "Payee (customer reference)", "text"], ["kind", "Kind", "select", ["policyholder", "beneficiary", "estate", "trust", "assignee", "provider"]], ["account_ref", "Account reference", "text"], ["name_check_ref", "Name check reference", "text"], ["screening_ref", "Screening reference", "text"], ["authority_doc", "Authority document (optional)", "optional"]],
+  pay: [C, ["payment_ref", "Payment reference", "text"], ["amount_minor", "Amount", "money"]],
+  pay_cost: [C, ["payment_ref", "Payment reference", "text"], ["item", "Evidence or task", "text"], ["provider", "Provider", "text"]],
+  pay_interest: [C, ["payment_ref", "Payment reference", "text"], ["party", "Lender or assignee", "text"]],
+  start_waiver: [C, ["from", "Waive from", "date"]],
+  declare_income: [C, ["from", "From", "date"], ["other_income_minor", "Other income a month", "money"]],
+  raise_overpayment: [C, ["overpayment", "Overpayment reference", "text"], ["amount_minor", "Amount", "money"], ["cause", "Cause", "select", ["insurer_error", "late_information", "claimant_false_declaration", "late_death_notification", "provider_billing"]], ["good_faith", "Received in good faith", "bool"]],
+  record_repayment: [C, ["overpayment", "Overpayment reference", "text"], ["amount_minor", "Amount repaid", "money"]],
+  prepare_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"], ["kind", "Kind", "select", ["benefit", "provider"]], ["benefit_date", "Benefit date", "date"]],
+  approve_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
+  cancel_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
+};
+const commandName = (action) => action.startsWith("decide_") ? "decide" : action;
+
+function fields() {
+  const spec = ACTIONS[$("a-command").value] || [];
+  put($("a-fields"), spec.map(([key, label, kind, options], n) => {
+    const id = "f-" + n;
+    const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
+      : kind === "bool" ? h("select", { id }, h("option", { value: "true" }, "Yes"), h("option", { value: "false" }, "No"))
+      : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" || kind === "optmoney" ? "number" : "text",
+          step: kind === "money" || kind === "optmoney" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
+          required: !["optional", "optdate", "optmoney", "list"].includes(kind), value: key === "claim" ? $("c-id").value : null });
+    return h("div", {}, h("label", { for: id }, label), input);
+  }));
+}
+put($("a-command"), Object.keys(ACTIONS).map((c) => h("option", { value: c }, words(c).replace(/^decide /, "decide: "))));
+$("a-command").addEventListener("change", fields);
+$("act").addEventListener("submit", run($("act-msg"), async () => {
+  const action = $("a-command").value, name = commandName(action), inner = {}, body = { purpose: $("a-purpose").value };
+  ACTIONS[action].forEach(([key, , kind], n) => {
+    const raw = $("f-" + n).value;
+    const value = kind === "bool" ? raw === "true" : kind === "list" ? list(raw) : kind === "int" ? Number(raw) : kind === "money" ? Math.round(Number(raw) * 100)
+      : kind === "optmoney" ? (raw.trim() ? Math.round(Number(raw) * 100) : null) : kind === "optional" || kind === "optdate" ? (raw.trim() || null) : raw;
+    if (key === "partition") { body.partition = value; return; }
+    const path = key.split("."); let at = inner;
+    for (const part of path.slice(0, -1)) at = at[part] = at[part] || {};
+    at[path[path.length - 1]] = value;
+  });
+  if (action === "decide_decline" || action === "decide_withdraw") inner.request = action.slice(7);
+  if (action === "notify") delete inner.reasons;
+  body.command = { [name]: inner };
+  const done = await send(body);
+  if (inner.claim && (inner.claim === $("c-id").value || action === "notify")) { $("c-id").value = inner.claim; await show(inner.claim); }
+  return `Done: ${words(action)}${done.duplicate ? " (already done)" : ""}.`;
+}));
+
+async function show(id) {
+  const c = await ask("claim", { claim: id }), v = c.view;
+  $("claim").hidden = false; $("c-title").textContent = `${v.claim}: ${words(v.claim_type)}, ${words(v.status)}`;
+  put($("c-summary"), table(["Policy", "Partition", "Owner", "Notified", "Decision due", "Admitted", "Paid", "Next benefit", "Repayment asked"],
+    [[c.policy, c.partition, v.owner || "unassigned", v.notified_on, v.decision_due || "", money(v.admitted_minor), money(v.paid_minor), v.next_benefit || "", money(v.repayment_asked_minor)]]));
+  put($("c-evidence"), (v.evidence_outstanding || []).length ? table(["Evidence", "Kind", "Due"], v.evidence_outstanding.map(([e, kind, due]) => [e, kind, due])) : h("p", { class: "muted" }, "Nothing outstanding."));
+  fields();
+}
+$("lookup").addEventListener("submit", run($("c-msg"), () => show($("c-id").value)));
+$("queue").addEventListener("submit", run($("q-msg"), async () => {
+  const { rows } = await ask("queue", { queue: $("q-name").value });
+  put($("q-rows"), rows.length ? table(["Claim", "Partition", "Priority", "Days open", "Owner", ""], rows.map((r) => [r.claim, r.partition, r.priority, r.age_days, r.owner || "unassigned",
+    h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), async () => { $("c-id").value = r.claim; await show(r.claim); }) } }, "Open")])) : h("p", { class: "muted" }, "Nothing in this queue."));
+}));
+put($("q-name"), QUEUES.map((q) => h("option", { value: q }, words(q))));
+$("books").addEventListener("submit", run($("b-msg"), async () => {
+  const what = $("b-what").value;
+  const answer = what === "remittance" ? await ask("remittance", { run: $("b-run").value, partition: $("b-part").value }) : await ask(what);
+  $("b-out").textContent = JSON.stringify(answer, null, 2);
+}));
+signIn(R).then(async () => {
+  const me = await ask("me");
+  $("me").textContent = `You act as ${me.staff}. The ledger has ${me.partitions} partitions; a claim's actions go to the one holding it.`;
+  fields();
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

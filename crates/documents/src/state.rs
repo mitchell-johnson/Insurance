@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use ic_core::interest::InterestEvent;
 use ic_core::{PartyId, PolicyId, PolicyStatus, Reject, Standing};
 use ic_log::StateMachine;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,10 @@ use crate::template::{sha256_hex, Part, PartRef, Template, TemplateRef};
 /// The most items one command may carry or one tick may process. A command
 /// does a bounded amount of work, like every command in the core.
 pub const MAX_CHUNK: usize = 200;
+
+/// How long an idempotency key is remembered. A repeat of a command older
+/// than this is judged on its merits, like a new one.
+pub const KEEP_KEYS_DAYS: i64 = 90;
 
 /// The default retention, in days, where no schedule has been activated:
 /// seven years. The periods need legal review; see `docs/documents.md`.
@@ -103,6 +108,10 @@ pub struct DocumentsState {
     /// The latest time any command has carried.
     pub now: Option<DateTime<Utc>>,
     policy_ended: BTreeMap<PolicyId, NaiveDate>,
+    /// Interests in each policy, by the core's interest id, as its events
+    /// reported them.
+    #[serde(default)]
+    interests: BTreeMap<PolicyId, BTreeMap<String, StandingInterest>>,
     /// Destruction dates and the documents due on them.
     expiry: BTreeMap<NaiveDate, BTreeSet<String>>,
     #[serde(with = "pairs")]
@@ -111,6 +120,10 @@ pub struct DocumentsState {
     /// Vault objects to delete, by document.
     pub pending_deletes: BTreeMap<String, String>,
     results: BTreeMap<String, StoredResult>,
+    /// The remembered keys, oldest first, with the day each was stored, so
+    /// that the old ones can be forgotten.
+    #[serde(default)]
+    key_log: VecDeque<(NaiveDate, String)>,
 }
 
 /// The local date in New Zealand, which is the date notices and retention
@@ -159,6 +172,8 @@ impl StateMachine for DocumentsState {
         // pass or acknowledging the stream twice changes nothing the second
         // time, so the keys of these frequent commands are not kept.
         let remember = !matches!(env.command, Command::ObserveCoreEvents { .. } | Command::Tick | Command::MarkPublished { .. });
+        let is_tick = matches!(env.command, Command::Tick);
+        let today = ctx.today;
         let result = if !env.command.allowed_callers().contains(&env.caller.as_str()) {
             reject("not_allowed", format!("{} may not send {}", env.caller, env.command.name()))
         } else if env.actor.is_empty() {
@@ -188,6 +203,7 @@ impl StateMachine for DocumentsState {
         };
         self.unpublished.extend(events.iter().cloned());
         if remember {
+            self.key_log.push_back((today, env.key.clone()));
             self.results.insert(
                 env.key,
                 StoredResult {
@@ -195,6 +211,8 @@ impl StateMachine for DocumentsState {
                     error: result.clone().err(),
                 },
             );
+        } else if is_tick {
+            self.forget_old_keys(today);
         }
         Applied {
             index,
@@ -208,6 +226,26 @@ impl StateMachine for DocumentsState {
 impl DocumentsState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A key guards against a command sent twice, which happens within
+    /// minutes. Keys older than [`KEEP_KEYS_DAYS`] are forgotten as time
+    /// passes, a bounded number at a time, so the state does not grow for ever.
+    fn forget_old_keys(&mut self, today: NaiveDate) {
+        for _ in 0..MAX_CHUNK {
+            match self.key_log.front() {
+                Some((stored, _)) if *stored + Duration::days(KEEP_KEYS_DAYS) < today => {}
+                _ => break,
+            }
+            if let Some((_, key)) = self.key_log.pop_front() {
+                self.results.remove(&key);
+            }
+        }
+    }
+
+    /// How many idempotency keys are remembered.
+    pub fn remembered_keys(&self) -> usize {
+        self.results.len()
     }
 
     fn dispatch(&mut self, command: Command, ctx: &mut Ctx) -> Result<(), Reject> {
@@ -636,6 +674,24 @@ impl DocumentsState {
         }
         if issue.recipients.iter().any(|r| r.channels.is_empty() && !proof) {
             return reject("invalid", "every recipient needs a channel");
+        }
+        if let Some(policy) = &issue.policy {
+            let from_trigger = issue
+                .trigger_event
+                .as_ref()
+                .and_then(|event| self.triggers.get(&format!("{event}:{:?}", issue.kind)))
+                .is_some_and(|t| !t.copy_to.is_empty());
+            if from_trigger || matches!(issue.kind, DocumentKind::LapseNotice | DocumentKind::SuspensionNotice) {
+                // A lender the policy is assigned to must hear that it is
+                // in arrears, suspended or ended as the owner does.
+                let owed = self.interested_parties(policy, ctx.today);
+                if let Some(missing) = owed.iter().find(|p| !issue.recipients.iter().any(|r| r.party == **p)) {
+                    return reject(
+                        "interested_party_missing",
+                        format!("{} has an interest in the policy and must receive this document", missing.0),
+                    );
+                }
+            }
         }
         if issue.kind.class() == DocumentClass::MandatoryNotice && issue.trigger_event.is_none() {
             // A notice renders after the event that requires it, so it can
@@ -1451,11 +1507,17 @@ impl DocumentsState {
         let cutoff = ctx.today - days(self.settings.live_event_days);
         for r in records.into_iter().filter(|r| r.seq > checkpoint) {
             self.note_policy_end(&r, ctx);
+            // Who holds an interest is a standing fact, wanted however old
+            // the event that reported it.
+            self.note_interest(&r);
             if r.business_date < cutoff {
                 // Old events are history being replayed, not news.
                 continue;
             }
-            for trigger in crate::triggers::triggers(&r) {
+            for mut trigger in crate::triggers::triggers(&r) {
+                if copied_to_interests(trigger.kind) {
+                    trigger.copy_to = self.interested_parties(&trigger.policy, trigger.business_date);
+                }
                 ctx.events.push(Event::DocumentRequired {
                     trigger: trigger.id.clone(),
                     policy: trigger.policy.clone(),
@@ -1466,6 +1528,51 @@ impl DocumentsState {
         }
         self.checkpoints.insert(partition, expected);
         Ok(())
+    }
+
+    /// A lender or other party with an interest in a policy is owed a copy
+    /// of the notices that warn it may end: the core's events say who they are.
+    fn note_interest(&mut self, record: &ic_core::EventRecord) {
+        let ic_core::Event::Interest(event) = &record.event else { return };
+        match event {
+            InterestEvent::Recorded {
+                policy,
+                interest,
+                party,
+                effective_from,
+                ..
+            } => {
+                self.interests.entry(policy.clone()).or_default().insert(
+                    interest.clone(),
+                    StandingInterest {
+                        party: party.clone(),
+                        from: *effective_from,
+                        until: None,
+                    },
+                );
+            }
+            InterestEvent::Released {
+                policy, interest, effective, ..
+            } => {
+                if let Some(held) = self.interests.get_mut(policy).and_then(|of| of.get_mut(interest)) {
+                    held.until = Some(*effective);
+                }
+            }
+            InterestEvent::ConsentRecorded { .. } | InterestEvent::ConsentUsed { .. } => {}
+        }
+    }
+
+    /// The parties whose interest in a policy stands on a date, each once.
+    pub fn interested_parties(&self, policy: &PolicyId, on: NaiveDate) -> Vec<PartyId> {
+        let standing: BTreeSet<&PartyId> = self
+            .interests
+            .get(policy)
+            .into_iter()
+            .flat_map(|of| of.values())
+            .filter(|i| i.stands_on(on))
+            .map(|i| &i.party)
+            .collect();
+        standing.into_iter().cloned().collect()
     }
 
     /// Contractual documents are kept for the life of the policy and a
@@ -1773,6 +1880,16 @@ pub(crate) fn standing_notice(to: Option<Standing>) -> Option<(DocumentKind, &'s
         Some(Standing::Suspended) => Some((DocumentKind::SuspensionNotice, "suspension")),
         Some(Standing::Paid) | None => None,
     }
+}
+
+/// Whether a document the core's events require is copied to the parties
+/// with an interest in the policy: the notices of arrears and suspension,
+/// and the letter that says the policy has ended.
+fn copied_to_interests(kind: DocumentKind) -> bool {
+    matches!(
+        kind,
+        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::GeneralCorrespondence
+    )
 }
 
 /// Maps whose keys are not plain strings are saved as lists of pairs,

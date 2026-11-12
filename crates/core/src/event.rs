@@ -97,6 +97,8 @@ pub struct LifeInfo {
     pub sex: Option<Sex>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoker: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
 }
 
 impl LifeInfo {
@@ -108,6 +110,19 @@ impl LifeInfo {
             date_of_birth: None,
             sex: None,
             smoker: None,
+            occupation_class: None,
+        }
+    }
+
+    /// A life with the rating factors given.
+    pub fn with_factors(life: LifeId, party: Option<PartyId>, factors: Option<&crate::policy::LifeFactors>) -> Self {
+        Self {
+            life,
+            party,
+            date_of_birth: factors.and_then(|f| f.date_of_birth),
+            sex: factors.and_then(|f| f.sex),
+            smoker: factors.and_then(|f| f.smoker),
+            occupation_class: factors.and_then(|f| f.occupation_class.clone()),
         }
     }
 }
@@ -202,6 +217,11 @@ pub enum Event {
         policy: PolicyId,
         layer: LayerInfo,
         origin: LayerOrigin,
+        /// The layer this one takes the place of when underwriting changed
+        /// its terms and nothing else: the same cover carried on, not new
+        /// business.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<u32>,
     },
     /// A layer stopped from a date: an underwritten layer given up, reduced
     /// or ended because the member left.
@@ -212,6 +232,23 @@ pub enum Event {
         life: LifeId,
         effective: NaiveDate,
         sum_insured_minor: i64,
+    },
+    /// A layer was cut in part: it ends on `effective` and the part kept
+    /// carries on as a new layer. Published before the `LayerEnded` and
+    /// `LayerAdded` that record the two halves, so that a reader that keeps
+    /// something per layer (commission terms, clawback exposure) can carry
+    /// the kept share across instead of treating it as cover given up and
+    /// new cover written.
+    LayerReduced {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        continued_as: u32,
+        effective: NaiveDate,
+        /// The layer's sum insured before the cut.
+        sum_insured_minor: i64,
+        /// What carries on in the new layer.
+        kept_minor: i64,
     },
     /// The part of a retrospective adjustment that is underwriting loading.
     /// It names no member: loadings reach the scheme only in aggregate.
@@ -286,6 +323,51 @@ pub enum Event {
     ReceiptReversed {
         policy: PolicyId,
         receipt: String,
+        amount_minor: i64,
+    },
+    /// A scheme member was billed for cover the member pays for themselves:
+    /// a period's premium, or an adjustment to periods already billed.
+    /// Sensitive: the amount can include an underwriting loading, so it
+    /// goes to the member and never to the employer.
+    MemberPremiumBilled {
+        policy: PolicyId,
+        life: LifeId,
+        receivable: u32,
+        period_start: NaiveDate,
+        period_end: NaiveDate,
+        total_minor: i64,
+        adjustment: bool,
+    },
+    /// Money from a scheme member, set against what the member owes; the
+    /// rest is the member's credit.
+    MemberReceiptApplied {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        allocated_minor: i64,
+        to_credit_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
+    MemberReceiptReversed {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        amount_minor: i64,
+    },
+    /// A member's credit was set against what the member owes.
+    MemberCreditApplied {
+        policy: PolicyId,
+        life: LifeId,
+        amount_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
+    MemberCreditRefunded {
+        policy: PolicyId,
+        life: LifeId,
         amount_minor: i64,
     },
     /// What the policy owes after a command changed it. Read models and cash
@@ -460,6 +542,10 @@ pub enum Event {
         /// identified.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         party: Option<PartyId>,
+        /// The member's rating factors as last recorded, for the extracts.
+        /// Sensitive like any life's factors; absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        info: Option<LifeInfo>,
     },
     MemberLeft {
         policy: PolicyId,
@@ -473,6 +559,10 @@ pub enum Event {
         /// The member's cover on the details just notified.
         #[serde(default)]
         covers: Vec<MemberCover>,
+        /// The member's rating factors as last recorded, for the extracts.
+        /// Sensitive like any life's factors; absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        info: Option<LifeInfo>,
     },
     MemberIdentified {
         policy: PolicyId,

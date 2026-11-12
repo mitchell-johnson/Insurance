@@ -6,7 +6,7 @@
 
 - **The channel module** (`state.rs`) runs as a Raft group named `channels` on the ledger nodes, registered in `crates/node`. It reads the core's events and is told the rest by the other modules. Nothing in it reads a clock: every command carries its time.
 - **The portal service** (`http.rs`, `main.rs`, binary `ic-portal`) is a gateway with no state of its own. It checks the caller's token, asks the module a question or proposes a command, and answers. Any number of copies can run; losing one loses nothing.
-- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/ops`, `/status`. They load nothing from anywhere else.
+- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/ops`, `/status`. They load nothing from anywhere else.
 - **The customer app** is not in this repository. Its whole contract is the `/app/v1` API below, including the offline sync protocol. The native app belongs with the bank's app.
 
 ## Who signs in, and how
@@ -101,6 +101,99 @@ One place to see and resolve money held from an adviser, a provider or any other
 - **Proof of debt**: an extract of what the party owes, for a liquidator.
 - **Carrying it out.** An approved action is handed to the module that owns the money, which reports back. The workbench records the outcome; it does not move money.
 
+## The complaints and conduct workbench
+
+`/complaints` is the staff screen for the complaints module (`docs/complaints.md`): recording a complaint wherever it is heard, the queue (vulnerable complainants first, then the nearest deadline), a complaint's file and running timers, every action on a complaint, referral to a forum, the register and the report for a period, and conduct cases with their population, sample and regulator requests.
+
+That module takes each command from a named calling service. The workbench is those services for people, and a person's seats follow from their staff actions:
+
+| Staff action | Seat (the caller that module sees) |
+| --- | --- |
+| `complaints.record` | `intake`: record a complaint, nothing else |
+| `complaints.handle` | `complaints` and `intake`: everything on a complaint, and the register |
+| `complaints.legal` | `legal`: forums and conduct cases |
+| `complaints.conduct` | `conduct`: conduct cases |
+| `complaints.vulnerability_trained` | no seat: marks the person as trained to work with vulnerable customers |
+
+A person's **authority level** is the limit `complaints_authority` in their authority profile.
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/complaints/me` | Your seats, authority level and training. |
+| `GET /staff/v1/complaints/{question}` | `queue`, `complaint?id=`, `running?id=`, `subject_record?id=`, `complaints_of?party=`, `register?from=&to=`, `report?from=&to=` for the complaints team, legal and conduct; `open_conduct_cases` and `conduct_case?id=` for conduct and legal only. |
+| `POST /staff/v1/complaints/commands` | `{ "as": "<seat>", "command": { ... } }` in that module's own JSON, with an `Idempotency-Key`. |
+
+What the service decides and the person cannot:
+
+- **The seat.** A command goes as a seat the person holds or not at all. Commands only that module's own services send (`tick`, `mark_published`, `activate_timers`, the population commands) are refused whatever the seat.
+- **Who is asking.** A complaint's file is asked for as the person signed in, and that module gives it only to someone the case has let in. Conduct cases are asked for in the role the person holds.
+- **Authority and training.** `assign` carries the handler's authority level and training, and `record_remediation` the authoriser's level (the sender, unless the command names a colleague). Both are written in from the staff records, replacing anything sent. Someone who does not work complaints cannot be named.
+
+That module's refusals come back as `409` with its own code; a file the case has not opened to the person is `403`; no leader is `503 complaints_unavailable`. The portal service holds no complaint data, and the two modules share no code: `tests/http.rs` runs the workbench against that module's own state machine.
+
+## The unit pricing console
+
+`/pricing` is the staff screen for the unit pricing module (`docs/unit-pricing.md`): the prices waiting for a person with their checks, valuation files that could not be read, prices overdue, the valuation received for a fund and date, prices in force, funds and their suspensions, and price errors with their corrections and remediation. From it a preparer prepares a price, an approver approves it (accepting each failed check with a reason when it is held) or rejects it, and a lead suspends and resumes a fund, raises and closes a price error, and offers a price again to partitions that refused it.
+
+The portal service holds none of this. It passes the console's questions to the `unit-pricing` module on the nodes and sends each command there as the person who gave it, under the caller `unit-pricing-console`, with the roles their staff templates give them:
+
+| Staff action | Role in the unit pricing module |
+| --- | --- |
+| `unit_pricing.view` | none: opens the console to read |
+| `unit_pricing.prepare` | `unit_pricing_preparer` |
+| `unit_pricing.approve` | `unit_pricing_approver` |
+| `unit_pricing.lead` | `unit_pricing_lead` |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/unit-pricing/me` | Whether you may open the console, and your roles. |
+| `GET /staff/v1/unit-pricing/{question}` | One of `status`, `funds`, `work`, `errors`, `price?id=`, `error?id=`, `prices?fund=&from=&to=`, `valuations?fund=&pricing_date=`, `late?as_at=`. That module's other questions are not asked from here. |
+| `POST /staff/v1/unit-pricing/commands` | One of `prepare_price`, `approve_price`, `reject_price`, `suspend_fund`, `resume_fund`, `raise_price_error`, `close_error`, `republish`, in that module's own JSON, with an `Idempotency-Key`. |
+
+Someone without a unit pricing action is refused before anything reaches that module, and a command is refused here if the person lacks its role. That module checks the role again, enforces that an approver is never the preparer, and keeps who did what; its refusals come back as `409` with its own code (`403` for `unauthorised`). If it has no leader the console answers `503 unit_pricing_unavailable`. Valuation files arrive through the administrator's storage account, not the console. The two modules share no code; `tests/http.rs` runs the console against that module's own state machine.
+
+## The claims console
+
+`/claims` is the screen claims staff work from: the work queues across every partition, a claim as the claimant sees it (status, owner, decision due, evidence outstanding, admitted and paid), and every action a person takes on a claim, from a phone notification through assessment, decisions and their second signature, payees and payments, to overpayments and payment runs. It also shows the book of claims in payment, the management report and a run's remittance.
+
+Claims live inside the core on the partition of each claim's policy (`docs/claims.md`), so the portal service talks to the core's partitions, not to a module of its own:
+
+- **Who.** A member of staff whose templates hold `claims.work` gets in. Every command goes under the caller `claims`, and every `actor` in it is replaced with the person signed in and the purpose they typed, whatever the page sent. The purpose is required and recorded by the claims module. What a person may decide is the claims module's authority book, keyed by the same staff ID as the workforce directory; someone the book does not know is refused `403 unknown_staff`, and refusals for authority, ownership or access come back as `403` with that module's code, anything else as `409`.
+- **Where.** A command naming a claim goes to the partition that holds it (`404 unknown_claim` when none does; a policy that is moving partition answers that briefly, so try again). A notification goes to the partition holding its policy. A payment run is on one partition, which the person names.
+- **Not from people.** Configuration, acknowledgements (documents), bank outcomes and run confirmation (payments), deaths (customer master), reinsurance notices, non-disclosure outcomes (underwriting) and the controls are refused here whatever the person's roles.
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/claims/me` | Your staff ID and how many partitions the ledger has (`IC_PARTITIONS`). |
+| `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=`, `book`, `report`, `remittance?run=&partition=`. |
+| `POST /staff/v1/claims/commands` | `{ "purpose", "partition"?, "command" }`, the command in the claims module's own JSON, with an `Idempotency-Key`. |
+
+`503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
+
+## The finance console
+
+`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, and retries a stalled feed.
+
+As with the other consoles, the portal service holds none of it. It passes the questions to the `finance` module on the nodes and sends each command as the person who gave it, under the caller `finance-console`:
+
+| Staff action | Role in the finance ledger |
+| --- | --- |
+| `finance.view` | none: opens the console to read |
+| `finance.operate` | `finance_operator` |
+| `finance.approve` | `finance_approver` |
+| `finance.lead` | `finance_lead` |
+| `finance.actuary` | `appointed_actuary` |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/finance/me` | Whether you may open the console, and your roles. |
+| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, with that question's fields as query parameters. |
+| `POST /staff/v1/finance/commands` | One of that module's commands in its own JSON, with an `Idempotency-Key`. Commands only its own services send (the configuration, the core's event feed, Merkle roots, extracts, conduct facts, and the check and aged item reports other modules make) are refused. |
+
+- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range.
+- **Who may.** The ledger checks every role itself and keeps maker and checker apart whatever roles one person holds. A refusal for want of a role comes back as `403 authority`, any other as `409` with its code, and `503 finance_unavailable` when it has no leader.
+- **Not on the page.** A chart of accounts, a close configuration and a return definition are proposed from their files through the command route; the page only approves them.
+
 ## Operations console and status page (addendum entry 6)
 
 `IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which region normally leads. From that and what the nodes report:
@@ -161,6 +254,7 @@ node crates/channels/tests/browser/check.js
 
 ## Known gaps
 
+- **Claims staff see the claimant's view of a claim.** The claims module is adding a staff view of a claim's work (tasks, evidence, the decision waiting for a signature, payees, schedule, overpayments, timers); until it lands the console shows the claimant's view and the queues. Clinical detail is shown only after the person opens the file, which that module logs with its purpose.
 - **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app.
 - **New business is not in the adviser portal.** Quotes and proposals are underwriting's API. The portal shows the book, standing, held money and servicing requests.
 - **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).

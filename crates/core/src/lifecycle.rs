@@ -14,10 +14,12 @@ use crate::catalog::Catalog;
 use crate::command::IssuePolicy;
 use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::machine::{CoreState, Ctx, Reject, MAX_MEMBERSHIP_CHUNK};
-use crate::policy::{CancellationRecord, Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
+use crate::policy::{
+    CancellationRecord, Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, Policy, PolicyStatus, Standing,
+};
 use crate::postings::{div_half_even, PostingSet};
 use crate::premium::{member_period_premium, member_sum_insured, retail_period_premium};
-use crate::{arrears, billing, cash, earning, LifeId};
+use crate::{arrears, billing, cash, earning, voluntary, LifeId};
 
 /// How far back a policy may be incepted or a change backdated.
 pub(crate) const BACKDATING_LIMIT_DAYS: u64 = 400;
@@ -27,18 +29,12 @@ pub(crate) fn life_infos(policy: &Policy) -> Vec<LifeInfo> {
         .lives
         .values()
         .map(|l| {
-            let factors = l.factors.as_of(NaiveDate::MAX);
-            LifeInfo {
-                life: l.id.clone(),
-                party: match &l.kind {
-                    LifeKind::Named { party } => Some(party.clone()),
-                    LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
-                    LifeKind::Pool { .. } => None,
-                },
-                date_of_birth: factors.and_then(|f| f.date_of_birth),
-                sex: factors.and_then(|f| f.sex),
-                smoker: factors.and_then(|f| f.smoker),
-            }
+            let party = match &l.kind {
+                LifeKind::Named { party } => Some(party.clone()),
+                LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+                LifeKind::Pool { .. } => None,
+            };
+            LifeInfo::with_factors(l.id.clone(), party, l.factors.as_of(NaiveDate::MAX))
         })
         .collect()
 }
@@ -178,6 +174,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
                 exclusions: spec.exclusions,
                 loading_itemised: false,
                 rated_from: None,
+                member_pays: MemberPays::Nothing,
             });
         }
     }
@@ -216,6 +213,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         claims: BTreeMap::new(),
         refunds_raised: BTreeMap::new(),
         payouts: BTreeMap::new(),
+        member_accounts: BTreeSet::new(),
         interests: BTreeMap::new(),
         payments: BTreeMap::new(),
         cessions: BTreeMap::new(),
@@ -390,6 +388,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             exclusions,
                             loading_itemised: false,
                             rated_from: None,
+                            member_pays: MemberPays::Nothing,
                         });
                         added.push(LayerInfo {
                             cover: cover.code.clone(),
@@ -406,6 +405,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                         policy: policy.id.clone(),
                         layer,
                         origin: LayerOrigin::Indexation,
+                        continues: None,
                     });
                 }
             }
@@ -540,6 +540,9 @@ pub(crate) fn close_out(
     cover_ends: NaiveDate,
     detail: BTreeMap<String, String>,
 ) -> Result<(), Reject> {
+    // What members owe for their own cover is closed first, so that what
+    // they paid ahead goes back to them and not to the policyholder.
+    voluntary::close_all(ledger, product, policy, ctx)?;
     let c = policy.currency;
     let mut set = PostingSet::new();
     let mut refund_fine: i128 = 0;
@@ -621,6 +624,16 @@ pub(crate) fn reinstate(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     if (ctx.date - lapse.lapsed_on).num_days() > window {
         return Err(Reject::new("window_closed", "the reinstatement window has closed; this needs a new policy"));
     }
+    // Paying the arrears is enough for a while. After that the insurer has
+    // been off risk long enough to ask about the life's health again.
+    let approval = lapse.approval.clone().filter(|a| a.valid_until >= ctx.date);
+    let evidence_free = product.arrears().and_then(|r| r.reinstatement_evidence_free_days);
+    if approval.is_none() && evidence_free.is_some_and(|free| (ctx.date - lapse.lapsed_on).num_days() > free as i64) {
+        return Err(Reject::new(
+            "underwriting_required",
+            "the policy has been lapsed too long to reinstate on payment alone; it needs underwriting's decision",
+        ));
+    }
     // What the missed periods will cost, priced before anything is written.
     let mut missed: i64 = 0;
     if !policy.covers.values().any(|c| c.formula_driven) {
@@ -665,5 +678,10 @@ pub(crate) fn reinstate(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         earning::earn_through(ledger, policy, ctx, yesterday)?;
     }
     arrears::refresh(&product, policy, ctx);
+    // Underwriting's terms apply from today: the days before were priced,
+    // and are owed, on the terms the cover lapsed with.
+    for terms in approval.into_iter().flat_map(|a| a.terms) {
+        crate::underwritten::reinstated_terms(ledger, catalog, policy, ctx, terms)?;
+    }
     Ok(())
 }

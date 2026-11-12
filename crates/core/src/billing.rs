@@ -17,7 +17,7 @@ use crate::machine::{Ctx, Reject};
 use crate::policy::{Policy, PolicyStatus, Receivable, ReceivableKind};
 use crate::postings::{div_half_even, scale_map, PostingSet};
 use crate::premium::retail_period_premium;
-use crate::{cash, group};
+use crate::{cash, group, LifeId};
 
 /// A bill in signed minor units: negative for a credit adjustment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -84,6 +84,23 @@ pub(crate) fn raise_receivable(
     due: NaiveDate,
     entry_kind: &str,
 ) -> Result<Option<u32>, Reject> {
+    raise_receivable_for(ledger, policy, ctx, bill, kind, period, due, entry_kind, None)
+}
+
+/// Raise a receivable owed by the policyholder, or by one scheme member for
+/// cover the member pays for themselves.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn raise_receivable_for(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    bill: &Bill,
+    kind: ReceivableKind,
+    period: (NaiveDate, NaiveDate),
+    due: NaiveDate,
+    entry_kind: &str,
+    payer: Option<&LifeId>,
+) -> Result<Option<u32>, Reject> {
     if bill.is_zero() {
         return Ok(None);
     }
@@ -122,40 +139,73 @@ pub(crate) fn raise_receivable(
         net_fine: bill.net.iter().map(|(k, v)| (k.clone(), *v as i128 * FINE_PER_MINOR)).collect(),
         earned_fine: BTreeMap::new(),
         closed: false,
+        payer: payer.cloned(),
         entry: ctx.entries.last().map(|e| e.id),
         settled_on: None,
     });
-    settle_credits(ledger, policy, ctx)?;
+    settle_credits(ledger, policy, ctx, payer)?;
     Ok(Some(id))
 }
 
 /// A credit adjustment reduces what is owed on the oldest open receivables;
-/// anything left over becomes a credit balance in policy suspense.
-fn settle_credits(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+/// anything left over becomes a credit balance in policy suspense. A member's
+/// credit is set only against what that member owes, and what is left over
+/// is the member's money, not the scheme's.
+fn settle_credits(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, payer: Option<&LifeId>) -> Result<(), Reject> {
+    let theirs = |r: &Receivable| r.payer.as_ref() == payer;
     let mut credit: i64 = -policy
         .receivables
         .iter()
-        .filter(|r| r.outstanding_minor < 0)
+        .filter(|r| r.outstanding_minor < 0 && theirs(r))
         .map(|r| r.outstanding_minor)
         .sum::<i64>();
     if credit == 0 {
         return Ok(());
     }
-    let owed: i64 = policy.receivables.iter().filter(|r| r.outstanding_minor > 0).map(|r| r.outstanding_minor).sum();
+    let owed: i64 = policy
+        .receivables
+        .iter()
+        .filter(|r| r.outstanding_minor > 0 && theirs(r))
+        .map(|r| r.outstanding_minor)
+        .sum();
     let to_suspense = (credit - owed).max(0);
     if to_suspense > 0 {
+        // Premium already paid is the policyholder's money again. Say how
+        // much of it had paid for cover, so commission earned on it goes back.
+        let credits: BTreeMap<u32, i64> = policy
+            .receivables
+            .iter()
+            .filter(|r| r.outstanding_minor < 0 && theirs(r))
+            .map(|r| (r.id, r.outstanding_minor))
+            .collect();
+        let net: BTreeMap<String, i64> = crate::counterparty::net_by_cover_type(&policy.receivables, &credits)
+            .into_iter()
+            .map(|(cover_type, amount)| (cover_type, (-(amount as i128) * to_suspense as i128 / credit as i128) as i64))
+            .filter(|(_, amount)| *amount > 0)
+            .collect();
+        if !net.is_empty() {
+            ctx.emit(Event::PremiumUnapplied {
+                policy: policy.id.clone(),
+                reference: "premium_credit".to_string(),
+                net_by_cover_type: net,
+            });
+        }
         let c = policy.currency;
         let mut set = PostingSet::new();
         set.debit(accounts::premium_receivable(&policy.id, c), to_suspense as i128, Dimensions::default());
-        set.credit(accounts::policy_suspense(&policy.id, c), to_suspense as i128, Dimensions::default());
+        let suspense = match payer {
+            Some(life) => accounts::member_suspense(&policy.id, life, c),
+            None => accounts::policy_suspense(&policy.id, c),
+        };
+        set.credit(suspense, to_suspense as i128, Dimensions::default());
         let postings = set.into_postings(ledger)?;
         ctx.post(ledger, "premium_credit_to_suspense", Some(policy), ctx.date, postings, BTreeMap::new())?;
     }
-    for r in policy.receivables.iter_mut().filter(|r| r.outstanding_minor < 0) {
+    for r in policy.receivables.iter_mut().filter(|r| r.outstanding_minor < 0 && theirs(r)) {
         r.outstanding_minor = 0;
     }
     credit -= to_suspense;
-    let mut open: Vec<&mut Receivable> = policy.receivables.iter_mut().filter(|r| r.outstanding_minor > 0).collect();
+    let mut open: Vec<&mut Receivable> = policy.receivables.iter_mut().filter(|r| r.outstanding_minor > 0 && theirs(r)).collect();
     open.sort_by_key(|r| (r.due, r.id));
     for r in open {
         let take = credit.min(r.outstanding_minor);

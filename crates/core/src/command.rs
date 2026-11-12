@@ -8,7 +8,7 @@ use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LifeFactors, LifeKind, ReopenedChoice, UnwindCause};
+use crate::policy::{LifeFactors, LifeKind, MemberPays, ReopenedChoice, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -108,6 +108,10 @@ pub struct ExcessLayer {
     /// The member agreed to the employer seeing this layer's loaded premium.
     #[serde(default)]
     pub loading_itemised: bool,
+    /// What of the layer's premium the member pays for themselves. Left
+    /// out, the employer pays for all of it.
+    #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
+    pub member_pays: MemberPays,
     /// The underwriting decision this layer comes from.
     pub reference: String,
 }
@@ -127,6 +131,45 @@ pub struct UnderwrittenLayer {
     pub exclusions: Vec<String>,
     /// The underwriting decision this layer comes from.
     pub reference: String,
+}
+
+/// Less cover for one life on a retail policy, at the owner's request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReduceCover {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// The cover the life keeps. Zero gives the cover up for this life.
+    pub sum_insured_minor: i64,
+}
+
+/// New underwriting terms on cover a life already has on a retail policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AlteredTerms {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// The terms from today. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The underwriting decision the terms come from.
+    pub reference: String,
+}
+
+/// Underwriting's decision that a lapsed policy may be reinstated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReinstatementTerms {
+    pub policy: PolicyId,
+    /// The underwriting decision.
+    pub reference: String,
+    /// The last day the decision can be relied on.
+    pub valid_until: NaiveDate,
+    /// Terms that differ from the ones the cover lapsed on, applied from
+    /// the day of reinstatement. Empty: reinstated on the terms it had.
+    #[serde(default)]
+    pub terms: Vec<crate::policy::LayerTerms>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,6 +309,19 @@ pub enum Command {
     /// the terms underwriting decided. The rest of a period already billed
     /// is billed as an adjustment, due today.
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
+    /// Change the underwriting terms on a life's cover from today. Each
+    /// layer ends and is written again with the same sum insured, origin
+    /// and rating date and the new terms; the days left of a period already
+    /// billed are billed or credited as an adjustment.
+    AlterUnderwrittenTerms(Box<AlteredTerms>),
+    /// Record underwriting's decision on a lapsed policy. `Reinstate` needs
+    /// it once the lapse has run longer than the product's evidence-free
+    /// days, and applies its terms from the day of reinstatement.
+    ApproveReinstatement(Box<ReinstatementTerms>),
+    /// Reduce or give up one life's cover on a retail policy from today,
+    /// newest layer first, with the billed premium for the days left
+    /// credited back.
+    ReduceCover(Box<ReduceCover>),
     /// End an underwritten layer from a date (a reduction, or the member
     /// giving the extra cover up). A leaver's layers end with the leave.
     EndExcessLayer {
@@ -288,6 +344,21 @@ pub enum Command {
         receipt: String,
     },
     /// Pay a credit balance in suspense back to the policyholder.
+    /// Money from a scheme member for cover the member pays for themselves.
+    /// It is set against what that member owes; the rest is held as the
+    /// member's credit.
+    ApplyMemberReceipt {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        amount: Money,
+    },
+    /// Pay a scheme member's credit back to the member.
+    RefundMemberCredit {
+        policy: PolicyId,
+        life: LifeId,
+        amount: Money,
+    },
     RefundSuspense {
         policy: PolicyId,
         amount: Money,
@@ -423,12 +494,15 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
-            Command::AddUnderwrittenLayer(_) => &["underwriting"],
+            Command::AddUnderwrittenLayer(_) | Command::AlterUnderwrittenTerms(_) | Command::ApproveReinstatement(_) => &["underwriting"],
+            Command::ReduceCover(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
             Command::Interest(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
+            Command::ApplyMemberReceipt { .. } => &["cash-matching"],
+            Command::RefundMemberCredit { .. } => &["cash-matching", "policy-servicing"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
                 &["payments"]
@@ -464,9 +538,14 @@ impl Command {
             Command::AddExcessLayer(_) => "add_excess_layer",
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
+            Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
+            Command::ApproveReinstatement(_) => "approve_reinstatement",
+            Command::ReduceCover(_) => "reduce_cover",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::ApplyMemberReceipt { .. } => "apply_member_receipt",
+            Command::RefundMemberCredit { .. } => "refund_member_credit",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",
             Command::Interest(_) => "interest",

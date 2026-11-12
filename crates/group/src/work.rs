@@ -921,6 +921,7 @@ impl GroupState {
                     loadings,
                     exclusions,
                     loading_itemised: itemised_terms && member_consents_to_itemising,
+                    member_pays: Default::default(),
                     reference: c.reference.clone().unwrap_or_else(|| format!("grp-case:{case}")),
                 };
                 self.enqueue_core(s, Command::AddExcessLayer(Box::new(layer)), After::LayerWritten { case });

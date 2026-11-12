@@ -67,9 +67,12 @@ def billing(frequencies, policy_fee_annual = "0", modal_loading = {}):
 def earning(day_count = "actual"):
     return {"kind": "earning", "day_count": day_count}
 
-def arrears(grace_days, lapse_days, suspend_after_grace = False, reinstatement_days = 90):
-    return {"kind": "arrears", "grace_days": grace_days, "lapse_days": lapse_days,
-            "suspend_after_grace": suspend_after_grace, "reinstatement_days": reinstatement_days}
+def arrears(grace_days, lapse_days, suspend_after_grace = False, reinstatement_days = 90, reinstatement_evidence_free_days = None):
+    a = {"kind": "arrears", "grace_days": grace_days, "lapse_days": lapse_days,
+         "suspend_after_grace": suspend_after_grace, "reinstatement_days": reinstatement_days}
+    if reinstatement_evidence_free_days != None:
+        a["reinstatement_evidence_free_days"] = reinstatement_evidence_free_days
+    return a
 
 def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False):
     return {
@@ -100,8 +103,16 @@ def product(code, name, version, effective_from, line, currency, statutory_fund,
         "features": features,
     }
 
-def rate(annual_rate, age_from = 0, age_to = 150, sex = None, smoker = None, category = None):
-    return {"age_from": age_from, "age_to": age_to, "sex": sex, "smoker": smoker, "category": category, "annual_rate": annual_rate}
+def rate(annual_rate, age_from = 0, age_to = 150, sex = None, smoker = None, category = None, occupation_class = None):
+    return {
+        "age_from": age_from,
+        "age_to": age_to,
+        "sex": sex,
+        "smoker": smoker,
+        "category": category,
+        "occupation_class": occupation_class,
+        "annual_rate": annual_rate,
+    }
 
 def rate_table(id, version, effective_from, rows, scope = None):
     return {"id": id, "version": version, "effective_from": effective_from, "rows": rows, "scope": scope}

@@ -46,6 +46,16 @@ Contact details are fetched from the customer master at the moment of sending, f
 
 Every provider call carries an id derived from the document, party, channel and attempt, so a retry after a crash is the same operation to the provider.
 
+## PDF
+
+The text is the document: it is what is rendered, hashed and stored. `pdf.rs` sets that text on A4 pages whenever a PDF is wanted, and the PDF is never stored. The first page carries the name and address 45 mm down, where a DL envelope's window shows them, then the title and the text; every page has the document id and `n / total` at its foot. Large print (`AlternateFormat::LargePrint`) is 18 point. The fonts are embedded as subsets with a map back to characters, so the file is small (about 20 KB), searchable and readable by a screen reader, and the same letter always gives the same bytes.
+
+- **Email** that may carry the text attaches `<document>.pdf`. An email that only points to the secure inbox attaches nothing.
+- **Post** writes `print/<document>/<party>-<attempt>.pdf` to the print outbox before the JSON instruction, which names it in `pdf`.
+- **Download**: `Driver::pdf(id, fonts)` gives the stored text as a PDF, for the portal and app.
+
+A character the font cannot draw is an error, never a gap. The email or print instruction then goes with the text alone (`pdf` is null) and the reason is logged, so no notice is held up. The bundled faces are Liberation Sans (SIL Open Font License, `crates/documents/fonts/OFL.txt`), which covers Latin scripts including the macron vowels of te reo Māori.
+
 ## Notice clocks
 
 A notice with a notice period (`minimum_notice_days` on its template) has a purpose: `renewal`, `lapse`, `premium_change`, `suspension`. Its clock starts on the date delivery is proven to every addressee. `notice_gate(policy, purpose, date)` answers whether the thing the notice warns of may take effect: no notice, waiting (not delivered, undeliverable, defective, or period still running), or clear.
@@ -70,6 +80,8 @@ The module publishes `doc-<seq>` events to the `documents-events` Event Hub: tem
 
 The module host feeds the module every partition's events. `triggers.rs` maps them to the documents they require: a schedule after issue and every change to cover, a lapse or suspension notice when standing changes, a receipt when a payment is applied. A trigger is a statement that a document is due; a service with access to the policy and customer data answers it by asking the driver to issue. Events older than `live_event_days` are recorded but trigger nothing, so a replay cannot send a flood of old letters.
 
+**Interested parties.** The core reports every interest noted on a policy, such as an assignment to a lender, and its release (`Event::Interest`). The module keeps who holds each interest and between which dates, from events of any age. A trigger for a lapse notice (raised when the policy enters grace, which is the arrears notice), a suspension notice or the letter that a policy has ended lists in `copy_to` the parties whose interest stood on the event's date. `IssueDocument` refuses a lapse or suspension notice, and any document answering a trigger with copies owed, with `interested_party_missing` unless every party whose interest stands on the day of issue is a recipient. The notice clock still runs from delivery to the addressees. An interest stops being owed copies on the date its release takes effect. Question `interested_parties` (`policy`, `on`) answers who is owed a copy.
+
 ## Azure
 
 | Need | Service | Notes |
@@ -90,9 +102,11 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 - Settings are listed on `service::Config`. The webhook key is read from the file `IC_DOCUMENTS_WEBHOOK_KEY_FILE` names when that is set, which is how the deployment supplies it. All are required except the container names, key name, hub names, conduct officer, listen address and cycle interval.
 - **Deploying.** `infra/documents.bicep` creates the vault storage account and its two containers, the wrapping key, Communication Services, the two Event Hubs, the service's identity and its role assignments, and the Event Grid subscription for delivery reports. `deploy/k8s/documents.yaml` runs two copies of the service. The template is deployed twice: first without `deliveryReportsUrl`, then, once the service is reachable at its public address, with it, because Event Grid creates a webhook subscription only after calling it. Three things need a person: verifying the email sending domain and linking it to the Communication Services resource, buying the SMS number or short code, and routing `https://<host>/v1/delivery-reports` (that path only) through the ingress to the `ic-documents` service. The template and manifest have not been deployed from here; check the Communication Services role ID as the template's parameter describes before the first deployment.
 
+**Idempotency keys** are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotten as `Tick` passes, at most 200 a tick. Core events, `Tick` and `MarkPublished` are frequent and leave none.
+
 ## Not built, or waiting on others
 
 - **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
-- **Rendering to PDF, large print, audio and braille.** Documents are text. The requested format is recorded on the document and passed to the print house; producing the other formats is not built.
+- **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
+- **The insurer's own typeface.** PDFs are set in the bundled Liberation Sans. `Fonts::new` and `AzureChannels::with_fonts` take other TrueType faces, but the service has no setting for them yet. Text in a script the font lacks (Chinese, for example) goes as text without a PDF.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.
-- **Idempotency keys are kept for ever**, except for core events, `Tick` and `MarkPublished`, which are frequent and leave none. The rest are small, but there is no pruning.

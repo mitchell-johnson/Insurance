@@ -2,6 +2,11 @@
 //! and device keys that sign as a phone or a browser does.
 #![allow(dead_code)]
 
+pub mod claims;
+pub mod complaints;
+pub mod finance;
+pub mod pricing;
+
 use base64::Engine;
 use chrono::NaiveDate;
 use ic_channels::directory::{Actor, DirectoryCommand, Engagement};

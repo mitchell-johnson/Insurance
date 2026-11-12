@@ -5,7 +5,7 @@
 //! Nothing here changes state, and nothing here reads a clock: the
 //! dashboard is given today's date by whoever asks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use ic_ledger::{AccountClass, BalanceFamily, EntryId, Hash32, PartitionId};
@@ -160,10 +160,9 @@ pub struct Dashboard {
     pub trial_balance_hash: Option<Hash32>,
 }
 
-/// The date `n` working days after `from`. Weekends are skipped; public
-/// holidays are not known here, so a step due over a holiday shows as due a
-/// day early rather than late.
-pub fn working_days_after(from: NaiveDate, n: u32) -> NaiveDate {
+/// The date `n` working days after `from`. Weekends and the listed public
+/// holidays are skipped.
+pub fn working_days_after(from: NaiveDate, n: u32, holidays: &BTreeSet<NaiveDate>) -> NaiveDate {
     let mut date = from;
     let mut left = n;
     while left > 0 {
@@ -171,7 +170,7 @@ pub fn working_days_after(from: NaiveDate, n: u32) -> NaiveDate {
             break;
         };
         date = next;
-        if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) && !holidays.contains(&date) {
             left -= 1;
         }
     }
@@ -278,11 +277,13 @@ impl FinanceState {
     /// The close of a period on one screen, as at `today`.
     pub fn dashboard(&self, period: PeriodId, today: NaiveDate) -> Dashboard {
         let state = self.periods.get(&period);
+        let none = BTreeSet::new();
+        let holidays = self.close_config.as_ref().map_or(&none, |c| &c.holidays);
         let steps: Vec<Step> = self
             .checks(period)
             .into_iter()
             .map(|check| {
-                let due = working_days_after(period.end(), check.day);
+                let due = working_days_after(period.end(), check.day, holidays);
                 let overdue = today > due && matches!(check.status, CheckStatus::Red { .. });
                 Step { check, due, overdue }
             })

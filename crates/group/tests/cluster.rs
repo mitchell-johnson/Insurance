@@ -323,7 +323,8 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
 /// Purpose: of everything in underwriting's outbox, only terms and endings for a scheme
 /// member's excess are read as answers; accepted terms carry the amount, loadings and
 /// exclusions; a decline is a decline and a lapse or withdrawal is not proceeded with;
-/// and an answer never claims the member's consent to the employer seeing a loading.
+/// and the member's consent to the employer seeing a loading is taken only from
+/// underwriting's own record of it, never assumed.
 /// Why it matters: the outbox holds every other module's work as well. Reading an
 /// individual policy's terms as a scheme decision would write cover nobody asked for,
 /// and inventing consent would show a member's health loading on an employer's invoice.
@@ -340,6 +341,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         entry,
         policy: policy.clone(),
         effective: d(2027, 11, 1),
+        employer_may_see_loading: false,
         covers: vec![ic_core::command::CoverSpec {
             code: "group-life".into(),
             life: Some(life("E003")),
@@ -371,6 +373,24 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
             member_consents_to_itemising: false,
         }
     );
+    // Consent is what underwriting recorded from the member's signed step, and absent means no.
+    let mut consented = serde_json::to_value(terms(excess.clone(), "grp-uw:harbour:7")).unwrap();
+    consented["apply_terms"]["employer_may_see_loading"] = serde_json::json!(true);
+    assert!(matches!(
+        excess_answer(&consented).unwrap().decision,
+        ExcessDecision::Accepted {
+            member_consents_to_itemising: true,
+            ..
+        }
+    ));
+    consented["apply_terms"].as_object_mut().unwrap().remove("employer_may_see_loading");
+    assert!(matches!(
+        excess_answer(&consented).unwrap().decision,
+        ExcessDecision::Accepted {
+            member_consents_to_itemising: false,
+            ..
+        }
+    ));
     for (outcome, decision) in [
         ("declined", ExcessDecision::Declined),
         ("lapsed", ExcessDecision::NotProceeded),

@@ -95,6 +95,10 @@ A fault in one step is reported in the pass's log line and the others still run.
 
 `deploy/k8s/unit-pricing.yaml` runs two replicas of the driver with that identity.
 
+## The console
+
+Staff act through the unit pricing console in the portal (`/pricing` in `ic-portal`, `docs/channels.md`, "The unit pricing console"). It sends the console commands under the caller `unit-pricing-console` with the staff member's party ID as actor and their roles, and reads the questions below.
+
 ## Questions
 
 All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fund between two dates), `valuations`, `work` (prices waiting for a person and refused files), `late` (prices overdue as at a date), `errors`, `error`, `outbox`, `events`, `extracts_due`, `holding`, and `close_check`.
@@ -105,5 +109,4 @@ All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fu
 
 - **The finance close does not ask yet.** `close_check` is built here, but the close driver has no source for it; the finance thread wires it beside `core_sources()`.
 - **A fund this module refuses.** If a definition the core accepted has pricing terms this module refuses, the refusal is recorded against the event's key and the fund cannot be priced; a corrected definition is a new version, which arrives as a new event.
-- **No staff screens.** Prepare, approve, suspend and the price error commands are typed commands under the caller `unit-pricing-console`; the console that sends them with the person's roles belongs to the portal services.
 - **Not deployed.** `infra/unit-pricing.bicep` is compiled in CI but not referenced by `main.bicep`, and its Defender resource uses a preview API version. `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.

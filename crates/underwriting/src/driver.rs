@@ -245,9 +245,12 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
     }
 
     async fn group_of(&self, proposal: &ProposalId) -> Result<Option<GroupId>, DriverError> {
+        Ok(self.proposal(proposal).await?.map(|p| p.group))
+    }
+
+    async fn proposal(&self, proposal: &ProposalId) -> Result<Option<Proposal>, DriverError> {
         let answer = self.underwriting.ask(Query::Proposal { proposal: proposal.clone() }).await?;
-        let found: Option<Proposal> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
-        Ok(found.map(|p| p.group))
+        serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))
     }
 
     /// Carry the outbox until it is empty. What was delivered before a stop
@@ -545,11 +548,13 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             Effect::ApplyTerms {
                 key,
                 proposal,
-                entry: Entry::Increase { .. },
+                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. }),
                 policy,
                 covers,
                 ..
             } => {
+                let increase = matches!(entry, Entry::Increase { .. });
+                let what = if increase { "increase" } else { "alteration" };
                 let Some(group) = self.group_of(proposal).await? else {
                     return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
                 };
@@ -557,23 +562,38 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 let mut refused = None;
                 for cover in covers {
                     let Some(life) = &cover.life else {
-                        return Ok(Step::Park(format!("the increase on {} names no life", cover.code)));
+                        return Ok(Step::Park(format!("the {what} on {} names no life", cover.code)));
                     };
                     // Keyed by the proposal and cover, not the attempt: a cover the core has
                     // written is not written again when the rest is tried again.
-                    let layer = ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
-                        policy: policy.clone(),
-                        cover: cover.code.clone(),
-                        life: life.clone(),
-                        sum_insured_minor: cover.sum_insured_minor,
-                        loadings: cover.loadings.clone(),
-                        exclusions: cover.exclusions.clone(),
-                        reference: key.clone(),
-                    }));
-                    let sent = format!("{proposal}/increase/{life}/{}", cover.code);
+                    let layer = if increase {
+                        ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+                            policy: policy.clone(),
+                            cover: cover.code.clone(),
+                            life: life.clone(),
+                            sum_insured_minor: cover.sum_insured_minor,
+                            loadings: cover.loadings.clone(),
+                            exclusions: cover.exclusions.clone(),
+                            reference: key.clone(),
+                        }))
+                    } else {
+                        // The cover keeps its sum insured: an alteration changes the terms
+                        // on what the life already holds.
+                        ic_core::Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+                            policy: policy.clone(),
+                            cover: cover.code.clone(),
+                            life: life.clone(),
+                            loadings: cover.loadings.clone(),
+                            exclusions: cover.exclusions.clone(),
+                            reference: key.clone(),
+                        }))
+                    };
+                    let sent = format!("{proposal}/{what}/{life}/{}", cover.code);
                     let answer = self.core.send(home_partition(&group), &sent, "underwriting", layer).await?;
                     match answer.refused {
                         None => layers.extend(added_layers(&answer.events)),
+                        // The cover is already on these terms: there is nothing to write.
+                        Some(r) if !increase && r.code == "no_change" => {}
                         Some(r) => {
                             refused = Some(r.code);
                             break;
@@ -632,6 +652,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 proposal,
                 entry: Entry::GroupExcess { .. },
                 covers,
+                employer_may_see_loading,
                 ..
             } => {
                 let (Some((scheme, case)), [cover]) = (excess_case(proposal), covers.as_slice()) else {
@@ -641,7 +662,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     sum_insured_minor: cover.sum_insured_minor,
                     loadings: cover.loadings.clone(),
                     exclusions: cover.exclusions.clone(),
-                    member_consents_to_itemising: false,
+                    member_consents_to_itemising: *employer_may_see_loading,
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
@@ -662,7 +683,43 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
-            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for an alteration or a reinstatement on underwriting's terms".to_string()),
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry: Entry::Reinstatement { .. },
+                policy,
+                covers,
+                ..
+            } => {
+                let Some(found) = self.proposal(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let mut terms = Vec::new();
+                for cover in covers {
+                    let Some(life) = &cover.life else {
+                        return Ok(Step::Park(format!("the reinstatement of {} names no life", cover.code)));
+                    };
+                    terms.push(ic_core::policy::LayerTerms {
+                        cover: cover.code.clone(),
+                        life: life.clone(),
+                        loadings: cover.loadings.clone(),
+                        exclusions: cover.exclusions.clone(),
+                    });
+                }
+                // The decision is recorded against the lapse; the policy comes back when
+                // the arrears are paid and the reinstatement is asked for. It can be relied
+                // on for as long as the proposal's own terms can.
+                let decision = ic_core::Command::ApproveReinstatement(Box::new(ic_core::command::ReinstatementTerms {
+                    policy: policy.clone(),
+                    reference: key.clone(),
+                    valid_until: found.expires_on,
+                    terms,
+                }));
+                let sent = format!("{proposal}/reinstatement");
+                let answer = self.core.send(home_partition(&found.group), &sent, "underwriting", decision).await?;
+                let outcome = answer.refused.map_or(Ok(Vec::new()), |r| Err(r.code));
+                self.issue_answer(key, proposal, outcome).await?
+            }
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
             other => match self.forward.forward(other).await? {

@@ -6,11 +6,26 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::NaiveDate;
 use ic_core::{PayableKind, PolicyId};
 use serde::{Deserialize, Serialize};
 
 use crate::machine::{Event, PaymentsState, Tx};
 use crate::model::{About, Counterparty, Id, Instruction, NewItem, OutboxEntry, Reject, Role};
+
+/// The statement a reinsurer settlement pays, from the source the
+/// reinsurance module gave it.
+fn statement_number(source: &str) -> Option<u32> {
+    source.strip_prefix("reinsurance:statement:")?.parse().ok()
+}
+
+/// What is known of one claims run: the payments of it that are still to
+/// settle, and what has settled so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimsRun {
+    pub outstanding: BTreeSet<Id>,
+    pub settled_minor: i64,
+}
 
 /// One released payment that has not yet been settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -39,6 +54,10 @@ pub struct Waiting {
     /// bank refuses it before it settles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim: Option<String>,
+    /// The claims run it went out in, when it was not released by hand:
+    /// claims is told the run's settled total once all of it has settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -72,6 +91,9 @@ impl PaymentsState {
             source: waiting.source.clone(),
             amount_minor: waiting.amount_minor,
         });
+        if let Some(run) = &waiting.run {
+            self.claims_runs.entry(run.clone()).or_default().outstanding.insert(waiting.payment.clone());
+        }
         self.waiting.insert(waiting.payment.clone(), waiting);
         Ok(())
     }
@@ -147,6 +169,9 @@ impl PaymentsState {
     /// raised to release it again under a new reference.
     pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
         let Some(waiting) = self.waiting.remove(&n.item) else { return };
+        // It will be released again under a new reference, in whatever run
+        // claims then puts it; this run is finished with it.
+        self.claims_run_moved(&waiting, 0);
         if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
             self.push_outbox(OutboxEntry {
                 key: format!("claim-payment-failed-{}", n.item),
@@ -161,6 +186,81 @@ impl PaymentsState {
                 about: Some(About::Item(n.item.clone())),
             });
         }
+    }
+
+    /// A payment of a claims run settled (`settled_minor` is its amount) or
+    /// left the run unpaid (zero). When nothing of the run is outstanding
+    /// any more, claims is given the total that settled, which it compares
+    /// with what it sent out.
+    fn claims_run_moved(&mut self, waiting: &Waiting, settled_minor: i64) {
+        let (Some(run), Some(policy)) = (&waiting.run, &waiting.policy) else { return };
+        let Some(known) = self.claims_runs.get_mut(run) else { return };
+        known.outstanding.remove(&waiting.payment);
+        known.settled_minor += settled_minor;
+        if !known.outstanding.is_empty() {
+            return;
+        }
+        let total = known.settled_minor;
+        self.claims_runs.remove(run);
+        if total > 0 {
+            self.push_outbox(OutboxEntry {
+                key: format!("claims-run-confirmed-{run}"),
+                instruction: Instruction::CoreAt {
+                    policy: policy.clone(),
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::ConfirmRun {
+                        run: run.clone(),
+                        settled_minor: total,
+                    }))),
+                },
+                about: Some(About::Item(waiting.payment.clone())),
+            });
+        }
+    }
+
+    /// A waiting payment settled: it is finished with here.
+    pub(crate) fn waiting_settled(&mut self, n: &NewItem) {
+        if let Some(waiting) = self.waiting.remove(&n.item) {
+            self.claims_run_moved(&waiting, n.amount_minor);
+        }
+    }
+
+    /// A reinsurer settlement is paid: the reinsurance module records it
+    /// against the statement, in that module's own command.
+    pub(crate) fn origin_settled(&mut self, n: &NewItem, on: NaiveDate) {
+        let Some(number) = statement_number(&n.source) else { return };
+        self.push_outbox(OutboxEntry {
+            key: format!("reinsurance-settled-{}", n.item),
+            instruction: Instruction::Module {
+                module: "reinsurance".to_string(),
+                command: serde_json::json!({
+                    "key": format!("payments:settled:{}", n.item),
+                    "caller": "payments",
+                    "on": on,
+                    "command": {"record_settlement": {"number": number, "payment_ref": n.item, "amount_minor": n.amount_minor}},
+                }),
+            },
+            about: Some(About::Item(n.item.clone())),
+        });
+    }
+
+    /// A reinsurer settlement was refused or sent back by the bank, before
+    /// or after it settled: the statement is owed again.
+    pub(crate) fn origin_returned(&mut self, n: &NewItem, on: NaiveDate, reason: &str) {
+        let Some(number) = statement_number(&n.source) else { return };
+        self.push_outbox(OutboxEntry {
+            key: format!("reinsurance-returned-{}", n.item),
+            instruction: Instruction::Module {
+                module: "reinsurance".to_string(),
+                command: serde_json::json!({
+                    "key": format!("payments:returned:{}:{on}", n.item),
+                    "caller": "payments",
+                    "on": on,
+                    "command": {"settlement_returned": {"number": number, "payment_ref": n.item, "reason": reason}},
+                }),
+            },
+            about: Some(About::Item(n.item.clone())),
+        });
     }
 
     /// Released payments that are in no run.

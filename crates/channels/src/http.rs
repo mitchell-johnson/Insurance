@@ -135,6 +135,14 @@ pub struct AppState {
     pub regions: Arc<dyn RegionSource>,
     /// How the web pages sign people in.
     pub ui: UiConfig,
+    /// The unit pricing module, for the staff console.
+    pub pricing: Arc<dyn crate::forward::Source>,
+    /// The finance ledger, for the finance console.
+    pub finance: Arc<dyn crate::forward::Source>,
+    /// The core's partitions, where claims live, for the claims console.
+    pub claims: Arc<dyn crate::claims::Partitions>,
+    /// The complaints module, for the complaints and conduct workbench.
+    pub complaints: Arc<dyn crate::forward::Source>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -746,6 +754,427 @@ async fn staff_admin(State(s): State<Shared>, headers: HeaderMap, method: Method
     ok(view)
 }
 
+impl AppState {
+    /// What this person may do in the unit pricing console. Nobody without
+    /// a unit pricing action gets as far as that module.
+    async fn pricing_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::PricingStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include unit pricing"));
+        }
+        Ok((session, standing))
+    }
+}
+
+/// What to say when another module would not answer or could not be
+/// reached: its own refusal as `refused`, anything else as unavailable.
+fn module_problem(what: &str, refused: StatusCode, reason: String) -> Problem {
+    match reason.strip_prefix(crate::forward::REFUSED) {
+        Some(why) => Problem::new(refused, "refused", why),
+        None => Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("{what}_unavailable"),
+            format!("{} could not be reached: {reason}", what.replace('_', " ")),
+        ),
+    }
+}
+
+fn pricing_down(reason: String) -> Problem {
+    module_problem("unit_pricing", StatusCode::BAD_REQUEST, reason)
+}
+
+impl From<crate::complaints::Refusal> for Problem {
+    fn from(refusal: crate::complaints::Refusal) -> Self {
+        match refusal {
+            crate::complaints::Refusal::Bad(why) => Problem::bad_request(why),
+            crate::complaints::Refusal::Forbidden(why) => Problem::forbidden(why),
+        }
+    }
+}
+
+impl AppState {
+    /// What this person may do at the complaints workbench, and the same
+    /// for one other member of staff. Nobody without a seat gets further.
+    async fn complaints_standing(&self, session: &Session, about: Option<PartyId>) -> Result<(Value, Value), Problem> {
+        let answer = self
+            .ask(Question::ComplaintsStaff {
+                staff: session.party.clone(),
+                about,
+                at: session.at,
+            })
+            .await?;
+        if !answer["me"]["seats"].as_array().is_some_and(|seats| !seats.is_empty()) {
+            return Err(Problem::forbidden("your roles do not include complaints"));
+        }
+        Ok((answer["me"].clone(), answer["other"].clone()))
+    }
+}
+
+/// One of the workbench's questions to the complaints module: the queue, a
+/// complaint, its timers, the register, the report, conduct cases. `me`
+/// answers from here.
+async fn complaints_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let (standing, _) = s.complaints_standing(&session, None).await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::complaints::question(&name, &fields, &session.party, &standing)?;
+    // Every question is built here from checked fields, so a refusal is that module saying this person may not see it.
+    let answer = s
+        .complaints
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("complaints", StatusCode::FORBIDDEN, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+#[derive(Deserialize)]
+struct ComplaintsCommand {
+    /// The seat the person acts in: `intake`, `complaints`, `legal` or `conduct`.
+    #[serde(rename = "as")]
+    seat: String,
+    command: Value,
+}
+
+/// One person's command to the complaints module, in the seat they name.
+async fn complaints_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let sent: ComplaintsCommand = parse(&body)?;
+    let about = crate::complaints::depends_on(&sent.command, &session.party);
+    let (standing, other) = s.complaints_standing(&session, about.clone()).await?;
+    let key = key(&headers, &session.party.0)?;
+    let other = about.as_ref().map(|who| (who, &other));
+    let envelope = crate::complaints::envelope(&key, &session.party, &sent.seat, session.at, sent.command, &standing, other)?;
+    let output = s
+        .complaints
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("complaints", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            code,
+            refused["message"].as_str().unwrap_or("the complaints module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["events"] }))
+}
+
+impl AppState {
+    /// What this person may do in the finance console. Nobody without a
+    /// finance action gets as far as that module.
+    async fn finance_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::FinanceStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include finance"));
+        }
+        Ok((session, standing))
+    }
+}
+
+impl AppState {
+    /// Whether this person may open the claims console. What they may decide
+    /// is the claims module's authority book.
+    async fn claims_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<Session, Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::ClaimsStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include claims"));
+        }
+        Ok(session)
+    }
+
+    /// Every partition's answer, with the partition it came from. A partition
+    /// whose business date is not open has none.
+    async fn claims_everywhere(
+        &self,
+        question: &ic_core::claims_module::report::Question,
+    ) -> Result<Vec<(ic_ledger::PartitionId, ic_core::claims_module::report::Reply)>, Problem> {
+        let asks = (0..self.claims.count()).map(|p| async move { (p, self.claims.ask(p, question.clone()).await) });
+        let mut out = Vec::new();
+        for (p, answer) in futures::future::join_all(asks).await {
+            if let Some(reply) = answer.map_err(claims_down)? {
+                out.push((p, reply));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The partition holding a claim, and the claim as its claimant sees it.
+    async fn find_claim(&self, claim: &str) -> Result<(ic_ledger::PartitionId, Box<ic_core::claims_module::report::ClaimRow>), Problem> {
+        let question = ic_core::claims_module::report::Question::Claim { claim: claim.to_string() };
+        self.claims_everywhere(&question)
+            .await?
+            .into_iter()
+            .find_map(|(p, reply)| match reply {
+                ic_core::claims_module::report::Reply::Claim(Some(row)) => Some((p, row)),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                // A policy moving partition answers unknown on both sides for a moment.
+                Problem::new(
+                    StatusCode::NOT_FOUND,
+                    "unknown_claim",
+                    format!("no partition holds the claim {claim}; if its policy is moving, try again shortly"),
+                )
+            })
+    }
+}
+
+fn claims_down(reason: String) -> Problem {
+    Problem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "claims_unavailable",
+        format!("the claims could not be reached: {reason}"),
+    )
+}
+
+/// One of the console's questions about claims: a queue across every
+/// partition, a claim, the book and report by partition, or a run's
+/// remittance on its partition. `me` answers from here.
+async fn claims_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    use ic_core::claims_module::report::{Question as Q, Reply as R};
+    let session = s.claims_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(json!({ "staff": session.party, "partitions": s.claims.count() }));
+    }
+    let field = |f: &str| fields.get(f).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
+    match question {
+        Q::Claim { claim } => {
+            let (partition, row) = s.find_claim(&claim).await?;
+            ok(json!({ "partition": partition, "policy": row.policy, "party": row.party, "view": row.view }))
+        }
+        Q::Queue { .. } => {
+            let mut rows: Vec<Value> = Vec::new();
+            let mut sorted: Vec<_> = s
+                .claims_everywhere(&question)
+                .await?
+                .into_iter()
+                .flat_map(|(p, reply)| match reply {
+                    R::Queue(rows) => rows.into_iter().map(|r| (p, r)).collect(),
+                    _ => vec![],
+                })
+                .collect();
+            // Most urgent first, then oldest, as the claims module orders one partition's.
+            sorted.sort_by(|(_, a), (_, b)| b.priority.cmp(&a.priority).then(b.age_days.cmp(&a.age_days)));
+            for (p, row) in sorted {
+                rows.push(json!({ "partition": p, "claim": row.claim, "priority": row.priority, "age_days": row.age_days, "owner": row.owner }));
+            }
+            ok(json!({ "rows": rows }))
+        }
+        Q::Remittance { .. } => {
+            let partition: ic_ledger::PartitionId = field("partition")
+                .and_then(|p| p.parse().ok())
+                .filter(|p| *p < s.claims.count())
+                .ok_or_else(|| Problem::bad_request("a run is on one partition: give partition"))?;
+            match s.claims.ask(partition, question).await.map_err(claims_down)? {
+                Some(R::Remittance(items)) => ok(json!(items)),
+                _ => Err(Problem::not_found()),
+            }
+        }
+        Q::Book | Q::Report => {
+            let partitions: Vec<Value> = s
+                .claims_everywhere(&question)
+                .await?
+                .into_iter()
+                .map(|(p, reply)| json!({ "partition": p, "answer": reply }))
+                .collect();
+            ok(json!({ "partitions": partitions }))
+        }
+    }
+}
+
+/// One person's claims command, as that person: the actor is who signed
+/// in, with the purpose they gave, and it goes to the partition holding the
+/// claim. The claims module decides what their authority allows.
+async fn claims_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    #[derive(serde::Deserialize)]
+    struct Body {
+        #[serde(default)]
+        purpose: String,
+        #[serde(default)]
+        partition: Option<ic_ledger::PartitionId>,
+        command: Value,
+    }
+    let session = s.claims_standing(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let request: Body = parse(&body)?;
+    let (name, target, command) = crate::claims::command(&session.party, &request.purpose, request.partition, request.command).map_err(Problem::bad_request)?;
+    let partition = match target {
+        crate::claims::Target::Partition(p) if p < s.claims.count() => p,
+        crate::claims::Target::Partition(p) => return Err(Problem::bad_request(format!("there is no partition {p}"))),
+        crate::claims::Target::Claim(claim) if name != "notify" => s.find_claim(&claim).await?.0,
+        crate::claims::Target::Claim(_) | crate::claims::Target::Policy(_) => {
+            let policy = match &command {
+                ic_core::Command::Claims(c) => match c.as_ref() {
+                    ic_core::claims_module::Command::Notify(n) => n.policy.clone(),
+                    _ => return Err(Problem::bad_request(format!("{name} names no claim"))),
+                },
+                _ => return Err(Problem::bad_request("not a claims command")),
+            };
+            let policy = ic_core::PolicyId(policy);
+            let asks = (0..s.claims.count()).map(|p| s.claims.locate(p, policy.clone()));
+            let mut found = None;
+            for answer in futures::future::join_all(asks).await {
+                found = found.or(answer.map_err(claims_down)?);
+            }
+            found.ok_or_else(|| Problem::new(StatusCode::NOT_FOUND, "unknown_policy", format!("no partition holds the policy {}", policy.0)))?
+        }
+    };
+    let proposed = s.claims.propose(partition, crate::claims::envelope(key, command)).await.map_err(claims_down)?;
+    if let Some((code, message)) = proposed.rejected {
+        // Authority is the claims module's: someone it does not know, or whose profile does not cover this.
+        let status = match code.as_str() {
+            "unknown_staff" | "authority" | "not_authorised" | "not_owner" | "no_access" => StatusCode::FORBIDDEN,
+            "unknown_claim" => StatusCode::NOT_FOUND,
+            _ => StatusCode::CONFLICT,
+        };
+        return Err(Problem::new(status, &code, message));
+    }
+    ok(json!({ "accepted": true, "partition": partition, "duplicate": proposed.duplicate, "events": proposed.events }))
+}
+
+/// One of the console's questions to the finance ledger: the close
+/// dashboard, checks, the trial balance, journals, returns, extracts. `me`
+/// answers from here.
+async fn finance_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.finance_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::finance::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s
+        .finance
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// One person's command to the finance ledger, as that person with the
+/// roles they hold. That module decides what each role may do, keeps maker
+/// and checker apart, and records who did what.
+async fn finance_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.finance_standing(&headers, &method, &uri, &body).await?;
+    if !standing["roles"].as_array().is_some_and(|held| !held.is_empty()) {
+        return Err(Problem::forbidden("you may read the finance console but hold no role to act in it"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let envelope = crate::finance::envelope(&key, &session.party, &standing["roles"], parse(&body)?).map_err(Problem::bad_request)?;
+    let output = s
+        .finance
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        let status = if code == "authority" { StatusCode::FORBIDDEN } else { StatusCode::CONFLICT };
+        return Err(Problem::new(
+            status,
+            code,
+            refused["message"].as_str().unwrap_or("the finance ledger refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["events"] }))
+}
+
+/// One of the console's questions to the unit pricing module: the work
+/// queue, funds, prices, valuations, errors. `me` answers from here.
+async fn pricing_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::pricing::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s.pricing.ask(question).await.map_err(pricing_down)?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// One person's command to the unit pricing module: prepare, approve,
+/// reject, suspend, resume, raise or close a price error, republish. It goes
+/// as that person with the roles they hold; that module checks them again
+/// and keeps who did what.
+async fn pricing_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.pricing_standing(&headers, &method, &uri, &body).await?;
+    let command: Value = parse(&body)?;
+    let Some((name, role)) = crate::pricing::role_for(&command) else {
+        return Err(Problem::bad_request("that is not a command the unit pricing console sends"));
+    };
+    if !standing["roles"].as_array().is_some_and(|held| held.iter().any(|r| r == role)) {
+        return Err(Problem::forbidden(format!("{name} needs the role {role}")));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, command);
+    let output = s.pricing.tell(envelope).await.map_err(pricing_down)?;
+    if let Some(refused) = output.get("refused") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        let status = if code == "unauthorised" {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::CONFLICT
+        };
+        return Err(Problem::new(status, code, refused["message"].as_str().unwrap_or("unit pricing refused it")));
+    }
+    ok(json!({ "accepted": true, "output": output }))
+}
+
 /// A refusal by the four questions, with the reason the person is given.
 impl AppState {
     /// Write a staff read to the access log, then refuse it if it was not
@@ -1012,6 +1441,14 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))
         .route("/staff/v1/workbench/{party}/proof-of-debt", get(proof_of_debt))
+        .route("/staff/v1/complaints/commands", post(complaints_command))
+        .route("/staff/v1/complaints/{question}", get(complaints_question))
+        .route("/staff/v1/claims/commands", post(claims_command))
+        .route("/staff/v1/claims/{question}", get(claims_question))
+        .route("/staff/v1/finance/commands", post(finance_command))
+        .route("/staff/v1/finance/{question}", get(finance_question))
+        .route("/staff/v1/unit-pricing/commands", post(pricing_command))
+        .route("/staff/v1/unit-pricing/{question}", get(pricing_question))
         .route("/internal/v1/commands", post(module_command))
         .route("/internal/v1/pending", get(module_pending))
         .route("/ops/v1/regions", get(ops_regions))
@@ -1022,6 +1459,10 @@ pub fn router(state: Shared) -> Router {
         .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
         .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
         .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
+        .route("/complaints", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS) }))
+        .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
+        .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
+        .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
         .route("/ui/config.json", get(ui_config))

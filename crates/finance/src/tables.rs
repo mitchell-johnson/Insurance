@@ -14,9 +14,13 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::NaiveDate;
+use ic_ledger::PartitionId;
 use ic_money::DecStr;
 use ic_product::{RateRow, RateTable, Sex};
 use serde::{Deserialize, Serialize};
+
+use crate::mart::RatedCover;
 
 /// Rates are compared as integers at nine decimal places.
 const SCALE_DP: u32 = 9;
@@ -35,6 +39,10 @@ pub struct TableSchema {
     /// is not rated by category.
     #[serde(default)]
     pub categories: Vec<String>,
+    /// The occupation classes every table must carry. Empty when the table
+    /// is not rated by occupation class.
+    #[serde(default)]
+    pub occupation_classes: Vec<String>,
     /// The ages every key must cover, without gap or overlap. `None` when
     /// the table is not rated by age.
     #[serde(default)]
@@ -136,6 +144,7 @@ struct Key {
     sex: Option<Sex>,
     smoker: Option<bool>,
     category: Option<String>,
+    occupation_class: Option<String>,
 }
 
 impl Key {
@@ -144,6 +153,7 @@ impl Key {
             sex: row.sex,
             smoker: row.smoker,
             category: row.category.clone(),
+            occupation_class: row.occupation_class.clone(),
         }
     }
 
@@ -161,6 +171,9 @@ impl Key {
         }
         if let Some(category) = &self.category {
             parts.push(category.clone());
+        }
+        if let Some(class) = &self.occupation_class {
+            parts.push(format!("class {class}"));
         }
         if parts.is_empty() {
             "all".to_string()
@@ -225,15 +238,23 @@ fn required_keys(schema: &TableSchema) -> BTreeSet<Key> {
     } else {
         schema.categories.iter().cloned().map(Some).collect()
     };
+    let classes: Vec<Option<String>> = if schema.occupation_classes.is_empty() {
+        vec![None]
+    } else {
+        schema.occupation_classes.iter().cloned().map(Some).collect()
+    };
     let mut keys = BTreeSet::new();
     for sex in &sexes {
         for smoker in &smokers {
             for category in &categories {
-                keys.insert(Key {
-                    sex: *sex,
-                    smoker: *smoker,
-                    category: category.clone(),
-                });
+                for class in &classes {
+                    keys.insert(Key {
+                        sex: *sex,
+                        smoker: *smoker,
+                        category: category.clone(),
+                        occupation_class: class.clone(),
+                    });
+                }
             }
         }
     }
@@ -458,6 +479,7 @@ fn compare(table: &RateTable, previous: &RateTable, schema: &TableSchema, by_age
             sex: key.sex,
             smoker: key.smoker,
             category: key.category.clone(),
+            occupation_class: key.occupation_class.clone(),
             annual_rate: schema.rate_min.clone(),
         };
         let at = cell(key, &row, by_age);
@@ -516,6 +538,195 @@ pub fn cross_check(table: &RateTable, other: &RateTable) -> Vec<Finding> {
         f.block(Check::CrossTable, key.label(), format!("{} has no rates for this cell", table.id));
     }
     f.0
+}
+
+/// What to price: the cover codes the table rates, how, and the two versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DryRunRequest {
+    /// The cover codes rated from this table.
+    pub covers: Vec<String>,
+    /// The rate is an amount per life, not per thousand of sum insured.
+    #[serde(default)]
+    pub per_life: bool,
+    /// Price on the age when the cover started (level premiums), not the
+    /// age on the date asked (stepped premiums).
+    #[serde(default)]
+    pub age_at_start: bool,
+    pub current: RateTable,
+    pub proposed: RateTable,
+}
+
+/// One rating cell of the book under both versions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DryRunCell {
+    pub age_band: String,
+    pub sex: String,
+    pub smoker: Option<bool>,
+    pub covers: u64,
+    pub current_annual_minor: i64,
+    pub proposed_annual_minor: i64,
+}
+
+/// One cover whose premium moves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DryRunChange {
+    pub partition: PartitionId,
+    pub policy: String,
+    pub cover: String,
+    pub layer: Option<u32>,
+    pub age: u32,
+    pub current_annual_minor: i64,
+    pub proposed_annual_minor: i64,
+}
+
+/// A proposed table version priced against the in-force book beside the
+/// version it replaces. Premiums are annual, before loadings, discounts,
+/// fees and tax, so the figures show the movement and are not a bill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DryRun {
+    pub as_at: NaiveDate,
+    pub current: String,
+    pub proposed: String,
+    /// Covers priced under both versions.
+    pub covers: u64,
+    pub current_annual_minor: i64,
+    pub proposed_annual_minor: i64,
+    pub change_minor: i64,
+    /// Covers whose life has no age published, so neither version prices them.
+    pub no_age: u64,
+    /// Covers neither version has a rate for.
+    pub no_rate_in_either: u64,
+    /// Covers only the proposed version has a rate for.
+    pub newly_rated: u64,
+    /// Covers priced today that the proposed version has no rate for.
+    pub left_without_a_rate: u64,
+    /// The first covers of `left_without_a_rate`, as `policy/cover`.
+    pub left_without_a_rate_examples: Vec<String>,
+    pub cells: Vec<DryRunCell>,
+    /// The covers whose premium moves most, largest first.
+    pub largest_changes: Vec<DryRunChange>,
+    /// Whether the proposed version may go forward to approval.
+    pub passed: bool,
+}
+
+/// How many covers a dry run names in each of its lists.
+pub const DRY_RUN_LISTED: usize = 20;
+
+/// The annual rate for a cover's factors: the first row that matches, as the
+/// premium calculation in `ic-product` finds it. A scheme's benefit category
+/// is not published to finance, so a row for one category never matches.
+fn rate_for(table: &RateTable, age: u32, c: &RatedCover) -> Option<i128> {
+    table
+        .rows
+        .iter()
+        .find(|r| {
+            age >= r.age_from
+                && age <= r.age_to
+                && (r.sex.is_none() || r.sex == c.sex)
+                && (r.smoker.is_none() || r.smoker == c.smoker)
+                && r.category.is_none()
+                && (r.occupation_class.is_none() || r.occupation_class == c.occupation_class)
+        })
+        .and_then(|r| scaled(r.annual_rate.as_str()))
+        .map(|(rate, _)| rate)
+}
+
+/// An annual premium in minor units from a rate at nine decimal places,
+/// rounded half up.
+fn annual_minor(rate: i128, per_life: bool, sum_insured_minor: i64) -> i64 {
+    let one = 10i128.pow(SCALE_DP);
+    let (amount, divisor) = if per_life {
+        (rate * 100, one)
+    } else {
+        // minor units of sum insured, per thousand
+        (rate * i128::from(sum_insured_minor), one * 1000)
+    };
+    i64::try_from((amount + divisor / 2) / divisor).unwrap_or(i64::MAX)
+}
+
+/// Price the in-force covers under the current and the proposed version.
+pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -> DryRun {
+    let name = |t: &RateTable| format!("{} v{}", t.id, t.version);
+    let mut run = DryRun {
+        as_at,
+        current: name(&request.current),
+        proposed: name(&request.proposed),
+        covers: 0,
+        current_annual_minor: 0,
+        proposed_annual_minor: 0,
+        change_minor: 0,
+        no_age: 0,
+        no_rate_in_either: 0,
+        newly_rated: 0,
+        left_without_a_rate: 0,
+        left_without_a_rate_examples: Vec::new(),
+        cells: Vec::new(),
+        largest_changes: Vec::new(),
+        passed: true,
+    };
+    let mut cells: BTreeMap<(u32, String, Option<bool>), DryRunCell> = BTreeMap::new();
+    for c in book {
+        let age = if request.age_at_start { c.age_at_start } else { c.age };
+        let Some(age) = age else {
+            run.no_age += 1;
+            continue;
+        };
+        let (current, proposed) = match (rate_for(&request.current, age, c), rate_for(&request.proposed, age, c)) {
+            (Some(current), Some(proposed)) => (current, proposed),
+            (None, None) => {
+                run.no_rate_in_either += 1;
+                continue;
+            }
+            (None, Some(_)) => {
+                run.newly_rated += 1;
+                continue;
+            }
+            (Some(_), None) => {
+                run.left_without_a_rate += 1;
+                if run.left_without_a_rate_examples.len() < DRY_RUN_LISTED {
+                    run.left_without_a_rate_examples.push(format!("{}/{}", c.policy, c.cover));
+                }
+                continue;
+            }
+        };
+        let current = annual_minor(current, request.per_life, c.sum_insured_minor);
+        let proposed = annual_minor(proposed, request.per_life, c.sum_insured_minor);
+        run.covers += 1;
+        run.current_annual_minor = run.current_annual_minor.saturating_add(current);
+        run.proposed_annual_minor = run.proposed_annual_minor.saturating_add(proposed);
+        let sex = crate::mart::sex_name(c.sex).to_string();
+        let cell = cells.entry((age / 5, sex.clone(), c.smoker)).or_insert_with(|| DryRunCell {
+            age_band: crate::mart::age_band(Some(age)),
+            sex,
+            smoker: c.smoker,
+            covers: 0,
+            current_annual_minor: 0,
+            proposed_annual_minor: 0,
+        });
+        cell.covers += 1;
+        cell.current_annual_minor = cell.current_annual_minor.saturating_add(current);
+        cell.proposed_annual_minor = cell.proposed_annual_minor.saturating_add(proposed);
+        if current != proposed {
+            run.largest_changes.push(DryRunChange {
+                partition: c.partition,
+                policy: c.policy.to_string(),
+                cover: c.cover.clone(),
+                layer: c.layer,
+                age,
+                current_annual_minor: current,
+                proposed_annual_minor: proposed,
+            });
+        }
+    }
+    run.change_minor = run.proposed_annual_minor.saturating_sub(run.current_annual_minor);
+    run.cells = cells.into_values().collect();
+    // A stable sort, so covers that move by the same amount stay in book order.
+    run.largest_changes
+        .sort_by_key(|m| std::cmp::Reverse(m.proposed_annual_minor.abs_diff(m.current_annual_minor)));
+    run.largest_changes.truncate(DRY_RUN_LISTED);
+    run.passed = run.left_without_a_rate == 0;
+    run
 }
 
 /// Load the schemas each table ID is validated against. The module must

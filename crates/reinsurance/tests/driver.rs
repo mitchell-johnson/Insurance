@@ -15,7 +15,7 @@ use ic_ledger::PartitionId;
 use ic_money::Currency::NZD;
 use ic_product::{Frequency, Sex};
 use ic_reinsurance::delivery::CoreDelivery;
-use ic_reinsurance::driver::{group_command, handed, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
+use ic_reinsurance::driver::{group_command, handed, payments_command, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
 use ic_reinsurance::host::{answer, module_spec, react, Query, MAX_ANSWER, MODULE};
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_reinsurance::machine::Audience;
@@ -580,14 +580,20 @@ fn status(policy: &str, to: ic_core::PolicyStatus) -> ic_core::event::Event {
 }
 
 /// Purpose: the driver process reads its settings from the environment, falls back to its
-/// defaults, and refuses to start without the cluster's addresses or with a setting that is
-/// not a number above zero.
+/// defaults, and refuses to start without the cluster's addresses, without the storage
+/// account and Event Hubs namespace, or with a setting that is not a number above zero.
 /// Why it matters: a driver that started with a zero pause would spin a core; one that
-/// started with no cluster would look healthy and carry nothing.
+/// started with no cluster would look healthy and carry nothing; and one that started with
+/// nowhere to file statements would leave them in the outbox with nobody the wiser.
 #[test]
 fn the_driver_process_checks_its_settings() {
     let lookup = |pairs: &'static [(&'static str, &'static str)]| move |key: &str| pairs.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_string());
-    let config = Config::from_lookup(lookup(&[("IC_NODES", " node-1:7000,node-2:7000 ")])).unwrap();
+    let config = Config::from_lookup(lookup(&[
+        ("IC_NODES", " node-1:7000,node-2:7000 "),
+        ("IC_BLOB_ENDPOINT", "https://acct.blob.core.windows.net"),
+        ("IC_EVENT_HUBS_ENDPOINT", "https://ns.servicebus.windows.net"),
+    ]))
+    .unwrap();
     assert_eq!(
         config,
         Config {
@@ -595,6 +601,10 @@ fn the_driver_process_checks_its_settings() {
             cycle_every: Duration::from_secs(2),
             patience: Duration::from_secs(10),
             batch: 100,
+            records_endpoint: "https://acct.blob.core.windows.net".into(),
+            records_container: "reinsurance-records".into(),
+            event_hubs: "https://ns.servicebus.windows.net".into(),
+            event_hub: "reinsurance-events".into(),
         }
     );
     let tuned = Config::from_lookup(lookup(&[
@@ -602,14 +612,26 @@ fn the_driver_process_checks_its_settings() {
         ("IC_REINSURANCE_CYCLE_MS", "250"),
         ("IC_REINSURANCE_PATIENCE_MS", "3000"),
         ("IC_REINSURANCE_BATCH", "7"),
+        ("IC_BLOB_ENDPOINT", "b"),
+        ("IC_EVENT_HUBS_ENDPOINT", "e"),
+        ("IC_REINSURANCE_RECORDS_CONTAINER", "records"),
+        ("IC_REINSURANCE_EVENT_HUB", "hub"),
     ]))
     .unwrap();
     assert_eq!(
         (tuned.cycle_every, tuned.patience, tuned.batch),
         (Duration::from_millis(250), Duration::from_secs(3), 7)
     );
+    assert_eq!((tuned.records_container.as_str(), tuned.event_hub.as_str()), ("records", "hub"));
     assert!(Config::from_lookup(lookup(&[])).unwrap_err().contains("IC_NODES"));
     assert!(Config::from_lookup(lookup(&[("IC_NODES", "  ")])).unwrap_err().contains("IC_NODES"));
+    // Nowhere to file statements, or nobody to tell of exceptions, is not a way to run.
+    assert!(Config::from_lookup(lookup(&[("IC_NODES", "n:1"), ("IC_EVENT_HUBS_ENDPOINT", "e")]))
+        .unwrap_err()
+        .contains("IC_BLOB_ENDPOINT"));
+    assert!(Config::from_lookup(lookup(&[("IC_NODES", "n:1"), ("IC_BLOB_ENDPOINT", "b")]))
+        .unwrap_err()
+        .contains("IC_EVENT_HUBS_ENDPOINT"));
     for bad in ["0", "-5", "soon"] {
         let pairs: &'static [(&str, &str)] = Box::leak(Box::new([("IC_NODES", "n:1"), ("IC_REINSURANCE_CYCLE_MS", bad)]));
         assert!(Config::from_lookup(lookup(pairs)).unwrap_err().contains("IC_REINSURANCE_CYCLE_MS"), "{bad}");
@@ -790,6 +812,37 @@ fn a_reply_to_a_notice_is_taken_only_when_it_says_so() {
     }
 }
 
+/// Purpose: a settlement due to a reinsurer becomes the payments module's "offer payment"
+/// command, keyed by the statement so it is one payment however often it is offered; money
+/// due from a reinsurer, a nil settlement and any other notice produce no command.
+/// Why it matters: the payment reference goes to the bank as the end-to-end reference and
+/// comes back on the settlement. If it changed between tries a reinsurer could be paid twice
+/// for one statement; if a negative net were offered, payments would refuse it and an
+/// exception would open every month for a statement that is in order.
+#[test]
+fn a_settlement_due_is_offered_to_payments_once_per_statement() {
+    let due = |net_minor: i64| Notice::SettlementDue {
+        statement: 7,
+        treaty: "retail".into(),
+        reinsurer: "north-re".into(),
+        currency: ic_money::Currency::NZD,
+        net_minor,
+    };
+    assert_eq!(
+        payments_command(&due(90_000_00)).unwrap(),
+        json!({
+            "key": "reinsurance:settlement:7",
+            "actor": {"id": "reinsurance", "roles": ["service"]},
+            "at": "1970-01-01T00:00:00",
+            "command": {"type": "offer_payment", "waiting": {
+                "payment": "ri-stmt-7", "source": "reinsurance:statement:7", "payee": "north-re", "amount_minor": 90_000_00}},
+        })
+    );
+    assert_eq!(payments_command(&due(0)), None);
+    assert_eq!(payments_command(&due(-1)), None);
+    assert_eq!(payments_command(&Notice::ExceptionClosed { id: "x".into() }), None);
+}
+
 /// An audience that records what it is handed, and can refuse or be away.
 #[derive(Clone, Default)]
 struct TestAudiences {
@@ -915,6 +968,49 @@ async fn notices_are_handed_to_the_audience_they_are_for() {
         })
     );
     assert_eq!(group_command(1, &Notice::ExceptionClosed { id: "x".into() }, d(2027, 3, 2)), None);
+}
+
+/// A feed for staff that keeps the IDs it was sent.
+#[derive(Clone, Default)]
+struct StaffSeen(Arc<Mutex<Vec<String>>>);
+
+impl ic_reinsurance::carriers::StaffFeed for StaffSeen {
+    async fn publish(&self, id: &str, _kind: &str, _body: serde_json::Value) -> Result<(), ic_azure::AzureError> {
+        self.0.lock().unwrap().push(id.to_string());
+        Ok(())
+    }
+}
+
+/// Purpose: with every carrier in place a round empties the outbox: notices for staff go to
+/// their feed and are acknowledged like any other. And while one audience is away (here
+/// group administration) the round still tells staff, reports the failure, and hands the
+/// waiting notices to that audience on the next round, each once.
+/// Why it matters: the exceptions for staff are how anyone learns that something else is
+/// stuck. If an hour's outage of one module, or of Blob Storage, held every notice behind
+/// it, staff would hear nothing in exactly the hour they most need to.
+#[tokio::test]
+async fn one_audience_being_away_does_not_keep_staff_waiting() {
+    let mut w = World::new();
+    let waiting = with_group_notices(&mut w);
+    let for_staff = w.module.state().notices_for(Audience::Staff, usize::MAX).len();
+    assert!(for_staff >= 2);
+    let carriers = ic_reinsurance::carriers::Carriers {
+        modules: TestAudiences::default(),
+        records: ic_azure::blob::MemoryWormStore::default(),
+        staff: StaffSeen::default(),
+    };
+    *carriers.modules.away.lock().unwrap() = true;
+    assert!(matches!(w.driver.hand_on(&carriers, d(2027, 3, 2)).await, Err(DriverError::Unavailable(_))));
+    assert_eq!(carriers.staff.0.lock().unwrap().len(), for_staff);
+    let state = w.module.state();
+    assert!(state.notices_for(Audience::Staff, usize::MAX).is_empty());
+    assert_eq!(state.notices_for(Audience::Group, usize::MAX).len(), 2);
+
+    *carriers.modules.away.lock().unwrap() = false;
+    assert_eq!(w.driver.hand_on(&carriers, d(2027, 3, 2)).await.unwrap(), Round { taken: 2, refused: 0 });
+    assert_eq!(carriers.modules.taken.lock().unwrap().iter().map(|(s, _, _)| *s).collect::<Vec<_>>(), waiting);
+    assert_eq!(carriers.staff.0.lock().unwrap().len(), for_staff, "nothing is told twice");
+    assert!(w.module.state().notices(usize::MAX).is_empty());
 }
 
 /// Purpose: a notice its audience refuses is set aside with an exception and does not hold

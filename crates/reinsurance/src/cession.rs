@@ -76,9 +76,24 @@ pub struct Risk {
     /// loaded with.
     #[serde(default)]
     pub migrated: Option<Cession>,
+    /// For a layer the core wrote again on new underwriting terms: the start
+    /// and key of the cover it continues, back to the first. The cover keeps
+    /// that place in the life's retention order and that age under its treaty.
+    #[serde(default)]
+    pub continues: Option<(NaiveDate, RiskKey)>,
 }
 
 impl Risk {
+    /// When the cover began, through every rewrite of its terms.
+    pub fn began(&self) -> NaiveDate {
+        self.continues.as_ref().map_or(self.start, |(start, _)| *start)
+    }
+
+    /// The cover's place in the order retention is filled in.
+    fn place(&self) -> (NaiveDate, &RiskKey) {
+        self.continues.as_ref().map_or((self.start, &self.key), |(start, key)| (*start, key))
+    }
+
     pub fn amount_on(&self, on: NaiveDate) -> i64 {
         self.amounts.iter().rev().find(|(d, _)| *d <= on).map_or(0, |(_, a)| *a)
     }
@@ -368,7 +383,7 @@ fn split(risk: &Risk, treaty: &Treaty, tref: &TreatyRef, sar: i64, on: NaiveDate
 
 /// The fixed order retention is filled in.
 pub fn allocation_order(a: &Risk, b: &Risk) -> std::cmp::Ordering {
-    (a.start, &a.key).cmp(&(b.start, &b.key))
+    (a.place(), &a.key).cmp(&(b.place(), &b.key))
 }
 
 /// The cession on every cover of one life, from every date on which it

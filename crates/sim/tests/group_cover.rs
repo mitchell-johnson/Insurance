@@ -71,6 +71,7 @@ fn excess(id: &PolicyId, start: NaiveDate, loading: Option<&str>, itemised: bool
         loadings: loading.map(|l| DecStr::parse(l).unwrap()).into_iter().collect(),
         exclusions: vec![],
         loading_itemised: itemised,
+        member_pays: Default::default(),
         reference: "uw-1".into(),
     }
 }
@@ -820,4 +821,58 @@ fn nothing_changes_membership_or_layers_while_an_invoice_is_being_built() {
         add(&mut c, p, excess(&id, d(2027, 11, 5), None, false)).unwrap_err().code,
         "invoice_in_progress"
     );
+}
+
+/// Purpose: a member who joins a scheme after issue, and a member whose details change, are
+/// published with their rating factors as last recorded, occupation class included.
+/// Why it matters: the in-force, movement and experience extracts group lives by age, sex,
+/// smoker status and occupation class. Members who joined after issue used to reach the
+/// stream with no factors at all, so on a growing scheme most of the lives could not be
+/// placed in any cell.
+#[test]
+fn a_joiner_and_a_changed_member_are_published_with_their_rating_factors() {
+    let mut c = cluster(d(2027, 11, 15));
+    let (p, id) = scheme(&mut c);
+    let mut joiner = member("late-1", d(1985, 4, 2), "staff", 80_000_00);
+    joiner.factors.sex = Some(ic_product::Sex::Male);
+    joiner.factors.occupation_class = Some("2".into());
+    let mut changed = joiner.factors.clone();
+    changed.smoker = Some(true);
+    c.take_events();
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Joined {
+            life: joiner,
+            effective: d(2027, 11, 15),
+        }],
+    )
+    .unwrap();
+    membership(
+        &mut c,
+        p,
+        &id,
+        vec![MemberChange::Changed {
+            life: life("late-1"),
+            effective: d(2027, 11, 15),
+            factors: changed,
+        }],
+    )
+    .unwrap();
+    let seen = events(&mut c);
+    let joined = seen.iter().find_map(|e| match e {
+        Event::MemberJoined { info, .. } => info.clone(),
+        _ => None,
+    });
+    let joined = joined.expect("the joiner carries its factors");
+    assert_eq!(
+        (joined.life, joined.date_of_birth, joined.sex, joined.smoker, joined.occupation_class.as_deref()),
+        (life("late-1"), Some(d(1985, 4, 2)), Some(ic_product::Sex::Male), None, Some("2"))
+    );
+    let after = seen.iter().find_map(|e| match e {
+        Event::MemberChanged { info, .. } => info.clone(),
+        _ => None,
+    });
+    assert_eq!(after.expect("the change carries the new factors").smoker, Some(true));
 }

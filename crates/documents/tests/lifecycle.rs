@@ -223,6 +223,7 @@ fn replayed_history_sends_nothing() {
                     policy: pol.clone(),
                     layer,
                     origin: ic_core::LayerOrigin::Indexation,
+                    continues: None,
                 },
             ),
         ]),
@@ -531,4 +532,50 @@ fn replaying_the_log_reaches_the_same_state() {
     assert_eq!(again.state.state_hash(), kit.state.state_hash());
     let restored: DocumentsState = serde_json::from_slice(&serde_json::to_vec(&kit.state).unwrap()).unwrap();
     assert_eq!(restored, kit.state);
+}
+
+/// Purpose: idempotency keys older than the keeping period are forgotten
+/// as ticks pass, a bounded number per tick, while recent keys still
+/// return the original result, and a saved state without the key log loads.
+/// Why it matters: every issued document leaves a key, so without pruning
+/// the replicated state and every snapshot grow for the life of the
+/// insurer; forgetting a key too soon would let a retry repeat a command.
+#[test]
+fn old_keys_are_forgotten_and_recent_ones_kept() {
+    use ic_documents::state::{KEEP_KEYS_DAYS, MAX_CHUNK};
+    let mut kit = Kit::new();
+    let refused = |kit: &mut Kit, key: &str| {
+        kit.send_keyed(
+            key,
+            "nobody",
+            "svc",
+            Command::DismissTrigger {
+                trigger: "t".into(),
+                reason: "r".into(),
+            },
+        )
+    };
+    for i in 0..MAX_CHUNK + 5 {
+        assert_eq!(refused(&mut kit, &format!("old-{i}")).result.unwrap_err().code, "not_allowed");
+    }
+    kit.advance_days(KEEP_KEYS_DAYS);
+    kit.tick();
+    assert_eq!(kit.state.remembered_keys(), MAX_CHUNK + 5, "a key is kept for the whole period");
+    assert!(refused(&mut kit, "old-0").duplicate);
+
+    kit.advance_days(1);
+    assert!(refused(&mut kit, "recent").result.is_err());
+    kit.tick();
+    // One tick forgets a bounded number, oldest first; the next finishes.
+    assert_eq!(kit.state.remembered_keys(), 5 + 1);
+    kit.tick();
+    assert_eq!(kit.state.remembered_keys(), 1);
+    assert!(refused(&mut kit, "recent").duplicate);
+    // A forgotten key is judged again on its merits.
+    assert!(!refused(&mut kit, "old-0").duplicate);
+
+    let mut saved = serde_json::to_value(&kit.state).unwrap();
+    saved.as_object_mut().unwrap().remove("key_log").expect("the state saves its key log");
+    let older: DocumentsState = serde_json::from_value(saved).unwrap();
+    assert_eq!(older.remembered_keys(), 2);
 }

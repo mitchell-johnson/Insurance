@@ -52,6 +52,10 @@ pub struct ClaimsState {
     /// Health benefit used: per policy year and over the lifetime.
     pub health_used: BTreeMap<String, i64>,
     pub control: Control,
+    /// Claims of a policy that is moving to another partition: out of every
+    /// index and unreachable until the move completes or is called off.
+    #[serde(default)]
+    pub in_transfer: BTreeMap<String, Moved>,
     // Indexes, rebuilt by `commit` from the claims themselves.
     pub due_index: BTreeSet<(NaiveDate, ClaimId)>,
     pub by_policy: BTreeMap<String, BTreeSet<ClaimId>>,
@@ -61,6 +65,86 @@ pub struct ClaimsState {
     /// Claims with an overpayment being recovered by offset.
     pub offsetting: BTreeSet<ClaimId>,
     pub owned: BTreeMap<StaffId, BTreeSet<ClaimId>>,
+}
+
+/// Everything claims holds for one policy, as it travels with the policy.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Moved {
+    pub claims: Vec<Claim>,
+    pub pre_approvals: BTreeMap<ClaimId, PreApproval>,
+    /// Health benefit used by the policy's lives, by the same keys.
+    pub health_used: BTreeMap<String, i64>,
+}
+
+impl ClaimsState {
+    /// What would travel with a policy. Refused while one of its claims is
+    /// in a payment run that has not been approved or cancelled.
+    pub fn moving(&self, policy: &str) -> Result<Moved, Reject> {
+        let ids = self.by_policy.get(policy).cloned().unwrap_or_default();
+        let claims: Vec<Claim> = ids.iter().filter_map(|id| self.claims.get(id)).cloned().collect();
+        if claims.iter().any(|c| c.in_run.is_some()) {
+            return Err(Reject::new(
+                "claim_in_run",
+                "a claim on this policy is in a payment run; approve or cancel the run first",
+            ));
+        }
+        let prefix = format!("{policy}/");
+        Ok(Moved {
+            pre_approvals: self
+                .pre_approvals
+                .iter()
+                .filter(|(id, _)| ids.contains(*id))
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            health_used: self
+                .health_used
+                .iter()
+                .filter(|(k, _)| k.starts_with(&prefix))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect(),
+            claims,
+        })
+    }
+
+    /// The policy has started to move: its claims leave every index and
+    /// wait, so nothing can be done to them on either side meanwhile.
+    pub fn detach(&mut self, policy: &str) -> Result<(), Reject> {
+        let moved = self.moving(policy)?;
+        for c in &moved.claims {
+            if let Some(old) = self.claims.remove(&c.id) {
+                self.index(&old, false);
+            }
+            self.pre_approvals.remove(&c.id);
+        }
+        for key in moved.health_used.keys() {
+            self.health_used.remove(key);
+        }
+        self.by_policy.remove(policy);
+        self.in_transfer.insert(policy.to_string(), moved);
+        Ok(())
+    }
+
+    /// The move was called off: the claims are back as they were.
+    pub fn reattach(&mut self, policy: &str) {
+        if let Some(moved) = self.in_transfer.remove(policy) {
+            self.attach(moved);
+        }
+    }
+
+    /// The policy has landed elsewhere: this partition lets its claims go.
+    pub fn release(&mut self, policy: &str) {
+        self.in_transfer.remove(policy);
+    }
+
+    /// Claims arriving with a policy: registered again with their timers,
+    /// schedules and limits exactly as they left.
+    pub fn attach(&mut self, moved: Moved) {
+        self.pre_approvals.extend(moved.pre_approvals);
+        self.health_used.extend(moved.health_used);
+        for claim in moved.claims {
+            self.commit(claim);
+        }
+    }
 }
 
 /// What a handler has to hand while one command applies.
@@ -95,8 +179,13 @@ impl Cx<'_> {
             .filter(|p| p.party == payee)
             .map(|p| p.account_ref.clone())
             .unwrap_or_default();
+        // The run it went out in, so the payments module can confirm the run once every item has settled.
+        let lump = claim.payments.iter().find(|p| p.payment_ref == payment_ref).and_then(|p| p.run.clone());
+        let periods = claim.schedule.iter().flat_map(|s| s.periods.values());
+        let run = lump.or_else(|| periods.filter(|p| p.payment_ref == payment_ref).map(|p| p.run.clone()).next());
         let detail = [
             ("policy", claim.policy.clone()),
+            ("run", run.unwrap_or_default()),
             ("account_ref", account_ref),
             ("payment_ref", payment_ref.to_string()),
             ("amount_minor", gross_minor.to_string()),
@@ -247,6 +336,12 @@ impl ClaimsState {
                 actor,
             } => self.pay_cost(cx, &claim, payment_ref, &item, &provider, &actor),
             Command::StartWaiver { claim, from, actor } => self.start_waiver(cx, &claim, from, &actor),
+            Command::PayInterest {
+                claim,
+                payment_ref,
+                party,
+                actor,
+            } => self.pay_interest(cx, &claim, payment_ref, &party, &actor),
             Command::PaymentReturned { claim, payment_ref } => self.payment_returned(cx, &claim, &payment_ref),
             Command::DeclareIncome {
                 claim,
@@ -491,11 +586,12 @@ impl ClaimsState {
             }
             Due::Review(kind) => {
                 open_task(claim, cx, format!("review/{kind:?}/{on}"), kind, Some(on));
-                claim.due.insert((plus_days(on, self.rules.review_grace_days), Due::ReviewOverdue(kind)));
-                let months = match kind {
-                    TaskKind::MedicalReview => self.rules.medical_review_months,
-                    _ => self.rules.income_declaration_months,
+                let (grace, months) = match kind {
+                    TaskKind::ProofOfLife => (self.rules.proof_of_life_grace_days, self.rules.proof_of_life_months),
+                    TaskKind::MedicalReview => (self.rules.review_grace_days, self.rules.medical_review_months),
+                    _ => (self.rules.review_grace_days, self.rules.income_declaration_months),
                 };
+                claim.due.insert((plus_days(on, grace), Due::ReviewOverdue(kind)));
                 if let Some(s) = claim.schedule.as_mut() {
                     let next = plus_months(on, months.max(1));
                     if next < s.end {

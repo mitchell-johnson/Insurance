@@ -302,6 +302,7 @@ fn set_cancellation_aside(
             net_fine: BTreeMap::new(),
             earned_fine: BTreeMap::new(),
             closed: false,
+            payer: None,
             entry: ctx.entries.get(posted).map(|e| e.id),
             settled_on: None,
         });

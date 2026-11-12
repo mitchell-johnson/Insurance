@@ -44,5 +44,5 @@ def aged(kind, name, owner, day, by, max_age_days, max_amount_minor, blocking = 
         "blocking": blocking,
     }
 
-def close_config(version, checks, aged = []):
-    return {"version": version, "checks": checks, "aged": aged}
+def close_config(version, checks, aged = [], holidays = []):
+    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays}

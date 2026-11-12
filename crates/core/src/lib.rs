@@ -30,10 +30,12 @@ mod earning;
 mod group;
 mod lifecycle;
 mod postings;
+mod reduce;
 mod reopen;
 mod transfer;
 mod underwritten;
 mod unwind;
+pub mod voluntary;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};

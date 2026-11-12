@@ -413,6 +413,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             loadings: vec![],
             exclusions: vec![],
             loading_itemised: false,
+            member_pays: Default::default(),
             reference: "uw".into(),
         })),
         Command::EndExcessLayer {
@@ -430,6 +431,37 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             exclusions: vec![],
             reference: "uw".into(),
         })),
+        Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+            policy: p.clone(),
+            cover: "life".into(),
+            life: LifeId("l".into()),
+            loadings: vec![],
+            exclusions: vec![],
+            reference: "uw".into(),
+        })),
+        Command::ApproveReinstatement(Box::new(ic_core::command::ReinstatementTerms {
+            policy: p.clone(),
+            reference: "uw".into(),
+            valid_until: d(2027, 1, 1),
+            terms: vec![],
+        })),
+        Command::ReduceCover(Box::new(ic_core::command::ReduceCover {
+            policy: p.clone(),
+            cover: "life".into(),
+            life: LifeId("l".into()),
+            sum_insured_minor: 0,
+        })),
+        Command::ApplyMemberReceipt {
+            policy: p.clone(),
+            life: LifeId("l".into()),
+            receipt: "r".into(),
+            amount: Money::new(1, NZD),
+        },
+        Command::RefundMemberCredit {
+            policy: p.clone(),
+            life: LifeId("l".into()),
+            amount: Money::new(1, NZD),
+        },
         Command::ApplyReceipt {
             policy: p.clone(),
             receipt: "r".into(),
@@ -538,7 +570,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 34, "{names:?}");
+    assert_eq!(names.len(), 39, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

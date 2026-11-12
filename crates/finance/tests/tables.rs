@@ -362,3 +362,43 @@ fn a_schema_that_cannot_check_anything_is_refused() {
     );
     assert!(!report.passed());
 }
+
+/// Purpose: a schema that declares occupation classes needs one row for every class in
+/// every cell. The shipped group table, which has none, is short of all four cells; the
+/// same table written out by class passes; two rows that differ only by class are two
+/// cells, so against the previous version one class's rate moving by a fifth is listed
+/// under that class alone; and a class the schema does not declare is refused.
+/// Why it matters: occupation class is a rating factor. If the checks ignored it, two
+/// rows for different classes would look like one cell declared twice, and a mis-keyed
+/// rate for one class would be compared with another class's rate or not compared at all.
+#[test]
+fn a_table_rated_by_occupation_class_is_checked_class_by_class() {
+    let mut by_class = schema("group-life-standard");
+    by_class.occupation_classes = vec!["1".to_string(), "2".to_string()];
+    let check = |source: &str, previous: Option<&RateTable>| validate(&load_rate_table("g.star", source).unwrap(), &by_class, &manifest(), previous);
+
+    let missing: Vec<String> = blocked(&check(GROUP, None), Check::Shape).into_iter().map(|(cell, _)| cell).collect();
+    assert_eq!(missing, ["executive class 1", "executive class 2", "staff class 1", "staff class 2"]);
+
+    let rows = r#"rate("1.10", category = "staff", occupation_class = "1"),
+        rate("1.30", category = "staff", occupation_class = "2"),
+        rate("1.45", category = "executive", occupation_class = "1"),
+        rate("1.70", category = "executive", occupation_class = "2"),"#;
+    let start = GROUP.find("rate(\"1.10\"").unwrap();
+    let end = GROUP.find("    ],").unwrap();
+    let classed = format!("{}{rows}\n{}", &GROUP[..start], &GROUP[end..]);
+    let first = check(&classed, None);
+    assert!(first.findings.is_empty(), "{:?}", first.findings);
+
+    let next = classed.replace("version = 1", "version = 2").replace("\"1.30\"", "\"1.56\"");
+    let previous = load_rate_table("g.star", &classed).unwrap();
+    let report = check(&next, Some(&previous));
+    let listed: Vec<&str> = report.findings.iter().filter(|f| f.check == Check::Change).map(|f| f.cell.as_str()).collect();
+    assert_eq!(listed, ["staff class 2"]);
+    assert!(report.passed());
+
+    let unknown = check(&classed.replace("occupation_class = \"2\"", "occupation_class = \"9\""), None);
+    let refused = blocked(&unknown, Check::Schema);
+    assert_eq!(refused.len(), 2, "{refused:?}");
+    assert_eq!(refused[0], ("staff class 9".to_string(), "the schema has no such rating cell".to_string()));
+}

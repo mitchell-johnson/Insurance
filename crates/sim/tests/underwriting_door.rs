@@ -194,7 +194,7 @@ fn an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left() {
     );
     let events = c.take_events();
     assert!(events.iter().any(|e| matches!(&e.event,
-        ic_core::Event::LayerAdded { layer, origin: ic_core::LayerOrigin::Increase, .. } if layer.layer == 2 && layer.start == today && layer.sum_insured_minor == 100_000_00)));
+        ic_core::Event::LayerAdded { layer, origin: ic_core::LayerOrigin::Increase, continues: None, .. } if layer.layer == 2 && layer.start == today && layer.sum_insured_minor == 100_000_00)));
     assert!(events.iter().any(|e| matches!(&e.event,
         ic_core::Event::PremiumAdjusted { effective, total_minor, .. } if *effective == today && *total_minor == adjustment.total_minor)));
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
@@ -282,4 +282,391 @@ fn an_increase_that_cannot_be_priced_or_is_not_underwritings_is_refused() {
     c.submit(0, "underwriting", Command::CancelPolicy { policy: id.clone() }).unwrap();
     assert_eq!(code(c.submit(0, "underwriting", increase(&id, "life", 50_000_00, None))), "not_in_force");
     days(&mut c, 2);
+}
+
+fn terms(policy: &PolicyId, life: &str, cover: &str, loading: Option<&str>, exclusions: &[&str]) -> Command {
+    Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+        policy: policy.clone(),
+        cover: cover.into(),
+        life: ic_core::LifeId(life.into()),
+        loadings: loading.map(|l| ic_money::DecStr::parse(l).unwrap()).into_iter().collect(),
+        exclusions: exclusions.iter().map(|e| e.to_string()).collect(),
+        reference: "uw-decision-2".into(),
+    }))
+}
+
+/// Purpose: underwriting changes the terms on cover a life already holds, part way through a
+/// month already billed. Only the layers whose terms differ are ended and written again, each
+/// with its sum insured, its origin and the date its premium is rated from, and announced as
+/// carrying on the layer it replaces; a loading put on
+/// bills the days left of the month, a loading taken off credits them; asking for the terms
+/// the cover already has is refused; and the books reconcile throughout.
+/// Why it matters: an alteration must not look like new cover. A layer that lost its origin
+/// would pay commission again, one that lost its rating date would reprice a level premium at
+/// today's age, and one that kept its old loading after underwriting removed it would go on
+/// charging a customer for a risk the insurer has agreed is gone.
+#[test]
+fn a_change_of_terms_rewrites_each_layer_and_bills_or_credits_the_days_left() {
+    let mut c = cluster();
+    let application = term_life(13, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
+    let id = application.policy.clone();
+    c.submit(0, "new-business", issue_command(application)).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    c.submit(0, "underwriting", increase(&id, "life", 100_000_00, Some("0.5"))).unwrap();
+    let before = c.state(0).policies[&id].clone();
+    let increase_adjustment = before.receivables.last().unwrap().total_minor;
+    c.take_events();
+
+    // The increase already carries these terms, so only the original layer changes.
+    c.submit(0, "underwriting", terms(&id, "life-1", "life", Some("0.5"), &["EX-BACK"])).unwrap();
+    let policy = c.state(0).policies[&id].clone();
+    let layers = &policy.covers["life"].layers;
+    assert_eq!(layers.len(), 3);
+    assert_eq!((layers[0].end, layers[1].end), (Some(today), None));
+    let rewritten = &layers[2];
+    assert_eq!(
+        (rewritten.id, rewritten.start, rewritten.end, rewritten.sum_insured_minor, rewritten.origin),
+        (3, today, None, 400_000_00, ic_core::LayerOrigin::Original)
+    );
+    assert_eq!(rewritten.rated_from, Some(start()), "the premium is still rated from the day the cover began");
+    assert_eq!(
+        (rewritten.loadings[0].as_str(), rewritten.exclusions.as_slice()),
+        ("0.5", &["EX-BACK".to_string()][..])
+    );
+    let events = c.take_events();
+    assert!(events.iter().any(|e| matches!(&e.event,
+        ic_core::Event::LayerEnded { layer: 1, effective, sum_insured_minor: 400_000_00, .. } if *effective == today)));
+    assert!(events.iter().any(|e| matches!(&e.event,
+        ic_core::Event::LayerAdded { layer, origin: ic_core::LayerOrigin::Original, continues: Some(1), .. } if layer.layer == 3 && layer.start == today && layer.sum_insured_minor == 400_000_00)));
+    // Cover that is new says so by saying nothing: only a rewritten layer names the one it carries on.
+    let json = serde_json::to_value(&events.iter().find(|e| matches!(&e.event, ic_core::Event::LayerAdded { .. })).unwrap().event).unwrap();
+    assert_eq!(json["layer_added"]["continues"], 1);
+
+    // Four times the sum of the increase at the same 50% loading, but the loading alone: the
+    // increase's adjustment was 100,000 at 150%, this one is 400,000 at 50%.
+    let loaded = policy.receivables.last().unwrap().clone();
+    assert_eq!(
+        (loaded.kind, loaded.period_start, loaded.period_end, loaded.due),
+        (ic_core::policy::ReceivableKind::Adjustment, today, d(2027, 12, 15), today)
+    );
+    let expected = increase_adjustment * 4 / 3;
+    assert!((loaded.total_minor - expected).abs() <= 4, "{} against {expected}", loaded.total_minor);
+    assert!(events.iter().any(|e| matches!(&e.event,
+        ic_core::Event::PremiumAdjusted { effective, total_minor, .. } if *effective == today && *total_minor == loaded.total_minor)));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // The same terms again change nothing, and say so.
+    let unchanged = c.state(0).policies[&id].clone();
+    assert_eq!(
+        code(c.submit(0, "underwriting", terms(&id, "life-1", "life", Some("0.5"), &["EX-BACK"]))),
+        "no_change"
+    );
+    assert!(c.state(0).policies[&id] == unchanged);
+
+    // Five days on underwriting takes the loading and the exclusion off all of it: both
+    // layers in force are rewritten and the days left are credited.
+    days(&mut c, 5);
+    let later = c.business_date().unwrap();
+    assert_eq!(later, d(2027, 11, 30));
+    c.submit(0, "underwriting", terms(&id, "life-1", "life", None, &[])).unwrap();
+    let policy = c.state(0).policies[&id].clone();
+    let layers = &policy.covers["life"].layers;
+    assert_eq!(layers.len(), 5);
+    assert!(layers[..3].iter().all(|l| l.end.is_some()));
+    let standard: Vec<_> = layers[3..]
+        .iter()
+        .map(|l| (l.sum_insured_minor, l.origin, l.rated_from, l.loadings.len(), l.exclusions.len(), l.start))
+        .collect();
+    assert_eq!(
+        standard,
+        vec![
+            (100_000_00, ic_core::LayerOrigin::Increase, Some(today), 0, 0, later),
+            (400_000_00, ic_core::LayerOrigin::Original, Some(start()), 0, 0, later),
+        ]
+    );
+    let credit = policy.receivables.last().unwrap().clone();
+    assert_eq!(
+        (credit.kind, credit.period_start, credit.period_end),
+        (ic_core::policy::ReceivableKind::Adjustment, later, d(2027, 12, 15))
+    );
+    // 500,000 of loading at 50% for 15 days, against 400,000 of it for 20.
+    let expected = -(loaded.total_minor * 5 / 4 * 15 / 20);
+    assert!(
+        credit.total_minor < 0 && (credit.total_minor - expected).abs() <= 4,
+        "{} against {expected}",
+        credit.total_minor
+    );
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // The next month is billed on the terms now in force: standard rates on all 500,000.
+    days(&mut c, 16);
+    let policy = c.state(0).policies[&id].clone();
+    let first = &policy.receivables[0];
+    let december = policy.receivables.iter().find(|r| r.period_start == d(2027, 12, 15)).unwrap();
+    assert_eq!(december.kind, ic_core::policy::ReceivableKind::Period);
+    assert!(december.total_minor > first.total_minor && december.total_minor < first.total_minor * 3 / 2);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
+/// Purpose: a change of terms is refused whole, with nothing written, from any caller but
+/// underwriting; for a cover the policy does not have; for a negative loading; for a life with
+/// no cover to change; while billing has not caught up to today; and on a policy no longer in
+/// force. A change on the first day of a period not yet billed writes the layers and bills
+/// nothing, since the period's own bill will price them.
+/// Why it matters: the command rewrites the terms a claim is assessed on and the price of the
+/// cover. Accepting it from another caller would let terms change without a decision behind
+/// them; accepting it while billing is behind would leave days nobody is charged for.
+#[test]
+fn a_change_of_terms_that_cannot_be_priced_or_is_not_underwritings_is_refused() {
+    let mut c = cluster();
+    let application = term_life(14, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
+    let id = application.policy.clone();
+    c.submit(0, "new-business", issue_command(application)).unwrap();
+    days(&mut c, 2);
+    let untouched = c.state(0).policies[&id].clone();
+
+    assert_eq!(
+        code(c.submit(0, "policy-servicing", terms(&id, "life-1", "life", Some("0.25"), &[]))),
+        "caller_not_allowed"
+    );
+    assert_eq!(
+        code(c.submit(0, "underwriting", terms(&id, "life-1", "trauma", Some("0.25"), &[]))),
+        "unknown_cover"
+    );
+    assert_eq!(
+        code(c.submit(0, "underwriting", terms(&id, "life-1", "life", Some("-0.25"), &[]))),
+        "invalid_loading"
+    );
+    assert_eq!(code(c.submit(0, "underwriting", terms(&id, "life-9", "life", Some("0.25"), &[]))), "no_change");
+    assert_eq!(code(c.submit(0, "underwriting", terms(&id, "life-1", "life", None, &[]))), "no_change");
+    assert!(c.state(0).policies[&id] == untouched, "a refused change wrote nothing");
+
+    let mut date = c.business_date().unwrap();
+    while date < d(2027, 12, 15) {
+        date = date.succ_opt().unwrap();
+        c.submit(0, "leader", Command::AdvanceBusinessDate { to: date }).unwrap();
+    }
+    let billed = c.state(0).policies[&id].receivables.len();
+    c.submit(0, "underwriting", terms(&id, "life-1", "life", None, &["EX-BACK"])).unwrap();
+    let policy = c.state(0).policies[&id].clone();
+    assert_eq!(policy.receivables.len(), billed, "nothing is billed until the period is");
+    assert_eq!(policy.covers["life"].layers.len(), 2);
+    c.submit(0, "leader", Command::AdvanceBusinessDate { to: d(2027, 12, 16) }).unwrap();
+    assert_eq!(
+        code(c.submit(0, "underwriting", terms(&id, "life-1", "life", Some("0.25"), &["EX-BACK"]))),
+        "billing_behind"
+    );
+    c.submit(0, "end-of-day", Command::RunEndOfDay { policies: vec![id.clone()] }).unwrap();
+    c.submit(0, "underwriting", terms(&id, "life-1", "life", Some("0.25"), &["EX-BACK"])).unwrap();
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    c.submit(0, "underwriting", Command::CancelPolicy { policy: id.clone() }).unwrap();
+    assert_eq!(code(c.submit(0, "underwriting", terms(&id, "life-1", "life", None, &[]))), "not_in_force");
+    days(&mut c, 2);
+}
+
+/// A term life policy on a copy of the shipped product that lets a lapse of up to thirty days
+/// be reinstated on payment alone.
+fn evidence_after_thirty_days(c: &mut Cluster, n: u64) -> PolicyId {
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", "code = \"term-life-evidence\"")
+        .replace("reinstatement_days = 180", "reinstatement_days = 180, reinstatement_evidence_free_days = 30");
+    let product = ic_product::loader::load_product("term_life_evidence.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let mut issue = term_life(n, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
+    issue.product_code = "term-life-evidence".into();
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    id
+}
+
+fn approve(policy: &PolicyId, valid_until: NaiveDate, terms: Vec<ic_core::policy::LayerTerms>) -> Command {
+    Command::ApproveReinstatement(Box::new(ic_core::command::ReinstatementTerms {
+        policy: policy.clone(),
+        reference: "uw-decision-3".into(),
+        valid_until,
+        terms,
+    }))
+}
+
+fn loaded(life: &str, cover: &str, loading: &str) -> ic_core::policy::LayerTerms {
+    ic_core::policy::LayerTerms {
+        cover: cover.into(),
+        life: ic_core::LifeId(life.into()),
+        loadings: vec![ic_money::DecStr::parse(loading).unwrap()],
+        exclusions: vec!["EX-BACK".into()],
+    }
+}
+
+fn pay(c: &mut Cluster, policy: &PolicyId, receipt: &str) {
+    let amount = ic_money::Money::new(20_000_00, ic_money::Currency::NZD);
+    let receipt = receipt.to_string();
+    c.submit(
+        0,
+        "cash-matching",
+        Command::ApplyReceipt {
+            policy: policy.clone(),
+            receipt,
+            amount,
+        },
+    )
+    .unwrap();
+}
+
+fn reinstate(policy: &PolicyId) -> Command {
+    Command::Reinstate { policy: policy.clone() }
+}
+
+/// Purpose: where the product limits reinstatement on payment alone, a policy lapsed for less
+/// than that comes back when the arrears are paid; one lapsed longer is refused until
+/// underwriting has decided, and a decision that has gone stale counts for nothing. With the
+/// decision, the policy is reinstated and the cover goes onto underwriting's terms from that
+/// day: the layer is rewritten with its sum insured, origin and rating date, the days before
+/// are owed on the old terms, the days left of the month on the new, and the books reconcile.
+/// Why it matters: after months off risk the insurer is entitled to ask about the life's
+/// health before taking the risk back. Reinstating on payment alone lets a customer who has
+/// just had bad news buy back cover at the old price; and terms that were decided but not
+/// applied leave the policy priced, and claims assessed, as if nobody had asked.
+#[test]
+fn a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms() {
+    let mut c = cluster();
+    let soon = evidence_after_thirty_days(&mut c, 21);
+    let late = evidence_after_thirty_days(&mut c, 22);
+    let stale = evidence_after_thirty_days(&mut c, 23);
+    days(&mut c, 91);
+    let lapsed_on = c.business_date().unwrap();
+    assert_eq!(lapsed_on, d(2028, 2, 14));
+    assert!([&soon, &late, &stale].iter().all(|id| c.state(0).policies[*id].status == PolicyStatus::Lapsed));
+
+    // Thirty days lapsed: payment is still enough.
+    days(&mut c, 30);
+    pay(&mut c, &soon, "soon");
+    c.submit(0, "collections", reinstate(&soon)).unwrap();
+    assert_eq!(c.state(0).policies[&soon].status, PolicyStatus::InForce);
+
+    // Forty days: not without underwriting, however much is paid.
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    assert_eq!(today, d(2028, 3, 25));
+    pay(&mut c, &late, "late");
+    pay(&mut c, &stale, "stale");
+    assert_eq!(code(c.submit(0, "collections", reinstate(&late))), "underwriting_required");
+    assert_eq!(c.state(0).policies[&late].status, PolicyStatus::Lapsed);
+
+    c.submit(0, "underwriting", approve(&late, d(2028, 4, 24), vec![loaded("life-1", "life", "0.5")]))
+        .unwrap();
+    c.take_events();
+    c.submit(0, "collections", reinstate(&late)).unwrap();
+    let policy = c.state(0).policies[&late].clone();
+    assert_eq!((policy.status, policy.lapse.is_none()), (PolicyStatus::InForce, true));
+    let layers = &policy.covers["life"].layers;
+    assert_eq!(layers.len(), 2);
+    assert_eq!((layers[0].end, layers[1].start, layers[1].end), (Some(today), today, None));
+    assert_eq!(
+        (layers[1].sum_insured_minor, layers[1].origin, layers[1].rated_from),
+        (400_000_00, ic_core::LayerOrigin::Original, Some(start()))
+    );
+    assert_eq!(
+        (layers[1].loadings[0].as_str(), layers[1].exclusions.as_slice()),
+        ("0.5", &["EX-BACK".to_string()][..])
+    );
+    // The month from 15 March was billed on the old terms; its last 21 days carry the loading.
+    let month = policy.receivables.iter().find(|r| r.period_start == d(2028, 3, 15)).unwrap().clone();
+    let adjustment = policy.receivables.last().unwrap().clone();
+    assert_eq!(
+        (adjustment.kind, adjustment.period_start, adjustment.period_end),
+        (ic_core::policy::ReceivableKind::Adjustment, today, d(2028, 4, 15))
+    );
+    assert!(
+        adjustment.total_minor > 0 && adjustment.total_minor < month.total_minor / 2,
+        "{} against a month of {}",
+        adjustment.total_minor,
+        month.total_minor
+    );
+    let events = c.take_events();
+    let at = |wanted: fn(&ic_core::Event) -> bool| events.iter().position(|e| wanted(&e.event)).unwrap();
+    assert!(
+        at(|e| matches!(e, ic_core::Event::PolicyReinstated { .. })) < at(|e| matches!(e, ic_core::Event::LayerEnded { .. })),
+        "the policy is back in force before its terms change"
+    );
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // A decision good until today is no decision tomorrow.
+    c.submit(0, "underwriting", approve(&stale, today, vec![])).unwrap();
+    days(&mut c, 1);
+    assert_eq!(code(c.submit(0, "collections", reinstate(&stale))), "underwriting_required");
+    c.submit(0, "underwriting", approve(&stale, d(2028, 4, 24), vec![])).unwrap();
+    c.submit(0, "collections", reinstate(&stale)).unwrap();
+    let policy = c.state(0).policies[&stale].clone();
+    assert_eq!((policy.status, policy.covers["life"].layers.len()), (PolicyStatus::InForce, 1));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+    days(&mut c, 25);
+}
+
+/// Purpose: underwriting's decision on a lapsed policy is refused, with nothing written, from
+/// any other caller; on a policy that is not lapsed; with no reference; already out of date;
+/// for a cover or a life the policy does not have; for a negative loading; and after the
+/// reinstatement window has closed. On a product that asks for no evidence, a decision that
+/// carries terms is still applied when the policy is reinstated.
+/// Why it matters: the decision is what lets a risk back onto the books after months off
+/// them, and it can change the terms a claim is assessed on. Each refusal is a way of
+/// recording one that nobody made, or that could not be applied when the day came.
+#[test]
+fn a_reinstatement_decision_that_cannot_stand_is_refused() {
+    let mut c = cluster();
+    let application = term_life(24, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
+    let id = application.policy.clone();
+    c.submit(0, "new-business", issue_command(application)).unwrap();
+    let good_until = d(2028, 6, 1);
+    assert_eq!(code(c.submit(0, "underwriting", approve(&id, good_until, vec![]))), "not_lapsed");
+    days(&mut c, 96);
+    let today = c.business_date().unwrap();
+    let lapsed = c.state(0).policies[&id].clone();
+    assert_eq!(lapsed.status, PolicyStatus::Lapsed);
+
+    assert_eq!(code(c.submit(0, "collections", approve(&id, good_until, vec![]))), "caller_not_allowed");
+    let mut unnamed = approve(&id, good_until, vec![]);
+    if let Command::ApproveReinstatement(spec) = &mut unnamed {
+        spec.reference.clear();
+    }
+    assert_eq!(code(c.submit(0, "underwriting", unnamed)), "reference");
+    assert_eq!(
+        code(c.submit(0, "underwriting", approve(&id, today.pred_opt().unwrap(), vec![]))),
+        "decision_expired"
+    );
+    for (terms, refusal) in [
+        (loaded("life-1", "trauma", "0.5"), "unknown_cover"),
+        (loaded("life-9", "life", "0.5"), "unknown_life"),
+        (loaded("life-1", "life", "-0.5"), "invalid_loading"),
+    ] {
+        assert_eq!(code(c.submit(0, "underwriting", approve(&id, good_until, vec![terms]))), refusal);
+    }
+    assert!(c.state(0).policies[&id] == lapsed, "a refused decision wrote nothing");
+
+    // The shipped product asks for no evidence, but terms underwriting decided still apply.
+    c.submit(0, "underwriting", approve(&id, good_until, vec![loaded("life-1", "life", "0.25")]))
+        .unwrap();
+    pay(&mut c, &id, "catch-up");
+    c.submit(0, "collections", reinstate(&id)).unwrap();
+    let policy = c.state(0).policies[&id].clone();
+    assert_eq!(policy.status, PolicyStatus::InForce);
+    assert_eq!(policy.covers["life"].layers.last().unwrap().loadings[0].as_str(), "0.25");
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    let closed = term_life(
+        25,
+        c.business_date().unwrap(),
+        d(1988, 6, 2),
+        Sex::Male,
+        false,
+        400_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    );
+    let other = closed.policy.clone();
+    c.submit(0, "new-business", issue_command(closed)).unwrap();
+    days(&mut c, 91 + 181);
+    assert_eq!(code(c.submit(0, "underwriting", approve(&other, d(2029, 6, 1), vec![]))), "window_closed");
 }

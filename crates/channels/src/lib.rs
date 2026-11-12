@@ -17,13 +17,17 @@
 //! - [`classes`]: data classes and masking.
 //! - [`feed`]: audience-scoped rows and the per-party device sync feed.
 
+pub mod claims;
 pub mod classes;
+pub mod complaints;
 pub mod directory;
 pub mod feed;
+pub mod finance;
 pub mod forward;
 pub mod http;
 pub mod identity;
 pub mod ops;
+pub mod pricing;
 pub mod query;
 pub mod serve;
 pub mod settings;

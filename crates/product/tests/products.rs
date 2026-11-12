@@ -59,6 +59,7 @@ fn term_life_exact_premium() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     // age band 33-37: 0.45 * 1.42^3 = 1.2885 per thousand; 500,000 cover
@@ -89,6 +90,7 @@ fn loading_applies_to_base() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     let base = cover_premium(p.cover("life").unwrap(), &life, &f, 500_000_00).unwrap();
@@ -135,7 +137,12 @@ fn bad_products_are_rejected() {
 /// fee, a discount over 100%) that would otherwise surface as wrong premiums in production.
 #[test]
 fn each_product_rule_refuses_the_file_that_breaks_it() {
-    let cases: [(&str, &str, &str); 12] = [
+    let cases: [(&str, &str, &str); 13] = [
+        (
+            "reinstatement_days = 180",
+            "reinstatement_days = 180, reinstatement_evidence_free_days = 181",
+            "reinstatement_evidence_free_days is longer than reinstatement_days",
+        ),
         ("version = 1,", "version = 0,", "version of at least 1"),
         ("code = \"term-life\"", "code = \"\"", "needs a code"),
         ("code = \"trauma\"", "code = \"life\"", "duplicate cover code"),
@@ -174,6 +181,24 @@ fn each_product_rule_refuses_the_file_that_breaks_it() {
     // A product with no covers at all.
     let none = "PRODUCT = product(code = 'x', name = 'x', version = 1, effective_from = '2027-01-01', line = 'life', currency = 'NZD', statutory_fund = 'SF1', covers = [], features = [])";
     assert!(load_product("bad.star", none).unwrap_err().to_string().contains("offers no covers"));
+}
+
+/// Purpose: a product can say how long after a lapse paying the arrears is enough to
+/// reinstate; a product that does not say leaves the whole window free of evidence; and
+/// saying nothing leaves the product's file, and so its hash, as it was.
+/// Why it matters: the setting decides whether a policy lapsed for months comes back on risk
+/// with no question about the life's health. A default that silently started demanding
+/// underwriting, or changed the hash of every product in force, would break reinstatement
+/// for policies already written.
+#[test]
+fn a_product_can_limit_reinstatement_on_payment_alone() {
+    let shipped = load_product("term_life.star", TERM).unwrap();
+    assert_eq!(shipped.arrears().unwrap().reinstatement_evidence_free_days, None);
+    assert!(!serde_json::to_string(&shipped).unwrap().contains("reinstatement_evidence_free_days"));
+
+    let limited = TERM.replace("reinstatement_days = 180", "reinstatement_days = 180, reinstatement_evidence_free_days = 30");
+    let rules = load_product("term_life.star", &limited).unwrap().arrears().unwrap();
+    assert_eq!((rules.reinstatement_days, rules.reinstatement_evidence_free_days), (180, Some(30)));
 }
 
 /// Purpose: a file that does not define the expected symbol, or is not valid Starlark,
@@ -248,6 +273,7 @@ fn rating_refuses_what_it_cannot_price() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     assert!(matches!(
