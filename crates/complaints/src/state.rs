@@ -1033,6 +1033,61 @@ impl ComplaintsState {
 
     // --- time ---
 
+    /// The letters owed that nobody has issued, at most `limit`: an
+    /// acknowledgement for each open complaint without one, a deadlock
+    /// notice for each deadlock without one, and a letter to each customer
+    /// of a licence case not yet told or excluded. A migrated complaint was
+    /// acknowledged, if at all, by the system it came from.
+    pub fn letters_due(&self, limit: usize) -> Vec<LetterDue> {
+        let mut due = vec![];
+        let complaints = self.open.iter().filter_map(|id| self.complaints.get(id));
+        for c in complaints {
+            let letter = |kind, since, due| LetterDue {
+                kind,
+                subject: c.id.clone(),
+                party: c.complainant.clone(),
+                representatives: c.representatives.iter().map(|r| r.party.clone()).collect(),
+                since,
+                due,
+                detail: BTreeMap::new(),
+            };
+            if c.acknowledged_on.is_none() && !c.migrated {
+                let by = self.running(c).into_iter().find(|(t, _)| *t == Timer::Acknowledge).map(|(_, d)| d);
+                due.push(letter(LetterKind::Acknowledgement, c.received_on, by));
+            }
+            if let Some(d) = c.deadlock.as_ref().filter(|d| d.notice.is_none()) {
+                due.push(letter(LetterKind::DeadlockNotice, d.on, None));
+            }
+            if due.len() >= limit {
+                due.truncate(limit);
+                return due;
+            }
+        }
+        let cases = self.open_conduct.iter().filter_map(|id| self.conduct.get(id));
+        for case in cases.filter(|c| c.population_complete) {
+            let ConductKind::LicenceEvent { status, effective, .. } = &case.kind else {
+                // Other cases are written to by the people handling them.
+                continue;
+            };
+            let detail: BTreeMap<String, String> = [("status".to_string(), status.clone()), ("effective".to_string(), effective.to_string())].into();
+            for (party, _) in case.customers.iter().filter(|(_, told)| **told == Contact::Outstanding) {
+                if due.len() >= limit {
+                    return due;
+                }
+                due.push(LetterDue {
+                    kind: LetterKind::LicenceNotice,
+                    subject: case.id.clone(),
+                    party: party.clone(),
+                    representatives: vec![],
+                    since: case.opened_on,
+                    due: None,
+                    detail: detail.clone(),
+                });
+            }
+        }
+        due
+    }
+
     /// The timers running on a complaint: each with its due date.
     pub fn running(&self, c: &Complaint) -> Vec<(Timer, NaiveDate)> {
         let Some(t) = self.timers.get(&c.timers_version) else {

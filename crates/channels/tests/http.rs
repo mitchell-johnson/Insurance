@@ -41,6 +41,7 @@ struct Portal {
     pricing: Arc<common::pricing::PricingModule>,
     claims: Arc<common::claims::ClaimsCore>,
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
+    master: Arc<common::customers::MasterDouble>,
 }
 
 fn healthy() -> RegionReport {
@@ -278,6 +279,10 @@ fn portal() -> Portal {
     let finance = Arc::new(common::finance::seeded());
     let claims = Arc::new(common::claims::seeded());
     let reinsurance = Arc::new(common::reinsurance::seeded());
+    let master = Arc::new(common::customers::MasterDouble::with(
+        KIRI,
+        json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
+    ));
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -294,6 +299,7 @@ fn portal() -> Portal {
         finance: finance.clone(),
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
+        master: Some(master.clone()),
     }));
     Portal {
         app,
@@ -307,6 +313,7 @@ fn portal() -> Portal {
         pricing,
         claims,
         reinsurance,
+        master,
     }
 }
 
@@ -1330,6 +1337,7 @@ async fn the_unit_pricing_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        master: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1536,6 +1544,7 @@ async fn the_complaints_and_conduct_workbench() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        master: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1628,6 +1637,7 @@ async fn the_reinsurance_exceptions_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        master: None,
     }));
     for (path, body) in [
         ("/staff/v1/reinsurance/exceptions", None),
@@ -1738,6 +1748,14 @@ async fn the_claims_console() {
         (StatusCode::OK, &json!(1), &json!("pol-c1"), &json!("cl-1")),
         "{claim}"
     );
+    // Staff work from the claim's own view: who owns it, its queue and money, nothing clinical.
+    let (status, work) = ask("sub-cl1", "work?claim=c-1").await;
+    assert_eq!(
+        (status, &work["partition"], &work["view"]["owner"]),
+        (StatusCode::OK, &json!(1), &json!("cl-1")),
+        "{work}"
+    );
+    assert_eq!(ask("sub-cl1", "work?claim=c-404").await.0, StatusCode::NOT_FOUND);
     // The assessor records the cause as themselves; a colleague who does not own the claim cannot.
     let cause = json!({ "record_cause": { "claim": "c-1", "cause_code": "CC-0003" } });
     let (status, problem) = tell("sub-cllead", "assessing", cause.clone()).await;
@@ -1808,6 +1826,7 @@ async fn the_claims_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        master: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -1977,6 +1996,7 @@ async fn the_finance_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        master: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),
@@ -2011,4 +2031,89 @@ async fn serve_for_a_browser() {
     assert_eq!(status, StatusCode::OK);
     println!("policy {}", portal.retail);
     axum::serve(listener, portal.app.clone()).await.unwrap();
+}
+
+/// Purpose: a customer reads their own record from the customer master, changes contact details and consents only from an enrolled
+/// device that proved its key, cannot send any other command, has their version and key passed on, gets the master's own answer
+/// (including a stale-version refusal), takes a copy of their record from a device, and is told plainly when the master is down or
+/// not configured.
+/// Why it matters: this is the Privacy Act self-service route; the portal must only ever ask about the person signed in, must not
+/// widen what a person may change beyond the master's own policy, and a retried change must carry the same key so it applies once.
+#[tokio::test]
+async fn a_person_keeps_their_own_customer_record() {
+    let portal = &portal();
+    let (status, record) = portal.get("sub-kiri", "/app/v1/profile").await;
+    assert_eq!((status, &record["record"]["given_name"]), (StatusCode::OK, &json!("Kiri")));
+    // The adviser signed in reads their own party, never Kiri's.
+    assert_eq!(portal.get("sub-adv", "/app/v1/profile").await.0, StatusCode::NOT_FOUND);
+    assert_ne!(portal.master.calls.lock().unwrap()[1].party, KIRI);
+
+    // A change needs the device, not just a token.
+    let change = json!({ "command": "record", "fields": { "email": "kiri@new.nz" } });
+    let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/profile/commands", change.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
+    let send = |body: Value, version: Option<&str>| {
+        let text = body.to_string();
+        let mut headers = portal.proof(&portal.phone, "POST", "/app/v1/profile/commands", &text);
+        if let Some(v) = version {
+            headers.push(("if-match", v.to_string()));
+        }
+        async move { (portal.send("POST", "/app/v1/profile/commands", &headers, Some(body)).await, headers) }
+    };
+    // Only contact details and consents are the person's own to change.
+    for refused in [json!({ "command": "merge" }), json!({ "fields": {} })] {
+        let ((status, _), _) = send(refused, None).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    let before = portal.master.calls.lock().unwrap().len();
+    let ((status, answer), headers) = send(change.clone(), Some("1")).await;
+    assert_eq!((status, &answer["version"]), (StatusCode::OK, &json!("2")));
+    // The key is scoped to the person, so two people cannot collide on one.
+    let call = portal.master.calls.lock().unwrap()[before].clone();
+    let key = headers.iter().find(|(n, _)| *n == "idempotency-key").unwrap().1.clone();
+    assert_eq!(
+        (call.what, call.party.as_str(), call.version.as_deref(), call.key),
+        ("command", KIRI, Some("1"), Some(format!("{KIRI}:{key}")))
+    );
+    assert_eq!(portal.get("sub-kiri", "/app/v1/profile").await.1["record"]["email"], "kiri@new.nz");
+    // A change made against a version the person no longer sees is the master's refusal, passed through.
+    let ((status, problem), _) = send(json!({ "command": "set_consent", "consent": "marketing", "given": false }), Some("1")).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::PRECONDITION_FAILED, Some("version_mismatch")));
+
+    // A copy of the record needs the device too.
+    assert_eq!(portal.get("sub-kiri", "/app/v1/profile/export").await.1["title"], "device_required");
+    let proved = portal.proof(&portal.phone, "GET", "/app/v1/profile/export", "");
+    let (status, export) = portal.send("GET", "/app/v1/profile/export", &proved, None).await;
+    assert_eq!((status, &export["party"]), (StatusCode::OK, &json!(KIRI)));
+
+    // An unreachable master is a 503 the app can retry.
+    portal.master.down.store(true, Ordering::SeqCst);
+    let (status, problem) = portal.get("sub-kiri", "/app/v1/profile").await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("customer_master_unavailable"))
+    );
+
+    // And a portal deployed without one says so.
+    let now = portal.now();
+    let bare = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+    }));
+    let request = Request::builder()
+        .uri("/app/v1/profile")
+        .header("x-dev-subject", "sub-kiri")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }

@@ -39,7 +39,7 @@ PRODUCT = product(
             modal_loading = {"fortnightly": "0.04", "monthly": "0.04"},
         ),
         earning(),
-        arrears(grace_days = 30, lapse_days = 90, suspend_after_grace = True, reinstatement_days = 180),
+        arrears(grace_days = 30, lapse_days = 90, suspend_after_grace = True, reinstatement_days = 180, reinstatement_evidence_free_days = 60),
         indexation(rate_code = "cpi"),
         multi_cover_discount(min_covers = 2, percent = "5"),
         cooling_off(days = 14),

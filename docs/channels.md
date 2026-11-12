@@ -35,6 +35,8 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 
 ## The customer app API
 
+A policy carries its core status and `ended`, true for anything that is no longer live: lapsed, surrendered, matured, expired, cancelled, ended by a claim, transferred away or avoided for non-disclosure. An avoided policy is treated as never in force, so its covers show as not in force too.
+
 | Call | What it does |
 | --- | --- |
 | `GET /app/v1/me` | Who you are, your policies and your relationship to each, any notices. |
@@ -46,6 +48,11 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 | `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. |
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
+| `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
+| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
+| `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
+
+**Your record.** The profile routes call the customer master (`docs/customers.md`) with the portal's own Entra token (`IC_CUSTOMERS_URL`, `IC_CUSTOMERS_SCOPE`; both or neither, https unless on localhost). The portal sends only the signed-in party, as both party and actor, with purpose `self_service` or `subject_access`; the master's Cedar policy decides what that shows and allows, and its answer, including a 412 for a stale version, comes back as it is. The portal adds two checks of its own: a change or an export needs a device that proved its key, and only `record` and `set_consent` are sent. The idempotency key is scoped to the person. A portal deployed without the master, or a master that is down or answers 503, gives 503 `customer_master_unavailable`.
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
 
@@ -165,7 +172,7 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/claims/me` | Your staff ID and how many partitions the ledger has (`IC_PARTITIONS`). |
-| `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=`, `book`, `report`, `remittance?run=&partition=`. |
+| `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=` (the claimant's view), `work?claim=` (the staff view: tasks, evidence, the decision waiting for a signature, payee, payments, benefit, overpayments, timers), `book`, `report`, `remittance?run=&partition=`. |
 | `POST /staff/v1/claims/commands` | `{ "purpose", "partition"?, "command" }`, the command in the claims module's own JSON, with an `Idempotency-Key`. |
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
@@ -283,7 +290,7 @@ node crates/channels/tests/browser/check.js
 
 ## Known gaps
 
-- **Claims staff see the claimant's view of a claim.** The claims module is adding a staff view of a claim's work (tasks, evidence, the decision waiting for a signature, payees, schedule, overpayments, timers); until it lands the console shows the claimant's view and the queues. Clinical detail is shown only after the person opens the file, which that module logs with its purpose.
+- **No clinical view in the claims console.** Staff work from the claims module's staff view (`work`), which carries nothing clinical. The cause, reason codes and evidence documents stay in that module until it offers a question for them after `open_file`.
 - **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app.
 - **New business is not in the adviser portal.** Quotes and proposals are underwriting's API. The portal shows the book, standing, held money and servicing requests.
 - **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).

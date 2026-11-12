@@ -717,3 +717,60 @@ async fn a_reinstatement_decision_is_recorded_against_the_lapse() {
     );
     assert!(b.reinsurance.module.state().reservation("P2/L1/life/1").is_none());
 }
+
+/// Purpose: a non-disclosure review that ends in avoidance reaches the core: claims opens the
+/// review on a policy in force, two seniors who never touched the life decide to avoid it and
+/// keep the premiums, and the driver alone carries the remedy so that the core holds the policy
+/// avoided with nothing parked and the books reconciling.
+/// Why it matters: avoiding a policy is decided in underwriting and done in the core. A remedy
+/// that stayed in the outbox would leave a policy the insurer has avoided still in force,
+/// billing the customer and open to claims.
+#[tokio::test]
+async fn an_avoidance_decided_in_review_reaches_the_core() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let policy = b.module.with(|w| w.p("P1").policy.clone());
+    assert_eq!(b.ledger.cluster.lock().unwrap().state(0).policies[&policy].status, PolicyStatus::InForce);
+
+    b.module.with(|w| {
+        w.ok(
+            "claims",
+            Command::OpenNonDisclosureReview {
+                claim_ref: "CLM-1".into(),
+                policy: policy.clone(),
+                life: "L1".into(),
+                opened_by: "cl-1".into(),
+            },
+        );
+        let review = "ndr/CLM-1/L1".to_string();
+        w.ok(
+            "underwriting-console",
+            Command::TakeCase {
+                case: review.clone(),
+                underwriter: "sam".into(),
+            },
+        );
+        w.ok(
+            "underwriting-console",
+            Command::RecordNonDisclosureOutcome {
+                review,
+                outcome: ic_underwriting::command::NonDisclosureOutcome::Avoid,
+                decided_by: "sam".into(),
+                countersigned_by: Some("sue".into()),
+                reasons: set(&["RC-0980"]),
+                varied_terms: vec![],
+                premium: Some(ic_underwriting::command::PremiumOnAvoidance::Retain),
+            },
+        );
+    });
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        assert_eq!(cluster.state(0).policies[&policy].status, PolicyStatus::Avoided);
+        assert!(cluster.reconcile().is_empty());
+    }
+    assert_eq!(b.pass().await, Pass::default(), "nothing is left to carry");
+}

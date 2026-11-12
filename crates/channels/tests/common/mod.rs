@@ -4,6 +4,7 @@
 
 pub mod claims;
 pub mod complaints;
+pub mod customers;
 pub mod finance;
 pub mod pricing;
 pub mod reinsurance;

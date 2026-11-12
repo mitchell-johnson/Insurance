@@ -672,6 +672,7 @@ impl UnderwritingState {
             if outcome != NonDisclosureOutcome::NoAction {
                 cx.effect(Effect::NonDisclosureRemedy {
                     key: format!("{id}/remedy"),
+                    proposal: Some(p.id.clone()),
                     policy: p.policy.clone(),
                     life: life.clone(),
                     outcome,

@@ -143,6 +143,9 @@ pub struct AppState {
     pub claims: Arc<dyn crate::claims::Partitions>,
     /// The reinsurance module, for the exceptions console.
     pub reinsurance: Arc<dyn crate::forward::Source>,
+    /// The customer master, for a person's own record. `None` where it is
+    /// not configured: those routes answer 503.
+    pub master: Option<Arc<dyn crate::customers::Master>>,
     /// The complaints module, for the complaints and conduct workbench.
     pub complaints: Arc<dyn crate::forward::Source>,
 }
@@ -389,6 +392,63 @@ struct Have {
 }
 
 /// Device sync. Offline data goes only to an enrolled device that proved its key.
+fn device_required(what: &str) -> Problem {
+    Problem::new(
+        StatusCode::UNAUTHORIZED,
+        "device_required",
+        format!("{what} needs proof of an enrolled device's key"),
+    )
+}
+
+impl AppState {
+    fn master(&self) -> Result<&Arc<dyn crate::customers::Master>, Problem> {
+        self.master.as_ref().ok_or_else(|| {
+            Problem::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "customer_master_unavailable",
+                "the customer master is not configured here",
+            )
+        })
+    }
+}
+
+/// The customer master's answer, passed on: its status and body, or 503
+/// when it could not be reached.
+fn mastered(answer: Result<crate::customers::Answered, String>) -> Answer {
+    let (status, body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "customer_master_unavailable", e))?;
+    let status = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    Ok((status, Json(body)).into_response())
+}
+
+/// Your own record in the customer master: name, contact details and
+/// consents, with the version a change must name.
+async fn profile(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    mastered(s.master()?.record(&session.party).await)
+}
+
+/// Change your contact details or consents, from an enrolled device.
+async fn profile_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    if session.device.is_none() {
+        return Err(device_required("changing your details"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let command: Value = parse(&body)?;
+    crate::customers::check(&command).map_err(Problem::forbidden)?;
+    let version = header(&headers, "if-match");
+    mastered(s.master()?.command(&session.party, version, key, command).await)
+}
+
+/// A copy of everything the insurer holds about you, from an enrolled device.
+async fn profile_export(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    if session.device.is_none() {
+        return Err(device_required("a copy of your record"));
+    }
+    mastered(s.master()?.export(&session.party).await)
+}
+
 async fn sync(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Query(q): Query<Have>) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     if session.device.is_none() {
@@ -1556,6 +1616,9 @@ pub fn router(state: Shared) -> Router {
         .route("/readyz", get(ready))
         // The customer app, shared by every External ID caller.
         .route("/app/v1/me", get(me))
+        .route("/app/v1/profile", get(profile))
+        .route("/app/v1/profile/commands", post(profile_command))
+        .route("/app/v1/profile/export", get(profile_export))
         .route("/app/v1/sync", get(sync))
         .route("/app/v1/policies/{policy}", get(policy))
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))

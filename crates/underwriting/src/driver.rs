@@ -27,7 +27,7 @@ use ic_reinsurance::capacity::{CapacityRequest, Outcome};
 use ic_reinsurance::treaty::RiskFactors;
 use serde_json::Value;
 
-use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject, View};
+use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, NonDisclosureOutcome, PremiumOnAvoidance, Reject, View};
 use crate::model::{Entry, Proposal, ProposalId};
 use crate::special::Query;
 
@@ -721,7 +721,48 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 self.issue_answer(key, proposal, outcome).await?
             }
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
-            Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
+            Effect::NonDisclosureRemedy {
+                key,
+                proposal,
+                policy,
+                outcome,
+                review,
+                terms,
+                premium,
+                ..
+            } => {
+                let group = match proposal {
+                    Some(proposal) => self.group_of(proposal).await?,
+                    None => None,
+                };
+                let Some(group) = group else {
+                    return Ok(Step::Park(
+                        "the remedy does not say which proposal, so where the policy is held is not known".to_string(),
+                    ));
+                };
+                let remedy = match (outcome, premium) {
+                    (NonDisclosureOutcome::Avoid, Some(premium)) => ic_core::Command::AvoidPolicy {
+                        policy: policy.clone(),
+                        case: review.clone(),
+                        premium: match premium {
+                            PremiumOnAvoidance::Refund => ic_core::policy::PremiumOnAvoidance::Refund,
+                            PremiumOnAvoidance::Retain => ic_core::policy::PremiumOnAvoidance::Retain,
+                        },
+                    },
+                    (NonDisclosureOutcome::Vary, _) => ic_core::Command::VaryForNonDisclosure {
+                        policy: policy.clone(),
+                        case: review.clone(),
+                        terms: terms.clone(),
+                    },
+                    _ => return Ok(Step::Park(format!("a {} remedy with nothing the core can act on", outcome.key()))),
+                };
+                // Keyed by the effect: the core does nothing twice for the same case either.
+                let answer = self.core.send(home_partition(&group), key, "underwriting", remedy).await?;
+                match answer.refused {
+                    None => Step::Delivered,
+                    Some(r) => Step::Park(format!("the core refused the remedy: {}: {}", r.code, r.message)),
+                }
+            }
             other => match self.forward.forward(other).await? {
                 None => Step::Delivered,
                 Some(reason) => Step::Park(reason),

@@ -231,6 +231,13 @@ pub enum Command {
         key: RiskKey,
         reference: String,
     },
+    /// Start recovering again on a claim reopened after its admission was
+    /// reversed, once its disputed items are settled. `reference` is where
+    /// the decision is filed.
+    ResumeRecoveries {
+        claim: ClaimId,
+        reference: String,
+    },
 
     // --- migration ---
     /// A cession as the legacy system held it. Nothing is recalculated.
@@ -315,7 +322,7 @@ impl Command {
             // The payments module says what the bank did with a settlement;
             // people record one that was paid some other way.
             Command::RecordSettlement { .. } | Command::SettlementReturned { .. } => &["payments", "reinsurance-ops", "finance", "month-end"],
-            Command::FacultativeReinsurerTold { .. } => &["reinsurance-ops"],
+            Command::FacultativeReinsurerTold { .. } | Command::ResumeRecoveries { .. } => &["reinsurance-ops"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
             | Command::InstructionRefused { .. }
@@ -356,6 +363,7 @@ impl Command {
             Command::IssueSupplementaryListing { .. } => "issue_supplementary_listing",
             Command::ReviewProfitCommission { .. } => "review_profit_commission",
             Command::FacultativeReinsurerTold { .. } => "facultative_reinsurer_told",
+            Command::ResumeRecoveries { .. } => "resume_recoveries",
             Command::LoadMigratedCession { .. } => "load_migrated_cession",
             Command::LoadOpeningBalance { .. } => "load_opening_balance",
             Command::AcknowledgeInstructions { .. } => "acknowledge_instructions",
@@ -1090,6 +1098,7 @@ impl Reinsurance {
                 self.set_exception(ctx, id, "facultative_terms_altered", None);
                 Ok(())
             }
+            Command::ResumeRecoveries { claim, reference } => self.resume_recoveries(ctx, &claim, &reference),
             Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),
             Command::InstructionRefused { seq, code, message } => self.instruction_refused(ctx, seq, &code, &message),
             Command::AbandonInstruction { seq, reason, approved_by } => self.abandon_instruction(ctx, seq, reason, approved_by),

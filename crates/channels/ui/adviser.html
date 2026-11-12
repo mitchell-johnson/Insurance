@@ -37,7 +37,7 @@ async function load() {
   const totals = Object.entries(book.held.held || {});
   put($("held"), totals.length ? h("p", {}, "Total held: ", h("strong", {}, totals.map(([c, v]) => money(v, c)).join(", ")), ". It is released when the reason below is resolved.") : h("p", { class: "muted" }, "Nothing is being held from you."),
     totals.length ? table(["Period", "Book", "Amount", "Why it is held", "Since"], book.held.entries.map((e) => [e.period || "", e.book || "", money(e.amount_minor, e.currency), String(e.reason || "").replace(/_/g, " "), e.since])) : null);
-  put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.status, p.engagement,
+  put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.ended ? `Ended (${String(p.status).replace(/_/g, " ")})` : String(p.status).replace(/_/g, " "), p.engagement,
     h("button", { class: "quiet", on: { click: run($("msg"), () => open(p, p.can_transact)) } }, "Open")])));
   const requests = await api(R, "GET", "/app/v1/requests");
   put($("requests"), table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, r.policy || "", r.kind, String(r.status).replace(/_/g, " ")])));

@@ -21,6 +21,7 @@ pub mod claims;
 pub mod classes;
 pub mod complaints;
 pub mod countersign;
+pub mod customers;
 pub mod directory;
 pub mod feed;
 pub mod finance;
