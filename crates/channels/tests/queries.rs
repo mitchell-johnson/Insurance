@@ -162,6 +162,56 @@ fn a_session_resolves_to_a_party_and_an_assurance() {
     assert_eq!(ask(&w.ch, Question::Devices { party: p("nobody") }), json!([]));
 }
 
+/// Purpose: a policy the insurer avoids for non-disclosure is shown as ended, in the customer's list and on the policy itself,
+/// and its covers are no longer in force.
+/// Why it matters: an avoided policy is treated as never having been in force. A customer or adviser who still saw it as
+/// live could rely on cover that does not exist.
+#[test]
+fn an_avoided_policy_is_shown_as_ended() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let at = w.at;
+    let listed = ask(&w.ch, Question::Policies { party: p(KIRI), at });
+    assert_eq!((&listed[0]["status"], &listed[0]["ended"]), (&json!("in_force"), &json!(false)));
+    w.core(
+        &pol,
+        "underwriting",
+        ic_core::Command::AvoidPolicy {
+            policy: pol.clone(),
+            case: "nd-1".into(),
+            premium: ic_core::PremiumOnAvoidance::Refund,
+        },
+    );
+    w.relay();
+    let at = w.at;
+    let listed = ask(&w.ch, Question::Policies { party: p(KIRI), at });
+    assert_eq!((&listed[0]["status"], &listed[0]["ended"]), (&json!("avoided"), &json!(true)));
+    let view = ask(
+        &w.ch,
+        Question::Policy {
+            viewer: p(KIRI),
+            policy: pol.clone(),
+            at,
+        },
+    );
+    let rows = view["rows"].as_array().unwrap();
+    let policy = rows.iter().find(|r| r["kind"] == "policy").unwrap();
+    assert_eq!(
+        (&policy["body"]["status"], &policy["body"]["ended"]),
+        (&json!("avoided"), &json!(true)),
+        "{view}"
+    );
+    assert!(
+        rows.iter()
+            .filter(|r| r["body"].get("in_force").is_some())
+            .all(|r| r["body"]["in_force"] == false),
+        "{view}"
+    );
+    for status in [ic_core::PolicyStatus::InForce, ic_core::PolicyStatus::PaidUp, ic_core::PolicyStatus::Proposed] {
+        assert!(!ic_channels::state::ended(status));
+    }
+}
+
 /// Purpose: a customer's questions return their own policies, rows, sync feed and requests; a stranger gets the same answer as for a policy that does not exist.
 /// Why it matters: the queries are the read side of every customer screen, and "not yours" must be indistinguishable from "not there".
 #[test]
