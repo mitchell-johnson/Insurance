@@ -527,6 +527,10 @@ pub enum Event {
         transfer_id: String,
     },
 
+    /// Something happened in the investment ledger: a fund or a unit price
+    /// was activated, or a unit order was placed, cancelled or executed.
+    Investment(crate::invest::InvestEvent),
+
     /// A balanced entry on counterparty accounts. Carries the lines, so the
     /// module that keeps each party's position builds it from this alone.
     CounterpartyPosted {

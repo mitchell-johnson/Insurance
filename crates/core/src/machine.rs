@@ -206,6 +206,9 @@ pub struct CoreState {
     /// Counterparty posting references this partition has accepted.
     #[serde(default)]
     pub counterparty: crate::counterparty::CounterpartyBook,
+    /// Funds, unit prices and unit orders. Unit holdings are ledger balances.
+    #[serde(default)]
+    pub investment: crate::invest::InvestmentBook,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -229,6 +232,7 @@ impl CoreState {
             last_close: None,
             claims: ic_claims::ClaimsState::default(),
             counterparty: Default::default(),
+            investment: Default::default(),
         }
     }
 
@@ -253,6 +257,7 @@ impl CoreState {
             &self.last_close,
             &self.claims,
             &self.counterparty,
+            &self.investment,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -579,9 +584,16 @@ impl CoreState {
                 target_partition,
             } => self.with_policy(&policy, true, |s, p| {
                 claims::may_transfer(p)?;
+                if s.investment.holds_anything(&s.ledger, p) {
+                    return Err(Reject::new(
+                        "policy_invested",
+                        "a policy with units, pending investment cash or pending unit orders cannot change partition yet",
+                    ));
+                }
                 transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition)
             }),
             Command::Claims(command) => claims::apply(self, ctx, *command),
+            Command::Investment(command) => self.invest(ctx, *command),
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);
@@ -604,6 +616,29 @@ impl CoreState {
                 }),
                 None => crate::counterparty::post(&mut self.ledger, &mut self.counterparty, None, ctx, *posting),
             },
+        }
+    }
+
+    fn invest(&mut self, ctx: &mut Ctx<'_>, command: crate::invest::InvestCommand) -> Result<(), Reject> {
+        use crate::invest::{self, InvestCommand};
+        match command {
+            InvestCommand::ActivateFund(fund) => invest::activate_fund(&mut self.investment, ctx, *fund),
+            InvestCommand::ActivateUnitPrice(price) => invest::activate_price(&mut self.investment, ctx, *price),
+            InvestCommand::AllocateCash {
+                policy,
+                reference,
+                amount_minor,
+            } => self.with_policy(&policy, true, |s, p| {
+                invest::allocate_cash(&mut s.ledger, &mut s.investment, p, ctx, reference, amount_minor)
+            }),
+            InvestCommand::PlaceOrder(order) => {
+                let id = order.policy.clone();
+                self.with_policy(&id, true, |s, p| invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order))
+            }
+            InvestCommand::CancelOrder { order_id } => invest::cancel_order(&mut self.investment, ctx, &order_id),
+            InvestCommand::ExecuteOrders { fund, pricing_date, limit } => {
+                invest::execute_orders(&mut self.ledger, &mut self.investment, &self.policies, ctx, &fund, pricing_date, limit)
+            }
         }
     }
 
