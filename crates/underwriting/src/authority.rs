@@ -13,6 +13,8 @@ use cedar_policy::{Authorizer, Context, Decision, Entities, EntityId, EntityType
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use ic_core::PartyId;
+
 use crate::case::Queue;
 use crate::load::{eval, invalid, LoadError};
 
@@ -56,6 +58,11 @@ pub struct AuthorityProfile {
     /// May give the second signature and review others' decisions.
     pub senior: bool,
     pub role: Role,
+    /// The underwriter as a party in the customer master. Nobody acts on an
+    /// application on which they are the policyholder or a life, whether or
+    /// not they declared it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub party: Option<PartyId>,
 }
 
 /// Load authority profiles. The module must define `PROFILES`.

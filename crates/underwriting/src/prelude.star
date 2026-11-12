@@ -130,7 +130,10 @@ def rule_set(id, version, effective_from, question_set, products, rules, effecti
 # --- authority ---
 
 def profile(underwriter, version, limits, products, queues, max_loading_percent = 0, may_exclude = False,
-            may_decline = False, may_defer = False, senior = False, role = "underwriter"):
-    return {"underwriter": underwriter, "version": version, "limits": limits, "products": products,
-            "queues": queues, "max_loading_percent": max_loading_percent, "may_exclude": may_exclude,
-            "may_decline": may_decline, "may_defer": may_defer, "senior": senior, "role": role}
+            may_decline = False, may_defer = False, senior = False, role = "underwriter", party = None):
+    p = {"underwriter": underwriter, "version": version, "limits": limits, "products": products,
+         "queues": queues, "max_loading_percent": max_loading_percent, "may_exclude": may_exclude,
+         "may_decline": may_decline, "may_defer": may_defer, "senior": senior, "role": role}
+    if party != None:
+        p["party"] = party
+    return p

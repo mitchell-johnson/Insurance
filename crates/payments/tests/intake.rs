@@ -358,6 +358,14 @@ fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
         .as_str()
         .unwrap()
         .contains("beneficiary bank closed"));
+    // The reinsurance module offers it again under a new reference and the
+    // same source, and it is paid like the first.
+    let mut again = released("ri-stmt-7-2", "re-1", 90_000_00);
+    (again.source, again.policy, again.payable) = ("reinsurance:statement:7".to_string(), None, None);
+    desk.ok(&svc(), offer(again));
+    desk.prepare("r0", RunType::Reinsurer, d(2027, 11, 18));
+    desk.ok(&mia(), take("r0", &["ri-stmt-7-2"]));
+    desk.approve("r0");
 
     // One the bank refuses outright is reported the same way, and a source
     // that is not a statement number tells nobody.

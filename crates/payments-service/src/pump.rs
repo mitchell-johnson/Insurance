@@ -95,7 +95,14 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             .secrets
             .secret(&endpoint.credential)
             .ok_or_else(|| format!("the credential {} is not available", endpoint.credential))?;
+        let accounts = config
+            .accounts
+            .iter()
+            .filter(|(_, a)| a.bank == ch.bank)
+            .filter_map(|(code, a)| Some((a.at_bank.as_ref()?.number.clone(), code.clone())))
+            .collect();
         Ok(Target {
+            accounts,
             kind: ch.kind,
             format: ch.format,
             url: endpoint.url.trim_end_matches('/').to_string(),
@@ -265,12 +272,21 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                 let about_drill =
                     matches!(&numbered.message, BankMessage::Acknowledgement { id, .. } | BankMessage::Settlement { id, .. } if id.starts_with("drill-"));
                 if !about_drill {
-                    match self.tell(format!("bank-{channel}-{}", numbered.seq), numbered.message.command()).await {
+                    let key = match numbered.part {
+                        0 => format!("bank-{channel}-{}", numbered.seq),
+                        part => format!("bank-{channel}-{}-{part}", numbered.seq),
+                    };
+                    match self.tell(key, numbered.message.command()).await {
                         Ok(()) => pass.messages += 1,
                         // The bank said something the module will not take.
                         // That is a break between us and the bank: tell
                         // someone, and do not read it again.
                         Err(e) => {
+                            // The rest of a document whose earlier parts
+                            // were taken is offered again with them.
+                            if unbroken {
+                                through = through.min(numbered.seq - 1);
+                            }
                             unbroken = false;
                             let detail = format!("channel {channel} message {}: {e}", numbered.seq);
                             if let Err(n) = self.notifier.notify(Role::Reconciler, "bank_message_refused", &detail).await {

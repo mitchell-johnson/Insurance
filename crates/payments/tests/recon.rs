@@ -560,3 +560,79 @@ fn the_place_in_a_banks_messages_only_moves_forward() {
     assert_eq!(desk.code(&svc(), elsewhere), "unknown_channel");
     assert_eq!(desk.state.messages_read["anz-file"], 9);
 }
+
+/// Purpose: a credit quoting a reinsurance statement (`ri-stmt-<n>`, in any
+/// case, anywhere in the reference) is sent to the reinsurance module as a
+/// settlement of that statement, in the statement's sign, and is resolved
+/// when that module records it; if that module refuses, the money stays
+/// unidentified for a person; a reference that only looks like one, or a
+/// debit, is not sent.
+/// Why it matters: money a reinsurer owes arrives without anyone in
+/// payments knowing to expect it. Matched here, the reinsurance account is
+/// cleared the day the money lands instead of when someone notices it in
+/// the unidentified list.
+#[test]
+fn money_a_reinsurer_pays_is_matched_to_its_statement() {
+    let mut desk = Desk::new();
+    let a = "anz-sf1-operating";
+    let open = 10_000_000_00;
+    desk.ok(
+        &svc(),
+        statement(
+            a,
+            d(2027, 11, 15),
+            open,
+            open + 1_200_00 + 50_00 + 7_00 - 3_00,
+            vec![
+                line("l1", 1_200_00, "Swiss Re RI-STMT-42 Q3"),
+                line("l2", 50_00, "ri-stmt-7-2"),
+                line("l3", 7_00, "ri-stmt-x"),
+                line("l4", -3_00, "ri-stmt-9"),
+            ],
+        ),
+    );
+    let sent: Vec<(u64, serde_json::Value)> = desk
+        .state
+        .outbox
+        .iter()
+        .filter_map(|(k, e)| match &e.instruction {
+            Instruction::Module { module, command } if module == "reinsurance" => Some((*k, command.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[0].1,
+        json!({"key": "payments:received:anz-sf1-operating-2027-11-15-l1", "caller": "payments", "on": "2027-11-15",
+               "command": {"record_settlement": {"number": 42, "payment_ref": "Swiss Re RI-STMT-42 Q3", "amount_minor": -1_200_00}}})
+    );
+    assert_eq!(sent[1].1["command"]["record_settlement"]["number"], 7);
+    let unidentified = |desk: &Desk| {
+        let mut open: Vec<_> = desk
+            .state
+            .exceptions
+            .values()
+            .filter(|e| e.resolution.is_none() && e.kind == ExceptionKind::UnidentifiedReceipt)
+            .map(|e| e.reference.clone())
+            .collect();
+        open.sort();
+        open
+    };
+    assert_eq!(unidentified(&desk), vec!["Swiss Re RI-STMT-42 Q3", "ri-stmt-7-2"]);
+    let events = desk.ok(
+        &svc(),
+        Command::CompleteInstruction {
+            entry: sent[0].0,
+            refused: None,
+        },
+    );
+    assert!(matches!(&events[0], Event::ExceptionResolved { resolution, .. } if resolution == "recorded by reinsurance against its statement"));
+    desk.ok(
+        &svc(),
+        Command::CompleteInstruction {
+            entry: sent[1].0,
+            refused: Some("not_instructed".to_string()),
+        },
+    );
+    assert_eq!(unidentified(&desk), vec!["ri-stmt-7-2"], "a refused one stays for a person");
+}

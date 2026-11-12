@@ -748,6 +748,7 @@ async fn two_pumps_never_send_the_same_submission() {
         format: Default::default(),
         url: endpoint.url.trim_end_matches('/').to_string(),
         token: "token-akl".to_string(),
+        accounts: Default::default(),
     };
     let batch = world.state().batch(&s2).unwrap();
     let manifest = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
@@ -776,6 +777,7 @@ async fn the_fake_bank_checks_what_a_bank_checks() {
         format: Default::default(),
         url: world.bank.url.clone(),
         token: token.to_string(),
+        accounts: Default::default(),
     };
     let api = Target {
         kind: ic_payments::config::ChannelKind::Api,
@@ -1108,6 +1110,7 @@ async fn the_services_small_parts_do_what_they_say() {
         format: Default::default(),
         url,
         token: "t".to_string(),
+        accounts: Default::default(),
     };
     assert!(matches!(HttpBank::default().messages(&to, 0).await, Err(ChannelError::Unknown(_))));
 }
@@ -1281,24 +1284,7 @@ async fn a_restarted_pump_carries_on_where_the_last_one_stopped() {
 /// drill may depend on which format a channel speaks.
 #[tokio::test]
 async fn a_bank_that_speaks_iso_20022_is_sent_iso_20022() {
-    let mut world = World::new().await;
-    let mut config: ic_payments::Config = serde_json::from_value(world.module.query(serde_json::json!({"q": "config"})).await.unwrap()).unwrap();
-    let iso = common::iso_config();
-    for (id, channel) in &mut config.channels {
-        channel.format = iso.channels[id].format;
-    }
-    for (code, account) in &mut config.accounts {
-        account.at_bank = iso.accounts[code].at_bank.clone();
-    }
-    world.ok(
-        &cal(),
-        Command::ActivateConfig {
-            version: 2,
-            config: Box::new(config),
-        },
-    );
-    world.bank.lock().iso = true;
-    world.api.lock().iso = true;
+    let mut world = iso_world().await;
     world.payee("p1", PayeeKind::Beneficiary);
     let pump = world.pump("akl", "a");
 
@@ -1348,4 +1334,154 @@ async fn a_bank_that_speaks_iso_20022_is_sent_iso_20022() {
     assert!(file.evidence_hash.starts_with("unwritten: "));
     assert!(probes["bnz-file"].ok, "the other bank still speaks the system's own format");
     assert_eq!(world.bank.lock().held.len(), 1);
+}
+
+/// The test world with the first bank's channels switched to ISO 20022, and
+/// that bank's fakes speaking it, numbering each account as configured.
+async fn iso_world() -> World {
+    let mut world = World::new().await;
+    let mut config: ic_payments::Config = serde_json::from_value(world.module.query(serde_json::json!({"q": "config"})).await.unwrap()).unwrap();
+    let iso = common::iso_config();
+    for (id, channel) in &mut config.channels {
+        channel.format = iso.channels[id].format;
+    }
+    for (code, account) in &mut config.accounts {
+        account.at_bank = iso.accounts[code].at_bank.clone();
+    }
+    let numbers: BTreeMap<String, String> = config
+        .accounts
+        .iter()
+        .filter_map(|(code, a)| Some((code.clone(), a.at_bank.as_ref()?.number.clone())))
+        .collect();
+    world.ok(
+        &cal(),
+        Command::ActivateConfig {
+            version: 2,
+            config: Box::new(config),
+        },
+    );
+    for bank in [&world.bank, &world.api] {
+        let mut inner = bank.lock();
+        inner.iso = true;
+        inner.account_numbers = numbers.clone();
+        inner.account_numbers.insert("settlement".to_string(), numbers["anz-sf1-claims"].clone());
+    }
+    world
+}
+
+/// Purpose: a bank that speaks ISO 20022 is understood: its `pain.002`
+/// rejects an item, its `camt.054` settles the file and returns an item, its
+/// `camt.053` statement reconciles; a document holding several messages is
+/// recorded part by part, and the place in the bank's sequence stops before
+/// a document any part of which the module did not take, so a restarted
+/// pump is offered it again whole; a document that cannot be read at all is
+/// reported each pass and nothing after it is read.
+/// Why it matters: these are the bank's answers about real money. One
+/// lost, or one read past, is a payment the ledger never hears about.
+#[tokio::test]
+async fn a_bank_that_speaks_iso_20022_is_understood() {
+    let mut world = iso_world().await;
+    world.payee("p1", PayeeKind::Beneficiary);
+    let pump = world.pump("akl", "a");
+    world.bank.lock().reject_items.insert("i2".to_string(), "AC01".to_string());
+    let s = world.run(
+        "r1",
+        RunType::BenefitPayments,
+        false,
+        vec![pay("i1", "p1", 300_00), pay("i2", "p1", 50_00), pay("i3", "p1", 20_00)],
+    );
+    assert_eq!(pump.pass().await.sent, 1);
+    world.bank.acknowledge(&s);
+    world.bank.settle(&s, d(2027, 11, 16));
+    world.bank.push(BankMessage::Return {
+        item: "i3".to_string(),
+        reason: ReturnReason::AccountClosed,
+        returned_on: d(2027, 11, 17),
+    });
+    let pass = pump.pass().await;
+    assert_eq!((pass.messages, pass.problems.len()), (3, 0), "{:?}", pass.problems);
+    let state = world.state();
+    assert_eq!(state.submissions[&s].settled_on, Some(d(2027, 11, 16)));
+    assert_eq!(state.control_totals("r1").unwrap()["rejected"], 50_00);
+
+    // A statement in camt.053 is reconciled against what was expected.
+    world.bank.push(BankMessage::Statement {
+        account: "anz-sf1-claims".to_string(),
+        date: d(2027, 11, 17),
+        opening_minor: 1_000_000_00,
+        closing_minor: 1_000_000_00 - 320_00 + 20_00,
+        lines: vec![
+            StatementLine {
+                id: "l1".to_string(),
+                amount_minor: -320_00,
+                reference: s.clone(),
+                payer_account: None,
+            },
+            StatementLine {
+                id: "l2".to_string(),
+                amount_minor: 20_00,
+                reference: "i3".to_string(),
+                payer_account: None,
+            },
+        ],
+    });
+    let pass = pump.pass().await;
+    assert_eq!((pass.messages, pass.problems.len()), (1, 0), "{:?}", pass.problems);
+    assert_eq!(world.state().books["anz-sf1-claims"].statement_date, Some(d(2027, 11, 17)));
+
+    // One document, two parts: the first taken, the second refused. The
+    // place stops before the document, so it is offered again whole.
+    let number = world.bank.lock().account_numbers["settlement"].clone();
+    let entry = |id: &str| {
+        format!("<Ntry><Amt Ccy=\"NZD\">0.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><BookgDt><Dt>2027-11-18</Dt></BookgDt><NtryDtls><Btch><PmtInfId>{id}</PmtInfId></Btch></NtryDtls></Ntry>")
+    };
+    let two = format!(
+        "<?xml version=\"1.0\"?><Document><BkToCstmrDbtCdtNtfctn><Ntfctn><Acct><Id><Othr><Id>{number}</Id></Othr></Id></Acct>{}{}</Ntfctn></BkToCstmrDbtCdtNtfctn></Document>",
+        entry(&s),
+        entry("never-sent")
+    );
+    world.bank.push_document(&two);
+    let before = world.state().messages_read["anz-file"];
+    let pass = pump.pass().await;
+    assert!(pass.problems.iter().any(|p| p.contains("unknown_submission")), "{:?}", pass.problems);
+    assert_eq!(
+        world.state().messages_read["anz-file"],
+        before,
+        "the place stops before the half-taken document"
+    );
+    let again = world.pump("akl", "b").pass().await;
+    assert!(again.problems.iter().any(|p| p.contains("unknown_submission")), "{:?}", again.problems);
+
+    // A document nobody can read stops the reading there, every pass, and
+    // says why.
+    let stuck = iso_world().await;
+    stuck.bank.push_document("<not xml");
+    stuck.bank.push(BankMessage::Settlement {
+        id: "later".to_string(),
+        settled_on: d(2027, 11, 18),
+    });
+    let reader = stuck.pump("akl", "c");
+    for _ in 0..2 {
+        let pass = reader.pass().await;
+        assert_eq!(pass.messages, 0);
+        assert!(pass.problems.iter().any(|p| p.contains("document 1 cannot be read")), "{:?}", pass.problems);
+    }
+    // Behind a readable document, an unreadable one waits for the next pass.
+    let good = ic_payments_service::fake::iso_document(
+        &BankMessage::Settlement {
+            id: "r9-1".to_string(),
+            settled_on: d(2027, 11, 18),
+        },
+        &BTreeMap::new(),
+    );
+    let documents = vec![
+        ic_payments_service::bank::Document { seq: 1, document: good },
+        ic_payments_service::bank::Document {
+            seq: 2,
+            document: "<".to_string(),
+        },
+    ];
+    let accounts = BTreeMap::from([("settlement".to_string(), "anz-sf1-claims".to_string())]);
+    let read = ic_payments_service::bank::read_documents(documents, &accounts).unwrap();
+    assert_eq!(read.iter().map(|n| (n.seq, n.part)).collect::<Vec<_>>(), vec![(1, 0)]);
 }

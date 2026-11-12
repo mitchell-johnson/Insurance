@@ -6,6 +6,7 @@
 //! adapter implements [`Bank`] against that bank's formats and transport;
 //! nothing above the trait changes.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 
 use base64::Engine;
@@ -20,6 +21,9 @@ pub struct Target {
     pub format: WireFormat,
     pub url: String,
     pub token: String,
+    /// The module's code for each of our account numbers at this bank, to
+    /// read the bank's statements by.
+    pub accounts: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -50,7 +54,38 @@ pub struct Receipt {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Numbered {
     pub seq: u64,
+    /// Which of the messages read from one of the bank's documents this is.
+    /// A document in the system's own format is one message.
+    #[serde(default, skip_serializing_if = "is_first")]
+    pub part: u32,
     pub message: BankMessage,
+}
+
+fn is_first(part: &u32) -> bool {
+    *part == 0
+}
+
+/// One document from a bank that speaks ISO 20022, with its place in the
+/// bank's sequence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Document {
+    pub seq: u64,
+    pub document: String,
+}
+
+/// The messages in a bank's documents, in order. A document that cannot be
+/// read stops the reading there: what came before it is returned, and if it
+/// is the first, the reason is. Nothing after it is read until it can be.
+pub fn read_documents(documents: Vec<Document>, accounts: &BTreeMap<String, String>) -> Result<Vec<Numbered>, ChannelError> {
+    let mut out = Vec::new();
+    for d in documents {
+        match ic_payments::iso20022::read_messages(&d.document, accounts) {
+            Ok(messages) => out.extend(messages.into_iter().zip(0..).map(|(message, part)| Numbered { seq: d.seq, part, message })),
+            Err(e) if out.is_empty() => return Err(ChannelError::Refused(format!("document {} cannot be read: {e}", d.seq))),
+            Err(_) => break,
+        }
+    }
+    Ok(out)
 }
 
 pub trait Bank: Send + Sync {
@@ -158,6 +193,9 @@ impl Bank for HttpBank {
     async fn messages(&self, to: &Target, after: u64) -> Result<Vec<Numbered>, ChannelError> {
         let url = format!("{}/messages?after={after}", to.url);
         let response = self.http.get(url).bearer_auth(&to.token).send().await.map_err(transport)?;
-        body(checked(response).await?).await
+        match to.format {
+            WireFormat::Own => body(checked(response).await?).await,
+            WireFormat::Iso20022 => read_documents(body(checked(response).await?).await?, &to.accounts),
+        }
     }
 }
