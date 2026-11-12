@@ -434,7 +434,16 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
         InvestCommand::ActivateUnitPrice(Box::new(price("g-tue", "growth", tuesday, "3.0000", "3.0000"))),
     )
     .unwrap();
+    // Until the sells run, each switch counts as pending in the fund it is going to, for
+    // the date its buy will take, so bond's Tuesday is not finished although it is struck.
+    let coming = |c: &Cluster, name: &str| {
+        let on_issue = c.state(0).investment.units_on_issue(&c.state(0).ledger, &fund_id(name));
+        (on_issue.executed_through, on_issue.pending)
+    };
+    assert_eq!(coming(&c, "bond"), (None, BTreeMap::from([(tuesday, 1)])));
+    assert_eq!(coming(&c, "income"), (None, BTreeMap::from([(d(2027, 11, 18), 1)])));
     execute(&mut c, "growth", tuesday).unwrap();
+    assert_eq!(coming(&c, "bond"), (None, BTreeMap::from([(tuesday, 1)])));
     // 500 units at 3.00 = 1,500.00 to bond; 300.00 needs exactly 100 units; 100 units to income.
     assert_eq!(units(&c, &policy, "growth"), 2_000_000_000 - 500_000_000 - 100_000_000 - 100_000_000);
     let second_half = c.state(0).investment.order("sw-1.in").expect("the switch placed its buy").clone();
@@ -464,6 +473,7 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     assert_eq!((todo[0].fund.clone(), todo[0].pricing_date, todo[0].pending), (fund_id("bond"), tuesday, 1));
     execute(&mut c, "bond", tuesday).unwrap();
     assert_eq!(units(&c, &policy, "bond"), 1_500_000_000);
+    assert_eq!(coming(&c, "bond"), (Some(tuesday), BTreeMap::new()));
 
     // Thursday: sell everything in growth twice over. The first takes it all for what it
     // fetches; the cash order asks for more than is left and is cancelled; income's buy executes.
@@ -1139,4 +1149,63 @@ fn a_withdrawal_is_paid_through_benefit_payable() {
         InvestEvent::PayoutRaised { policyholder, .. } | InvestEvent::PayoutReinstructed { policyholder, .. } => *policyholder == owner,
         _ => true,
     }));
+}
+
+/// Purpose: a fund is authored as a Starlark file and loaded into the definition the
+/// core activates. The shipped funds load, carry a hash of their source, activate on a
+/// cluster and activate again without effect; the same file edited without a new version
+/// is refused by the core; and a file that is not Starlark, defines no fund, does not
+/// match the schema or breaks a rule is refused when it is loaded, with the file named.
+/// Why it matters: a fund's rounding rule and spreads decide how many units every order
+/// gets, for as long as the fund exists. They must come from a reviewed file whose hash
+/// is on the log, and a slip in that file must stop at the loader, not be discovered as
+/// wrong units after a year of orders.
+#[test]
+fn funds_are_loaded_from_files_and_bad_files_are_refused() {
+    use ic_core::invest::load_fund;
+    use ic_product::LoadError;
+    use ic_sim::config::{shipped_fund_activations, shipped_funds};
+
+    let funds = shipped_funds().unwrap();
+    let ids: Vec<&str> = funds.iter().map(|f| f.id.0.as_str()).collect();
+    assert_eq!(ids, ["cash", "balanced", "growth"]);
+    assert_eq!(funds, shipped_funds().unwrap());
+    for f in &funds {
+        assert_eq!((f.version, f.currency, f.content_hash.len()), (1, NZD, 64), "{}", f.id.0);
+        assert!(!f.prices_on(d(2027, 12, 27)) && f.prices_on(d(2027, 12, 29)));
+        assert_eq!(f.pricing["compensation_minimum_minor"], "2000");
+    }
+    assert_ne!(funds[0].content_hash, funds[1].content_hash);
+
+    let mut c = Cluster::in_memory(2, 5);
+    c.open(start()).unwrap();
+    for _ in 0..2 {
+        for command in shipped_fund_activations().unwrap() {
+            c.activate_everywhere(command).unwrap();
+        }
+    }
+    assert_eq!(c.state(1).investment.fund(&fund_id("balanced")).unwrap().buy_spread_bps, 15);
+
+    let source = |cut_off: &str, rounding: &str| {
+        format!(
+            "FUND = fund(id = \"cash\", version = 1, name = \"Cash Fund\", currency = \"NZD\", cut_off = \"{cut_off}\", price_decimals = 4, unit_rounding = \"{rounding}\")"
+        )
+    };
+    // Other content under a version already active: loads, and the core refuses it.
+    let edited = load_fund("funds/cash.star", &source("16:00", "down")).unwrap();
+    assert_ne!(edited.content_hash, funds[0].content_hash);
+    assert!(edited.open_to_new_money && edited.pricing.is_empty());
+    assert_eq!(code(invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(edited)))), "invalid_fund");
+
+    let refused = |text: &str| load_fund("funds/x.star", text).unwrap_err();
+    assert!(matches!(refused("FUND = fund("), LoadError::Starlark(_)));
+    assert!(matches!(refused("OTHER = 1"), LoadError::MissingSymbol { symbol: "FUND", .. }));
+    assert!(matches!(refused(&source("15:00", "sideways")), LoadError::Schema { .. }));
+    assert!(matches!(refused("FUND = 7"), LoadError::Schema { .. }));
+    let broken = refused(&source("3pm", "down"));
+    assert!(matches!(broken, LoadError::Invalid { .. }));
+    assert!(
+        broken.to_string().contains("funds/x.star") && broken.to_string().contains("cut-off"),
+        "{broken}"
+    );
 }
