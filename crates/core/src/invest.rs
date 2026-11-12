@@ -1400,6 +1400,9 @@ pub struct Executable {
     pub pricing_date: NaiveDate,
     pub price_id: String,
     pub pending: u32,
+    /// The first of them. An order executes once, so a run that names it in
+    /// its idempotency key never sends the same key for different work.
+    pub first: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1420,6 +1423,10 @@ pub struct Replayable {
     pub fund: FundId,
     pub pricing_date: NaiveDate,
     pub orders: u32,
+    /// The fund's approved minimum for compensating one order, from its
+    /// pricing terms (`compensation_minimum_minor`; none means every
+    /// difference is paid). The replay run sends it back as the threshold.
+    pub compensation_minimum_minor: i64,
 }
 
 impl InvestmentBook {
@@ -1460,11 +1467,15 @@ impl InvestmentBook {
             .filter_map(|(id, orders)| {
                 let price = self.prices.get(id)?;
                 let current = self.price_for(&price.fund, price.pricing_date)?;
+                let minimum = self
+                    .fund(&price.fund)
+                    .and_then(|f| f.pricing.get("compensation_minimum_minor")?.parse::<i64>().ok());
                 (current.price_id != price.price_id).then(|| Replayable {
                     superseded: price.price_id.clone(),
                     fund: price.fund.clone(),
                     pricing_date: price.pricing_date,
                     orders,
+                    compensation_minimum_minor: minimum.unwrap_or(0).max(0),
                 })
             })
             .collect()
@@ -1472,21 +1483,23 @@ impl InvestmentBook {
 
     /// Funds and dates with a price in force and orders still pending.
     pub fn executable(&self) -> Vec<Executable> {
-        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        // In key order, so the first order seen in a slot is its first.
+        let mut counts: BTreeMap<String, (u32, &str)> = BTreeMap::new();
         for key in &self.pending {
-            if let Some((slot, _)) = key.rsplit_once('/') {
-                *counts.entry(slot.to_string()).or_default() += 1;
+            if let Some((slot, order)) = key.rsplit_once('/') {
+                counts.entry(slot.to_string()).or_insert((0, order)).0 += 1;
             }
         }
         counts
             .into_iter()
-            .filter_map(|(slot, pending)| {
+            .filter_map(|(slot, (pending, first))| {
                 let price = self.prices.get(self.in_force.get(&slot)?)?;
                 Some(Executable {
                     fund: price.fund.clone(),
                     pricing_date: price.pricing_date,
                     price_id: price.price_id.clone(),
                     pending,
+                    first: first.to_string(),
                 })
             })
             .collect()

@@ -666,8 +666,14 @@ fn the_book_answers_its_readers_and_reconciles_to_the_ledger() {
     };
     assert_eq!(todo.len(), 1);
     assert_eq!(
-        (todo[0].fund.clone(), todo[0].pricing_date, todo[0].price_id.as_str(), todo[0].pending),
-        (fund_id("growth"), monday, "p-1", 1)
+        (
+            todo[0].fund.clone(),
+            todo[0].pricing_date,
+            todo[0].price_id.as_str(),
+            todo[0].pending,
+            todo[0].first.as_str()
+        ),
+        (fund_id("growth"), monday, "p-1", 1, "buy-1")
     );
     // Before execution Monday is not yet "executed through".
     let Reply::UnitsOnIssue(before) = ask(&c, Question::UnitsOnIssue { fund: fund_id("growth") }) else {
@@ -867,6 +873,7 @@ fn a_corrected_price_is_replayed_over_the_orders_executed_at_it() {
             fund: fund_id("growth"),
             pricing_date: tuesday,
             orders: 2,
+            compensation_minimum_minor: 0,
         }]
     );
     assert_eq!(code(replay(&mut c, "p-t", 0, 0)), "invalid_chunk");

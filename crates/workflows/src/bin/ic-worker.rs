@@ -15,7 +15,7 @@ use chrono::NaiveDate;
 use ic_workflows::due::{is_due, ledger_day};
 use ic_workflows::settings::WorkerSettings;
 use ic_workflows::temporal::{close_day, run_worker};
-use ic_workflows::EndOfDayInput;
+use ic_workflows::{run_unit_orders, EndOfDayInput};
 use temporalio_client::envconfig::LoadClientConfigProfileOptions;
 use temporalio_client::{Client, ClientOptions, Connection};
 
@@ -109,6 +109,21 @@ async fn main() -> Result<(), String> {
                 closed.push(report.closed);
             }
         }
-        Some((other, _)) => Err(format!("unknown command {other:?}; expected no command, `close` or `close-due`")),
+        // Between closes: execute what has a price in force and replay what
+        // is on a corrected price, now. Every command it sends is one the
+        // close would send, with the same key, so the two never double up.
+        Some((command, [])) if command == "unit-orders" => {
+            let ledger = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
+            let day = ledger_day(&ledger, settings.patience).await?;
+            let steps = settings.steps()?;
+            let mut left = std::collections::BTreeMap::new();
+            for partition in 0..day.partitions {
+                let remaining = run_unit_orders(&steps, partition, day.business_date).await.map_err(|e| e.to_string())?;
+                left.insert(partition, remaining);
+            }
+            println!("{}", serde_json::json!({ "business_date": day.business_date, "left": left }));
+            Ok(())
+        }
+        Some((other, _)) => Err(format!("unknown command {other:?}; expected no command, `close`, `close-due` or `unit-orders`")),
     }
 }

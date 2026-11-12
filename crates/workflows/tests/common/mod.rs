@@ -91,6 +91,11 @@ pub fn business(partitions: PartitionId) -> Vec<(PartitionId, &'static str, Comm
     commands
 }
 
+/// The paid policy on partition 0.
+pub fn first_policy() -> PolicyId {
+    term_life(1, opening(), d(1985, 6, 1), Sex::Male, false, 250_000_00, None, Frequency::Monthly, None).policy
+}
+
 /// What the book looks like, in terms that do not depend on salts or on how
 /// the day's work was chunked: the date, the number of journal entries, and
 /// each policy's status, balance owed and periods billed.

@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 /// stuck. A round bills one period per policy, so a real run needs a handful.
 pub const MAX_ROUNDS: u32 = 1_000;
 
+/// Passes over a partition's unit orders in one run. Each pass handles a
+/// chunk of every fund and date, so a real run needs a handful; whatever is
+/// left after this many is reported and taken up by the next run.
+pub const MAX_UNIT_PASSES: u32 = 1_000;
+
 /// What to close. The workflow ID is derived from it, so a day has one run.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndOfDayInput {
@@ -64,6 +69,27 @@ pub struct RoundStep {
     pub round: u32,
 }
 
+/// One pass over a partition's unit orders.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitStep {
+    pub partition: PartitionId,
+    /// The business date the run belongs to. Part of each command's
+    /// idempotency key.
+    pub closing: NaiveDate,
+    pub pass: u32,
+}
+
+/// What a pass over a partition's unit orders found.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnitPass {
+    /// Whether the work waiting changed. When it did not, another pass
+    /// would send the same commands again and change nothing.
+    pub progressed: bool,
+    /// Orders with a price in force still to execute, plus orders still on
+    /// a superseded price.
+    pub left: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PublishStep {
     pub closing: NaiveDate,
@@ -96,6 +122,11 @@ pub struct EndOfDayReport {
     /// Reconciliation breaks. Any break is for a person to resolve before
     /// the next day's run.
     pub breaks: Vec<BreakView>,
+    /// Unit orders a partition could not execute or replay although their
+    /// price is in force (an order of a policy moving partition, for
+    /// one). Absent when there are none. For a person to look at.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unit_orders_left: BTreeMap<PartitionId, u32>,
     pub published: PublishedSummary,
 }
 
@@ -111,6 +142,10 @@ pub trait Steps {
     /// Run one round of policy work. Returns how many policies still need
     /// another round.
     async fn run_round(&self, step: RoundStep) -> Result<u32, Self::Error>;
+
+    /// Execute a chunk of every fund and date whose price is in force, and
+    /// replay a chunk of every superseded price.
+    async fn unit_orders(&self, step: UnitStep) -> Result<UnitPass, Self::Error>;
 
     async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, Self::Error>;
 
@@ -159,6 +194,15 @@ pub async fn run_end_of_day<S: Steps>(steps: &S, input: &EndOfDayInput) -> Resul
         }
         rounds.insert(partition, round);
     }
+    // Unit orders: everything whose price is in force executes before the
+    // books are checked, and every order on a corrected price is replayed.
+    let mut unit_orders_left = BTreeMap::new();
+    for partition in 0..input.partitions {
+        let left = run_unit_orders(steps, partition, closing).await.map_err(EndOfDayError::Step)?;
+        if left > 0 {
+            unit_orders_left.insert(partition, left);
+        }
+    }
     // Reconciliation: each partition's own rules, then the one rule that
     // spans partitions.
     let mut breaks = Vec::new();
@@ -191,6 +235,20 @@ pub async fn run_end_of_day<S: Steps>(steps: &S, input: &EndOfDayInput) -> Resul
         heads,
         rounds,
         breaks,
+        unit_orders_left,
         published,
     })
+}
+
+/// Work through one partition's unit orders until a pass changes nothing.
+/// Returns how many are left.
+pub async fn run_unit_orders<S: Steps>(steps: &S, partition: PartitionId, closing: NaiveDate) -> Result<u32, S::Error> {
+    let mut pass = 0;
+    loop {
+        let done = steps.unit_orders(UnitStep { partition, closing, pass }).await?;
+        pass += 1;
+        if !done.progressed || pass >= MAX_UNIT_PASSES {
+            return Ok(done.left);
+        }
+    }
 }

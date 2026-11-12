@@ -137,3 +137,72 @@ spec:
                 readOnly: true
                 volumeAttributes:
                   secretProviderClass: ic-worker-token
+---
+# Unit orders between closes. Every fifteen minutes: execute the orders whose
+# price is in force and replay the orders standing on a corrected price, so a
+# price the unit pricing module activates in the morning reaches customers'
+# holdings within the quarter hour instead of at midnight. The close does the
+# same work as one of its steps, with the same idempotency keys, so the two
+# never apply an order twice and a missed run here is caught up there.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ic-unit-orders
+spec:
+  schedule: "*/15 * * * *"
+  timeZone: Pacific/Auckland
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 7
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 840
+      template:
+        metadata:
+          labels:
+            app: ic-unit-orders
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: Never
+          serviceAccountName: ic-worker
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: unit-orders
+              image: insurance-core
+              command: ["/usr/local/bin/ic-worker", "unit-orders"]
+              envFrom:
+                - configMapRef:
+                    name: ic-ledger
+                - configMapRef:
+                    name: ic-azure
+                - configMapRef:
+                    name: ic-temporal
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  memory: 512Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: cluster-token
+                  mountPath: /mnt/cluster-token
+                  readOnly: true
+          volumes:
+            - name: cluster-token
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-worker-token
