@@ -22,7 +22,12 @@ pub(crate) enum Derived {
 
 /// Pure: the standing a policy's receivables imply on a date.
 pub(crate) fn derive(policy: &Policy, rules: ArrearsRules, on: NaiveDate) -> Derived {
-    let Some(due) = policy.oldest_unpaid_due() else {
+    derive_from(policy.oldest_unpaid_due(), rules, on)
+}
+
+/// Pure: the standing an oldest unpaid due date implies on a date.
+pub(crate) fn derive_from(oldest_unpaid_due: Option<NaiveDate>, rules: ArrearsRules, on: NaiveDate) -> Derived {
+    let Some(due) = oldest_unpaid_due else {
         return Derived::Standing(Standing::Paid);
     };
     let age = (on - due).num_days();
@@ -123,6 +128,14 @@ pub(crate) fn write_off(policy: &Policy, set: &mut PostingSet, mine: impl Fn(&Re
         );
         leftover_fine += unearned - from_unearned;
         arrears += outstanding;
+    }
+    // A credit note still unearned has a negative unearned balance, and its
+    // credit has already reduced what is owed on other receivables. Taken
+    // together that is premium earned and never paid: it is written off,
+    // not charged to whoever would otherwise get the refund.
+    if leftover_fine < 0 {
+        set.debit(accounts::lapse_write_off(&policy.product_code, c), -leftover_fine, dims(policy, None, "lapse"));
+        leftover_fine = 0;
     }
     (arrears, leftover_fine)
 }

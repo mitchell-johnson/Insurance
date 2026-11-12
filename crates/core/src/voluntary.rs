@@ -15,11 +15,11 @@ use ic_money::{AccrualAmount, Money};
 use ic_product::ProductDefinition;
 
 use crate::accounts::{self, dims};
-use crate::arrears;
+use crate::arrears::{self, Derived};
 use crate::cash::{allocate, apply_allocations};
 use crate::event::Event;
 use crate::machine::{Ctx, Reject};
-use crate::policy::{Policy, PolicyStatus, ReceiptRecord};
+use crate::policy::{Policy, PolicyStatus, ReceiptRecord, Standing};
 use crate::postings::PostingSet;
 use crate::LifeId;
 
@@ -49,7 +49,15 @@ fn member(policy: &Policy, life: &LifeId) -> Result<(), Reject> {
 }
 
 /// Money from a member for cover the member pays for themselves.
-pub(crate) fn apply_receipt(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, life: LifeId, receipt: String, amount: Money) -> Result<(), Reject> {
+pub(crate) fn apply_receipt(
+    ledger: &mut Ledger,
+    catalog: &crate::catalog::Catalog,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: LifeId,
+    receipt: String,
+    amount: Money,
+) -> Result<(), Reject> {
     member(policy, &life)?;
     if amount.currency != policy.currency || amount.minor <= 0 {
         return Err(Reject::new("invalid_amount", "a receipt must be a positive amount in the policy's currency"));
@@ -90,12 +98,15 @@ pub(crate) fn apply_receipt(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut 
     );
     ctx.emit(Event::MemberReceiptApplied {
         policy: policy.id.clone(),
-        life,
+        life: life.clone(),
         receipt,
         allocated_minor: allocated,
         to_credit_minor: to_credit,
         net_by_cover_type,
     });
+    if let Some(product) = catalog.product(&policy.product_hash) {
+        refresh(product, policy, ctx, &life);
+    }
     Ok(())
 }
 
@@ -186,6 +197,80 @@ pub(crate) fn close_all(ledger: &mut Ledger, product: &ProductDefinition, policy
     let payers: BTreeSet<LifeId> = policy.receivables.iter().filter(|r| !r.closed).filter_map(|r| r.payer.clone()).collect();
     for life in payers {
         close(ledger, product, policy, ctx, &life)?;
+    }
+    for life in std::mem::take(&mut policy.member_standing).into_keys() {
+        announce(policy, ctx, &life, None);
+    }
+    Ok(())
+}
+
+/// Record a member's standing and say so when it changed.
+fn announce(policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId, to: Option<Standing>) {
+    let from = match to {
+        Some(s) => policy.member_standing.insert(life.clone(), s),
+        None => policy.member_standing.remove(life),
+    };
+    if from != to {
+        ctx.emit(Event::MemberStandingChanged {
+            policy: policy.id.clone(),
+            life: life.clone(),
+            from,
+            to,
+            oldest_unpaid_due: policy.member_oldest_unpaid_due(life),
+        });
+    }
+}
+
+/// Re-derive one member's standing after a bill, a payment or a reversal,
+/// without lapsing: that happens only in the end-of-day run.
+pub(crate) fn refresh(product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId) {
+    let Some(rules) = product.arrears().filter(|_| policy.status == PolicyStatus::InForce) else {
+        return;
+    };
+    let billed = policy.receivables.iter().any(|r| !r.closed && r.payer.as_ref() == Some(life));
+    if !billed && !policy.member_standing.contains_key(life) {
+        return;
+    }
+    let to = match arrears::derive_from(policy.member_oldest_unpaid_due(life), rules, ctx.date) {
+        Derived::Standing(s) => s,
+        Derived::Lapse => policy.member_standing.get(life).copied().unwrap_or(Standing::InGrace),
+    };
+    announce(policy, ctx, life, Some(to));
+}
+
+/// The end-of-day arrears run for the members of a scheme who are billed
+/// for cover of their own. A member who has not paid within the product's
+/// lapse period loses that cover and nothing else: the cover the employer
+/// pays for, and every other member, are untouched.
+pub(crate) fn run_arrears(
+    ledger: &mut Ledger,
+    catalog: &crate::catalog::Catalog,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+) -> Result<(), Reject> {
+    let Some(rules) = product.arrears().filter(|_| policy.status == PolicyStatus::InForce) else {
+        return Ok(());
+    };
+    let mut members: BTreeSet<LifeId> = policy.member_standing.keys().cloned().collect();
+    members.extend(policy.receivables.iter().filter(|r| !r.closed).filter_map(|r| r.payer.clone()));
+    for life in members {
+        match arrears::derive_from(policy.member_oldest_unpaid_due(&life), rules, ctx.date) {
+            Derived::Standing(s) => announce(policy, ctx, &life, Some(s)),
+            Derived::Lapse => {
+                ctx.work += 40;
+                let (layers, effective) = crate::group::end_member_paid_layers(ledger, catalog, product, policy, ctx, &life)?;
+                let arrears_minor = close(ledger, product, policy, ctx, &life)?;
+                announce(policy, ctx, &life, None);
+                ctx.emit(Event::MemberCoverLapsed {
+                    policy: policy.id.clone(),
+                    life,
+                    layers,
+                    effective,
+                    arrears_minor,
+                });
+            }
+        }
     }
     Ok(())
 }

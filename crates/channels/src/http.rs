@@ -1126,15 +1126,12 @@ async fn claims_question(
         }
         Q::Queue { .. } => {
             let mut rows: Vec<Value> = Vec::new();
-            let mut sorted: Vec<_> = s
-                .claims_everywhere(&question)
-                .await?
-                .into_iter()
-                .flat_map(|(p, reply)| match reply {
-                    R::Queue(rows) => rows.into_iter().map(|r| (p, r)).collect(),
-                    _ => vec![],
-                })
-                .collect();
+            let mut sorted = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::Queue(found) = reply {
+                    sorted.extend(found.into_iter().map(|r| (p, r)));
+                }
+            }
             // Most urgent first, then oldest, as the claims module orders one partition's.
             sorted.sort_by(|(_, a), (_, b)| b.priority.cmp(&a.priority).then(b.age_days.cmp(&a.age_days)));
             for (p, row) in sorted {
@@ -1147,10 +1144,9 @@ async fn claims_question(
                 .and_then(|p| p.parse().ok())
                 .filter(|p| *p < s.claims.count())
                 .ok_or_else(|| Problem::bad_request("a run is on one partition: give partition"))?;
-            match s.claims.ask(partition, question).await.map_err(claims_down)? {
-                Some(R::Remittance(items)) => ok(json!(items)),
-                _ => Err(Problem::not_found()),
-            }
+            // Null while the partition's business date is not open.
+            let reply = s.claims.ask(partition, question).await.map_err(claims_down)?;
+            ok(json!(reply)["remittance"].clone())
         }
         Q::Book | Q::Report => {
             let partitions: Vec<Value> = s
@@ -1179,19 +1175,12 @@ async fn claims_command(State(s): State<Shared>, headers: HeaderMap, method: Met
     let session = s.claims_standing(&headers, &method, &uri, &body).await?;
     let key = key(&headers, &session.party.0)?;
     let request: Body = parse(&body)?;
-    let (name, target, command) = crate::claims::command(&session.party, &request.purpose, request.partition, request.command).map_err(Problem::bad_request)?;
+    let (_, target, command) = crate::claims::command(&session.party, &request.purpose, request.partition, request.command).map_err(Problem::bad_request)?;
     let partition = match target {
         crate::claims::Target::Partition(p) if p < s.claims.count() => p,
         crate::claims::Target::Partition(p) => return Err(Problem::bad_request(format!("there is no partition {p}"))),
-        crate::claims::Target::Claim(claim) if name != "notify" => s.find_claim(&claim).await?.0,
-        crate::claims::Target::Claim(_) | crate::claims::Target::Policy(_) => {
-            let policy = match &command {
-                ic_core::Command::Claims(c) => match c.as_ref() {
-                    ic_core::claims_module::Command::Notify(n) => n.policy.clone(),
-                    _ => return Err(Problem::bad_request(format!("{name} names no claim"))),
-                },
-                _ => return Err(Problem::bad_request("not a claims command")),
-            };
+        crate::claims::Target::Claim(claim) => s.find_claim(&claim).await?.0,
+        crate::claims::Target::Policy(policy) => {
             let policy = ic_core::PolicyId(policy);
             let asks = (0..s.claims.count()).map(|p| s.claims.locate(p, policy.clone()));
             let mut found = None;
