@@ -6,12 +6,16 @@ mod azure;
 mod support;
 
 use azure::Fake;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use ic_documents::channels::{
     delivery_reports, mask, subscription_validation, AzureChannels, Channels, Contact, ContactDirectory, DirectoryError, HttpDirectory, MemoryDirectory,
     Outbound, SendError,
 };
 use ic_documents::kinds::DataClass;
 use ic_documents::model::{AttemptOutcome, Channel};
+use ic_documents::pdf::{layout, pdf, Fonts, Letter};
+use ic_documents::template::AlternateFormat;
 use ic_documents::vault::MemoryStore;
 use ic_documents::DocumentKind;
 use serde_json::json;
@@ -27,6 +31,7 @@ fn message(channel: Channel, destination: &str) -> Outbound {
         title: "Your renewal".into(),
         text: "Dear Aroha. Your premium will be $123.45.".into(),
         format: None,
+        language: "en".into(),
         contact: Contact {
             name: "Aroha Ngata".into(),
             destination: destination.into(),
@@ -187,11 +192,30 @@ async fn post_is_a_print_file_and_the_inbox_needs_no_send() {
     let name = ch.send(&m).await.unwrap();
     assert_eq!(name, "print/d1/aroha-1.json");
     assert_eq!(ch.send(&m).await.unwrap(), name, "a retry does not print twice");
-    assert_eq!(print.names(), vec![name.clone()]);
+    assert_eq!(print.names(), vec![name.clone(), "print/d1/aroha-1.pdf".to_string()]);
     let file: serde_json::Value = serde_json::from_slice(&ic_documents::vault::ObjectStore::get(&print, &name).await.unwrap().unwrap()).unwrap();
     assert_eq!(file["address"], json!(["12 Kowhai Street", "Ngaio", "Wellington 6035"]));
     assert_eq!(file["name"], json!("Aroha Ngata"));
     assert!(file["text"].as_str().unwrap().contains("$123.45"));
+    // The instruction names the pages, which are addressed for the envelope.
+    assert_eq!(file["pdf"], json!("print/d1/aroha-1.pdf"));
+    let pages = ic_documents::vault::ObjectStore::get(&print, "print/d1/aroha-1.pdf").await.unwrap().unwrap();
+    assert_eq!(pages, m.pdf(&Fonts::bundled()).unwrap());
+    let address: Vec<String> = m.contact.destination.lines().map(str::to_string).collect();
+    let laid = layout(
+        &Letter {
+            document: "d1",
+            title: "Your renewal",
+            name: "Aroha Ngata",
+            address: &address,
+            text: &m.text,
+            language: "en",
+            large_print: false,
+        },
+        &Fonts::bundled(),
+    )
+    .unwrap();
+    assert_eq!(laid[0].lines[1].text, "12 Kowhai Street");
 
     print.set_down(true);
     m.attempt = 2;
@@ -297,4 +321,76 @@ fn delivery_reports_are_read_from_event_grid() {
     assert_eq!(subscription_validation(&serde_json::to_vec(&handshake).unwrap()), Some("abc-123".into()));
     assert_eq!(subscription_validation(&serde_json::to_vec(&body).unwrap()), None);
     assert_eq!(subscription_validation(b"junk"), None);
+}
+
+/// Purpose: an email that may carry the text also carries the document as
+/// a PDF, in large print when that was asked for and without a postal
+/// address; an email that only points to the inbox carries none.
+/// Why it matters: a customer keeps and prints the attachment, so it must
+/// be the same document, and attaching it to a pointer email would send
+/// health information by a channel that must not carry it.
+#[tokio::test]
+async fn an_email_carries_the_document_as_a_pdf() {
+    let fake = Fake::start().await;
+    let ch = channels(&fake, MemoryStore::default()).with_fonts(Fonts::bundled());
+    let mut m = message(Channel::Email, "aroha@example.nz");
+    m.format = Some(AlternateFormat::LargePrint);
+    ch.send(&m).await.unwrap();
+    let mut sensitive = m.clone();
+    sensitive.document = "d2".into();
+    sensitive.data_class = DataClass::InsuranceSensitive;
+    ch.send(&sensitive).await.unwrap();
+
+    let inner = fake.lock();
+    let attachment = &inner.emails[0].1["attachments"][0];
+    assert_eq!(attachment["name"], json!("d1.pdf"));
+    assert_eq!(attachment["contentType"], json!("application/pdf"));
+    let file = STANDARD.decode(attachment["contentInBase64"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        file,
+        pdf(
+            &Letter {
+                document: "d1",
+                title: "Your renewal",
+                name: "",
+                address: &[],
+                text: &m.text,
+                language: "en",
+                large_print: true,
+            },
+            &Fonts::bundled()
+        )
+        .unwrap()
+    );
+    assert!(inner.emails[1].1.get("attachments").is_none());
+}
+
+/// Purpose: when the text has a character the font cannot draw, the email
+/// still goes with the text and the print instruction still goes with the
+/// text and no pages.
+/// Why it matters: the PDF is a convenience on top of the document. A
+/// mandatory notice held back because of one character the font lacks
+/// would miss its notice period; the text itself is always complete.
+#[tokio::test]
+async fn a_document_that_cannot_be_typeset_still_goes_as_text() {
+    let fake = Fake::start().await;
+    let print = MemoryStore::default();
+    let ch = channels(&fake, print.clone());
+    let mut m = message(Channel::Email, "aroha@example.nz");
+    m.text = "您的保费".into();
+    assert!(m.pdf(&Fonts::bundled()).is_err());
+    ch.send(&m).await.unwrap();
+    {
+        let inner = fake.lock();
+        assert_eq!(inner.emails[0].1["content"]["plainText"], json!("您的保费"));
+        assert!(inner.emails[0].1.get("attachments").is_none());
+    }
+
+    m.channel = Channel::Post;
+    m.contact.destination = "12 Kowhai Street\nWellington 6035".into();
+    let name = ch.send(&m).await.unwrap();
+    assert_eq!(print.names(), vec![name.clone()]);
+    let file: serde_json::Value = serde_json::from_slice(&ic_documents::vault::ObjectStore::get(&print, &name).await.unwrap().unwrap()).unwrap();
+    assert_eq!(file["pdf"], json!(null));
+    assert_eq!(file["text"], json!("您的保费"));
 }

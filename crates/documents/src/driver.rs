@@ -46,6 +46,8 @@ pub enum DriverError {
     Vault(#[from] VaultError),
     #[error(transparent)]
     Crypto(#[from] CryptoError),
+    #[error(transparent)]
+    Pdf(#[from] crate::pdf::PdfError),
     #[error("unexpected answer from the module: {0}")]
     Answer(String),
 }
@@ -395,6 +397,27 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         Ok(vault::fetch(&self.objects, &owner_key, document).await?)
     }
 
+    /// The document as a PDF to download: the text as issued, set in
+    /// large print if that is the format it was issued in.
+    pub async fn pdf(&self, id: &str, fonts: &crate::pdf::Fonts) -> Result<Vec<u8>, DriverError> {
+        let document = self.document(id).await?;
+        let title = match &document.template {
+            Some(r) => self.template(r).await?.0.template.title,
+            None => "Your document".to_string(),
+        };
+        let text = self.contents(&document).await?.text;
+        let letter = crate::pdf::Letter {
+            document: &document.id,
+            title: &title,
+            name: "",
+            address: &[],
+            text: &text,
+            language: &document.language,
+            large_print: document.format == Some(AlternateFormat::LargePrint),
+        };
+        Ok(crate::pdf::pdf(&letter, fonts)?)
+    }
+
     /// Render the document again from its stored data and the template
     /// version recorded for it, and say whether it comes out the same.
     pub async fn verify(&self, id: &str) -> Result<bool, DriverError> {
@@ -460,6 +483,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             title,
             text: self.contents(&document).await?.text,
             format: document.format,
+            language: document.language.clone(),
             contact,
             attempt: attempt as u32,
         };
