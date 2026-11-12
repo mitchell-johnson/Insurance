@@ -9,6 +9,18 @@ use chrono::NaiveDate;
 use crate::machine::{Event, PaymentsState, Tx};
 use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
 
+/// The outbox key prefix for money a reinsurer paid in.
+const RECEIVED_FROM_REINSURER: &str = "reinsurance-received-";
+
+/// The reinsurance statement a bank reference quotes, as `ri-stmt-<n>` in
+/// any case, anywhere in the reference.
+fn reinsurer_statement(reference: &str) -> Option<u64> {
+    let lower = reference.to_ascii_lowercase();
+    let at = lower.find("ri-stmt-")? + "ri-stmt-".len();
+    let digits: String = lower[at..].chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 impl PaymentsState {
     /// The place only moves forward: a slower driver reporting an older
     /// place changes nothing.
@@ -88,6 +100,7 @@ impl PaymentsState {
         for line in &lines {
             let id = format!("{account}-{date}-{}", line.id);
             let expected = self.books.get_mut(account).and_then(|b| b.expected.remove(&line.reference));
+            let reinsurer = (line.amount_minor > 0).then(|| reinsurer_statement(&line.reference)).flatten();
             match expected {
                 Some(e) if e.amount_minor == line.amount_minor => {
                     matched += 1;
@@ -98,6 +111,29 @@ impl PaymentsState {
                     id,
                     exception(ExceptionKind::AmountMismatch, line.amount_minor - e.amount_minor, &line.reference),
                 ),
+                // A reinsurer paid what a statement says it owes, quoting
+                // the statement. The reinsurance module is told; until it
+                // records it, the money is unidentified.
+                None if reinsurer.is_some() => {
+                    self.open_exception(
+                        tx,
+                        id.clone(),
+                        exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
+                    );
+                    self.push_outbox(OutboxEntry {
+                        key: format!("{RECEIVED_FROM_REINSURER}{id}"),
+                        instruction: Instruction::Module {
+                            module: "reinsurance".to_string(),
+                            command: serde_json::json!({
+                                "key": format!("payments:received:{id}"),
+                                "caller": "payments",
+                                "on": date,
+                                "command": {"record_settlement": {"number": reinsurer, "payment_ref": line.reference, "amount_minor": -line.amount_minor}},
+                            }),
+                        },
+                        about: Some(About::Exception(id)),
+                    });
+                }
                 None if line.amount_minor > 0 && purpose == Purpose::PremiumCollection => {
                     // A customer paid by direct credit. Cash matching decides
                     // whose it is; until it does, the money is unidentified.
@@ -187,12 +223,18 @@ impl PaymentsState {
             (Some(About::RefundRaise(id)), refused) => self.refund_raised(tx, &id, refused),
             (Some(About::RefundRelease(id)), None) => self.refund_released(tx, &id),
             // Cash matching applied the receipt: it is identified.
+            // So did the reinsurance module, for money a reinsurer paid.
             (Some(About::Exception(id)), None) => {
+                let resolution = if done.key.starts_with(RECEIVED_FROM_REINSURER) {
+                    "recorded by reinsurance against its statement"
+                } else {
+                    "applied by cash matching"
+                };
                 if let Some(e) = self.exceptions.get_mut(&id) {
-                    e.resolution = Some("applied by cash matching".to_string());
+                    e.resolution = Some(resolution.to_string());
                     tx.emit(Event::ExceptionResolved {
                         exception: id,
-                        resolution: "applied by cash matching".to_string(),
+                        resolution: resolution.to_string(),
                     });
                 }
             }
