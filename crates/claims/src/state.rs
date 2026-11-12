@@ -246,6 +246,7 @@ impl ClaimsState {
                 provider,
                 actor,
             } => self.pay_cost(cx, &claim, payment_ref, &item, &provider, &actor),
+            Command::StartWaiver { claim, from, actor } => self.start_waiver(cx, &claim, from, &actor),
             Command::PaymentReturned { claim, payment_ref } => self.payment_returned(cx, &claim, &payment_ref),
             Command::DeclareIncome {
                 claim,
@@ -529,6 +530,7 @@ impl ClaimsState {
                     note(claim, cx, None, format!("evidence_overdue:{id}"));
                 }
             }
+            Due::Waiver => self.waiver_day(cx, claim),
             Due::ExpectedEnd => {
                 if claim.status == Status::InPayment {
                     open_task(claim, cx, "senior-review/duration", TaskKind::SeniorReview, None);

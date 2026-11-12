@@ -1517,3 +1517,56 @@ fn late_payment_interest_is_its_own_posting_and_settles_with_the_benefit() {
     assert_eq!((record.status, record.paid_minor(false)), (Status::Paid, 80_000_00));
     days(&mut c, 2);
 }
+
+/// Purpose: premium waiver on the real ledger: with a waiver running beside a benefit, the
+/// premium is billed as usual and then paid from claims expense at the day end, so the policy
+/// owes nothing, stays in good standing, and the core's claim record, the journal and the
+/// claims event all carry the same waived amount.
+/// Why it matters: the design recognises earned premium and claims cost both. A waiver that
+/// merely stopped billing would understate both, and one that left the receivable owing would
+/// lapse the policy of the very customer the benefit is for.
+#[test]
+fn a_waived_premium_is_billed_and_paid_from_claims_expense() {
+    let mut c = cluster();
+    // The first premium is paid exactly, so nothing waits in suspense to pay the next.
+    let id = policy(&mut c, 0, false);
+    let owing = c.state(0).policies[&id].outstanding_minor();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-first".into(),
+        amount: Money::new(owing, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 5);
+    let first = c.business_date().unwrap();
+    open_claim(&mut c, "clm-ip", &id, "trauma", ClaimType::IncomeProtection, first);
+    ok(&mut c, decide("clm-ip", admit(None, Some(benefit(3_000_00, first)), false)));
+    assert_eq!(c.state(0).policies[&id].outstanding_minor(), 0);
+    let expense = accounts::claims_incurred("term-life", "trauma", NZD);
+    let before = c.state(0).ledger.natural_balance(&expense.id);
+    ok(
+        &mut c,
+        claims::Command::StartWaiver {
+            claim: "clm-ip".into(),
+            from: first,
+            actor: actor("sam"),
+        },
+    );
+    assert!(module_events(&c, "premium_waived").is_empty(), "nothing is owing yet, so nothing is posted");
+
+    // The next premium falls due and is billed inside these days.
+    days(&mut c, 40);
+    let p = &c.state(0).policies[&id];
+    let waived = p.claims["clm-ip"].waived_minor;
+    assert!(waived > 0, "a premium was billed and waived");
+    assert_eq!((p.outstanding_minor(), p.status), (0, PolicyStatus::InForce));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id) - before, i128::from(waived));
+    assert_eq!(c.state(0).ledger.balance(&accounts::premium_receivable(&id, NZD).id), 0);
+    let events = module_events(&c, "premium_waived");
+    assert_eq!(events.iter().map(|e| e["amount_minor"].parse::<i64>().unwrap()).sum::<i64>(), waived);
+    assert!(c.nodes[&0]
+        .journal
+        .iter()
+        .any(|e| e.body.kind == "premium_waived" && e.body.detail["claim"] == "clm-ip"));
+    clean(&c);
+}

@@ -280,6 +280,7 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             kind,
             ..
         } => goodwill_or_cost(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee, Some(kind)),
+        Instruction::WaivePremium { claim, cover, from, until, .. } => waive(s, p, ctx, &claim, &cover, from, until),
         Instruction::Close {
             claim, outcome, overpayment, ..
         } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
@@ -633,6 +634,49 @@ fn goodwill_or_cost(
         record.payable_minor += amount;
     }
     instruct(policy, claim, payment_ref, amount, cost.is_none());
+    Ok(())
+}
+
+/// Premium waiver: the premium was billed as usual, and what is owing for
+/// periods starting in the window is paid from claims expense, so earned
+/// premium and claims cost are both recognised. Older arrears are not
+/// touched, and nothing is posted where nothing is owing.
+fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, cover: &str, from: NaiveDate, until: NaiveDate) -> Result<(), Reject> {
+    known(policy, claim)?;
+    let mine = |r: &&crate::policy::Receivable| r.outstanding_minor > 0 && !r.closed && r.period_start >= from && r.period_start < until;
+    let total: i64 = policy.receivables.iter().filter(mine).map(|r| r.outstanding_minor).sum();
+    if total == 0 || policy.status != PolicyStatus::InForce {
+        return Ok(());
+    }
+    let c = policy.currency;
+    let (expense, d) = incurred(policy, cover, "premium_waiver");
+    let mut set = PostingSet::new();
+    set.debit(expense, i128::from(total), d.clone());
+    set.credit(accounts::premium_receivable(&policy.id, c), i128::from(total), d);
+    post(
+        &mut state.ledger,
+        policy,
+        ctx,
+        "premium_waived",
+        set,
+        claim,
+        &[("amount_minor", total.to_string())],
+    )?;
+    for r in policy.receivables.iter_mut().filter(|r| mine(&&**r)) {
+        r.outstanding_minor = 0;
+    }
+    if let Some(record) = policy.claims.get_mut(claim) {
+        record.waived_minor += total;
+    }
+    ctx.emit(Event::Module {
+        module: MODULE.to_string(),
+        kind: "premium_waived".to_string(),
+        subject: claim.to_string(),
+        detail: [("policy".to_string(), policy.id.to_string()), ("amount_minor".to_string(), total.to_string())].into(),
+    });
+    if let Some(product) = state.catalog.product(&policy.product_hash) {
+        arrears::refresh(product, policy, ctx);
+    }
     Ok(())
 }
 

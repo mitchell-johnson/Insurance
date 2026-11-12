@@ -142,7 +142,12 @@ impl ClaimsState {
                 }
                 match (claim.claim_type.periodic(), periodic) {
                     (true, Some(p)) => {
-                        let sound = p.monthly_minor > 0
+                        // A premium waiver claim pays no money to anyone: its benefit is the premium.
+                        let amount_fits = match claim.claim_type {
+                            crate::ClaimType::PremiumWaiver => p.monthly_minor == 0,
+                            _ => p.monthly_minor > 0,
+                        };
+                        let sound = amount_fits
                             && p.monthly_minor <= facts.sum_insured_minor
                             && p.first_period >= claim.event_date
                             && p.end > p.first_period
