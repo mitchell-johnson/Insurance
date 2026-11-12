@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ic_ledger::{AccountClass, AccountUnit, Dimensions, EntryId, Hash32, PartitionId};
+use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
@@ -87,6 +88,28 @@ pub struct LifeInfo {
     pub life: LifeId,
     /// The party, where the life is named or has been identified.
     pub party: Option<PartyId>,
+    /// The rating factors the life was priced on, as last recorded: what an
+    /// in-force, movement or experience extract groups by. Absent for a
+    /// pool of unnamed members and wherever a factor was never given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub date_of_birth: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sex: Option<Sex>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smoker: Option<bool>,
+}
+
+impl LifeInfo {
+    /// A life with no rating factors given.
+    pub fn new(life: LifeId, party: Option<PartyId>) -> Self {
+        Self {
+            life,
+            party,
+            date_of_birth: None,
+            sex: None,
+            smoker: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

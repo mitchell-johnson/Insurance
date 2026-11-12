@@ -549,3 +549,55 @@ async fn the_daily_sweep_pages_through_open_proposals_once_a_day() {
     let (_, sweep) = b.driver.cycle(&mut day, 2).await;
     assert_eq!(sweep, None, "one sweep a day from this driver");
 }
+
+/// Purpose: more cover on a policy in force goes through underwriting like new business and
+/// reaches the core as a new layer on the same policy, on the decided terms; the reservation is
+/// confirmed against that layer; the proposal ends issued; and the ledger reconciles.
+/// Why it matters: an increase the customer accepted and the core never wrote is cover they
+/// believe they have and do not. The layer number is what ties the reinsurance placed for the
+/// increase to the cover actually on risk.
+#[tokio::test]
+async fn an_accepted_increase_becomes_a_layer_on_the_policy_in_force() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+
+    let more = |id: &str, sum: i64| {
+        let hash = b.product_hash.clone();
+        b.module.with(|w| {
+            let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", sum)], false);
+            open.quote.product_hash = hash;
+            open.entry = Entry::Increase { policy: policy.clone() };
+            open.policy = policy.clone();
+            open.policy_number = number.clone();
+            open.group = group.clone();
+            w.ok("new-business", Command::OpenProposal(Box::new(open)));
+            w.disclose(id, "L1", &clean());
+        })
+    };
+
+    more("P2", 200_000_00);
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("P2"), ProposalStatus::Issued { .. }), "{:?}", b.status("P2"));
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let layers = &cluster.state(0).policies[&policy].covers["life"].layers;
+        assert_eq!(layers.len(), 2);
+        assert_eq!((layers[1].sum_insured_minor, layers[1].origin), (200_000_00, ic_core::LayerOrigin::Increase));
+        assert!(cluster.reconcile().is_empty());
+    }
+    let ri = b.reinsurance.module.state();
+    assert_eq!(
+        ri.reservation("P2/L1/life/1").unwrap().status,
+        ReservationStatus::Confirmed {
+            policy: policy.clone(),
+            cover: "life".into(),
+            layers: vec![2],
+        }
+    );
+}

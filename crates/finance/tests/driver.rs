@@ -14,7 +14,7 @@ use ic_azure::merkle::{publish_root, root_name};
 use ic_azure::AzureError;
 use ic_core::Reject;
 use ic_finance::close::{Capacity, CheckStatus, Outcome, PeriodStatus};
-use ic_finance::driver::{self, distribution_sources, payments_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK};
+use ic_finance::driver::{self, distribution_sources, payments_sources, reinsurance_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK};
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
 use serde_json::{json, Value};
@@ -108,6 +108,7 @@ type TestDriver = Driver<Ledger, Others, Store, Store>;
 fn sources() -> Vec<Source> {
     let mut all = distribution_sources();
     all.extend(payments_sources());
+    all.extend(reinsurance_sources());
     for (caller, kind) in [("collections", "policy_suspense"), ("investment", "pending_investment_cash")] {
         all.push(Source {
             caller: caller.to_string(),
@@ -435,6 +436,10 @@ fn refusals_are_listed_and_months_close_in_order() {
     let dec = period(2027, 12);
     let first = block(driver.pass()).unwrap();
     assert_eq!(first.extracts_registered.len(), 6);
+    // The reinsurer's sweep is asked for once: for December, which ends a quarter.
+    assert_eq!(first.reports_sent.iter().filter(|r| *r == "reinsurance_sweep").count(), 1);
+    assert_eq!(status(&driver, nov(), "reinsurance_sweep"), CheckStatus::NotDue);
+    assert_eq!(status(&driver, dec, "reinsurance_sweep"), CheckStatus::Green);
     assert!(first.waiting.is_empty(), "{:?}", first.waiting);
     {
         // December ends a quarter: its own requirements are not the subject here.

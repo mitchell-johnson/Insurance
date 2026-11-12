@@ -30,6 +30,7 @@ mod lifecycle;
 mod postings;
 mod reopen;
 mod transfer;
+mod underwritten;
 mod unwind;
 
 pub use command::{Command, Envelope};

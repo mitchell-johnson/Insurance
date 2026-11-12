@@ -193,10 +193,7 @@ impl Bench {
                 product_code: "term-life".to_string(),
                 product_hash: "hash".to_string(),
                 inception,
-                lives: vec![LifeInfo {
-                    life,
-                    party: Some(PartyId::from(party)),
-                }],
+                lives: vec![LifeInfo::new(life, Some(PartyId::from(party)))],
                 layers,
                 members: vec![],
             }],
@@ -215,13 +212,7 @@ impl Bench {
                 product_code: "group-life".to_string(),
                 product_hash: "hash".to_string(),
                 inception,
-                lives: members
-                    .iter()
-                    .map(|m| LifeInfo {
-                        life: m.life.clone(),
-                        party: None,
-                    })
-                    .collect(),
+                lives: members.iter().map(|m| LifeInfo::new(m.life.clone(), None)).collect(),
                 layers: vec![],
                 members,
             }],

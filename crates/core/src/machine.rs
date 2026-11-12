@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, underwritten, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -426,6 +426,12 @@ impl CoreState {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                     group::add_excess_layer(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::AddUnderwrittenLayer(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    underwritten::add_layer(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
             Command::EndExcessLayer {

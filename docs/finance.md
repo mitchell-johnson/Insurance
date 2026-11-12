@@ -77,7 +77,7 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 - asks the ledger what the close is waiting for (`{"q": "work"}`);
 - reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
 - for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
-- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep;
 - reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
 - closes a period that is signed off with nothing blocking, oldest first.
 
@@ -134,6 +134,6 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 - Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
-- Sources for the reports reinsurance, collections and investment owe. The driver takes any module's answer; commission's and payments' questions are wired. Pending investment cash will come from the core's investment ledger when it is built.
+- Sources for policy suspense (collections) and pending investment cash. The driver takes any module's answer; commission, payments and reinsurance are wired. Pending investment cash will come from the core's investment ledger when it is built.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.
