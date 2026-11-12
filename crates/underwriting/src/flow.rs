@@ -506,7 +506,7 @@ pub(crate) fn settle(cfg: &Config, p: &mut Proposal, cx: &mut Cx) -> Result<(), 
 }
 
 /// Loading percent as the fraction the core rates with.
-fn loading(percent: u32) -> Result<DecStr, Reject> {
+pub(crate) fn loading(percent: u32) -> Result<DecStr, Reject> {
     DecStr::parse(&format!("{}.{:02}", percent / 100, percent % 100)).map_err(|e| Reject::new("loading", e.to_string()))
 }
 

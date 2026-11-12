@@ -46,6 +46,16 @@ Contact details are fetched from the customer master at the moment of sending, f
 
 Every provider call carries an id derived from the document, party, channel and attempt, so a retry after a crash is the same operation to the provider.
 
+## PDF
+
+The text is the document: it is what is rendered, hashed and stored. `pdf.rs` sets that text on A4 pages whenever a PDF is wanted, and the PDF is never stored. The first page carries the name and address 45 mm down, where a DL envelope's window shows them, then the title and the text; every page has the document id and `n / total` at its foot. Large print (`AlternateFormat::LargePrint`) is 18 point. The fonts are embedded as subsets with a map back to characters, so the file is small (about 20 KB), searchable and readable by a screen reader, and the same letter always gives the same bytes.
+
+- **Email** that may carry the text attaches `<document>.pdf`. An email that only points to the secure inbox attaches nothing.
+- **Post** writes `print/<document>/<party>-<attempt>.pdf` to the print outbox before the JSON instruction, which names it in `pdf`.
+- **Download**: `Driver::pdf(id, fonts)` gives the stored text as a PDF, for the portal and app.
+
+A character the font cannot draw is an error, never a gap. The email or print instruction then goes with the text alone (`pdf` is null) and the reason is logged, so no notice is held up. The bundled faces are Liberation Sans (SIL Open Font License, `crates/documents/fonts/OFL.txt`), which covers Latin scripts including the macron vowels of te reo Māori.
+
 ## Notice clocks
 
 A notice with a notice period (`minimum_notice_days` on its template) has a purpose: `renewal`, `lapse`, `premium_change`, `suspension`. Its clock starts on the date delivery is proven to every addressee. `notice_gate(policy, purpose, date)` answers whether the thing the notice warns of may take effect: no notice, waiting (not delivered, undeliverable, defective, or period still running), or clear.
@@ -97,5 +107,6 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 ## Not built, or waiting on others
 
 - **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
-- **Rendering to PDF, large print, audio and braille.** Documents are text. The requested format is recorded on the document and passed to the print house; producing the other formats is not built.
+- **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
+- **The insurer's own typeface.** PDFs are set in the bundled Liberation Sans. `Fonts::new` and `AzureChannels::with_fonts` take other TrueType faces, but the service has no setting for them yet. Text in a script the font lacks (Chinese, for example) goes as text without a PDF.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.
