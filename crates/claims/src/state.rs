@@ -266,6 +266,7 @@ impl ClaimsState {
             Command::ActivateAuthority { book } => self.activate_authority(cx, *book),
             Command::ActivateRules { rules } => self.activate_rules(cx, *rules),
             Command::Notify(n) => self.notify(cx, *n),
+            Command::LoadMigrated { claim, health_used } => self.load_migrated(cx, *claim, health_used),
             Command::Acknowledge { claim, delivery_ref } => self.acknowledge(cx, &claim, &delivery_ref),
             Command::Assign { claim, to, actor } => self.assign(cx, &claim, &to, &actor),
             Command::RecordContact { claim, actor } => self.record_contact(cx, &claim, &actor),

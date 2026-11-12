@@ -1741,3 +1741,52 @@ fn an_aborted_transfer_puts_the_claims_back() {
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     assert_eq!(money(&c, &id), (0, 80_000_00, 0));
 }
+
+/// Purpose: a claim in payment loaded by the migration lands on the real ledger: its reserve
+/// is an opening entry against the claims migration control account, the claim record, the
+/// core's claim ledger and the journal agree, only the migration may load, and the next run
+/// pays and settles the next period.
+/// Why it matters: the outstanding claims total of the old system is reconciled to one control
+/// account. If loading posted to claims expense, or left the reserve out, the first close after
+/// cutover would show a claims cost that never happened or a liability that vanished.
+#[test]
+fn a_migrated_claim_opens_against_the_migration_control_account() {
+    // The old system, played by a cluster of its own with the same policy.
+    let mut old = cluster();
+    let old_id = policy(&mut old, 0, true);
+    days(&mut old, 5);
+    let first = old.business_date().unwrap();
+    open_claim(&mut old, "clm-ip", &old_id, "trauma", ClaimType::IncomeProtection, first);
+    ok(&mut old, decide("clm-ip", admit(None, Some(benefit(3_000_00, first)), false)));
+    verify_payee(&mut old, "clm-ip");
+    pay_run(&mut old, "run-old", first);
+    let legacy = claim(&old, "clm-ip").clone();
+    assert!(legacy.reserve_minor > 0);
+
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    assert_eq!(id, old_id);
+    days(&mut c, 5);
+    let load = claims::Command::LoadMigrated {
+        claim: Box::new(legacy.clone()),
+        health_used: Default::default(),
+    };
+    assert_eq!(code(c.submit(0, "claims", wrap(load.clone()))), "caller_not_allowed");
+    c.submit(0, "migration", wrap(load.clone())).unwrap();
+    clean(&c);
+    let control = accounts::claims_migration_control(NZD);
+    assert_eq!(c.state(0).ledger.natural_balance(&control.id), i128::from(legacy.reserve_minor));
+    assert_eq!(money(&c, &id), (i128::from(legacy.reserve_minor), 0, 0));
+    let expense = accounts::claims_incurred("term-life", "trauma", NZD);
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id), 0, "the cost was recognised in the old system");
+    assert!(claim(&c, "clm-ip").migrated);
+    assert_eq!(code(c.submit(0, "migration", wrap(load))), "claim_exists");
+
+    days(&mut c, 31);
+    let second = first.checked_add_months(chrono::Months::new(1)).unwrap();
+    pay_run(&mut c, "run-1", second);
+    c.submit(0, "payments", settle(&id, &format!("run-1/clm-ip/{second}"), 3_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(claim(&c, "clm-ip").schedule.as_ref().unwrap().periods.len(), 2);
+    days(&mut c, 2);
+}

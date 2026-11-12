@@ -281,6 +281,24 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             kind,
             ..
         } => goodwill_or_cost(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee, Some(kind)),
+        Instruction::OpenMigrated {
+            claim,
+            cover,
+            reserve_minor,
+            admitted_minor,
+            payable_minor,
+            receivable_minor,
+            open,
+            ..
+        } => open_migrated(
+            &mut s.ledger,
+            p,
+            ctx,
+            &claim,
+            cover,
+            [reserve_minor, admitted_minor, payable_minor, receivable_minor],
+            open,
+        ),
         Instruction::WaivePremium { claim, cover, from, until, .. } => waive(s, p, ctx, &claim, &cover, from, until),
         Instruction::Close {
             claim, outcome, overpayment, ..
@@ -635,6 +653,39 @@ fn goodwill_or_cost(
         record.payable_minor += amount;
     }
     instruct(policy, claim, payment_ref, amount, cost.is_none());
+    Ok(())
+}
+
+/// A claim loaded from another system. Nothing is expensed here: the cost
+/// was recognised there. The reserve, the unpaid admitted money and the
+/// overpayment are opened against the migration control account.
+fn open_migrated(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, cover: String, money: [i64; 4], open: bool) -> Result<(), Reject> {
+    let [reserve, admitted, payable, receivable] = money;
+    if policy.claims.contains_key(claim) || money.iter().any(|m| *m < 0) {
+        return invalid("a migrated claim is new to the policy and its amounts are not negative");
+    }
+    let c = policy.currency;
+    let d = dims(policy, policy.covers.get(&cover).map(|c| c.cover_type.as_str()), "claim_migrated");
+    let control = accounts::claims_migration_control(c);
+    let mut set = PostingSet::new();
+    set.debit(control.clone(), i128::from(reserve + payable), d.clone());
+    set.credit(accounts::claim_reserve(&policy.id, c), i128::from(reserve), d.clone());
+    set.credit(accounts::benefit_payable(&policy.id, c), i128::from(payable), d.clone());
+    set.debit(accounts::claim_recovery_receivable(&policy.id, c), i128::from(receivable), d.clone());
+    set.credit(control, i128::from(receivable), d);
+    post(ledger, policy, ctx, "claim_migrated", set, claim, &[])?;
+    policy.claims.insert(
+        claim.to_string(),
+        ClaimLedger {
+            cover,
+            open,
+            reserve_minor: reserve,
+            admitted_minor: admitted,
+            payable_minor: payable,
+            receivable_minor: receivable,
+            ..ClaimLedger::default()
+        },
+    );
     Ok(())
 }
 
