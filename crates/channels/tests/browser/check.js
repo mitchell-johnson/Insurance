@@ -183,6 +183,23 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#act button").click();
     await p.locator("#act-msg .banner.bad").waitFor();
   }, expectStatus: [403] });
+  await visit(browser, "/reinsurance", { subject: "sub-ri1" }, { run: async (p) => {
+    await sees(p, "you act on exceptions");
+    await p.locator("#exceptions").getByText("delivery:1").waitFor();
+    await p.getByRole("button", { name: "Abandon the instruction" }).click();
+    await sees(p, "stay apart");
+    await p.fill("#a-reason", "the policy was entered in error");
+    await p.locator("#act-form button").first().click();
+    await sees(p, "Someone else signs it");
+    await p.getByRole("button", { name: "Withdraw" }).waitFor();
+  } });
+  await visit(browser, "/reinsurance", { subject: "sub-ri2" }, { run: async (p) => {
+    await p.getByRole("button", { name: "Sign and send" }).click();
+    await sees(p, "Signed and sent.");
+    await sees(p, "No exceptions are open.");
+    await sees(p, "Nothing is waiting.");
+  } });
+  await visit(browser, "/reinsurance", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();

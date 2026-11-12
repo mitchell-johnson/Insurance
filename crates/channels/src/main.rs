@@ -69,6 +69,11 @@ async fn main() -> Result<(), String> {
             module: ic_channels::finance::MODULE,
             patience: settings.patience,
         }),
+        reinsurance: Arc::new(forward::Hosted {
+            client: settings.client(),
+            module: ic_channels::reinsurance::MODULE,
+            patience: settings.patience,
+        }),
         pricing: Arc::new(forward::Hosted {
             client: settings.client(),
             module: ic_channels::pricing::MODULE,
