@@ -222,6 +222,17 @@ async fn raft_endpoints_refuse_callers_they_cannot_place() {
     assert_eq!(put(7, serde_json::json!({ "1": addr })).await.0, 404);
     let (status, said) = put(0, serde_json::json!({ "1": addr, "3": "127.0.0.1:1" })).await;
     assert_eq!(status, 421, "{said}");
+    // Nor can it record a reader's place, drop a reader or hand over a lead it does not hold.
+    let consumer = format!("http://{addr}/v1/partitions/0/consumers/outside");
+    let held = http.put(&consumer).bearer_auth(TOKEN).json(&serde_json::json!({ "through_seq": 3 }));
+    assert_eq!(held.send().await.unwrap().status().as_u16(), 421);
+    assert_eq!(http.delete(&consumer).bearer_auth(TOKEN).send().await.unwrap().status().as_u16(), 421);
+    let hand_over = http
+        .post(format!("http://{addr}/v1/partitions/0/leader"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({ "to": 2 }));
+    let refused = hand_over.send().await.unwrap().status().as_u16();
+    assert!(refused == 421 || refused == 503, "a node that leads nothing accepted a handover: {refused}");
     // A group is initialised once; asking again is answered as done and changes nothing.
     let again = http.post(format!("http://{addr}/v1/init")).bearer_auth(TOKEN).send().await.unwrap();
     assert_eq!(again.status().as_u16(), 204);
