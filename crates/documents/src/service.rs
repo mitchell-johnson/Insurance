@@ -16,10 +16,14 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::channels::{delivery_reports, subscription_validation, Channels, ContactDirectory};
-use crate::crypto::KeyWrap;
-use crate::driver::{CoreLink, Cycle, Driver, DriverError, EventPublisher, Module};
-use crate::vault::ObjectStore;
+use ic_azure::credential::AzureCredential;
+use ic_raft::{ClusterAuth, ClusterClient};
+
+use crate::channels::{delivery_reports, subscription_validation, AzureChannels, Channels, ContactDirectory, HttpDirectory};
+use crate::complaints_relay::{run_relay, ClusterComplaints, ClusterLicences, Relay};
+use crate::crypto::{KeyVaultWrap, KeyWrap};
+use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
+use crate::vault::{BlobVault, ObjectStore};
 
 /// Where everything is. Read from the environment; nothing here is secret
 /// except the webhook key, which comes from a mounted Key Vault secret.
@@ -47,6 +51,8 @@ pub struct Config {
     pub webhook_key: String,
     pub listen: String,
     pub cycle_every: Duration,
+    /// How long start-up waits for a ledger node to answer.
+    pub cluster_wait: Duration,
 }
 
 impl std::fmt::Debug for Config {
@@ -96,6 +102,7 @@ impl Config {
             webhook_key,
             listen: get("IC_DOCUMENTS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(seconds),
+            cluster_wait: Duration::from_secs(60),
         })
     }
 }
@@ -215,4 +222,87 @@ pub async fn serve(listener: tokio::net::TcpListener, routes: Router, stop: impl
         .with_graceful_shutdown(stop)
         .await
         .map_err(|e| DriverError::Unavailable(e.to_string()))
+}
+
+/// Completes on Ctrl-C or SIGTERM, which is how Kubernetes asks a pod to stop.
+pub async fn stop_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+}
+
+/// The whole service: the driver's cycle, the complaints relay and the
+/// delivery-report webhook, against the cluster and Azure, until `stop`
+/// completes. Fails at once if no ledger node answers or the listen
+/// address cannot be bound, so a bad deployment is seen at start.
+pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth, stop: impl Future<Output = ()> + Send + 'static) -> Result<(), String> {
+    let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
+    let partitions = client.partitions(config.cluster_wait).await?;
+    let patience = Duration::from_secs(10);
+    let driver = Arc::new(Driver {
+        module: ClusterModule::new(client.clone(), patience),
+        objects: BlobVault::new(&config.vault_endpoint, &config.vault_container, credential.clone()),
+        wrap: KeyVaultWrap::new(&config.key_vault, &config.key_name, credential.clone()),
+        channels: AzureChannels::new(
+            &config.communication_endpoint,
+            &config.email_from,
+            &config.sms_from,
+            credential.clone(),
+            BlobVault::new(&config.vault_endpoint, &config.print_container, credential.clone()),
+        ),
+        directory: HttpDirectory::new(&config.customer_master, &config.customer_master_scope, credential.clone()),
+        actor: "documents-service".to_string(),
+        clock: Arc::new(chrono::Utc::now),
+        batch: 100,
+    });
+    let relay = Relay {
+        module: ClusterComplaints::new(client.clone(), patience),
+        actor: "documents-service".to_string(),
+        conduct_officer: config.conduct_officer.clone(),
+        clock: Arc::new(chrono::Utc::now),
+        batch: 100,
+    };
+    let listener = tokio::net::TcpListener::bind(&config.listen)
+        .await
+        .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
+    tracing::info!(?config, "documents service started");
+
+    // One stop for the three tasks.
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
+    let until_stopped = move || {
+        let mut stopped = stopped.clone();
+        async move {
+            let _ = stopped.wait_for(|s| *s).await;
+        }
+    };
+    tokio::spawn(async move {
+        stop.await;
+        let _ = stopping.send(true);
+    });
+    let web = tokio::spawn(serve(listener, router(driver.clone(), &config.webhook_key), until_stopped()));
+    let complaints = tokio::spawn(run_relay(
+        relay,
+        EventHubsPublisher::new(&config.event_hubs_namespace, &config.complaints_event_hub, credential.clone()),
+        ClusterLicences::new(client.clone(), partitions),
+        config.cycle_every,
+        until_stopped(),
+        |_| {},
+    ));
+    let publisher = EventHubsPublisher::new(&config.event_hubs_namespace, &config.event_hub, credential);
+    let core = ClusterCore::new(client, partitions, patience);
+    run_cycles(driver, publisher, Some(core), config.cycle_every, until_stopped(), |_| {}).await;
+    complaints.await.map_err(|e| e.to_string())?;
+    web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }

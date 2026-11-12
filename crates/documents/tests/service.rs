@@ -12,7 +12,7 @@ use ic_documents::command::{Command, NoticeSpec};
 use ic_documents::crypto::{self, LocalWrap};
 use ic_documents::driver::{Driver, IssueRequest, LocalModule, MemoryPublisher, Module};
 use ic_documents::model::{Channel, DeliveryStatus, RecipientRole};
-use ic_documents::service::{router, run_cycles, serve, Config, NoCore};
+use ic_documents::service::{router, run, run_cycles, serve, stop_signal, Config, NoCore};
 use ic_documents::vault::MemoryStore;
 use serde_json::{json, Value};
 use support::*;
@@ -286,4 +286,103 @@ async fn the_loop_keeps_cycling_until_stopped() {
     // A listener that is already gone is reported, not hung on.
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     serve(listener, router(driver, KEY), async {}).await.unwrap();
+}
+
+/// A stand-in ledger node: no partitions, and every module accepts every
+/// command and answers every question with an empty list.
+async fn quiet_cluster() -> (String, Arc<Mutex<Vec<String>>>) {
+    use axum::extract::{Path, State};
+    use axum::routing::{get, post};
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    async fn command(State(calls): State<Arc<Mutex<Vec<String>>>>, Path(module): Path<String>, axum::Json(body): axum::Json<Value>) -> axum::Json<Value> {
+        calls.lock().unwrap().push(format!("{module}:{}", body["caller"].as_str().unwrap_or_default()));
+        axum::Json(json!({ "log_index": 1, "result": { "Ok": { "index": 1, "result": { "Ok": null }, "events": [], "duplicate": false } } }))
+    }
+    async fn query(State(calls): State<Arc<Mutex<Vec<String>>>>, Path(module): Path<String>) -> axum::Json<Value> {
+        calls.lock().unwrap().push(format!("{module}?"));
+        axum::Json(json!({ "Ok": [] }))
+    }
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let app = axum::Router::new()
+        .route("/v1/status", get(|| async { axum::Json(json!([])) }))
+        .route("/v1/modules/{module}/commands", post(command))
+        .route("/v1/modules/{module}/query", post(query))
+        .with_state(calls.clone());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (addr, calls)
+}
+
+fn run_config(cluster: &str) -> Config {
+    let mut env = settings();
+    env.insert("IC_CLUSTER_NODES", cluster.to_string());
+    env.insert("IC_DOCUMENTS_LISTEN", "127.0.0.1:0".into());
+    let mut config = Config::from_lookup(|k| env.get(k).cloned()).unwrap();
+    config.cycle_every = Duration::from_millis(10);
+    config.cluster_wait = Duration::from_millis(300);
+    config
+}
+
+/// Purpose: the service as deployed starts against the cluster, runs the
+/// documents cycle and the complaints relay side by side, and stops all
+/// of it when asked; with no ledger node answering, or its address taken,
+/// it fails at start with the reason.
+/// Why it matters: this is the function the container runs. If the relay
+/// were not started here no complaint timer would ever move in
+/// production, and a service that started without a cluster would sit
+/// looking healthy while sending nothing.
+#[tokio::test]
+async fn the_service_runs_both_loops_and_stops_when_asked() {
+    let (cluster, calls) = quiet_cluster().await;
+    let credential = ic_azure::credential::AzureCredential::static_token("tok");
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let running = tokio::spawn(run(run_config(&cluster), credential.clone(), ic_raft::ClusterAuth::open(), async move {
+        let _ = stopped.await;
+    }));
+    let seen = |what: &'static str| {
+        let calls = calls.clone();
+        async move {
+            for _ in 0..400 {
+                if calls.lock().unwrap().iter().any(|c| c == what) {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            panic!("the service never sent {what}");
+        }
+    };
+    seen("documents:delivery").await;
+    seen("complaints:scheduler").await;
+    seen("distribution?").await;
+    stop.send(()).unwrap();
+    assert_eq!(tokio::time::timeout(Duration::from_secs(10), running).await.unwrap().unwrap(), Ok(()));
+
+    let nowhere = run(run_config("127.0.0.1:1"), credential.clone(), ic_raft::ClusterAuth::open(), async {}).await;
+    assert_eq!(nowhere, Err("no ledger node answered".to_string()));
+
+    let taken = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut config = run_config(&cluster);
+    config.listen = taken.local_addr().unwrap().to_string();
+    let error = run(config, credential, ic_raft::ClusterAuth::open(), async {}).await.unwrap_err();
+    assert!(error.starts_with("cannot listen on 127.0.0.1:"), "{error}");
+}
+
+/// Purpose: the stop signal completes when the process is sent SIGTERM.
+/// Why it matters: Kubernetes stops a pod with SIGTERM. A service that
+/// ignored it would be killed mid-cycle after the grace period on every
+/// deployment, instead of finishing the step it was on.
+#[tokio::test]
+async fn sigterm_stops_the_service() {
+    let waiting = tokio::spawn(stop_signal());
+    // Let the handler be installed before the signal is sent.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert!(!waiting.is_finished());
+    let sent = std::process::Command::new("kill")
+        .args(["-TERM", &std::process::id().to_string()])
+        .status()
+        .unwrap();
+    assert!(sent.success());
+    tokio::time::timeout(Duration::from_secs(10), waiting).await.unwrap().unwrap();
 }
