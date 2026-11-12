@@ -2100,6 +2100,7 @@ dependencies = [
 name = "ic-group"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "hex",
  "ic-azure",
@@ -2113,11 +2114,14 @@ dependencies = [
  "ic-reinsurance",
  "ic-sim",
  "proptest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
