@@ -1039,3 +1039,82 @@ fn the_real_claims_module_feeds_the_experience_extract() {
     assert_ne!(cell["cover_days"], "0", "the policy the claim is on has no exposure in its cell");
     assert_eq!(total(&experience, "ending_claims"), 0);
 }
+
+/// Purpose: two policies each billed 60 are avoided for non-disclosure on 3 March, one
+/// with every premium refunded and one with the premium kept. Both leave the in-force
+/// book that day as an `avoided` movement and the movements still reconcile. The refund
+/// takes the 60 billed back off premium as its own movement, dated to inception; where
+/// the insurer keeps the premium the 60 stands. The in-force extract as at 2 March still
+/// shows both policies.
+/// Why it matters: an avoided policy is treated as never having been in force, so its
+/// refunded premium must not stay in the premium the actuary sees, and the policy must
+/// not sit in the book attracting reserves. But the files already cut said it was in
+/// force, and they must keep saying so.
+#[test]
+fn an_avoided_policy_leaves_the_book_and_a_refund_takes_its_premium_back() {
+    use ic_core::PremiumOnAvoidance;
+    let day = |n: u32| d(2028, 3, n);
+    let mut s = Stream::new(day(1));
+    for name in ["pol-refund", "pol-retain"] {
+        s.push(Event::PolicyIssued {
+            policy: PolicyId::from(name),
+            number: "N".to_string(),
+            group: "grp".into(),
+            policyholder: "party-x".into(),
+            product_code: "term-life".to_string(),
+            product_hash: "h".to_string(),
+            inception: day(1),
+            lives: vec![],
+            layers: vec![layer("life", 1, "l1", 500, day(1))],
+            members: vec![],
+        });
+        s.push(Event::PremiumDue {
+            policy: PolicyId::from(name),
+            receivable: 1,
+            period_start: day(1),
+            period_end: d(2028, 3, 31),
+            total_minor: 60,
+            members: None,
+            by_cover_type: BTreeMap::new(),
+        });
+    }
+    s.close(day(2));
+    s.close(day(3));
+    for (name, premium) in [("pol-refund", PremiumOnAvoidance::Refund), ("pol-retain", PremiumOnAvoidance::Retain)] {
+        s.push(Event::PolicyStatusChanged {
+            policy: PolicyId::from(name),
+            from: PolicyStatus::InForce,
+            to: PolicyStatus::Avoided,
+        });
+        s.push(Event::PolicyAvoided {
+            policy: PolicyId::from(name),
+            case: "nd-1".to_string(),
+            premium,
+            refunded_minor: 0,
+        });
+    }
+    s.close(day(4));
+    let mart = mart_of(1, &s.events);
+    assert_eq!(total(&mart.in_force(day(2)).unwrap(), "policies"), 2);
+    let after = mart.in_force(day(3)).unwrap();
+    assert_eq!((total(&after, "policies"), total(&after, "sum_insured_minor")), (0, 0));
+    assert!(after.reconciled);
+
+    let moved = mart.movement(day(3), day(3)).unwrap();
+    assert!(moved.reconciled);
+    let all = rows(&moved);
+    let kinds = |policy: &str| -> Vec<(String, String)> {
+        all.iter()
+            .filter(|r| r["policy"] == policy)
+            .map(|r| (r["kind"].clone(), r["premium_minor"].clone()))
+            .collect()
+    };
+    let refund = kinds("pol-refund");
+    assert!(refund.iter().any(|(kind, _)| kind == "avoided"), "{refund:?}");
+    assert_eq!(refund.last().unwrap(), &("premium_refunded_on_avoidance".to_string(), "-60".to_string()));
+    let refund_row = all.iter().find(|r| r["kind"] == "premium_refunded_on_avoidance").unwrap();
+    assert_eq!(refund_row["effective"], "2028-03-01");
+    assert!(kinds("pol-retain").iter().all(|(kind, premium)| kind == "avoided" && premium == "0"));
+    // Over the whole life of the two policies: 120 billed, 60 given back.
+    assert_eq!(total(&mart.movement(day(1), day(3)).unwrap(), "premium_minor"), 60);
+}

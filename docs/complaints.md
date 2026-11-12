@@ -18,7 +18,7 @@ Every command arrives in an envelope: an idempotency key, the calling service, t
 | `legal` | forum commands, conduct case commands, and the only caller for a court or the privacy regulator |
 | `conduct` | conduct cases |
 | `distribution` (commission and adviser module) | opening a licence case and attaching its population |
-| `documents` | proof that an outcome letter or a customer letter was delivered |
+| `documents` | the acknowledgement, deadlock notice and licence letters it issues, and proof that an outcome letter was delivered |
 | `scheduler` | `Tick` |
 | `relay` | `MarkPublished` |
 | `migration` | `RecordComplaint` with the original dates |
@@ -79,10 +79,18 @@ The documents service (`ic-documents`, see `docs/documents.md`) runs the complai
 
 A step that fails is logged and tried again on the next pass, and does not stop the other steps.
 
+### Letters
+
+Question `letters_due` lists what is owed and nobody has issued: an acknowledgement for each open complaint without one (not migrated complaints), a deadlock notice for each deadlock without one, and a letter to each customer of a licence case whose population is complete and who is neither told nor excluded. It names parties and dates, nothing a complaint is about.
+
+The documents service (`complaint_letters.rs`) works that list every pass. For each letter it asks the customer master for the person's name, language and format, issues the document from the template for its kind with proof of delivery required, to the person and anyone recorded as acting for them, and records it as caller `documents` with `RecordAcknowledgement`, `RecordDeadlockNotice` or `RecordCustomerNotified`. The document id is made from the complaint or case (`complaint-ack:<complaint>`, `complaint-deadlock:<complaint>`, `licence-notice:<case>:<party>`), so a letter is issued once however a pass is interrupted, and a letter a handler recorded first counts as done.
+
+Templates receive `name`, `reference` (the complaint or case), `date` (received, deadlocked or opened), `due` (acknowledgements), and for a licence case `status` and `effective`. A letter is left for a person, and the pass says so in the log, when its template has no active version, the person has no contact point, or the customer master says they have died. Conduct cases other than licence events are always written to by the people handling them.
+
 Idempotency keys are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotten as `Tick` passes, at most 500 a tick. `Tick` and `MarkPublished` leave none.
 
 ## Not built, or waiting on others
 
 - **The workbench** is built by the portal service: page `/complaints` and the routes under `/staff/v1/complaints` (`docs/channels.md`). It reads this module as JSON, and `crates/channels/tests/http.rs` runs it against `ComplaintsState`, so renaming a command, question or field here fails that test.
-- **Issuing letters.** The documents service does not yet answer `AcknowledgementDue`, `DeadlockReached` or `PopulationComplete` by issuing a document: that needs the complainant's contact details and the wording, which come from the customer master and templates not yet written.
+- **Wording.** The three letter templates (`complaint-acknowledgement`, `complaint-deadlock-notice`, `licence-event-notice`) are not written. Until legal, product and compliance approve and activate each, its letters are left for the people handling the cases.
 - **The timer values** in tests are short for testing. The real periods come from the conduct regime and the scheme's terms and need compliance sign-off before go-live.

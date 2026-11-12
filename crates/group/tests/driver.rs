@@ -720,7 +720,8 @@ async fn a_request_no_longer_wanted_is_withdrawn_or_never_sent() {
 
 /// Purpose: with the real customer master service behind the driver, over HTTP with a
 /// signed Entra ID token and PostgreSQL underneath, a file's joiners are matched as the
-/// addendum requires: a joiner whose email is a known person's is linked to that person,
+/// addendum requires: a joiner whose email is a known person's is linked to that person, one found only
+/// by her mobile number is put to staff as a possible match and not created again,
 /// a namesake with nothing stronger than a name and a birth date is left unlinked as a
 /// possible match for a person to decide, and someone unknown is created there and
 /// linked; a retried file asks again and gets the same people.
@@ -741,24 +742,37 @@ async fn joiners_are_matched_by_the_real_customer_master() {
         .person("Bo", "Ngata", "1985-06-02", &[("email", serde_json::json!("bo.ngata@example.test"))])
         .await;
     let namesake = world.person("Cy", "Patel", "1975-07-03", &[]).await;
+    let by_phone = world
+        .person("Fay", "Lim", "1992-09-05", &[("mobile_phone", serde_json::json!("+64215550134"))])
+        .await;
 
     let credential = ic_azure::credential::AzureCredential::static_token(&world.token("group-admin"));
     let client = HttpCustomerMaster::new(&base, customer_master::AUDIENCE, credential);
     let mut mapping = named_mapping();
     mapping.columns.email = Some("Email".to_string());
+    mapping.columns.mobile_phone = Some("Mobile".to_string());
     mapping.content_hash = String::new();
     let d = rig_with(client, mapping.seal().unwrap());
 
-    let file = "Emp No,First,Last,DOB,Category,Salary,Site,Email\n\
-E001,Ana,Founder,01/05/1980,staff,60000,akl,\n\
-E002,Bo,Ngata,02/06/1985,staff,60000,wlg,bo.ngata@example.test\n\
-E003,Cy,Patel,03/07/1975,staff,60000,wlg,\n\
-E005,Eru,Walker,04/08/1990,staff,60000,akl,eru.walker@example.test\n";
+    let file = "Emp No,First,Last,DOB,Category,Salary,Site,Email,Mobile\n\
+E001,Ana,Founder,01/05/1980,staff,60000,akl,,\n\
+E002,Bo,Ngata,02/06/1985,staff,60000,wlg,bo.ngata@example.test,\n\
+E003,Cy,Patel,03/07/1975,staff,60000,wlg,,\n\
+E005,Eru,Walker,04/08/1990,staff,60000,akl,eru.walker@example.test,\n\
+E006,Fay,Tane,05/09/1992,staff,60000,akl,,021 555 0134\n";
     through(&d, "nov.csv", file).await;
 
     let party_of = |id: &str| d.module.state.lock().unwrap().schemes[SCHEME].membership.active(id).unwrap().party.clone();
     assert_eq!(party_of("E002"), Some(party(&known)), "the known email links");
     assert_eq!(party_of("E003"), None, "a name and a birth date are not enough to link");
+    // Fay's surname has changed since the customer master last heard of her. Her mobile,
+    // written for dialling at home, still finds her; a mobile is not enough to link on, so
+    // she is put to staff as a possible match and not created a second time.
+    assert_eq!(party_of("E006"), None, "a mobile alone does not link");
+    assert_eq!(
+        d.module.state.lock().unwrap().schemes[SCHEME].possible.get("E006"),
+        Some(&vec![party(&by_phone)])
+    );
     {
         let g = d.module.state.lock().unwrap();
         assert_eq!(g.schemes[SCHEME].possible.get("E003"), Some(&vec![party(&namesake)]));
@@ -785,6 +799,7 @@ E005,Eru,Walker,04/08/1990,staff,60000,akl,eru.walker@example.test\n";
         date_of_birth: NaiveDate::from_ymd_opt(1990, 8, 4),
         email: Some("eru.walker@example.test".into()),
         national_id: None,
+        mobile_phone: None,
     };
     let answer = again.resolve(SCHEME, &eru).await.unwrap();
     assert!(
@@ -1018,6 +1033,7 @@ async fn the_customer_master_client_reads_every_answer() {
         date_of_birth: Some(d(1985, 6, 2)),
         email: Some("bo@example.test".into()),
         national_id: None,
+        mobile_phone: None,
     };
     let cm = HttpCustomerMaster::new(
         &base,

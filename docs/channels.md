@@ -35,6 +35,8 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 
 ## The customer app API
 
+A policy carries its core status and `ended`, true for anything that is no longer live: lapsed, surrendered, matured, expired, cancelled, ended by a claim, transferred away or avoided for non-disclosure. An avoided policy is treated as never in force, so its covers show as not in force too.
+
 | Call | What it does |
 | --- | --- |
 | `GET /app/v1/me` | Who you are, your policies and your relationship to each, any notices. |

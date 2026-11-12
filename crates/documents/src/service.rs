@@ -20,6 +20,7 @@ use ic_azure::credential::AzureCredential;
 use ic_raft::{ClusterAuth, ClusterClient};
 
 use crate::channels::{delivery_reports, subscription_validation, AzureChannels, Channels, ContactDirectory, HttpDirectory};
+use crate::complaint_letters::{run_letters, LetterIssuer, LetterTemplates};
 use crate::complaints_relay::{run_relay, ClusterComplaints, ClusterLicences, Relay};
 use crate::crypto::{KeyVaultWrap, KeyWrap};
 use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
@@ -300,10 +301,24 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         until_stopped(),
         |_| {},
     ));
+    let letters = tokio::spawn(run_letters(
+        LetterIssuer {
+            complaints: ClusterComplaints::new(client.clone(), patience),
+            letters: driver.clone(),
+            templates: LetterTemplates::default(),
+            actor: "documents-service".to_string(),
+            clock: Arc::new(chrono::Utc::now),
+            batch: 100,
+        },
+        config.cycle_every,
+        until_stopped(),
+        |_| {},
+    ));
     let publisher = EventHubsPublisher::new(&config.event_hubs_namespace, &config.event_hub, credential);
     let core = ClusterCore::new(client, partitions, patience);
     run_cycles(driver, publisher, Some(core), config.cycle_every, until_stopped(), |_| {}).await;
     complaints.await.map_err(|e| e.to_string())?;
+    letters.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
 
