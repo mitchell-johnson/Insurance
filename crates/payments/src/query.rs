@@ -117,12 +117,12 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
     }
 }
 
-fn payout_waiting(policy: &ic_core::PolicyId, payout: &str, payment: &str, amount_minor: i64) -> crate::Command {
+fn payout_waiting(policy: &ic_core::PolicyId, policyholder: &ic_core::PartyId, payout: &str, payment: &str, amount_minor: i64) -> crate::Command {
     crate::Command::OfferPayment {
         waiting: Box::new(crate::intake::Waiting {
             payment: payment.to_string(),
             source: format!("payout:{policy}:{payout}"),
-            payee: String::new(),
+            payee: policyholder.to_string(),
             account_ref: String::new(),
             policy: policy.clone(),
             amount_minor,
@@ -161,18 +161,22 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         }
         // A unit-linked payout is owed (a withdrawal, a surrender, a price
         // remediation), or owed again under a new reference after the bank
-        // sent it back. The event does not say who is paid: the maker names
-        // the payee, who is verified and screened like any other.
+        // sent it back. It is paid to the policyholder: a payee of that
+        // party, verified and screened like any other.
         ic_core::Event::Investment(ic_core::invest::InvestEvent::PayoutRaised {
-            policy, payout, amount_minor, ..
-        }) => payout_waiting(policy, payout, payout, *amount_minor),
+            policy,
+            policyholder,
+            payout,
+            amount_minor,
+            ..
+        }) => payout_waiting(policy, policyholder, payout, payout, *amount_minor),
         ic_core::Event::Investment(ic_core::invest::InvestEvent::PayoutReinstructed {
             policy,
+            policyholder,
             payout,
             payment,
             amount_minor,
-            ..
-        }) => payout_waiting(policy, payout, payment, *amount_minor),
+        }) => payout_waiting(policy, policyholder, payout, payment, *amount_minor),
         _ => return Vec::new(),
     };
     vec![crate::Envelope {

@@ -208,14 +208,14 @@ fn a_released_provider_cost_waits_like_a_benefit() {
 }
 
 /// Purpose: a unit-linked payout the core owes waits under the payout's
-/// ID with no payee; the maker must name one, who must exist; a payout
+/// ID for the policyholder and can go only to a payee of that party; a
+/// release that names nobody needs the maker to name the payee; a payout
 /// sent back by the bank and instructed again waits under its new
 /// reference; a payment released to a named party cannot be redirected to
 /// someone else's payee.
 /// Why it matters: the core settles a payout only under the reference it
-/// issued and for the exact amount. The event does not say who is paid, so
-/// a person must, and that choice must not be usable to divert a payment
-/// that did name its payee.
+/// issued and for the exact amount. A surrender value paid to a payee who
+/// is not the policyholder is the fraud this binding prevents.
 #[test]
 fn a_unit_linked_payout_waits_for_a_named_payee() {
     let mut desk = Desk::new();
@@ -227,11 +227,11 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     };
     let raised = record(
         "3-90",
-        json!({"payout_raised": {"policy": "pol-1", "policyholder": "party-1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}),
+        json!({"payout_raised": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}),
     );
     let again = record(
         "3-91",
-        json!({"payout_reinstructed": {"policy": "pol-1", "policyholder": "party-1", "payout": "po-1", "payment": "po-1-r2", "amount_minor": 12_345_00}}),
+        json!({"payout_reinstructed": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "payment": "po-1-r2", "amount_minor": 12_345_00}}),
     );
     let returned = record(
         "3-92",
@@ -244,7 +244,7 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     let held = &desk.state.waiting["po-1"];
     assert_eq!(
         (held.source.as_str(), held.payee.as_str(), held.amount_minor),
-        ("payout:pol-1:po-1", "", 12_345_00)
+        ("payout:pol-1:po-1", "party-p1", 12_345_00)
     );
 
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
@@ -253,9 +253,15 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
         payments: [payment.to_string()].into(),
         payees: [(payment.to_string(), payee.to_string())].into(),
     };
-    assert_eq!(desk.code(&mia(), take("r1", &["po-1"])), "payee_required");
+    // It is the policyholder's: nobody else's payee can be named for it.
     assert_eq!(desk.code(&mia(), to("po-1", "nobody")), "unknown_payee");
-    desk.ok(&mia(), to("po-1", "p1"));
+    assert_eq!(desk.code(&mia(), to("po-1", "p2")), "payee_mismatch");
+    desk.ok(&mia(), take("r1", &["po-1"]));
+    // A release that names nobody needs the maker to say who is paid.
+    let mut anonymous = released("pay-0", "", 5_00);
+    anonymous.source = "manual:pay-0".to_string();
+    desk.ok(&svc(), offer(anonymous));
+    assert_eq!(desk.code(&mia(), take("r1", &["pay-0"])), "payee_required");
     let item = &desk.state.runs["r1"].items["po-1"].new;
     assert_eq!((item.amount_minor, item.payable), (12_345_00, Some(PayableKind::Benefit)));
 
@@ -263,7 +269,7 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     for envelope in react(&again) {
         desk.state.apply(5010, envelope).unwrap();
     }
-    assert_eq!(waiting(&desk), vec!["po-1-r2"]);
+    assert_eq!(waiting(&desk), vec!["pay-0", "po-1-r2"]);
 
     // A release that names its party goes to that party's payee only.
     desk.ok(&svc(), offer(released("pay-1", "party-p1", 100_00)));
