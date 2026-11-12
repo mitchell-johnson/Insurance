@@ -446,14 +446,25 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             Effect::IssueInterim { key, proposal, command } => {
                 let answer = self
                     .core
-                    .send(home_partition(&command.group), key, "new-business", ic_core::Command::IssuePolicy(command.clone()))
+                    .send(
+                        home_partition(&command.group),
+                        key,
+                        "new-business",
+                        ic_core::Command::IssuePolicy(command.clone()),
+                    )
                     .await?;
                 if let Some(r) = answer.refused {
                     return Ok(Step::Park(format!("the core refused interim cover: {}: {}", r.code, r.message)));
                 }
-                match self.tell(format!("{key}/issued"), AS_ISSUER, Command::InterimIssued { proposal: proposal.clone() }).await? {
+                match self
+                    .tell(format!("{key}/issued"), AS_ISSUER, Command::InterimIssued { proposal: proposal.clone() })
+                    .await?
+                {
                     Ok(_) => Step::Delivered,
-                    Err(e) => Step::Park(format!("interim cover is in force but the module refused to record it: {}: {}", e.code, e.message)),
+                    Err(e) => Step::Park(format!(
+                        "interim cover is in force but the module refused to record it: {}: {}",
+                        e.code, e.message
+                    )),
                 }
             }
             Effect::EndInterim { key, proposal, policy } => {
@@ -462,7 +473,12 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 let answer = self
                     .core
-                    .send(home_partition(&group), key, "underwriting", ic_core::Command::CancelPolicy { policy: policy.clone() })
+                    .send(
+                        home_partition(&group),
+                        key,
+                        "underwriting",
+                        ic_core::Command::CancelPolicy { policy: policy.clone() },
+                    )
                     .await?;
                 match answer.refused {
                     None => Step::Delivered,

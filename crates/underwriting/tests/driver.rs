@@ -17,8 +17,8 @@ use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_sim::config::shipped_activations;
 use ic_sim::Cluster;
 use ic_underwriting::command::{Applied, Command, Effect, Envelope, Reject};
-use ic_underwriting::driver::{Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::config::{InterimSettings, Settings};
+use ic_underwriting::driver::{Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::model::{Entry, ProposalStatus, Stage};
 use ic_underwriting::special::{answer, Query};
 use serde_json::Value;
@@ -348,7 +348,10 @@ async fn interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issu
     assert!(pass.parked.is_empty(), "{pass:?}");
     let interim = b.module.with(|w| w.p("P1").interim.clone().unwrap());
     assert!(interim.issued && !interim.ended);
-    assert_eq!(b.ledger.cluster.lock().unwrap().state(0).policies[&interim.policy].status, PolicyStatus::InForce);
+    assert_eq!(
+        b.ledger.cluster.lock().unwrap().state(0).policies[&interim.policy].status,
+        PolicyStatus::InForce
+    );
 
     b.module.with(|w| w.disclose("P1", "L1", &clean()));
     let pass = b.pass().await;
@@ -453,7 +456,10 @@ async fn an_excess_decision_reaches_group_administration_under_the_agreed_key() 
     let decisions: Vec<_> = sent.iter().map(|e| (e.key.as_str(), e.caller.as_str(), e.today, &e.command)).collect();
     assert_eq!(decisions.len(), 2, "{decisions:?}");
     for (key, caller, today, _) in &decisions {
-        assert!(key.starts_with("uw:grp-uw:acme:") && *caller == "underwriting" && *today == start(), "{decisions:?}");
+        assert!(
+            key.starts_with("uw:grp-uw:acme:") && *caller == "underwriting" && *today == start(),
+            "{decisions:?}"
+        );
     }
     assert!(decisions.iter().any(|d| matches!(
         d.3,
@@ -497,6 +503,11 @@ async fn with_nothing_connected_notices_are_parked_and_the_policy_still_issues()
     let pass = b.pass().await;
     assert!(matches!(b.status("P1"), ProposalStatus::Issued { .. }), "{:?}", b.status("P1"));
     assert!(!pass.parked.is_empty());
-    assert!(pass.parked.iter().all(|(_, reason)| reason == "correspondence is not connected to underwriting"), "{pass:?}");
+    assert!(
+        pass.parked
+            .iter()
+            .all(|(_, reason)| reason == "correspondence is not connected to underwriting"),
+        "{pass:?}"
+    );
     assert_eq!(b.module.with(|w| (w.s.outbox(0, 10).len(), w.s.parked().len())), (0, pass.parked.len()));
 }
