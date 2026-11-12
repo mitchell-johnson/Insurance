@@ -32,6 +32,16 @@ pub enum Actor {
     Module(String),
 }
 
+impl Actor {
+    /// The person behind a command that only a person may send.
+    pub fn person(&self) -> Result<&Staff, Reject> {
+        match self {
+            Actor::Staff(staff) => Ok(staff),
+            Actor::Module(name) => reject("caller_not_allowed", format!("{name} is not a person, and this is decided by a person")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     /// Idempotency key. A duplicate returns the original result.
@@ -1164,6 +1174,18 @@ impl DistributionState {
         Ok(())
     }
 
+    fn reached_by(&self, case: &Case) -> Vec<PartyId> {
+        let advisers = case
+            .engagements
+            .iter()
+            .filter_map(|id| self.config.structure.engagements.get(id))
+            .map(|e| e.adviser.clone());
+        std::iter::once(case.subject.clone())
+            .chain(case.payees.iter().cloned())
+            .chain(advisers)
+            .collect()
+    }
+
     /// The parties an event is about, for the change cursor.
     fn parties_of(&self, event: &Event) -> Vec<PartyId> {
         let of_action = |id: &String| self.actions.get(id).map(|a| a.party.clone()).into_iter().collect();
@@ -1177,7 +1199,8 @@ impl DistributionState {
             | Event::ActionProposed { party, .. }
             | Event::DocumentAttached { party, .. } => vec![party.clone()],
             Event::StatementIssued { payee, .. } => vec![payee.clone()],
-            Event::CaseOpened { subject, .. } => vec![subject.clone()],
+            // A case shows on its subject and on everyone it reaches.
+            Event::CaseOpened { case, .. } | Event::CaseClosed { case } => self.cases.get(case).map(|c| self.reached_by(c)).unwrap_or_default(),
             Event::StructureChanged { child, parent } => vec![child.clone(), parent.clone()],
             Event::EngagementStarted { adviser, with, .. } => vec![adviser.clone(), with.clone()],
             Event::EngagementEnded { id, .. } => self

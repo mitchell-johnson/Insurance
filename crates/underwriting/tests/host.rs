@@ -100,3 +100,51 @@ fn effects_wait_in_the_outbox_until_the_driver_acknowledges_them() {
     assert!(!next.effects.is_empty());
     assert_eq!(w.s.outbox(0, 1)[0].0, last + 1);
 }
+
+/// Purpose: an effect the driver cannot deliver is set aside with its reason, where a query
+/// shows it, and the effects behind it stay deliverable; a person with an authority profile
+/// puts it back, at the end of the outbox under a new number; and parking needs a reason and
+/// an effect that is really waiting.
+/// Why it matters: effects are delivered in order. Without a place to put the one nobody can
+/// take, a single undeliverable notice would stop every policy behind it from being issued,
+/// and dropping it instead would lose it without trace.
+#[test]
+fn an_undeliverable_effect_is_parked_in_sight_and_can_be_requeued() {
+    use ic_underwriting::command::Command;
+
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    w.disclose("P1", "L1", &clean());
+    w.open("P2", 400_000_00);
+    w.disclose("P2", "L1", &clean());
+    let waiting = w.s.outbox(0, 100);
+    assert!(waiting.len() >= 2, "{waiting:?}");
+    let (first, second) = (waiting[0].clone(), waiting[1].clone());
+
+    let park = |effect: u64, reason: &str| Command::ParkEffect { effect, reason: reason.into() };
+    assert_eq!(w.err("effects-driver", park(first.0, " ")), "reason");
+    assert_eq!(w.err("effects-driver", park(9_999, "nothing takes it")), "unknown_effect");
+    assert_eq!(w.err("underwriting-console", park(first.0, "nothing takes it")), "caller");
+    w.ok("effects-driver", park(first.0, "nothing takes it"));
+    assert_eq!(w.s.parked(), vec![(first.0, first.1.clone(), "nothing takes it".to_string())]);
+    assert_eq!(w.s.outbox(0, 1), vec![second.clone()]);
+    assert_eq!(w.err("effects-driver", park(first.0, "again")), "unknown_effect");
+    let shown = answer(&w.s, json!({ "query": "parked" })).unwrap();
+    assert_eq!(shown, serde_json::to_value(w.s.parked()).unwrap());
+
+    // The rest can be acknowledged past the gap the parked effect left.
+    w.ok("effects-driver", Command::AcknowledgeEffects { through: second.0 });
+
+    let requeue = |effect: u64, by: &str| Command::RequeueEffect { effect, by: by.into() };
+    assert_eq!(w.err("underwriting-console", requeue(first.0, "nobody")), "no_profile");
+    assert_eq!(w.err("underwriting-console", requeue(second.0, "amy")), "unknown_effect");
+    assert_eq!(w.err("effects-driver", requeue(first.0, "amy")), "caller");
+    let before = w.s.outbox(0, 100).len();
+    let requeued = w.ok("underwriting-console", requeue(first.0, "amy"));
+    assert_eq!(requeued.effects, vec![first.1.clone()]);
+    assert!(w.s.parked().is_empty());
+    let after = w.s.outbox(0, 100);
+    assert_eq!(after.len(), before + 1);
+    let last = after.last().unwrap();
+    assert!(last.0 > second.0 && last.1 == first.1);
+}

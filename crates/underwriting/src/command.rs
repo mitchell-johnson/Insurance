@@ -201,6 +201,14 @@ pub struct DelegatedDecision {
     pub consent_ref: String,
 }
 
+/// One layer of an issued policy, as the core numbered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuedLayer {
+    pub life: LifeId,
+    pub cover: String,
+    pub layer: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged, like the core's commands.
 #[serde(rename_all = "snake_case")]
@@ -405,6 +413,10 @@ pub enum Command {
     },
     PolicyIssued {
         proposal: ProposalId,
+        /// The layers the core wrote, from its reply, so that capacity is
+        /// confirmed against them.
+        #[serde(default)]
+        layers: Vec<IssuedLayer>,
     },
     IssueRejected {
         proposal: ProposalId,
@@ -424,6 +436,18 @@ pub enum Command {
     /// and the receivers answered. They leave the outbox.
     AcknowledgeEffects {
         through: u64,
+    },
+    /// An effect cannot be delivered: nothing takes it yet, or the receiver
+    /// refused it. It is set aside with the reason, where a person can see
+    /// it, so that it does not hold up the effects behind it.
+    ParkEffect {
+        effect: u64,
+        reason: String,
+    },
+    /// Put a parked effect back in the outbox, at the end, to be tried again.
+    RequeueEffect {
+        effect: u64,
+        by: String,
     },
 
     // --- adviser licensing ---
@@ -531,7 +555,8 @@ impl Command {
             CapacityAnswered { .. } | FacultativeTermsRecorded { .. } => &["reinsurance"],
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
-            AcknowledgeEffects { .. } => &["effects-driver"],
+            AcknowledgeEffects { .. } | ParkEffect { .. } => &["effects-driver"],
+            RequeueEffect { .. } => &["underwriting-console"],
             LicenceChanged { .. } => &["adviser-licensing"],
             OpenFileForClaim { .. } | OpenNonDisclosureReview { .. } => &["claims"],
             DelegatedDecision(_) | DelegateFileReceived { .. } => &["delegate-api"],
@@ -609,6 +634,9 @@ pub enum Effect {
         policy: PolicyId,
         life: LifeId,
         cover: String,
+        /// The layers this cover was issued as.
+        #[serde(default)]
+        layers: Vec<u32>,
     },
     /// Rating factors for the reinsurer's rate tables and listing.
     RecordRiskFactors {
