@@ -16,6 +16,7 @@
 //! the same effect.
 
 use std::future::Future;
+use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use ic_core::event::Event as CoreEvent;
@@ -26,7 +27,7 @@ use ic_reinsurance::capacity::{CapacityRequest, Outcome};
 use ic_reinsurance::treaty::RiskFactors;
 use serde_json::Value;
 
-use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject};
+use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject, View};
 use crate::model::{Entry, Proposal, ProposalId};
 use crate::special::Query;
 
@@ -34,6 +35,7 @@ use crate::special::Query;
 pub const DRIVER: &str = "effects-driver";
 const AS_REINSURANCE: &str = "reinsurance";
 const AS_ISSUER: &str = "issuer";
+const AS_TIMER: &str = "timer";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DriverError {
@@ -126,6 +128,15 @@ pub struct Pass {
     pub stale: u32,
     /// Effects parked, with the number each had and the reason.
     pub parked: Vec<(u64, String)>,
+}
+
+/// What a day's sweep did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub pages: u32,
+    pub lapsed: u32,
+    pub chased: u32,
+    pub escalated: u32,
 }
 
 enum Step {
@@ -279,6 +290,92 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             }
             if let Some(e) = stopped {
                 return Err(e);
+            }
+        }
+    }
+
+    /// The day's sweep: lapse what has expired, chase evidence, escalate
+    /// what nobody has touched, a page at a time until the open proposals
+    /// are done. Each page has a key of the day and where it starts, so a
+    /// sweep repeated on the same day, by this driver or another, does the
+    /// day's work once.
+    pub async fn sweep(&self, page: u32) -> Result<Swept, DriverError> {
+        let today = self.today();
+        let mut total = Swept::default();
+        let mut after: Option<ProposalId> = None;
+        loop {
+            let key = format!("sweep:{today}:{}", after.as_ref().map(ToString::to_string).unwrap_or_default());
+            let command = Command::Sweep {
+                after: after.clone(),
+                max: page.clamp(1, 1000),
+            };
+            let applied = self
+                .tell(key, AS_TIMER, command)
+                .await?
+                .map_err(|e| DriverError::Answer(format!("the module refused the sweep: {}: {}", e.code, e.message)))?;
+            let Some(View::Sweep {
+                next,
+                lapsed,
+                chased,
+                escalated,
+            }) = applied.view
+            else {
+                // A repeat older than the results the module keeps: that day's sweep was done long ago.
+                return Ok(total);
+            };
+            total.pages += 1;
+            total.lapsed += lapsed;
+            total.chased += chased;
+            total.escalated += escalated;
+            match next {
+                Some(next) => after = Some(next),
+                None => return Ok(total),
+            }
+        }
+    }
+
+    /// Carry the outbox, and sweep once on each new day. `swept` is the
+    /// last day this driver swept on.
+    pub async fn cycle(&self, swept: &mut Option<NaiveDate>, page: u32) -> (Result<Pass, DriverError>, Option<Result<Swept, DriverError>>) {
+        let today = self.today();
+        let sweep = if *swept == Some(today) {
+            None
+        } else {
+            let done = self.sweep(page).await;
+            if done.is_ok() {
+                *swept = Some(today);
+            }
+            Some(done)
+        };
+        (self.deliver().await, sweep)
+    }
+
+    /// Run cycles until `stop` resolves. `seen` is shown each cycle's results.
+    pub async fn run(
+        &self,
+        every: Duration,
+        page: u32,
+        stop: impl Future<Output = ()>,
+        mut seen: impl FnMut(&Result<Pass, DriverError>, &Option<Result<Swept, DriverError>>),
+    ) {
+        tokio::pin!(stop);
+        let mut swept = None;
+        loop {
+            let (pass, sweep) = self.cycle(&mut swept, page).await;
+            match &pass {
+                Ok(p) if p.parked.is_empty() => tracing::debug!(delivered = p.delivered, stale = p.stale, "underwriting delivery pass"),
+                Ok(p) => tracing::warn!(delivered = p.delivered, parked = ?p.parked, "underwriting effects were parked"),
+                Err(e) => tracing::warn!(error = %e, "an underwriting delivery pass could not finish"),
+            }
+            match &sweep {
+                None => {}
+                Some(Ok(s)) => tracing::info!(pages = s.pages, lapsed = s.lapsed, chased = s.chased, escalated = s.escalated, "underwriting daily sweep"),
+                Some(Err(e)) => tracing::warn!(error = %e, "the underwriting daily sweep could not finish"),
+            }
+            seen(&pass, &sweep);
+            tokio::select! {
+                () = &mut stop => return,
+                () = tokio::time::sleep(every) => {}
             }
         }
     }
