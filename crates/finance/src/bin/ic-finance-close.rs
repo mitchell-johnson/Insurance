@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ic_azure::blob::BlobContainer;
 use ic_azure::credential::AzureCredential;
-use ic_finance::driver::{core_sources, distribution_sources, payments_sources, reinsurance_sources, Driver};
+use ic_finance::driver::{core_sources, distribution_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver};
 use ic_finance::service::{run_passes, ClusterBooks, ClusterModules, Config};
 use ic_raft::{ClusterAuth, ClusterClient};
 
@@ -49,6 +49,7 @@ async fn main() -> Result<(), String> {
             .chain(payments_sources())
             .chain(reinsurance_sources())
             .chain(core_sources())
+            .chain(unit_pricing_sources())
             .collect(),
     };
     tracing::info!(?config, "finance close service started");

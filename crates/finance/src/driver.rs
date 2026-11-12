@@ -148,6 +148,17 @@ pub fn reinsurance_sources() -> Vec<Source> {
     }]
 }
 
+/// What the unit pricing module owes: no price late or waiting, no price
+/// error open, every holdings extract written.
+pub fn unit_pricing_sources() -> Vec<Source> {
+    vec![Source {
+        caller: "unit-pricing".to_string(),
+        module: "unit-pricing".to_string(),
+        reports: Reports::Check("unit_pricing".to_string()),
+        question: |as_at| json!({ "q": "close_check", "as_at": as_at }),
+    }]
+}
+
 /// The name the core's partitions are asked under, beside the modules.
 pub const CORE: &str = "core";
 
