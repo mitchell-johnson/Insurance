@@ -50,6 +50,7 @@ CHART = chart(
         account("3900", "Retained earnings", "liability"),
         # Income
         account("4000", "Earned premium", "income", control = True, roles = ["earned_premium"]),
+        account("4010", "Premium retained on avoided policies", "income", control = True, roles = ["avoidance_premium_retained"]),
         account("4100", "Reinsurance commission", "income", control = True, roles = ["reinsurance_commission", "reinsurance_profit_commission"]),
         account("4110", "Reinsurance recoveries", "income", control = True, roles = ["reinsurance_recoveries"]),
         account("4900", "Other income", "income"),
