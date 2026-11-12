@@ -12,6 +12,7 @@ use common::*;
 use http_body_util::BodyExt;
 use ic_api::auth::Auth;
 use ic_channels::classes::DataClass;
+use ic_channels::complaints::actions as workbench_complaints;
 use ic_channels::directory::DirectoryCommand;
 use ic_channels::http::{approval_action, router, AppState, Local, OPERATIONS};
 use ic_channels::identity::{action_hash, proof_message, Enrolment, IdentityCommand};
@@ -96,6 +97,11 @@ fn portal() -> Portal {
         ("sub-up1", "up-1"),
         ("sub-up2", "up-2"),
         ("sub-lead", "lead-1"),
+        ("sub-front", "front-1"),
+        ("sub-cmp1", "cmp-1"),
+        ("sub-cmp2", "cmp-2"),
+        ("sub-lex", "lex-1"),
+        ("sub-con", "con-1"),
     ] {
         w.dir(
             module("identity"),
@@ -149,12 +155,35 @@ fn portal() -> Portal {
                     &[ic_channels::pricing::actions::VIEW, ic_channels::pricing::actions::LEAD],
                     &[DataClass::Ordinary],
                 ),
+                template("frontline", &[workbench_complaints::RECORD], &[DataClass::Ordinary]),
+                template(
+                    "complaints-team",
+                    &[workbench_complaints::HANDLE, workbench_complaints::TRAINED],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
+                Template {
+                    default_profile: "junior".into(),
+                    ..template(
+                        "complaints-junior",
+                        &[workbench_complaints::HANDLE],
+                        &[DataClass::Ordinary, DataClass::Personal],
+                    )
+                },
+                template("complaints-legal", &[workbench_complaints::LEGAL], &[DataClass::Ordinary]),
+                template("conduct", &[workbench_complaints::CONDUCT], &[DataClass::Ordinary]),
             ],
-            profiles: vec![Profile {
-                id: "p".into(),
-                version: 1,
-                limits: [(workbench::LIMIT.to_string(), 100_000_00)].into(),
-            }],
+            profiles: vec![
+                Profile {
+                    id: "p".into(),
+                    version: 1,
+                    limits: [(workbench::LIMIT.to_string(), 100_000_00), (ic_channels::complaints::AUTHORITY.to_string(), 3)].into(),
+                },
+                Profile {
+                    id: "junior".into(),
+                    version: 1,
+                    limits: [(ic_channels::complaints::AUTHORITY.to_string(), 1)].into(),
+                },
+            ],
             admin: p("alice"),
             admin_templates: vec!["administrator".into()],
         }),
@@ -167,6 +196,11 @@ fn portal() -> Portal {
         ("up-1", "unit-pricing"),
         ("up-2", "unit-pricing"),
         ("lead-1", "unit-pricing-lead"),
+        ("front-1", "frontline"),
+        ("cmp-1", "complaints-team"),
+        ("cmp-2", "complaints-junior"),
+        ("lex-1", "complaints-legal"),
+        ("con-1", "conduct"),
     ] {
         w.send(
             staff("alice"),
@@ -200,6 +234,7 @@ fn portal() -> Portal {
     )
     .unwrap();
     let pricing = Arc::new(common::pricing::seeded(w.at));
+    let complaints = Arc::new(common::complaints::seeded(w.at));
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -212,6 +247,7 @@ fn portal() -> Portal {
         regions: regions.clone(),
         ui: UiConfig::Dev,
         pricing: pricing.clone(),
+        complaints: complaints.clone(),
     }));
     Portal {
         app,
@@ -711,7 +747,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 7);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 12);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1115,10 +1151,9 @@ async fn the_unit_pricing_console() {
         assert_eq!(ask("sub-up1", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
     assert_eq!(ask("sub-up1", "price?id=nope").await.0, StatusCode::NOT_FOUND);
-    assert_eq!(
-        ask("sub-up1", "valuations?fund=growth&pricing_date=never").await.0,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
+    // A question that module cannot read is its refusal, not an outage.
+    let (status, problem) = ask("sub-up1", "valuations?fund=growth&pricing_date=never").await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::BAD_REQUEST, Some("refused")));
 
     // Only people's commands, and only in a role the person holds.
     let prepare = json!({ "prepare_price": { "fund": "growth", "pricing_date": day } });
@@ -1141,10 +1176,7 @@ async fn the_unit_pricing_console() {
     let unkeyed = portal.send("POST", "/staff/v1/unit-pricing/commands", &subject_only, Some(prepare.clone()));
     assert_eq!(unkeyed.await.0, StatusCode::BAD_REQUEST);
     // A command that module cannot read is its refusal to take it, not a success.
-    assert_eq!(
-        tell("sub-up1", json!({ "prepare_price": { "fund": 7 } })).await.0,
-        StatusCode::SERVICE_UNAVAILABLE
-    );
+    assert_eq!(tell("sub-up1", json!({ "prepare_price": { "fund": 7 } })).await.0, StatusCode::BAD_REQUEST);
 
     // Prepare, with the same key twice: one price.
     let keyed = [("x-dev-subject", "sub-up1".to_string()), ("idempotency-key", "prep-1".to_string())];
@@ -1234,6 +1266,7 @@ async fn the_unit_pricing_console() {
         regions: portal.regions.clone(),
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1252,6 +1285,210 @@ async fn the_unit_pricing_console() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(problem["title"], "unit_pricing_unavailable");
+    }
+}
+
+/// Purpose: the complaints and conduct workbench end to end against that module's own code: a seat follows from a person's staff
+/// actions; front-line staff record and nothing more; the complaints team reads the queue, the file, the register and the report;
+/// conduct cases are open only to the conduct function and legal; a handler's authority and training and a remediation's authority
+/// are written in from the staff records whatever the person typed; and that module's own refusals come back with their codes.
+/// Why it matters: the complaints module believes the calling service about who may act and at what authority. If the workbench let
+/// a person pick their own seat or type their own authority, an untrained junior could be given a vulnerable complainant's file and
+/// approve goodwill payments beyond their limit, and conduct cases would be readable by the people they concern.
+#[tokio::test]
+async fn the_complaints_and_conduct_workbench() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/complaints/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, seat: &'static str, command: Value| {
+        let portal = &portal;
+        async move {
+            portal
+                .write("POST", who, "/staff/v1/complaints/commands", json!({ "as": seat, "command": command }))
+                .await
+        }
+    };
+    let intake = |id: &str, vulnerable: bool| {
+        json!({ "record_complaint": { "complaint": id, "channel": "call", "complainant": KIRI, "complainant_kind": "policyholder",
+            "category": { "process": "service" }, "summary_document": format!("doc-{id}"), "vulnerable": vulnerable } })
+    };
+
+    // Seats.
+    for outsider in ["sub-kiri", "sub-fin1", "sub-up1"] {
+        assert_eq!(ask(outsider, "me").await.0, StatusCode::FORBIDDEN, "{outsider}");
+        assert_eq!(tell(outsider, "intake", intake("c-0", false)).await.0, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(ask("sub-front", "me").await.1, json!({ "seats": ["intake"], "authority": 3, "trained": false }));
+    assert_eq!(
+        ask("sub-cmp1", "me").await.1,
+        json!({ "seats": ["intake", "complaints"], "authority": 3, "trained": true })
+    );
+    assert_eq!(
+        ask("sub-cmp2", "me").await.1,
+        json!({ "seats": ["intake", "complaints"], "authority": 1, "trained": false })
+    );
+    assert_eq!(ask("sub-lex", "me").await.1["seats"], json!(["legal"]));
+    assert_eq!(ask("sub-con", "me").await.1["seats"], json!(["conduct"]));
+
+    // The front line records a complaint, twice with one key, and can do nothing else.
+    let keyed = [("x-dev-subject", "sub-front".to_string()), ("idempotency-key", "c-1".to_string())];
+    let body = json!({ "as": "intake", "command": intake("c-1", true) });
+    let (status, first) = portal.send("POST", "/staff/v1/complaints/commands", &keyed, Some(body.clone())).await;
+    assert_eq!((status, &first["duplicate"]), (StatusCode::OK, &json!(false)), "{first}");
+    assert_eq!(
+        portal.send("POST", "/staff/v1/complaints/commands", &keyed, Some(body.clone())).await.1["duplicate"],
+        true
+    );
+    let unkeyed = [("x-dev-subject", "sub-front".to_string())];
+    assert_eq!(
+        portal.send("POST", "/staff/v1/complaints/commands", &unkeyed, Some(body)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        tell("sub-front", "complaints", json!({ "declare_deadlock": { "complaint": "c-1" } })).await.0,
+        StatusCode::FORBIDDEN
+    );
+    for question in ["queue", "complaint?id=c-1", "register?from=2027-11-01&to=2027-11-30", "open_conduct_cases"] {
+        assert_eq!(ask("sub-front", question).await.0, StatusCode::FORBIDDEN, "{question}");
+    }
+    // What is not a person's command is refused before it is sent, and that module refuses a command in the wrong seat.
+    for (seat, command) in [
+        ("scheduler", json!("tick")),
+        ("complaints", json!("tick")),
+        ("complaints", json!({ "tick": null })),
+        ("complaints", json!({ "mark_published": { "through_seq": 9 } })),
+        ("complaints", json!({ "assign": {}, "close": {} })),
+    ] {
+        assert_eq!(tell("sub-cmp1", seat, command.clone()).await.0, StatusCode::BAD_REQUEST, "{seat} {command}");
+    }
+    assert_eq!(
+        tell(
+            "sub-con",
+            "conduct",
+            json!({ "attach_population": { "case": "b-1", "customers": [], "advisers": [], "policies": [] } })
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let (status, problem) = tell("sub-con", "conduct", json!({ "declare_deadlock": { "complaint": "c-1" } })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(
+        tell("sub-cmp1", "complaints", json!({ "declare_deadlock": { "complaint": 7 } })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // The queue shows the vulnerable complainant needs a trained handler.
+    let (status, queue) = ask("sub-cmp1", "queue").await;
+    assert_eq!(
+        (status, &queue[0]["complaint"], &queue[0]["needs_trained_handler"]),
+        (StatusCode::OK, &json!("c-1"), &json!(true)),
+        "{queue}"
+    );
+
+    // Assignment: authority and training come from the staff records, whatever is typed.
+    let assign = |handler: &str| json!({ "assign": { "complaint": "c-1", "handler": handler, "authority": 9, "trained_for_vulnerability": true } });
+    let (status, problem) = tell("sub-cmp1", "complaints", assign("cmp-2")).await;
+    assert_eq!(status, StatusCode::CONFLICT, "an untrained handler for a vulnerable complainant: {problem}");
+    assert_eq!(tell("sub-cmp1", "complaints", assign("fin-1")).await.0, StatusCode::FORBIDDEN);
+    let (status, done) = tell("sub-cmp2", "complaints", assign("cmp-1")).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    // The file is open to the handler and closed to a colleague the case has not let in.
+    let (status, file) = ask("sub-cmp1", "complaint?id=c-1").await;
+    assert_eq!(status, StatusCode::OK, "{file}");
+    assert!(
+        file.to_string().contains("\"cmp-1\"") && !file.to_string().contains("\"authority\":9"),
+        "{file}"
+    );
+    let (status, problem) = ask("sub-cmp2", "complaint?id=c-1").await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("refused")));
+    assert_eq!(ask("sub-cmp1", "complaint").await.0, StatusCode::BAD_REQUEST);
+    assert!(ask("sub-cmp1", "running?id=c-1").await.1.is_array());
+    assert_eq!(ask("sub-cmp1", "running?id=nope").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(ask("sub-cmp1", &format!("complaints_of?party={KIRI}")).await.1, json!(["c-1"]));
+    assert_eq!(ask("sub-lex", "subject_record?id=c-1").await.0, StatusCode::OK);
+    let register = ask("sub-cmp2", "register?from=2027-11-01&to=2027-11-30").await.1;
+    assert_eq!((register.as_array().unwrap().len(), &register[0]["complaint"]), (1, &json!("c-1")));
+    assert_eq!(ask("sub-cmp2", "report?from=2027-11-01&to=2027-11-30").await.0, StatusCode::OK);
+    for bad in [
+        "register?from=yesterday&to=2027-11-30",
+        "report?from=2027-11-01",
+        "pending_events?limit=5",
+        "state_hash",
+    ] {
+        assert_eq!(ask("sub-cmp1", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // Goodwill: the authoriser's level is theirs, not what was typed. The junior's limit is 500.00.
+    for (who, command) in [
+        ("sub-cmp1", json!({ "record_acknowledgement": { "complaint": "c-1", "document": "ack-1" } })),
+        (
+            "sub-cmp1",
+            json!({ "decide": { "complaint": "c-1", "outcome": "upheld", "reason_codes": ["delay"], "document": "out-1" } }),
+        ),
+    ] {
+        let (status, done) = tell(who, "complaints", command).await;
+        assert_eq!(status, StatusCode::OK, "{done}");
+    }
+    let goodwill = |reference: &str, by: Option<&str>| json!({ "record_remediation": { "complaint": "c-1", "kind": "ex_gratia", "reference": reference, "amount_minor": 100_000, "authorised_by": by, "authority": 9 } });
+    let (status, problem) = tell("sub-cmp1", "complaints", goodwill("pay-1", Some("cmp-2"))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "beyond the junior's limit: {problem}");
+    assert_eq!(tell("sub-cmp1", "complaints", goodwill("pay-1", Some("fin-1"))).await.0, StatusCode::FORBIDDEN);
+    let mut own = goodwill("pay-1", None);
+    own["record_remediation"].as_object_mut().unwrap().remove("authorised_by");
+    let (status, done) = tell("sub-cmp1", "complaints", own).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let file = ask("sub-cmp1", "complaint?id=c-1").await.1;
+    assert_eq!(file["remediation"][0]["authorised_by"], "cmp-1", "{file}");
+
+    // Conduct cases: the conduct function and legal only.
+    let open = json!({ "open_conduct_case": { "case": "b-1", "kind": "breach", "owner": "con-1", "summary_document": null, "notify_regulator": false } });
+    let (status, done) = tell("sub-con", "conduct", open).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(ask("sub-con", "open_conduct_cases").await.1, json!(["b-1"]));
+    assert_eq!(ask("sub-lex", "open_conduct_cases").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-con", "conduct_case?id=b-1").await.1["owner"], "con-1");
+    assert_eq!(ask("sub-con", "conduct_case?id=b-2").await.0, StatusCode::NOT_FOUND);
+    for question in ["open_conduct_cases", "conduct_case?id=b-1"] {
+        assert_eq!(ask("sub-cmp1", question).await.0, StatusCode::FORBIDDEN, "{question}");
+    }
+    // The conduct function also reads the register.
+    assert_eq!(ask("sub-con", "queue").await.0, StatusCode::OK);
+
+    // That module has no leader.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+    }));
+    for (method, path, body) in [
+        ("GET", "/staff/v1/complaints/queue", None),
+        (
+            "POST",
+            "/staff/v1/complaints/commands",
+            Some(json!({ "as": "complaints", "command": { "declare_deadlock": { "complaint": "c-1" } } })),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-dev-subject", "sub-cmp1")
+            .header("idempotency-key", "k");
+        let bytes = body.map(|b| b.to_string()).unwrap_or_default();
+        let response = down.clone().oneshot(request.body(Body::from(bytes)).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(problem["title"], "complaints_unavailable");
     }
 }
 

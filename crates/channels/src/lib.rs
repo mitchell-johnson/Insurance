@@ -18,6 +18,7 @@
 //! - [`feed`]: audience-scoped rows and the per-party device sync feed.
 
 pub mod classes;
+pub mod complaints;
 pub mod directory;
 pub mod feed;
 pub mod forward;
