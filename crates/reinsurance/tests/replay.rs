@@ -481,6 +481,7 @@ fn every_notice_names_its_audience() {
         ),
         (
             Notice::DisputeResolved {
+                claim: ic_reinsurance::ClaimId::from("C1"),
                 reference: "r".into(),
                 repay_minor: 0,
             },

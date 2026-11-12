@@ -7,7 +7,7 @@ Configuration is in `config/finance/`: the chart of accounts, the close configur
 ## How money reaches the books
 
 - The core publishes each posted entry as lines by account role (`Event::EntryPosted.lines`), with its value date and the entry it reverses, and after each close the partition's balances by role (`Event::ControlTotals`).
-- The chart (`config/finance/chart.star`) maps each role to one finance account. Accounts fed this way are control accounts and are locked against manual journals. A role the chart does not map stops the feed from that partition until a chart version that maps it is approved.
+- The chart (`config/finance/chart.star`) maps each role to one finance account. A test reads the role list from the core's source, so a role added to the core without an account here fails the build and not the feed. Accounts fed this way are control accounts and are locked against manual journals. A role the chart does not map stops the feed from that partition until a chart version that maps it is approved.
 - The lines of one partition and business date are posted as one summarised journal when that day closes. Its detail names the partition, the date, the closing chain head and the range of core entries it carries. That is the lineage from a ledger figure to the core.
 - The node shows the module each event once. An event the books cannot take yet (no chart active, a role not placed) is held in the replicated state, in order, and taken in when the cause is fixed. `FeedStalled` and `FeedResumed` say when. Nothing the core published is dropped.
 
@@ -77,7 +77,7 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 - asks the ledger what the close is waiting for (`{"q": "work"}`);
 - reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
 - for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
-- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep, and `core_sources()` the pending investment cash on every partition of the core's investment ledger;
 - reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
 - closes a period that is signed off with nothing blocking, oldest first.
 
@@ -134,6 +134,6 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 - Rating factors for members who join a scheme after issue, occupation class, and claims that do not end a policy, on the extracts. They need those facts on the core's or the claims module's events.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
-- Sources for policy suspense (collections) and pending investment cash. The driver takes any module's answer; commission, payments and reinsurance are wired. Pending investment cash will come from the core's investment ledger when it is built.
+- A source for aged policy suspense. The balance is in the core's ledger by policy and nothing reports it yet, so `aged:policy_suspense` stays red until one does or the finance lead waives it. Pending investment cash will come from the core's investment ledger when it is built.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.

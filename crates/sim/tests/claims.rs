@@ -1389,3 +1389,75 @@ fn a_premium_paid_after_the_event_does_not_rewrite_the_event_date() {
     assert!(settled(&c).iter().all(Option::is_some));
     clean(&c);
 }
+
+/// Purpose: the cost of a piece of evidence is paid to its provider on the real ledger: expensed
+/// once to claims handling, owed in benefit payable until the payments module settles it, and
+/// after a bank return and a second payment still expensed once, with the claim's ledger closed.
+/// Why it matters: handling costs share the payable account with benefits. This proves against
+/// the real state machine that a provider payment needs no admission, cannot be settled before
+/// claims releases it, and that sending a bounced fee again does not book the expense twice.
+#[test]
+fn a_handling_cost_is_expensed_once_and_settled_like_a_benefit() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(
+        &mut c,
+        claims::Command::RequestEvidence {
+            claim: "clm-1".into(),
+            evidence: "e-1".into(),
+            kind: "medical_report".into(),
+            from: "treating-doctor".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::ReceiveEvidence {
+            claim: "clm-1".into(),
+            evidence: "e-1".into(),
+            vault_ref: "vault-1".into(),
+            cost_minor: 180_00,
+        },
+    );
+    let cost = |payment: &str| claims::Command::PayCost {
+        claim: "clm-1".into(),
+        payment_ref: payment.into(),
+        item: "e-1".into(),
+        provider: "party-lab".into(),
+        actor: actor("sam"),
+    };
+    let handling = accounts::claims_handling("term-life", NZD);
+    assert_eq!(code(c.submit(0, "payments", settle(&id, "fee-1", 180_00))), "insufficient_payable");
+    ok(&mut c, cost("fee-1"));
+    clean(&c);
+    assert_eq!(money(&c, &id), (100_000_00, 180_00, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&handling.id), 180_00);
+    assert_eq!(module_events(&c, "claim_cost_paid")[0]["net_minor"], "18000");
+    assert_eq!(code(run(&mut c, cost("fee-2"))), "cost_paid");
+
+    c.submit(0, "payments", settle(&id, "fee-1", 180_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (100_000_00, 0, 0));
+    let back = Command::ReturnPayment {
+        policy: id.clone(),
+        payment: "fee-1".into(),
+    };
+    c.submit(0, "payments", back).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (100_000_00, 180_00, 0));
+    assert_eq!(claim(&c, "clm-1").cost_payable_minor, 180_00);
+
+    // Paid again from what came back: the expense stands at one fee.
+    ok(&mut c, cost("fee-2"));
+    c.submit(0, "payments", settle(&id, "fee-2", 180_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (100_000_00, 0, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&handling.id), 180_00);
+    let record = claim(&c, "clm-1");
+    assert_eq!((record.cost_payable_minor, record.payable_minor, record.paid_minor(false)), (0, 0, 0));
+    assert_eq!(c.state(0).ledger.balance(&accounts::bank(CLAIMS_BANK, NZD).id), -180_00);
+    days(&mut c, 2);
+}

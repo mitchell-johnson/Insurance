@@ -395,6 +395,7 @@ fn a_reversed_admission_raises_disputed_items_for_people_to_settle() {
     assert_eq!(b.refused("finance", resolve(45 * K, "kim", "lee", "")), "invalid_resolution");
     let applied = b.ok("finance", resolve(45 * K, "kim", "lee", "AG-1"));
     assert!(applied.notices.contains(&Notice::DisputeResolved {
+        claim: ClaimId::from("C1"),
         reference: reference.clone(),
         repay_minor: 45 * K
     }));
@@ -611,4 +612,281 @@ fn a_claim_on_facultative_cover_recovers_the_facultative_share() {
     assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 650 * K);
     assert_eq!(b.ri.exposure(on)[&north()].open_recoverables_minor, 0);
     b.assert_reconciles();
+}
+
+/// One of the claims module's published facts, as the core's event feed shows it.
+fn published(kind: &str, claim: &str, detail: &[(&str, &str)]) -> ic_core::event::Event {
+    ic_core::event::Event::Module {
+        module: "claims".into(),
+        kind: kind.into(),
+        subject: claim.into(),
+        detail: detail.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    }
+}
+
+const RESERVED: [(&str, &str); 8] = [
+    ("claim", "C1"),
+    ("policy", "P1"),
+    ("cover", "life"),
+    ("life", "L1"),
+    ("event_date", "2027-06-01"),
+    ("gross_reserve_minor", "80000000"),
+    ("periodic", "false"),
+    ("catastrophe_event", ""),
+];
+
+/// Purpose: the facts the claims module publishes on a partition's event feed drive a
+/// claim's recoveries from reserve to payment with nobody sending the module a command: the
+/// reserve, the admission, the payment, a payment the bank returns, the close, a reopening
+/// and a reversed admission each do what the same fact sent as a command does, and kinds
+/// reinsurance has no use for, and other modules' facts, change nothing.
+/// Why it matters: this is how recoveries happen in production. The claims module lives in
+/// the core and tells nobody directly, so a fact misread here is a recovery not billed, or
+/// billed for a payment the bank sent back.
+#[test]
+fn claims_facts_published_by_the_core_drive_the_recoveries() {
+    let mut b = anna();
+    b.feed(1, vec![published("claim_reserved", "C1", &RESERVED)]);
+    assert_eq!(
+        (b.posted(PostingKind::Recoverable, &north()), b.posted(PostingKind::Recoverable, &south())),
+        (180 * K, 120 * K)
+    );
+    assert_eq!(claim(&b, "C1").event_date, d(2027, 6, 1));
+    // Work inside claims, and another module's fact with the same name, are not ours.
+    let quiet = b.feed(
+        1,
+        vec![
+            published("claim_assigned", "C1", &[("handover", "false")]),
+            published("evidence_requested", "C1", &[("evidence", "e1"), ("due", "2027-06-20")]),
+            ic_core::event::Event::Module {
+                module: "group".into(),
+                kind: "claim_closed".into(),
+                subject: "C1".into(),
+                detail: Default::default(),
+            },
+        ],
+    );
+    assert!(quiet.instructions.is_empty() && quiet.notices.is_empty());
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Open);
+
+    b.feed(1, vec![published("claim_reserve_changed", "C1", &[("gross_reserve_minor", "40000000")])]);
+    assert_eq!(b.posted(PostingKind::Recoverable, &north()), 90 * K);
+    b.feed(1, vec![published("claim_admitted", "C1", &[("admitted_minor", "80000000")])]);
+    assert_eq!(claim(&b, "C1").admitted_minor, Some(800 * K));
+    let pay = [
+        ("policy", "P1"),
+        ("account_ref", "acct-1"),
+        ("payment_ref", "PAY-1"),
+        ("amount_minor", "80000000"),
+        ("net_minor", "80000000"),
+        ("payee", "party-claimant"),
+        ("period_end", ""),
+        ("ex_gratia", "false"),
+    ];
+    b.feed(1, vec![published("claim_paid", "C1", &pay)]);
+    assert_eq!(
+        (b.posted(PostingKind::RecoveryDue, &north()), b.posted(PostingKind::RecoveryDue, &south())),
+        (180 * K, 120 * K)
+    );
+    // The bank sends the payment back: nothing is due from the reinsurers until it is paid again.
+    b.feed(
+        1,
+        vec![published("payment_returned", "C1", &[("payment_ref", "PAY-1"), ("amount_minor", "80000000")])],
+    );
+    assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 0);
+    assert_eq!(claim(&b, "C1").paid_minor, 0);
+    let mut again = pay;
+    again[2] = ("payment_ref", "PAY-2");
+    b.feed(1, vec![published("claim_paid", "C1", &again)]);
+    assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 180 * K);
+
+    b.feed(1, vec![published("claim_closed", "C1", &[("outcome", "paid")])]);
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Closed);
+    b.feed(
+        1,
+        vec![
+            published("claim_reopened", "C1", &[("basis", "NewEvidence")]),
+            published("claim_reserve_changed", "C1", &[("gross_reserve_minor", "80000000")]),
+        ],
+    );
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Open);
+
+    let reversed = b.feed(
+        1,
+        vec![
+            published("claim_closed", "C1", &[("outcome", "reversed")]),
+            published(
+                "admission_reversed",
+                "C1",
+                &[("decided_on", "2027-06-10"), ("reason_code", "R-1"), ("cause", "override")],
+            ),
+        ],
+    );
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Reversed);
+    assert_eq!(
+        reversed.notices.iter().filter(|n| matches!(n, Notice::DisputedItemRaised { .. })).count(),
+        2,
+        "one disputed item for each reinsurer that paid"
+    );
+    // A reopening does not take a reversed admission away from the people settling it.
+    b.feed(1, vec![published("claim_reopened", "C1", &[("basis", "Complaint")])]);
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Reversed);
+    let written_off = [("amount_minor", "80000000"), ("insurer_error", "true"), ("status", "written_off")];
+    b.feed(1, vec![published("overpayment_written_off", "C1", &written_off)]);
+    let item = b.ri.dispute(&dispute_reference(&ClaimId::from("C1"), &retail(), &north())).unwrap();
+    assert!(item.insurer_error && item.written_off_minor == 800 * K);
+    assert!(b.ri.exceptions().keys().all(|k| !k.starts_with("claim_fact:")));
+    b.assert_reconciles();
+    assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
+}
+
+/// Purpose: a benefit in payment, which claims admits with a monthly amount and no sum,
+/// keeps its expected recovery on the reserve, and each period paid is recovered as it is
+/// paid.
+/// Why it matters: claims publishes that admission with an admitted sum of nothing. Taken
+/// literally it would drop the expected recovery on every income protection claim to what
+/// has been paid so far, and the ledger would understate what reinsurers owe.
+#[test]
+fn a_benefit_in_payment_keeps_its_expected_recovery_on_the_reserve() {
+    let mut b = anna();
+    let mut reserved = RESERVED;
+    reserved[5] = ("gross_reserve_minor", "40000000");
+    reserved[6] = ("periodic", "true");
+    b.feed(1, vec![published("claim_reserved", "C1", &reserved)]);
+    assert!(claim(&b, "C1").periodic);
+    let expected = b.posted(PostingKind::Recoverable, &north());
+    assert!(expected > 0);
+    let admitted = b.feed(
+        1,
+        vec![published("claim_admitted", "C1", &[("admitted_minor", "0"), ("monthly_minor", "500000")])],
+    );
+    assert!(admitted.instructions.is_empty());
+    assert_eq!(claim(&b, "C1").admitted_minor, None);
+    let pay = [
+        ("payment_ref", "RUN-1/C1"),
+        ("amount_minor", "500000"),
+        ("period_end", "2027-06-30"),
+        ("ex_gratia", "false"),
+    ];
+    b.feed(1, vec![published("claim_paid", "C1", &pay)]);
+    assert!(b.posted(PostingKind::RecoveryDue, &north()) > 0);
+    assert_eq!(b.posted(PostingKind::Recoverable, &north()), expected);
+    b.assert_reconciles();
+}
+
+/// Purpose: a claims fact that cannot be read, or that the module cannot take, opens one
+/// exception on its claim and the feed carries on; the exception closes when the fact is
+/// entered by hand, and a fact about a claim the module has never seen is treated the same
+/// way.
+/// Why it matters: the feed carries every partition's events in order, so refusing a batch
+/// for one bad fact would stop cessions and premiums for every policy behind it. Dropping
+/// the fact silently would leave a recovery wrong with nothing to show for it.
+#[test]
+fn a_claims_fact_that_cannot_be_taken_is_raised_and_the_feed_goes_on() {
+    let mut b = anna();
+    let mut unreadable = RESERVED;
+    unreadable[5] = ("gross_reserve_minor", "lots");
+    let applied = b.feed(
+        1,
+        vec![
+            published("claim_reserved", "C1", &unreadable),
+            published("claim_reserve_changed", "C7", &[("gross_reserve_minor", "100")]),
+            published("claim_paid", "C8", &[("amount_minor", "100")]),
+            published("admission_reversed", "C9", &[("decided_on", "tomorrow"), ("reason_code", "R-1")]),
+            published("claim_reserved", "C2", &RESERVED),
+        ],
+    );
+    let why = |id: &str| b.ri.exceptions()[&format!("claim_fact:{id}")].detail.clone();
+    assert!(
+        why("C1").contains("gross_reserve_minor is not an amount") && why("C1").contains("1-"),
+        "{}",
+        why("C1")
+    );
+    assert!(why("C7").contains("unknown_claim"), "{}", why("C7"));
+    assert!(why("C8").contains("claim_paid has no payment_ref"), "{}", why("C8"));
+    assert!(why("C9").contains("decided_on is not a date"), "{}", why("C9"));
+    assert_eq!(b.ri.exceptions()["claim_fact:C1"].code, "claim_fact_not_taken");
+    // The fact behind the bad ones was taken, and the feed has moved past all five.
+    assert!(b.ri.claim(&ClaimId::from("C2")).is_some());
+    assert_eq!(applied.notices.iter().filter(|n| matches!(n, Notice::ExceptionOpened { .. })).count(), 4);
+    b.feed(1, vec![published("claim_reserve_changed", "C2", &[("gross_reserve_minor", "100")])]);
+    // Operations enter the fact that could not be read, which settles the exception.
+    assert_eq!(
+        b.refused("underwriting", Command::Claim(Box::new(reserved("C1", "P1", "life", 800 * K)))),
+        "caller_not_allowed"
+    );
+    b.ok("reinsurance-ops", Command::Claim(Box::new(reserved("C1", "P1", "life", 800 * K))));
+    assert!(!b.ri.exceptions().contains_key("claim_fact:C1"));
+    assert!(b.ri.exceptions().contains_key("claim_fact:C7"));
+    b.assert_reconciles();
+}
+
+/// Purpose: each notice for claims becomes the command the claims module publishes for
+/// it, word for word, sent as `reinsurance` to the partition that holds the claim's policy:
+/// the large-claim notification, the consent requirement, a consent, a disputed item, and
+/// its settlement with the claim it belongs to. Notices for anyone else have no such command.
+/// Why it matters: the claims module reads these by name. A field spelled differently is a
+/// notice the core refuses in production, and a settlement sent without its claim cannot be
+/// matched to the disputed item it closes.
+#[test]
+fn notices_for_claims_are_the_commands_claims_reads() {
+    let mut b = Bench::new();
+    b.issue(3, "P1", "anna", vec![layer("life", "life", 1, "L1", 3000 * K, d(2027, 2, 1))]);
+    b.today = d(2027, 6, 10);
+    fact(&mut b, reserved("C1", "P1", "life", 3000 * K));
+    b.ok(
+        "reinsurance-ops",
+        Command::ReinsurerConsent {
+            claim: ClaimId::from("C1"),
+            reinsurer: north(),
+            agreed: true,
+            reference: "email-77".into(),
+        },
+    );
+    fact(&mut b, paid("C1", "PAY-1", 3000 * K, false));
+    fact(
+        &mut b,
+        ClaimFact::AdmissionReversed {
+            claim: ClaimId::from("C1"),
+            decided_on: d(2027, 6, 10),
+            reason_code: "exclusion_missed".into(),
+            cause: None,
+        },
+    );
+    let reference = dispute_reference(&ClaimId::from("C1"), &retail(), &north());
+    b.ok(
+        "finance",
+        Command::ResolveDispute {
+            reference: reference.clone(),
+            repay_minor: 25_00,
+            agreement_ref: "AG-1".into(),
+            prepared_by: "kim".into(),
+            approved_by: "lee".into(),
+        },
+    );
+    let mut sent = Vec::new();
+    let mut others = 0;
+    for (seq, notice) in b.ri.notices(usize::MAX) {
+        match b.ri.notice_to_core(seq) {
+            Some(delivery) => {
+                assert_eq!(notice.audience(), ic_reinsurance::machine::Audience::Claims);
+                assert_eq!((delivery.partition, delivery.caller), (3, "reinsurance"));
+                assert_eq!(delivery.key, format!("reinsurance:notice:{seq}:0"));
+                sent.push(serde_json::to_value(&delivery.command).unwrap()["claims"]["reinsurance"].clone());
+            }
+            None => others += 1,
+        }
+    }
+    assert!(others > 0, "exceptions and documents are not for claims");
+    assert!(b.ri.notice_to_core(9_999).is_none());
+    use serde_json::json;
+    let expected = [
+        json!({"large_claim_notification": {"claim": "C1", "treaty": "retail-life-surplus"}}),
+        json!({"reinsurer_consent_required": {"claim": "C1", "treaty": "retail-life-surplus", "due_by": "2027-06-20"}}),
+        json!({"reinsurer_consent": {"claim": "C1", "reinsurer": "reinsurer-north", "agreed": true, "reference": "email-77", "treaty": null}}),
+        json!({"disputed_item_raised": {"claim": "C1", "reinsurer": "reinsurer-north", "reference": reference}}),
+        json!({"disputed_item_raised": {"claim": "C1", "reinsurer": "reinsurer-south", "reference": "DSP/C1/retail-life-surplus/reinsurer-south"}}),
+        json!({"dispute_resolved": {"claim": "C1", "reference": reference, "repay_minor": 25_00}}),
+    ];
+    assert_eq!(sent, expected);
 }
