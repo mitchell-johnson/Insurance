@@ -732,6 +732,10 @@ impl PricingState {
                 if self.core_units_for(&p.fund, p.pricing_date) != p.core_units_micro {
                     return Err(refuse("stale", "the core's units on issue have changed; prepare the price again"));
                 }
+                let previous = self.previous_active(&p.fund, p.pricing_date).map(|x| x.id.as_str());
+                if previous != p.previous.as_ref().map(|x| x.price_id.as_str()) {
+                    return Err(refuse("stale", "the previous price has been corrected since; prepare the price again"));
+                }
                 if let Some(err) = self.errors.values().find(|x| x.open() && x.fund == p.fund && !x.corrected()) {
                     return Err(refuse(
                         "held_by_error",
