@@ -474,6 +474,16 @@ pub struct Reinsurance {
     pub consent_refused: bool,
     /// Disputed items raised on reinsurers' accounts from decisions here.
     pub disputed_items: Vec<(String, String)>,
+    /// Disputed items people have settled, with what the insurer repaid.
+    #[serde(default)]
+    pub disputes_settled: BTreeMap<String, i64>,
+}
+
+impl Reinsurance {
+    /// Disputed items raised and not yet settled.
+    pub fn disputes_open(&self) -> usize {
+        self.disputed_items.iter().filter(|(_, r)| !self.disputes_settled.contains_key(r)).count()
+    }
 }
 
 /// A health invoice or receipt, or a request to pre-approve one.
@@ -577,6 +587,12 @@ pub struct Claim {
 }
 
 impl Claim {
+    /// The person the claim is about, for anyone deciding who may see it or
+    /// who owes an overpayment: the claimant, else the life, else the policyholder.
+    pub fn subject_party(&self) -> &str {
+        self.claimant.as_deref().or(self.life_party.as_deref()).unwrap_or(&self.policyholder)
+    }
+
     pub fn line(&self) -> Line {
         self.claim_type.line()
     }

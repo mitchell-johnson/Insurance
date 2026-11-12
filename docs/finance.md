@@ -83,6 +83,20 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 
 Anything that cannot be done yet is listed in `Pass::waiting` and tried on the next pass. Every command carries a key made from what it is about, so a driver stopped anywhere is started again.
 
+### Running it
+
+`ic-finance-close` is the driver as a process: the ledger and the other modules through the cluster client, roots and extracts on Azure Blob Storage with a workload identity. `infra/finance.bicep` creates its identity, the extracts account with time-based retention, and read access to the core's `merkle-roots` container.
+
+| Setting | Meaning |
+| --- | --- |
+| `IC_CLUSTER_NODES` | the ledger nodes, `host:port` separated by commas |
+| `IC_CLUSTER_TOKEN` or `IC_CLUSTER_TOKEN_FILE` | the cluster token |
+| `IC_FINANCE_ROOTS_ENDPOINT`, `IC_FINANCE_ROOTS_CONTAINER` | where the core publishes Merkle roots (container defaults to `merkle-roots`) |
+| `IC_FINANCE_EXTRACTS_ENDPOINT`, `IC_FINANCE_EXTRACTS_CONTAINER` | where extracts are written (container defaults to `finance-extracts`) |
+| `IC_FINANCE_PASS_SECONDS` | seconds between passes, 60 by default |
+
+It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
+
 ## Actuarial tables
 
 `ic_finance::tables::validate` is the gate a rate table passes before activation, against the schema declared for it in `config/finance/tables.star`:
@@ -119,7 +133,7 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 ## Not built yet
 
 - Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
-- The process that runs the driver against the cluster and Azure Blob Storage on a schedule, and its Temporal workflow. The pass itself is built and tested against stand-ins.
+- A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
 - Sources for the reports reinsurance, payments, collections and investment owe. The driver takes any module's answer; only commission's questions are wired.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.

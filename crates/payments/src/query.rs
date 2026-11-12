@@ -103,6 +103,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
         "represent" => found(Some(&state.represent)),
+        "waiting" => found(Some(state.waiting_payments())),
         "reconciliation" => found(state.reconciliation(text(&question, "account")?, day(&question)?)),
         "readiness" => found(Some(state.readiness(day(&question)?))),
         "trail" => Ok(json!({"events": state.event_seq, "chain": state.event_chain})),
@@ -118,6 +119,23 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             policy: policy.clone(),
             claim: claim.clone(),
         },
+        // Claims released a payment: that is the instruction to pay it.
+        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind == "claim_paid" => {
+            let field = |name: &str| detail.get(name).cloned().unwrap_or_default();
+            crate::Command::OfferPayment {
+                waiting: Box::new(crate::intake::Waiting {
+                    payment: field("payment_ref"),
+                    source: format!("claim:{subject}:{}", field("payment_ref")),
+                    payee: field("payee"),
+                    account_ref: field("account_ref"),
+                    policy: ic_core::PolicyId::from(field("policy").as_str()),
+                    // An amount that cannot be read is refused by the
+                    // module as not positive; nothing is guessed.
+                    amount_minor: field("net_minor").parse().unwrap_or(0),
+                    payable: ic_core::PayableKind::Benefit,
+                }),
+            }
+        }
         _ => return Vec::new(),
     };
     vec![crate::Envelope {

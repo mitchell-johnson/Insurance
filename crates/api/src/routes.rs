@@ -9,6 +9,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use ic_cashmatch::{IncomingPayment, Outcome};
+use ic_core::claims_module::report::{Question, Reply};
 use ic_core::command::IssuePolicy;
 use ic_core::policy::LifeKind;
 use ic_core::{Command, GroupId, PartyId, PolicyId};
@@ -43,6 +44,11 @@ pub fn router(state: Shared) -> Router {
         .route("/v1/policies/{number}", get(policy))
         .route("/v1/payments", post(payment))
         .route("/v1/commands", post(command))
+        .route("/v1/claims/{claim}", get(claim))
+        .route("/v1/claims/queues/{queue}", get(claims_queue))
+        .route("/v1/claims/book", get(claims_book))
+        .route("/v1/claims/report", get(claims_report))
+        .route("/v1/claims/runs/{run}/remittance", get(claims_remittance))
         .route("/v1/admin/end-of-day", post(end_of_day))
         .route("/v1/admin/reconciliation", get(reconciliation))
         .with_state(state)
@@ -316,6 +322,91 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<
         return Err(Problem::not_found());
     }
     Ok(Json(Value::Object(body)).into_response())
+}
+
+/// The role the claims module's own staff hold.
+const CLAIMS: &str = "claims";
+
+/// One claim. That a claim exists implies health, so the row is sensitive:
+/// claims staff see it, and so does the person it is about. Anyone else gets
+/// the same answer as for a claim that does not exist.
+async fn claim(State(s): State<Shared>, headers: HeaderMap, Path(id): Path<String>) -> ApiResult {
+    let caller = s.auth.authenticate(&headers).await?;
+    let replies = s.backend.claims(&Question::Claim { claim: id }).await?;
+    let row = replies
+        .into_iter()
+        .find_map(|r| match r {
+            Reply::Claim(Some(row)) => Some(row),
+            _ => None,
+        })
+        .ok_or_else(Problem::not_found)?;
+    if !caller.has_role(CLAIMS) {
+        let scope = RowScope {
+            kind: "claim",
+            subject: Some(&row.party),
+            sensitive: true,
+        };
+        let allowed = s
+            .scope
+            .may_view(&caller.subject, &caller.dev_relationships, &scope, true)
+            .map_err(|e| Problem::new(StatusCode::INTERNAL_SERVER_ERROR, "scope", e.to_string()))?;
+        if !allowed {
+            return Err(Problem::not_found());
+        }
+    }
+    Ok(Json(json!(row.view)).into_response())
+}
+
+/// A work queue across every partition, most urgent first and then oldest.
+async fn claims_queue(State(s): State<Shared>, headers: HeaderMap, Path(queue): Path<String>) -> ApiResult {
+    let caller = s.auth.authenticate(&headers).await?;
+    require(&caller, CLAIMS)?;
+    let queue = serde_json::from_value(Value::String(queue)).map_err(|_| Problem::not_found())?;
+    let mut rows: Vec<_> = s
+        .backend
+        .claims(&Question::Queue { queue })
+        .await?
+        .into_iter()
+        .flat_map(|r| match r {
+            Reply::Queue(rows) => rows,
+            _ => vec![],
+        })
+        .collect();
+    rows.sort_by(|a, b| b.priority.cmp(&a.priority).then(b.age_days.cmp(&a.age_days)));
+    Ok(Json(json!({ "rows": rows })).into_response())
+}
+
+/// Each partition's answer to a question only claims staff may ask.
+async fn claims_staff(s: &Shared, headers: &HeaderMap, question: Question) -> ApiResult {
+    let caller = s.auth.authenticate(headers).await?;
+    require(&caller, CLAIMS)?;
+    let partitions: Vec<Value> = s
+        .backend
+        .claims(&question)
+        .await?
+        .into_iter()
+        .map(|r| match r {
+            Reply::Book(b) => json!(b),
+            Reply::Report(r) => json!(r),
+            Reply::Remittance(r) => json!(r),
+            Reply::Claim(_) | Reply::Queue(_) => Value::Null,
+        })
+        .collect();
+    Ok(Json(json!({ "partitions": partitions })).into_response())
+}
+
+/// The claims in payment, by partition. Carries cause analysis.
+async fn claims_book(State(s): State<Shared>, headers: HeaderMap) -> ApiResult {
+    claims_staff(&s, &headers, Question::Book).await
+}
+
+async fn claims_report(State(s): State<Shared>, headers: HeaderMap) -> ApiResult {
+    claims_staff(&s, &headers, Question::Report).await
+}
+
+/// The remittance advice for a payment run: each payee's count and total.
+async fn claims_remittance(State(s): State<Shared>, headers: HeaderMap, Path(run): Path<String>) -> ApiResult {
+    claims_staff(&s, &headers, Question::Remittance { run }).await
 }
 
 async fn end_of_day(State(s): State<Shared>, headers: HeaderMap) -> ApiResult {
