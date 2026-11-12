@@ -14,7 +14,9 @@ use ic_azure::merkle::{publish_root, root_name};
 use ic_azure::AzureError;
 use ic_core::Reject;
 use ic_finance::close::{Capacity, CheckStatus, Outcome, PeriodStatus};
-use ic_finance::driver::{self, distribution_sources, payments_sources, reinsurance_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK};
+use ic_finance::driver::{
+    self, core_sources, distribution_sources, payments_sources, reinsurance_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK,
+};
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
 use serde_json::{json, Value};
@@ -70,7 +72,7 @@ impl driver::Modules for Others {
         let aged = |as_at: &Value| json!({ "kind": "any", "as_at": as_at, "items": [], "total_minor": 0, "count": 0 });
         Ok(if question == json!("sweep_check") {
             self.sweep.lock().unwrap().clone().unwrap_or(json!({ "green": true, "items": [] }))
-        } else if let Some(held) = question.get("aged_held") {
+        } else if let Some(held) = question.get("aged_held").or(question.get("waiting_cash")) {
             aged(&held["as_at"])
         } else if question.get("aged").is_some() || question["q"].as_str().is_some_and(|q| q.starts_with("aged_")) {
             aged(&question["as_at"])
@@ -109,14 +111,13 @@ fn sources() -> Vec<Source> {
     let mut all = distribution_sources();
     all.extend(payments_sources());
     all.extend(reinsurance_sources());
-    for (caller, kind) in [("collections", "policy_suspense"), ("investment", "pending_investment_cash")] {
-        all.push(Source {
-            caller: caller.to_string(),
-            module: "ops".to_string(),
-            reports: Reports::Aged(kind.to_string()),
-            question: |as_at| json!({ "aged": true, "as_at": as_at }),
-        });
-    }
+    all.extend(core_sources());
+    all.push(Source {
+        caller: "collections".to_string(),
+        module: "ops".to_string(),
+        reports: Reports::Aged("policy_suspense".to_string()),
+        question: |as_at| json!({ "aged": true, "as_at": as_at }),
+    });
     all
 }
 
@@ -217,8 +218,8 @@ fn a_month_goes_from_its_last_day_to_closed() {
             "aged:held_balance",
             "fund_cash_settlement",
             "aged:unidentified_receipts",
-            "aged:policy_suspense",
             "aged:pending_investment_cash",
+            "aged:policy_suspense",
             SUBLEDGER_CHECK
         ]
     );
@@ -330,8 +331,8 @@ fn a_module_that_does_not_answer_is_reported_and_asked_again() {
         [
             "fund_cash_settlement",
             "aged:unidentified_receipts",
-            "aged:policy_suspense",
             "aged:pending_investment_cash",
+            "aged:policy_suspense",
             SUBLEDGER_CHECK
         ]
     );
@@ -495,4 +496,50 @@ fn refusals_are_listed_and_months_close_in_order() {
     // An answer that is not a report.
     *driver.modules.sweep.lock().unwrap() = Some(json!({ "sweep": "fine" }));
     assert!(matches!(block(driver.pass()), Err(DriverError::Answer(m)) if m.starts_with("commission_sweep:")));
+}
+
+/// Purpose: the waiting cash of two partitions becomes one aged report: a policy with
+/// nothing waiting is left out, the items run oldest first, the total and the count cover
+/// every policy, and a list longer than the cap keeps the oldest.
+/// Why it matters: the close turns red on the oldest and largest items. A report that cut
+/// off the oldest cash, or whose total covered only the items listed, would show a month
+/// as clean while money sat uninvested past the pricing lag.
+#[test]
+fn waiting_cash_from_every_partition_is_one_report_oldest_first() {
+    use ic_core::invest::WaitingCash;
+    use ic_money::Currency::NZD;
+    let cash = |policy: &str, amount_minor: i64, since: NaiveDate| WaitingCash {
+        policy: policy.into(),
+        amount_minor,
+        currency: NZD,
+        since,
+    };
+    let as_at = d(2027, 11, 30);
+    let report = driver::waiting_cash_report(
+        as_at,
+        vec![
+            cash("pol-b", 500, d(2027, 11, 28)),
+            cash("pol-z", 0, d(2027, 11, 1)),
+            cash("pol-a", 250, d(2027, 11, 20)),
+        ],
+    );
+    assert_eq!(
+        report,
+        json!({
+            "as_at": "2027-11-30",
+            "items": [
+                { "party": "pol-a", "reason": "pending_investment_cash", "amount_minor": 250, "since": "2027-11-20" },
+                { "party": "pol-b", "reason": "pending_investment_cash", "amount_minor": 500, "since": "2027-11-28" },
+            ],
+            "total_minor": 750,
+            "count": 2,
+        })
+    );
+    let many: Vec<WaitingCash> = (0..driver::MAX_AGED_ITEMS as i64 + 5)
+        .map(|n| cash(&format!("pol-{n:05}"), 1, as_at - chrono::Days::new(n as u64 % 7)))
+        .collect();
+    let report = driver::waiting_cash_report(as_at, many);
+    assert_eq!(report["items"].as_array().unwrap().len(), driver::MAX_AGED_ITEMS);
+    assert_eq!((report["count"].clone(), report["total_minor"].clone()), (json!(2005), json!(2005)));
+    assert_eq!(report["items"][0]["since"], json!("2027-11-24"));
 }

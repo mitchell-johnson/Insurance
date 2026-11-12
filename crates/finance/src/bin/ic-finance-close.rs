@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use ic_azure::blob::BlobContainer;
 use ic_azure::credential::AzureCredential;
-use ic_finance::driver::{distribution_sources, payments_sources, reinsurance_sources, Driver};
+use ic_finance::driver::{core_sources, distribution_sources, payments_sources, reinsurance_sources, Driver};
 use ic_finance::service::{run_passes, ClusterBooks, ClusterModules, Config};
 use ic_raft::{ClusterAuth, ClusterClient};
 
@@ -37,9 +37,10 @@ async fn main() -> Result<(), String> {
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;
     let auth = ClusterAuth::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
+    let partitions = client.partitions(Duration::from_secs(60)).await?;
     let driver = Driver {
         books: ClusterBooks::new(client.clone(), Duration::from_secs(10)),
-        modules: ClusterModules::new(client),
+        modules: ClusterModules::new(client, partitions),
         roots: BlobContainer::new(&config.roots_endpoint, &config.roots_container, credential.clone()),
         extracts: BlobContainer::new(&config.extracts_endpoint, &config.extracts_container, credential),
         location: config.location(),
@@ -47,6 +48,7 @@ async fn main() -> Result<(), String> {
             .into_iter()
             .chain(payments_sources())
             .chain(reinsurance_sources())
+            .chain(core_sources())
             .collect(),
     };
     tracing::info!(?config, "finance close service started");
