@@ -126,3 +126,29 @@ fn control_totals_follow_the_close_they_belong_to() {
     }
     assert_eq!(pairs, 30);
 }
+
+/// Purpose: the event that announces a policy carries, for each life, the rating factors
+/// it was priced on (date of birth, sex and smoker status), and an event written before
+/// those fields existed still reads, with the factors absent.
+/// Why it matters: the in-force, movement and experience extracts group by age, sex and
+/// smoker status and are built from events alone. Without the factors on the event the
+/// experience study cannot be produced; and if old events stopped reading, every consumer
+/// replaying from the start would fail on the first policy.
+#[test]
+fn the_issue_event_carries_each_lifes_rating_factors() {
+    let events = month();
+    let issued = events.iter().find(|e| matches!(e.event, Event::PolicyIssued { .. })).unwrap();
+    let Event::PolicyIssued { lives, .. } = &issued.event else { unreachable!() };
+    assert_eq!(lives.len(), 1);
+    assert_eq!(
+        (lives[0].date_of_birth, lives[0].sex, lives[0].smoker),
+        (Some(d(1990, 3, 10)), Some(Sex::Female), Some(false))
+    );
+
+    let mut older = serde_json::to_value(&lives[0]).unwrap();
+    for field in ["date_of_birth", "sex", "smoker"] {
+        assert!(older.as_object_mut().unwrap().remove(field).is_some(), "{field} is not on the event");
+    }
+    let read: ic_core::event::LifeInfo = serde_json::from_value(older).unwrap();
+    assert_eq!(read, ic_core::event::LifeInfo::new(lives[0].life.clone(), lives[0].party.clone()));
+}
