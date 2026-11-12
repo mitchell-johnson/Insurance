@@ -329,11 +329,9 @@ fn late_prices_are_listed() {
         },
     );
     assert!(h.state.late(day(5)).is_empty());
-    // A fund that has never priced is late on every pricing day the
-    // lookback reaches, and no further back.
+    // A fund that has never priced is late from the day it was activated
+    // (the 2nd), and not before.
     let fresh = Harness::new();
-    let late = fresh.state.late(day(2));
-    let friday = chrono::NaiveDate::from_ymd_opt(2026, 10, 29).unwrap_or_default();
-    assert!(late.contains(&(fund_id("growth"), friday)));
-    assert!(late.iter().all(|(_, d)| (day(2) - *d).num_days() <= 60));
+    assert!(fresh.state.late(day(3)).is_empty());
+    assert_eq!(fresh.state.late(day(4)), vec![(fund_id("growth"), day(2))]);
 }

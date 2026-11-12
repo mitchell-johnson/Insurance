@@ -110,7 +110,8 @@ pub enum Command {
     },
     /// One partition's units on issue of a fund, from the core's
     /// `UnitsOnIssue` query: its unit position once every order up to
-    /// `executed_through` has executed.
+    /// `executed_through` has executed. It also tells the module that the
+    /// partition's holdings for every priced date up to then are complete.
     RecordCoreUnits {
         fund: FundId,
         partition: PartitionId,
@@ -168,13 +169,6 @@ pub enum Command {
     },
     /// A unit movement from the core's events.
     RecordMovement(Box<UnitMovement>),
-    /// Every order of a fund up to a pricing date has executed on a
-    /// partition, so its holdings for that date are complete.
-    RecordExecuted {
-        fund: FundId,
-        partition: PartitionId,
-        pricing_date: NaiveDate,
-    },
     /// The holdings extract or net flow instruction was written for the administrator.
     RecordExtractWritten {
         extract: String,
@@ -201,7 +195,6 @@ impl Command {
             Command::Republish { .. } => "republish",
             Command::RecordDelivery { .. } => "record_delivery",
             Command::RecordMovement(_) => "record_movement",
-            Command::RecordExecuted { .. } => "record_executed",
             Command::RecordExtractWritten { .. } => "record_extract_written",
         }
     }
@@ -224,7 +217,7 @@ impl Command {
             | Command::CloseError { .. }
             | Command::Republish { .. } => &[CALLER_CONSOLE],
             Command::RecordDelivery { .. } => &[CALLER_OUTBOX],
-            Command::RecordMovement(_) | Command::RecordExecuted { .. } => &[CALLER_EVENTS],
+            Command::RecordMovement(_) => &[CALLER_EVENTS],
         }
     }
 

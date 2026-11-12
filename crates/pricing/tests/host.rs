@@ -63,13 +63,14 @@ fn answers_each_question() {
     );
     for partition in 0..2 {
         h.ok(
-            CALLER_EVENTS,
-            "relay",
+            CALLER_INTAKE,
+            "driver",
             &[],
-            Command::RecordExecuted {
+            Command::RecordCoreUnits {
                 fund: fund_id("growth"),
                 partition,
-                pricing_date: day(3),
+                executed_through: Some(day(3)),
+                units_micro: UNITS / 2,
             },
         );
     }
@@ -77,10 +78,11 @@ fn answers_each_question() {
     assert_eq!(ask(&h, json!({"q": "error", "id": "E1"}))["cause"], "bond");
     let due = ask(&h, json!({"q": "extracts_due", "limit": 50}));
     assert_eq!(due[0]["currency"], "NZD");
-    assert_eq!(due[0]["extract"]["id"], "growth@2026-11-03");
+    assert_eq!(due[0]["extract"]["id"], "growth@2026-11-02");
+    assert_eq!(due[1]["extract"]["id"], "growth@2026-11-03");
     let check = ask(&h, json!({"q": "close_check", "as_at": "2026-11-04"}));
     let kinds: Vec<&str> = check["items"].as_array().into_iter().flatten().filter_map(|i| i["kind"].as_str()).collect();
-    assert_eq!(kinds, vec!["open_price_error", "extract_not_written"]);
+    assert_eq!(kinds, vec!["open_price_error", "extract_not_written", "extract_not_written"]);
 
     assert!(answer(&h.state, json!({"q": "nonsense"})).unwrap_err().contains("not a question"));
 }
@@ -110,4 +112,126 @@ fn hosted_module_applies_answers_and_snapshots() {
     let mut copy = (spec.make)();
     copy.load(saved).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(copy.query(json!({"q": "status"})), module.query(json!({"q": "status"})));
+}
+
+/// Purpose: an executed unit order from the core becomes one movement with
+/// the sign of its direction, keyed by the event's ID; any other event is ignored.
+/// Why it matters: holdings, the net flow and the remediation record are
+/// built only from these; a sell counted as a buy would put the
+/// administrator's register out by twice the order.
+#[test]
+fn core_events_become_movements() {
+    use ic_core::invest::{Direction, InvestEvent, OrderKind};
+    use ic_pricing::host::react;
+    let record = |event| ic_core::EventRecord {
+        id: "3-17".into(),
+        partition: 3,
+        seq: 17,
+        business_date: day(3),
+        log_index: 40,
+        traceparent: None,
+        event: ic_core::Event::Investment(event),
+    };
+    let sell = record(InvestEvent::UnitOrderExecuted {
+        order_id: "O-9".into(),
+        policy: "POL-1".into(),
+        fund: fund_id("growth"),
+        direction: Direction::Sell,
+        kind: OrderKind::Withdrawal,
+        cash_minor: 1_000_00,
+        units_micro: 497_512,
+        price_id: "growth@2026-11-03.1".into(),
+        pricing_date: day(3),
+    });
+    let envelopes = react(&sell);
+    assert_eq!(envelopes.len(), 1);
+    let e = &envelopes[0];
+    assert_eq!((e.key.as_str(), e.caller.as_str()), ("event:3-17", CALLER_EVENTS));
+    assert_eq!(e.at.date_naive(), day(3));
+    match &e.command {
+        Command::RecordMovement(m) => {
+            assert_eq!((m.kind, m.units_micro, m.cash_minor, m.partition), (MovementKind::Sell, -497_512, -1_000_00, 3));
+            assert_eq!(m.policy, "POL-1");
+        }
+        other => panic!("{other:?}"),
+    }
+    let buy = record(InvestEvent::UnitOrderExecuted {
+        order_id: "O-10".into(),
+        policy: "POL-1".into(),
+        fund: fund_id("growth"),
+        direction: Direction::Buy,
+        kind: OrderKind::PremiumAllocation,
+        cash_minor: 1_000_00,
+        units_micro: 497_265,
+        price_id: "growth@2026-11-03.1".into(),
+        pricing_date: day(3),
+    });
+    assert!(matches!(&react(&buy)[0].command, Command::RecordMovement(m) if m.units_micro == 497_265 && m.kind == MovementKind::Buy));
+    let other = record(InvestEvent::FundActivated {
+        fund: fund_id("growth"),
+        version: 1,
+        content_hash: "x".into(),
+    });
+    assert!(react(&other).is_empty());
+}
+
+/// Purpose: the outbox carrier reads each publication as the core's
+/// `ActivateUnitPrice` for its own partition with a stable key, and turns
+/// the core's answer (applied, refused, unroutable) into the module's
+/// delivery record.
+/// Why it matters: this is the only way a price reaches the core; the key
+/// must not change between offers or a retry could apply twice, and a
+/// refusal must reach the work list with the core's reason.
+#[test]
+fn outbox_carries_prices_to_the_core() {
+    use ic_core::invest::InvestCommand;
+    use ic_pricing::host::OUTBOX;
+    use ic_raft::{CoreOutcome, Route};
+    let mut h = Harness::new();
+    h.receive("F1", valuation(day(2), "2000000", UNITS, "0"));
+    h.core_units(None, UNITS / 2);
+    let id = h.prepared_id(day(2));
+    h.approve(&id, BTreeMap::new());
+    let answer = ask(&h, (OUTBOX.pending)(10));
+    let postings = (OUTBOX.read)(answer).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(postings.len(), 2);
+    assert_eq!(postings[1].route, Route::Partition(1));
+    assert_eq!(postings[1].envelope.key, format!("unit-pricing:{id}/1/1"));
+    assert_eq!(postings[1].envelope.caller, "unit-pricing");
+    match &postings[1].envelope.command {
+        ic_core::Command::Investment(c) => match c.as_ref() {
+            InvestCommand::ActivateUnitPrice(p) => {
+                assert_eq!(
+                    (p.price_id.as_str(), p.version, p.mid.as_str(), p.supersedes.clone()),
+                    (id.as_str(), 1, "2.0000", None)
+                );
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+    assert!((OUTBOX.read)(json!({"x": 1})).is_err());
+
+    let outcomes = [
+        CoreOutcome::Applied {
+            partition: 0,
+            log_index: 9,
+            duplicate: false,
+        },
+        CoreOutcome::Refused(ic_core::Reject::new("replay_required", "orders executed at the superseded price")),
+        CoreOutcome::Unroutable("no such partition".into()),
+    ];
+    let mut deliveries = Vec::new();
+    for outcome in &outcomes {
+        let envelope: Envelope = serde_json::from_value((OUTBOX.outcome)(&postings[0], outcome)).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(envelope.caller, CALLER_OUTBOX);
+        assert_eq!(envelope.key, format!("outcome:{}", postings[0].id));
+        match envelope.command {
+            Command::RecordDelivery { delivery, .. } => deliveries.push(delivery),
+            other => panic!("{other:?}"),
+        }
+    }
+    assert_eq!(deliveries[0], Delivery::Applied);
+    assert!(matches!(&deliveries[1], Delivery::Refused { code, .. } if code == "replay_required"));
+    assert!(matches!(&deliveries[2], Delivery::Refused { code, .. } if code == "unroutable"));
 }

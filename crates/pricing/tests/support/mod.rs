@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, NaiveDate, NaiveTime, TimeZone, Utc, Weekday};
+use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use ic_money::{Currency, DecStr, FundId, RoundingMode};
 use ic_pricing::command::*;
 use ic_pricing::fund::FundDefinition;
@@ -34,19 +34,17 @@ pub fn fund(name: &str) -> FundDefinition {
         ("pricing_lag_days", "1"),
     ];
     FundDefinition {
-        fund: fund_id(name),
+        id: fund_id(name),
         version: 1,
+        content_hash: format!("{name}-v1"),
         name: format!("{name} fund"),
         currency: Currency::NZD,
-        effective_from: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap_or_default(),
-        pricing_weekdays: vec![Weekday::Mon, Weekday::Tue, Weekday::Wed, Weekday::Thu, Weekday::Fri],
-        non_pricing_days: Default::default(),
-        cutoff: NaiveTime::from_hms_opt(15, 0, 0).unwrap_or_default(),
-        time_zone: "Pacific/Auckland".to_string(),
+        cut_off: "15:00".to_string(),
         buy_spread_bps: 25,
         sell_spread_bps: 25,
         price_decimals: 4,
         unit_rounding: RoundingMode::Down,
+        non_pricing_days: Default::default(),
         open_to_new_money: true,
         pricing: pricing.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
     }

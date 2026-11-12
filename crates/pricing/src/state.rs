@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::command::*;
-use crate::fund::{FundDefinition, PricingTerms};
+use crate::fund::{FundDefinition, FundRules, PricingTerms};
 use crate::strike::{error_size, strike, CheckKind, Previous, Struck};
 use crate::valuation::Valuation;
 
@@ -215,6 +215,8 @@ pub struct Extract {
 pub struct PricingState {
     pub partitions: Option<PartitionId>,
     pub funds: BTreeMap<FundId, Vec<FundDefinition>>,
+    /// The date each fund's first version was activated: it prices from then.
+    pub fund_activated: BTreeMap<FundId, NaiveDate>,
     pub valuations: BTreeMap<String, Vec<ValuationRecord>>,
     pub refused_files: BTreeMap<String, String>,
     pub core_units: BTreeMap<FundId, BTreeMap<PartitionId, CoreUnits>>,
@@ -306,7 +308,7 @@ impl PricingState {
 
     fn execute(&mut self, e: &Envelope) -> Step {
         match &e.command {
-            Command::ActivateFund(def) => self.activate_fund(def),
+            Command::ActivateFund(def) => self.activate_fund(def, e.at.date_naive()),
             Command::RecordPartitions { count } => self.record_partitions(*count),
             Command::ReceiveValuations {
                 administrator,
@@ -332,6 +334,9 @@ impl PricingState {
                         units_micro: *units_micro,
                     },
                 );
+                if let Some(through) = executed_through {
+                    self.record_executed_through(fund, *partition, *through)?;
+                }
                 Ok(Output::Done)
             }
             Command::PreparePrice { fund, pricing_date } => self.prepare(e, fund, *pricing_date),
@@ -374,7 +379,6 @@ impl PricingState {
             Command::Republish { price } => self.republish(price),
             Command::RecordDelivery { publication, delivery } => self.record_delivery(e.at, publication, delivery),
             Command::RecordMovement(m) => self.record_movement(m),
-            Command::RecordExecuted { fund, partition, pricing_date } => self.record_executed(fund, *partition, *pricing_date),
             Command::RecordExtractWritten { extract, name, sha256 } => {
                 let x = self.extracts.get_mut(extract).ok_or_else(|| refuse("unknown_extract", extract.clone()))?;
                 if x.written.is_some() {
@@ -398,21 +402,21 @@ impl PricingState {
             .ok_or_else(|| refuse("unknown_fund", format!("no definition of {} is active", fund.0)))
     }
 
-    /// The definition in force on a date, and its terms.
-    pub fn definition_on(&self, fund: &FundId, date: NaiveDate) -> Option<&FundDefinition> {
-        self.funds.get(fund)?.iter().rev().find(|d| d.effective_from <= date)
+    /// The definition in force: a fund's latest version.
+    pub fn definition_of(&self, fund: &FundId) -> Option<&FundDefinition> {
+        self.funds.get(fund)?.last()
     }
 
-    fn activate_fund(&mut self, def: &FundDefinition) -> Step {
-        def.validate().map_err(|m| refuse("invalid_definition", m))?;
-        let versions = self.funds.entry(def.fund.clone()).or_default();
+    fn activate_fund(&mut self, def: &FundDefinition, today: NaiveDate) -> Step {
+        def.terms().map_err(|m| refuse("invalid_definition", m))?;
+        let versions = self.funds.entry(def.id.clone()).or_default();
         if let Some(same) = versions.iter().find(|v| v.version == def.version) {
             return if same == def {
                 Ok(Output::Done)
             } else {
                 Err(refuse(
                     "config_conflict",
-                    format!("{} version {} is active with other content", def.fund.0, def.version),
+                    format!("{} version {} is active with other content", def.id.0, def.version),
                 ))
             };
         }
@@ -422,6 +426,7 @@ impl PricingState {
             None => {}
         }
         versions.push(def.clone());
+        self.fund_activated.entry(def.id.clone()).or_insert(today);
         Ok(Output::Done)
     }
 
@@ -507,7 +512,7 @@ impl PricingState {
         let mut refused = Vec::new();
         for v in valuations {
             let key = slot(&v.fund, v.pricing_date);
-            if self.definition_on(&v.fund, v.pricing_date).is_none() {
+            if self.definition_of(&v.fund).is_none() {
                 refused.push((key, "no definition of the fund is in force on that date".to_string()));
                 continue;
             }
@@ -571,11 +576,11 @@ impl PricingState {
 
     fn prepare(&mut self, e: &Envelope, fund: &FundId, date: NaiveDate) -> Step {
         let def = self
-            .definition_on(fund, date)
+            .definition_of(fund)
             .ok_or_else(|| refuse("unknown_fund", format!("no definition of {} is in force on {date}", fund.0)))?
             .clone();
-        let terms = def.validate().map_err(|m| refuse("invalid_definition", m))?;
-        if !def.is_pricing_day(date) {
+        let terms = def.terms().map_err(|m| refuse("invalid_definition", m))?;
+        if !def.prices_on(date) {
             return Err(refuse("not_a_pricing_day", format!("{} does not price on {date}", fund.0)));
         }
         let key = slot(fund, date);
@@ -695,11 +700,8 @@ impl PricingState {
         if let Some(s) = self.suspended_on(&p.fund, p.pricing_date) {
             return Err(refuse("suspended", format!("{} is suspended from {}: {}", p.fund.0, s.from, s.reason)));
         }
-        let def = self
-            .definition_on(&p.fund, p.pricing_date)
-            .ok_or_else(|| refuse("unknown_fund", p.fund.0.clone()))?
-            .clone();
-        let terms: PricingTerms = def.validate().map_err(|m| refuse("invalid_definition", m))?;
+        let def = self.definition_of(&p.fund).ok_or_else(|| refuse("unknown_fund", p.fund.0.clone()))?.clone();
+        let terms: PricingTerms = def.terms().map_err(|m| refuse("invalid_definition", m))?;
         let in_force = self.active.get(&key).and_then(|v| v.last()).cloned();
         let n = self
             .partitions
@@ -972,6 +974,25 @@ impl PricingState {
         Ok(Output::Done)
     }
 
+    /// A partition has executed every order of a fund through `through`:
+    /// mark each priced date up to then that has no extract yet.
+    fn record_executed_through(&mut self, fund: &FundId, partition: PartitionId, through: NaiveDate) -> Result<(), Output> {
+        let prefix = format!("{}@", fund.0);
+        let dates: Vec<NaiveDate> = self
+            .active
+            .range(prefix.clone()..)
+            .take_while(|(k, _)| k.starts_with(&prefix))
+            .filter(|(k, _)| !self.extracts.contains_key(*k))
+            .filter_map(|(_, ids)| ids.last().and_then(|id| self.prices.get(id)))
+            .map(|p| p.pricing_date)
+            .filter(|d| *d <= through)
+            .collect();
+        for date in dates {
+            self.record_executed(fund, partition, date)?;
+        }
+        Ok(())
+    }
+
     fn record_executed(&mut self, fund: &FundId, partition: PartitionId, date: NaiveDate) -> Step {
         let n = self.partition_known(partition)?;
         let key = slot(fund, date);
@@ -1051,11 +1072,11 @@ impl PricingState {
         let mut late = Vec::new();
         let floor = as_at.checked_sub_days(Days::new(LATE_LOOKBACK_DAYS)).unwrap_or(as_at);
         for fund in self.funds.keys() {
-            let Some(def) = self.definition_on(fund, as_at) else { continue };
-            let Ok(terms) = def.validate() else { continue };
+            let Some(def) = self.definition_of(fund) else { continue };
+            let Ok(terms) = def.terms() else { continue };
             let start = match self.latest_active_date(fund) {
                 Some(last) => def.following_pricing_day(last),
-                None => def.next_pricing_day(self.funds[fund][0].effective_from),
+                None => def.next_pricing_day(self.fund_activated.get(fund).copied().unwrap_or(floor)),
             };
             let Ok(mut d) = start else { continue };
             d = d.max(def.next_pricing_day(floor).unwrap_or(d));

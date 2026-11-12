@@ -277,21 +277,25 @@ fn movements_build_holdings_and_extracts() {
     assert_eq!(holdings.get("P1"), Some(&5_497_265));
     assert_eq!(holdings.get("P2"), None, "a holding back to zero is dropped");
 
-    let executed = |partition| Command::RecordExecuted {
+    let executed = |partition| Command::RecordCoreUnits {
         fund: fund_id("growth"),
         partition,
-        pricing_date: day(3),
+        executed_through: Some(day(3)),
+        units_micro: UNITS / 2,
     };
-    h.ok(CALLER_EVENTS, "relay", &[], executed(0));
-    assert!(h.state.extracts_due(10).is_empty());
-    h.ok(CALLER_EVENTS, "relay", &[], executed(1));
-    let x = h.state.extracts_due(10)[0].clone();
+    // The 2nd's extract was taken when the 3rd was priced against it.
+    let third = "growth@2026-11-03";
+    assert_eq!(h.state.extracts_due(10).len(), 1);
+    h.ok(CALLER_INTAKE, "driver", &[], executed(0));
+    assert!(!h.state.extracts.contains_key(third));
+    h.ok(CALLER_INTAKE, "driver", &[], executed(1));
+    let x = h.state.extracts[third].clone();
     assert_eq!((x.units_on_issue_micro, x.holders), (5_497_265, 1));
     assert_eq!((x.flow.applications_minor, x.flow.redemptions_minor, x.flow.orders), (1_000_00, 500_00, 3));
     assert_eq!(x.price.as_deref(), Some(d3.as_str()));
     // A late report for the same date does not take the extract again.
-    h.ok(CALLER_EVENTS, "relay", &[], executed(1));
-    assert_eq!(h.state.extracts.len(), 1);
+    h.ok(CALLER_INTAKE, "driver", &[], executed(1));
+    assert_eq!(h.state.extracts.len(), 2);
     let written = |extract: &str| Command::RecordExtractWritten {
         extract: extract.into(),
         name: "holdings/growth/2026-11-03.csv".into(),
@@ -300,7 +304,7 @@ fn movements_build_holdings_and_extracts() {
     h.ok(CALLER_INTAKE, "driver", &[], written(&x.id));
     assert!(h.state.extracts[&x.id].holdings.is_empty());
     assert_eq!(h.state.extracts[&x.id].units_on_issue_micro, 5_497_265);
-    assert!(h.state.extracts_due(10).is_empty());
+    assert_eq!(h.state.extracts_due(10).len(), 1);
     assert_eq!(code(h.send(CALLER_INTAKE, "driver", &[], written(&x.id))), "written");
     assert_eq!(code(h.send(CALLER_INTAKE, "driver", &[], written("nope"))), "unknown_extract");
 }
@@ -328,13 +332,12 @@ fn definitions_and_partitions() {
     let mut bad = fund("cash");
     bad.price_decimals = 0;
     assert_eq!(code(act(&mut h, bad)), "invalid_definition");
+    assert_eq!(h.state.definition_of(&fund_id("growth")).map(|d| d.version), Some(1));
     let mut v2 = fund("growth");
     v2.version = 2;
-    v2.effective_from = day(9);
     v2.buy_spread_bps = 30;
     assert_eq!(act(&mut h, v2), Output::Done);
-    assert_eq!(h.state.definition_on(&fund_id("growth"), day(6)).map(|d| d.version), Some(1));
-    assert_eq!(h.state.definition_on(&fund_id("growth"), day(9)).map(|d| d.version), Some(2));
+    assert_eq!(h.state.definition_of(&fund_id("growth")).map(|d| d.version), Some(2));
 
     let parts = |h: &mut Harness, count| h.send(CALLER_INTAKE, "driver", &[], Command::RecordPartitions { count });
     assert_eq!(parts(&mut h, 2), Output::Done);

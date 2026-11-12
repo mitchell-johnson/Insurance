@@ -124,7 +124,7 @@ fn within(measured: Dec, limit: &DecStr) -> bool {
 /// its checks is in it.
 pub fn inputs_hash(def: &FundDefinition, valuation: &Valuation, previous: Option<&Previous>, core_units_micro: Option<i64>) -> String {
     let inputs = serde_json::json!({
-        "fund": def.fund,
+        "fund": def.id,
         "definition_version": def.version,
         "spreads_bps": [def.buy_spread_bps, def.sell_spread_bps],
         "price_decimals": def.price_decimals,
@@ -146,8 +146,8 @@ pub fn strike(
     previous: Option<&Previous>,
     core_units_micro: Option<i64>,
 ) -> Result<Struck, String> {
-    if valuation.fund != def.fund {
-        return Err(format!("the valuation is for {}, not {}", valuation.fund.0, def.fund.0));
+    if valuation.fund != def.id {
+        return Err(format!("the valuation is for {}, not {}", valuation.fund.0, def.id.0));
     }
     let units = dec_i128(valuation.units_on_issue_micro as i128) / dec_i128(MICRO_PER_UNIT as i128);
     let nav = valuation.nav.get();
@@ -291,7 +291,7 @@ pub fn error_size(wrong_mid: &DecStr, correct_mid: &DecStr) -> Dec {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fund::sample;
+    use crate::fund::{sample, FundRules};
     use crate::valuation::AssetPrice;
     use ic_money::FundId;
 
@@ -338,7 +338,7 @@ mod tests {
     #[test]
     fn strikes_mid_buy_and_sell() {
         let def = sample("growth");
-        let terms = def.validate().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
         // 2,010,000 / 1,000,000 units = 2.01; buy 2.015025 -> 2.0151; sell 2.004975 -> 2.0049.
         let v = valuation("2010000", 1_000_000_000_000);
         let s = strike(&def, &terms, &v, Some(&previous("1.9900", "1990000")), Some(1_000_000_000_000)).unwrap_or_else(|e| panic!("{e}"));
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn units_on_issue_difference_blocks() {
         let def = sample("growth");
-        let terms = def.validate().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
         let v = valuation("2010000", 1_000_000_000_000);
         let p = previous("1.9900", "1990000");
         let off = strike(&def, &terms, &v, Some(&p), Some(999_999_000_000)).unwrap_or_else(|e| panic!("{e}"));
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn failed_checks_hold_the_price() {
         let def = sample("growth");
-        let terms = def.validate().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
         // 10% up against a 5% tolerance and a 1% benchmark.
         let mut v = valuation("2189000", 1_000_000_000_000);
         v.stale_assets = vec![
@@ -416,7 +416,7 @@ mod tests {
     #[test]
     fn first_price_and_empty_fund() {
         let def = sample("growth");
-        let terms = def.validate().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
         let mut v = valuation("0", 0);
         let s = strike(&def, &terms, &v, None, Some(0)).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(s.mid.as_str(), "1.0000");
@@ -431,7 +431,7 @@ mod tests {
         // A fund without a benchmark does not run the check.
         let mut plain = sample("growth");
         plain.pricing.remove("benchmark_gap");
-        let pt = plain.validate().unwrap_or_else(|e| panic!("{e}"));
+        let pt = plain.terms().unwrap_or_else(|e| panic!("{e}"));
         let s = strike(&plain, &pt, &valuation("100", 100_000_000), None, Some(100_000_000)).unwrap_or_else(|e| panic!("{e}"));
         assert!(s.checks.iter().all(|c| c.kind != CheckKind::Benchmark));
     }
@@ -442,7 +442,7 @@ mod tests {
     #[test]
     fn refuses_impossible_prices() {
         let def = sample("cash");
-        let terms = def.validate().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
         assert!(strike(&def, &terms, &valuation("1", 1), None, None).unwrap_err().contains("not cash"));
         let def = sample("growth");
         assert!(strike(&def, &terms, &valuation("0", 1_000_000), None, None).unwrap_err().contains("zero"));
