@@ -2,6 +2,7 @@
 //! and device keys that sign as a phone or a browser does.
 #![allow(dead_code)]
 
+pub mod complaints;
 pub mod pricing;
 
 use base64::Engine;

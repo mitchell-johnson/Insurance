@@ -24,7 +24,7 @@
 //! was known from and to. The two are independent, and an extract is
 //! reconciled when opening plus movements equals closing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
@@ -112,7 +112,7 @@ impl Factors {
     }
 }
 
-fn sex_name(sex: Option<Sex>) -> &'static str {
+pub(crate) fn sex_name(sex: Option<Sex>) -> &'static str {
     match sex {
         Some(Sex::Female) => "female",
         Some(Sex::Male) => "male",
@@ -120,8 +120,25 @@ fn sex_name(sex: Option<Sex>) -> &'static str {
     }
 }
 
+/// One cover in force with the factors a rate table prices it on. It carries
+/// ages, never the date of birth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatedCover {
+    pub partition: PartitionId,
+    pub policy: PolicyId,
+    pub cover: String,
+    pub layer: Option<u32>,
+    /// Age last birthday as at the date asked.
+    pub age: Option<u32>,
+    /// Age last birthday when this cover started.
+    pub age_at_start: Option<u32>,
+    pub sex: Option<Sex>,
+    pub smoker: Option<bool>,
+    pub sum_insured_minor: i64,
+}
+
 /// The five-year band an age falls in, for example `30-34`.
-fn age_band(age: Option<u32>) -> String {
+pub(crate) fn age_band(age: Option<u32>) -> String {
     age.map(|a| format!("{}-{}", a / 5 * 5, a / 5 * 5 + 4)).unwrap_or_default()
 }
 
@@ -811,6 +828,35 @@ impl Mart {
             }
         }
         t
+    }
+
+    /// The covers in force as at the close of `as_at` on the named cover
+    /// codes, each with what a rate table prices it on.
+    pub fn rated_covers(&self, as_at: NaiveDate, covers: &BTreeSet<String>) -> Result<Vec<RatedCover>, MartError> {
+        self.closed(as_at)?;
+        let mut rated = Vec::new();
+        for ((partition, policy), row) in &self.policies {
+            if !row.status_at(as_at).is_some_and(provides_cover) {
+                continue;
+            }
+            let mut spans: Vec<&Span> = row.spans.iter().filter(|s| s.known_at(as_at) && covers.contains(&s.cover)).collect();
+            spans.sort_by(|a, b| (&a.cover, a.layer, &a.life).cmp(&(&b.cover, b.layer, &b.life)));
+            for s in spans {
+                let factors = row.factors(&s.life);
+                rated.push(RatedCover {
+                    partition: *partition,
+                    policy: policy.clone(),
+                    cover: s.cover.clone(),
+                    layer: s.layer,
+                    age: factors.age(as_at),
+                    age_at_start: factors.age(s.start),
+                    sex: factors.sex,
+                    smoker: factors.smoker,
+                    sum_insured_minor: s.sum_insured_minor,
+                });
+            }
+        }
+        Ok(rated)
     }
 
     /// Every cover in force as at the close of `as_at`.

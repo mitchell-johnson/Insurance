@@ -101,6 +101,42 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "administrator outage (lead-1)");
   } });
   await visit(browser, "/pricing", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/complaints", { subject: "sub-front" }, { run: async (p) => {
+    await sees(p, "intake");
+    await p.fill("#i-id", "c-100"); await p.fill("#i-who", "party-00000001"); await p.fill("#i-doc", "doc-100");
+    await p.locator("#intake button").click();
+    await sees(p, "Recorded c-100");
+  } });
+  await visit(browser, "/complaints", { subject: "sub-cmp1" }, { run: async (p) => {
+    await sees(p, "trained to work with vulnerable customers");
+    await p.getByRole("tab", { name: "Queue" }).click();
+    await p.locator("#queue").getByText("c-100").waitFor();
+    await p.selectOption("#a-command", "assign");
+    await p.fill("#f-0", "c-100"); await p.fill("#f-1", "cmp-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: assign.");
+    await p.locator("#queue").getByRole("button", { name: "Open" }).first().click();
+    await p.locator("#file:not([hidden])").waitFor();
+    await sees(p, "doc-100");
+    await p.getByRole("tab", { name: "Register and report" }).click();
+    await p.fill("#p-from", "2027-11-01"); await p.fill("#p-to", "2027-11-30");
+    await p.locator("#period button").click();
+    await p.locator("#register").getByText("c-100").waitFor();
+    await p.getByRole("tab", { name: "Conduct cases" }).click();
+    await p.locator("#case-msg .banner.bad").waitFor();
+  } });
+  await visit(browser, "/complaints", { subject: "sub-con" }, { run: async (p) => {
+    await p.getByRole("tab", { name: "Queue" }).click();
+    await p.selectOption("#a-command", "open_conduct_case");
+    await p.fill("#f-0", "b-100"); await p.fill("#f-2", "con-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: open conduct case.");
+    await p.getByRole("tab", { name: "Conduct cases" }).click();
+    await p.locator("#cases").getByRole("button", { name: "Open" }).first().click();
+    await p.locator("#case:not([hidden])").waitFor();
+    await sees(p, "Owner con-1");
+  } });
+  await visit(browser, "/complaints", { subject: "sub-fin1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
   console.log("all pages check out");

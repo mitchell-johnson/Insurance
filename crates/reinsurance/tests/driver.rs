@@ -15,7 +15,7 @@ use ic_ledger::PartitionId;
 use ic_money::Currency::NZD;
 use ic_product::{Frequency, Sex};
 use ic_reinsurance::delivery::CoreDelivery;
-use ic_reinsurance::driver::{group_command, handed, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
+use ic_reinsurance::driver::{group_command, handed, payments_command, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
 use ic_reinsurance::host::{answer, module_spec, react, Query, MAX_ANSWER, MODULE};
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_reinsurance::machine::Audience;
@@ -788,6 +788,37 @@ fn a_reply_to_a_notice_is_taken_only_when_it_says_so() {
     for odd in [json!({"result": {}}), json!({"accepted": true}), json!(null), json!("ok")] {
         assert!(matches!(handed(Ok(odd)), Err(DriverError::Answer(why)) if why.contains("neither accepted nor refused")));
     }
+}
+
+/// Purpose: a settlement due to a reinsurer becomes the payments module's "offer payment"
+/// command, keyed by the statement so it is one payment however often it is offered; money
+/// due from a reinsurer, a nil settlement and any other notice produce no command.
+/// Why it matters: the payment reference goes to the bank as the end-to-end reference and
+/// comes back on the settlement. If it changed between tries a reinsurer could be paid twice
+/// for one statement; if a negative net were offered, payments would refuse it and an
+/// exception would open every month for a statement that is in order.
+#[test]
+fn a_settlement_due_is_offered_to_payments_once_per_statement() {
+    let due = |net_minor: i64| Notice::SettlementDue {
+        statement: 7,
+        treaty: "retail".into(),
+        reinsurer: "north-re".into(),
+        currency: ic_money::Currency::NZD,
+        net_minor,
+    };
+    assert_eq!(
+        payments_command(&due(90_000_00)).unwrap(),
+        json!({
+            "key": "reinsurance:settlement:7",
+            "actor": {"id": "reinsurance", "roles": ["service"]},
+            "at": "1970-01-01T00:00:00",
+            "command": {"type": "offer_payment", "waiting": {
+                "payment": "ri-stmt-7", "source": "reinsurance:statement:7", "payee": "north-re", "amount_minor": 90_000_00}},
+        })
+    );
+    assert_eq!(payments_command(&due(0)), None);
+    assert_eq!(payments_command(&due(-1)), None);
+    assert_eq!(payments_command(&Notice::ExceptionClosed { id: "x".into() }), None);
 }
 
 /// An audience that records what it is handed, and can refuse or be away.
