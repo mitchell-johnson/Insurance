@@ -13,7 +13,7 @@ use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, earning, group, lifecycle, payments, reinsurance, reopen, transfer, unwind, PolicyId};
+use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -199,6 +199,10 @@ pub struct CoreState {
     /// The end-of-day orchestration reads it to build the day's Merkle root,
     /// however many times it has to retry.
     pub last_close: Option<ClosedDay>,
+    /// The claims on this partition's policies. Replicated, snapshotted and
+    /// hashed with everything else here.
+    #[serde(default)]
+    pub claims: ic_claims::ClaimsState,
     /// Counterparty posting references this partition has accepted.
     #[serde(default)]
     pub counterparty: crate::counterparty::CounterpartyBook,
@@ -223,6 +227,7 @@ impl CoreState {
             idempotency: BTreeMap::new(),
             transfers_seen: BTreeSet::new(),
             last_close: None,
+            claims: ic_claims::ClaimsState::default(),
             counterparty: Default::default(),
         }
     }
@@ -246,6 +251,7 @@ impl CoreState {
             &self.idempotency,
             &self.transfers_seen,
             &self.last_close,
+            &self.claims,
             &self.counterparty,
         );
         // Every type in the state has string or integer map keys, so this
@@ -281,6 +287,7 @@ impl CoreState {
                         || ic_product::schedule::period_start(p.inception, p.frequency, p.periods_billed).is_some_and(|s| s <= today))
             })
             .map(|p| p.id.clone())
+            .chain(claims::policies_with_work_due(self, today))
             .collect()
     }
 
@@ -346,6 +353,7 @@ impl CoreState {
                     closing_head,
                     totals: role_totals(&self.ledger),
                 });
+                claims::drain_due(self, ctx);
                 Ok(())
             }
             Command::RunEndOfDay { policies } => {
@@ -363,6 +371,7 @@ impl CoreState {
                         });
                     }
                 }
+                claims::drain_due(self, ctx);
                 Ok(())
             }
             Command::IssuePolicy(cmd) => {
@@ -495,9 +504,20 @@ impl CoreState {
                 amount,
                 bank_account,
             } => self.with_policy(&policy, true, |s, p| {
-                payments::settle_payable(&mut s.ledger, p, ctx, payment, payable, refund, amount, bank_account)
+                let benefit = payable == payments::PayableKind::Benefit;
+                if benefit {
+                    claims::check_settlement(&s.ledger, p, &payment, amount.minor)?;
+                }
+                payments::settle_payable(&mut s.ledger, p, ctx, payment.clone(), payable, refund, amount, bank_account)?;
+                if benefit {
+                    claims::settled(p, &payment);
+                }
+                Ok(())
             }),
-            Command::ReturnPayment { policy, payment } => self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment)),
+            Command::ReturnPayment { policy, payment } => {
+                self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment))?;
+                claims::bank_returned(self, ctx, &policy, &payment)
+            }
             Command::RecordCession {
                 policy,
                 cover,
@@ -552,8 +572,10 @@ impl CoreState {
                 target_group,
                 target_partition,
             } => self.with_policy(&policy, true, |s, p| {
+                claims::may_transfer(p)?;
                 transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition)
             }),
+            Command::Claims(command) => claims::apply(self, ctx, *command),
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);
@@ -607,7 +629,7 @@ impl CoreState {
 
     /// Like [`Self::with_policy`], and reports the policy's balance if the
     /// handler changed it.
-    fn with_policy_tracked<F>(&mut self, ctx: &mut Ctx<'_>, id: &PolicyId, refuse_if_frozen: bool, f: F) -> Result<(), Reject>
+    pub(crate) fn with_policy_tracked<F>(&mut self, ctx: &mut Ctx<'_>, id: &PolicyId, refuse_if_frozen: bool, f: F) -> Result<(), Reject>
     where
         F: FnOnce(&mut Self, &mut Ctx<'_>, &mut Policy) -> Result<(), Reject>,
     {

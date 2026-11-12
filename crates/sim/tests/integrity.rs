@@ -492,6 +492,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             policy: p.clone(),
             transfer_id: "t".into(),
         },
+        Command::Claims(Box::new(ic_core::claims_module::Command::DrainDue)),
         Command::PostCounterparty(Box::new(ic_core::counterparty::CounterpartyPosting {
             reference: "ce:0-1".into(),
             kind: "commission_earned".into(),

@@ -21,6 +21,14 @@ pub mod role {
     pub const UNIT_ACCOUNT: &str = "unit_account";
     pub const POLICY_LOAN: &str = "policy_loan";
 
+    /// Case estimates for claims notified and not yet admitted or closed.
+    pub const CLAIM_RESERVE: &str = "claim_reserve";
+    /// Claim money overpaid and owed back.
+    pub const CLAIM_RECOVERY_RECEIVABLE: &str = "claim_recovery_receivable";
+    pub const CLAIMS_INCURRED: &str = "claims_incurred";
+    pub const EX_GRATIA: &str = "ex_gratia";
+    pub const CLAIM_RECOVERY_WRITE_OFF: &str = "claim_recovery_write_off";
+
     pub const SETTLEMENT: &str = "settlement";
     /// The mirror of one bank account the insurer holds.
     pub const BANK: &str = "bank";
@@ -115,6 +123,50 @@ pub fn unit_account(p: &PolicyId, fund: &FundId) -> Account {
 }
 pub fn policy_loan(p: &PolicyId, c: Currency) -> Account {
     acct(format!("pol/{p}/policy_loan"), AccountUnit::Minor(c), AccountClass::Asset, role::POLICY_LOAN)
+}
+
+/// Opened with a policy's first claim.
+pub fn claim_reserve(p: &PolicyId, c: Currency) -> Account {
+    acct(
+        format!("pol/{p}/claim_reserve"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::CLAIM_RESERVE,
+    )
+}
+/// Opened with a policy's first overpayment.
+pub fn claim_recovery_receivable(p: &PolicyId, c: Currency) -> Account {
+    acct(
+        format!("pol/{p}/claim_recovery_receivable"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::CLAIM_RECOVERY_RECEIVABLE,
+    )
+}
+pub fn claims_incurred(product: &str, cover_type: &str, c: Currency) -> Account {
+    acct(
+        format!("int/claims_incurred/{product}/{cover_type}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::CLAIMS_INCURRED,
+    )
+}
+/// Goodwill payments, never mixed with contractual ones.
+pub fn ex_gratia(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/ex_gratia/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::EX_GRATIA,
+    )
+}
+pub fn claim_recovery_write_off(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/claim_recovery_write_off/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::CLAIM_RECOVERY_WRITE_OFF,
+    )
 }
 
 /// The accounts every policy gets at issue.

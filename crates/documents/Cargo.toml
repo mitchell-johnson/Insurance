@@ -11,6 +11,7 @@ ic-core.workspace = true
 ic-log.workspace = true
 ic-raft.workspace = true
 ic-azure.workspace = true
+ic-complaints = { path = "../complaints" }
 chrono = { workspace = true, features = ["clock"] }
 chrono-tz.workspace = true
 serde.workspace = true

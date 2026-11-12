@@ -8,13 +8,14 @@ use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 
 use common::*;
-use ic_channels::forward::{commands_for, pass, Source, PUBLISHER, STRUCTURE};
+use ic_channels::directory::{DirectoryCommand, StructureLink};
+use ic_channels::forward::{commands_for, conduct_by_party, pass, structure_for, Source, PUBLISHER, STRUCTURE};
 use ic_channels::http::{Channel, Local};
 use ic_channels::query::Question;
 use ic_channels::state::Command;
 use ic_channels::workbench::{PartyStatus, WorkbenchCommand};
 use ic_distribution::rules::HeldReason;
-use ic_distribution::structure::{CeasedReason, LicenceRecord, LicenceState};
+use ic_distribution::structure::{CeasedReason, LicenceRecord, LicenceState, Relation, RelationKind};
 use ic_distribution::workbench::{DocumentRecord, HeldLine, Position, Summary};
 use ic_distribution::{BookId, DistributionState};
 use serde_json::{json, Value};
@@ -121,6 +122,8 @@ fn the_questions_and_answers_match_the_commission_modules_own() {
         json!("status"),
         json!({ "position": { "party": "adv-1", "as_at": today } }),
         json!({ "engagements": { "adviser": "adv-1", "as_at": today } }),
+        json!("relations"),
+        json!("conduct_cases"),
     ] {
         ic_distribution::host::answer(&theirs, question.clone()).unwrap_or_else(|e| panic!("{question}: {e}"));
     }
@@ -128,10 +131,46 @@ fn the_questions_and_answers_match_the_commission_modules_own() {
     assert_eq!((changed["seq"].as_u64(), changed["parties"].as_array().map(Vec::len)), (Some(0), Some(0)));
     assert!(ic_distribution::host::answer(&theirs, json!("status")).unwrap().get("today").is_some());
 
+    // No structure and no conduct cases read as none; that module's own relation type reads as a link, except who is paid for whom.
+    assert_eq!(
+        structure_for(ic_distribution::host::answer(&theirs, json!("relations")).unwrap(), None),
+        Ok(vec![])
+    );
+    assert_eq!(
+        conduct_by_party(ic_distribution::host::answer(&theirs, json!("conduct_cases")).unwrap()),
+        Ok(BTreeMap::new())
+    );
+    let relation = |kind| Relation {
+        child: p("fap-1"),
+        parent: p("grp-1"),
+        kind,
+        from: d(2026, 1, 1),
+        to: Some(d(2028, 1, 1)),
+    };
+    let theirs_now = serde_json::to_value([
+        relation(RelationKind::Under),
+        relation(RelationKind::LicensedBy),
+        relation(RelationKind::PayeeFor),
+    ])
+    .unwrap();
+    let link = Command::Directory(DirectoryCommand::RecordStructure {
+        child: p("fap-1"),
+        link: StructureLink {
+            parent: p("grp-1"),
+            from: d(2026, 1, 1),
+            to: Some(d(2028, 1, 1)),
+        },
+    });
+    assert_eq!(structure_for(theirs_now.clone(), None), Ok(vec![link.clone(), link.clone()]));
+    assert_eq!(structure_for(theirs_now.clone(), Some(&[p("grp-1")])).map(|c| c.len()), Ok(2));
+    assert_eq!(structure_for(theirs_now, Some(&[p("adv-9")])), Ok(vec![]));
+    assert!(structure_for(json!({}), None).unwrap_err().contains("relations"));
+    assert!(conduct_by_party(json!([{ "case": 4 }])).unwrap_err().contains("conduct_cases"));
+
     // An empty position and an empty engagement list make one command: an empty publication.
     let empty = ic_distribution::host::answer(&theirs, json!({ "position": { "party": "adv-1", "as_at": today } })).unwrap();
     let none = ic_distribution::host::answer(&theirs, json!({ "engagements": { "adviser": "adv-1", "as_at": today } })).unwrap();
-    let commands = commands_for(&p("adv-1"), empty, none, today, "NZD").unwrap();
+    let commands = commands_for(&p("adv-1"), empty, none, today, "NZD", vec![]).unwrap();
     assert!(matches!(&commands[..], [(PUBLISHER, Command::Workbench(WorkbenchCommand::Publish { items, .. }))] if items.is_empty()));
 
     // Every state the commission module can report reads as the workbench status it means.
@@ -149,6 +188,7 @@ fn the_questions_and_answers_match_the_commission_modules_own() {
             engagements(json!([])),
             today,
             "NZD",
+            vec![],
         )
         .unwrap();
         let status: Vec<PartyStatus> = commands
@@ -175,6 +215,7 @@ fn the_questions_and_answers_match_the_commission_modules_own() {
             engagements(json!([])),
             today,
             "NZD",
+            vec![],
         )
         .unwrap();
         assert!(commands
@@ -194,14 +235,15 @@ fn the_questions_and_answers_match_the_commission_modules_own() {
             engagements(json!([])),
             today,
             "NZD",
+            vec![],
         )
         .unwrap();
     }
-    assert!(commands_for(&p("x"), json!({ "held": 3 }), engagements(json!([])), today, "NZD")
+    assert!(commands_for(&p("x"), json!({ "held": 3 }), engagements(json!([])), today, "NZD", vec![])
         .unwrap_err()
         .contains("position"));
     assert!(
-        commands_for(&p("x"), position("x", vec![], vec![], None, summary(0, 0)), json!({}), today, "NZD")
+        commands_for(&p("x"), position("x", vec![], vec![], None, summary(0, 0)), json!({}), today, "NZD", vec![])
             .unwrap_err()
             .contains("engagements")
     );
@@ -232,6 +274,8 @@ async fn a_pass_carries_engagements_licences_and_held_money() {
         Ok(json!({ "seq": 7, "parties": ["fap-1", "adv-1"] })),
     );
     source.set(json!("status"), Ok(json!({ "today": today, "seq": 7 })));
+    source.set(json!("relations"), Ok(json!([])));
+    source.set(json!("conduct_cases"), Ok(json!([])));
     source.set(
         json!({ "position": { "party": "fap-1", "as_at": today } }),
         Ok(position(
@@ -330,4 +374,113 @@ async fn a_pass_carries_engagements_licences_and_held_money() {
         )),
     );
     assert!(pass(&source, local.as_ref(), 13, at, "NZD").await.unwrap_err().contains("refused"));
+}
+
+/// Purpose: a pass carries the structure above the advice business and the open conduct cases: a group's licence is revoked and the
+/// adviser two levels below goes read-only naming the group; a conduct case reaches the body it was opened on and the advisers and
+/// payees it names, and leaves when it closes; a later pass sends only the links that touch a party that changed.
+/// Why it matters: addendum entry 4 follows a licence down the structure. Without the links the portal would cut off advisers under a
+/// suspended provider but go on serving those under a provider whose parent lost its licence, and the workbench would not know to
+/// bring the conduct officer in.
+#[tokio::test]
+async fn a_pass_carries_the_structure_and_the_conduct_cases() {
+    let w = World::new();
+    let at = w.at;
+    let local = Arc::new(Local::new(w.ch));
+    let today = "2027-12-01";
+    let source = Scripted::default();
+    source.set(json!("status"), Ok(json!({ "today": today })));
+    let quiet = |party: &str, licences: Vec<LicenceRecord>| {
+        source.set(
+            json!({ "position": { "party": party, "as_at": today } }),
+            Ok(position(party, vec![], licences, None, summary(0, 0))),
+        );
+        source.set(json!({ "engagements": { "adviser": party, "as_at": today } }), Ok(engagements(json!([]))));
+    };
+    quiet("grp-1", vec![licence(LicenceState::Revoked, d(2027, 11, 12))]);
+    quiet("fap-1", vec![]);
+    quiet("pay-1", vec![]);
+    source.set(
+        json!({ "position": { "party": "adv-1", "as_at": today } }),
+        Ok(position("adv-1", vec![], vec![], None, summary(0, 0))),
+    );
+    source.set(
+        json!({ "engagements": { "adviser": "adv-1", "as_at": today } }),
+        Ok(engagements(
+            json!([{ "id": "e1", "adviser": "adv-1", "with": "fap-1", "from": "2025-01-01", "to": null }]),
+        )),
+    );
+    source.set(
+        json!("relations"),
+        Ok(json!([
+            { "child": "fap-1", "parent": "grp-1", "kind": "licensed_by", "from": "2025-01-01", "to": null },
+            { "child": "pay-1", "parent": "adv-1", "kind": "payee_for", "from": "2025-01-01", "to": null },
+        ])),
+    );
+    source.set(
+        json!("conduct_cases"),
+        Ok(json!([
+            { "case": "cc-1", "licence_event": "notice-1", "party": "grp-1", "advisers": ["adv-1"], "payees": ["pay-1", "adv-1"], "policies": [], "closed": null },
+            { "case": "cc-0", "party": "adv-1", "closed": "2027-10-01" },
+        ])),
+    );
+    source.set(
+        json!({ "changed_parties": { "since": 0 } }),
+        Ok(json!({ "seq": 4, "parties": ["grp-1", "fap-1", "adv-1", "pay-1"] })),
+    );
+    assert_eq!(pass(&source, local.as_ref(), 0, at, "NZD").await, Ok(4));
+
+    let book = local.ask(Question::Book { adviser: p("adv-1"), at }).await.unwrap();
+    assert_eq!(book["read_only"], true);
+    assert_eq!(book["engagements"][0]["standing"]["licence_of"], "grp-1");
+    local.with(|s| {
+        // Who is paid for whom is not a link a licence follows.
+        assert_eq!(s.data.directory.structure.keys().collect::<Vec<_>>(), [&p("fap-1")]);
+        let conduct = |party: &str| s.data.workbench.positions[&p(party)].conduct.iter().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            (conduct("grp-1"), conduct("adv-1"), conduct("pay-1")),
+            (vec!["cc-1".to_string()], vec!["cc-1".to_string()], vec!["cc-1".to_string()])
+        );
+        assert!(conduct("fap-1").is_empty());
+    });
+
+    // Later: the case closes, and a new link appears between parties that did not change. Only adv-1 is forwarded.
+    source.set(
+        json!("conduct_cases"),
+        Ok(json!([{ "case": "cc-1", "party": "grp-1", "advisers": ["adv-1"], "closed": "2027-12-01" }])),
+    );
+    source.set(
+        json!("relations"),
+        Ok(json!([
+            { "child": "fap-1", "parent": "grp-1", "kind": "licensed_by", "from": "2025-01-01", "to": "2027-11-01" },
+            { "child": "fap-2", "parent": "grp-2", "kind": "under", "from": "2025-01-01", "to": null },
+        ])),
+    );
+    source.set(
+        json!({ "changed_parties": { "since": 4 } }),
+        Ok(json!({ "seq": 5, "parties": ["adv-1", "fap-1"] })),
+    );
+    assert_eq!(pass(&source, local.as_ref(), 4, at + 60, "NZD").await, Ok(5));
+    local.with(|s| {
+        assert!(s.data.workbench.positions[&p("adv-1")].conduct.is_empty());
+        assert!(!s.data.directory.structure.contains_key(&p("fap-2")));
+        // The link ended before the revocation, replacing the open one: the group's licence no longer reaches the adviser.
+        assert_eq!(s.data.directory.structure[&p("fap-1")].len(), 1);
+    });
+    let book = local
+        .ask(Question::Book {
+            adviser: p("adv-1"),
+            at: at + 60,
+        })
+        .await
+        .unwrap();
+    assert_eq!(book["read_only"], false);
+
+    // A structure the directory refuses stops the pass.
+    source.set(
+        json!("relations"),
+        Ok(json!([{ "child": "fap-1", "parent": "fap-1", "kind": "under", "from": "2025-01-01", "to": null }])),
+    );
+    source.set(json!({ "changed_parties": { "since": 5 } }), Ok(json!({ "seq": 6, "parties": ["fap-1"] })));
+    assert!(pass(&source, local.as_ref(), 5, at, "NZD").await.unwrap_err().contains("the structure"));
 }

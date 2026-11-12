@@ -10,6 +10,7 @@
 //! again and carries on: nothing is lost and nothing is done twice.
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::NaiveDate;
 use ic_core::{Command as CoreCommand, GroupId, Reject};
@@ -17,7 +18,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::command::{Envelope, GroupCommand, Resolution};
+use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
 use crate::csv::{self, CsvError};
 use crate::event::{GroupEvent, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{FileToRead, Question};
@@ -60,8 +61,37 @@ pub trait Core: Send + Sync {
 /// receiver de-duplicates on the key or the sequence number.
 pub trait Peers: Send + Sync {
     fn reinsurance(&self, key: &str, on: NaiveDate, notice: &ReinsuranceNotice) -> impl Future<Output = Result<(), String>> + Send;
-    fn underwriting(&self, key: &str, request: &UnderwritingRequest) -> impl Future<Output = Result<(), String>> + Send;
+    /// Ask underwriting to decide a member's cover above the automatic
+    /// amount. The request names the member's person.
+    fn underwriting(&self, key: &str, today: NaiveDate, request: &UnderwritingRequest) -> impl Future<Output = Result<(), String>> + Send;
+    /// Tell underwriting a request is no longer wanted.
+    fn withdraw_underwriting(&self, key: &str, today: NaiveDate, request_key: &str) -> impl Future<Output = Result<(), String>> + Send;
+    /// Underwriting's answers to this module's requests, numbered after
+    /// `after`, oldest first.
+    fn underwriting_answers(&self, after: u64, max: usize) -> impl Future<Output = Result<Answers, String>> + Send;
     fn publish(&self, seq: u64, date: NaiveDate, event: &GroupEvent) -> impl Future<Output = Result<(), String>> + Send;
+}
+
+/// One answer from underwriting to a request of this module's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExcessAnswer {
+    /// The answer's own key there. It is stable, so it makes the key the
+    /// decision is recorded under and an answer seen twice is recorded once.
+    pub key: String,
+    pub scheme: String,
+    pub case: u64,
+    pub decision: ExcessDecision,
+}
+
+/// A page of underwriting's answers.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Answers {
+    /// The last number read, whether or not it was an answer for this
+    /// module. The next page starts after it.
+    pub through: u64,
+    /// There may be more after this page.
+    pub more: bool,
+    pub answers: Vec<ExcessAnswer>,
 }
 
 /// The customer master: who a joiner is. The only place a member's name goes.
@@ -135,6 +165,10 @@ pub struct Driver<M, C, P, D, F> {
     salt: String,
     /// Outbox entries taken per pass.
     batch: usize,
+    /// How far underwriting's answers have been read. Kept only in memory:
+    /// a driver that starts again reads them all again, and each is
+    /// recorded once because its key is the answer's own.
+    answers_through: AtomicU64,
 }
 
 impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C, P, D, F> {
@@ -147,6 +181,7 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             files,
             salt: salt.to_string(),
             batch: 200,
+            answers_through: AtomicU64::new(0),
         }
     }
 
@@ -201,10 +236,42 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
     pub async fn run_once(&self) -> Result<Pass, DriverError> {
         let files = self.read_files().await?;
         let outbox = self.deliver().await?;
+        let answers = self.collect_answers().await?;
         Ok(Pass {
-            done: files.done + outbox.done,
-            failed: files.failed + outbox.failed,
+            done: files.done + outbox.done + answers.done,
+            failed: files.failed + outbox.failed + answers.failed,
         })
+    }
+
+    /// Bring underwriting's answers back as decisions on the cases they
+    /// answer. Underwriting keeps its answers until its own driver clears
+    /// them; reading them here takes nothing away.
+    pub async fn collect_answers(&self) -> Result<Pass, DriverError> {
+        let mut pass = Pass::default();
+        loop {
+            let after = self.answers_through.load(Ordering::Relaxed);
+            let Ok(page) = self.peers.underwriting_answers(after, self.batch).await else {
+                pass.failed += 1;
+                return Ok(pass);
+            };
+            for answer in &page.answers {
+                let command = GroupCommand::RecordExcessDecision {
+                    scheme: answer.scheme.clone(),
+                    case: answer.case,
+                    decision: answer.decision.clone(),
+                };
+                match self.send(format!("uw:{}", answer.key), command).await? {
+                    Ok(()) => pass.done += 1,
+                    // The case was closed here first, or the answer cannot
+                    // stand as given. Asking again would not change it.
+                    Err(reject) => tracing::warn!(scheme = %answer.scheme, case = answer.case, code = %reject.code, "an underwriting answer was not recorded"),
+                }
+            }
+            self.answers_through.store(page.through.max(after), Ordering::Relaxed);
+            if !page.more {
+                return Ok(pass);
+            }
+        }
     }
 
     /// Carry the module's outbox to where each entry belongs. An entry that
@@ -218,7 +285,8 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             let question = Question::Outbox { limit: self.batch, after };
             let items: Vec<(u64, Outbound)> = decode(self.module.ask(question).await?, "items")?;
             let full = items.len() >= self.batch;
-            let failed_before = pass.failed;
+            // Entries that stay where they are after this batch.
+            let mut left = 0usize;
             let mut delivered = vec![];
             for (id, out) in items {
                 after = Some(id);
@@ -235,13 +303,23 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                         Err(e) => Err(e),
                     },
                     Outbound::Reinsurance { key, notice } => self.peers.reinsurance(key, today, notice).await,
-                    Outbound::Underwriting { key, request } => self.peers.underwriting(key, request).await,
+                    // Underwriting asks a person. Until the member is linked
+                    // to one the request waits, which is nobody's failure.
+                    Outbound::Underwriting { request, .. } if request.party.is_none() => {
+                        left += 1;
+                        continue;
+                    }
+                    Outbound::Underwriting { key, request } => self.peers.underwriting(key, today, request).await,
+                    Outbound::WithdrawUnderwriting { key, request_key } => self.peers.withdraw_underwriting(key, today, request_key).await,
                     Outbound::Publish { seq, date, event } => self.peers.publish(*seq, *date, event).await,
                     Outbound::ResolveParties { scheme, file, employee_ids } => self.resolve(scheme, file, employee_ids).await,
                 };
                 match result {
                     Ok(()) => delivered.push(id),
-                    Err(_) => pass.failed += 1,
+                    Err(_) => {
+                        pass.failed += 1;
+                        left += 1;
+                    }
                 }
             }
             if !delivered.is_empty() {
@@ -253,7 +331,7 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             }
             // Read on only past entries that are stuck; otherwise the next
             // pass takes the next batch.
-            if !full || pass.failed == failed_before {
+            if !full || left == 0 {
                 return Ok(pass);
             }
         }

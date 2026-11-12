@@ -25,6 +25,7 @@ pub mod actions {
     pub const PREPARE: &str = "held_balance.prepare";
     pub const APPROVE: &str = "held_balance.approve";
     pub const APPROVE_LEGAL: &str = "held_balance.approve_legal";
+    pub const APPROVE_CONDUCT: &str = "held_balance.approve_conduct";
     pub const CONFIGURE: &str = "held_balance.configure";
 }
 
@@ -127,6 +128,10 @@ pub struct Position {
     pub status: Vec<StatusChange>,
     /// Cases open against the party.
     pub cases: BTreeSet<String>,
+    /// The conduct cases open on the party now. While there is one, money
+    /// does not move without the conduct officer.
+    #[serde(default)]
+    pub conduct: BTreeSet<String>,
     /// A hold pending review: the date and the legal reference.
     pub review: Option<(NaiveDate, String)>,
 }
@@ -230,16 +235,31 @@ impl Action {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Needs {
-    /// Approvers other than legal.
+    /// Approvers other than legal and the conduct officer.
     pub approvers: u8,
     pub legal: bool,
+    /// The conduct officer signs: a conduct case is open on the party.
+    #[serde(default)]
+    pub conduct: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Approval {
     pub by: PartyId,
     pub legal: bool,
+    #[serde(default)]
+    pub conduct: bool,
     pub at: At,
+}
+
+impl Proposal {
+    /// Whether every signature the action needs has been given.
+    fn signed(&self) -> bool {
+        let others = self.approvals.iter().filter(|a| !a.legal && !a.conduct).count();
+        others >= usize::from(self.needs.approvers)
+            && (!self.needs.legal || self.approvals.iter().any(|a| a.legal))
+            && (!self.needs.conduct || self.approvals.iter().any(|a| a.conduct))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -312,6 +332,10 @@ pub enum WorkbenchCommand {
         documents: Vec<Document>,
         #[serde(default)]
         cases: Vec<String>,
+        /// The conduct cases open on the party now. A module that knows of
+        /// them states the whole list each time; one that does not leaves it out.
+        #[serde(default)]
+        conduct: Option<Vec<String>>,
     },
     RecordStatus {
         party: PartyId,
@@ -330,7 +354,11 @@ pub enum WorkbenchCommand {
     Approve {
         id: String,
         /// Approving as legal, the named role.
+        #[serde(default)]
         legal: bool,
+        /// Approving as the conduct officer.
+        #[serde(default)]
+        conduct: bool,
     },
     Decline {
         id: String,
@@ -438,6 +466,7 @@ impl Workbench {
         Needs {
             approvers: if above || second_for_write_off { 2 } else { 1 },
             legal: above || new_account_at_risk,
+            conduct: !position.conduct.is_empty(),
         }
     }
 
@@ -528,6 +557,7 @@ impl Workbench {
                 items,
                 documents,
                 cases,
+                conduct,
             } => {
                 let module = module(actor, &PUBLISHERS)?;
                 if let Some(bad) = items.iter().find(|i| i.kind == ItemKind::Held && (i.reason.is_none() || i.amount_minor < 0)) {
@@ -547,6 +577,9 @@ impl Workbench {
                 }
                 position.documents.extend(documents);
                 position.cases.extend(cases);
+                if let Some(open) = conduct {
+                    position.conduct = open.into_iter().collect();
+                }
                 Ok(vec![WorkbenchEvent::PositionChanged { party }])
             }
             WorkbenchCommand::RecordStatus {
@@ -617,11 +650,14 @@ impl Workbench {
                 );
                 Ok(vec![WorkbenchEvent::Prepared { id }])
             }
-            WorkbenchCommand::Approve { id, legal } => {
+            WorkbenchCommand::Approve { id, legal, conduct } => {
                 let by = staff(actor)?;
                 let proposal = self.proposals.get(&id).ok_or_else(|| reject("not_found", "no such action"))?;
                 if proposal.state != ProposalState::AwaitingApproval {
                     return Err(reject("not_awaiting", "that action is not awaiting approval"));
+                }
+                if legal && conduct {
+                    return Err(reject("one_seat", "an approval is given in one role: legal or the conduct officer, not both"));
                 }
                 if proposal.approvals.iter().any(|a| a.by == by) {
                     return Err(reject(
@@ -630,20 +666,30 @@ impl Workbench {
                     ));
                 }
                 let have_legal = proposal.approvals.iter().any(|a| a.legal);
-                let have_others = proposal.approvals.iter().filter(|a| !a.legal).count();
+                let have_conduct = proposal.approvals.iter().any(|a| a.conduct);
+                let have_others = proposal.approvals.iter().filter(|a| !a.legal && !a.conduct).count();
                 if legal && (!proposal.needs.legal || have_legal) {
                     return Err(reject("not_needed", "legal approval is not outstanding on this action"));
                 }
-                if !legal && have_others >= usize::from(proposal.needs.approvers) {
-                    return Err(reject("not_needed", "this action is waiting for legal, not for another approver"));
+                if conduct && (!proposal.needs.conduct || have_conduct) {
+                    return Err(reject("not_needed", "the conduct officer's approval is not outstanding on this action"));
                 }
-                let action = if legal { actions::APPROVE_LEGAL } else { actions::APPROVE };
+                if !legal && !conduct && have_others >= usize::from(proposal.needs.approvers) {
+                    return Err(reject(
+                        "not_needed",
+                        "this action is waiting for legal or the conduct officer, not for another approver",
+                    ));
+                }
+                let action = match (legal, conduct) {
+                    (true, _) => actions::APPROVE_LEGAL,
+                    (_, true) => actions::APPROVE_CONDUCT,
+                    _ => actions::APPROVE,
+                };
                 authority.check(&by, action, &proposal.party, proposal.action.amount(), Some(&proposal.maker), &id, at)?;
                 let mut events = Vec::new();
                 if let Some(p) = self.proposals.get_mut(&id) {
-                    p.approvals.push(Approval { by, legal, at });
-                    let others = p.approvals.iter().filter(|a| !a.legal).count();
-                    let complete = others >= usize::from(p.needs.approvers) && (!p.needs.legal || p.approvals.iter().any(|a| a.legal));
+                    p.approvals.push(Approval { by, legal, conduct, at });
+                    let complete = p.signed();
                     if complete {
                         p.state = ProposalState::Approved;
                         events.push(WorkbenchEvent::Ready {
@@ -774,6 +820,7 @@ impl Workbench {
             "items": p.all().map(|(module, i)| json!({ "module": module, "item": i })).collect::<Vec<_>>(),
             "documents": p.documents,
             "cases": p.cases,
+            "conduct_cases": p.conduct,
             "review": p.review.as_ref().map(|(on, reference)| json!({ "on": on, "legal_reference": reference })),
             "actions": self.proposals.values().filter(|a| &a.party == party).collect::<Vec<_>>(),
         }))

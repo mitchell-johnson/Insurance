@@ -50,13 +50,17 @@ Two choices can be made again under a reopen reference: a decline of indexation 
 
 A module hosted from the first start is shown every event. One added later starts at the oldest event each partition still holds. Loading a new module from Event Hubs or the cold tier is not built.
 
+### Claims stay on the partition they were made on
+
+A policy with an open claim, or a claim with a reserve, an unpaid admission or an overpayment outstanding, cannot be transferred to another group. The other gaps in claims operations are listed in `docs/claims.md`.
+
 ### Fail-back is built; the second region is not provisioned
 
 The fail-back controller runs on every node and is tested with three nodes in one process. The shipped infrastructure is still one region, so `IC_PREFERRED_NODES` is unset in the manifests and nothing fails back in a deployed cluster until voters exist in a second and third region. Pacing is per node: after a region loss the leaders sit on a few nodes, each of which moves its own share per round, so the share moved across the cluster in one round can be up to that share times the number of leading nodes. A pause is not persisted across a node restart. The operations console and status page showing the degraded state belong to the channels module and are not driven from this status yet.
 
 ### Group scheme administration
 
-Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a scheme working end to end today: underwriting does not yet receive requests for cover above the automatic amount, no customer master exists to match joiners on named schemes, and the group service's Azure resources (`infra/group.bicep`) are not yet referenced by `main.bicep` or compiled in CI.
+Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a scheme working end to end today: requests for cover above the automatic amount reach the underwriting module but that module has no driver yet to take a proposal to an answer, no customer master exists to match joiners on named schemes, and the group service's Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
 
 ### Payments are built against a fake bank
 

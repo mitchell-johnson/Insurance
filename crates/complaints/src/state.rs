@@ -112,6 +112,10 @@ impl StateMachine for ComplaintsState {
             caller: env.caller.clone(),
             events: vec![],
         };
+        // Letting time pass or acknowledging the stream twice changes
+        // nothing the second time, and both are sent every few seconds for
+        // ever: their keys are not kept.
+        let remember = !matches!(env.command, Command::Tick | Command::MarkPublished { .. });
         let result = if !env.command.allowed_callers().contains(&env.caller.as_str()) {
             reject("not_allowed", format!("{} may not send {}", env.caller, env.command.name()))
         } else if env.actor.is_empty() {
@@ -138,13 +142,15 @@ impl StateMachine for ComplaintsState {
             vec![]
         };
         self.unpublished.extend(events.iter().cloned());
-        self.results.insert(
-            env.key,
-            StoredResult {
-                index,
-                error: result.clone().err(),
-            },
-        );
+        if remember {
+            self.results.insert(
+                env.key,
+                StoredResult {
+                    index,
+                    error: result.clone().err(),
+                },
+            );
+        }
         Applied {
             index,
             result,

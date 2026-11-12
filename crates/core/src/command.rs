@@ -277,6 +277,12 @@ pub enum Command {
         with_claim: Option<String>,
     },
 
+    // --- claims ---
+    /// A command for the claims module, which lives on the policy's
+    /// partition. The module decides; whatever money that moves is posted by
+    /// the core in the same step, so the claim and the ledger commit or fail
+    /// together.
+    Claims(Box<ic_claims::Command>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -390,6 +396,7 @@ impl Command {
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
+            Command::Claims(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -428,6 +435,7 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::Claims(_) => "claims",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",
