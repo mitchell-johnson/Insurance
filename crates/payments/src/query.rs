@@ -71,6 +71,10 @@ fn day(question: &Value) -> Result<NaiveDate, String> {
     text(question, "today")?.parse().map_err(|_| "today is a date like 2026-11-11".to_string())
 }
 
+fn as_at(question: &Value) -> Result<NaiveDate, String> {
+    text(question, "as_at")?.parse().map_err(|_| "as_at is a date like 2026-11-30".to_string())
+}
+
 fn found<T: serde::Serialize>(what: Option<T>) -> Result<Value, String> {
     serde_json::to_value(what).map_err(|e| e.to_string())
 }
@@ -104,6 +108,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
         "represent" => found(Some(&state.represent)),
         "waiting" => found(Some(state.waiting_payments())),
+        "fund_cash_settlement" => Ok(state.fund_cash_settlement(as_at(&question)?)),
+        "aged_unidentified_receipts" => Ok(state.aged_unidentified_receipts(as_at(&question)?)),
         "reconciliation" => found(state.reconciliation(text(&question, "account")?, day(&question)?)),
         "readiness" => found(Some(state.readiness(day(&question)?))),
         "trail" => Ok(json!({"events": state.event_seq, "chain": state.event_chain})),
