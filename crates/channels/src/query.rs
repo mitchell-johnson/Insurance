@@ -120,6 +120,13 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// What a member of staff may do with replacement matches, and how the
+    /// commission module should see them when they decide one.
+    ReplacementStaff {
+        staff: PartyId,
+        at: At,
+        purpose: String,
+    },
     /// Whether a member of staff may open the claims console.
     ClaimsStaff {
         staff: PartyId,
@@ -432,6 +439,11 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             standing
         }
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
+        Question::ReplacementStaff { staff, at, purpose } => {
+            let mut standing = crate::replacements::standing(&d.staff, &staff, at);
+            standing["actor"] = commission_staff(state, &staff, at, &purpose);
+            standing
+        }
         Question::Workbench { staff, party, at } => {
             let record = party.as_ref().map_or_else(|| "counterparty:*".to_string(), |p| format!("counterparty:{p}"));
             let (request, decision) = staff_check(

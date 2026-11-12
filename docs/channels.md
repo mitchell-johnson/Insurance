@@ -108,6 +108,15 @@ One place to see and resolve money held from an adviser, a provider or any other
 - **Proof of debt**: an extract of what the party owes, for a liquidator.
 - **Carrying it out.** An approved action is handed to the module that owns the money, which reports back. The workbench records the outcome; it does not move money.
 
+### Replacement matches
+
+`/replacements` lists every layer the commission module's replacement rule matched to cover given up on the same life (`docs/distribution.md`, "Replacements nobody declared"): who wrote it, the matched amount, the reason, the cover it replaced, and whether it stands, is disputed or was overturned. Anyone with `held_balance.view` reads it. A disputed match is decided by the conduct officer (`held_balance.approve_conduct`), with a purpose, through `POST /staff/v1/replacements/decide {policy, cover, layer, replacement, purpose}`. The portal sends `decide_replacement` to the commission module as that person, described as the workbench describes them (the conduct officer's template carries the role `conduct_officer`), and that module checks `case.manage` again by its own policy. Its refusals come back with their codes: 403 for `not_authorised`, 409 for anything else (`unknown_layer`, `not_matched`, `not_disputed`).
+
+| Call | What it does |
+| --- | --- |
+| `GET /staff/v1/replacements` | Every match, and whether you may decide. |
+| `POST /staff/v1/replacements/decide` | Decide a disputed match: `replacement: true` takes the held commission back; `false` makes the layer new business from now. |
+
 ## The complaints and conduct workbench
 
 `/complaints` is the staff screen for the complaints module (`docs/complaints.md`): recording a complaint wherever it is heard, the queue (vulnerable complainants first, then the nearest deadline), a complaint's file and running timers, every action on a complaint, referral to a forum, the register and the report for a period, and conduct cases with their population, sample and regulator requests.
@@ -301,4 +310,5 @@ node crates/channels/tests/browser/check.js
 - **Only commission is carried across automatically.** Finance, reinsurance, group administration and claims must send their own workbench positions through `/internal/v1/commands`; until they do, the workbench shows none of their money.
 - **Two sets of thresholds.** The workbench here and the commission module each decide how many signatures an action needs, from their own settings. They ship alike. If the commission module's are made stricter, an action approved here comes back as `needs_more_approval` and stays open there for the people it names.
 - **The conduct officer here and there.** The workbench asks for the conduct officer whenever a conduct case is open on the party; the commission module asks by its own rules. The signature is replayed as `conduct_officer`, and where that module did not need it the action carries on with its other signatures.
+- **Advisers do not see their own matches yet.** The commission module tells the writing adviser in its answer to `WriteLayer`, which new business sends; the adviser portal does not yet list an adviser's matches or carry a dispute (`DisputeReplacement` is sent by new business or policy servicing, or by staff with `policy.assign`).
 - **Commission balances are taken to be in one currency** (`IC_PORTAL_CURRENCY`, default NZD), because that module's answers carry none.

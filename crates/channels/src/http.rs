@@ -148,6 +148,8 @@ pub struct AppState {
     pub master: Option<Arc<dyn crate::customers::Master>>,
     /// The complaints module, for the complaints and conduct workbench.
     pub complaints: Arc<dyn crate::forward::Source>,
+    /// The commission module, for replacement matches.
+    pub commission: Arc<dyn crate::forward::Source>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -1047,6 +1049,68 @@ impl AppState {
     }
 }
 
+/// What this person may do with replacement matches, refused if nothing.
+async fn replacement_standing(s: &AppState, session: &Session, purpose: &str) -> Result<Value, Problem> {
+    let standing = s
+        .ask(Question::ReplacementStaff {
+            staff: session.party.clone(),
+            at: session.at,
+            purpose: purpose.to_string(),
+        })
+        .await?;
+    if standing["view"] != true {
+        return Err(Problem::forbidden("your roles do not include the held balance workbench"));
+    }
+    Ok(standing)
+}
+
+/// Every replacement the commission module matched, and whether this person may decide a disputed one.
+async fn replacements(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let standing = replacement_standing(&s, &session, "").await?;
+    let matches = s
+        .commission
+        .ask(crate::replacements::question())
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    ok(json!({ "decide": standing["decide"], "matches": matches }))
+}
+
+/// Decide a disputed match, as the person signed in, with the purpose they gave.
+async fn replacement_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let request: Value = parse(&body)?;
+    let purpose = request["purpose"].as_str().map(str::trim).unwrap_or_default();
+    let standing = replacement_standing(&s, &session, purpose).await?;
+    if standing["decide"] != true {
+        return Err(Problem::forbidden("a disputed match is decided by the conduct officer"));
+    }
+    if purpose.is_empty() {
+        return Err(Problem::bad_request("say why you are deciding it: the purpose is recorded with the decision"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let command = crate::replacements::decision(&request).map_err(Problem::bad_request)?;
+    let output = s
+        .commission
+        .tell(crate::replacements::envelope(&key, standing["actor"].clone(), command))
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        let status = if code == "not_authorised" {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::CONFLICT
+        };
+        return Err(Problem::new(
+            status,
+            code,
+            refused["message"].as_str().unwrap_or("the commission module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"] }))
+}
+
 /// The business date a reinsurance command is made on: the latest any
 /// partition has reported, or today's date while none has.
 fn business_date(standing: &Value, at: At) -> String {
@@ -1648,6 +1712,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/complaints/commands", post(complaints_command))
         .route("/staff/v1/complaints/{question}", get(complaints_question))
         .route("/staff/v1/claims/commands", post(claims_command))
+        .route("/staff/v1/replacements", get(replacements))
+        .route("/staff/v1/replacements/decide", post(replacement_decide))
         .route("/staff/v1/reinsurance/commands", post(reinsurance_command))
         .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
         .route("/staff/v1/reinsurance/{question}", get(reinsurance_question))
@@ -1671,6 +1737,7 @@ pub fn router(state: Shared) -> Router {
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
+        .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
         .route("/ui/config.json", get(ui_config))

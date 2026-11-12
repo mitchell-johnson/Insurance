@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Replacement matches</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Replacement matches</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<section><h2>Matches</h2><p class="muted">New cover written on a life soon after cover on that life was given up. The matched amount earns no initial commission. An adviser may dispute a match; the conduct officer decides it.</p><div id="m-msg" aria-live="polite"></div><div id="matches"></div></section>
+<section id="act" hidden><h2 id="act-title"></h2>
+<form id="act-form"><div class="row">
+<div><label for="a-outcome">Decision</label><select id="a-outcome" required><option value="">Choose</option><option value="true">It was a replacement: take the held commission back</option><option value="false">It was new business: the layer earns as new from now</option></select></div>
+<div><label for="a-purpose">Why (recorded with the decision)</label><input id="a-purpose" required></div>
+</div><p><button>Decide</button> <button class="quiet" type="button" id="act-cancel">Cancel</button></p></form><div id="act-msg" aria-live="polite"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, money, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/replacements";
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+let current = null;
+// A layer key is policy/cover/layer.
+function parts(key) {
+  const bits = key.split("/");
+  return { layer: Number(bits.pop()), cover: bits.pop(), policy: bits.join("/") };
+}
+function state(m) {
+  if (m.overturned) return "Overturned: new business";
+  if (m.disputed) return "Disputed";
+  return "Stands";
+}
+function open(m) {
+  current = parts(m.layer);
+  $("act").hidden = false; $("act-title").textContent = "Decide the dispute on " + m.layer;
+  $("a-outcome").value = ""; $("a-purpose").value = "";
+}
+$("act-cancel").addEventListener("click", () => { $("act").hidden = true; });
+$("act-form").addEventListener("submit", run($("m-msg"), async () => {
+  await api(R, "POST", BASE + "/decide", { ...current, replacement: $("a-outcome").value === "true", purpose: $("a-purpose").value });
+  $("act").hidden = true;
+  await refresh();
+  return "Decided.";
+}));
+async function refresh() {
+  const view = await api(R, "GET", BASE);
+  $("me").textContent = view.decide ? "You decide disputed matches as the conduct officer." : "You may read the matches.";
+  const rows = view.matches || [];
+  put($("matches"), rows.length ? table(["Layer", "Written by", "Matched", "Sum insured", "Reason", "On", "Replaced", "State", ""], rows.map((m) => [
+    m.layer, (m.writing || []).join(", "), money(m.matched_minor), money(m.sum_insured_minor), words(m.reason), m.on, (m.replaced || []).join(", "), state(m),
+    view.decide && m.disputed && !m.overturned ? h("button", { class: "quiet", type: "button", on: { click: () => open(m) } }, "Decide") : ""]))
+    : h("p", { class: "muted" }, "The rule has matched nothing."));
+}
+signIn(R).then(refresh).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

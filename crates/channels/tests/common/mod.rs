@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod claims;
+pub mod commission;
 pub mod complaints;
 pub mod customers;
 pub mod finance;

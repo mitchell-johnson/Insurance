@@ -32,6 +32,7 @@ pub mod ops;
 pub mod pricing;
 pub mod query;
 pub mod reinsurance;
+pub mod replacements;
 pub mod serve;
 pub mod settings;
 pub mod staff;

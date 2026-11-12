@@ -115,6 +115,7 @@ fn portal() -> Portal {
         ("sub-ri2", "ri-2"),
         ("sub-riview", "ri-view"),
         ("sub-aud", "aud-1"),
+        ("sub-wbcon", "wb-con"),
     ] {
         w.dir(
             module("identity"),
@@ -200,6 +201,11 @@ fn portal() -> Portal {
                     &[DataClass::Financial],
                 ),
                 template("ri-reader", &[ic_channels::reinsurance::actions::VIEW], &[DataClass::Financial]),
+                template(
+                    "conduct-officer",
+                    &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
+                    &[DataClass::Ordinary, DataClass::Financial],
+                ),
             ],
             profiles: vec![
                 Profile {
@@ -241,6 +247,7 @@ fn portal() -> Portal {
         ("ri-1", "ri-ops"),
         ("ri-2", "ri-lead"),
         ("ri-view", "ri-reader"),
+        ("wb-con", "conduct-officer"),
     ] {
         w.send(
             staff("alice"),
@@ -296,6 +303,7 @@ fn portal() -> Portal {
         ui: UiConfig::Dev,
         pricing: pricing.clone(),
         complaints: complaints.clone(),
+        commission: Arc::new(common::commission::seeded()),
         finance: finance.clone(),
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
@@ -802,7 +810,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 22);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 23);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1084,6 +1092,7 @@ async fn pages_are_served_locked_down() {
         "/finance",
         "/claims",
         "/reinsurance",
+        "/replacements",
         "/ops",
         "/status",
     ] {
@@ -1334,6 +1343,7 @@ async fn the_unit_pricing_console() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
@@ -1541,6 +1551,7 @@ async fn the_complaints_and_conduct_workbench() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
@@ -1634,6 +1645,7 @@ async fn the_reinsurance_exceptions_console() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
@@ -1826,6 +1838,7 @@ async fn the_claims_console() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
@@ -1996,6 +2009,7 @@ async fn the_finance_console() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
@@ -2108,6 +2122,7 @@ async fn a_person_keeps_their_own_customer_record() {
         ui: UiConfig::Dev,
         pricing: portal.pricing.clone(),
         complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
@@ -2119,4 +2134,72 @@ async fn a_person_keeps_their_own_customer_record() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: staff with the workbench's view read the replacement matches; only the conduct officer may decide a disputed one, with
+/// a purpose and a decision that names its layer; the decision reaches the commission module's own state machine as that person,
+/// passes its `case.manage` authority check and is refused only for the layer, which here was never matched.
+/// Why it matters: deciding a dispute takes commission back from an adviser or pays it; the portal must not let anyone else decide,
+/// and must describe the person so that the commission module's own policy can check them again.
+#[tokio::test]
+async fn the_conduct_officer_decides_disputed_replacements() {
+    let portal = portal();
+    let (status, view) = portal.get("sub-fin1", "/staff/v1/replacements").await;
+    assert_eq!((status, &view["decide"], &view["matches"]), (StatusCode::OK, &json!(false), &json!([])));
+    assert_eq!(portal.get("sub-sue", "/staff/v1/replacements").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(portal.get("sub-wbcon", "/staff/v1/replacements").await.1["decide"], true);
+
+    let decide = |who: &'static str, body: Value| portal.write("POST", who, "/staff/v1/replacements/decide", body);
+    let body = json!({ "policy": "pol-9", "cover": "life", "layer": 1, "replacement": true, "purpose": "dispute D-1 reviewed" });
+    assert_eq!(decide("sub-fin1", body.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(decide("sub-sue", body.clone()).await.0, StatusCode::FORBIDDEN);
+    for bad in [
+        json!({ "policy": "pol-9", "cover": "life", "layer": 1, "replacement": true }),
+        json!({ "policy": "pol-9", "cover": "life", "layer": "first", "replacement": true, "purpose": "x" }),
+        json!({ "policy": "", "cover": "life", "layer": 1, "replacement": true, "purpose": "x" }),
+        json!({ "policy": "pol-9", "cover": "life", "layer": 1, "replacement": "yes", "purpose": "x" }),
+    ] {
+        assert_eq!(decide("sub-wbcon", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, problem) = decide("sub-wbcon", body).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("unknown_layer")), "{problem}");
+
+    // A commission module that cannot be reached is said plainly.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+    }));
+    for (method, body) in [
+        ("GET", None),
+        (
+            "POST",
+            Some(json!({ "policy": "p", "cover": "c", "layer": 1, "replacement": false, "purpose": "x" })),
+        ),
+    ] {
+        let path = if body.is_some() {
+            "/staff/v1/replacements/decide"
+        } else {
+            "/staff/v1/replacements"
+        };
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-dev-subject", "sub-wbcon")
+            .header("idempotency-key", "k")
+            .body(Body::from(body.map(|b| b.to_string()).unwrap_or_default()))
+            .unwrap();
+        assert_eq!(down.clone().oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
 }

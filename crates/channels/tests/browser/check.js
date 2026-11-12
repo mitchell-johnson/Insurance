@@ -199,6 +199,11 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "No exceptions are open.");
     await sees(p, "Nothing is waiting.");
   } });
+  await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
+    await sees(p, "You decide disputed matches");
+    await sees(p, "The rule has matched nothing.");
+  } });
+  await visit(browser, "/replacements", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/reinsurance", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
