@@ -268,6 +268,77 @@ fn family_privacy_and_consent() {
     assert!(!w.ch.data.published.contains_key(&pol));
 }
 
+/// Purpose: a parent sees their child's health-implying rows until the child reaches the age the product sets; from the next
+/// business date those rows are purged from the parent's device and the handover is announced; an adult child can still consent.
+/// Why it matters: a parent has to manage a young child's claims, and a seventeen-year-old's are their own. Getting the date wrong
+/// in either direction is a privacy breach or a parent locked out of their child's care.
+#[test]
+fn a_childs_health_information_becomes_their_own() {
+    let mut w = World::new();
+    let pol = w.issue(health_family(2, open(), &[d(1985, 1, 1), d(1986, 2, 2), d(2011, 11, 16)], Frequency::Monthly));
+    let (holder, partner, child) = ("party-00000002-1", "party-00000002-2", "party-00000002-3");
+    let claim = format!("{pol}/claims/c9");
+    let row = Row {
+        key: claim.clone(),
+        policy: pol.clone(),
+        kind: "claim".into(),
+        subject: Some(p(child)),
+        sensitive: true,
+        body: json!({ "state": "received" }),
+    };
+    w.send(
+        module("claims"),
+        Command::PublishRows {
+            rows: vec![row],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    // Until the customer master says who is a child, nobody's health information is shown to anyone else.
+    assert!(!w.held(holder).contains(&claim));
+
+    let birthday = open().succ_opt().unwrap();
+    let dependant = |who: &str, from| DirectoryCommand::RecordDependant {
+        policy: pol.clone(),
+        party: p(who),
+        controls_from: from,
+    };
+    assert_eq!(code(w.dir(party(holder), dependant(child, birthday))), "forbidden");
+    assert_eq!(code(w.dir(module("customer-master"), dependant("stranger", birthday))), "not_insured");
+    assert_eq!(code(w.dir(module("customer-master"), dependant(holder, birthday))), "policyholder");
+    let effects = w.dir(module("customer-master"), dependant(child, birthday)).unwrap();
+    assert!(moved(&effects).contains(holder));
+    assert_eq!(w.row(holder, &claim).unwrap()["state"], "received");
+    // The other parent is insured, not the policyholder: the child's claim is not theirs to see.
+    assert!(!w.held(partner).contains(&claim));
+
+    // The day closes and the next opens: the child is of age.
+    w.cluster.end_of_day().unwrap();
+    let effects = w.relay();
+    assert_eq!(w.ch.today(0), birthday);
+    assert!(effects.contains(&Effect::ControlPassed {
+        policy: pol.clone(),
+        party: p(child),
+        policyholder: Some(p(holder)),
+    }));
+    assert_eq!(w.last_op(holder, &claim), Some(Op::Purge));
+    assert!(w.held(child).contains(&claim), "it is still theirs");
+    // The handover is announced once, not on every later day.
+    w.cluster.end_of_day().unwrap();
+    assert!(!w.relay().iter().any(|e| matches!(e, Effect::ControlPassed { .. })));
+
+    // Now an adult for this purpose, they may let the parent see it again.
+    w.dir(
+        party(child),
+        DirectoryCommand::SetFamilyConsent {
+            policy: pol.clone(),
+            consent: true,
+        },
+    )
+    .unwrap();
+    assert!(w.held(holder).contains(&claim));
+}
+
 /// Purpose: a module publishes rows only under its own name, and only modules publish.
 /// Why it matters: published rows reach customers' devices; one module overwriting another's rows, or the channel's own, would show customers facts nobody owns.
 #[test]
