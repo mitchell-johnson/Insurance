@@ -505,7 +505,7 @@ Owned by the thread "Build underwriting and new business". The full module descr
 3. Receivers for notices, evidence requests and delegate file requests: the driver parks them. Each needs a door in documents or an evidence provider and a `Forward` implementation in `driver.rs`.
 4. A process that writes disclosures to the clinical store, and deploying `infra/underwriting.bicep` (bring it into `infra/main.bicep`).
 5. Risk codes on capacity reservations (`ReserveCapacity` effect does not send them), a horizon for the module's idempotency keys (agreed with the drivers), peer review drawing without scanning every proposal, staff grants, publishing proposal progress to channels, and an interim cover product.
-6. Retry of an increase or alteration refused for `billing_behind` is manual.
+6. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
 
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.
 

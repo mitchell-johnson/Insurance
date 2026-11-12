@@ -661,6 +661,112 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
     assert_eq!(Entry::NewBusiness.policy(), None);
 }
 
+/// Purpose: the core refuses cover written for today while its billing is behind. That refusal
+/// tells nobody: the next day's sweep sends the terms again under a new key, and the proposal
+/// issues when the core takes them. If the core goes on refusing, the sweep stops after five
+/// attempts in all, and also once the proposal's terms are out of date, and only then is a
+/// manager told.
+/// Why it matters: billing is behind for a few hours every day, between the date moving on and
+/// the end of day running. Waiting for a person each time leaves an increase the customer
+/// accepted unwritten for days; retrying without end hides a core that never catches up.
+#[test]
+fn terms_refused_while_billing_is_behind_are_sent_again_by_the_sweep() {
+    let mut w = World::new();
+    let mut open = w.open_command("P1", &["L1"], &[("L1", "life", "life", 200_000_00)], false);
+    open.entry = Entry::Increase {
+        policy: PolicyId::from("POL-P1"),
+    };
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    let disclosed = w.disclose("P1", "L1", &clean());
+    w.automatic(&disclosed);
+    let behind = || Command::IssueRejected {
+        proposal: "P1".into(),
+        code: "billing_behind".into(),
+    };
+    let sweep = |w: &mut World| w.ok("timer", Command::Sweep { after: None, max: 100 });
+    let told = |a: &Applied| {
+        a.effects.iter().any(|e| {
+            matches!(
+                e,
+                Effect::Notify {
+                    kind: NoticeKind::IssueFailed,
+                    ..
+                }
+            )
+        })
+    };
+    let sent_again = |a: &Applied| {
+        a.effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::ApplyTerms { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let refused = w.ok("issuer", behind());
+    assert!(!told(&refused), "a refusal for billing behind tells nobody");
+    w.days(1);
+    let swept = sweep(&mut w);
+    assert_eq!(sent_again(&swept), ["P1/issue/2"]);
+    assert_eq!(w.p("P1").status, ProposalStatus::Issuing);
+    w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
+    assert!(matches!(w.p("P1").status, ProposalStatus::Issued { .. }));
+
+    // A core that never catches up: four more tries, then a person.
+    let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 200_000_00)], false);
+    open.entry = Entry::Increase {
+        policy: PolicyId::from("POL-P2"),
+    };
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    let disclosed = w.disclose("P2", "L1", &clean());
+    w.automatic(&disclosed);
+    let behind = || Command::IssueRejected {
+        proposal: "P2".into(),
+        code: "billing_behind".into(),
+    };
+    for attempt in 2..=5 {
+        w.ok("issuer", behind());
+        w.days(1);
+        assert_eq!(sent_again(&sweep(&mut w)), [format!("P2/issue/{attempt}")]);
+    }
+    w.ok("issuer", behind());
+    w.days(1);
+    let gave_up = sweep(&mut w);
+    assert!(sent_again(&gave_up).is_empty() && told(&gave_up));
+    assert!(matches!(&w.p("P2").status, ProposalStatus::IssueFailed { code } if code == "billing_behind_retries_exhausted"));
+    assert!(sweep(&mut w).effects.is_empty(), "told once");
+
+    // Out of date terms are not sent again however few the attempts.
+    let mut open = w.open_command("P3", &["L1"], &[("L1", "life", "life", 200_000_00)], false);
+    open.entry = Entry::Increase {
+        policy: PolicyId::from("POL-P3"),
+    };
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    let disclosed = w.disclose("P3", "L1", &clean());
+    w.automatic(&disclosed);
+    w.ok(
+        "issuer",
+        Command::IssueRejected {
+            proposal: "P3".into(),
+            code: "billing_behind".into(),
+        },
+    );
+    let expires = w.p("P3").expires_on;
+    while w.today() <= expires {
+        w.days(1);
+    }
+    let late = sweep(&mut w);
+    assert!(sent_again(&late).iter().all(|k| !k.starts_with("P3/")) && told(&late));
+}
+
 /// Purpose: the state machine's own guarantees. A repeated key returns the original result and
 /// changes nothing; a key is required; each command is accepted only from its own driver; a
 /// refused command leaves the state exactly as it was; the same log replayed gives the same
