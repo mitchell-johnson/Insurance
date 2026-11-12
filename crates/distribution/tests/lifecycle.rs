@@ -277,3 +277,105 @@ fn a_replaced_policys_clawback_carries_to_the_replacement() {
     );
     w.assert_reconciled();
 }
+
+/// Purpose: when an unwind reverses the billing of periods already paid, the renewal commission
+/// those premiums earned is taken back from the payees who received it, to the cent; the
+/// initial commission and the renewal on periods that stand are left alone; premium handed
+/// back never takes back more commission than it earned; and once the policy is resumed and
+/// billed again, the premium earns again.
+/// Why it matters: a late-notified death or a remediation hands months of premium back to the
+/// customer. Commission left with the adviser on premium the insurer no longer has is an
+/// overpayment nobody would find until the adviser's account was audited, and taking back more
+/// than was earned would be a debt the adviser never owed.
+#[test]
+fn premium_handed_back_by_an_unwind_takes_its_renewal_commission_with_it() {
+    let (mut w, policy, first_renewal) = advised_in(worked_example());
+    let total = |w: &World| w.payable("a-co") + w.payable("fap-one") + w.held("fap-one");
+    let unwind_after = w.today() + chrono::Duration::days(20);
+    // Two more months, each paid when billed.
+    let mut earned = vec![];
+    for n in 2..=3 {
+        w.days(31);
+        let before = total(&w);
+        assert!(w.pay(&policy, &format!("r{n}")) > 0, "month {n} was not billed");
+        earned.push(total(&w) - before);
+    }
+    assert!(earned.iter().all(|e| *e > 0), "{earned:?}");
+    let (a_before, fap_before, all_before) = (w.payable("a-co"), w.payable("fap-one"), total(&w));
+
+    w.core(
+        &policy,
+        "remediation",
+        CoreCommand::UnwindAfter {
+            policy: policy.clone(),
+            after: unwind_after,
+            cause: UnwindCause::Remediation,
+            reference: "rem-2".into(),
+        },
+    )
+    .unwrap();
+    let taken_back = all_before - total(&w);
+    assert_eq!(taken_back, earned.iter().sum::<i64>(), "exactly the renewal on the two months handed back");
+    assert!(
+        w.payable("a-co") < a_before && w.payable("fap-one") < fap_before,
+        "from each payee who received it"
+    );
+    assert_eq!(
+        total(&w),
+        1_200_00 + first_renewal,
+        "the initial commission and the first month's renewal stand"
+    );
+    assert!(w
+        .events
+        .iter()
+        .any(|e| matches!(e, Event::CommissionReversed { reference, .. } if reference.starts_with("cu:"))));
+    w.assert_reconciled();
+
+    // More premium said to be handed back than is left takes back only what is left, once.
+    let partition = w.cluster.locate(&policy).unwrap();
+    let all = std::collections::BTreeMap::from([("life".to_string(), i64::MAX / 4)]);
+    let rest = inject(
+        &mut w,
+        partition,
+        CoreEvent::PremiumUnapplied {
+            policy: policy.clone(),
+            reference: "everything".into(),
+            net_by_cover_type: all.clone(),
+        },
+    );
+    let reference = rest
+        .iter()
+        .find_map(|e| match e {
+            Event::CommissionReversed { reference, .. } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("the first month's renewal is taken back");
+    let lines = &w.dist.allocations[&reference].lines;
+    assert_eq!(
+        lines.iter().map(|l| l.amount_minor).sum::<i64>(),
+        -first_renewal,
+        "only the first month's renewal was left to take"
+    );
+    assert_eq!(lines.len(), 2, "one line for each payee of the rule: {lines:?}");
+    let again = inject(
+        &mut w,
+        partition,
+        CoreEvent::PremiumUnapplied {
+            policy: policy.clone(),
+            reference: "everything-again".into(),
+            net_by_cover_type: all,
+        },
+    );
+    assert!(again.is_empty(), "{again:?}");
+    // Premium on a policy nobody advised on takes nothing from anyone.
+    let unknown = inject(
+        &mut w,
+        partition,
+        CoreEvent::PremiumUnapplied {
+            policy: PolicyId("POL-NOBODY".into()),
+            reference: "x".into(),
+            net_by_cover_type: std::collections::BTreeMap::from([("life".to_string(), 100)]),
+        },
+    );
+    assert!(unknown.is_empty());
+}

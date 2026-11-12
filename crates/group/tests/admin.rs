@@ -289,7 +289,7 @@ fn the_host_feeds_events_and_asks_questions() {
     .unwrap();
     let outbox = ask(&h, json!({"ask": "outbox", "limit": 0})).unwrap();
     assert_eq!((outbox["items"].as_array().unwrap().len(), outbox["more"].as_bool()), (0, Some(true)));
-    let outbox = ask(&h, json!({"ask": "outbox", "limit": 50})).unwrap();
+    let outbox = ask(&h, json!({"ask": "outbox", "limit": 50, "after": 0})).unwrap();
     assert_eq!((outbox["items"].as_array().unwrap().len(), outbox["more"].as_bool()), (1, Some(false)));
     let scheme = ask(&h, json!({"ask": "scheme", "scheme": SCHEME})).unwrap();
     assert_eq!(

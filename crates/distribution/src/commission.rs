@@ -200,20 +200,34 @@ impl DistributionState {
                 net_by_cover_type,
                 ..
             } => {
-                if let Some(reference) = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type) {
-                    self.receipts.insert(format!("{policy}/{receipt}"), reference);
+                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type);
+                if let Some(reference) = &reference {
+                    self.receipts.insert(format!("{policy}/{receipt}"), reference.clone());
                 }
+                self.premium_applied(&policy, reference, net_by_cover_type);
             }
             CoreEvent::SuspenseApplied { policy, net_by_cover_type, .. } => {
-                self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type);
+                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type);
+                self.premium_applied(&policy, reference, net_by_cover_type);
             }
             CoreEvent::ReceiptReversed { policy, receipt, .. } => {
                 // A dishonoured premium reverses the lines of the entry that
                 // recorded it, to the same payees, whatever the rule says today.
                 if let Some(reference) = self.receipts.get(&format!("{policy}/{receipt}")).cloned() {
                     self.reverse_allocation(ctx, &reference, &cause, date, None);
+                    // Nothing of it is left to hand back.
+                    for record in self
+                        .premiums
+                        .get_mut(&policy)
+                        .into_iter()
+                        .flatten()
+                        .filter(|r| r.reference.as_ref() == Some(&reference))
+                    {
+                        record.back = record.net.clone();
+                    }
                 }
             }
+            CoreEvent::PremiumUnapplied { policy, net_by_cover_type, .. } => self.premium_unapplied(ctx, &policy, &cause, date, &net_by_cover_type),
             CoreEvent::PolicyStatusChanged { policy, to, .. } => match to {
                 PolicyStatus::Lapsed => self.policy_ended(ctx, &policy, &cause, date, EndKind::Lapsed),
                 PolicyStatus::Cancelled => self.policy_ended(ctx, &policy, &cause, date, EndKind::Cancelled),
@@ -491,6 +505,95 @@ impl DistributionState {
 
     /// Reverse an allocation with a new one: the same payees, the same
     /// accounts, the opposite sign. With `only_layer`, just that layer's lines.
+    fn premium_applied(&mut self, policy: &PolicyId, reference: Option<String>, net: BTreeMap<String, i64>) {
+        if net.is_empty() || !self.policies.contains_key(policy) {
+            return;
+        }
+        self.premiums.entry(policy.clone()).or_default().push(PremiumRecord {
+            reference,
+            net,
+            back: BTreeMap::new(),
+        });
+    }
+
+    /// Premium already paid went back to the policyholder because the
+    /// billing it paid was reversed. The renewal commission it earned goes
+    /// back with it, from the payees who received it and in the proportion
+    /// handed back. The most recent premium is taken first: billing is
+    /// reversed from the latest period backwards, and premium is applied to
+    /// the oldest period first. Initial commission is not touched here; it
+    /// follows the layer and the clawback schedule.
+    fn premium_unapplied(&mut self, ctx: &mut Ctx, policy: &PolicyId, cause: &str, date: NaiveDate, net: &BTreeMap<String, i64>) {
+        let Some(partition) = self.policies.get(policy).map(|p| p.partition) else {
+            return;
+        };
+        let mut records = self.premiums.remove(policy).unwrap_or_default();
+        let mut lines: Vec<AllocLine> = vec![];
+        for (cover_type, amount) in net {
+            let mut remaining = *amount;
+            for record in records.iter_mut().rev() {
+                if remaining <= 0 {
+                    break;
+                }
+                let paid = record.net.get(cover_type).copied().unwrap_or(0);
+                let before = record.back.get(cover_type).copied().unwrap_or(0);
+                let take = remaining.min(paid - before);
+                if take <= 0 {
+                    continue;
+                }
+                remaining -= take;
+                let after = before + take;
+                record.back.insert(cover_type.clone(), after);
+                let Some(original) = record
+                    .reference
+                    .as_ref()
+                    .and_then(|r| self.allocations.get(r))
+                    .filter(|a| a.reversed_by.is_none())
+                else {
+                    continue;
+                };
+                // The difference of two running shares, so that premium
+                // handed back in parts takes back exactly the whole line.
+                let share = |line: i64, of: i64| (line as i128 * of as i128 / paid as i128) as i64;
+                lines.extend(
+                    original
+                        .lines
+                        .iter()
+                        .filter(|l| &l.cover_type == cover_type && l.commission_type == Some(CommissionType::Renewal))
+                        .map(|l| AllocLine {
+                            amount_minor: -(share(l.amount_minor, after) - share(l.amount_minor, before)),
+                            ..l.clone()
+                        })
+                        .filter(|l| l.amount_minor != 0),
+                );
+            }
+        }
+        self.premiums.insert(policy.clone(), records);
+        if lines.is_empty() {
+            return;
+        }
+        let reference = format!("cu:{cause}");
+        ctx.emit(Event::CommissionReversed {
+            reference: reference.clone(),
+            reverses: cause.to_string(),
+        });
+        self.record_allocation(
+            ctx,
+            Allocation {
+                reference,
+                partition,
+                policy: policy.clone(),
+                kind: "commission_reversed".into(),
+                cause: cause.to_string(),
+                date,
+                lines,
+                reverses: None,
+                exposures: vec![],
+                reversed_by: None,
+            },
+        );
+    }
+
     fn reverse_allocation(&mut self, ctx: &mut Ctx, reference: &str, cause: &str, date: NaiveDate, only_layer: Option<&str>) {
         let Some(original) = self.allocations.get(reference).cloned() else {
             return;
@@ -501,7 +604,9 @@ impl DistributionState {
         let lines: Vec<AllocLine> = original
             .lines
             .iter()
-            .filter(|l| only_layer.is_none_or(|k| l.layer.as_deref() == Some(k)))
+            // Reversing one layer takes back what was paid for writing it.
+            // Renewal on its premium goes back when the premium does.
+            .filter(|l| only_layer.is_none_or(|k| l.layer.as_deref() == Some(k) && l.commission_type != Some(CommissionType::Renewal)))
             .map(|l| AllocLine {
                 amount_minor: -l.amount_minor,
                 ..l.clone()
@@ -858,6 +963,7 @@ impl DistributionState {
         lines: Vec<CounterpartyLine>,
     ) {
         let seq = self.seq;
+        self.carried(&reference);
         let owner = self.requested.get_mut(&reference).and_then(|r| {
             r.state = PostingState::Posted { entry, seq };
             r.owner.clone()

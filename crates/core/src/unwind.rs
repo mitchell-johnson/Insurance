@@ -45,10 +45,15 @@ pub(crate) fn reverse_billing_after(
 ) -> Result<Vec<u32>, Reject> {
     let c = policy.currency;
     let mut reversed = Vec::new();
+    let mut unapplied: BTreeMap<String, i64> = BTreeMap::new();
     for i in 0..policy.receivables.len() {
         let r = policy.receivables[i].clone();
         if r.closed || r.period_start <= after {
             continue;
+        }
+        let paid_net = crate::counterparty::net_by_cover_type(std::slice::from_ref(&r), &BTreeMap::from([(r.id, r.total_minor - r.outstanding_minor)]));
+        for (cover_type, amount) in paid_net {
+            *unapplied.entry(cover_type).or_insert(0) += amount;
         }
         ctx.work += 1;
         let mut set = PostingSet::new();
@@ -92,6 +97,13 @@ pub(crate) fn reverse_billing_after(
         reversed.push(r.id);
     }
 
+    if !unapplied.is_empty() {
+        ctx.emit(Event::PremiumUnapplied {
+            policy: policy.id.clone(),
+            reference: reference.to_string(),
+            net_by_cover_type: unapplied,
+        });
+    }
     policy.periods_billed = (0..policy.periods_billed)
         .take_while(|n| period_start(policy.inception, policy.frequency, *n).is_some_and(|start| start <= after))
         .count() as u32;
