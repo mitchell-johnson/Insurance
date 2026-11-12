@@ -12,7 +12,7 @@ use ic_documents::command::{Command, NoticeSpec};
 use ic_documents::crypto::{self, LocalWrap};
 use ic_documents::driver::{Driver, IssueRequest, LocalModule, MemoryPublisher, Module};
 use ic_documents::model::{Channel, DeliveryStatus, RecipientRole};
-use ic_documents::service::{router, run, run_cycles, serve, stop_signal, Config, NoCore};
+use ic_documents::service::{router, run, run_cycles, run_from, serve, stop_signal, Config, NoCore};
 use ic_documents::vault::MemoryStore;
 use serde_json::{json, Value};
 use support::*;
@@ -385,4 +385,34 @@ async fn sigterm_stops_the_service() {
         .unwrap();
     assert!(sent.success());
     tokio::time::timeout(Duration::from_secs(10), waiting).await.unwrap().unwrap();
+}
+
+/// Purpose: started from its environment, the service refuses a missing
+/// setting, a half-configured Azure identity and a cluster with no
+/// authentication chosen, each before anything runs; with all three in
+/// order it goes on to look for the cluster.
+/// Why it matters: these are the three things an operator gets wrong in a
+/// deployment manifest. Each must stop the pod at start with a message
+/// that names the setting, not surface later as a document that never sent.
+#[tokio::test]
+async fn the_environment_is_checked_before_anything_starts() {
+    let no_file = |path: &str| Err(std::io::Error::new(std::io::ErrorKind::NotFound, path.to_string()));
+    let mut env = settings();
+    env.insert("IC_CLUSTER_NODES", "127.0.0.1:1".into());
+
+    let empty = run_from(|_| None, no_file, async {}).await;
+    assert_eq!(empty, Err("IC_DOCUMENTS_WEBHOOK_KEY is not set".to_string()));
+
+    let mut half = env.clone();
+    half.insert("AZURE_FEDERATED_TOKEN_FILE", "/var/run/token".into());
+    let error = run_from(|k| half.get(k).cloned(), no_file, async {}).await.unwrap_err();
+    assert!(error.contains("AZURE_TENANT_ID"), "{error}");
+
+    let error = run_from(|k| env.get(k).cloned(), no_file, async {}).await.unwrap_err();
+    assert!(error.contains("IC_CLUSTER_AUTH"), "{error}");
+
+    let mut token_file = env.clone();
+    token_file.insert("IC_CLUSTER_TOKEN_FILE", "/secrets/missing".into());
+    let error = run_from(|k| token_file.get(k).cloned(), no_file, async {}).await.unwrap_err();
+    assert!(error.contains("/secrets/missing"), "{error}");
 }

@@ -306,3 +306,17 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
     complaints.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
+
+/// The service from its environment: `get` is `std::env::var` and `read`
+/// is `std::fs::read_to_string` in production. Anything missing or
+/// contradictory is an error before anything is started.
+pub async fn run_from(
+    get: impl Fn(&str) -> Option<String>,
+    read: impl Fn(&str) -> std::io::Result<String>,
+    stop: impl Future<Output = ()> + Send + 'static,
+) -> Result<(), String> {
+    let config = Config::from_lookup(&get)?;
+    let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
+    let auth = ClusterAuth::from_lookup(&get, read)?;
+    run(config, credential, auth, stop).await
+}
