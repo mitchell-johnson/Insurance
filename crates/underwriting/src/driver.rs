@@ -98,7 +98,9 @@ pub trait Schemes: Send + Sync {
 /// delegates and correspondence. `Ok(None)` is taken; `Ok(Some(reason))` is
 /// why it could not be.
 pub trait Forward: Send + Sync {
-    fn forward(&self, effect: &Effect) -> impl Future<Output = Result<Option<String>, DriverError>> + Send;
+    /// `seq` is the effect's number in the outbox, the same on every try,
+    /// for a receiver that de-duplicates on it.
+    fn forward(&self, seq: u64, effect: &Effect) -> impl Future<Output = Result<Option<String>, DriverError>> + Send;
 }
 
 /// Nothing is connected: every effect offered is parked with the reason.
@@ -106,7 +108,7 @@ pub trait Forward: Send + Sync {
 pub struct NothingConnected;
 
 impl Forward for NothingConnected {
-    async fn forward(&self, effect: &Effect) -> Result<Option<String>, DriverError> {
+    async fn forward(&self, _seq: u64, effect: &Effect) -> Result<Option<String>, DriverError> {
         Ok(Some(
             match effect {
                 Effect::RequestEvidence { .. } | Effect::ChaseEvidence { .. } | Effect::CancelEvidence { .. } => "no evidence provider is connected",
@@ -272,7 +274,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             let mut through = None;
             let mut stopped = None;
             for (seq, effect) in &outbox {
-                match self.one(effect).await {
+                match self.one(*seq, effect).await {
                     Ok(Step::Delivered) => pass.delivered += 1,
                     Ok(Step::Stale) => pass.stale += 1,
                     Ok(Step::Park(reason)) => {
@@ -401,7 +403,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
         }
     }
 
-    async fn one(&self, effect: &Effect) -> Result<Step, DriverError> {
+    async fn one(&self, seq: u64, effect: &Effect) -> Result<Step, DriverError> {
         Ok(match effect {
             Effect::ReserveCapacity {
                 reservation,
@@ -764,7 +766,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     Some(r) => Step::Park(format!("the core refused the remedy: {}: {}", r.code, r.message)),
                 }
             }
-            other => match self.forward.forward(other).await? {
+            other => match self.forward.forward(seq, other).await? {
                 None => Step::Delivered,
                 Some(reason) => Step::Park(reason),
             },

@@ -11,13 +11,16 @@
 // - The wrapping key is an HSM key that cannot be exported, with only wrap
 //   and unwrap allowed, and the store's identity may do nothing else with it.
 //
-// The underwriting driver (deploy/k8s/underwriting.yaml) does not use any of
-// this: it talks only to the ledger nodes. This identity is for the process
-// that takes disclosures and reads them back for an underwriter.
+// The clinical identity is for the process that takes disclosures and reads
+// them back for an underwriter. The underwriting driver
+// (deploy/k8s/underwriting.yaml) uses none of it: it talks to the ledger
+// nodes and publishes staff notices to the `underwriting-notices` hub below,
+// under the workers' identity from main.bicep, which may only send to it.
 //
 // Deployed on its own into the same resource group as main.bicep:
 //   az deployment group create -g <rg> -f infra/underwriting.bicep \
-//     -p name=<name> keyVaultName=<vault> aksOidcIssuer=<url>
+//     -p name=<name> keyVaultName=<vault> aksOidcIssuer=<url> \
+//     eventHubsNamespaceName=<namespace>
 
 @description('Azure region.')
 param location string = resourceGroup().location
@@ -39,6 +42,9 @@ param aksOidcIssuer string
 @description('The Kubernetes namespace the services run in.')
 param workloadNamespace string = 'insurance-core'
 
+@description('The Event Hubs namespace main.bicep created.')
+param eventHubsNamespaceName string
+
 @description('The Kubernetes service account of the process that reads and writes the clinical store.')
 param serviceAccount string = 'ic-underwriting-clinical'
 
@@ -53,6 +59,7 @@ var roles = {
   // Key Vault Crypto Service Encryption User: read the key's metadata, wrap
   // and unwrap. No sign, no encrypt, no delete.
   keyVaultWrapUser: 'e147488a-f6f5-4113-8e2d-b22465e65bf6'
+  eventHubsDataSender: '2b629674-e913-4c01-ae53-ef4638d8f975'
 }
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -149,6 +156,42 @@ resource storeWrap 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// --- notices for staff --------------------------------------------------------
+
+resource eventHubs 'Microsoft.EventHub/namespaces@2024-01-01' existing = {
+  name: eventHubsNamespaceName
+}
+
+// One partition: the notices are one ordered sequence. They name a proposal
+// and who should act, never a reason or an answer.
+resource notices 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = {
+  parent: eventHubs
+  name: 'underwriting-notices'
+  properties: {
+    partitionCount: 1
+    retentionDescription: {
+      cleanupPolicy: 'Delete'
+      retentionTimeInHours: 168
+    }
+  }
+}
+
+// The driver runs as ic-worker (deploy/k8s/underwriting.yaml).
+resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: '${name}-worker'
+}
+
+resource driverSends 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: notices
+  name: guid(notices.id, workerIdentity.id, roles.eventHubsDataSender)
+  properties: {
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.eventHubsDataSender)
+  }
+}
+
+output noticesHub string = notices.name
 output clinicalIdentityClientId string = identity.properties.clientId
 output clinicalBlobEndpoint string = clinical.properties.primaryEndpoints.blob
 output clinicalContainer string = records.name

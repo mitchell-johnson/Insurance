@@ -124,7 +124,7 @@ impl Schemes for Group {
 struct TakesAll(Arc<Mutex<Vec<Effect>>>);
 
 impl Forward for TakesAll {
-    async fn forward(&self, effect: &Effect) -> Result<Option<String>, DriverError> {
+    async fn forward(&self, _seq: u64, effect: &Effect) -> Result<Option<String>, DriverError> {
         self.0.lock().unwrap().push(effect.clone());
         Ok(None)
     }

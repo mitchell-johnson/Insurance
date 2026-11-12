@@ -24,6 +24,7 @@ pub mod host;
 pub mod load;
 pub mod machine;
 pub mod model;
+pub mod notices;
 pub mod questions;
 pub mod rules;
 pub mod service;
