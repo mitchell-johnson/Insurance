@@ -229,10 +229,9 @@ pub enum Command {
 impl Command {
     /// The command's name as it appears on the wire.
     pub fn name(&self) -> String {
-        match serde_json::to_value(self) {
-            Ok(serde_json::Value::Object(fields)) => fields.keys().next().cloned().unwrap_or_default(),
-            Ok(serde_json::Value::String(name)) => name,
-            _ => String::new(),
+        match serde_json::to_value(self).unwrap_or_default() {
+            serde_json::Value::Object(fields) => fields.keys().next().cloned().unwrap_or_default(),
+            unit => unit.as_str().unwrap_or_default().to_string(),
         }
     }
 
