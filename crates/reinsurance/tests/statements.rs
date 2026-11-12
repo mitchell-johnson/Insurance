@@ -303,6 +303,7 @@ fn a_settlement_the_bank_returns_is_owed_again() {
     g.ok("finance", instruct(1));
     assert_eq!(g.refused("payments", returned("")), "not_settled");
     assert_eq!(g.refused("claims", settled("ri-stmt-1")), "caller_not_allowed");
+    assert_eq!(g.refused("claims", returned("ri-stmt-1")), "caller_not_allowed");
     g.ok("payments", settled("ri-stmt-1"));
     assert_eq!(g.ri.balance(&group(), &north()), 0);
     assert_eq!(g.refused("payments", returned("some-other-payment")), "not_settled");

@@ -141,7 +141,7 @@ fn row_ref(key: &RiskKey) -> String {
     hex::encode(&h.finalize()[..8])
 }
 
-fn sha256_hex(body: &str) -> String {
+pub(crate) fn sha256_hex(body: &str) -> String {
     hex::encode(Sha256::digest(body.as_bytes()))
 }
 
