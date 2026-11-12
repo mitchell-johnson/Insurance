@@ -295,15 +295,19 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     let proposal = p.id.clone();
     let (product, expires, commencement) = (p.product_code.clone(), p.expires_on, cx.today);
     let covers: Vec<_> = p.covers_on(life).cloned().collect();
+    let alteration = matches!(p.entry, Entry::Alteration { .. });
     let f = life_mut(p, life)?;
     close_cases(f, cx);
     let Some(decision) = f.decisions.last().cloned() else {
         return reject("no_decision", "there is no decision to act on");
     };
     // Cover that is already in force with a legacy system was ceded there.
-    let migrated = matches!(decision.source, DecisionSource::Migrated { .. });
+    // Cover whose terms alone are changing is in force and ceded here: its
+    // sum insured does not change, and reserving it again would count the
+    // life's cover twice against the retention.
+    let ceded = matches!(decision.source, DecisionSource::Migrated { .. }) || alteration;
     for c in &covers {
-        let accepted = decision.accepted_sum(&c.code, c.sum_insured_minor).filter(|_| !migrated);
+        let accepted = decision.accepted_sum(&c.code, c.sum_insured_minor).filter(|_| !ceded);
         if accepted.is_some_and(|a| f.capacity.get(&c.code).is_some_and(|r| r.amount_minor == a)) {
             continue;
         }

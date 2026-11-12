@@ -109,6 +109,7 @@ fn a_lump_sum_is_released_within_what_was_admitted() {
         (notice["payee"].as_str(), notice["period_end"].as_str(), notice["ex_gratia"].as_str()),
         ("party-claimant", "", "false")
     );
+    assert_eq!(notice["run"], "", "released by hand, so in no run");
     assert_eq!(w.refused(pay("c-1", "ana", "p-1", 10_000, None)), "payment_exists");
 
     // A new authority version lowers the assessor's payment limit: it binds at once.
@@ -305,6 +306,8 @@ fn a_returned_benefit_period_is_reissued_as_that_period() {
     w.benefit_in_payment("ip-1");
     w.pay_run("run-1", d(2027, 3, 1));
     let payment = "run-1/ip-1/2027-03-01";
+    // The payments module confirms a run from the run named on each of its payments.
+    assert_eq!(w.core.noticed("claim_paid")[0]["run"], "run-1");
     w.ok(Command::PaymentReturned {
         claim: "ip-1".into(),
         payment_ref: payment.into(),
@@ -1115,4 +1118,132 @@ fn a_waiver_only_claim_waives_from_admission_and_ends_itself() {
     w.advance(3);
     w.ok(Command::DrainDue);
     assert_eq!(waivers(&w).len(), asked, "an ended waiver asks for nothing more");
+}
+
+/// Purpose: where interests are recorded on the policy, a lump sum goes to those parties first,
+/// in priority order and each up to its extent, before the claimant can be paid anything of
+/// theirs; a payment to an interested party that the bank returns is owed to that party again.
+/// Why it matters: a lender who took an assignment of the policy has a legal right to the
+/// proceeds ahead of the owner. If the claims workflow could pay the owner first, the insurer
+/// would have to pay the lender a second time out of its own pocket.
+#[test]
+fn recorded_interests_are_paid_before_the_claimant() {
+    use ic_claims::port::{CoverFacts, Interest};
+    let mut w = World::new();
+    let interest = |party: &str, extent: Option<i64>, priority: u32| Interest {
+        party: party.into(),
+        extent_minor: extent,
+        priority,
+    };
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            // Recorded out of order: the priority decides, not the order on file.
+            interests: vec![interest("second-lender", Some(30_000), 2), interest("bank", Some(150_000), 1)],
+            ..facts("trauma")
+        },
+    );
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    let due: Vec<_> = w.claim("c-1").interests.iter().map(|i| (i.party.as_str(), i.owed_minor)).collect();
+    assert_eq!(due, vec![("bank", 150_000), ("second-lender", 30_000)]);
+    assert_eq!(w.core.noticed("interest_to_be_paid").len(), 2);
+    let to = |who: &str, payment: &str, party: &str| Command::PayInterest {
+        claim: "c-1".into(),
+        payment_ref: payment.into(),
+        party: party.into(),
+        actor: actor(who),
+    };
+
+    // The claimant's share is 20,000 and not a cent of the lenders' money.
+    assert_eq!(w.refused(pay("c-1", "ana", "p-1", 20_001, None)), "interest_first");
+    assert_eq!(w.refused(to("ben", "i-1", "bank")), "not_owner");
+    assert_eq!(w.refused(to("ana", "i-1", "nobody")), "no_interest");
+    assert_eq!(w.refused(to("ana", "i-1", "second-lender")), "interest_priority");
+    w.ok(to("ana", "i-1", "bank"));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay { amount_minor: 150_000, payee, close: false, .. }) if payee == "bank"
+    ));
+    let notice = w.core.noticed("claim_paid")[0].clone();
+    // The lender's account is the payments module's to hold, not the claimant's.
+    assert_eq!(
+        (notice["payee"].as_str(), notice["account_ref"].as_str(), notice["net_minor"].as_str()),
+        ("bank", "", "150000")
+    );
+    assert_eq!(w.refused(to("ana", "i-2", "bank")), "no_interest");
+    assert_eq!(w.refused(to("ana", "i-1", "second-lender")), "payment_exists");
+
+    // The bank sends the lender's money back: it is the lender's again, not the claimant's.
+    w.ok(Command::PaymentReturned {
+        claim: "c-1".into(),
+        payment_ref: "i-1".into(),
+    });
+    assert_eq!(w.claim("c-1").interests_unpaid_minor(), 180_000);
+    assert_eq!(w.refused(pay("c-1", "ana", "p-1", 170_000, None)), "interest_first");
+    w.ok(to("ana", "i-2", "bank"));
+    w.ok(pay("c-1", "ana", "p-1", 20_000, None));
+    assert_eq!(w.claim("c-1").status, Status::Admitted, "the second lender is still to be paid");
+    w.ok(to("ana", "i-3", "second-lender"));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            amount_minor: 30_000,
+            close: true,
+            ..
+        })
+    ));
+    let c = w.claim("c-1");
+    assert_eq!(
+        (c.status, c.payable_minor, c.paid_minor(false), c.interests_unpaid_minor()),
+        (Status::Paid, 0, 200_000, 0)
+    );
+}
+
+/// Purpose: an interest recorded for everything takes the whole of the proceeds, leaving later
+/// interests and the claimant nothing, and a payment above the assessor's authority is refused.
+/// Why it matters: a full assignment is the common case for a mortgage. The claimant being
+/// paid nothing has to be the outcome the system reaches by itself, and a large payment to a
+/// lender needs the same authority as the same payment to anyone else.
+#[test]
+fn a_whole_interest_takes_all_of_the_proceeds() {
+    use ic_claims::port::{CoverFacts, Interest};
+    let mut w = World::new();
+    let whole = |party: &str, priority: u32| Interest {
+        party: party.into(),
+        extent_minor: None,
+        priority,
+    };
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            interests: vec![whole("bank", 1), whole("later", 2)],
+            ..facts("trauma")
+        },
+    );
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    let c = w.claim("c-1");
+    assert_eq!((c.interests.len(), c.interests[0].owed_minor), (1, 200_000));
+    assert_eq!(w.refused(pay("c-1", "ana", "p-1", 1, None)), "interest_first");
+    let mut book = authority();
+    book.version = 2;
+    book.profiles.get_mut("assessor").expect("in the book").max_payment_minor = 100_000;
+    w.ok(Command::ActivateAuthority { book: Box::new(book) });
+    let to_bank = Command::PayInterest {
+        claim: "c-1".into(),
+        payment_ref: "i-1".into(),
+        party: "bank".into(),
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(to_bank.clone()), "authority");
+    let mut book = authority();
+    book.version = 3;
+    w.ok(Command::ActivateAuthority { book: Box::new(book) });
+    w.core.refuse_next = 1;
+    assert_eq!(w.refused(to_bank.clone()), "ledger");
+    w.ok(to_bank);
+    assert_eq!(w.claim("c-1").status, Status::Paid);
 }

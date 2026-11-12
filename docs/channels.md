@@ -101,6 +101,36 @@ One place to see and resolve money held from an adviser, a provider or any other
 - **Proof of debt**: an extract of what the party owes, for a liquidator.
 - **Carrying it out.** An approved action is handed to the module that owns the money, which reports back. The workbench records the outcome; it does not move money.
 
+## The complaints and conduct workbench
+
+`/complaints` is the staff screen for the complaints module (`docs/complaints.md`): recording a complaint wherever it is heard, the queue (vulnerable complainants first, then the nearest deadline), a complaint's file and running timers, every action on a complaint, referral to a forum, the register and the report for a period, and conduct cases with their population, sample and regulator requests.
+
+That module takes each command from a named calling service. The workbench is those services for people, and a person's seats follow from their staff actions:
+
+| Staff action | Seat (the caller that module sees) |
+| --- | --- |
+| `complaints.record` | `intake`: record a complaint, nothing else |
+| `complaints.handle` | `complaints` and `intake`: everything on a complaint, and the register |
+| `complaints.legal` | `legal`: forums and conduct cases |
+| `complaints.conduct` | `conduct`: conduct cases |
+| `complaints.vulnerability_trained` | no seat: marks the person as trained to work with vulnerable customers |
+
+A person's **authority level** is the limit `complaints_authority` in their authority profile.
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/complaints/me` | Your seats, authority level and training. |
+| `GET /staff/v1/complaints/{question}` | `queue`, `complaint?id=`, `running?id=`, `subject_record?id=`, `complaints_of?party=`, `register?from=&to=`, `report?from=&to=` for the complaints team, legal and conduct; `open_conduct_cases` and `conduct_case?id=` for conduct and legal only. |
+| `POST /staff/v1/complaints/commands` | `{ "as": "<seat>", "command": { ... } }` in that module's own JSON, with an `Idempotency-Key`. |
+
+What the service decides and the person cannot:
+
+- **The seat.** A command goes as a seat the person holds or not at all. Commands only that module's own services send (`tick`, `mark_published`, `activate_timers`, the population commands) are refused whatever the seat.
+- **Who is asking.** A complaint's file is asked for as the person signed in, and that module gives it only to someone the case has let in. Conduct cases are asked for in the role the person holds.
+- **Authority and training.** `assign` carries the handler's authority level and training, and `record_remediation` the authoriser's level (the sender, unless the command names a colleague). Both are written in from the staff records, replacing anything sent. Someone who does not work complaints cannot be named.
+
+That module's refusals come back as `409` with its own code; a file the case has not opened to the person is `403`; no leader is `503 complaints_unavailable`. The portal service holds no complaint data, and the two modules share no code: `tests/http.rs` runs the workbench against that module's own state machine.
+
 ## The unit pricing console
 
 `/pricing` is the staff screen for the unit pricing module (`docs/unit-pricing.md`): the prices waiting for a person with their checks, valuation files that could not be read, prices overdue, the valuation received for a fund and date, prices in force, funds and their suspensions, and price errors with their corrections and remediation. From it a preparer prepares a price, an approver approves it (accepting each failed check with a reason when it is held) or rejects it, and a lead suspends and resumes a fund, raises and closes a price error, and offers a price again to partitions that refused it.
