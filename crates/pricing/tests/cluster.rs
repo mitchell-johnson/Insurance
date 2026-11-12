@@ -16,6 +16,7 @@ use ic_money::{Currency, FundId, Money, RoundingMode};
 use ic_pricing::adapters::{BlobInbox, BlobOutbound, ClusterCore, ClusterModule};
 use ic_pricing::command::*;
 use ic_pricing::driver::{Driver, Inbox, Module, Scan};
+use ic_pricing::service::{serve, Config};
 use ic_product::{Frequency, Sex};
 use ic_raft::server::{self, ColdTarget, EventTarget, Settings};
 use ic_raft::{ClusterAuth, ClusterClient};
@@ -93,7 +94,8 @@ where
 /// own process. This is the deployed path end to end: commands as JSON
 /// through Raft, the core's own price command and refusal rules, the event
 /// feed and the storage protocol. It is the test that fails if a price
-/// struck here cannot actually reach a policy.
+/// struck here cannot actually reach a policy. The process's own loop is
+/// run at the end, because it is what the container starts.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
     let dir = std::env::temp_dir().join(format!("ic-pricing-cluster-{}", std::process::id()));
@@ -116,7 +118,7 @@ async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
         snapshot_every: 1000,
     };
     let node = server::start_with(settings, vec![ic_pricing::module_spec().unwrap()]).await.unwrap();
-    let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);
+    let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth.clone());
     let patience = Duration::from_secs(20);
 
     // The core: a business date, the products, the fund, a policy with cash
@@ -286,6 +288,63 @@ async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
     // Nothing more to do on the next pass.
     let report = driver.pass(at).await;
     assert_eq!((report.files_taken, report.units_reported, report.extracts_written), (0, 0, 0), "{report:?}");
+
+    // The process as deployed runs its passes until told to stop.
+    let config = Config {
+        cluster: addr.clone(),
+        inbox_endpoint: fake.base.clone(),
+        inbox_container: "unit-pricing-inbound".into(),
+        outbound_endpoint: fake.base.clone(),
+        outbound_container: "unit-pricing-outbound".into(),
+        cycle_every: Duration::from_millis(50),
+        patience,
+    };
+    let stop = tokio::time::sleep(Duration::from_millis(300));
+    serve(config, auth, AzureCredential::static_token(TOKEN), stop).await.unwrap();
+
+    // The shipped binary refuses to start without its settings, runs with
+    // them, and stops cleanly on SIGTERM, as Kubernetes ends a pod.
+    let binary = || {
+        // The test's own environment stays, so a coverage run still
+        // records the binary; none of the driver's settings are in it.
+        let mut c = std::process::Command::new(env!("CARGO_BIN_EXE_ic-unit-pricing"));
+        c.env_remove("IC_NODES");
+        c
+    };
+    let refused = binary().output().unwrap();
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("IC_NODES"));
+    let token_file = dir.join("federated-token");
+    std::fs::write(&token_file, "a-projected-service-account-token").unwrap();
+    let mut child = binary()
+        .env("IC_NODES", &addr)
+        .env("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef")
+        .env("AZURE_FEDERATED_TOKEN_FILE", &token_file)
+        .env("AZURE_TENANT_ID", "tenant-1")
+        .env("AZURE_CLIENT_ID", "client-1")
+        .env("AZURE_AUTHORITY_HOST", format!("{}/", fake.base))
+        .env("IC_UNIT_PRICING_INBOX_ENDPOINT", &fake.base)
+        .env("IC_UNIT_PRICING_OUTBOUND_ENDPOINT", &fake.base)
+        .env("IC_UNIT_PRICING_CYCLE_MS", "100")
+        .spawn()
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert!(child.try_wait().unwrap().is_none(), "ic-unit-pricing exited at start");
+    assert!(std::process::Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let mut tries = 0;
+    let exit = loop {
+        if let Some(exit) = child.try_wait().unwrap() {
+            break exit;
+        }
+        tries += 1;
+        assert!(tries < 400, "ic-unit-pricing ignored SIGTERM");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(exit.success(), "ic-unit-pricing exited with {exit}");
 
     node.stop().await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
