@@ -57,6 +57,14 @@ pub struct Schedule {
     /// On replacement business, the unexpired clawback of the replaced
     /// policy carries over to the new one instead of being clawed back.
     pub replacement_carries_clawback: bool,
+    /// Whether premium waived during a claim earns renewal commission, as
+    /// premium received does. It does unless the schedule says otherwise.
+    #[serde(default = "yes")]
+    pub earns_on_waived_premium: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Schedule {

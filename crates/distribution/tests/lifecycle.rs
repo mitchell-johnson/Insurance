@@ -547,3 +547,73 @@ fn a_claim_overpayment_shows_as_a_memo_line_and_moves_no_money() {
         (requested, payable)
     );
 }
+
+/// Purpose: premium the insurer pays for the customer during a claim earns renewal commission
+/// for the payees of the rule as premium received does, and no initial commission; a layer
+/// written under a schedule that says waived premium earns nothing earns nothing, while a layer
+/// written under the earlier version still earns; a waiver that names no policy this module
+/// knows, or carries no premium for cover, posts nothing; and a schedule stored before the
+/// setting existed reads as earning.
+/// Why it matters: the design says a waived premium earns unless the schedule says otherwise.
+/// An adviser whose client is on claim for years would otherwise lose renewal income the
+/// agreement gives them, and a schedule that excludes it would be overpaid for as long as the
+/// claim runs.
+#[test]
+fn waived_premium_earns_renewal_commission_unless_the_schedule_says_otherwise() {
+    let (mut w, earning, _) = advised_in(worked_example());
+    // The next version of the schedule stops paying on waived premium; a new policy is written under it.
+    w.activate(
+        "no-waiver",
+        vec![Change::ActivateSchedule(Schedule {
+            version: 2,
+            effective_from: w.today(),
+            earns_on_waived_premium: false,
+            ..schedule()
+        })],
+    )
+    .unwrap();
+    let (excluded, _) = w.issue(2, 400_000_00, None);
+    w.write(&excluded, "life", 1, "eng-a-one", "a-at-fap-one", 900_00).unwrap();
+    w.pay(&excluded, "x1");
+    w.assert_reconciled();
+    let partition = w.cluster.locate(&earning).unwrap();
+    let waived = |policy: &PolicyId, fields: &[(&str, &str)]| CoreEvent::Module {
+        module: "claims".into(),
+        kind: "premium_waived".into(),
+        subject: "clm-7".into(),
+        detail: std::iter::once(("policy", policy.0.as_str()))
+            .chain(fields.iter().copied())
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+    };
+
+    let requested = w.dist.requested.len();
+    let events = inject(&mut w, partition, waived(&earning, &[("amount_minor", "11500"), ("net:life", "10000")]));
+    let reference = events
+        .iter()
+        .find_map(|e| match e {
+            Event::CommissionEarned { reference, total_minor, .. } => Some((reference.clone(), *total_minor)),
+            _ => None,
+        })
+        .expect("waived premium earns");
+    assert_eq!(reference.1, 10_00, "the renewal rate on the premium for cover, not on the tax and fee");
+    let lines = &w.dist.allocations[&reference.0].lines;
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines.iter().all(|l| l.commission_type == Some(ic_distribution::rules::CommissionType::Renewal)));
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    for stray in [
+        waived(&excluded, &[("amount_minor", "11500"), ("net:life", "10000")]),
+        waived(&PolicyId("POL-NOBODY".into()), &[("net:life", "10000")]),
+        waived(&earning, &[("amount_minor", "11500")]),
+        waived(&earning, &[("net:life", "not a number")]),
+    ] {
+        let events = inject(&mut w, partition, stray.clone());
+        assert!(events.is_empty(), "{stray:?} produced {events:?}");
+    }
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    let mut stored = serde_json::to_value(schedule()).unwrap();
+    stored.as_object_mut().unwrap().remove("earns_on_waived_premium");
+    assert!(serde_json::from_value::<Schedule>(stored).unwrap().earns_on_waived_premium);
+}
