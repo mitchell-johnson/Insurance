@@ -429,10 +429,16 @@ fn a_submission_is_taken_once_from_a_provisioned_region() {
         1
     );
     assert_eq!(answer(&desk.state, json!({"q": "submission_in_progress"})).unwrap(), json!(true));
+    assert_eq!(
+        answer(&desk.state, json!({"failback_quiet": true})).unwrap(),
+        json!(false),
+        "leaders stay put while a file is going out"
+    );
     desk.ok(&svc(), sent());
     assert_eq!(desk.state.submissions[&s].region.as_deref(), Some("syd"));
     assert_eq!(desk.state.submissions[&s].status, SubmissionStatus::Sent);
     assert_eq!(answer(&desk.state, json!({"q": "submission_in_progress"})).unwrap(), json!(false));
+    assert_eq!(answer(&desk.state, json!({"failback_quiet": true})).unwrap(), json!(true));
     assert_eq!(
         desk.code(
             &svc(),

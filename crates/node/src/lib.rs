@@ -16,6 +16,7 @@ pub fn modules() -> Result<Vec<ModuleSpec>, String> {
         ic_distribution::host::module_spec()?, //
         ic_documents::module_spec()?,          //
         ic_group::module_spec()?,              //
+        ic_payments_service::module_spec()?,   //
         ic_underwriting::module_spec()?,       //
     ])
 }

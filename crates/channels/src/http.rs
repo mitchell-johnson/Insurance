@@ -292,6 +292,14 @@ impl AppState {
         if answer["known"] != true {
             return Err(Problem::forbidden("this sign-in is not registered with the insurer"));
         }
+        if answer["device_revoked"] == true {
+            // Said before anything else, and whatever the token: this is the app's signal to wipe its local data.
+            return Err(Problem::new(
+                StatusCode::UNAUTHORIZED,
+                "device_revoked",
+                "this device is no longer enrolled: remove everything it holds",
+            ));
+        }
         if answer["valid"] != true {
             return Err(Problem::new(
                 StatusCode::UNAUTHORIZED,

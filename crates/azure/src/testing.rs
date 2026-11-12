@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{post, put};
 use axum::{Json, Router};
@@ -22,6 +22,7 @@ pub struct FakeAzure {
     /// `http://127.0.0.1:<port>`: use it as every endpoint and as the authority.
     pub base: String,
     blobs: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
+    tags: Arc<Mutex<BTreeMap<String, BTreeMap<String, String>>>>,
     seen: Arc<Mutex<Vec<String>>>,
     down: Arc<AtomicBool>,
 }
@@ -74,6 +75,20 @@ impl FakeAzure {
         self.blobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone()
     }
 
+    /// Set a stored blob's index tags, as Defender for Storage does after a scan.
+    pub fn set_blob_tags(&self, key: &str, tags: &[(&str, &str)]) {
+        let tags = tags.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        self.tags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key.to_string(), tags);
+    }
+
+    /// Remove a stored blob.
+    pub fn remove_blob(&self, key: &str) {
+        self.blobs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(key);
+    }
+
     /// Events accepted for a hub partition, in total.
     pub fn events_sent(&self, hub: &str, partition: u16) -> usize {
         let prefix = format!("send {hub}/{partition} x");
@@ -102,9 +117,31 @@ async fn put_blob(State(f): State<FakeAzure>, Path((container, name)): Path<(Str
     StatusCode::CREATED
 }
 
-async fn get_blob(State(f): State<FakeAzure>, Path((container, name)): Path<(String, String)>) -> Result<Vec<u8>, StatusCode> {
+async fn get_blob(
+    State(f): State<FakeAzure>,
+    Path((container, name)): Path<(String, String)>,
+    Query(query): Query<BTreeMap<String, String>>,
+) -> Result<Vec<u8>, StatusCode> {
     if f.is_down() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
+    }
+    if query.get("comp").map(String::as_str) == Some("tags") {
+        let key = format!("{container}/{name}");
+        if !f.blobs().contains_key(&key) {
+            return Err(StatusCode::NOT_FOUND);
+        }
+        let tags = f
+            .tags
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let set: String = tags
+            .iter()
+            .map(|(k, v)| format!("<Tag><Key>{}</Key><Value>{}</Value></Tag>", k.replace('&', "&amp;"), v.replace('&', "&amp;")))
+            .collect();
+        return Ok(format!("<?xml version=\"1.0\" encoding=\"utf-8\"?><Tags><TagSet>{set}</TagSet></Tags>").into_bytes());
     }
     f.blobs().get(&format!("{container}/{name}")).cloned().ok_or(StatusCode::NOT_FOUND)
 }

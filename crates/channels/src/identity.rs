@@ -45,6 +45,10 @@ pub enum Enrolment {
     Verification { reference: String },
     /// Approved from a device already enrolled, which signed the new key.
     ExistingDevice { device: String, signature: String },
+    /// Every earlier device is lost or out of reach. After fresh identity
+    /// verification this one replaces them: they are revoked, and every
+    /// session the person had is closed.
+    Recovery { reference: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -203,6 +207,7 @@ impl IdentityState {
         // change a command makes before it is validated: it depends only on
         // the command's time, so every replica makes it alike.
         self.challenges.retain(|_, c| c.expires > at);
+        let mut events = Vec::new();
         match command {
             IdentityCommand::EnrolDevice {
                 device,
@@ -218,10 +223,41 @@ impl IdentityState {
                     return Err(reject("bad_key", "the key must be an uncompressed P-256 point"));
                 }
                 match &enrolment {
-                    Enrolment::Verification { reference } => {
-                        if reference.trim().is_empty() {
-                            return Err(reject("unverified", "enrolment needs an identity verification reference"));
+                    Enrolment::Verification { reference } | Enrolment::Recovery { reference } if reference.trim().is_empty() => {
+                        return Err(reject("unverified", "enrolment needs an identity verification reference"));
+                    }
+                    Enrolment::Verification { .. } => {
+                        // A person who still has a device adds another from it. If they do not, it is a recovery,
+                        // and the devices they no longer control must not stay enrolled beside the new one.
+                        if self
+                            .by_party
+                            .get(&party)
+                            .is_some_and(|ds| ds.iter().any(|d| self.active_device(d, &party).is_some()))
+                        {
+                            return Err(reject("already_enrolled", "this person has a device: approve from it, or recover"));
                         }
+                    }
+                    Enrolment::Recovery { .. } => {
+                        let old: Vec<String> = self
+                            .by_party
+                            .get(&party)
+                            .into_iter()
+                            .flatten()
+                            .filter(|d| self.active_device(d, &party).is_some())
+                            .cloned()
+                            .collect();
+                        for id in &old {
+                            if let Some(d) = self.devices.get_mut(id) {
+                                d.revoked = Some(at);
+                            }
+                            events.push(IdentityEvent::DeviceRevoked {
+                                device: id.clone(),
+                                party: party.clone(),
+                            });
+                        }
+                        self.challenges.retain(|_, c| !old.contains(&c.device));
+                        self.sessions_revoked.insert(party.clone(), at);
+                        events.push(IdentityEvent::SessionsRevoked { party: party.clone() });
                     }
                     Enrolment::ExistingDevice { device: approver, signature } => {
                         let approver = self
@@ -246,7 +282,8 @@ impl IdentityState {
                         revoked: None,
                     },
                 );
-                Ok(vec![IdentityEvent::DeviceEnrolled { device, party }])
+                events.push(IdentityEvent::DeviceEnrolled { device, party });
+                Ok(events)
             }
             IdentityCommand::RevokeDevice { device } => {
                 let d = self

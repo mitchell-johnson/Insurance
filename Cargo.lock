@@ -2102,6 +2102,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",
@@ -2109,12 +2110,14 @@ dependencies = [
  "ic-product",
  "ic-raft",
  "ic-readmodel",
+ "ic-reinsurance",
  "ic-sim",
  "proptest",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2160,6 +2163,7 @@ dependencies = [
  "ic-distribution",
  "ic-documents",
  "ic-group",
+ "ic-payments-service",
  "ic-raft",
  "ic-underwriting",
  "serde_json",
@@ -2178,6 +2182,35 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "ic-payments-service"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-azure",
+ "ic-cashmatch",
+ "ic-core",
+ "ic-log",
+ "ic-money",
+ "ic-payments",
+ "ic-payments-service",
+ "ic-product",
+ "ic-raft",
+ "ic-sim",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

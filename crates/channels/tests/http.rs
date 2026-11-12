@@ -507,6 +507,37 @@ async fn devices_are_managed_by_their_owner() {
         StatusCode::OK
     );
     assert!(!portal.get("sub-kiri", "/app/v1/devices").await.1[0]["revoked"].is_null());
+
+    // The phone is lost. After fresh verification the identity service enrols its replacement as a recovery.
+    let replacement = Key::new();
+    let recover = json!({ "identity": { "enrol_device": { "device": "phone-2", "party": KIRI, "public_key": replacement.public, "hardware_backed": true,
+        "enrolment": { "via": "recovery", "reference": "idv-9" } } } });
+    let identity = [
+        ("x-dev-subject", "svc".to_string()),
+        ("x-dev-roles", "identity".to_string()),
+        ("x-module", "identity".to_string()),
+        ("idempotency-key", "recover-1".to_string()),
+    ];
+    let (status, answer) = portal.send("POST", "/internal/v1/commands", &identity, Some(recover)).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // The old phone is told to wipe, whatever token it presents; a session from before the recovery is closed.
+    portal.clock.fetch_add(5, Ordering::SeqCst);
+    let mut old = portal.proof(&portal.phone, "GET", "/app/v1/sync", "");
+    old.push(("x-dev-issued", (portal.now() + 1).to_string()));
+    let (status, problem) = portal.send("GET", "/app/v1/sync", &old, None).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_revoked")));
+    let stale = [("x-dev-subject", "sub-kiri".to_string()), ("x-dev-issued", (portal.now() - 60).to_string())];
+    assert_eq!(portal.send("GET", "/app/v1/me", &stale, None).await.1["title"], "session_revoked");
+    // The replacement syncs after signing in again.
+    let now = portal.now();
+    let signature = replacement.sign(&proof_message(now, "GET", "/app/v1/sync", b""));
+    let fresh = [
+        ("x-dev-subject", "sub-kiri".to_string()),
+        ("x-dev-issued", (now + 1).to_string()),
+        ("x-device-id", "phone-2".to_string()),
+        ("x-device-proof", format!("{now}.{signature}")),
+    ];
+    assert_eq!(portal.send("GET", "/app/v1/sync", &fresh, None).await.0, StatusCode::OK);
 }
 
 /// Purpose: an employer administrator sees their schemes and manages the scheme's administrators and its second-administrator rule; nobody else can.
