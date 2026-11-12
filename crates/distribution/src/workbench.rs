@@ -537,6 +537,13 @@ impl DistributionState {
                 if payee.account_on(account_ref, today).is_none() {
                     return reject("account_not_verified", "the account is not on the party, or is still inside its cooling-off");
                 }
+                let short = self.short_of_owed_elsewhere(party, *amount_minor);
+                if short > 0 && self.config.release_owed_elsewhere == crate::config::OwedElsewhere::Refused {
+                    return reject(
+                        "owes_elsewhere",
+                        format!("{party} is being pursued for a debt in another ledger and the release would leave {short} of it uncovered"),
+                    );
+                }
                 Ok(())
             }
             Action::Offset { amount_minor, against } => {

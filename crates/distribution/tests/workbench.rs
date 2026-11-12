@@ -1000,3 +1000,49 @@ fn a_release_to_a_party_pursued_for_a_debt_elsewhere_needs_legal() {
     assert_eq!(w.dist.actions["full"].state, ActionState::Completed);
     w.assert_reconciled();
 }
+
+/// Purpose: the business can switch a release to a party pursued for a debt elsewhere from
+/// "needs legal" to "refused" through an approved change set: once switched, a release that
+/// would leave the debt uncovered is refused when it is prepared, one that leaves it covered
+/// still goes ahead, and switching back restores the legal signature.
+/// Why it matters: the default (legal signs) was chosen without a policy decision behind it.
+/// The insurer may decide to refuse outright, and that must be a dual-approved setting, not a
+/// code change.
+#[test]
+fn a_release_to_a_party_pursued_elsewhere_can_be_refused_by_setting() {
+    let (mut w, _, held) = suspended();
+    let record = ic_core::EventRecord {
+        id: "9-1".into(),
+        partition: 9,
+        seq: 1,
+        business_date: w.today(),
+        log_index: 0,
+        traceparent: None,
+        event: ic_core::event::Event::Module {
+            module: "claims".into(),
+            kind: "overpayment_raised".into(),
+            subject: "clm-1".into(),
+            detail: [
+                ("overpayment", "clm-1/overpayment/1"),
+                ("party", "fap-one"),
+                ("outstanding_minor", "10000"),
+                ("status", "pursued"),
+            ]
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        },
+    };
+    w.send(module("event-relay"), Command::Ingest(Box::new(record))).unwrap();
+    use ic_distribution::config::OwedElsewhere;
+    assert_eq!(w.dist.config.release_owed_elsewhere, OwedElsewhere::NeedsLegal);
+
+    w.activate("refuse", vec![Change::ReleaseOwedElsewhere(OwedElsewhere::Refused)]).unwrap();
+    assert_eq!(code(w.act("full", "fap-one", release(held))), "owes_elsewhere");
+    w.act("covered", "fap-one", release(held - 100_00)).unwrap();
+    assert!(!w.dist.actions["covered"].needed.contains(&Role::Legal));
+
+    w.activate("allow", vec![Change::ReleaseOwedElsewhere(OwedElsewhere::NeedsLegal)]).unwrap();
+    w.act("full", "fap-one", release(held)).unwrap();
+    assert!(w.dist.actions["full"].needed.contains(&Role::Legal));
+}
