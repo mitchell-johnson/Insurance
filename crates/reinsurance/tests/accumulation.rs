@@ -252,10 +252,7 @@ fn a_transfer_between_partitions_keeps_the_cessions() {
                 transfer_id: "T1".into(),
                 group: GroupId::from("G2"),
                 from_partition: 3,
-                lives: vec![LifeInfo {
-                    life: LifeId::from("L1"),
-                    party: Some(PartyId::from("anna")),
-                }],
+                lives: vec![LifeInfo::new(LifeId::from("L1"), Some(PartyId::from("anna")))],
                 layers: vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))],
                 members,
                 number: format!("N-{policy}"),
