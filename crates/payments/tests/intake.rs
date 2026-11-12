@@ -19,9 +19,9 @@ fn released(payment: &str, payee: &str, amount: i64) -> Waiting {
         source: format!("claim:clm-1:{payment}"),
         payee: payee.to_string(),
         account_ref: "acct-ref-9".to_string(),
-        policy: policy("pol-1"),
+        policy: Some(policy("pol-1")),
         amount_minor: amount,
-        payable: PayableKind::Benefit,
+        payable: Some(PayableKind::Benefit),
     }
 }
 
@@ -198,7 +198,7 @@ fn a_released_provider_cost_waits_like_a_benefit() {
         (held.source.as_str(), held.amount_minor, held.account_ref.as_str()),
         ("claim-cost:clm-1:clm-1-cost-1", 450_00, "")
     );
-    assert_eq!(held.payable, PayableKind::Benefit);
+    assert_eq!(held.payable, Some(PayableKind::Benefit));
     assert!(react(&claims_event("3-81", "claim_admitted", detail)).is_empty());
 
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
@@ -275,4 +275,46 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     desk.ok(&svc(), offer(released("pay-1", "party-p1", 100_00)));
     assert_eq!(desk.code(&mia(), to("pay-1", "p2")), "payee_mismatch");
     desk.ok(&mia(), to("pay-1", "p1"));
+}
+
+/// Purpose: another module's driver offers a payment that is not policy
+/// money (a reinsurer's net settlement) with a plain JSON command; it waits,
+/// joins a reinsurer run for the reinsurer's payee, and when it settles the
+/// asking module's source is on the event and nothing is sent to the core;
+/// a release that names a policy without its payable is refused.
+/// Why it matters: this is the wire format the reinsurance driver sends.
+/// If it drifts, settlements due sit in an outbox and no reinsurer is paid;
+/// if a non-policy payment produced a core instruction it would be refused
+/// there and block the outbox behind it.
+#[test]
+fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
+    let mut desk = Desk::new();
+    desk.payee("re-1", PayeeKind::Reinsurer, "0301112223");
+    let envelope: ic_payments::Envelope = serde_json::from_value(json!({
+        "key": "reinsurance-notice-41",
+        "actor": {"id": "reinsurance", "roles": ["service"]},
+        "at": "1970-01-01T00:00:00",
+        "command": {"type": "offer_payment", "waiting": {
+            "payment": "ri-stmt-7", "source": "reinsurance:statement:7", "payee": "party-re-1", "amount_minor": 90_000_00}}
+    }))
+    .unwrap();
+    desk.state.apply(6000, envelope.clone()).unwrap();
+    desk.state.apply(6001, envelope).unwrap();
+    assert_eq!(desk.state.clock, Some(monday()), "an offer does not move the clock");
+    assert_eq!(waiting(&desk), vec!["ri-stmt-7"]);
+    let mut half = released("pay-1", "p1", 5_00);
+    half.payable = None;
+    assert_eq!(desk.code(&svc(), offer(half)), "invalid_payment");
+
+    desk.prepare("r1", RunType::Reinsurer, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["ri-stmt-7"]));
+    let submission = desk.approve("r1");
+    let events = desk.settle(&submission, d(2027, 11, 15));
+    assert!(events.contains(&Event::ItemSettled {
+        item: "ri-stmt-7".to_string(),
+        source: "reinsurance:statement:7".to_string(),
+        amount_minor: 90_000_00
+    }));
+    assert!(desk.state.outbox.is_empty(), "nothing for the core: this is not policy money");
+    assert!(desk.state.waiting.is_empty());
 }
