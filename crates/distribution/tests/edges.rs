@@ -309,8 +309,9 @@ fn an_uplift_gives_no_path_and_an_ordinary_ending_is_not_a_clawback() {
 /// Purpose: the change cursor names exactly the parties that moved after a sequence (a payee
 /// whose commission was confirmed, a provider whose licence changed and the adviser engaged
 /// under it), and the engagements question gives an adviser's engagements with the licence
-/// problem that stops each being used on the day asked, and the relations question lists the
-/// dated links of the structure.
+/// problem that stops each being used on the day asked, the conduct cases question gives
+/// the case a licence event opened with the event and its population, and the relations
+/// question lists the dated links of the structure.
 /// Why it matters: the portal's publisher reads these two questions to keep the workbench and
 /// the adviser directory current. A cursor that missed a party would leave a stale balance or
 /// an adviser shown as available after their provider's licence was suspended; one that named
@@ -368,6 +369,18 @@ fn the_change_cursor_and_the_engagements_question_feed_a_publisher() {
     let before = ask_engagements(&w, None, today.pred_opt().unwrap());
     assert_eq!(before["engagements"][0]["impairment"], serde_json::Value::Null);
     assert_eq!(ask_engagements(&w, Some("fap-two"), today)["engagements"], serde_json::json!([]));
+
+    // The conduct case the suspension opened, with the event and the people and policies it reaches.
+    let cases = ask(&w.dist, Question::ConductCases).unwrap();
+    let case = &cases.as_array().unwrap()[0];
+    assert_eq!(cases.as_array().unwrap().len(), 1);
+    assert_eq!(case["party"], serde_json::json!("fap-one"));
+    assert_eq!(case["status"], serde_json::json!("suspended"));
+    assert_eq!(case["effective"], serde_json::json!(today));
+    assert_eq!(case["advisers"], serde_json::json!(["adviser-a"]));
+    assert_eq!(case["closed"], serde_json::Value::Null);
+    assert!(case["licence_event"].as_str().is_some_and(|r| !r.is_empty()));
+    assert!(case["policies"].as_array().is_some());
 
     // The structure above a provider, so a group's licence can be followed down.
     w.send(

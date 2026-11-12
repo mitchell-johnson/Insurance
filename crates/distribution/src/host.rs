@@ -83,6 +83,10 @@ pub enum Question {
     },
     OpenTasks,
     Status,
+    /// Every conduct case a licence event opened, with the event and the
+    /// affected population: what the complaints module's conduct register
+    /// is fed from. Customers are not held here; the policies are.
+    ConductCases,
     /// Every dated link in the structure: who sits under, is licensed by or
     /// is paid for whom, and from when to when.
     Relations,
@@ -150,6 +154,39 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
         Question::Action { id } => value(&state.actions.get(&id)),
         Question::Case { id } => value(&state.cases.get(&id)),
         Question::OpenTasks => value(&state.tasks.values().filter(|t| t.done.is_none()).collect::<Vec<_>>()),
+        Question::ConductCases => {
+            let structure = &state.config.structure;
+            let rows: Vec<Value> = state
+                .cases
+                .values()
+                .filter(|c| c.kind == crate::state::CaseKind::Conduct)
+                .map(|c| {
+                    let event = structure
+                        .parties
+                        .get(&c.subject)
+                        .and_then(|p| p.licence.iter().rev().find(|r| r.source_ref == c.source_ref && r.effective <= c.opened));
+                    let advisers: std::collections::BTreeSet<&PartyId> = c
+                        .engagements
+                        .iter()
+                        .filter_map(|id| structure.engagements.get(id))
+                        .map(|e| &e.adviser)
+                        .collect();
+                    json!({
+                        "case": c.id,
+                        "licence_event": c.source_ref,
+                        "party": c.subject,
+                        "status": event.map(|r| r.state),
+                        "effective": event.map(|r| r.effective),
+                        "opened": c.opened,
+                        "advisers": advisers,
+                        "payees": c.payees,
+                        "policies": c.policies,
+                        "closed": c.closed,
+                    })
+                })
+                .collect();
+            Ok(json!(rows))
+        }
         Question::Relations => value(&state.config.structure.relations),
         Question::Outbox { limit } => value(&state.outbox(limit)),
         Question::ChangedParties { since } => {
