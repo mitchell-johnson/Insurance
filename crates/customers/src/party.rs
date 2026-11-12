@@ -168,6 +168,8 @@ pub struct Party {
     pub shredded: bool,
     /// The last sequence number applied.
     pub version: u64,
+    /// When the last event was recorded.
+    pub last_recorded: Option<DateTime<Utc>>,
 }
 
 /// The limit on text a caller supplies outside the field values.
@@ -234,6 +236,7 @@ impl Party {
     /// Fold one event in.
     pub fn apply(&mut self, rec: &Recorded) {
         self.version = rec.seq;
+        self.last_recorded = Some(rec.recorded_at);
         match &rec.body {
             EventBody::Created { kind, group, source } => {
                 self.kind = Some(*kind);
@@ -283,6 +286,7 @@ impl Party {
                     id,
                     kind: self.kind,
                     version: rec.seq,
+                    last_recorded: Some(rec.recorded_at),
                     shredded: true,
                     ..Party::default()
                 };

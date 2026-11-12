@@ -13,6 +13,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod access;
+pub mod auth;
+pub mod config;
 pub mod crypto;
 pub mod db;
 pub mod event;
@@ -20,5 +23,8 @@ pub mod keys;
 pub mod matching;
 pub mod model;
 pub mod party;
+pub mod retention;
+pub mod service;
 pub mod store;
 pub mod validate;
+pub mod work;

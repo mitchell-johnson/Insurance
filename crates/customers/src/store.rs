@@ -122,6 +122,15 @@ pub struct Store<W> {
     index: IndexKey,
 }
 
+/// The public facts of a stream, and its key.
+struct Stream {
+    version: u64,
+    head: Vec<u8>,
+    shredded: bool,
+    kind: PartyKind,
+    key: Option<DataKey>,
+}
+
 /// What locking and loading a party in a transaction found.
 struct Loaded {
     party: Party,
@@ -174,6 +183,31 @@ impl<W: KeyWrapper> Store<W> {
     /// Read and open a party's stream. With `lock`, inside a transaction,
     /// the party's row is locked first.
     async fn load_with(&self, c: &impl GenericClient, id: &PartyId, lock: bool) -> Result<Option<Loaded>> {
+        let Some((records, mut stream)) = self.read_stream(c, id, lock).await? else {
+            return Ok(None);
+        };
+        let mut party = Party::new(id.clone());
+        for rec in &records {
+            party.apply(rec);
+        }
+        if stream.shredded {
+            party.shredded = true;
+            party.kind = Some(stream.kind);
+        } else if party.version != stream.version {
+            return Err(StoreError::Integrity(format!(
+                "{id} is at version {} but its stream ends at {}",
+                stream.version, party.version
+            )));
+        }
+        party.version = stream.version;
+        Ok(Some(Loaded {
+            party,
+            head: std::mem::take(&mut stream.head),
+            key: stream.key.take(),
+        }))
+    }
+
+    async fn read_stream(&self, c: &impl GenericClient, id: &PartyId, lock: bool) -> Result<Option<(Vec<Recorded>, Stream)>> {
         let sql = if lock {
             "select version, head_hash, shredded_at is not null, kind from parties where id = $1 for update"
         } else {
@@ -201,7 +235,7 @@ impl<W: KeyWrapper> Store<W> {
             )
             .await
             .map_err(db)?;
-        let mut party = Party::new(id.clone());
+        let mut records = Vec::new();
         for r in rows {
             let seq: i64 = r.get(0);
             let kind: String = r.get(1);
@@ -210,39 +244,49 @@ impl<W: KeyWrapper> Store<W> {
             let commitment: Vec<u8> = r.get(4);
             let ciphertext: Option<Vec<u8>> = r.get(5);
             let seq = u64::try_from(seq).map_err(|_| StoreError::Integrity("negative sequence".into()))?;
-            let rec = match (&key, ciphertext) {
+            match (&key, ciphertext) {
                 (Some(key), Some(ct)) => {
-                    let payload = crypto::open(key, &id.0, seq, &ct, &commitment).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
-                    serde_json::from_value::<Recorded>(payload).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?
+                    let payload =
+                        crypto::open(key, &id.0, seq, &ct, &commitment).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
+                    let rec = serde_json::from_value::<Recorded>(payload).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
+                    records.push(rec);
                 }
-                // Erased: only the public part remains.
-                _ if shredded => Recorded {
-                    seq,
-                    recorded_at,
-                    caller,
-                    actor: String::new(),
-                    body: if kind == "shredded" {
-                        EventBody::Shredded
-                    } else {
-                        continue;
-                    },
-                },
+                // Erased: only the tombstone means anything.
+                _ if shredded => {
+                    if kind == "shredded" {
+                        records.push(Recorded {
+                            seq,
+                            recorded_at,
+                            caller,
+                            actor: String::new(),
+                            body: EventBody::Shredded,
+                        });
+                    }
+                }
                 _ => return Err(StoreError::Integrity(format!("{id} event {seq} has no payload or key"))),
-            };
-            party.apply(&rec);
+            }
         }
-        if shredded {
-            party.shredded = true;
-            party.kind = Some(kind);
-        }
-        if party.version != u64::try_from(version).unwrap_or(0) && !shredded {
-            return Err(StoreError::Integrity(format!(
-                "{id} is at version {version} but its stream ends at {}",
-                party.version
-            )));
-        }
-        party.version = u64::try_from(version).unwrap_or(0);
-        Ok(Some(Loaded { party, head, key }))
+        let stream = Stream {
+            version: u64::try_from(version).unwrap_or(0),
+            head,
+            shredded,
+            kind,
+            key,
+        };
+        Ok(Some((records, stream)))
+    }
+
+    /// Every event of a party, opened: what an access request returns.
+    pub async fn records(&self, id: &PartyId) -> Result<Option<Vec<Recorded>>> {
+        let client = self.client().await?;
+        Ok(self.read_stream(&*client, id, false).await?.map(|(r, _)| r))
+    }
+
+    /// An earlier answer to the same request, if there is one.
+    pub async fn recall(&self, idem: &Idempotency) -> Result<Option<Value>> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(db)?;
+        self.remembered(&tx, idem).await
     }
 
     /// A party as it stands, or `None` if there is no such party.
