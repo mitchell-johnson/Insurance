@@ -1,0 +1,21 @@
+[package]
+name = "ic-complaints"
+description = "Complaints, disputes and conduct cases: the register, timers, separation of review, external referrals and reporting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-log.workspace = true
+ic-raft.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

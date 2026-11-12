@@ -36,7 +36,7 @@ async fn main() -> Result<(), String> {
         .json()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
-    let config = Config::from_lookup(|key| std::env::var(key).ok())?;
+    let config = Config::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;
     let auth = ClusterAuth::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);

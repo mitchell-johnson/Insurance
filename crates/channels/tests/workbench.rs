@@ -673,3 +673,201 @@ fn the_proof_of_debt_extract_reconciles_and_traces() {
     assert_eq!(extract["as_at"], "2027-11-15");
     assert!(w.ch.data.workbench.proof_of_debt(&p("nobody"), open()).is_none());
 }
+
+/// A commission module that records what it is told and answers from a script.
+#[derive(Default)]
+struct Commission {
+    told: std::sync::Mutex<Vec<serde_json::Value>>,
+    /// Envelope key -> the refusal to answer with.
+    refuse: std::sync::Mutex<std::collections::BTreeMap<String, (String, String)>>,
+    /// What the `action` question answers; `Err` text when it cannot be asked.
+    record: std::sync::Mutex<(serde_json::Value, Option<String>)>,
+}
+
+type Asked<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<serde_json::Value, String>> + Send + 'a>>;
+
+impl ic_channels::forward::Source for Commission {
+    fn ask(&self, _question: serde_json::Value) -> Asked<'_> {
+        let (answer, down) = self.record.lock().unwrap().clone();
+        Box::pin(async move { down.map_or(Ok(answer), Err) })
+    }
+
+    fn tell(&self, envelope: serde_json::Value) -> Asked<'_> {
+        let refusal = self.refuse.lock().unwrap().get(envelope["key"].as_str().unwrap()).cloned();
+        self.told.lock().unwrap().push(envelope);
+        Box::pin(async move {
+            Ok(match refusal {
+                Some((code, message)) => json!({ "result": { "Err": { "code": code, "message": message } } }),
+                None => json!({ "result": { "Ok": null } }),
+            })
+        })
+    }
+}
+
+/// Purpose: an action approved on the workbench is replayed in the commission module as each person's own act, in that module's own
+/// command and staff types, and what that module makes of it comes back as the action's outcome: posted, still posting, refused,
+/// rejected, failed, or wanting more signatures.
+/// Why it matters: the commission module moves the money and checks authority itself. If the staff console's approval never reached
+/// it, held commission approved for release would sit unpaid; if it arrived as a bundle signed by nobody, that module's own
+/// maker-checker record would be empty.
+#[tokio::test]
+async fn approved_actions_are_replayed_in_the_commission_module() {
+    use ic_channels::forward::{carry_actions, envelopes_for};
+    use ic_channels::http::{Channel, Local};
+    use ic_channels::query::Question;
+
+    let mut w = staffed();
+    held(&mut w);
+    // A large release: two approvers and legal.
+    w.send(staff("fin-1"), prepare("act/1", release(60_000_00))).unwrap();
+    for (who, legal) in [("fin-2", false), ("fin-3", false), ("lex", true)] {
+        w.send(staff(who), approve("act/1", legal)).unwrap();
+    }
+    // One still waiting for its approver is not carried.
+    w.send(staff("fin-1"), prepare("act-2", Action::WriteOff { amount_minor: 10_00 })).unwrap();
+    let at = w.at;
+    let local = Local::new(w.ch);
+
+    let waiting = local
+        .ask(Question::WorkbenchApproved {
+            module: "commission".into(),
+            at,
+        })
+        .await
+        .unwrap();
+    assert_eq!(waiting.as_array().unwrap().len(), 1);
+    let proposal: Proposal = serde_json::from_value(waiting[0]["proposal"].clone()).unwrap();
+    let envelopes = envelopes_for(&proposal, &waiting[0]["people"]);
+    assert_eq!(envelopes.len(), 4);
+
+    // Every envelope is one the commission module's own types accept, sent as the person who acted.
+    let theirs: Vec<ic_distribution::Envelope> = envelopes.iter().map(|e| serde_json::from_value(e.clone()).unwrap()).collect();
+    let who = |e: &ic_distribution::Envelope| match &e.actor {
+        ic_distribution::Actor::Staff(s) => (
+            s.id.to_string(),
+            s.templates.iter().flat_map(|t| t.roles.iter().map(|r| r.key())).collect::<Vec<_>>(),
+        ),
+        ic_distribution::Actor::Module(m) => (m.clone(), vec![]),
+    };
+    assert_eq!(
+        who(&theirs[0]),
+        ("fin-1".to_string(), vec!["counterparty_finance", "counterparty_finance_approver"])
+    );
+    assert_eq!(who(&theirs[3]), ("lex".to_string(), vec!["legal"]));
+    let ic_distribution::Actor::Staff(maker) = &theirs[0].actor else { panic!() };
+    let limits = &maker.templates[0];
+    assert_eq!(limits.default_profile.limit(ic_distribution::authority::LimitKind::Release), 100_000_00);
+    assert_eq!(limits.ceiling[&ic_distribution::authority::LimitKind::WriteOff], 1_000_000_00);
+    assert_eq!((maker.purpose.as_str(), maker.paths.contains("*")), ("licence_revoked", true));
+    assert!(matches!(
+        &theirs[0].command,
+        ic_distribution::Command::ProposeAction { id, action: ic_distribution::workbench::Action::Release { amount_minor: 60_000_00, account_ref }, document_ref, .. }
+            if id == "act-1" && account_ref == "acct-verified-1" && document_ref == "vault:fma-2027-118"
+    ));
+    assert!(matches!(&theirs[3].command, ic_distribution::Command::ApproveAction { id, as_role: ic_distribution::authority::Role::Legal } if id == "act-1"));
+    assert!(matches!(
+        &theirs[1].command,
+        ic_distribution::Command::ApproveAction {
+            as_role: ic_distribution::authority::Role::CounterpartyFinanceApprover,
+            ..
+        }
+    ));
+
+    // Every other kind of action also reads as one of theirs.
+    let share = Share {
+        party: p("fap-2"),
+        amount_minor: 5,
+        agreement: "agr-1".into(),
+    };
+    for action in [
+        Action::Offset {
+            amount_minor: 1,
+            receivable: "cb-1".into(),
+        },
+        Action::Offset {
+            amount_minor: 1,
+            receivable: "commission".into(),
+        },
+        Action::HoldPending {
+            review_on: d(2028, 1, 1),
+            legal_reference: "lr-1".into(),
+        },
+        Action::WriteOff { amount_minor: 1 },
+        Action::Split { shares: vec![share] },
+        Action::RecordDividend {
+            receivable: "cb-1".into(),
+            received_minor: 1,
+        },
+    ] {
+        let other = Proposal {
+            action,
+            approvals: vec![],
+            ..proposal.clone()
+        };
+        let envelope = envelopes_for(&other, &waiting[0]["people"]).remove(0);
+        serde_json::from_value::<ic_distribution::Envelope>(envelope.clone()).unwrap_or_else(|e| panic!("{envelope}: {e}"));
+    }
+
+    let state_of = |local: &Local| local.with(|s| serde_json::to_value(&s.data.workbench.proposals["act/1"]).unwrap());
+    let commission = Commission::default();
+
+    // Still posting: nothing is closed, and the next pass sends the same keys again.
+    *commission.record.lock().unwrap() = (json!({ "state": "posting" }), None);
+    assert_eq!(carry_actions(&commission, &local, at).await, Ok(0));
+    assert_eq!(commission.told.lock().unwrap().len(), 4);
+    assert_eq!(state_of(&local)["state"], "approved");
+    // The commission module cannot be asked: the pass says so and nothing is closed.
+    commission.record.lock().unwrap().1 = Some("no leader".into());
+    assert_eq!(carry_actions(&commission, &local, at).await, Err("no leader".to_string()));
+
+    // Posted.
+    *commission.record.lock().unwrap() = (json!({ "state": "completed" }), None);
+    assert_eq!(carry_actions(&commission, &local, at).await, Ok(1));
+    let done = state_of(&local);
+    assert_eq!(
+        (done["state"].as_str(), done["reference"].as_str()),
+        (Some("applied"), Some("distribution:act-1"))
+    );
+    // Nothing is waiting any more.
+    assert_eq!(carry_actions(&commission, &local, at).await, Ok(0));
+
+    // The other outcomes, each on a fresh action.
+    let outcomes: [(&str, serde_json::Value, Option<(&str, &str)>, &str); 4] = [
+        (
+            "r1",
+            json!({ "state": "proposed", "needed": [] }),
+            Some(("workbench:r1:propose", "over_limit")),
+            "over_limit",
+        ),
+        ("r2", json!({ "state": "rejected", "rejected_because": "wrong account" }), None, "rejected"),
+        ("r3", json!({ "state": "proposed", "failed": "the balance moved" }), None, "failed"),
+        ("r4", json!({ "state": "proposed", "needed": ["legal"] }), None, "needs_more_approval"),
+    ];
+    for (id, record, refuse, code) in outcomes {
+        local.with(|s| {
+            for (n, (who, command)) in [("fin-1", prepare(id, release(10_00))), ("fin-2", approve(id, false))].into_iter().enumerate() {
+                let envelope = ic_channels::Envelope {
+                    key: format!("{id}-{n}"),
+                    at,
+                    actor: staff(who),
+                    command,
+                };
+                ic_log::StateMachine::apply(s, 10_000, envelope).result.unwrap();
+            }
+        });
+        *commission.record.lock().unwrap() = (record, None);
+        if let Some((key, code)) = refuse {
+            commission
+                .refuse
+                .lock()
+                .unwrap()
+                .insert(key.to_string(), (code.to_string(), "refused there".to_string()));
+        }
+        let before = commission.told.lock().unwrap().len();
+        assert_eq!(carry_actions(&commission, &local, at).await, Ok(1), "{id}");
+        // A refused proposal is not followed by its approvals.
+        assert_eq!(commission.told.lock().unwrap().len() - before, if refuse.is_some() { 1 } else { 2 }, "{id}");
+        let closed = local.with(|s| serde_json::to_value(&s.data.workbench.proposals[id]).unwrap());
+        assert_eq!((closed["state"].as_str(), closed["code"].as_str()), (Some("failed"), Some(code)), "{id}");
+    }
+}
