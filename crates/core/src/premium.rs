@@ -53,6 +53,20 @@ pub fn retail_period_premium(
     period_start: NaiveDate,
     work: &mut u32,
 ) -> Result<ModalPremium, PremiumError> {
+    retail_premium_with(catalog, product, policy, period_start, work, None)
+}
+
+/// As [`retail_period_premium`], counting one more layer (a cover code and
+/// a layer number) that started after the period's first day. Used to price
+/// cover added part way through a period already billed.
+pub(crate) fn retail_premium_with(
+    catalog: &Catalog,
+    product: &ProductDefinition,
+    policy: &Policy,
+    period_start: NaiveDate,
+    work: &mut u32,
+    also: Option<(&str, u32)>,
+) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
     let mut annual: BTreeMap<String, Dec> = BTreeMap::new();
     for cover in policy.covers.values() {
@@ -63,7 +77,7 @@ pub fn retail_period_premium(
         let table = catalog
             .rate_table_on(&def.rating.table, rated_on, &policy.group)
             .ok_or_else(|| PremiumError::NoRateTable(def.rating.table.clone()))?;
-        for layer in cover.layers.iter().filter(|l| l.in_force_on(period_start)) {
+        for layer in cover.layers.iter().filter(|l| l.in_force_on(period_start) || also == Some((cover.code.as_str(), l.id))) {
             *work += 1;
             let life = policy.lives.get(&layer.life).ok_or_else(|| PremiumError::UnknownLife(layer.life.clone()))?;
             let f = factors_on(life, period_start)?;
