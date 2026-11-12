@@ -140,6 +140,63 @@ where
     })
 }
 
+/// Where one of a module's core commands is to be proposed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// The module knows the partition.
+    Partition(PartitionId),
+    /// The partition that holds this policy. The host looks it up.
+    Policy(ic_core::PolicyId),
+}
+
+/// One command a module wants the core to apply, from its outbox.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CorePosting {
+    /// The module's own name for this outbox item.
+    pub id: String,
+    pub route: Route,
+    /// The command as the core takes it. Its idempotency key is the
+    /// module's, so the same item offered twice is applied once.
+    pub envelope: ic_core::Envelope,
+}
+
+/// What became of a [`CorePosting`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoreOutcome {
+    /// The core applied it, now or on an earlier offer.
+    Applied { partition: PartitionId, log_index: u64, duplicate: bool },
+    /// The core understood it and refused it. Offering it again changes
+    /// nothing.
+    Refused(ic_core::Reject),
+    /// No partition holds the policy it was addressed to.
+    Unroutable(String),
+}
+
+/// How the host carries a module's commands to the core.
+///
+/// A module that posts to the core keeps an outbox in its replicated state,
+/// written in the same step as whatever caused the posting. The host, on the
+/// node that leads the module's group, asks for the oldest items, proposes
+/// each to its partition and tells the module what became of it. The module
+/// removes an item only when it hears the outcome, so a node lost at any
+/// point leaves the item to be offered again, and the core's idempotency key
+/// makes the second offer harmless.
+///
+/// The three functions adapt the host to the module's own questions and
+/// commands. All are pure.
+#[derive(Clone, Copy)]
+pub struct Outbox {
+    /// The question that lists up to `limit` of the oldest unsent items.
+    pub pending: fn(limit: usize) -> Value,
+    /// Read the module's answer to that question, oldest first.
+    pub read: fn(Value) -> Result<Vec<CorePosting>, String>,
+    /// The module command that records an item's outcome. It carries its
+    /// own idempotency key, as every module command does.
+    pub outcome: fn(&CorePosting, &CoreOutcome) -> Value,
+}
+
 /// A module a node hosts: its name and how to make its empty state.
 #[derive(Clone)]
 pub struct ModuleSpec {
@@ -150,6 +207,8 @@ pub struct ModuleSpec {
     /// The module reads every partition's events: the host feeds them to
     /// its group and each partition keeps them until the group has them.
     pub events: bool,
+    /// The module posts to the core: the host carries its outbox there.
+    pub outbox: Option<Outbox>,
 }
 
 impl ModuleSpec {
@@ -162,7 +221,14 @@ impl ModuleSpec {
             name: name.to_string(),
             make,
             events: false,
+            outbox: None,
         })
+    }
+
+    /// Carry this module's outbox to the core. See [`Outbox`].
+    pub fn posting_to_core(mut self, outbox: Outbox) -> Self {
+        self.outbox = Some(outbox);
+        self
     }
 
     /// Feed this module every partition's events.
