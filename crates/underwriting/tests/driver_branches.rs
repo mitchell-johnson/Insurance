@@ -939,7 +939,7 @@ async fn nothing_connected_says_which_receiver_is_missing() {
         ),
     ];
     for (effect, reason) in cases {
-        assert_eq!(NothingConnected.forward(&effect).await, Ok(Some(reason.to_string())), "{effect:?}");
+        assert_eq!(NothingConnected.forward(0, &effect).await, Ok(Some(reason.to_string())), "{effect:?}");
         let (pass, _) = carry(effect, None, Value::Null, &[]).await;
         assert_eq!(pass.parked, vec![(7, reason.to_string())]);
     }
