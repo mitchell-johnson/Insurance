@@ -77,7 +77,11 @@ pub(crate) fn retail_premium_with(
         let table = catalog
             .rate_table_on(&def.rating.table, rated_on, &policy.group)
             .ok_or_else(|| PremiumError::NoRateTable(def.rating.table.clone()))?;
-        for layer in cover.layers.iter().filter(|l| l.in_force_on(period_start) || also == Some((cover.code.as_str(), l.id))) {
+        for layer in cover
+            .layers
+            .iter()
+            .filter(|l| l.in_force_on(period_start) || also == Some((cover.code.as_str(), l.id)))
+        {
             *work += 1;
             let life = policy.lives.get(&layer.life).ok_or_else(|| PremiumError::UnknownLife(layer.life.clone()))?;
             let f = factors_on(life, period_start)?;

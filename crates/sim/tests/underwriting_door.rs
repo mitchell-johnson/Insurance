@@ -168,7 +168,10 @@ fn an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left() {
     let policy = c.state(0).policies[&id].clone();
     let layers = &policy.covers["life"].layers;
     assert_eq!(layers.len(), 2);
-    assert_eq!((layers[0].sum_insured_minor, layers[0].loadings.len(), layers[0].exclusions.len()), (400_000_00, 0, 0));
+    assert_eq!(
+        (layers[0].sum_insured_minor, layers[0].loadings.len(), layers[0].exclusions.len()),
+        (400_000_00, 0, 0)
+    );
     let added = &layers[1];
     assert_eq!(
         (added.id, added.start, added.end, added.sum_insured_minor, added.origin),
@@ -179,8 +182,16 @@ fn an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left() {
     // The adjustment: the days left of the billed month, in proportion.
     let adjustment = policy.receivables.last().unwrap().clone();
     assert_eq!(adjustment.kind, ic_core::policy::ReceivableKind::Adjustment);
-    assert_eq!((adjustment.period_start, adjustment.period_end, adjustment.due), (today, d(2027, 12, 15), today));
-    assert!(adjustment.total_minor > 0 && adjustment.total_minor < first.total_minor, "{} of {}", adjustment.total_minor, first.total_minor);
+    assert_eq!(
+        (adjustment.period_start, adjustment.period_end, adjustment.due),
+        (today, d(2027, 12, 15), today)
+    );
+    assert!(
+        adjustment.total_minor > 0 && adjustment.total_minor < first.total_minor,
+        "{} of {}",
+        adjustment.total_minor,
+        first.total_minor
+    );
     let events = c.take_events();
     assert!(events.iter().any(|e| matches!(&e.event,
         ic_core::Event::LayerAdded { layer, origin: ic_core::LayerOrigin::Increase, .. } if layer.layer == 2 && layer.start == today && layer.sum_insured_minor == 100_000_00)));
@@ -205,7 +216,10 @@ fn an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left() {
     let policy = c.state(0).policies[&id].clone();
     assert_eq!(policy.covers["life"].layers[2].start, d(2028, 1, 15));
     let whole = policy.receivables.last().unwrap().clone();
-    assert_eq!((whole.kind, whole.period_start, whole.period_end), (ic_core::policy::ReceivableKind::Adjustment, d(2028, 1, 15), d(2028, 2, 15)));
+    assert_eq!(
+        (whole.kind, whole.period_start, whole.period_end),
+        (ic_core::policy::ReceivableKind::Adjustment, d(2028, 1, 15), d(2028, 2, 15))
+    );
     // Half the sum of the first increase and none of its 50% loading: a third of its month.
     assert!((whole.total_minor - month / 3).abs() <= 3, "{} against a third of {month}", whole.total_minor);
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
@@ -232,7 +246,10 @@ fn an_increase_that_cannot_be_priced_or_is_not_underwritings_is_refused() {
     assert_eq!(code(c.submit(0, "underwriting", increase(&id, "trauma", 50_000_00, None))), "unknown_cover");
     assert_eq!(code(c.submit(0, "underwriting", increase(&id, "life", 0, None))), "sum_insured");
     assert_eq!(code(c.submit(0, "underwriting", increase(&id, "life", 4_700_000_00, None))), "sum_insured");
-    assert_eq!(code(c.submit(0, "underwriting", increase(&id, "life", 50_000_00, Some("-0.1")))), "invalid_loading");
+    assert_eq!(
+        code(c.submit(0, "underwriting", increase(&id, "life", 50_000_00, Some("-0.1")))),
+        "invalid_loading"
+    );
     let mut stranger = increase(&id, "life", 50_000_00, None);
     if let Command::AddUnderwrittenLayer(spec) = &mut stranger {
         spec.life = ic_core::LifeId("life-9".into());
@@ -255,7 +272,10 @@ fn an_increase_that_cannot_be_priced_or_is_not_underwritings_is_refused() {
     c.submit(0, "end-of-day", Command::RunEndOfDay { policies: vec![id.clone()] }).unwrap();
     let policy = c.state(0).policies[&id].clone();
     let december = policy.receivables.iter().find(|r| r.period_start == d(2027, 12, 15)).unwrap();
-    assert!(december.total_minor > policy.receivables[0].total_minor, "the period was billed with the layer in it");
+    assert!(
+        december.total_minor > policy.receivables[0].total_minor,
+        "the period was billed with the layer in it"
+    );
     c.submit(0, "underwriting", increase(&id, "life", 50_000_00, None)).unwrap();
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 

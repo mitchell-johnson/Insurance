@@ -25,7 +25,12 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         .product(&policy.product_hash)
         .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?
         .clone();
-    let unknown_cover = || Reject::new("unknown_cover", format!("{} is not a cover in force on this policy that is priced per life", spec.cover));
+    let unknown_cover = || {
+        Reject::new(
+            "unknown_cover",
+            format!("{} is not a cover in force on this policy that is priced per life", spec.cover),
+        )
+    };
     let cover = policy
         .covers
         .get(&spec.cover)
@@ -102,8 +107,19 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         let with = retail_premium_with(catalog, &product, policy, start, &mut ctx.work, Some((&spec.cover, id)))?;
         let days_left = (next - effective).num_days() as i128;
         let days = (next - start).num_days().max(1) as i128;
-        let delta = Bill::from_modal(policy, &with).minus(&Bill::from_modal(policy, &without)).scaled(days_left, days);
-        if let Some(receivable) = raise_receivable(ledger, policy, ctx, &delta, ReceivableKind::Adjustment, (effective, next), ctx.date, "premium_adjusted")? {
+        let delta = Bill::from_modal(policy, &with)
+            .minus(&Bill::from_modal(policy, &without))
+            .scaled(days_left, days);
+        if let Some(receivable) = raise_receivable(
+            ledger,
+            policy,
+            ctx,
+            &delta,
+            ReceivableKind::Adjustment,
+            (effective, next),
+            ctx.date,
+            "premium_adjusted",
+        )? {
             ctx.emit(Event::PremiumAdjusted {
                 policy: policy.id.clone(),
                 receivable,
