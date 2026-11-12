@@ -705,6 +705,7 @@ fn risk(n: usize, sum: i64, start_day: u64, end_after: Option<u64>, member: bool
         excluded: false,
         excess_path: None,
         migrated: None,
+        continues: None,
     }
 }
 

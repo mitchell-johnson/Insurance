@@ -109,6 +109,7 @@ impl Reinsurance {
             excluded: pending.is_some_and(|p| p.excluded),
             excess_path: self.schemes.get(&key.policy).map(|s| s.excess_path),
             migrated: None,
+            continues: None,
             product,
             key,
         }
@@ -134,6 +135,45 @@ impl Reinsurance {
         self.put_risk(ctx, risk);
         self.pending_terms.remove(&(key.policy.clone(), key.cover.clone()));
         self.settle_confirmed(ctx, &key);
+    }
+
+    /// A layer the core wrote again because its underwriting terms changed.
+    /// Nothing about what is ceded has changed, so the new layer takes the
+    /// old one's treaty, its place in the retention order, its facultative
+    /// terms and a migrated cession as they stand. A facultative reinsurer
+    /// took the risk on the old terms, so a person is asked to tell it.
+    fn continue_layer(&mut self, ctx: &mut Ctx, policy: &PolicyId, partition: PartitionId, l: &LayerInfo, replaced: u32) {
+        let was = RiskKey {
+            policy: policy.clone(),
+            cover: l.cover.clone(),
+            layer: replaced,
+            life: l.life.clone(),
+        };
+        let key = RiskKey { layer: l.layer, ..was.clone() };
+        let (Some(old), None) = (self.risk(&was).cloned(), self.risk(&key)) else {
+            // The cover it continues was never seen here, or this layer
+            // already was: there is nothing to carry over.
+            return self.add_layer(ctx, policy, partition, l, true);
+        };
+        let mut risk = self.new_risk(key.clone(), partition, &l.cover_type, Source::Layer, l.start, l.sum_insured_minor);
+        risk.treaties = vec![(l.start, old.treaty_on(l.start).cloned())];
+        risk.facultative = old.facultative.clone();
+        risk.excluded = old.excluded;
+        risk.migrated = old.migrated.clone();
+        risk.continues = Some(old.continues.clone().unwrap_or((old.start, was.clone())));
+        self.put_risk(ctx, risk);
+        // The old layer's exception, if it was still open, is about this cover.
+        self.set_exception(ctx, format!("facultative_terms_altered:{was}"), "facultative_terms_altered", None);
+        if !old.facultative.is_empty() {
+            let references: Vec<&str> = old.facultative.iter().map(|f| f.reference.as_str()).collect();
+            let detail = format!(
+                "the underwriting terms of {was} changed on {} and it carries on as layer {}: tell the facultative reinsurer ({})",
+                l.start,
+                l.layer,
+                references.join(", ")
+            );
+            self.set_exception(ctx, format!("facultative_terms_altered:{key}"), "facultative_terms_altered", Some(detail));
+        }
     }
 
     /// Set a member's cover from a date. Covers the member no longer has end
@@ -280,6 +320,12 @@ impl Reinsurance {
                     self.set_in_force(ctx, &policy, in_force(to), business_date);
                 }
             }
+            Event::LayerAdded {
+                policy,
+                layer,
+                continues: Some(replaced),
+                ..
+            } => self.continue_layer(ctx, &policy, partition, &layer, replaced),
             Event::LayerAdded { policy, layer, .. } => self.add_layer(ctx, &policy, partition, &layer, true),
             Event::LayersMerged {
                 policy,
