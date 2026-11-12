@@ -1998,6 +1998,7 @@ dependencies = [
  "ic-ledger",
  "ic-log",
  "ic-money",
+ "ic-pricing",
  "ic-product",
  "ic-raft",
  "ic-readmodel",

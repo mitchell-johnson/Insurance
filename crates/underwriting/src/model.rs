@@ -116,6 +116,10 @@ pub enum ConsentKind {
     ExistingCoverPrefill,
     /// Records may be obtained from doctors and other sources.
     ObtainRecords,
+    /// A scheme member agrees that their employer may see the loaded premium
+    /// for their underwritten cover on an itemised invoice. A loading implies
+    /// health, so without this the employer learns only that cover is in place.
+    EmployerSeesLoading,
 }
 
 /// Cover the insurer already holds on the person, from the life index.

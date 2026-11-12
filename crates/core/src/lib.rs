@@ -30,6 +30,7 @@ mod earning;
 mod group;
 mod lifecycle;
 mod postings;
+mod reduce;
 mod reopen;
 mod transfer;
 mod underwritten;

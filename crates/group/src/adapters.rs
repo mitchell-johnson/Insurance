@@ -217,8 +217,9 @@ fn case_of(proposal: &str) -> Option<(String, u64)> {
 /// with its loadings and exclusions; a proposal that ended without terms
 /// was declined, or was not proceeded with.
 ///
-/// Underwriting does not say whether the member agreed to the employer
-/// seeing a loading, so an answer never claims that consent.
+/// The member's consent to the employer seeing a loading is underwriting's
+/// `employer_may_see_loading`, recorded there by the member's signed step.
+/// Absent, it is not claimed.
 pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
     let group_excess = |body: &Value| body["entry"]["entry"] == "group_excess";
     let (body, decision) = if let Some(body) = effect.get("apply_terms").filter(|b| group_excess(b)) {
@@ -227,7 +228,7 @@ pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
             sum_insured_minor: cover["sum_insured_minor"].as_i64()?,
             loadings: serde_json::from_value(cover["loadings"].clone()).ok()?,
             exclusions: serde_json::from_value(cover["exclusions"].clone()).ok()?,
-            member_consents_to_itemising: false,
+            member_consents_to_itemising: body["employer_may_see_loading"].as_bool().unwrap_or(false),
         };
         (body, decision)
     } else {
