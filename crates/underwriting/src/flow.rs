@@ -667,6 +667,15 @@ pub(crate) fn end_proposal(p: &mut Proposal, cx: &mut Cx) {
         }
     }
     end_interim(p, cx);
+    if let Some(policy) = p.entry.policy() {
+        cx.effect(Effect::ProposalEnded {
+            key: format!("{proposal}/ended"),
+            proposal,
+            entry: p.entry.clone(),
+            policy: policy.clone(),
+            outcome: p.status.key().to_string(),
+        });
+    }
 }
 
 /// An offer was declined or ran out: the life is settled without cover.
