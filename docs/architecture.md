@@ -134,6 +134,89 @@ Owned by the thread "Build portal and app services". Full description: [channels
 - Browser check, not run by CI: `cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &` then `POLICY=pol-00000001 node crates/channels/tests/browser/check.js`. All pages passed on 2026-11-12.
 - No known failing checks in this crate at hand-over.
 
+### Unit pricing (`ic-pricing`)
+
+Unit pricing decides which price is right. The core's investment ledger (section "Units and funds") decides what a price does. The module is the crate `crates/pricing`. It is hosted on every ledger node as the module group `unit-pricing` (one line in `ic_node::modules()`), because a price is one fact for every partition. Its driver is the binary `ic-unit-pricing`. The full reference is [unit-pricing.md](unit-pricing.md): file formats, commands, roles, questions and settings.
+
+**Where the code is.**
+
+- `fund.rs`: the module's terms, read from the `pricing` map of the core's own `ic_core::invest::FundDefinition`.
+  - The terms are `previous_move`, `benchmark_gap`, `stale_asset_days`, `unexplained_move`, `error_threshold`, `launch_price`, `pricing_lag_days`, `time_zone` and `compensation_minimum_minor`. Unknown keys are refused.
+  - It also holds the pricing calendar: weekends and the fund's non-pricing days, the cut-off and when a price is due.
+- `valuation.rs`: the administrator's CSV file (`H`/`V`/`A`/`T` records, at most 4 MiB, refused whole if malformed).
+- `strike.rs`:
+  - strikes mid, buy (rounded up) and sell (rounded down);
+  - runs the checks: units on issue (blocking), previous move, benchmark, stale assets and unexplained move (each holds the price);
+  - hashes every input.
+- `state.rs`: the deterministic state machine `PricingState`. It covers funds, valuations, prices and their statuses, suspensions, the per-partition publication outbox, price errors with their remediation record, holdings and flows from the core's events, extracts, idempotency keys (kept for 35 days) and a bounded event log.
+- `command.rs`: commands, callers and roles.
+- `host.rs`: the module's questions, `react()` and the core outbox. `react()` turns core events into module commands.
+- `driver.rs`, `adapters.rs`, `service.rs`, `bin/ic-unit-pricing.rs`: the driver process.
+- `extract.rs`: the holdings extract file.
+
+The tests are in `crates/pricing/tests/`:
+
+- `prices`, `errors` and `host`;
+- `driver`, which uses fakes;
+- `adapters`, which uses a stand-in for the Blob List API;
+- `funds`, which checks that every shipped fund in `products/funds/` is accepted;
+- `cluster`, an end-to-end test against a real node. It runs file intake, prepare, approve, delivery to the core, order execution, the holding and the extract written, and then the shipped binary under SIGTERM.
+
+Line coverage was 98.3% at hand-over.
+
+**The contract with the core.** All of it is on main.
+
+- **Funds.** The core emits `InvestEvent::FundActivated` with `definition: Some(FundDefinition)` on each partition. `react()` turns it into the module's `ActivateFund`, keyed `fund:{id}:{version}:{content_hash}`. The same key comes from each partition and from `ic_pricing::command::activation()` (caller `config`), so the module holds exactly the versions the core holds.
+- **Prices.**
+  - An approved price is queued for each partition and carried by the node's host outbox as `InvestCommand::ActivateUnitPrice(UnitPrice { price_id, fund, pricing_date, version, buy, sell, mid, inputs_hash, supersedes })`. It is sent under caller `unit-pricing` with key `unit-pricing:{price}/{partition}/{attempt}`.
+  - The core requires plain identifiers (letters, digits, `- _ . :`, at most 120 characters). So a slot is `{fund}:{date}` and a price ID is `{fund}:{date}.{version}`.
+  - The host reports each outcome back as `RecordDelivery`. The price is `Active` once every partition has applied it. A refusal waits for the lead's `Republish`.
+- **Orders.** The core runs `ExecuteOrders` and `ReplayOrders` itself, as a step of the close and from `ic-worker unit-orders` every fifteen minutes. This module never sends them. The replay threshold is the fund's `compensation_minimum_minor`, which the core sends as `materiality_minor`.
+- **Events read.**
+  - `UnitOrderExecuted` becomes a signed Buy or Sell movement.
+  - `UnitOrderReplayed` becomes a Correction, keyed `{order}/replay/{to_price}`, that carries the amount borne and whether it was compensated.
+  - From these the module keeps each policy's holding, each date's flows and each price error's remediation record.
+- **Units on issue.**
+  - The driver asks each partition `Question::UnitsOnIssue { fund }`. The reply is `units_micro`, `executed_through` and `pending`. The driver proposes `RecordCoreUnits` when a figure changes.
+  - `executed_through` is the latest struck date with nothing pending for it or any earlier date, counting a switch buy whose sell has not run (the core changed it to this at 88c7474).
+  - The units check for date D adds the partitions' units once every partition reports executed through the previous price's date. The holdings snapshot for D is taken once every partition reports executed through D.
+
+**Maker and checker.**
+
+- The roles are `unit_pricing_preparer`, `unit_pricing_approver` and `unit_pricing_lead`. The approver is never the preparer.
+- Each held check is accepted by name with a reason. A blocked price cannot be approved.
+- Approval re-checks four things: the valuation revision, the core's units, the previous price, and that no price for that slot is in flight. It is also refused when the fund is suspended, when an uncorrected price error is open on the fund, or when an earlier pricing day has no price and was not suspended.
+
+**Price errors.**
+
+- `RaisePriceError` names active prices. Each one is re-prepared as version n+1, which supersedes the old price.
+- A correction below `error_threshold` becomes `Immaterial` and is never sent to the core.
+- `CloseError` needs every correction active.
+
+**On Azure.** The template is `infra/unit-pricing.bicep` and the Kubernetes file is `deploy/k8s/unit-pricing.yaml` (two replicas, workload identity, cluster token from Key Vault).
+
+- **Inbound account.** It has a flat namespace and uses Entra ID only. Defender for Storage malware scanning writes its result as an index tag; the driver reads a file only once the tag says clean, refuses a file with a threat unread, and waits for an untagged one.
+- **Administrator access.** The administrator writes over HTTPS as its own service principal. An ABAC role condition allows writes only under `valuations/` and no deletes or tag writes, so it cannot forge a clean tag. SFTP was dropped because it needs a hierarchical namespace, which has no index tags; Mitchell approved this on 12 Nov 2026.
+- **Outbound container.** It is immutable for seven years. The driver writes `extracts/<fund>/<date>.csv` once.
+- **Driver pass.** It runs every 30 seconds and has three steps: intake over the last seven days of folders, units on issue, and extracts. A fault in one step does not stop the others. Every proposal is keyed (`valuation-file:<name>`, `units:<fund>:<p>:<through>:<units>`, `extract-written:<id>`), so two drivers or a restart propose nothing new.
+
+**Handed to other areas, and their state at hand-over.**
+
+- **Finance close.** Done by the finance thread. `ic_finance::driver::unit_pricing_sources()` asks `{"q":"close_check","as_at":…}`. The answer is `{green, items}`, and the item kinds are `late_price`, `price_awaiting_action`, `open_price_error` and `extract_not_written`. `ic-finance-close` reports it as the close check `unit_pricing`. Aged pending investment cash comes from the core, not from this module.
+- **Staff screens.** Done by the portal thread.
+  - The page `/pricing` in `ic-portal` uses the routes `/staff/v1/unit-pricing/*` and sends the eight console commands as caller `unit-pricing-console`.
+  - Roles come from the staff actions `unit_pricing.prepare`, `.approve` and `.lead`.
+  - `crates/channels/tests/http.rs` (`the_unit_pricing_console`) runs the console against `PricingState`, so renaming a command or field here fails that test.
+
+**Not finished.**
+
+- `infra/unit-pricing.bicep` compiles in CI but is not referenced by `main.bicep`. It has not been deployed, and its Defender resource uses a preview API. The ABAC condition string has not been tested against a live account.
+- `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.
+- No real administrator is onboarded. That needs its service principal's object ID (`administratorPrincipalId`) and an agreed file layout; the current layout is our own.
+- A definition the core accepts but this module refuses (bad pricing terms) is recorded as a refusal on the event's key, and the fund cannot be priced until a corrected version is activated. Nothing alerts on this yet.
+- A movement that arrives for a date whose extract was already written still updates holdings. Its flow entry is never consumed, so the next extract's holdings are right but the earlier date's flows stay short. The core's `executed_through` rule should prevent this.
+- Nothing alerts on a price that is late or a publication that was refused. Both show only in the `late`, `work` and `close_check` questions and in the driver's warn log.
+
 ## Privacy
 
 Command payloads carry personal and health information. They never go to logs: a log line names a command, its sender and its key only. Ledger entries carry salted commitments to their payloads, so the chain can be verified without the payloads being readable from it.
