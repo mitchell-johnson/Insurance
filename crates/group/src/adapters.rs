@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::command::{Envelope, ExcessDecision};
 use crate::driver::{Answers, Core, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use crate::event::{GroupEvent, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{Question, MODULE};
 use crate::state::Outcome;
 
@@ -189,6 +189,19 @@ pub fn underwriting_withdrawal(key: &str, at: DateTime<Utc>, today: NaiveDate, r
     underwriting_command(key, at, today, json!({ "withdraw": { "proposal": request_key } }))
 }
 
+/// What the core made of accepted terms, as the issuer's report to
+/// underwriting: the layer written, or the code it was refused with.
+pub fn underwriting_outcome(key: &str, at: DateTime<Utc>, today: NaiveDate, request_key: &str, outcome: &IssueOutcome) -> Value {
+    let command = match outcome {
+        IssueOutcome::Issued { life, cover, layer } => json!({ "policy_issued": {
+            "proposal": request_key,
+            "layers": [{ "life": life, "cover": cover, "layer": layer }],
+        }}),
+        IssueOutcome::Rejected { code } => json!({ "issue_rejected": { "proposal": request_key, "code": code } }),
+    };
+    json!({ "key": key, "caller": "issuer", "at": at, "today": today, "command": command })
+}
+
 fn underwriting_command(key: &str, at: DateTime<Utc>, today: NaiveDate, command: Value) -> Value {
     json!({ "key": key, "caller": crate::command::caller::STAFF, "at": at, "today": today, "command": command })
 }
@@ -204,8 +217,9 @@ fn case_of(proposal: &str) -> Option<(String, u64)> {
 /// with its loadings and exclusions; a proposal that ended without terms
 /// was declined, or was not proceeded with.
 ///
-/// Underwriting does not say whether the member agreed to the employer
-/// seeing a loading, so an answer never claims that consent.
+/// The member's consent to the employer seeing a loading is underwriting's
+/// `employer_may_see_loading`, recorded there by the member's signed step.
+/// Absent, it is not claimed.
 pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
     let group_excess = |body: &Value| body["entry"]["entry"] == "group_excess";
     let (body, decision) = if let Some(body) = effect.get("apply_terms").filter(|b| group_excess(b)) {
@@ -214,7 +228,7 @@ pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
             sum_insured_minor: cover["sum_insured_minor"].as_i64()?,
             loadings: serde_json::from_value(cover["loadings"].clone()).ok()?,
             exclusions: serde_json::from_value(cover["exclusions"].clone()).ok()?,
-            member_consents_to_itemising: false,
+            member_consents_to_itemising: body["employer_may_see_loading"].as_bool().unwrap_or(false),
         };
         (body, decision)
     } else {
@@ -306,6 +320,15 @@ impl Peers for ClusterPeers {
         // Answered, ended or never opened: there is nothing left to withdraw.
         self.to_underwriting(underwriting_withdrawal(key, Utc::now(), today, request_key), &["closed", "unknown_proposal"])
             .await
+    }
+
+    async fn underwriting_outcome(&self, key: &str, today: NaiveDate, request_key: &str, outcome: &IssueOutcome) -> Result<(), String> {
+        // Recorded already, ended, or decided without a proposal there.
+        self.to_underwriting(
+            underwriting_outcome(key, Utc::now(), today, request_key, outcome),
+            &["not_issuing", "unknown_proposal"],
+        )
+        .await
     }
 
     async fn underwriting_answers(&self, after: u64, max: usize) -> Result<Answers, String> {

@@ -5,7 +5,7 @@
 //! Nothing here changes state, and nothing here reads a clock: the
 //! dashboard is given today's date by whoever asks.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{Datelike, NaiveDate, Weekday};
 use ic_ledger::{AccountClass, BalanceFamily, EntryId, Hash32, PartitionId};
@@ -160,10 +160,9 @@ pub struct Dashboard {
     pub trial_balance_hash: Option<Hash32>,
 }
 
-/// The date `n` working days after `from`. Weekends are skipped; public
-/// holidays are not known here, so a step due over a holiday shows as due a
-/// day early rather than late.
-pub fn working_days_after(from: NaiveDate, n: u32) -> NaiveDate {
+/// The date `n` working days after `from`. Weekends and the listed public
+/// holidays are skipped.
+pub fn working_days_after(from: NaiveDate, n: u32, holidays: &BTreeSet<NaiveDate>) -> NaiveDate {
     let mut date = from;
     let mut left = n;
     while left > 0 {
@@ -171,7 +170,7 @@ pub fn working_days_after(from: NaiveDate, n: u32) -> NaiveDate {
             break;
         };
         date = next;
-        if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) {
+        if !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) && !holidays.contains(&date) {
             left -= 1;
         }
     }
@@ -278,11 +277,13 @@ impl FinanceState {
     /// The close of a period on one screen, as at `today`.
     pub fn dashboard(&self, period: PeriodId, today: NaiveDate) -> Dashboard {
         let state = self.periods.get(&period);
+        let none = BTreeSet::new();
+        let holidays = self.close_config.as_ref().map_or(&none, |c| &c.holidays);
         let steps: Vec<Step> = self
             .checks(period)
             .into_iter()
             .map(|check| {
-                let due = working_days_after(period.end(), check.day);
+                let due = working_days_after(period.end(), check.day, holidays);
                 let overdue = today > due && matches!(check.status, CheckStatus::Red { .. });
                 Step { check, due, overdue }
             })
@@ -546,6 +547,23 @@ impl FinanceState {
             })
             .collect();
         Work { roots_wanted, closing }
+    }
+
+    /// Money the core holds in suspense for each policy, as the feed has
+    /// built it up: one item for each policy, oldest first. The balances are
+    /// as at the latest day closed, which is the date the report carries
+    /// when that is later than the date asked for.
+    pub fn aged_suspense(&self, as_at: NaiveDate) -> serde_json::Value {
+        let held = self.mart.suspense();
+        let total: i64 = held.iter().map(|(_, h)| h.amount_minor).sum();
+        let as_at = self.mart.latest_close().map_or(as_at, |closed| closed.max(as_at));
+        let items: Vec<serde_json::Value> = held
+            .iter()
+            .filter(|(_, h)| h.since <= as_at)
+            .take(crate::driver::MAX_AGED_ITEMS)
+            .map(|(policy, h)| serde_json::json!({ "party": policy, "reason": "policy_suspense", "amount_minor": h.amount_minor, "since": h.since }))
+            .collect();
+        serde_json::json!({ "as_at": as_at, "items": items, "total_minor": total, "count": held.len() })
     }
 
     /// Lines `offset..offset + limit` of the extract of `kind` for a period,

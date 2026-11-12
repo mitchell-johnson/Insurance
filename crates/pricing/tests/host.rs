@@ -116,10 +116,13 @@ fn hosted_module_applies_answers_and_snapshots() {
 
 /// Purpose: an executed unit order from the core becomes one movement with
 /// the sign of its direction, a replayed order becomes a correction keyed by
-/// the order and the corrected price, and any other event is ignored.
+/// the order and the corrected price, a fund the core activated becomes the
+/// module's own activation under the same key on every partition and when
+/// applied twice, and any other event is ignored.
 /// Why it matters: holdings, the net flow and the remediation record are
 /// built only from these; a sell counted as a buy would put the
-/// administrator's register out by twice the order.
+/// administrator's register out by twice the order, and a fund the core
+/// trades that this module never activated could not be priced.
 #[test]
 fn core_events_become_movements() {
     use ic_core::invest::{Direction, InvestEvent, OrderKind};
@@ -198,6 +201,27 @@ fn core_events_become_movements() {
         definition: None,
     });
     assert!(react(&other).is_empty());
+
+    let def = fund("growth");
+    let activated = |partition| ic_core::EventRecord {
+        partition,
+        ..record(InvestEvent::FundActivated {
+            fund: def.id.clone(),
+            version: def.version,
+            content_hash: def.content_hash.clone(),
+            definition: Some(Box::new(def.clone())),
+        })
+    };
+    let (first, second) = (react(&activated(0)), react(&activated(1)));
+    assert_eq!(first[0].key, second[0].key, "one key whatever the partition");
+    assert_eq!(first[0].key, activation(def.clone(), first[0].at).key, "the same key as configuration's");
+    assert_eq!(first[0].caller, CALLER_EVENTS);
+    let mut state = ic_pricing::PricingState::default();
+    assert_eq!(state.apply_envelope(first[0].clone()), Output::Done);
+    let hash = state.state_hash();
+    assert_eq!(state.apply_envelope(second[0].clone()), Output::Done);
+    assert_eq!(state.state_hash(), hash, "the second partition's event changes nothing");
+    assert_eq!(state.funds[&def.id].len(), 1);
 }
 
 /// Purpose: the outbox carrier reads each publication as the core's

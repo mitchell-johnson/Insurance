@@ -210,6 +210,13 @@ pub enum Command {
         payment_ref: String,
         amount_minor: i64,
     },
+    /// The bank sent a settlement back after it was recorded as paid, or
+    /// before the module heard it had been.
+    SettlementReturned {
+        number: u32,
+        payment_ref: String,
+        reason: String,
+    },
     IssueSupplementaryListing {
         number: u32,
         reason: String,
@@ -297,9 +304,11 @@ impl Command {
             | Command::HoldSettlement { .. }
             | Command::ReleaseHold { .. }
             | Command::InstructSettlement { .. }
-            | Command::RecordSettlement { .. }
             | Command::IssueSupplementaryListing { .. }
             | Command::ReviewProfitCommission { .. } => &["reinsurance-ops", "finance", "month-end"],
+            // The payments module says what the bank did with a settlement;
+            // people record one that was paid some other way.
+            Command::RecordSettlement { .. } | Command::SettlementReturned { .. } => &["payments", "reinsurance-ops", "finance", "month-end"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
             | Command::InstructionRefused { .. }
@@ -336,6 +345,7 @@ impl Command {
             Command::ReleaseHold { .. } => "release_hold",
             Command::InstructSettlement { .. } => "instruct_settlement",
             Command::RecordSettlement { .. } => "record_settlement",
+            Command::SettlementReturned { .. } => "settlement_returned",
             Command::IssueSupplementaryListing { .. } => "issue_supplementary_listing",
             Command::ReviewProfitCommission { .. } => "review_profit_commission",
             Command::LoadMigratedCession { .. } => "load_migrated_cession",
@@ -1055,6 +1065,7 @@ impl Reinsurance {
                 payment_ref,
                 amount_minor,
             } => self.record_settlement(ctx, number, payment_ref, amount_minor),
+            Command::SettlementReturned { number, payment_ref, reason } => self.settlement_returned(ctx, number, &payment_ref, &reason),
             Command::IssueSupplementaryListing { number, reason } => self.issue_supplementary(ctx, number, reason),
             Command::ReviewProfitCommission { treaty, reinsurer } => self.review_profit_commission(ctx, treaty, reinsurer),
             Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),

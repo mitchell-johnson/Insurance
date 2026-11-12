@@ -177,6 +177,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
                 loadings: spec.loadings,
                 exclusions: spec.exclusions,
                 loading_itemised: false,
+                rated_from: None,
             });
         }
     }
@@ -388,6 +389,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             loadings,
                             exclusions,
                             loading_itemised: false,
+                            rated_from: None,
                         });
                         added.push(LayerInfo {
                             cover: cover.code.clone(),
@@ -415,7 +417,15 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
 /// Combine layers that nothing distinguishes, so decades of indexation do
 /// not leave hundreds of layers. Only layers older than the backdating window
 /// are merged, so nothing that could still be recalculated changes.
-pub(crate) fn merge_layers(policy: &mut Policy, cover_code: &str, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+///
+/// A level premium is priced on the life's age when the layer was first
+/// rated, so on a level cover layers also need the same rating date to merge;
+/// otherwise the merge would reprice the later layer at the earlier age.
+pub(crate) fn merge_layers(catalog: &Catalog, policy: &mut Policy, cover_code: &str, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+    let level = catalog
+        .product(&policy.product_hash)
+        .and_then(|p| p.cover(cover_code))
+        .is_some_and(|def| def.rating.premium_type == PremiumType::Level);
     let cutoff = ctx
         .date
         .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))
@@ -435,7 +445,10 @@ pub(crate) fn merge_layers(policy: &mut Policy, cover_code: &str, ctx: &mut Ctx<
         let mut removed = Vec::new();
         let mut j = i + 1;
         while j < cover.layers.len() {
-            if cover.layers[j].start <= cutoff && cover.layers[i].same_terms(&cover.layers[j]) {
+            if cover.layers[j].start <= cutoff
+                && cover.layers[i].same_terms(&cover.layers[j])
+                && (!level || cover.layers[i].rating_start() == cover.layers[j].rating_start())
+            {
                 let l = cover.layers.remove(j);
                 cover.layers[i].sum_insured_minor += l.sum_insured_minor;
                 removed.push(l.id);

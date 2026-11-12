@@ -37,6 +37,7 @@ struct Portal {
     phone: Key,
     retail: PolicyId,
     scheme: PolicyId,
+    pricing: Arc<common::pricing::PricingModule>,
 }
 
 fn healthy() -> RegionReport {
@@ -92,6 +93,9 @@ fn portal() -> Portal {
         ("sub-sue", "sue"),
         ("sub-fin1", "fin-1"),
         ("sub-fin2", "fin-2"),
+        ("sub-up1", "up-1"),
+        ("sub-up2", "up-2"),
+        ("sub-lead", "lead-1"),
     ] {
         w.dir(
             module("identity"),
@@ -135,6 +139,16 @@ fn portal() -> Portal {
                     &[workbench::actions::VIEW, workbench::actions::PREPARE, workbench::actions::APPROVE],
                     &[DataClass::Ordinary, DataClass::Financial],
                 ),
+                template(
+                    "unit-pricing",
+                    &[ic_channels::pricing::actions::PREPARE, ic_channels::pricing::actions::APPROVE],
+                    &[DataClass::Ordinary],
+                ),
+                template(
+                    "unit-pricing-lead",
+                    &[ic_channels::pricing::actions::VIEW, ic_channels::pricing::actions::LEAD],
+                    &[DataClass::Ordinary],
+                ),
             ],
             profiles: vec![Profile {
                 id: "p".into(),
@@ -146,7 +160,14 @@ fn portal() -> Portal {
         }),
     )
     .unwrap();
-    for (who, role) in [("sue", "service"), ("fin-1", "finance"), ("fin-2", "finance")] {
+    for (who, role) in [
+        ("sue", "service"),
+        ("fin-1", "finance"),
+        ("fin-2", "finance"),
+        ("up-1", "unit-pricing"),
+        ("up-2", "unit-pricing"),
+        ("lead-1", "unit-pricing-lead"),
+    ] {
         w.send(
             staff("alice"),
             Command::Staff(StaffCommand::Employ {
@@ -178,6 +199,7 @@ fn portal() -> Portal {
         }),
     )
     .unwrap();
+    let pricing = Arc::new(common::pricing::seeded(w.at));
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -189,6 +211,7 @@ fn portal() -> Portal {
         clock: Arc::new(move || tick.load(Ordering::SeqCst)),
         regions: regions.clone(),
         ui: UiConfig::Dev,
+        pricing: pricing.clone(),
     }));
     Portal {
         app,
@@ -199,6 +222,7 @@ fn portal() -> Portal {
         phone,
         retail,
         scheme,
+        pricing,
     }
 }
 
@@ -687,7 +711,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 4);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 7);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -959,7 +983,7 @@ async fn region_loss_is_shown_to_operators_and_said_plainly_to_customers() {
 #[tokio::test]
 async fn pages_are_served_locked_down() {
     let portal = portal();
-    for path in ["/", "/adviser", "/employer", "/staff", "/ops", "/status"] {
+    for path in ["/", "/adviser", "/employer", "/staff", "/pricing", "/ops", "/status"] {
         let response = portal
             .app
             .clone()
@@ -1036,6 +1060,199 @@ async fn pages_may_call_the_sign_in_authorities_only() {
         (Some("entra"), Some("spa-w"))
     );
     assert_eq!(config["customers"]["authority"], "https://contoso.ciamlogin.com");
+}
+
+/// Purpose: the unit pricing console end to end against that module's own code: only staff with a unit pricing action get in; the
+/// queue, funds, valuations and refused files are shown; a price is prepared, refused to its own preparer, approved by a second
+/// person, and found in force once the core has it; a held price is approved only with each failed check accepted; a lead suspends,
+/// resumes and raises a price error; and each command goes as the person with the roles their staff templates give.
+/// Why it matters: the unit pricing module takes people's commands only from this console and trusts the roles it states. A console
+/// that let anyone in, stated roles nobody holds, or sent anything but the people's commands would undo that module's two-person
+/// control over the price every unit-linked policy trades at.
+#[tokio::test]
+async fn the_unit_pricing_console() {
+    let portal = portal();
+    let base = "/staff/v1/unit-pricing";
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("{base}/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/unit-pricing/commands", command).await }
+    };
+    let day = common::pricing::first_day();
+
+    // Who gets in.
+    for outsider in ["sub-kiri", "sub-sue", "sub-fin1"] {
+        assert_eq!(ask(outsider, "work").await.0, StatusCode::FORBIDDEN, "{outsider}");
+        assert_eq!(
+            tell(outsider, json!({ "prepare_price": { "fund": "growth", "pricing_date": day } })).await.0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    assert_eq!(
+        ask("sub-up1", "me").await.1,
+        json!({ "view": true, "roles": ["unit_pricing_preparer", "unit_pricing_approver"] })
+    );
+    assert_eq!(ask("sub-lead", "me").await.1, json!({ "view": true, "roles": ["unit_pricing_lead"] }));
+
+    // What is shown before anyone acts.
+    let (status, work) = ask("sub-lead", "work").await;
+    assert_eq!((status, work["prices"].as_array().map(Vec::len)), (StatusCode::OK, Some(0)));
+    assert_eq!(work["refused_files"]["valuations/bad.csv"], "line 3: bad trailer");
+    let funds = ask("sub-lead", "funds").await.1;
+    assert_eq!(
+        funds.as_array().unwrap().iter().map(|f| f["fund"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["balanced", "cash", "growth"]
+    );
+    let valuation = ask("sub-up1", &format!("valuations?fund=growth&pricing_date={day}")).await;
+    assert_eq!(valuation.0, StatusCode::OK, "{valuation:?}");
+    assert_eq!(ask("sub-up1", "status").await.1["partitions"], 2);
+    // Only the console's questions, each with its fields; something not there is not found.
+    for bad in ["outbox?limit=5", "events?after=0&limit=5", "price", "prices?fund=growth", "late?as_at="] {
+        assert_eq!(ask("sub-up1", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(ask("sub-up1", "price?id=nope").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        ask("sub-up1", "valuations?fund=growth&pricing_date=never").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    // Only people's commands, and only in a role the person holds.
+    let prepare = json!({ "prepare_price": { "fund": "growth", "pricing_date": day } });
+    for (not_theirs, status) in [
+        (json!({ "record_partitions": { "count": 9 } }), StatusCode::BAD_REQUEST),
+        (
+            json!({ "record_delivery": { "publication": "x", "delivery": "applied" } }),
+            StatusCode::BAD_REQUEST,
+        ),
+        (json!({ "prepare_price": {}, "republish": {} }), StatusCode::BAD_REQUEST),
+        (json!("prepare_price"), StatusCode::BAD_REQUEST),
+        (json!({ "republish": { "price": "x" } }), StatusCode::FORBIDDEN),
+    ] {
+        assert_eq!(tell("sub-up1", not_theirs.clone()).await.0, status, "{not_theirs}");
+    }
+    let (status, problem) = tell("sub-lead", prepare.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("unit_pricing_preparer"));
+    let subject_only = [("x-dev-subject", "sub-up1".to_string())];
+    let unkeyed = portal.send("POST", "/staff/v1/unit-pricing/commands", &subject_only, Some(prepare.clone()));
+    assert_eq!(unkeyed.await.0, StatusCode::BAD_REQUEST);
+    // A command that module cannot read is its refusal to take it, not a success.
+    assert_eq!(
+        tell("sub-up1", json!({ "prepare_price": { "fund": 7 } })).await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    // Prepare, with the same key twice: one price.
+    let keyed = [("x-dev-subject", "sub-up1".to_string()), ("idempotency-key", "prep-1".to_string())];
+    let (status, first) = portal.send("POST", "/staff/v1/unit-pricing/commands", &keyed, Some(prepare.clone())).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let again = portal.send("POST", "/staff/v1/unit-pricing/commands", &keyed, Some(prepare)).await.1;
+    assert_eq!(first, again);
+    let price = first["output"]["prepared"]["price"].as_str().unwrap().to_string();
+    assert_eq!(first["output"]["prepared"]["status"], "prepared");
+    let work = ask("sub-up2", "work").await.1;
+    assert_eq!((&work["prices"][0]["id"], &work["prices"][0]["prepared_by"]), (&json!(price), &json!("up-1")));
+
+    // The preparer cannot approve it; a second person can. That module's refusal is passed on with its code.
+    let approve = json!({ "approve_price": { "price": price } });
+    let (status, problem) = tell("sub-up1", approve.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("separation")));
+    assert_eq!(tell("sub-up2", approve).await.0, StatusCode::OK);
+    let detail = ask("sub-lead", &format!("price?id={price}")).await.1;
+    assert_eq!((&detail["status"], &detail["approved_by"]), (&json!("activating"), &json!("up-2")));
+    portal.pricing.deliver_all(portal.now());
+    let in_force = ask("sub-lead", &format!("prices?fund=growth&from={day}&to={day}")).await.1;
+    assert_eq!(
+        (in_force.as_array().unwrap().len(), &in_force[0]["price"], &in_force[0]["version"]),
+        (1, &json!(price), &json!(1))
+    );
+
+    // The next day's valuation jumps a fifth: held, and approved only with each failed check accepted.
+    let next = d(2027, 11, 15);
+    portal.pricing.valuation(next, "1212000", portal.now());
+    portal.pricing.core_units(Some(day), portal.now());
+    let held = tell("sub-up2", json!({ "prepare_price": { "fund": "growth", "pricing_date": next } })).await.1;
+    assert_eq!(held["output"]["prepared"]["status"], "held", "{held}");
+    let held_id = held["output"]["prepared"]["price"].as_str().unwrap();
+    let (status, problem) = tell("sub-up1", json!({ "approve_price": { "price": held_id } })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    let waiting = ask("sub-up1", "work").await.1;
+    let accepted: serde_json::Map<String, Value> = waiting["prices"][0]["struck"]["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["passed"] == false)
+        .map(|c| (c["kind"].as_str().unwrap().to_string(), json!("market rally, confirmed with the administrator")))
+        .collect();
+    assert!(accepted.contains_key("previous_move"));
+    let (status, done) = tell("sub-up1", json!({ "approve_price": { "price": held_id, "accepted": accepted } })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    portal.pricing.deliver_all(portal.now());
+
+    // The lead: suspend and resume, and a price error over the first price.
+    let lead = |command: Value| tell("sub-lead", command);
+    assert_eq!(
+        lead(json!({ "suspend_fund": { "fund": "cash", "from": next, "reason": "administrator outage" } }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    assert_eq!(ask("sub-lead", "funds").await.1[1]["suspensions"][0]["by"], "lead-1");
+    assert_eq!(
+        lead(json!({ "resume_fund": { "fund": "cash", "from": d(2027, 11, 16), "reason": "restored" } }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let raise = json!({ "raise_price_error": { "error": "err-1", "prices": [price], "cause": "a bond was mispriced", "detected_on": next } });
+    assert_eq!(tell("sub-up1", raise.clone()).await.0, StatusCode::FORBIDDEN);
+    let (status, raised) = lead(raise).await;
+    assert_eq!(status, StatusCode::OK, "{raised}");
+    let errors = ask("sub-lead", "errors").await.1;
+    assert_eq!((errors.as_array().unwrap().len(), &errors[0]["raised_by"]), (1, &json!("lead-1")));
+    assert_eq!(ask("sub-lead", "error?id=err-1").await.1["cause"], "a bond was mispriced");
+    assert_eq!(ask("sub-lead", "error?id=err-2").await.0, StatusCode::NOT_FOUND);
+    // It cannot be closed before the correction is made.
+    assert_eq!(
+        lead(json!({ "close_error": { "error": "err-1", "summary": "done" } })).await.0,
+        StatusCode::CONFLICT
+    );
+    let late = ask("sub-lead", "late?as_at=2027-11-30").await;
+    assert!(late.0 == StatusCode::OK && late.1.is_array(), "{late:?}");
+
+    // That module has no leader: the console says so, for a question and for a command.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+    }));
+    for (method, path, body) in [
+        ("GET", "/staff/v1/unit-pricing/work", None),
+        ("POST", "/staff/v1/unit-pricing/commands", Some(json!({ "republish": { "price": "x" } }))),
+    ] {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-dev-subject", "sub-lead")
+            .header("idempotency-key", "k");
+        if body.is_some() {
+            request = request.header("content-type", "application/json");
+        }
+        let bytes = body.map(|b| b.to_string()).unwrap_or_default();
+        let response = down.clone().oneshot(request.body(Body::from(bytes)).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(problem["title"], "unit_pricing_unavailable");
+    }
 }
 
 /// Purpose: serve the seeded portal on a real port so the pages can be driven in a browser by `tests/browser/check.js`.

@@ -6,7 +6,7 @@ The core owns what a price does: the investment ledger holds funds, prices, orde
 
 ## A price, start to finish
 
-1. **Fund.** `ActivateFund` (caller `config`) takes the core's own `ic_core::invest::FundDefinition`, so both sides read the same definition; the shipped funds are Starlark files in `products/funds/`, and `ic_pricing::command::activation` builds this module's command for one. The module's terms are in its `pricing` map and are checked when the fund is activated. Unknown keys are refused.
+1. **Fund.** The module follows the core: each `FundActivated` event carries the core's `ic_core::invest::FundDefinition`, and the module takes it in as its own `ActivateFund`, keyed by fund, version and content hash, so it holds exactly the versions the core holds whoever activated them, and the event from each partition is taken once. `ic_pricing::command::activation` builds the same command under the caller `config` for a fund sent directly. The shipped funds are Starlark files in `products/funds/`, and a test here checks every one is accepted. The module's terms are in its `pricing` map and are checked when the fund is activated. Unknown keys are refused.
 
    | Term | Meaning |
    | --- | --- |
@@ -95,6 +95,10 @@ A fault in one step is reported in the pass's log line and the others still run.
 
 `deploy/k8s/unit-pricing.yaml` runs two replicas of the driver with that identity.
 
+## The console
+
+Staff act through the unit pricing console in the portal (`/pricing` in `ic-portal`, `docs/channels.md`, "The unit pricing console"). It sends the console commands under the caller `unit-pricing-console` with the staff member's party ID as actor and their roles, and reads the questions below.
+
 ## Questions
 
 All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fund between two dates), `valuations`, `work` (prices waiting for a person and refused files), `late` (prices overdue as at a date), `errors`, `error`, `outbox`, `events`, `extracts_due`, `holding`, and `close_check`.
@@ -104,6 +108,5 @@ All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fu
 ## Known gaps
 
 - **The finance close does not ask yet.** `close_check` is built here, but the close driver has no source for it; the finance thread wires it beside `core_sources()`.
-- **No staff screens.** Prepare, approve, suspend and the price error commands are typed commands under the caller `unit-pricing-console`; the console that sends them with the person's roles belongs to the portal services.
-- **Fund activation on this side.** `ic-admin` activates the shipped funds (`products/funds/`, `ic_sim::config::shipped_funds()`) in the core; it must also send `ic_pricing::command::activation(fund, at)` to this module so both hold the same definitions. A test here checks every shipped fund's terms are accepted.
+- **A fund this module refuses.** If a definition the core accepted has pricing terms this module refuses, the refusal is recorded against the event's key and the fund cannot be priced; a corrected definition is a new version, which arrives as a new event.
 - **Not deployed.** `infra/unit-pricing.bicep` is compiled in CI but not referenced by `main.bicep`, and its Defender resource uses a preview API version. `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.

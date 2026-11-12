@@ -143,8 +143,18 @@ pub(crate) fn consent(
                 return reject("decided", "the decision has been made: there is nothing left to share");
             }
             let msg = message("consent", &[&proposal.0, &life.0, "adviser_access"]);
-            if !signed.is_some_and(|s| s.verifies(&msg)) {
+            if !signed.as_ref().is_some_and(|s| s.verifies(&msg)) {
                 return reject("signature", "consent to adviser access needs the life's signed step");
+            }
+        }
+        if kind == ConsentKind::EmployerSeesLoading {
+            // Only a scheme member's own signed step lets the employer see it.
+            if !matches!(p.entry, crate::model::Entry::GroupExcess { .. }) {
+                return reject("entry", "only a scheme member's excess cover is billed through an employer");
+            }
+            let msg = message("consent", &[&proposal.0, &life.0, "employer_sees_loading"]);
+            if !signed.as_ref().is_some_and(|s| s.verifies(&msg)) {
+                return reject("signature", "consent to the employer seeing a loading needs the member's signed step");
             }
         }
         let f = life_mut(p, life)?;

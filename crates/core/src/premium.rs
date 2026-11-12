@@ -53,7 +53,21 @@ pub fn retail_period_premium(
     period_start: NaiveDate,
     work: &mut u32,
 ) -> Result<ModalPremium, PremiumError> {
-    retail_premium_with(catalog, product, policy, period_start, work, None)
+    retail_premium_with(catalog, product, policy, period_start, work, Layers::AtStart)
+}
+
+/// Which layers a period's premium is worked out over.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Layers<'a> {
+    /// The layers in force on the period's first day.
+    AtStart,
+    /// Those, and one more (a cover and a layer number) that started after
+    /// the period's first day.
+    With(&'a str, u32),
+    /// The layers in force on a later day of the period, each priced for
+    /// the whole period. The difference between two of these is what one
+    /// change of cover on that day is worth.
+    On(NaiveDate),
 }
 
 /// As [`retail_period_premium`], counting one more layer (a cover code and
@@ -65,7 +79,7 @@ pub(crate) fn retail_premium_with(
     policy: &Policy,
     period_start: NaiveDate,
     work: &mut u32,
-    also: Option<(&str, u32)>,
+    layers: Layers<'_>,
 ) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
     let mut annual: BTreeMap<String, Dec> = BTreeMap::new();
@@ -77,18 +91,23 @@ pub(crate) fn retail_premium_with(
         let table = catalog
             .rate_table_on(&def.rating.table, rated_on, &policy.group)
             .ok_or_else(|| PremiumError::NoRateTable(def.rating.table.clone()))?;
-        for layer in cover
-            .layers
-            .iter()
-            .filter(|l| l.in_force_on(period_start) || also == Some((cover.code.as_str(), l.id)))
-        {
+        for layer in cover.layers.iter().filter(|l| match layers {
+            Layers::AtStart => l.in_force_on(period_start),
+            Layers::With(code, id) => l.in_force_on(period_start) || (code == cover.code && id == l.id),
+            Layers::On(day) => l.in_force_on(day),
+        }) {
             *work += 1;
             let life = policy.lives.get(&layer.life).ok_or_else(|| PremiumError::UnknownLife(layer.life.clone()))?;
             let f = factors_on(life, period_start)?;
             let dob = f.date_of_birth.ok_or_else(|| PremiumError::MissingFactor(life.id.clone(), "date_of_birth"))?;
             let age = match def.rating.premium_type {
                 PremiumType::Stepped | PremiumType::GroupUnitRate => age_on(dob, rated_on),
-                PremiumType::Level => age_on(dob, layer.start),
+                // Level until the cover's stated age, then on attained age
+                // like a stepped premium.
+                PremiumType::Level => match (age_on(dob, rated_on), def.rating.level_to_age) {
+                    (attained, Some(to)) if attained >= to => attained,
+                    _ => age_on(dob, layer.rating_start()),
+                },
             };
             let rf = RatingFactors {
                 age,

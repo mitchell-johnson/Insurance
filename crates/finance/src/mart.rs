@@ -24,12 +24,12 @@
 //! was known from and to. The two are independent, and an extract is
 //! reconciled when opening plus movements equals closing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
 use ic_core::{LayerOrigin, LifeId, PolicyId, PolicyStatus};
-use ic_ledger::{sha256, Hash32, PartitionId};
+use ic_ledger::{sha256, AccountUnit, Hash32, PartitionId};
 use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
@@ -112,7 +112,7 @@ impl Factors {
     }
 }
 
-fn sex_name(sex: Option<Sex>) -> &'static str {
+pub(crate) fn sex_name(sex: Option<Sex>) -> &'static str {
     match sex {
         Some(Sex::Female) => "female",
         Some(Sex::Male) => "male",
@@ -120,8 +120,25 @@ fn sex_name(sex: Option<Sex>) -> &'static str {
     }
 }
 
+/// One cover in force with the factors a rate table prices it on. It carries
+/// ages, never the date of birth.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RatedCover {
+    pub partition: PartitionId,
+    pub policy: PolicyId,
+    pub cover: String,
+    pub layer: Option<u32>,
+    /// Age last birthday as at the date asked.
+    pub age: Option<u32>,
+    /// Age last birthday when this cover started.
+    pub age_at_start: Option<u32>,
+    pub sex: Option<Sex>,
+    pub smoker: Option<bool>,
+    pub sum_insured_minor: i64,
+}
+
 /// The five-year band an age falls in, for example `30-34`.
-fn age_band(age: Option<u32>) -> String {
+pub(crate) fn age_band(age: Option<u32>) -> String {
     age.map(|a| format!("{}-{}", a / 5 * 5, a / 5 * 5 + 4)).unwrap_or_default()
 }
 
@@ -284,6 +301,17 @@ pub struct Mart {
     policies: BTreeMap<(PartitionId, PolicyId), PolicyRow>,
     movements: Vec<Movement>,
     claims: Vec<EndingClaim>,
+    /// Money held in suspense for each policy, and since when.
+    #[serde(default, with = "crate::pairs")]
+    suspense: BTreeMap<(PartitionId, PolicyId), Held>,
+}
+
+/// Money held for a policy: what the core owes back or has yet to apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub amount_minor: i64,
+    /// The business date the balance last rose from nothing.
+    pub since: NaiveDate,
 }
 
 /// The in-force book's totals: policies, covers and sum insured.
@@ -386,6 +414,7 @@ impl Mart {
             policies: BTreeMap::new(),
             movements: Vec::new(),
             claims: Vec::new(),
+            suspense: BTreeMap::new(),
         }
     }
 
@@ -396,6 +425,18 @@ impl Mart {
 
     fn holds(&self, partition: PartitionId) -> bool {
         self.partitions == 0 || partition < self.partitions
+    }
+
+    /// Money held in suspense, by policy, oldest first.
+    pub fn suspense(&self) -> Vec<(&PolicyId, &Held)> {
+        let mut held: Vec<(&PolicyId, &Held)> = self.suspense.iter().map(|((_, policy), h)| (policy, h)).collect();
+        held.sort_by(|a, b| (a.1.since, a.0).cmp(&(b.1.since, b.0)));
+        held
+    }
+
+    /// The latest business date any partition has closed.
+    pub fn latest_close(&self) -> Option<NaiveDate> {
+        self.feeds.values().filter_map(|f| f.closed).max()
     }
 
     /// The next event wanted from a partition.
@@ -429,6 +470,31 @@ impl Mart {
         match &record.event {
             Event::BusinessDateAdvanced { from, .. } => {
                 feed.closed = (*from).or(feed.closed);
+            }
+            Event::EntryPosted {
+                policy: Some(policy), lines, ..
+            } => {
+                // A liability: a credit, which is negative, is money held.
+                let moved: i128 = lines
+                    .iter()
+                    .filter(|l| l.role == ic_core::accounts::role::POLICY_SUSPENSE)
+                    .map(|l| match l.unit {
+                        AccountUnit::Minor(_) => -l.signed,
+                        AccountUnit::Fine(_) => -l.signed / ic_money::FINE_PER_MINOR,
+                        AccountUnit::Units(_) => 0,
+                    })
+                    .sum();
+                if moved != 0 {
+                    let key = (partition, policy.clone());
+                    let was = self.suspense.get(&key).map_or(0, |h| h.amount_minor);
+                    let now = was.saturating_add(i64::try_from(moved).unwrap_or(i64::MAX));
+                    if now == 0 {
+                        self.suspense.remove(&key);
+                    } else {
+                        let since = self.suspense.get(&key).filter(|_| was != 0).map_or(date, |h| h.since);
+                        self.suspense.insert(key, Held { amount_minor: now, since });
+                    }
+                }
             }
             Event::PolicyIssued {
                 policy,
@@ -761,6 +827,35 @@ impl Mart {
             }
         }
         t
+    }
+
+    /// The covers in force as at the close of `as_at` on the named cover
+    /// codes, each with what a rate table prices it on.
+    pub fn rated_covers(&self, as_at: NaiveDate, covers: &BTreeSet<String>) -> Result<Vec<RatedCover>, MartError> {
+        self.closed(as_at)?;
+        let mut rated = Vec::new();
+        for ((partition, policy), row) in &self.policies {
+            if !row.status_at(as_at).is_some_and(provides_cover) {
+                continue;
+            }
+            let mut spans: Vec<&Span> = row.spans.iter().filter(|s| s.known_at(as_at) && covers.contains(&s.cover)).collect();
+            spans.sort_by(|a, b| (&a.cover, a.layer, &a.life).cmp(&(&b.cover, b.layer, &b.life)));
+            for s in spans {
+                let factors = row.factors(&s.life);
+                rated.push(RatedCover {
+                    partition: *partition,
+                    policy: policy.clone(),
+                    cover: s.cover.clone(),
+                    layer: s.layer,
+                    age: factors.age(as_at),
+                    age_at_start: factors.age(s.start),
+                    sex: factors.sex,
+                    smoker: factors.smoker,
+                    sum_insured_minor: s.sum_insured_minor,
+                });
+            }
+        }
+        Ok(rated)
     }
 
     /// Every cover in force as at the close of `as_at`.

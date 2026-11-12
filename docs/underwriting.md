@@ -16,6 +16,7 @@
 - **Interim accidental death cover**, where configured, is requested when the proposal opens, capped, and ended when the proposal ends in any way.
 - **The clock** (`external.rs`). One `Sweep` command per day does bounded work in ID order: lapses proposals past their expiry, chases evidence and marks it unobtainable after the configured chasers, escalates cases nobody has touched, and expires offers.
 - **Existing cover from the life index (addendum entry 2).** With the applicant's consent, the existing-cover question is pre-filled from the life index across partitions. Without consent nothing is read. What was read, and that it was pre-filled, is recorded on the file, and the applicant's own answer is still theirs to give.
+- **A scheme member's consent to itemising.** On a proposal for scheme excess cover the member may agree, by a signed step, that the employer sees a loaded premium (`ConsentKind::EmployerSeesLoading`). The accepted terms carry it to group administration as `employer_may_see_loading`; without it the answer never claims consent.
 - **Adviser licence loss (addendum entry 4).** When an adviser's licence is suspended or lost, their access to the file ends at once and the applicant is told. The proposal continues without them.
 - **Delegated underwriting** (`special.rs`). A delegate's decisions come in with the delegate's own reference, are checked against the delegated authority (products, sums, loadings, dates, tolerance for late reporting) and are refused or sent to a person where outside it. The delegate's file can be called for and its arrival recorded.
 - **Migrated policies.** Terms on a migrated policy are carried as data from the old system. Nothing is defaulted.
@@ -65,7 +66,6 @@ Settings: `IC_NODES` (required), the cluster token as for every worker, `IC_UNDE
 - **A group excess proposal stays in `issuing`.** Its terms go to group administration, which has the core write the layer; nothing brings the layer number back, so the proposal is never marked issued and its capacity reservation is never confirmed against the layer.
 - **An increase refused for `billing_behind`** (the day's billing has not run) comes back as a failed issue and waits for a person to retry it.
 - **No interim product is shipped.** Interim cover is off until settings name a product and cover the core has.
-- **Group excess answers do not carry the member's consent to itemising.** On a scheme that itemises loadings, group administration refuses an accepted answer with a loading (`consent_required`) and the effect is parked.
 - **Reserve capacity does not carry risk codes.** Reinsurance accepts optional `risk_codes` on a reservation; the effect does not send them, so a treaty exclusion by risk is found at the facultative step and not before.
 - **The idempotency key set grows without bound.** The last 20,000 results are kept to answer repeats in full; older keys are remembered but never dropped. It needs a horizon agreed with the drivers.
 - **Peer review draws by scanning every proposal**, which is fine for the book the tests build and too slow for a large one.

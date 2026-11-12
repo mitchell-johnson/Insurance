@@ -33,9 +33,12 @@ A period moves to closing when its last day has closed on every partition. `conf
 | --- | --- |
 | Worked out by the ledger | `control_check`, `valuation_extracts`, `unapproved_journals`, `actuarial_journals` (quarter ends), `trial_balance`, `fund_balance` |
 | Reported by a named caller | `commission_sweep` (commission), `unit_pricing` (unit-pricing), `reinsurance_sweep` (reinsurance, quarter ends), `fund_cash_settlement` (payments), `subledger_reconciliations` (close-workflow), `actuarial_handover` (reporting, quarter ends), `tax_reconciliation` and `analytical_review` (finance-console) |
-| Aged items reported by a named caller | `aged:held_balance` (commission), `aged:unidentified_receipts` (payments), `aged:policy_suspense` (collections), `aged:pending_investment_cash` (investment) |
+| Aged items reported by a named caller | `aged:held_balance` (commission), `aged:unidentified_receipts` (payments), `aged:policy_suspense` (close-workflow, from the ledger's own feed), `aged:pending_investment_cash` (investment) |
 
+- A step is due a number of working days after period end. Weekends and the `holidays` the close configuration lists are skipped. The list holds national public holidays on the day they are observed, a weekend date is refused, and each new year has to be added before it starts (a year with none listed counts weekdays only).
 - A blocking check that is red stops sign-off. The finance lead may waive it on the record with a reason, a remediation owner who is someone else, and a date. A waiver never clears the item: the next period's check starts red again and the earlier waiver stays on the dashboard until it is green.
+- Policy suspense is aged by the ledger itself. It follows every posting to the `policy_suspense` role by policy as the feed arrives, so the list is the control account split by policy, and `since` is the day the present holding began (a holding that was used up and paid again starts afresh). The question `{"q":"aged_suspense","as_at"}` answers with the items oldest first, as at the latest day closed on every partition.
+- A person records what is being done about an aged item with `DocumentAgedItem { kind, party, since, action, owner }` at the console (operator or lead). The action stays with the item while the same holding is reported again, and goes when the holding ends.
 - Held balances are a blocking month-end item. An item older or larger than the threshold with no documented action turns `aged:held_balance` red and names the party.
 - The finance lead signs off every period, and the appointed actuary also signs a quarter end. A posting after sign-off clears it.
 - Months close in order. A closed period is frozen with its trial balance and a hash, and takes no journal, report, waiver or sign-off afterwards.
@@ -77,7 +80,7 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 - asks the ledger what the close is waiting for (`{"q": "work"}`);
 - reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
 - for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
-- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep, `unit_pricing_sources()` the unit pricing check, and `core_sources()` the pending investment cash on every partition of the core's investment ledger;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep, `unit_pricing_sources()` the unit pricing check, `core_sources()` the pending investment cash on every partition of the core's investment ledger, and `finance_sources()` the ledger's own aged policy suspense;
 - reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
 - closes a period that is signed off with nothing blocking, oldest first.
 
@@ -106,7 +109,7 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 - against the previous version: a small uniform change passes, a larger move in a cell is listed for the actuary, and a cell that moves by more than the blocking factor blocks;
 - `cross_check` for tables that must line up, such as a premium table and the reinsurer's.
 
-A blocking finding stops activation. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
+A blocking finding stops activation. After validation a proposed version is priced against the book: the question `{"q":"table_dry_run","as_at","request":{covers, per_life, age_at_start, current, proposed}}` prices every cover in force on a closed date under both versions and answers with the annual premium under each, the movement by age band, sex and smoker status, the twenty covers that move most, and the covers the proposed version leaves without a rate (which fails the run). Premiums are before loadings, discounts, fees and tax, so the figures show the movement and are not a bill. A scheme's benefit category is not published to finance, so category tables are not priced. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
 
 ## Who may send what
 
@@ -118,7 +121,7 @@ Commands are `FinEnvelope { key, caller, actor, roles, command }`. The caller is
 | `feed` | `CoreEvent`, `Ingest`, `RecordMerkleRoot` |
 | `reporting` | `RegisterExtract`, and the checks it reports |
 | `claims`, `complaints` | `RecordConductFacts` |
-| `finance-console` | everything a person does: propose and approve configuration, journals, waivers, sign-off, closing, returns |
+| `finance-console` | everything a person does: propose and approve configuration, journals, waivers, documented actions on aged items, sign-off, closing, returns |
 | `close-workflow` | `ClosePeriod`, and the checks it reports |
 | the caller a check or aged kind names | `ReportCheck`, `ReportAgedItems` |
 
@@ -134,6 +137,3 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 - Rating factors for members who join a scheme after issue, occupation class, and claims that do not end a policy, on the extracts. They need those facts on the core's or the claims module's events.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
-- A source for aged policy suspense. The balance is in the core's ledger by policy and nothing reports it yet, so `aged:policy_suspense` stays red until one does or the finance lead waives it. Pending investment cash will come from the core's investment ledger when it is built.
-- The dry-run compare tool for a new table against the in-force book.
-- Public holidays in step due dates. Weekends are skipped.

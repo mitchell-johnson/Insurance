@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
 use crate::csv::{self, CsvError};
-use crate::event::{GroupEvent, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{FileToRead, Question};
 use crate::mapping::{FileMapping, Mapped, MappingError};
 use crate::record::MemberIdentity;
@@ -66,6 +66,8 @@ pub trait Peers: Send + Sync {
     fn underwriting(&self, key: &str, today: NaiveDate, request: &UnderwritingRequest) -> impl Future<Output = Result<(), String>> + Send;
     /// Tell underwriting a request is no longer wanted.
     fn withdraw_underwriting(&self, key: &str, today: NaiveDate, request_key: &str) -> impl Future<Output = Result<(), String>> + Send;
+    /// Tell underwriting what the core made of terms it accepted.
+    fn underwriting_outcome(&self, key: &str, today: NaiveDate, request_key: &str, outcome: &IssueOutcome) -> impl Future<Output = Result<(), String>> + Send;
     /// Underwriting's answers to this module's requests, numbered after
     /// `after`, oldest first.
     fn underwriting_answers(&self, after: u64, max: usize) -> impl Future<Output = Result<Answers, String>> + Send;
@@ -311,6 +313,7 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                     }
                     Outbound::Underwriting { key, request } => self.peers.underwriting(key, today, request).await,
                     Outbound::WithdrawUnderwriting { key, request_key } => self.peers.withdraw_underwriting(key, today, request_key).await,
+                    Outbound::UnderwritingOutcome { key, request_key, outcome } => self.peers.underwriting_outcome(key, today, request_key, outcome).await,
                     Outbound::Publish { seq, date, event } => self.peers.publish(*seq, *date, event).await,
                     Outbound::ResolveParties { scheme, file, employee_ids } => self.resolve(scheme, file, employee_ids).await,
                 };

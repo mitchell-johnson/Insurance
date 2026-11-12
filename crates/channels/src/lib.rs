@@ -24,6 +24,7 @@ pub mod forward;
 pub mod http;
 pub mod identity;
 pub mod ops;
+pub mod pricing;
 pub mod query;
 pub mod serve;
 pub mod settings;
