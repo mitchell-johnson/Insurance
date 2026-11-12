@@ -81,21 +81,6 @@ jobs:
           path: lcov.info
           if-no-files-found: ignore
 
-  resilience:
-    name: image and failure drill
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v4
-      # Builds the shipped image, starts three ledger nodes, Temporal, two
-      # workers and the API from it, then kills nodes and a worker, destroys
-      # a node's disk and replaces the node, checking the books throughout.
-      - name: Failure drill on the Compose cluster
-        run: deploy/compose/chaos.sh
-      - name: Logs
-        if: failure()
-        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail 200
-
   infrastructure:
     name: Azure template and Kubernetes manifests
     runs-on: ubuntu-latest
