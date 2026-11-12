@@ -545,11 +545,13 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             Effect::ApplyTerms {
                 key,
                 proposal,
-                entry: Entry::Increase { .. },
+                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. }),
                 policy,
                 covers,
                 ..
             } => {
+                let increase = matches!(entry, Entry::Increase { .. });
+                let what = if increase { "increase" } else { "alteration" };
                 let Some(group) = self.group_of(proposal).await? else {
                     return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
                 };
@@ -557,23 +559,38 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 let mut refused = None;
                 for cover in covers {
                     let Some(life) = &cover.life else {
-                        return Ok(Step::Park(format!("the increase on {} names no life", cover.code)));
+                        return Ok(Step::Park(format!("the {what} on {} names no life", cover.code)));
                     };
                     // Keyed by the proposal and cover, not the attempt: a cover the core has
                     // written is not written again when the rest is tried again.
-                    let layer = ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
-                        policy: policy.clone(),
-                        cover: cover.code.clone(),
-                        life: life.clone(),
-                        sum_insured_minor: cover.sum_insured_minor,
-                        loadings: cover.loadings.clone(),
-                        exclusions: cover.exclusions.clone(),
-                        reference: key.clone(),
-                    }));
-                    let sent = format!("{proposal}/increase/{life}/{}", cover.code);
+                    let layer = if increase {
+                        ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+                            policy: policy.clone(),
+                            cover: cover.code.clone(),
+                            life: life.clone(),
+                            sum_insured_minor: cover.sum_insured_minor,
+                            loadings: cover.loadings.clone(),
+                            exclusions: cover.exclusions.clone(),
+                            reference: key.clone(),
+                        }))
+                    } else {
+                        // The cover keeps its sum insured: an alteration changes the terms
+                        // on what the life already holds.
+                        ic_core::Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+                            policy: policy.clone(),
+                            cover: cover.code.clone(),
+                            life: life.clone(),
+                            loadings: cover.loadings.clone(),
+                            exclusions: cover.exclusions.clone(),
+                            reference: key.clone(),
+                        }))
+                    };
+                    let sent = format!("{proposal}/{what}/{life}/{}", cover.code);
                     let answer = self.core.send(home_partition(&group), &sent, "underwriting", layer).await?;
                     match answer.refused {
                         None => layers.extend(added_layers(&answer.events)),
+                        // The cover is already on these terms: there is nothing to write.
+                        Some(r) if !increase && r.code == "no_change" => {}
                         Some(r) => {
                             refused = Some(r.code);
                             break;
@@ -663,7 +680,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
-            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for an alteration or a reinstatement on underwriting's terms".to_string()),
+            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for a reinstatement on underwriting's terms".to_string()),
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
             other => match self.forward.forward(other).await? {
