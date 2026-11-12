@@ -12,8 +12,8 @@ metadata:
   annotations:
     azure.workload.identity/client-id: REPLACE-customersClientId
 ---
-# The blind-index key, mounted as a file under the service's identity. It
-# never becomes a Kubernetes Secret.
+# The blind-index key and the cluster token, mounted as files under the
+# service's identity. They never become Kubernetes Secrets.
 apiVersion: secrets-store.csi.x-k8s.io/v1
 kind: SecretProviderClass
 metadata:
@@ -29,6 +29,9 @@ spec:
         - |
           objectName: customers-index-key
           objectType: secret
+        - |
+          objectName: cluster-token
+          objectType: secret
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -40,6 +43,9 @@ data:
   IC_CUSTOMERS_PG_USER: REPLACE-customersPrincipalName
   IC_CUSTOMERS_REGISTER_ENDPOINT: REPLACE-registerEndpoint
   IC_CUSTOMERS_INDEX_KEY_FILE: /mnt/secrets/customers-index-key
+  # Deaths are told to claims on every core partition through the cluster.
+  IC_CLUSTER_NODES: "ic-node-1.ic-node:7000,ic-node-2.ic-node:7000,ic-node-3.ic-node:7000"
+  IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
   # Outputs of infra/main.bicep.
   IC_CUSTOMERS_KEY_VAULT: REPLACE-keyVaultUrl
   IC_EVENT_HUBS_NAMESPACE: REPLACE-eventHubsEndpoint
@@ -188,3 +194,21 @@ spec:
               insurance-core/ingress: "true"
       ports:
         - port: 8080
+---
+# The ledger nodes also hear from the customer master.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-customers
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-customers
+      ports:
+        - port: 7000

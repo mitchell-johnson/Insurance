@@ -47,6 +47,10 @@ Decisions are made by the Cedar policy in `config/cedar/customers.cedar`: which 
 
 Errors are `{"error": {"code", "message"}}`. 503 always means try again; it is never used for an answer.
 
+## Deaths to claims
+
+Every death recorded here, whoever recorded it, is told to claims: `RecordDeath { party, date_of_death }` from caller `customer-master`, proposed to every core partition, because a person's claims can sit on any of them and each partition finds its own. A row in `death_relay` is written in the same transaction as the death and removed once every partition has accepted it. A refusal (for example before the core has opened a business date) or an unreachable cluster keeps it, with the reason and an attempt count, for the next pass. Each attempt uses its own key (`death:{party}:{date}:{partition}:{attempt}`), because the core remembers a refusal under its key; claims treats the same death again as nothing new. A death retracted before it was told is never sent, and claims has no reversal yet, so a retraction after it was told needs claims staff. Without `IC_CLUSTER_NODES` deaths are kept and not sent.
+
 ## Retention and erasure
 
 The schedule is code (`src/retention.rs`, version `SCHEDULE_VERSION`): each field class is kept seven years after the last relationship ends or the last change, verification evidence five, prospects with no relationship two. A legal hold or an unresolved merge stops erasure.
@@ -70,6 +74,7 @@ The binary is `ic-customers`; settings come from the environment.
 | `IC_EVENT_HUBS_NAMESPACE`, `IC_CUSTOMERS_EVENT_HUB`, `IC_CUSTOMERS_PRIORITY_HUB`, `IC_CUSTOMERS_HUB_PARTITIONS` | Where events go | `customer-events`, `customer-priority`, 8 |
 | `IC_CUSTOMERS_REGISTER_ENDPOINT`, `IC_CUSTOMERS_REGISTER_CONTAINER` | Erasure register | container `customers-erasures` |
 | `IC_CUSTOMERS_LISTEN`, `IC_CUSTOMERS_CYCLE_SECONDS`, `IC_CUSTOMERS_SWEEP_MINUTES` | Port and background pace | `0.0.0.0:8080`, 2, 60 |
+| `IC_CLUSTER_NODES`, `IC_CLUSTER_TOKEN_FILE` | The ledger cluster, for telling claims of deaths | optional; deaths wait without it |
 
 Azure resources are in `infra/customers.bicep` (its own PostgreSQL Flexible Server, the wrapping key, the index-key secret, the hubs, the register and the identity). The Kubernetes manifests are `deploy/k8s/customers.yaml`. The service applies its own migrations at start under an advisory lock, so replicas starting together are safe. SIGTERM stops it cleanly.
 
@@ -78,6 +83,5 @@ Tests need a PostgreSQL server named by `IC_TEST_POSTGRES_URL` (CI starts one); 
 ## Not built yet
 
 - **Relationship changes to the channels directory.** The channels module expects `BindSubject`, `RecordOwnership`, `RecordAssignment` and `RecordDependant` from the customer master. The events are on `customer-events`; the relay that turns them into those commands is not written.
-- **Deaths from other sources to claims.** A death recorded here by anyone other than claims should reach claims as `RecordDeath`. Not yet relayed.
 - **Changing the index key** needs a rebuild of every blind index from the decrypted facts; there is no command for it yet.
 - **Locking the register's immutability policy** in prod is a deliberate, irreversible step for a person once the period is agreed.

@@ -112,14 +112,57 @@ pub async fn reshred<W: KeyWrapper, S: WormStore>(app: &App<W, S>, since: NaiveD
     Ok((listed.len(), erased))
 }
 
+/// Tell claims of every death waiting, a batch at a time. A death not
+/// accepted on every partition stays, with the reason, for the next pass.
+/// Returns the number told.
+pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(app: &App<W, S>, core: &C) -> Result<usize, String> {
+    use crate::relay::Failure;
+    let waiting = app.store.deaths_to_relay(100).await.map_err(|e| e.to_string())?;
+    if waiting.is_empty() {
+        return Ok(0);
+    }
+    let partitions = core.partitions().await.map_err(|e| format!("the core's partitions: {e}"))?;
+    let mut told = 0;
+    for (party, date, attempts) in waiting {
+        let failure = match crate::relay::send(core, partitions, &party, date, attempts).await {
+            Ok(()) => {
+                app.store.death_relayed(&party, date).await.map_err(|e| e.to_string())?;
+                tracing::info!(party = %party, "death told to claims");
+                told += 1;
+                continue;
+            }
+            Err(f) => f,
+        };
+        let (Failure::Refused(e) | Failure::Unreached(e)) = &failure;
+        tracing::warn!(party = %party, error = %e, "claims not yet told of a death; will retry");
+        app.store.death_failed(&party, date, e).await.map_err(|e| e.to_string())?;
+        if matches!(failure, Failure::Unreached(_)) {
+            break;
+        }
+    }
+    Ok(told)
+}
+
 /// Run the outbox every `every`, and the sweep every `sweep_every`, until
 /// `stop` completes. A failed pass is logged and tried again next time.
-pub async fn run<W: KeyWrapper, S: WormStore>(app: &App<W, S>, hubs: &Hubs, every: Duration, sweep_every: Duration, stop: impl Future<Output = ()>) {
+pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(
+    app: &App<W, S>,
+    hubs: &Hubs,
+    core: Option<&C>,
+    every: Duration,
+    sweep_every: Duration,
+    stop: impl Future<Output = ()>,
+) {
     tokio::pin!(stop);
     let mut last_sweep: Option<std::time::Instant> = None;
     loop {
         if let Err(e) = publish(app, hubs).await {
             tracing::warn!(error = %e, "publishing the outbox failed; will retry");
+        }
+        if let Some(core) = core {
+            if let Err(e) = relay_deaths(app, core).await {
+                tracing::warn!(error = %e, "relaying deaths to claims failed; will retry");
+            }
         }
         if last_sweep.is_none_or(|t| t.elapsed() >= sweep_every) {
             last_sweep = Some(std::time::Instant::now());
@@ -170,12 +213,19 @@ pub async fn start(
     let listener = tokio::net::TcpListener::bind(&config.listen)
         .await
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
+    let core = match &config.cluster {
+        Some(c) => Some(crate::relay::ClusterCore::new(&c.nodes, c.auth.clone(), Duration::from_secs(10))?),
+        None => {
+            tracing::warn!("IC_CLUSTER_NODES is not set: deaths are kept but not told to claims");
+            None
+        }
+    };
     tracing::info!(?config, policy = app.access.version(), "customer master started");
     let stopped = |mut s: tokio::sync::watch::Receiver<bool>| async move {
         let _ = s.wait_for(|v| *v).await;
     };
     let web = tokio::spawn(crate::service::serve(listener, crate::service::router(app.clone()), stopped(stop.clone())));
-    run(&app, &hubs, config.cycle_every, config.sweep_every, stopped(stop)).await;
+    run(&app, &hubs, core.as_ref(), config.cycle_every, config.sweep_every, stopped(stop)).await;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
 

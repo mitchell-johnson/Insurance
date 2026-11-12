@@ -365,6 +365,9 @@ async fn the_service_starts_and_stops() {
         ("IC_CUSTOMERS_REGISTER_ENDPOINT", azure.base.clone()),
         ("IC_CUSTOMERS_LISTEN", format!("127.0.0.1:{port}")),
         ("IC_CUSTOMERS_CYCLE_SECONDS", "1".to_string()),
+        // No cluster answers here: deaths would wait, and nothing else is held up.
+        ("IC_CLUSTER_NODES", "127.0.0.1:9".to_string()),
+        ("IC_CLUSTER_AUTH", "open".to_string()),
     ]);
     let config = ic_customers::config::Config::from_lookup(|k| env.get(k).cloned(), |_| Err(std::io::Error::other("none"))).unwrap();
     let credential = ic_azure::credential::AzureCredential::static_token(ic_azure::testing::TOKEN);
@@ -426,11 +429,18 @@ async fn background_work_survives_faults() {
         priority: ic_azure::eventhubs::EventHubsSink::new(&w.azure.base, "customer-priority", credential.clone()),
         partitions: 2,
     };
-    w.person("Lo", "Op", "1970-01-01", &[]).await;
+    let p = w.person("Lo", "Op", "1970-01-01", &[]).await;
+    w.command(&p, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-01" }))
+        .await;
+    let core = common::FakeCore {
+        partitions: 2,
+        ..Default::default()
+    };
     let pass = |every: u64| {
         work::run(
             &w.app,
             &hubs,
+            Some(&core),
             Duration::from_secs(every),
             Duration::ZERO,
             tokio::time::sleep(Duration::from_millis(300)),
@@ -440,11 +450,15 @@ async fn background_work_survives_faults() {
     pass(3600).await;
     assert!(!w.app.store.outbox(10).await.unwrap().is_empty(), "nothing was published");
     w.sql("alter table parties rename to parties_gone").await.unwrap();
+    w.sql("alter table death_relay rename to death_relay_gone").await.unwrap();
     pass(3600).await;
+    assert_eq!(core.proposed.lock().unwrap().len(), 2, "told on the first pass, once");
     w.sql("alter table parties_gone rename to parties").await.unwrap();
+    w.sql("alter table death_relay_gone rename to death_relay").await.unwrap();
     w.azure.set_down(false);
     pass(3600).await;
     assert!(w.app.store.outbox(10).await.unwrap().is_empty(), "published once Event Hubs returned");
+    assert_eq!(core.proposed.lock().unwrap().len(), 2, "the death went to both partitions, once");
     // An Azure database is reached only over TLS.
     let env = std::collections::BTreeMap::from([
         ("IC_CUSTOMERS_PG_HOST", "127.0.0.1".to_string()),
@@ -494,4 +508,63 @@ async fn a_repeated_creation_makes_one_party() {
         .await
         .unwrap();
     assert_eq!(first.party, second.party);
+}
+
+/// Purpose: every death recorded here is told to claims on every core partition, as
+/// `RecordDeath` with a key per party, date and partition; a refusal or an unreachable
+/// cluster keeps it with the reason for the next pass; a repeat writes nothing new; a death
+/// retracted before it was told is never sent; erasing the party removes what is waiting.
+/// Why it matters: claims stops benefits in payment from the day after a death on
+/// whichever partition each claim sits. A death that never reached one partition would
+/// keep paying a dead person; a retracted one sent anyway would stop a living person's
+/// income, and claims has no command to undo it.
+#[tokio::test]
+async fn deaths_are_told_to_claims_on_every_partition() {
+    let w = world_or_skip!();
+    let core = common::FakeCore {
+        partitions: 3,
+        ..Default::default()
+    };
+    let p = w.person("Mate", "Tonu", "1940-01-01", &[]).await;
+    let mark = |d: &str| json!({ "command": "mark_deceased", "date_of_death": d });
+    // Recorded by staff, not claims: still told.
+    w.command(&p, "staff", mark("2026-10-01")).await;
+    w.command(&p, "staff", mark("2026-10-01")).await;
+    *core.refuse.lock().unwrap() = Some(1);
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 0);
+    let row = w
+        .sql("update death_relay set attempts = attempts where attempts = 1 and last_error like 'partition 1 refused%'")
+        .await
+        .unwrap();
+    assert_eq!(row, 1, "kept with the reason");
+    *core.refuse.lock().unwrap() = None;
+    *core.unreachable.lock().unwrap() = true;
+    assert!(work::relay_deaths(&w.app, &core).await.is_err(), "no partitions, nothing tried");
+    *core.unreachable.lock().unwrap() = false;
+    *core.lost.lock().unwrap() = true;
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 0);
+    *core.lost.lock().unwrap() = false;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 1);
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 0, "told once");
+    let sent = core.proposed.lock().unwrap().clone();
+    assert_eq!(sent.len(), 3);
+    for (partition, (n, key, command)) in sent.iter().enumerate() {
+        assert_eq!(usize::from(*n), partition);
+        assert_eq!(key, &format!("death:{p}:2026-10-01:{partition}:2"), "the third attempt has its own key");
+        assert_eq!(command, &json!({ "claims": { "record_death": { "party": p, "date_of_death": "2026-10-01" } } }));
+    }
+    // Retracted before it was told: never sent.
+    let q = w.person("Ora", "Tonu", "1941-01-01", &[]).await;
+    w.command(&q, "staff", mark("2026-10-02")).await;
+    w.command(&q, "staff", json!({ "command": "retract_death", "reason": "wrong person" })).await;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 0);
+    assert!(core.proposed.lock().unwrap().is_empty());
+    // Erased while waiting: nothing left to send.
+    w.command(&q, "staff", mark("2026-10-03")).await;
+    w.sql(&format!("delete from death_relay where party_id <> '{q}'")).await.unwrap();
+    assert_eq!(w.sql("select 1 from death_relay").await.unwrap(), 1);
+    w.app.store.reshred(&[PartyId(q.clone())], Utc::now()).await.unwrap();
+    assert_eq!(w.sql("select 1 from death_relay").await.unwrap(), 0);
 }
