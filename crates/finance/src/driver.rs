@@ -117,6 +117,25 @@ pub fn distribution_sources() -> Vec<Source> {
     ]
 }
 
+/// What the payments module owes: the statutory fund cash settlement and
+/// the bank receipts nobody has identified.
+pub fn payments_sources() -> Vec<Source> {
+    vec![
+        Source {
+            caller: "payments".to_string(),
+            module: "payments".to_string(),
+            reports: Reports::Check("fund_cash_settlement".to_string()),
+            question: |as_at| json!({ "q": "fund_cash_settlement", "as_at": as_at }),
+        },
+        Source {
+            caller: "payments".to_string(),
+            module: "payments".to_string(),
+            reports: Reports::Aged("unidentified_receipts".to_string()),
+            question: |as_at| json!({ "q": "aged_unidentified_receipts", "as_at": as_at }),
+        },
+    ]
+}
+
 /// What one pass did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Pass {
