@@ -2112,6 +2112,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",
@@ -2125,6 +2126,7 @@ dependencies = [
  "sha2",
  "starlark",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
