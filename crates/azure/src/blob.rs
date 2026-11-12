@@ -51,6 +51,58 @@ impl BlobContainer {
     }
 }
 
+impl BlobContainer {
+    /// A blob's index tags, or `None` if there is no such blob. Microsoft
+    /// Defender for Storage writes its malware scan result here, under
+    /// [`MALWARE_SCAN_TAG`].
+    pub async fn tags(&self, name: &str) -> Result<Option<std::collections::BTreeMap<String, String>>, AzureError> {
+        let token = self.credential.token(SCOPE_STORAGE).await?;
+        let resp = self
+            .http
+            .get(format!("{}?comp=tags", self.url(name)))
+            .bearer_auth(token)
+            .header("x-ms-version", API_VERSION)
+            .header("x-ms-date", Self::date())
+            .send()
+            .await?;
+        if resp.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        let body = check("Blob Storage", resp).await?.text().await?;
+        Ok(Some(parse_tags(&body)))
+    }
+}
+
+/// The index tag Defender for Storage sets when it has scanned a blob.
+pub const MALWARE_SCAN_TAG: &str = "Malware Scanning scan result";
+/// Its value for a blob with nothing found. Anything else is not clean.
+pub const MALWARE_SCAN_CLEAN: &str = "No threats found";
+
+/// The `<Tag><Key>..</Key><Value>..</Value></Tag>` pairs of a tags document.
+fn parse_tags(xml: &str) -> std::collections::BTreeMap<String, String> {
+    fn between<'a>(s: &'a str, open: &str, close: &str) -> Option<(&'a str, &'a str)> {
+        let start = s.find(open)? + open.len();
+        let end = start + s[start..].find(close)?;
+        Some((&s[start..end], &s[end + close.len()..]))
+    }
+    let unescape = |s: &str| {
+        s.replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
+    };
+    let mut tags = std::collections::BTreeMap::new();
+    let mut rest = xml;
+    while let Some((tag, after)) = between(rest, "<Tag>", "</Tag>") {
+        if let (Some((key, _)), Some((value, _))) = (between(tag, "<Key>", "</Key>"), between(tag, "<Value>", "</Value>")) {
+            tags.insert(unescape(key), unescape(value));
+        }
+        rest = after;
+    }
+    tags
+}
+
 impl WormStore for BlobContainer {
     async fn put_new(&self, name: &str, content_type: &str, body: Vec<u8>) -> Result<(), AzureError> {
         let token = self.credential.token(SCOPE_STORAGE).await?;

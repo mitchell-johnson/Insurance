@@ -50,6 +50,33 @@ impl EventHubsSink {
     }
 }
 
+impl EventHubsSink {
+    /// Publish a module's own events to one partition of its hub, in order.
+    /// Each message is a JSON body with the properties a consumer needs to
+    /// de-duplicate without parsing it. Either the whole batch is accepted
+    /// or the call fails and the sender sends it again.
+    pub async fn send_json(&self, partition: PartitionId, messages: &[(serde_json::Value, serde_json::Value)]) -> Result<(), AzureError> {
+        for chunk in messages.chunks(BATCH) {
+            let token = self.credential.token(SCOPE_EVENT_HUBS).await?;
+            let batch: Vec<_> = chunk
+                .iter()
+                .map(|(body, properties)| json!({ "Body": body.to_string(), "UserProperties": properties }))
+                .collect();
+            let url = format!("{}/{}/partitions/{partition}/messages?api-version=2014-01&timeout=60", self.namespace, self.hub);
+            let resp = self
+                .http
+                .post(url)
+                .bearer_auth(token)
+                .header("content-type", "application/vnd.microsoft.servicebus.json")
+                .body(serde_json::to_vec(&batch).unwrap_or_default())
+                .send()
+                .await?;
+            check("Event Hubs", resp).await?;
+        }
+        Ok(())
+    }
+}
+
 impl EventSink for EventHubsSink {
     async fn publish(&self, partition: PartitionId, events: &[EventRecord]) -> Result<(), AzureError> {
         for chunk in events.chunks(BATCH) {

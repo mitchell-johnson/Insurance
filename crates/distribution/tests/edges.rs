@@ -305,3 +305,66 @@ fn an_uplift_gives_no_path_and_an_ordinary_ending_is_not_a_clawback() {
     assert!(w.dist.exposures.values().all(|e| !e.open));
     assert!(w.dist.policies[&policy].ended.is_some());
 }
+
+/// Purpose: the change cursor names exactly the parties that moved after a sequence (a payee
+/// whose commission was confirmed, a provider whose licence changed and the adviser engaged
+/// under it), and the engagements question gives an adviser's engagements with the licence
+/// problem that stops each being used on the day asked.
+/// Why it matters: the portal's publisher reads these two questions to keep the workbench and
+/// the adviser directory current. A cursor that missed a party would leave a stale balance or
+/// an adviser shown as available after their provider's licence was suspended; one that named
+/// everyone would make every pass re-read the whole book.
+#[test]
+fn the_change_cursor_and_the_engagements_question_feed_a_publisher() {
+    use ic_distribution::host::{ask, Question};
+    let w = worked_example();
+    let quiet = ask(&w.dist, Question::ChangedParties { since: w.dist.seq }).unwrap();
+    assert_eq!(quiet["parties"], serde_json::json!([]));
+    assert_eq!(quiet["seq"], serde_json::json!(w.dist.seq));
+    let all = ask(&w.dist, Question::ChangedParties { since: 0 }).unwrap();
+    for who in ["adviser-a", "a-co", "fap-one", "fap-two", "group-old"] {
+        assert!(all["parties"].as_array().unwrap().contains(&serde_json::json!(who)), "{who} missing from {all}");
+    }
+
+    // A premium moves the two payees of the rule and nobody else.
+    let cursor = w.dist.seq;
+    let (mut w, _policy, _) = advised_in(w);
+    let moved = ask(&w.dist, Question::ChangedParties { since: cursor }).unwrap();
+    assert_eq!(moved["parties"], serde_json::json!(["a-co", "fap-one"]));
+
+    // A licence event on the provider moves the provider and the adviser engaged under it.
+    let cursor = w.dist.seq;
+    let today = w.today();
+    w.licence("fap-one", LicenceState::Suspended, today).unwrap();
+    let moved = ask(&w.dist, Question::ChangedParties { since: cursor }).unwrap();
+    let names = moved["parties"].as_array().unwrap();
+    assert!(
+        names.contains(&serde_json::json!("fap-one")) && names.contains(&serde_json::json!("adviser-a")),
+        "{moved}"
+    );
+    assert!(!names.contains(&serde_json::json!("fap-two")), "{moved}");
+
+    let ask_engagements = |w: &World, adviser: Option<&str>, as_at| {
+        ask(
+            &w.dist,
+            Question::Engagements {
+                adviser: adviser.map(party),
+                as_at,
+            },
+        )
+        .unwrap()
+    };
+    let now = ask_engagements(&w, Some("adviser-a"), today);
+    let rows = now["engagements"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["id"], serde_json::json!("eng-a-one"));
+    assert_eq!(rows[0]["with"], serde_json::json!("fap-one"));
+    assert_eq!(rows[0]["from"], serde_json::json!("2020-01-01"));
+    assert_eq!(rows[0]["to"], serde_json::Value::Null);
+    assert_eq!(rows[0]["impairment"]["source"], serde_json::json!("fap-one"));
+    assert_eq!(rows[0]["impairment"]["state"], serde_json::json!("suspended"));
+    // Asked as at the day before, the same engagement was usable.
+    let before = ask_engagements(&w, None, today.pred_opt().unwrap());
+    assert_eq!(before["engagements"][0]["impairment"], serde_json::Value::Null);
+    assert_eq!(ask_engagements(&w, Some("fap-two"), today)["engagements"], serde_json::json!([]));
+}
