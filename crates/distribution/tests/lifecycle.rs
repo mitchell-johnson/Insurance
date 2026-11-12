@@ -379,3 +379,87 @@ fn premium_handed_back_by_an_unwind_takes_its_renewal_commission_with_it() {
     );
     assert!(unknown.is_empty());
 }
+
+/// Purpose: events that arrive for things the module does not know, or a second time, change
+/// nothing and post nothing: a status change or a reinstatement for a policy nobody advised on,
+/// a reinstatement with no clawback behind it, a layer announced twice, a receipt reversed
+/// twice, and premium handed back on a policy that earned no commission. A cancelled case marks
+/// everyone it reaches as changed, and a command that only a person may send names the module
+/// that tried.
+/// Why it matters: the event feed is at least once and carries every policy, advised or not. A
+/// module that posted on a repeat would pay or claw back twice, and one that failed on an
+/// unknown policy would stop reading the feed for every adviser.
+#[test]
+fn stray_and_repeated_events_post_nothing() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    // A policy nobody wrote: it earns nothing.
+    let (plain, plain_partition) = w.issue(2, 300_000_00, None);
+    w.pay(&plain, "p1");
+    w.assert_reconciled();
+    let nobody = PolicyId("POL-NOBODY".into());
+    let requested = w.dist.requested.len();
+    for event in [
+        CoreEvent::PolicyStatusChanged {
+            policy: nobody.clone(),
+            from: ic_core::PolicyStatus::InForce,
+            to: ic_core::PolicyStatus::Lapsed,
+        },
+        CoreEvent::PolicyReinstated { policy: nobody.clone() },
+        CoreEvent::PolicyReinstated { policy: policy.clone() },
+        CoreEvent::LayerAdded {
+            policy: policy.clone(),
+            layer: LayerInfo {
+                cover: "life".into(),
+                cover_type: "life".into(),
+                layer: 1,
+                start: w.today(),
+                sum_insured_minor: 1,
+                life: ic_core::LifeId("life-1".into()),
+            },
+            origin: LayerOrigin::Increase,
+        },
+    ] {
+        let events = inject(&mut w, partition, event.clone());
+        assert!(events.is_empty(), "{event:?} produced {events:?}");
+    }
+    assert_eq!(
+        w.dist.layers[&layer_of(&policy, 1)].sum_insured_minor,
+        500_000_00,
+        "the layer announced twice is unchanged"
+    );
+    assert_eq!(w.dist.requested.len(), requested);
+
+    // A receipt reversed, and the same reversal offered again under a new event.
+    let reversal = CoreEvent::ReceiptReversed {
+        policy: policy.clone(),
+        receipt: "r1".into(),
+        amount_minor: 1,
+    };
+    let first = inject(&mut w, partition, reversal.clone());
+    assert!(first.iter().any(|e| matches!(e, Event::CommissionReversed { .. })), "{first:?}");
+    assert_eq!(w.dist.requested.len(), requested + 1, "one posting takes the receipt's commission back");
+    assert!(inject(&mut w, partition, reversal).is_empty());
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // Premium handed back on the policy that earned nothing takes nothing.
+    let back = inject(
+        &mut w,
+        plain_partition,
+        CoreEvent::PremiumUnapplied {
+            policy: plain.clone(),
+            reference: "rem-9".into(),
+            net_by_cover_type: std::collections::BTreeMap::from([("life".to_string(), 10_00)]),
+        },
+    );
+    assert!(back.is_empty(), "{back:?}");
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // A command only a person decides, tried by a module, is refused by name.
+    let refused = ic_distribution::Actor::Module("payments".into()).person().unwrap_err();
+    assert_eq!(refused.code, "caller_not_allowed");
+    assert!(refused.message.contains("payments"));
+    assert!(admin().person().is_ok());
+    // A unit command names itself as the others do.
+    assert_eq!(Command::RecordDailyControl.name(), "record_daily_control");
+}
