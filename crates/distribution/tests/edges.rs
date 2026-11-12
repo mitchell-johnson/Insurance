@@ -309,7 +309,8 @@ fn an_uplift_gives_no_path_and_an_ordinary_ending_is_not_a_clawback() {
 /// Purpose: the change cursor names exactly the parties that moved after a sequence (a payee
 /// whose commission was confirmed, a provider whose licence changed and the adviser engaged
 /// under it), and the engagements question gives an adviser's engagements with the licence
-/// problem that stops each being used on the day asked.
+/// problem that stops each being used on the day asked, and the relations question lists the
+/// dated links of the structure.
 /// Why it matters: the portal's publisher reads these two questions to keep the workbench and
 /// the adviser directory current. A cursor that missed a party would leave a stale balance or
 /// an adviser shown as available after their provider's licence was suspended; one that named
@@ -367,4 +368,20 @@ fn the_change_cursor_and_the_engagements_question_feed_a_publisher() {
     let before = ask_engagements(&w, None, today.pred_opt().unwrap());
     assert_eq!(before["engagements"][0]["impairment"], serde_json::Value::Null);
     assert_eq!(ask_engagements(&w, Some("fap-two"), today)["engagements"], serde_json::json!([]));
+
+    // The structure above a provider, so a group's licence can be followed down.
+    w.send(
+        admin(),
+        Command::Relate(Relation {
+            child: party("fap-one"),
+            parent: party("group-old"),
+            kind: RelationKind::LicensedBy,
+            from: d(2021, 1, 1),
+            to: None,
+        }),
+    )
+    .unwrap();
+    let relations = ask(&w.dist, Question::Relations).unwrap();
+    let link = serde_json::json!({ "child": "fap-one", "parent": "group-old", "kind": "licensed_by", "from": "2021-01-01", "to": null });
+    assert!(relations.as_array().unwrap().contains(&link), "{relations}");
 }

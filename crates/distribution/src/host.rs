@@ -83,6 +83,9 @@ pub enum Question {
     },
     OpenTasks,
     Status,
+    /// Every dated link in the structure: who sits under, is licensed by or
+    /// is paid for whom, and from when to when.
+    Relations,
     /// The oldest postings still to be carried to the core: what the host's
     /// outbox carrier asks.
     Outbox {
@@ -147,6 +150,7 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
         Question::Action { id } => value(&state.actions.get(&id)),
         Question::Case { id } => value(&state.cases.get(&id)),
         Question::OpenTasks => value(&state.tasks.values().filter(|t| t.done.is_none()).collect::<Vec<_>>()),
+        Question::Relations => value(&state.config.structure.relations),
         Question::Outbox { limit } => value(&state.outbox(limit)),
         Question::ChangedParties { since } => {
             let parties: Vec<&PartyId> = state.changed.iter().filter(|(_, at)| **at > since).map(|(p, _)| p).collect();
