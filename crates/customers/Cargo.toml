@@ -1,0 +1,50 @@
+[package]
+name = "ic-customers"
+description = "The customer master: parties, relationships, matching, two-timeline records, field encryption under per-party keys and retention-driven shredding, on PostgreSQL"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-azure.workspace = true
+chrono = { workspace = true, features = ["clock"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+reqwest.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rand.workspace = true
+axum.workspace = true
+jsonwebtoken.workspace = true
+cedar-policy.workspace = true
+aes-gcm = "0.10"
+hmac = "0.12"
+zeroize = "1"
+strsim = "0.11"
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+deadpool = { version = "0.12", default-features = false, features = ["managed", "rt_tokio_1"] }
+tokio-postgres-rustls = "0.13"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+
+[[bin]]
+name = "ic-customers"
+path = "src/bin/ic-customers.rs"
+
+[dev-dependencies]
+ic-azure = { path = "../azure", features = ["testing"] }
+proptest.workspace = true
+tower.workspace = true
+http-body-util.workspace = true
+rsa = "0.9"
+
+[lints]
+workspace = true

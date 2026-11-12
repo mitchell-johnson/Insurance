@@ -904,7 +904,7 @@ async fn the_customer_master_client_reads_every_answer() {
                 assert_eq!(headers["authorization"], "Bearer tok-1");
                 log.lock().unwrap().push(body.clone());
                 match body["family_name"].as_str().unwrap() {
-                    "Linked" => (axum::http::StatusCode::OK, r#"{"outcome":"linked","party":"p-1"}"#),
+                    "Linked" => (axum::http::StatusCode::OK, r#"{"outcome":"linked","party":"p-1","ignored":["email"]}"#),
                     "Created" => (axum::http::StatusCode::CREATED, r#"{"outcome":"created","party":"p-2"}"#),
                     "Possible" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":["p-3","p-4"]}"#),
                     "Nobody" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":[]}"#),

@@ -370,3 +370,86 @@ fn refused_work_is_reported_by_what_it_was_about() {
         "no ceiling the core does not hold"
     );
 }
+
+/// The payer the core holds on a member's underwritten layers.
+fn payers(h: &Harness, id: &str) -> Vec<ic_core::policy::MemberPays> {
+    h.c.state(h.p).policies[&h.policy]
+        .covers
+        .values()
+        .flat_map(|c| c.layers.iter())
+        .filter(|l| l.life == life(id) && l.origin == ic_core::LayerOrigin::UnderwrittenExcess)
+        .map(|l| l.member_pays)
+        .collect()
+}
+
+/// Purpose: on a scheme whose terms bill loadings to the member, a loaded layer is written
+/// with the member paying the loading and an unloaded one with the employer paying all of
+/// it; the member's part is not on the scheme's invoice; and the count that protects a
+/// total is refused on terms that have no total.
+/// Why it matters: the setting decides who is asked for money that reveals a health
+/// loading. Billing the employer where the member was told they would pay discloses the
+/// loading to the employer; billing nobody is cover given away.
+#[test]
+fn a_loading_is_billed_to_the_member_where_the_terms_say_so() {
+    use ic_core::policy::MemberPays;
+
+    let mut t = terms();
+    t.excess_loading = ExcessLoading::MemberPays;
+    let mut bad = t.clone();
+    bad.excess_loading_min_count = 2;
+    assert!(bad.validate().unwrap_err().contains("minimum count"));
+
+    let (mut h, case) = with_executive(t.clone());
+    let owed_before = h.scheme().outstanding_minor;
+    h.underwriting(case, accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(status(&h, case), CaseStatus::Accepted);
+    assert_eq!(payers(&h, "E004"), vec![MemberPays::Loading]);
+    let with_loading = h.scheme().outstanding_minor - owed_before;
+
+    let (mut h, case) = with_executive(t);
+    let owed_before = h.scheme().outstanding_minor;
+    h.underwriting(case, accept(210_000_00, None, false)).unwrap();
+    assert_eq!(payers(&h, "E004"), vec![MemberPays::Nothing]);
+    assert_eq!(
+        h.scheme().outstanding_minor - owed_before,
+        with_loading,
+        "the employer owes the standard rate either way"
+    );
+    assert!(with_loading > 0);
+    // Nothing the module publishes says who has a loading.
+    assert!(!format!("{:?}", h.published).contains("loading"));
+}
+
+/// Purpose: where the employer pays loadings as one total with a minimum count, a member
+/// whose terms are accepted while fewer members than that hold underwritten cover pays
+/// their own loading, and one accepted once the count is reached is in the employer's
+/// total.
+/// Why it matters: a total of loadings over one or two members is those members'
+/// health loading, disclosed to their employer. The count is the only thing that stops
+/// the default billing option doing that on a small scheme.
+#[test]
+fn too_few_members_for_a_total_means_the_member_pays_the_loading() {
+    use ic_core::policy::MemberPays;
+
+    let mut t = terms();
+    t.excess_loading_min_count = 2;
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E004", attrs("executive", 240_000_00, "wlg")),
+            row(3, "E005", attrs("executive", 240_000_00, "wlg")),
+        ],
+    );
+    let case_of = |h: &Harness, id: &str| h.requests.iter().find(|r| r.life == life(id)).unwrap().case;
+    let (first, second) = (case_of(&h, "E004"), case_of(&h, "E005"));
+
+    h.underwriting(first, accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(payers(&h, "E004"), vec![MemberPays::Loading], "one member alone would be the total");
+    h.underwriting(second, accept(210_000_00, Some("0.25"), false)).unwrap();
+    assert_eq!(payers(&h, "E005"), vec![MemberPays::Nothing], "two members make a total");
+    // What the first member was told at their offer stands.
+    assert_eq!(payers(&h, "E004"), vec![MemberPays::Loading]);
+}
