@@ -115,6 +115,8 @@ struct Memo {
     reference: String,
     outstanding_minor: i64,
     as_at: NaiveDate,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -285,6 +287,7 @@ pub fn commands_for(
             book: line.book.clone(),
             reason: Some(line.reason.unwrap_or(HoldReason::LegalHold)),
             since: period_start(&line.period, today),
+            status: None,
         })
         .collect();
     for (id, kind, owed) in [
@@ -302,6 +305,7 @@ pub fn commands_for(
                 book: None,
                 reason: None,
                 since: today,
+                status: None,
             });
         }
     }
@@ -317,6 +321,7 @@ pub fn commands_for(
             book: None,
             reason: None,
             since: m.as_at,
+            status: m.status.clone(),
         });
     }
     out.push((

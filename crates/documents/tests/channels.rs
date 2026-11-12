@@ -35,6 +35,7 @@ fn message(channel: Channel, destination: &str) -> Outbound {
         contact: Contact {
             name: "Aroha Ngata".into(),
             destination: destination.into(),
+            ..Contact::default()
         },
         attempt: 1,
     }
@@ -239,6 +240,11 @@ async fn contact_points_come_from_the_customer_master() {
     fake.lock()
         .contacts
         .insert("aroha/email".into(), json!({ "name": "Aroha Ngata", "destination": "aroha@example.nz" }));
+    // The customer master also says what it knows of the person's needs.
+    fake.lock().contacts.insert(
+        "ben/email".into(),
+        json!({ "name": "Ben", "destination": "ben@example.nz", "language": "mi", "format": "large_print", "deceased": true }),
+    );
     let directory = HttpDirectory::new(&format!("{}/", fake.base), "api://customer-master/.default", Fake::credential());
 
     let found = directory.contact(&party("aroha"), Some("policyholder"), Channel::Email).await.unwrap().unwrap();
@@ -246,9 +252,16 @@ async fn contact_points_come_from_the_customer_master() {
         found,
         Contact {
             name: "Aroha Ngata".into(),
-            destination: "aroha@example.nz".into()
+            destination: "aroha@example.nz".into(),
+            ..Contact::default()
         }
     );
+    let ben = directory.contact(&party("ben"), None, Channel::Email).await.unwrap().unwrap();
+    assert_eq!(
+        (ben.language.as_deref(), ben.format.as_deref(), ben.deceased),
+        (Some("mi"), Some("large_print"), true)
+    );
+    fake.lock().contact_queries.pop();
     assert_eq!(directory.contact(&party("aroha"), None, Channel::Sms).await.unwrap(), None);
     {
         let inner = fake.lock();

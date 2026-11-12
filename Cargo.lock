@@ -2314,10 +2314,13 @@ name = "ic-group"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "base64 0.22.1",
  "chrono",
  "hex",
+ "http-body-util",
  "ic-azure",
  "ic-core",
+ "ic-customers",
  "ic-ledger",
  "ic-log",
  "ic-money",
@@ -2327,15 +2330,20 @@ dependencies = [
  "ic-reinsurance",
  "ic-sim",
  "ic-underwriting",
+ "jsonwebtoken",
  "proptest",
+ "rand 0.8.8",
  "reqwest 0.12.28",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

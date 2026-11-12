@@ -87,6 +87,10 @@ pub enum Question {
     /// affected population: what the complaints module's conduct register
     /// is fed from. Customers are not held here; the policies are.
     ConductCases,
+    /// Every layer the replacement rule matched to cover given up on the
+    /// same life, with who wrote it, the reason, and whether it is disputed
+    /// or was overturned: what oversight and conduct reporting count.
+    ReplacementMatches,
     /// Every dated link in the structure: who sits under, is licensed by or
     /// is paid for whom, and from when to when.
     Relations,
@@ -154,6 +158,28 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
         Question::Action { id } => value(&state.actions.get(&id)),
         Question::Case { id } => value(&state.cases.get(&id)),
         Question::OpenTasks => value(&state.tasks.values().filter(|t| t.done.is_none()).collect::<Vec<_>>()),
+        Question::ReplacementMatches => {
+            let rows: Vec<Value> = state
+                .layers
+                .iter()
+                .filter_map(|(key, l)| l.replacement.as_ref().map(|m| (key, l, m)))
+                .map(|(key, l, m)| {
+                    serde_json::json!({
+                        "layer": key,
+                        "policy": l.policy,
+                        "writing": l.writing.iter().map(|(e, _)| e).collect::<Vec<_>>(),
+                        "matched_minor": m.matched_minor,
+                        "sum_insured_minor": l.sum_insured_minor,
+                        "reason": m.reason,
+                        "on": m.on,
+                        "replaced": m.replaced.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+                        "disputed": m.disputed,
+                        "overturned": m.overturned,
+                    })
+                })
+                .collect();
+            Ok(Value::Array(rows))
+        }
         Question::ConductCases => {
             let structure = &state.config.structure;
             let rows: Vec<Value> = state

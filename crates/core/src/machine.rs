@@ -489,7 +489,7 @@ impl CoreState {
                 cash::reverse_receipt(&mut s.ledger, &s.catalog, p, ctx, &receipt)
             }),
             Command::ApplyMemberReceipt { policy, life, receipt, amount } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
-                voluntary::apply_receipt(&mut s.ledger, p, ctx, life, receipt, amount)
+                voluntary::apply_receipt(&mut s.ledger, &s.catalog, p, ctx, life, receipt, amount)
             }),
             Command::RefundMemberCredit { policy, life, amount } => {
                 self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
@@ -836,6 +836,7 @@ impl CoreState {
             earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
         }
         arrears::run(&mut self.ledger, &product, policy, ctx)?;
+        voluntary::run_arrears(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
         if let Some(keep_from) = ctx.date.checked_sub_days(chrono::Days::new(400)) {
             policy.prune_settled(keep_from);
         }

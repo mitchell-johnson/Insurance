@@ -393,6 +393,7 @@ async fn a_refund_travels_from_the_ledger_to_the_bank_and_back() {
         authority: "a1".to_string(),
         policy: policy.clone(),
         party: "payer".to_string(),
+        life: None,
         account: account("Ana Payer", "0101234567"),
         sole_name: false,
     };

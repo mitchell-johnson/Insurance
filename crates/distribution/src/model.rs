@@ -163,6 +163,64 @@ pub struct LayerRecord {
     /// The reference of the allocation that paid initial commission.
     pub initial_paid: Option<String>,
     pub ended: Option<NaiveDate>,
+    /// The life the layer covers, as the core names it.
+    #[serde(default)]
+    pub life: Option<String>,
+    /// Cover given up outside cooling-off, and not because of a claim: the
+    /// day and the sum insured that went. What the replacement rule matches
+    /// new business against.
+    #[serde(default)]
+    pub given_up: Option<(NaiveDate, i64)>,
+    /// How much of the cover given up has been matched to new layers.
+    #[serde(default)]
+    pub matched_away_minor: i64,
+    /// The layer was matched, in whole or in part, to cover given up on the
+    /// same life: a replacement nobody declared.
+    #[serde(default)]
+    pub replacement: Option<ReplacementMatch>,
+}
+
+/// Why the replacement rule matched a new layer to cover given up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchReason {
+    /// Written by the adviser who wrote the cover given up.
+    SameAdviser,
+    /// Written under the same provider, or one in the same group.
+    RelatedAdviser,
+    /// Written by anyone, for the amount that was given up.
+    AmountsMatch,
+}
+
+/// A new layer treated as a replacement because the rule matched it. The
+/// matched amount earns no initial commission and its trail follows the
+/// books of the cover it replaced; anything above it is new business.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplacementMatch {
+    pub matched_minor: i64,
+    pub reason: MatchReason,
+    pub on: NaiveDate,
+    /// The layers given up and how much of each was matched.
+    pub replaced: Vec<(String, i64)>,
+    /// The books of the cover replaced, weighted by the amount matched.
+    pub books: Vec<(BookId, i64)>,
+    /// Exposure items of the cover replaced that carry on, on their own
+    /// clock, because the whole of a layer given up was matched.
+    pub continued: Vec<String>,
+    /// The writing adviser's dispute, by its reference, until it is decided.
+    pub disputed: Option<String>,
+    /// The allocation that paid initial commission on the matched amount:
+    /// into held while a dispute is open, or in the ordinary way once a
+    /// dispute has been decided for the adviser.
+    pub matched_initial: Option<String>,
+    /// The exposure items that allocation created.
+    pub matched_exposures: Vec<String>,
+    /// A dispute was decided for the adviser: the layer is new business
+    /// after all. The record of the match stays.
+    pub overturned: bool,
+    /// Decided for the adviser before the layer's own initial commission
+    /// was paid: that one payment is on the whole layer.
+    pub initial_on_whole: bool,
 }
 
 impl LayerRecord {
@@ -210,6 +268,13 @@ pub struct PolicyRecord {
     pub last_clawback: Option<String>,
     /// The setting version a customer's change of adviser was decided under.
     pub adviser_change_setting: Option<u32>,
+    /// The person behind each life on the policy, where the core named one.
+    #[serde(default)]
+    pub lives: BTreeMap<String, PartyId>,
+    /// The engagement that submitted an alteration to the policy, and the
+    /// business date it was submitted on. Read by clawback by cause.
+    #[serde(default)]
+    pub altered_by: Option<(EngagementId, NaiveDate)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -257,6 +322,9 @@ pub struct Exposure {
     pub cover_type: String,
     pub open: bool,
     pub clawed_minor: i64,
+    /// The latest clawback on the item and what it took.
+    #[serde(default)]
+    pub last_clawback: Option<(String, i64)>,
 }
 
 impl Exposure {

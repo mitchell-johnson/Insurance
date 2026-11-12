@@ -148,6 +148,7 @@ async fn the_service_works_against_a_real_node() {
         authority: "a1".to_string(),
         policy: policy.clone(),
         party: "payer".to_string(),
+        life: None,
         account: account("Ana Payer", "0101234567"),
         sole_name: false,
     };

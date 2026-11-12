@@ -148,6 +148,8 @@ impl CustomerMaster for HttpCustomerMaster {
             .http
             .post(format!("{}/v1/parties/match", self.base))
             .bearer_auth(token)
+            // Why the customer master is being asked, which its access policy weighs.
+            .header("x-ic-purpose", "scheme_membership")
             .json(&body)
             .send()
             .await

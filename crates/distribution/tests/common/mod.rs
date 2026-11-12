@@ -212,6 +212,20 @@ impl World {
         (id, partition)
     }
 
+    /// A term life policy on a named person, so that two policies can be on
+    /// the same life.
+    pub fn issue_for(&mut self, n: u64, person: &str, life_cover_minor: i64) -> PolicyId {
+        let today = self.today();
+        let dob = d(1990, 3, 10);
+        let mut issue = term_life(n, today, dob, Sex::Female, false, life_cover_minor, None, Frequency::Monthly, None);
+        issue.lives = vec![ic_sim::persona::named_life("life-1", person, dob, Sex::Female, false)];
+        let id = issue.policy.clone();
+        let partition = self.cluster.partition_of(&issue.group);
+        self.cluster.submit(partition, "new-business", issue_command(issue)).unwrap();
+        self.sync();
+        id
+    }
+
     pub fn owing(&self, policy: &PolicyId) -> i64 {
         let p = self.cluster.locate(policy).unwrap();
         self.cluster.state(p).policies[policy].outstanding_minor()
