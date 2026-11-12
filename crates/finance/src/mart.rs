@@ -29,7 +29,7 @@ use std::collections::BTreeMap;
 use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
 use ic_core::{LayerOrigin, LifeId, PolicyId, PolicyStatus};
-use ic_ledger::{sha256, Hash32, PartitionId};
+use ic_ledger::{sha256, AccountUnit, Hash32, PartitionId};
 use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
@@ -284,6 +284,17 @@ pub struct Mart {
     policies: BTreeMap<(PartitionId, PolicyId), PolicyRow>,
     movements: Vec<Movement>,
     claims: Vec<EndingClaim>,
+    /// Money held in suspense for each policy, and since when.
+    #[serde(default, with = "crate::pairs")]
+    suspense: BTreeMap<(PartitionId, PolicyId), Held>,
+}
+
+/// Money held for a policy: what the core owes back or has yet to apply.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Held {
+    pub amount_minor: i64,
+    /// The business date the balance last rose from nothing.
+    pub since: NaiveDate,
 }
 
 /// The in-force book's totals: policies, covers and sum insured.
@@ -386,6 +397,7 @@ impl Mart {
             policies: BTreeMap::new(),
             movements: Vec::new(),
             claims: Vec::new(),
+            suspense: BTreeMap::new(),
         }
     }
 
@@ -396,6 +408,18 @@ impl Mart {
 
     fn holds(&self, partition: PartitionId) -> bool {
         self.partitions == 0 || partition < self.partitions
+    }
+
+    /// Money held in suspense, by policy, oldest first.
+    pub fn suspense(&self) -> Vec<(&PolicyId, &Held)> {
+        let mut held: Vec<(&PolicyId, &Held)> = self.suspense.iter().map(|((_, policy), h)| (policy, h)).collect();
+        held.sort_by(|a, b| (a.1.since, a.0).cmp(&(b.1.since, b.0)));
+        held
+    }
+
+    /// The latest business date any partition has closed.
+    pub fn latest_close(&self) -> Option<NaiveDate> {
+        self.feeds.values().filter_map(|f| f.closed).max()
     }
 
     /// The next event wanted from a partition.
@@ -429,6 +453,31 @@ impl Mart {
         match &record.event {
             Event::BusinessDateAdvanced { from, .. } => {
                 feed.closed = (*from).or(feed.closed);
+            }
+            Event::EntryPosted {
+                policy: Some(policy), lines, ..
+            } => {
+                // A liability: a credit, which is negative, is money held.
+                let moved: i128 = lines
+                    .iter()
+                    .filter(|l| l.role == ic_core::accounts::role::POLICY_SUSPENSE)
+                    .map(|l| match l.unit {
+                        AccountUnit::Minor(_) => -l.signed,
+                        AccountUnit::Fine(_) => -l.signed / ic_money::FINE_PER_MINOR,
+                        AccountUnit::Units(_) => 0,
+                    })
+                    .sum();
+                if moved != 0 {
+                    let key = (partition, policy.clone());
+                    let was = self.suspense.get(&key).map_or(0, |h| h.amount_minor);
+                    let now = was.saturating_add(i64::try_from(moved).unwrap_or(i64::MAX));
+                    if now == 0 {
+                        self.suspense.remove(&key);
+                    } else {
+                        let since = self.suspense.get(&key).filter(|_| was != 0).map_or(date, |h| h.since);
+                        self.suspense.insert(key, Held { amount_minor: now, since });
+                    }
+                }
             }
             Event::PolicyIssued {
                 policy,

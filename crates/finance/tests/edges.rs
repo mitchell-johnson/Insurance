@@ -371,7 +371,7 @@ fn commands_are_refused_from_the_wrong_service_or_before_setup() {
         owner: None,
         action: None,
     };
-    b.send("collections", None, aged((0..60).map(old).collect())).unwrap();
+    b.send("close-workflow", None, aged((0..60).map(old).collect())).unwrap();
     let CheckStatus::Red { items } = status(&b, p, "aged:policy_suspense") else {
         panic!("old suspense items did not turn the check red")
     };

@@ -41,6 +41,9 @@ const MONTHLY: i64 = 61_84;
 struct Local {
     state: Arc<Mutex<(PaymentsState, u64)>>,
     down: Arc<AtomicBool>,
+    /// What other modules were told, and what they will answer.
+    told: Arc<Mutex<Vec<(String, Value)>>>,
+    other_answer: Arc<Mutex<Option<Value>>>,
     /// Questions it will still answer; unset, it answers them all.
     answers_left: Arc<Mutex<Option<u32>>>,
     /// Answers every question with something that is not an answer.
@@ -56,6 +59,18 @@ impl Module for Local {
         guard.1 += 1;
         let index = guard.1;
         Ok(guard.0.apply(index, envelope))
+    }
+    async fn tell(&self, module: &str, command: Value) -> Result<Value, String> {
+        if self.down.load(Ordering::SeqCst) {
+            return Err("no leader".to_string());
+        }
+        self.told.lock().unwrap().push((module.to_string(), command));
+        Ok(self
+            .other_answer
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or(serde_json::json!({"index": 1, "result": {"Ok": null}})))
     }
     async fn query(&self, question: Value) -> Result<Value, String> {
         if self.down.load(Ordering::SeqCst) {
@@ -84,11 +99,10 @@ struct SimCore {
 }
 
 impl Core for SimCore {
-    async fn send(&self, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
+    async fn send_to(&self, _policy: &PolicyId, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
         if self.down.load(Ordering::SeqCst) {
             return Err("the core cannot be reached".to_string());
         }
-        assert!(policy_of(&command).is_some(), "the pump only sends commands about a policy");
         let applied = self.cluster.lock().unwrap().submit_keyed(0, key, caller, command);
         Ok(applied.result.err().map(|r| r.code))
     }
@@ -574,6 +588,104 @@ async fn an_unclear_answer_is_resolved_by_asking_the_bank() {
     assert!(pass.problems.len() >= 2, "{:?}", pass.problems);
     assert_eq!((pass.sent, pass.failed, pass.messages), (0, 0, 0));
     assert_eq!(world.state().submissions[&unsure].status, SubmissionStatus::Sending);
+}
+
+/// Purpose: an instruction for the claims module, which does not itself
+/// name a policy, is carried to the core under the policy it is held for;
+/// when the core refuses it the refusal is recorded against the instruction
+/// and a person is given the exception.
+/// Why it matters: this is how claims hears that a bank refused a benefit.
+/// A pump that could not route it, or dropped a refusal, would leave the
+/// payment showing as with the bank for ever.
+#[tokio::test]
+async fn a_notice_for_claims_is_carried_to_the_policys_partition() {
+    use ic_payments::model::{About, Instruction, OutboxEntry};
+    let world = World::new().await;
+    let pump = world.pump("akl", "a");
+    {
+        let mut guard = world.module.state.lock().unwrap();
+        let state = &mut guard.0;
+        let entry = OutboxEntry {
+            key: "claim-payment-failed-pay-a".to_string(),
+            instruction: Instruction::CoreAt {
+                policy: world.policy.clone(),
+                caller: "payments".to_string(),
+                command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+                    claim: "clm-nobody".to_string(),
+                    payment_ref: "pay-a".to_string(),
+                }))),
+            },
+            about: Some(About::Item("pay-a".to_string())),
+        };
+        state.outbox.insert(state.next_outbox, entry);
+        state.next_outbox += 1;
+    }
+    let pass = pump.pass().await;
+    assert_eq!(pass.instructions, 1, "{:?}", pass.problems);
+    let state = world.state();
+    assert!(state.outbox.is_empty());
+    // The core has no such claim, and says so; nobody is left guessing.
+    assert!(
+        state.exceptions.values().any(|e| e.kind == ExceptionKind::CoreRefused),
+        "{:?}",
+        state.exceptions
+    );
+}
+
+/// Purpose: a message for another module (a reinsurer settlement that was
+/// paid) is delivered to that module by name; its refusal is recorded and
+/// given to a person; while the cluster cannot be reached it waits.
+/// Why it matters: the reinsurance statement stays "instructed" and the
+/// finance close item stays open until this arrives. A lost message is a
+/// close that cannot be signed; a dropped refusal is one nobody chases.
+#[tokio::test]
+async fn a_message_for_another_module_is_delivered_or_its_refusal_kept() {
+    use ic_payments::model::{Instruction, OutboxEntry};
+    let world = World::new().await;
+    let pump = world.pump("akl", "a");
+    let message = |n: u32| {
+        serde_json::json!({"key": format!("payments:settled:ri-stmt-{n}"), "caller": "payments", "on": "2027-11-15",
+        "command": {"record_settlement": {"number": n, "payment_ref": format!("ri-stmt-{n}"), "amount_minor": 5}}})
+    };
+    let queue = |n: u32| {
+        let mut guard = world.module.state.lock().unwrap();
+        let state = &mut guard.0;
+        let entry = OutboxEntry {
+            key: format!("reinsurance-settled-ri-stmt-{n}"),
+            instruction: Instruction::Module {
+                module: "reinsurance".to_string(),
+                command: message(n),
+            },
+            about: Some(ic_payments::model::About::Item(format!("ri-stmt-{n}"))),
+        };
+        state.outbox.insert(state.next_outbox, entry);
+        state.next_outbox += 1;
+    };
+    queue(7);
+    world.module.down.store(true, Ordering::SeqCst);
+    assert!(!pump.pass().await.problems.is_empty());
+    assert!(world.module.told.lock().unwrap().is_empty());
+    world.module.down.store(false, Ordering::SeqCst);
+    let pass = pump.pass().await;
+    assert_eq!((pass.instructions, pass.problems.len()), (1, 0), "{:?}", pass.problems);
+    assert_eq!(*world.module.told.lock().unwrap(), vec![("reinsurance".to_string(), message(7))]);
+    assert!(world.state().outbox.is_empty());
+    assert!(world.state().exceptions.is_empty());
+
+    queue(8);
+    *world.module.other_answer.lock().unwrap() = Some(serde_json::json!({"index": 9, "result": {"Err": {"code": "unknown_statement", "message": "no"}}}));
+    pump.pass().await;
+    let state = world.state();
+    assert!(state.outbox.is_empty());
+    assert!(
+        state.exceptions.values().any(|e| e.kind == ExceptionKind::CoreRefused),
+        "{:?}",
+        state.exceptions
+    );
+
+    use ic_payments_service::ports::refusal;
+    assert_eq!(refusal(&serde_json::json!({"Err": {"message": "no code"}})).as_deref(), Some("refused"));
+    assert_eq!(refusal(&serde_json::json!({"Ok": []})), None);
 }
 
 /// Purpose: when the module stops answering part way through a pass, or

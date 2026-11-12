@@ -741,6 +741,9 @@ impl PaymentsState {
         }
         for n in &freed {
             self.free_item(n);
+            self.failed_before_settlement(n);
+            let reason = rejected.get(&n.item).cloned().unwrap_or_default();
+            self.origin_returned(n, tx.now.date(), &reason);
         }
         tx.emit(Event::SubmissionAcknowledged {
             submission: id.to_string(),
@@ -772,6 +775,7 @@ impl PaymentsState {
         for n in settled {
             total += n.amount_minor;
             self.waiting.remove(&n.item);
+            self.origin_settled(&n, settled_on);
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }
@@ -861,6 +865,10 @@ impl PaymentsState {
         if let Some(first) = &n.represents {
             self.represent.remove(first);
         }
+        if !was_settled {
+            self.failed_before_settlement(&n);
+        }
+        self.origin_returned(&n, returned_on, &format!("{reason:?}"));
         if was_settled {
             // The core heard it settle, so the core hears it come back, and
             // the statement will show the money moving the other way.

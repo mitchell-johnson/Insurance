@@ -348,6 +348,14 @@ pub struct UnderwritingRequest {
     pub reference: Option<String>,
 }
 
+/// What the core made of accepted terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IssueOutcome {
+    Issued { life: LifeId, cover: String, layer: u32 },
+    Rejected { code: String },
+}
+
 /// One thing the driver must do. It stays in the module's state until the
 /// driver reports it done, so a crash between the two loses nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,6 +382,15 @@ pub enum Outbound {
         key: String,
         /// The key the request went under, which is its name there.
         request_key: String,
+    },
+    /// What became of the terms underwriting accepted: the layer the core
+    /// wrote, so that underwriting can confirm reinsurance capacity against
+    /// it, or the core's refusal, so that a person there sees it.
+    UnderwritingOutcome {
+        key: String,
+        /// The key the request went under, which is its name there.
+        request_key: String,
+        outcome: IssueOutcome,
     },
     /// Match these joiners of a file against the customer master and
     /// answer with `PartiesResolved`. The driver holds the identities; the

@@ -19,9 +19,10 @@ fn released(payment: &str, payee: &str, amount: i64) -> Waiting {
         source: format!("claim:clm-1:{payment}"),
         payee: payee.to_string(),
         account_ref: "acct-ref-9".to_string(),
-        policy: policy("pol-1"),
+        policy: Some(policy("pol-1")),
+        claim: None,
         amount_minor: amount,
-        payable: PayableKind::Benefit,
+        payable: Some(PayableKind::Benefit),
     }
 }
 
@@ -198,7 +199,7 @@ fn a_released_provider_cost_waits_like_a_benefit() {
         (held.source.as_str(), held.amount_minor, held.account_ref.as_str()),
         ("claim-cost:clm-1:clm-1-cost-1", 450_00, "")
     );
-    assert_eq!(held.payable, PayableKind::Benefit);
+    assert_eq!(held.payable, Some(PayableKind::Benefit));
     assert!(react(&claims_event("3-81", "claim_admitted", detail)).is_empty());
 
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
@@ -275,4 +276,175 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     desk.ok(&svc(), offer(released("pay-1", "party-p1", 100_00)));
     assert_eq!(desk.code(&mia(), to("pay-1", "p2")), "payee_mismatch");
     desk.ok(&mia(), to("pay-1", "p1"));
+}
+
+/// Purpose: another module's driver offers a payment that is not policy
+/// money (a reinsurer's net settlement) with a plain JSON command; it waits,
+/// joins a reinsurer run for the reinsurer's payee, and when it settles the
+/// asking module's source is on the event, nothing is sent to the core, and
+/// the reinsurance module is told in its own command that the statement is
+/// paid, or that the bank refused or returned it; a release that names a
+/// policy without its payable is refused.
+/// Why it matters: this is the wire format the reinsurance driver sends.
+/// If it drifts, settlements due sit in an outbox and no reinsurer is paid;
+/// if a non-policy payment produced a core instruction it would be refused
+/// there and block the outbox behind it.
+#[test]
+fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
+    let mut desk = Desk::new();
+    desk.payee("re-1", PayeeKind::Reinsurer, "0301112223");
+    let envelope: ic_payments::Envelope = serde_json::from_value(json!({
+        "key": "reinsurance-notice-41",
+        "actor": {"id": "reinsurance", "roles": ["service"]},
+        "at": "1970-01-01T00:00:00",
+        "command": {"type": "offer_payment", "waiting": {
+            "payment": "ri-stmt-7", "source": "reinsurance:statement:7", "payee": "party-re-1", "amount_minor": 90_000_00}}
+    }))
+    .unwrap();
+    desk.state.apply(6000, envelope.clone()).unwrap();
+    desk.state.apply(6001, envelope).unwrap();
+    assert_eq!(desk.state.clock, Some(monday()), "an offer does not move the clock");
+    assert_eq!(waiting(&desk), vec!["ri-stmt-7"]);
+    let mut half = released("pay-1", "p1", 5_00);
+    half.payable = None;
+    assert_eq!(desk.code(&svc(), offer(half)), "invalid_payment");
+
+    desk.prepare("r1", RunType::Reinsurer, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["ri-stmt-7"]));
+    let submission = desk.approve("r1");
+    let events = desk.settle(&submission, d(2027, 11, 15));
+    assert!(events.contains(&Event::ItemSettled {
+        item: "ri-stmt-7".to_string(),
+        source: "reinsurance:statement:7".to_string(),
+        amount_minor: 90_000_00
+    }));
+    assert!(desk.state.waiting.is_empty());
+    // Nothing for the core, because this is not policy money. The
+    // reinsurance module is told, in its own command, that its statement is paid.
+    let told = |desk: &Desk| -> Vec<(String, serde_json::Value)> {
+        let entries = desk.state.outbox.values();
+        entries
+            .filter_map(|e| match &e.instruction {
+                Instruction::Module { module, command } => Some((module.clone(), command.clone())),
+                Instruction::Notify { .. } => None,
+                other => panic!("not for the core: {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(
+        told(&desk),
+        vec![(
+            "reinsurance".to_string(),
+            json!({"key": "payments:settled:ri-stmt-7", "caller": "payments", "on": "2027-11-15",
+                   "command": {"record_settlement": {"number": 7, "payment_ref": "ri-stmt-7", "amount_minor": 90_000_00}}})
+        )]
+    );
+
+    // The bank sends it back two days later: the statement is owed again.
+    desk.at(t(2027, 11, 17, 9, 0));
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "ri-stmt-7".to_string(),
+            reason: ic_payments::model::ReturnReason::Other("beneficiary bank closed".to_string()),
+            returned_on: d(2027, 11, 17),
+        },
+    );
+    let returned = &told(&desk)[1].1;
+    assert_eq!(returned["key"], json!("payments:returned:ri-stmt-7:2027-11-17"));
+    assert_eq!(returned["command"]["settlement_returned"]["number"], json!(7));
+    assert!(returned["command"]["settlement_returned"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("beneficiary bank closed"));
+
+    // One the bank refuses outright is reported the same way, and a source
+    // that is not a statement number tells nobody.
+    for (payment, source) in [("ri-stmt-8", "reinsurance:statement:8"), ("ri-other", "reinsurance:statement:latest")] {
+        let mut offered = released(payment, "re-1", 40_000_00 + payment.len() as i64);
+        (offered.source, offered.policy, offered.payable) = (source.to_string(), None, None);
+        desk.ok(&svc(), offer(offered));
+    }
+    desk.prepare("r2", RunType::Reinsurer, d(2027, 11, 18));
+    desk.ok(&mia(), take("r2", &["ri-stmt-8", "ri-other"]));
+    let submission = desk.approve("r2");
+    desk.deliver(&submission);
+    desk.ok(
+        &svc(),
+        Command::RecordAcknowledgement {
+            submission,
+            refused: None,
+            rejected: [
+                ("ri-stmt-8".to_string(), "account_closed".to_string()),
+                ("ri-other".to_string(), "account_closed".to_string()),
+            ]
+            .into(),
+        },
+    );
+    let all = told(&desk);
+    assert_eq!(all.len(), 3);
+    assert_eq!(
+        all[2].1["command"],
+        json!({"settlement_returned": {"number": 8, "payment_ref": "ri-stmt-8", "reason": "account_closed"}})
+    );
+}
+
+/// Purpose: when the bank refuses a claim payment, or sends it back before
+/// it settled, claims is told that exact payment failed, at the policy's
+/// partition, and the spent reference stops waiting; a payment that was not
+/// released by claims tells nobody.
+/// Why it matters: claims holds a released payment as "with the bank" until
+/// it hears otherwise. Without this a benefit the bank bounced stays owed
+/// to a claimant with nobody prompted to pay it again.
+#[test]
+fn claims_is_told_when_the_bank_refuses_a_released_payment() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    for (n, payment) in ["pay-a", "pay-b"].into_iter().enumerate() {
+        // Different amounts: two equal payments to one payee are held as a possible duplicate.
+        let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": (10_000 * (n + 1)).to_string(), "payee": "p1"});
+        for envelope in react(&claim_paid(&format!("3-{}", 100 + n), detail)) {
+            desk.state.apply(7000 + n as u64, envelope).unwrap();
+        }
+    }
+    desk.ok(&svc(), offer(released("pay-c", "p1", 300_00)));
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["pay-a", "pay-b", "pay-c"]));
+    let submission = desk.approve("r1");
+    desk.deliver(&submission);
+    desk.ok(
+        &svc(),
+        Command::RecordAcknowledgement {
+            submission: submission.clone(),
+            refused: None,
+            rejected: [
+                ("pay-a".to_string(), "account_closed".to_string()),
+                ("pay-c".to_string(), "account_closed".to_string()),
+            ]
+            .into(),
+        },
+    );
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "pay-b".to_string(),
+            reason: ic_payments::model::ReturnReason::Other("recalled".to_string()),
+            returned_on: d(2027, 11, 15),
+        },
+    );
+    // The maker is also told of the return, as for any returned payment.
+    let told: Vec<_> = desk.state.outbox.values().filter(|e| e.key.starts_with("claim-payment-failed-")).collect();
+    assert_eq!(told.len(), 2, "{:?}", desk.state.outbox);
+    assert!(desk.state.outbox.values().any(|e| e.key == "returned-pay-b"));
+    let failed = |payment: &str| Instruction::CoreAt {
+        policy: policy("pol-1"),
+        caller: "payments".to_string(),
+        command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+            claim: "clm-1".to_string(),
+            payment_ref: payment.to_string(),
+        }))),
+    };
+    assert_eq!((&told[0].instruction, &told[1].instruction), (&failed("pay-a"), &failed("pay-b")));
+    assert!(desk.state.waiting.is_empty(), "a reference the bank has seen is spent");
+    assert!(waiting(&desk).is_empty());
 }
