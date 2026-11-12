@@ -221,7 +221,9 @@ pub struct Treaty {
     /// the same life.
     #[serde(default)]
     pub reallocate_freed_retention: bool,
-    /// Opaque risk codes the treaty does not accept automatically.
+    /// Risk codes the treaty does not accept automatically, in underwriting's
+    /// cause tags (`pursuit.aviation`, `occupation.class_4`, `travel.*`). A
+    /// code ending in `.*` excludes the whole family.
     #[serde(default)]
     pub exclusions: Vec<String>,
     #[serde(default)]
@@ -259,6 +261,15 @@ impl Treaty {
             .any(|s| (s.product == "*" || s.product == product) && s.cover_types.iter().any(|c| c == "*" || c == cover_type))
     }
 
+    /// Whether any of the risk codes underwriting sent for a life is one the
+    /// treaty excludes.
+    pub fn excludes(&self, risk_codes: &[String]) -> bool {
+        self.exclusions.iter().any(|x| match x.strip_suffix('*') {
+            Some(family) => risk_codes.iter().any(|c| c.starts_with(family)),
+            None => risk_codes.contains(x),
+        })
+    }
+
     /// Whether cover starting on `on` is written under this version.
     pub fn open_on(&self, on: NaiveDate) -> bool {
         self.effective_from <= on && self.closed_to_new_business_from.is_none_or(|c| on < c)
@@ -273,6 +284,11 @@ impl Treaty {
             return Err("a treaty must say which products and cover types it applies to".into());
         }
         check_panel(&self.panel)?;
+        if let Some(bad) = self.exclusions.iter().find(|x| !exclusion_well_formed(x)) {
+            return Err(format!(
+                "the exclusion {bad:?} is not a risk code: use a tag such as pursuit.aviation, or a family such as pursuit.*"
+            ));
+        }
         match &self.basis {
             Basis::QuotaShare { share, automatic_limit_minor } => {
                 if *share == 0 || *automatic_limit_minor <= 0 {
@@ -480,5 +496,17 @@ impl ReinsurerRateTable {
                     && r.smoker.is_none_or(|s| smoker == Some(s))
             })
             .map(|r| r.rate)
+    }
+}
+
+/// A risk code, or a family of them: lower-case words joined by dots, with
+/// `*` allowed only as the whole of the last part.
+fn exclusion_well_formed(code: &str) -> bool {
+    let parts: Vec<&str> = code.split('.').collect();
+    let word = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    match parts.split_last() {
+        Some((&"*", rest)) => !rest.is_empty() && rest.iter().all(|p| word(p)),
+        Some((last, rest)) => word(last) && rest.iter().all(|p| word(p)),
+        None => false,
     }
 }

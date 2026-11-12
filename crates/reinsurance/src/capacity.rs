@@ -169,7 +169,7 @@ impl Reinsurance {
             suspensions: vec![],
             treaties: vec![(request.commencement, treaty.map(|t| t.reference()))],
             facultative: vec![],
-            excluded: treaty.is_some_and(|t| t.exclusions.iter().any(|x| request.risk_codes.contains(x))),
+            excluded: treaty.is_some_and(|t| t.excludes(&request.risk_codes)),
             excess_path: None,
             migrated: None,
             continues: None,

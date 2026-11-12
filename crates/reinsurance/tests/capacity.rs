@@ -189,7 +189,10 @@ fn facultative_terms_follow_the_proposal_to_the_issued_layer() {
 #[test]
 fn an_excluded_risk_needs_terms_for_the_whole_cover() {
     let mut b = Bench::empty();
-    let source = RETAIL.replace("recapture_after_years = 10,", "recapture_after_years = 10,\n    exclusions = [\"aviation\"],");
+    let source = RETAIL.replace(
+        "recapture_after_years = 10,",
+        "recapture_after_years = 10,\n    exclusions = [\"pursuit.aviation\"],",
+    );
     b.ok(
         "config",
         Command::ActivateTreaty {
@@ -197,7 +200,7 @@ fn an_excluded_risk_needs_terms_for_the_whole_cover() {
         },
     );
     let mut r = request("R1", "anna", 600 * K, d(2027, 3, 1));
-    r.risk_codes = vec!["aviation".into()];
+    r.risk_codes = vec!["pursuit.aviation".into()];
     b.ok("underwriting", Command::ReserveCapacity(Box::new(r)));
     assert_eq!(
         b.ri.capacity("R1").unwrap().outcome,
@@ -525,4 +528,33 @@ fn underwriting_can_ask_for_the_answer_and_is_told_of_offers_and_declines() {
         .notices_for(Audience::Staff, 100)
         .iter()
         .any(|(_, n)| matches!(n, Notice::CapacityReleased { .. })));
+}
+
+/// Purpose: a treaty's exclusions are underwriting's cause tags; a tag ending in `.*` excludes
+/// its whole family, an exact tag only itself, and terms naming something that is not a tag are
+/// refused when the treaty is loaded.
+/// Why it matters: underwriting sends the pursuits, occupation class and travel a life declared
+/// as tags such as `pursuit.aviation`. A reinsurer's wording "all hazardous pursuits" must not
+/// need every pursuit listed, and a misspelt exclusion that never matches would let excluded
+/// risks be ceded automatically without anyone noticing.
+#[test]
+fn exclusions_match_underwriting_tags_and_their_families() {
+    let load = |exclusions: &str| {
+        let source = RETAIL.replace(
+            "recapture_after_years = 10,",
+            &format!("recapture_after_years = 10,\n    exclusions = {exclusions},"),
+        );
+        ic_reinsurance::loader::load_treaty("t.star", &source)
+    };
+    let treaty = load(r#"["pursuit.*", "occupation.class_4"]"#).unwrap();
+    let codes = |c: &[&str]| c.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert!(treaty.excludes(&codes(&["pursuit.aviation"])));
+    assert!(treaty.excludes(&codes(&["travel.asia", "occupation.class_4"])));
+    assert!(!treaty.excludes(&codes(&["occupation.class_3", "travel.asia"])));
+    assert!(!treaty.excludes(&codes(&["pursuits.aviation"])));
+    assert!(!treaty.excludes(&[]));
+    for bad in [r#"["Aviation"]"#, r#"["pursuit."]"#, r#"["*"]"#, r#"["pursuit.*.x"]"#, r#"[""]"#] {
+        let err = load(bad).unwrap_err().to_string();
+        assert!(err.contains("is not a risk code"), "{bad}: {err}");
+    }
 }
