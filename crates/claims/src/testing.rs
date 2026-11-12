@@ -17,8 +17,6 @@ pub struct FakeCore {
     pub notices: Vec<(String, String, BTreeMap<String, String>)>,
     /// Refuse instructions while this is above zero, counting down.
     pub refuse_next: u32,
-    /// Let this many instructions through before refusing.
-    pub refuse_after: u32,
     pub work: u32,
 }
 
@@ -51,11 +49,8 @@ impl Core for FakeCore {
 
     fn execute(&mut self, instruction: Instruction) -> Result<(), Reject> {
         if self.refuse_next > 0 {
-            if self.refuse_after == 0 {
-                self.refuse_next -= 1;
-                return Err(Reject::new("ledger", "the core refused the instruction"));
-            }
-            self.refuse_after -= 1;
+            self.refuse_next -= 1;
+            return Err(Reject::new("ledger", "the core refused the instruction"));
         }
         self.instructions.push(instruction);
         Ok(())
