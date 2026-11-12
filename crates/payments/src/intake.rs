@@ -4,7 +4,7 @@
 //! paid. Nothing here moves money: a waiting payment joins a run like any
 //! other item and passes the same checks and approvals.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ic_core::{PayableKind, PolicyId};
 use serde::{Deserialize, Serialize};
@@ -22,6 +22,9 @@ pub struct Waiting {
     /// What is being paid, in the releasing module's words.
     pub source: String,
     /// Who is paid: a payee's ID here, or the party a payee belongs to.
+    /// Empty when the release does not say (a unit-linked payout): the
+    /// maker then names the payee when taking it into a run.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub payee: String,
     /// The releasing module's reference to the account it verified. Shown
     /// to the maker; this module pays the account it verified itself.
@@ -35,10 +38,10 @@ pub struct Waiting {
 impl PaymentsState {
     pub(crate) fn offer_payment(&mut self, tx: &mut Tx<'_>, waiting: Waiting) -> Result<(), Reject> {
         tx.need(Role::Service)?;
-        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.payee.is_empty() || waiting.amount_minor <= 0 {
+        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.amount_minor <= 0 {
             return Err(Reject::new(
                 "invalid_payment",
-                "a released payment has a reference, a source, a payee and a positive amount",
+                "a released payment has a reference, a source and a positive amount",
             ));
         }
         match self.waiting.get(&waiting.payment) {
@@ -64,9 +67,30 @@ impl PaymentsState {
         Ok(())
     }
 
-    /// The payee a waiting payment is for: the payee of that ID, or the one
-    /// payee the party has. A party with several payees is not guessed at.
-    fn payee_for(&self, waiting: &Waiting) -> Result<Id, Reject> {
+    /// The payee a waiting payment is for: the one the maker names, which
+    /// must be the payee or belong to the party the release names, if it
+    /// names one; otherwise the payee of that ID, or the one payee the party
+    /// has. A party with several payees is not guessed at.
+    fn payee_for(&self, waiting: &Waiting, chosen: Option<&Id>) -> Result<Id, Reject> {
+        if let Some(chosen) = chosen {
+            let payee = self
+                .payees
+                .get(chosen)
+                .ok_or_else(|| Reject::new("unknown_payee", format!("payment {}: there is no payee {chosen}", waiting.payment)))?;
+            if !(waiting.payee.is_empty() || waiting.payee == *chosen || waiting.payee == payee.party) {
+                return Err(Reject::new(
+                    "payee_mismatch",
+                    format!("payment {} was released to {}, not to {chosen}", waiting.payment, waiting.payee),
+                ));
+            }
+            return Ok(chosen.clone());
+        }
+        if waiting.payee.is_empty() {
+            return Err(Reject::new(
+                "payee_required",
+                format!("payment {} does not say who is paid: name the payee", waiting.payment),
+            ));
+        }
         if self.payees.contains_key(&waiting.payee) {
             return Ok(waiting.payee.clone());
         }
@@ -85,7 +109,7 @@ impl PaymentsState {
     }
 
     /// Put waiting payments into a run, as the items they were released as.
-    pub(crate) fn take_waiting(&mut self, tx: &mut Tx<'_>, run: &str, payments: BTreeSet<Id>) -> Result<(), Reject> {
+    pub(crate) fn take_waiting(&mut self, tx: &mut Tx<'_>, run: &str, payments: BTreeSet<Id>, payees: BTreeMap<Id, Id>) -> Result<(), Reject> {
         tx.need(Role::Maker)?;
         let mut items = Vec::new();
         for payment in &payments {
@@ -97,7 +121,7 @@ impl PaymentsState {
             items.push(NewItem {
                 item: waiting.payment.clone(),
                 source: waiting.source.clone(),
-                counterparty: Counterparty::Payee(self.payee_for(waiting)?),
+                counterparty: Counterparty::Payee(self.payee_for(waiting, payees.get(payment))?),
                 amount_minor: waiting.amount_minor,
                 policy: Some(waiting.policy.clone()),
                 payable: Some(waiting.payable),

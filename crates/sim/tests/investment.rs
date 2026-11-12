@@ -367,8 +367,9 @@ fn orders_that_cannot_be_honoured_are_refused_when_placed() {
 }
 
 /// Purpose: a switch sells in one fund and, when the sell executes, places a buy in the
-/// other fund for the cash it fetched: for the same pricing date where that fund has not
-/// yet struck, and for its next pricing date where it has. A sell for a cash amount sells
+/// other fund for the cash it fetched: for the same pricing date where that fund prices
+/// that day, even if its price is already struck, and for its next pricing date where it
+/// does not. A sell for a cash amount sells
 /// the units that amount needs, or the whole holding if it is worth less. An order whose
 /// units have gone by the time its price arrives is cancelled without stopping the rest.
 /// Why it matters: a switch that bought before it sold would spend money the policy does
@@ -410,8 +411,16 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
         order("cash-1", &policy, "growth", Direction::Sell, OrderAmount::Cash { minor: 300_00 }, tuesday),
     )
     .unwrap();
-    // Bond struck Tuesday's price before growth did, so the switch's buy takes bond's next
-    // pricing date: Thursday, since Wednesday is a holiday for these funds.
+    // A second switch, of 100 units, to a fund that does not price on Tuesday or Wednesday.
+    let mut income = fund("income");
+    income.non_pricing_days = [tuesday, d(2027, 11, 17)].into();
+    invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(income))).unwrap();
+    let mut second = order("sw-2", &policy, "growth", Direction::Sell, OrderAmount::Units { micro: 100_000_000 }, tuesday);
+    second.kind = OrderKind::SwitchOut;
+    second.switch_to = Some(fund_id("income"));
+    place(&mut c, second).unwrap();
+    // Bond struck Tuesday's price before growth did. The customer asked for the switch
+    // before either price was known, so its buy still takes Tuesday's bond price.
     c.end_of_day().unwrap();
     invest(
         &mut c,
@@ -426,16 +435,22 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     )
     .unwrap();
     execute(&mut c, "growth", tuesday).unwrap();
-    // 500 units at 3.00 = 1,500.00 to bond; 300.00 needs exactly 100 units.
-    assert_eq!(units(&c, &policy, "growth"), 2_000_000_000 - 500_000_000 - 100_000_000);
+    // 500 units at 3.00 = 1,500.00 to bond; 300.00 needs exactly 100 units; 100 units to income.
+    assert_eq!(units(&c, &policy, "growth"), 2_000_000_000 - 500_000_000 - 100_000_000 - 100_000_000);
     let second_half = c.state(0).investment.order("sw-1.in").expect("the switch placed its buy").clone();
     assert_eq!(second_half.order.amount, OrderAmount::Cash { minor: 1_500_00 });
     assert_eq!(
         (second_half.order.fund.clone(), second_half.order.pricing_date, second_half.order.kind),
-        (fund_id("bond"), d(2027, 11, 18), OrderKind::SwitchIn)
+        (fund_id("bond"), tuesday, OrderKind::SwitchIn)
     );
     assert_eq!(second_half.state, OrderState::Pending);
-    assert_eq!(pending_cash(&c, &policy), 1_000_00 + 1_500_00 + 300_00);
+    // The other switch's buy waits for income's next pricing date, Thursday.
+    let later = c.state(0).investment.order("sw-2.in").expect("the second switch placed its buy").clone();
+    assert_eq!(
+        (later.order.amount, later.order.pricing_date),
+        (OrderAmount::Cash { minor: 300_00 }, d(2027, 11, 18))
+    );
+    assert_eq!(pending_cash(&c, &policy), 1_000_00 + 1_500_00 + 300_00 + 300_00);
     // The switch's cash is committed to its buy: it cannot be returned to suspense.
     let back = InvestCommand::AllocateCash {
         policy: policy.clone(),
@@ -443,9 +458,15 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
         amount_minor: -1_300_01,
     };
     assert_eq!(code(invest(&mut c, "policy-servicing", back)), "cash_committed");
+    // Bond's Tuesday price is in force, so the buy is ready for the run at once.
+    let todo = c.state(0).investment.executable();
+    assert_eq!(todo.len(), 1);
+    assert_eq!((todo[0].fund.clone(), todo[0].pricing_date, todo[0].pending), (fund_id("bond"), tuesday, 1));
+    execute(&mut c, "bond", tuesday).unwrap();
+    assert_eq!(units(&c, &policy, "bond"), 1_500_000_000);
 
     // Thursday: sell everything in growth twice over. The first takes it all for what it
-    // fetches; the cash order asks for more than is left and is cancelled; bond's buy executes.
+    // fetches; the cash order asks for more than is left and is cancelled; income's buy executes.
     c.end_of_day().unwrap();
     let thursday = d(2027, 11, 18);
     assert_eq!(c.business_date(), Some(thursday));
@@ -469,15 +490,15 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     invest(
         &mut c,
         "unit-pricing",
-        InvestCommand::ActivateUnitPrice(Box::new(price("b-thu", "bond", thursday, "1.2500", "1.2500"))),
+        InvestCommand::ActivateUnitPrice(Box::new(price("i-thu", "income", thursday, "1.5000", "1.5000"))),
     )
     .unwrap();
     c.take_events();
     execute(&mut c, "growth", thursday).unwrap();
-    execute(&mut c, "bond", thursday).unwrap();
-    // 1,400 units at 1.00: worth less than 9,999.00, so all of it is sold for 1,400.00.
+    execute(&mut c, "income", thursday).unwrap();
+    // 1,300 units at 1.00: worth less than 9,999.00, so all of it is sold for 1,300.00.
     assert_eq!(units(&c, &policy, "growth"), 0);
-    assert_eq!(units(&c, &policy, "bond"), 1_200_000_000);
+    assert_eq!(units(&c, &policy, "income"), 200_000_000);
     assert!(matches!(c.state(0).investment.order("z-cash").unwrap().state, OrderState::Cancelled { .. }));
     let events = invest_events(&mut c);
     let executed: Vec<&str> = events
@@ -487,15 +508,15 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
             _ => None,
         })
         .collect();
-    assert_eq!(executed, ["a-cash", "sw-1.in"]);
+    assert_eq!(executed, ["a-cash", "sw-2.in"]);
     assert!(events
         .iter()
         .any(|e| matches!(e, InvestEvent::UnitOrderCancelled { order_id, .. } if order_id == "z-cash")));
-    assert_eq!(pending_cash(&c, &policy), 1_000_00 + 300_00 + 1_400_00);
+    assert_eq!(pending_cash(&c, &policy), 1_000_00 + 300_00 + 1_300_00);
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
     // The cash has been waiting since the day it was first allocated.
     let waiting = c.state(0).investment.waiting_cash(&c.state(0).ledger, &c.state(0).policies);
-    assert_eq!((waiting.len(), waiting[0].amount_minor, waiting[0].since), (1, 2_700_00, monday));
+    assert_eq!((waiting.len(), waiting[0].amount_minor, waiting[0].since), (1, 2_600_00, monday));
 }
 
 /// Purpose: a fund or a price is activated once and is then immutable: the same content
@@ -1105,4 +1126,10 @@ fn a_withdrawal_is_paid_through_benefit_payable() {
         }
     )));
     assert_eq!(seen.iter().filter(|e| matches!(e, InvestEvent::PayoutRaised { .. })).count(), 2);
+    // Each request to pay names the policy's owner, so it can be paid to no one else.
+    let owner = c.state(0).policies[&policy].policyholder.clone();
+    assert!(seen.iter().all(|e| match e {
+        InvestEvent::PayoutRaised { policyholder, .. } | InvestEvent::PayoutReinstructed { policyholder, .. } => *policyholder == owner,
+        _ => true,
+    }));
 }
