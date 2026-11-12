@@ -1738,6 +1738,14 @@ async fn the_claims_console() {
         (StatusCode::OK, &json!(1), &json!("pol-c1"), &json!("cl-1")),
         "{claim}"
     );
+    // Staff work from the claim's own view: who owns it, its queue and money, nothing clinical.
+    let (status, work) = ask("sub-cl1", "work?claim=c-1").await;
+    assert_eq!(
+        (status, &work["partition"], &work["view"]["owner"]),
+        (StatusCode::OK, &json!(1), &json!("cl-1")),
+        "{work}"
+    );
+    assert_eq!(ask("sub-cl1", "work?claim=c-404").await.0, StatusCode::NOT_FOUND);
     // The assessor records the cause as themselves; a colleague who does not own the claim cannot.
     let cause = json!({ "record_cause": { "claim": "c-1", "cause_code": "CC-0003" } });
     let (status, problem) = tell("sub-cllead", "assessing", cause.clone()).await;

@@ -30,6 +30,8 @@ pub enum PolicyStatus {
     Terminated,
     /// Moved to another group. History stays on this partition's chain.
     Transferred,
+    /// Avoided for non-disclosure: treated as never having been in force.
+    Avoided,
 }
 
 /// Derived from unpaid premium, never set by hand. Only a policy in force has
@@ -334,6 +336,60 @@ pub struct ReinstatementApproval {
     pub terms: Vec<LayerTerms>,
 }
 
+/// What becomes of the premiums paid on a policy that is avoided. The
+/// approved non-disclosure case decides; the core does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PremiumOnAvoidance {
+    /// Every premium paid since inception goes back to the policyholder.
+    Refund,
+    /// The insurer keeps what was paid.
+    Retain,
+}
+
+/// That a policy was avoided, and on what decision.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AvoidanceRecord {
+    /// The non-disclosure case that decided it.
+    pub case: String,
+    pub avoided_on: NaiveDate,
+    pub premium: PremiumOnAvoidance,
+    /// What went back to policy suspense for the policyholder.
+    pub refunded_minor: i64,
+}
+
+/// Terms a layer carried before a non-disclosure case varied them. The
+/// layer now reads as if written on the varied terms from its start; this
+/// is the record of what it was written on. Sensitive, like the terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variation {
+    pub case: String,
+    pub recorded_on: NaiveDate,
+    pub cover: String,
+    pub layer: u32,
+    pub loadings_before: Vec<DecStr>,
+    pub exclusions_before: Vec<String>,
+}
+
+/// What receivables removed from the policy's state had billed and earned,
+/// so that an avoidance years later can still undo all of it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrunedPremium {
+    /// Earned premium by cover type (and `policy_fee`), in fine units.
+    #[serde(default)]
+    pub earned_fine: BTreeMap<String, i128>,
+    #[serde(default)]
+    pub gst_minor: i64,
+    #[serde(default)]
+    pub levies_minor: BTreeMap<String, i64>,
+}
+
+impl PrunedPremium {
+    pub fn is_empty(&self) -> bool {
+        self.earned_fine.values().all(|v| *v == 0) && self.gst_minor == 0 && self.levies_minor.values().all(|v| *v == 0)
+    }
+}
+
 /// The underwriting terms on one life's cover.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayerTerms {
@@ -482,6 +538,12 @@ pub struct Policy {
     /// What a cancellation wrote, so that one set aside is undone exactly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancellation: Option<CancellationRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avoidance: Option<AvoidanceRecord>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub variations: Vec<Variation>,
+    #[serde(default, skip_serializing_if = "PrunedPremium::is_empty")]
+    pub pruned: PrunedPremium,
     /// The anniversaries that passed with indexation declined. A decline
     /// set aside is taken out again, so it does not count against the
     /// policyholder's right to indexation.
@@ -629,8 +691,19 @@ impl Policy {
     /// information the state machine needs: their history is in the log. This
     /// keeps policy state bounded over decades.
     pub fn prune_settled(&mut self, keep_from: NaiveDate) {
-        self.receivables
-            .retain(|r| r.outstanding_minor != 0 || r.unearned_fine() != 0 || r.period_end > keep_from);
+        let keep = |r: &Receivable| r.outstanding_minor != 0 || r.unearned_fine() != 0 || r.period_end > keep_from;
+        // What goes is remembered in total: an avoidance undoes every
+        // premium since inception, long after the receivables are gone.
+        for r in self.receivables.iter().filter(|r| !keep(r) && r.payer.is_none()) {
+            for (cover_type, fine) in &r.earned_fine {
+                *self.pruned.earned_fine.entry(cover_type.clone()).or_insert(0) += fine;
+            }
+            self.pruned.gst_minor += r.gst_minor;
+            for (code, v) in &r.levies_minor {
+                *self.pruned.levies_minor.entry(code.clone()).or_insert(0) += v;
+            }
+        }
+        self.receivables.retain(keep);
         self.receipts.retain(|_, r| r.received_on > keep_from);
         self.payments.retain(|_, p| p.settled_on > keep_from);
     }

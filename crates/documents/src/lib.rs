@@ -12,6 +12,7 @@
 
 pub mod channels;
 pub mod command;
+pub mod complaint_letters;
 pub mod complaints_relay;
 pub mod crypto;
 pub mod driver;
