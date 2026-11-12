@@ -232,3 +232,60 @@ fn published_codes_match_the_json_form() {
     }
     assert_eq!((Status::Ended.code(), Status::Reversed.code()), ("benefit_ended", "admission_reversed"));
 }
+
+/// Purpose: the staff working view of a claim shows who has it, the tasks, the evidence, the
+/// decision waiting for signatures, the payee, the interested parties, the payments and the
+/// benefit, and is absent for a claim that does not exist.
+/// Why it matters: the claims screen is built from this view. If it left out the waiting
+/// decision or the unpaid lender, staff would work from memory; if it carried the cause or a
+/// vault reference, the clinical file would be readable without the logged step of opening it.
+#[test]
+fn the_working_view_shows_the_work_and_not_the_clinical_file() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.ok(Command::RequestEvidence {
+        claim: "ip-1".into(),
+        evidence: "e-1".into(),
+        kind: "medical_report".into(),
+        from: "treating-doctor".into(),
+        actor: actor("ana"),
+    });
+    let view = w.state.work_view("ip-1").expect("the claim exists");
+    assert_eq!(
+        (view.owner.as_deref(), view.status, view.policy.as_str()),
+        (Some("ana"), Status::InPayment, "pol-2")
+    );
+    assert_eq!(view.payee.as_ref().map(|p| p.0.as_str()), Some("party-claimant"));
+    assert_eq!(
+        (view.payments.len(), view.paid_minor),
+        (0, 3_000),
+        "a benefit period is on the schedule, not a lump payment"
+    );
+    let benefit = view.benefit.as_ref().expect("in payment");
+    assert_eq!(
+        (benefit.monthly_minor, benefit.next_period, benefit.held_for_proof_of_life),
+        (3_000, d(2027, 4, 1), false)
+    );
+    assert_eq!(view.evidence[0].0, "e-1");
+    assert!(view.waiting.is_none() && view.interests.is_empty());
+    let json = serde_json::to_string(&view).expect("it serialises");
+    assert!(!json.contains("CC-0002") && !json.contains("R-OK") && !json.contains("vault"), "{json}");
+
+    // A decision above the proposer's authority waits, and the view says for whom.
+    w.open_claim("c-1");
+    w.assess("c-1", "CC-0003");
+    let _ = w.decide("c-1", "ana", World::admit_lump(Some(500_000)), "R-OK");
+    let waiting = w
+        .state
+        .work_view("c-1")
+        .expect("the claim exists")
+        .waiting
+        .expect("a second signature is needed");
+    assert_eq!((waiting.proposer.as_str(), waiting.still_needed, waiting.signed.len()), ("ana", 1, 0));
+    assert!(w.state.work_view("nope").is_none());
+    assert!(matches!(
+        w.state.answer(&ic_claims::report::Question::Work { claim: "ip-1".into() }, d(2027, 3, 1)),
+        ic_claims::report::Reply::Work(Some(_))
+    ));
+}
