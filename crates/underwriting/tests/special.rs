@@ -337,7 +337,13 @@ fn issued_with_terms(w: &mut World) {
     let decided = w.propose(&case, "amy", vec![excluded("EX-5001")]).unwrap();
     w.automatic(&decided);
     w.respond("P1", "L1", ic_underwriting::command::OfferResponse::Accept);
-    w.ok("issuer", Command::PolicyIssued { proposal: "P1".into() });
+    w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
 }
 
 /// Purpose: the claims module's way in. It reads the terms on a cover (loading, dated exclusion

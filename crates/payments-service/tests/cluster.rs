@@ -232,6 +232,49 @@ async fn the_service_works_against_a_real_node() {
 
     assert!(azure.seen().iter().any(|line| line == "sign anz-file-akl-signing"));
 
+    // The pump exactly as the binary builds it, from the environment alone:
+    // workload identity, Key Vault signing, the immutable evidence container
+    // and the mounted bank credential, running the drill against the node.
+    let mounted = dir.join("bank-credentials");
+    std::fs::create_dir_all(&mounted).unwrap();
+    std::fs::write(mounted.join("bank"), "token-akl\n").unwrap();
+    let cluster_token = dir.join("cluster-token");
+    std::fs::write(&cluster_token, "test-cluster-token-0123456789abcdef\n").unwrap();
+    let env: BTreeMap<&str, String> = BTreeMap::from([
+        ("IC_NODES", addr.clone()),
+        ("IC_CLUSTER_TOKEN_FILE", cluster_token.to_str().unwrap().to_string()),
+        ("IC_PUMP_INTERVAL_SECS", "1".to_string()),
+        ("IC_REGION", "akl".to_string()),
+        ("HOSTNAME", "pump-0".to_string()),
+        ("IC_BANK_SECRETS_DIR", mounted.to_str().unwrap().to_string()),
+        ("IC_KEY_VAULT_URL", azure.base.clone()),
+        ("IC_BLOB_ENDPOINT", azure.base.clone()),
+        ("AZURE_FEDERATED_TOKEN_FILE", token_file.to_str().unwrap().to_string()),
+        ("AZURE_TENANT_ID", "tenant-1".to_string()),
+        ("AZURE_CLIENT_ID", "client-payments".to_string()),
+        ("AZURE_AUTHORITY_HOST", azure.base.clone()),
+    ]);
+    let args = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+    let get = |key: &str| env.get(key).cloned();
+    ic_payments_service::pump::log_to_stderr();
+    let drilled = ic_payments_service::pump::run_from(&args(&["drill", "real-1"]), get, std::future::pending()).await;
+    assert_eq!(drilled, Ok(()));
+    assert!(azure.blobs().keys().any(|key| key.contains("drill-real-1")), "{:?}", azure.blobs().keys());
+    let readiness = Module::query(&client, json!({"q": "readiness", "today": ic_payments_service::pump::nz_now().date()}))
+        .await
+        .unwrap();
+    assert_eq!(readiness[0]["region"], json!("akl"));
+    assert_eq!(readiness[0]["ready"], json!(true), "{readiness}");
+    // One pass with nothing left to do is a success, and the standing pump
+    // stops when it is told to.
+    assert_eq!(ic_payments_service::pump::run_from(&args(&["once"]), get, std::future::pending()).await, Ok(()));
+    let told = tokio::time::sleep(Duration::from_millis(100));
+    assert_eq!(ic_payments_service::pump::run_from(&[], get, told).await, Ok(()));
+    // Without an identity to sign as, it does not start.
+    let partial = |key: &str| env.get(key).filter(|_| key != "AZURE_CLIENT_ID").cloned();
+    let refused = ic_payments_service::pump::run_from(&args(&["once"]), partial, std::future::pending()).await;
+    assert!(refused.unwrap_err().contains("AZURE_CLIENT_ID"));
+
     node.stop().await.unwrap();
     // With the node gone, the module and the core both say so.
     let gone = ClusterClient::new(vec![addr]).with_attempt_timeout(Duration::from_millis(200));

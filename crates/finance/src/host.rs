@@ -69,6 +69,17 @@ pub enum Question {
     Return {
         id: String,
     },
+    /// What the close is waiting for from its drivers.
+    Work,
+    /// Part of an extract cut from the data mart for a period.
+    Extract {
+        kind: String,
+        period: PeriodId,
+        #[serde(default)]
+        offset: u64,
+        #[serde(default)]
+        limit: Option<u64>,
+    },
 }
 
 fn encode<T: serde::Serialize>(value: &T) -> Result<Value, String> {
@@ -108,6 +119,10 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Backdated { period, origin } => encode(&state.backdated_in(period, origin)),
         Question::Journal { id } => state.journals.get(&id).map_or_else(|| Err(format!("there is no journal {id}")), encode),
         Question::Conduct { period, product } => encode(&state.conduct_report(period, product.as_deref())),
+        Question::Work => encode(&state.work()),
+        Question::Extract { kind, period, offset, limit } => {
+            encode(&state.extract(&kind, period, offset, limit.unwrap_or(crate::report::MAX_EXTRACT_LINES))?)
+        }
         Question::Return { id } => state.returns.get(&id).map_or_else(|| Err(format!("return {id} has not been filed")), encode),
     }
 }

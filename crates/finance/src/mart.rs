@@ -202,7 +202,7 @@ struct EndingClaim {
     sum_insured_minor: i64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct PartitionFeed {
     next_seq: u64,
     /// The last business date the partition closed.
@@ -212,7 +212,10 @@ struct PartitionFeed {
 /// The mart. Feed it every event of every partition, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mart {
-    feeds: Vec<PartitionFeed>,
+    /// How many partitions the insurer has. Zero until it is known: events
+    /// are taken from any partition, and no extract is cut.
+    partitions: u16,
+    feeds: BTreeMap<PartitionId, PartitionFeed>,
     #[serde(with = "crate::pairs")]
     policies: BTreeMap<(PartitionId, PolicyId), PolicyRow>,
     movements: Vec<Movement>,
@@ -305,41 +308,58 @@ fn opt<T: ToString>(value: &Option<T>) -> String {
     value.as_ref().map(T::to_string).unwrap_or_default()
 }
 
+impl Default for Mart {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
 impl Mart {
     pub fn new(partitions: u16) -> Self {
         Self {
-            feeds: (0..partitions).map(|_| PartitionFeed { next_seq: 1, closed: None }).collect(),
+            partitions,
+            feeds: BTreeMap::new(),
             policies: BTreeMap::new(),
             movements: Vec::new(),
             claims: Vec::new(),
         }
     }
 
+    /// Say how many partitions there are, once it is known.
+    pub fn set_partitions(&mut self, partitions: u16) {
+        self.partitions = partitions;
+    }
+
+    fn holds(&self, partition: PartitionId) -> bool {
+        self.partitions == 0 || partition < self.partitions
+    }
+
     /// The next event wanted from a partition.
     pub fn next_seq(&self, partition: PartitionId) -> Option<u64> {
-        self.feeds.get(partition as usize).map(|f| f.next_seq)
+        self.holds(partition).then(|| self.feeds.get(&partition).map_or(1, |f| f.next_seq))
     }
 
     /// The last date every partition has closed.
     pub fn closed_through(&self) -> Option<NaiveDate> {
-        self.feeds.iter().map(|f| f.closed).min().flatten()
+        (0..self.partitions).map(|p| self.feeds.get(&p).and_then(|f| f.closed)).min().flatten()
     }
 
     /// Take one event in. An event already taken is ignored; one that skips
     /// ahead is refused, so the caller asks for what is missing.
     pub fn apply(&mut self, record: &EventRecord) -> Result<(), MartError> {
         let partition = record.partition;
-        let feed = self.feeds.get_mut(partition as usize).ok_or(MartError::Partition(partition))?;
-        if record.seq < feed.next_seq {
+        let expected = self.next_seq(partition).ok_or(MartError::Partition(partition))?;
+        if record.seq < expected {
             return Ok(());
         }
-        if record.seq > feed.next_seq {
+        if record.seq > expected {
             return Err(MartError::Gap {
                 partition,
-                expected: feed.next_seq,
+                expected,
                 got: record.seq,
             });
         }
+        let feed = self.feeds.entry(partition).or_insert(PartitionFeed { next_seq: 1, closed: None });
         feed.next_seq += 1;
         let date = record.business_date;
         match &record.event {
@@ -641,11 +661,9 @@ impl Mart {
 
     /// An extract is cut only as at a date every partition has closed.
     fn closed(&self, date: NaiveDate) -> Result<(), MartError> {
-        match self.feeds.iter().position(|f| f.closed.is_none_or(|c| c < date)) {
-            Some(partition) => Err(MartError::NotClosed {
-                partition: partition as PartitionId,
-                date,
-            }),
+        let behind = |p: &PartitionId| self.feeds.get(p).and_then(|f| f.closed).is_none_or(|c| c < date);
+        match (0..self.partitions.max(1)).find(behind) {
+            Some(partition) => Err(MartError::NotClosed { partition, date }),
             None => Ok(()),
         }
     }

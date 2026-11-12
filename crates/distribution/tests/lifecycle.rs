@@ -379,3 +379,171 @@ fn premium_handed_back_by_an_unwind_takes_its_renewal_commission_with_it() {
     );
     assert!(unknown.is_empty());
 }
+
+/// Purpose: events that arrive for things the module does not know, or a second time, change
+/// nothing and post nothing: a status change or a reinstatement for a policy nobody advised on,
+/// a reinstatement with no clawback behind it, a layer announced twice, a receipt reversed
+/// twice, and premium handed back on a policy that earned no commission. A cancelled case marks
+/// everyone it reaches as changed, and a command that only a person may send names the module
+/// that tried.
+/// Why it matters: the event feed is at least once and carries every policy, advised or not. A
+/// module that posted on a repeat would pay or claw back twice, and one that failed on an
+/// unknown policy would stop reading the feed for every adviser.
+#[test]
+fn stray_and_repeated_events_post_nothing() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    // A policy nobody wrote: it earns nothing.
+    let (plain, plain_partition) = w.issue(2, 300_000_00, None);
+    w.pay(&plain, "p1");
+    w.assert_reconciled();
+    let nobody = PolicyId("POL-NOBODY".into());
+    let requested = w.dist.requested.len();
+    for event in [
+        CoreEvent::PolicyStatusChanged {
+            policy: nobody.clone(),
+            from: ic_core::PolicyStatus::InForce,
+            to: ic_core::PolicyStatus::Lapsed,
+        },
+        CoreEvent::PolicyReinstated { policy: nobody.clone() },
+        CoreEvent::PolicyReinstated { policy: policy.clone() },
+        CoreEvent::LayerAdded {
+            policy: policy.clone(),
+            layer: LayerInfo {
+                cover: "life".into(),
+                cover_type: "life".into(),
+                layer: 1,
+                start: w.today(),
+                sum_insured_minor: 1,
+                life: ic_core::LifeId("life-1".into()),
+            },
+            origin: LayerOrigin::Increase,
+        },
+    ] {
+        let events = inject(&mut w, partition, event.clone());
+        assert!(events.is_empty(), "{event:?} produced {events:?}");
+    }
+    assert_eq!(
+        w.dist.layers[&layer_of(&policy, 1)].sum_insured_minor,
+        500_000_00,
+        "the layer announced twice is unchanged"
+    );
+    assert_eq!(w.dist.requested.len(), requested);
+
+    // A receipt reversed, and the same reversal offered again under a new event.
+    let reversal = CoreEvent::ReceiptReversed {
+        policy: policy.clone(),
+        receipt: "r1".into(),
+        amount_minor: 1,
+    };
+    let first = inject(&mut w, partition, reversal.clone());
+    assert!(first.iter().any(|e| matches!(e, Event::CommissionReversed { .. })), "{first:?}");
+    assert_eq!(w.dist.requested.len(), requested + 1, "one posting takes the receipt's commission back");
+    assert!(inject(&mut w, partition, reversal).is_empty());
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // Premium handed back on the policy that earned nothing takes nothing.
+    let back = inject(
+        &mut w,
+        plain_partition,
+        CoreEvent::PremiumUnapplied {
+            policy: plain.clone(),
+            reference: "rem-9".into(),
+            net_by_cover_type: std::collections::BTreeMap::from([("life".to_string(), 10_00)]),
+        },
+    );
+    assert!(back.is_empty(), "{back:?}");
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // A command only a person decides, tried by a module, is refused by name.
+    let refused = ic_distribution::Actor::Module("payments".into()).person().unwrap_err();
+    assert_eq!(refused.code, "caller_not_allowed");
+    assert!(refused.message.contains("payments"));
+    assert!(admin().person().is_ok());
+    // A unit command names itself as the others do.
+    assert_eq!(Command::RecordDailyControl.name(), "record_daily_control");
+}
+
+/// Purpose: a claim overpayment that claims keeps in its own ledger shows on the party's
+/// position as a memo line with the claim, the amount outstanding, the recovery status and
+/// whether the insurer made the error; each later word from claims replaces the line; a line
+/// with nothing outstanding drops off; the party is marked as changed each time; none of it
+/// touches this module's balances or asks the core for a posting; and an event that names no
+/// party, or is some other claims fact, is left alone.
+/// Why it matters: the workbench is the one place a person sees everything a counterparty owes
+/// before releasing money to them. An overpayment missing from it lets held commission be paid
+/// to someone who owes the insurer; one counted in this module's balances would be counted
+/// twice, because the claim ledger already holds it.
+#[test]
+fn a_claim_overpayment_shows_as_a_memo_line_and_moves_no_money() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    let today = w.today();
+    let (requested, payable) = (w.dist.requested.len(), w.payable("a-co"));
+    let claims = |kind: &str, fields: &[(&str, &str)]| CoreEvent::Module {
+        module: "claims".into(),
+        kind: kind.into(),
+        subject: "clm-1".into(),
+        detail: fields.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+    };
+    let whole = |outstanding: &'static str, status: &'static str| {
+        vec![
+            ("claim", "clm-1"),
+            ("policy", "POL-9"),
+            ("overpayment", "clm-1/overpayment/1"),
+            ("party", "a-co"),
+            ("outstanding_minor", outstanding),
+            ("status", status),
+            ("cause", "duplicate_payment"),
+            ("insurer_error", "true"),
+            ("good_faith", "true"),
+        ]
+    };
+
+    let cursor = w.dist.seq;
+    inject(&mut w, partition, claims("overpayment_raised", &whole("250000", "held")));
+    let memo = w.dist.position(&party("a-co"), today).memo;
+    assert_eq!(memo.len(), 1);
+    let line = &memo[0];
+    assert_eq!(
+        (line.owner.as_str(), line.reference.as_str(), line.case_ref.as_str()),
+        ("claims", "clm-1/overpayment/1", "clm-1")
+    );
+    assert_eq!(
+        (line.outstanding_minor, line.status.as_str(), line.cause.as_str()),
+        (2_500_00, "held", "duplicate_payment")
+    );
+    assert!(line.insurer_error && line.good_faith);
+    assert_eq!((line.policy.clone(), line.as_at), (Some(PolicyId("POL-9".into())), today));
+    assert!(w.dist.changed[&party("a-co")] > cursor, "the publisher is told the party moved");
+    assert!(
+        w.dist.position(&party("fap-one"), today).memo.is_empty(),
+        "it shows on the party that owes it and nobody else"
+    );
+
+    // Claims changes its mind about recovery, then part is repaid: the one line follows.
+    inject(&mut w, partition, claims("recovery_status_changed", &whole("250000", "pursued")));
+    inject(&mut w, partition, claims("overpayment_recovered", &whole("100000", "pursued")));
+    let memo = w.dist.position(&party("a-co"), today).memo;
+    assert_eq!((memo.len(), memo[0].outstanding_minor, memo[0].status.as_str()), (1, 1_000_00, "pursued"));
+
+    // Events that cannot be shown, or are not about an overpayment, are left alone.
+    let no_party: Vec<(&str, &str)> = whole("999", "held").into_iter().filter(|(k, _)| *k != "party").collect();
+    inject(&mut w, partition, claims("overpayment_raised", &no_party));
+    inject(&mut w, partition, claims("claim_paid", &whole("999", "held")));
+    assert_eq!(w.dist.memo.len(), 1);
+    assert_eq!(w.dist.position(&party("a-co"), today).memo[0].outstanding_minor, 1_000_00);
+
+    // Written off: nothing is outstanding, so it leaves the position. The record of it stays.
+    inject(&mut w, partition, claims("overpayment_written_off", &whole("0", "written_off")));
+    assert!(w.dist.position(&party("a-co"), today).memo.is_empty());
+    assert_eq!(w.dist.memo["claims:clm-1/overpayment/1"].status, "written_off");
+
+    assert_eq!(
+        (
+            w.dist.requested.len(),
+            w.dist.balance(&party("a-co"), ic_core::counterparty::PartyLedger::CommissionPayable)
+        ),
+        (requested, payable)
+    );
+}

@@ -49,17 +49,25 @@ pub trait Notifier: Send + Sync {
 
 impl Module for ClusterClient {
     async fn propose(&self, envelope: Envelope) -> Result<Output, String> {
-        let command = serde_json::to_value(&envelope).map_err(|e| e.to_string())?;
-        let reply = self
-            .propose_module_until(MODULE, &command, Duration::from_secs(20))
-            .await
-            .map_err(|e| e.to_string())?;
-        serde_json::from_value(reply.result?).map_err(|e| e.to_string())
+        // Our own envelope always has a JSON form.
+        let command = serde_json::json!(envelope);
+        let reply = self.propose_module_until(MODULE, &command, Duration::from_secs(20)).await.map_err(lost)?;
+        serde_json::from_value(reply.result?).map_err(unreadable)
     }
 
     async fn query(&self, question: Value) -> Result<Value, String> {
-        self.query_module(MODULE, &question).await.map_err(|e| e.to_string())?
+        self.query_module(MODULE, &question).await.map_err(lost)?
     }
+}
+
+/// The cluster could not be reached or did not answer.
+fn lost(e: ic_raft::client::ClientError) -> String {
+    e.to_string()
+}
+
+/// An answer that is not in the form expected.
+pub(crate) fn unreadable(e: serde_json::Error) -> String {
+    format!("unreadable answer: {e}")
 }
 
 /// The policy a command of ours is about.
@@ -91,11 +99,7 @@ impl ClusterCore {
             traceparent: None,
             command,
         };
-        let reply = self
-            .client
-            .propose_until(partition, &envelope, Duration::from_secs(20))
-            .await
-            .map_err(|e| e.to_string())?;
+        let reply = self.client.propose_until(partition, &envelope, Duration::from_secs(20)).await.map_err(lost)?;
         Ok(reply.rejected.map(|r| r.code))
     }
 }
@@ -107,7 +111,7 @@ impl Core for ClusterCore {
         };
         let partitions = self.client.partitions(Duration::from_secs(20)).await?;
         for partition in 0..partitions {
-            if self.client.locate(partition, &policy).await.map_err(|e| e.to_string())?.is_some() {
+            if self.client.locate(partition, &policy).await.map_err(lost)?.is_some() {
                 return self.propose(partition, key, caller, command).await;
             }
         }
@@ -118,11 +122,7 @@ impl Core for ClusterCore {
         let partitions = self.client.partitions(Duration::from_secs(20)).await?;
         let mut all = Candidates::default();
         for partition in 0..partitions {
-            let found = self
-                .client
-                .payment_candidates(partition, &self.matcher, &payment)
-                .await
-                .map_err(|e| e.to_string())?;
+            let found = self.client.payment_candidates(partition, &self.matcher, &payment).await.map_err(lost)?;
             all = all.merge(found);
         }
         match self.matcher.decide(all, &payment) {

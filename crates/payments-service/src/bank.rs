@@ -103,7 +103,7 @@ async fn checked(response: reqwest::Response) -> Result<reqwest::Response, Chann
 }
 
 async fn body<T: serde::de::DeserializeOwned>(response: reqwest::Response) -> Result<T, ChannelError> {
-    response.json().await.map_err(|e| ChannelError::Unknown(e.to_string()))
+    response.json().await.map_err(transport)
 }
 
 impl HttpBank {
@@ -119,7 +119,7 @@ impl Bank for HttpBank {
     async fn submit(&self, to: &Target, batch: &Batch, manifest: &Manifest) -> Result<Receipt, ChannelError> {
         let request = match to.kind {
             ChannelKind::File => {
-                let manifest = serde_json::to_vec(manifest).map_err(|e| ChannelError::NotSent(e.to_string()))?;
+                let manifest = serde_json::json!(manifest).to_string();
                 self.http
                     .put(format!("{}/files/{}", to.url, batch.id))
                     .header("x-manifest", base64::engine::general_purpose::STANDARD.encode(manifest))

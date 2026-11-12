@@ -520,9 +520,6 @@ impl LifeFile {
             reconfirm: false,
         }
     }
-    pub fn current_decision(&self) -> Option<&Decision> {
-        self.decisions.iter().rev().find(|d| d.status != DecisionStatus::Superseded)
-    }
     pub fn effective_decision(&self) -> Option<&Decision> {
         self.decisions.iter().rev().find(|d| d.status == DecisionStatus::Effective)
     }
