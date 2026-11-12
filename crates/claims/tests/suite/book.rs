@@ -913,3 +913,78 @@ fn a_returned_handling_cost_is_owed_to_the_provider_again() {
     let c = w.claim("c-2");
     assert_eq!((c.status, c.payable_minor, c.closed_on.is_some()), (Status::Paid, 0, true));
 }
+
+/// Purpose: where the rules set late payment interest, a lump sum released after the free days
+/// carries simple interest from the end of those days to the day it is released, shown apart
+/// from the benefit; a payment inside the free days carries none; and a payment the bank
+/// returns is sent again with the interest it had, not with more.
+/// Why it matters: interest for delay is owed by law or by the product and is a cost of the
+/// insurer's own slowness. It must be worked out the same way every time, never be counted as
+/// benefit paid against the sum insured, and never grow because a bank sent the money back.
+#[test]
+fn a_lump_sum_paid_late_carries_interest() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    // Two basis points a day after ten free days.
+    r.late_interest = Some(ic_claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    w.advance(10);
+    w.ok(pay("c-1", "ana", "p-1", 100_000, None));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { interest_minor: 0, .. })));
+    assert_eq!(w.core.noticed("claim_paid")[0]["net_minor"], "100000");
+
+    w.advance(10);
+    w.ok(pay("c-1", "ana", "p-2", 100_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            amount_minor: 100_000,
+            interest_minor: 200,
+            close: true,
+            ..
+        })
+    ));
+    let notice = w.core.noticed("claim_paid")[1].clone();
+    assert_eq!(
+        (notice["amount_minor"].as_str(), notice["net_minor"].as_str(), notice["interest_minor"].as_str()),
+        ("100000", "100200", "200")
+    );
+    let c = w.claim("c-1");
+    // Interest is not benefit: the claim has paid what was admitted and no more.
+    assert_eq!((c.status, c.paid_minor(false), c.payable_minor), (Status::Paid, 200_000, 0));
+
+    w.ok(Command::PaymentReturned {
+        claim: "c-1".into(),
+        payment_ref: "p-2".into(),
+    });
+    let back = w.core.noticed("payment_returned")[0].clone();
+    assert_eq!((back["amount_minor"].as_str(), back["interest_minor"].as_str()), ("100200", "200"));
+    assert_eq!((back["ex_gratia"].as_str(), back["cost"].as_str()), ("false", "false"));
+    assert_eq!(w.claim("c-1").payable_minor, 100_200);
+    w.advance(30);
+    w.ok(pay("c-1", "ana", "p-3", 100_200, Some("p-2")));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            amount_minor: 100_200,
+            interest_minor: 0,
+            close: true,
+            ..
+        })
+    ));
+    let notice = w.core.noticed("claim_paid")[2].clone();
+    assert_eq!(
+        (notice["amount_minor"].as_str(), notice["net_minor"].as_str(), notice["interest_minor"].as_str()),
+        ("100000", "100200", "200")
+    );
+    let c = w.claim("c-1");
+    let last = c.payments.last().expect("the reissue");
+    assert_eq!((last.amount_minor, last.interest_minor), (100_000, 200));
+    assert_eq!((c.status, c.paid_minor(false), c.payable_minor), (Status::Paid, 200_000, 0));
+}

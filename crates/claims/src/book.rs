@@ -258,6 +258,20 @@ impl ClaimsState {
             ));
         }
         let close = claim.payable_minor == amount_minor && claim.cost_payable_minor == 0 && claim.status != Status::InPayment;
+        // A payment that came back is sent again as it was: its interest is
+        // part of what came back, and the delay since is not the insurer's.
+        let came_back = |p: &&Payment| p.returned && p.cost_item.is_none() && !p.ex_gratia;
+        let carried = reissue_of
+            .as_ref()
+            .and_then(|r| claim.payments.iter().filter(came_back).find(|p| &p.payment_ref == r))
+            .filter(|p| p.amount_minor + p.interest_minor == amount_minor)
+            .map_or(0, |p| p.interest_minor);
+        let interest_minor = match (self.rules.late_interest, claim.admission()) {
+            (Some(rate), Some(admission)) if period.is_none() && claim.schedule.is_none() && !claim.payments.iter().any(|p| came_back(&p)) => {
+                rate.on(amount_minor, admission.decided_on, cx.today)
+            }
+            _ => 0,
+        };
         cx.core.execute(Instruction::Pay {
             claim: id.to_string(),
             policy: claim.policy.clone(),
@@ -265,6 +279,7 @@ impl ClaimsState {
             amount_minor,
             payee: payee.clone(),
             close,
+            interest_minor,
         })?;
         claim.payable_minor -= amount_minor;
         let mut period_end = None;
@@ -278,18 +293,28 @@ impl ClaimsState {
             }
             _ => claim.payments.push(Payment {
                 payment_ref: payment_ref.clone(),
-                amount_minor,
+                amount_minor: amount_minor - carried,
                 paid_on: cx.today,
                 ex_gratia: false,
                 returned: false,
                 released_by: Some(actor.staff.clone()),
                 run: None,
                 cost_item: None,
+                interest_minor: interest_minor + carried,
             }),
         }
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
         note(&mut claim, cx, Some(actor), format!("paid:{payment_ref}"));
-        cx.paid(&claim, &payment_ref, amount_minor, amount_minor, &payee, period_end, false);
+        cx.paid(
+            &claim,
+            &payment_ref,
+            amount_minor - carried,
+            amount_minor + interest_minor,
+            &payee,
+            period_end,
+            false,
+            interest_minor + carried,
+        );
         if close && claim.status == Status::Admitted {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
@@ -343,6 +368,7 @@ impl ClaimsState {
                 amount_minor,
                 payee: provider.to_string(),
                 close,
+                interest_minor: 0,
             }
         } else {
             Instruction::HandlingCost {
@@ -374,6 +400,7 @@ impl ClaimsState {
             released_by: Some(actor.staff.clone()),
             run: None,
             cost_item: Some(item.to_string()),
+            interest_minor: 0,
         });
         note(&mut claim, cx, Some(actor), format!("cost_paid:{item}"));
         // The payments module's instruction, apart from `claim_paid` so no
@@ -413,9 +440,11 @@ impl ClaimsState {
         })?;
         let mut came_back = (0, None);
         let mut cost = 0;
+        let mut kind = (false, 0);
         if let Some(p) = lump.and_then(|i| claim.payments.get_mut(i)) {
             p.returned = true;
-            came_back = (p.amount_minor, p.run.clone());
+            came_back = (p.amount_minor + p.interest_minor, p.run.clone());
+            kind = (p.ex_gratia, p.interest_minor);
             cost = p.cost_item.as_ref().map_or(0, |_| p.amount_minor);
         }
         claim.cost_payable_minor += cost;
@@ -438,7 +467,14 @@ impl ClaimsState {
         cx.notify(
             "payment_returned",
             id,
-            &[("payment_ref", payment_ref.to_string()), ("amount_minor", amount.to_string())],
+            &[
+                ("payment_ref", payment_ref.to_string()),
+                ("amount_minor", amount.to_string()),
+                // What kind of money came back, for readers that keep them apart.
+                ("ex_gratia", kind.0.to_string()),
+                ("cost", (cost != 0).to_string()),
+                ("interest_minor", kind.1.to_string()),
+            ],
         );
         self.commit(claim);
         Ok(())
@@ -662,6 +698,7 @@ impl ClaimsState {
                 amount_minor: item.gross_minor,
                 payee: item.payee.clone(),
                 close: true,
+                interest_minor: 0,
             })?;
             claim.payments.push(Payment {
                 payment_ref: payment_ref.clone(),
@@ -672,6 +709,7 @@ impl ClaimsState {
                 released_by: run.approved_by.clone(),
                 run: Some(run.id.clone()),
                 cost_item: None,
+                interest_minor: 0,
             });
             claim.payable_minor = 0;
             claim.status = Status::Paid;
@@ -734,6 +772,7 @@ impl ClaimsState {
             &item.payee,
             Some(item.period_end),
             false,
+            0,
         );
         if closed {
             claim.closed_on = Some(cx.today);

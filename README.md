@@ -60,7 +60,7 @@ python3 tools/check_test_docs.py
 
 The end-of-day workflow test needs a Temporal server. It uses the one at `IC_TEST_TEMPORAL_ADDRESS` if set, otherwise it starts the dev server executable named by `IC_TEST_TEMPORAL_EXE`; with neither it fails and says what to set. `IC_SKIP_TEMPORAL_TESTS=1` leaves it out, and says so in the output.
 
-The standards the suite is held to, enforced in CI (`.github/workflows/ci.yml`):
+The standards the suite is held to, enforced in CI (`.github/workflows/ci.yml`, and `drill.yml` for the failure drill):
 
 - Line coverage of at least 98% as `cargo llvm-cov --workspace` reports it (its own table, which counts a line again for each generic instantiation and enclosing closure), with the Temporal tests included. `tools/coverage_floor.py` lists the uncovered lines of each file.
 - Every test carries a `Purpose:` and a `Why it matters:` line. `tools/check_test_docs.py` fails the build otherwise.

@@ -57,6 +57,7 @@ CHART = chart(
         account("5010", "Ex gratia payments", "expense", control = True, roles = ["ex_gratia"]),
         account("5020", "Claim recovery write-offs", "expense", control = True, roles = ["claim_recovery_write_off"]),
         account("5030", "Claims handling expenses", "expense", control = True, roles = ["claims_handling"]),
+        account("5040", "Interest on claims paid late", "expense", control = True, roles = ["claim_interest"]),
         account("5200", "Reinsurance premiums ceded", "expense", control = True, roles = ["reinsurance_premium"]),
         account("5300", "Unit pricing errors borne by the insurer", "expense", control = True, roles = ["pricing_error"]),
         account("5100", "Lapse write-offs", "expense", control = True, roles = ["lapse_write_off"]),

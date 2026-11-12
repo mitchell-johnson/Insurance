@@ -17,6 +17,7 @@ ic-group = { path = "../group" }
 ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
 ic-payments-service = { path = "../payments-service" }
+ic-pricing = { path = "../pricing" }
 tokio.workspace = true
 
 [dev-dependencies]

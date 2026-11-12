@@ -1,0 +1,26 @@
+[package]
+name = "ic-pricing"
+description = "Unit pricing: valuation intake from the fund administrator, price checks, maker-checker approval, activation through the log, price error correction and the unit holdings extract"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-ledger.workspace = true
+ic-log.workspace = true
+ic-money.workspace = true
+ic-raft.workspace = true
+chrono.workspace = true
+chrono-tz.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[lints]
+workspace = true
