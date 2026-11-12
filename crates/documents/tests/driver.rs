@@ -692,3 +692,39 @@ async fn events_are_published_to_event_hubs() {
     let nowhere = EventHubsPublisher::new("http://127.0.0.1:1", "h", azure::Fake::credential());
     assert!(nowhere.publish(&pending).await.is_err());
 }
+
+/// Purpose: a document from a template composed of a shared part is
+/// rendered with the part's wording by the driver, and verifies against
+/// the stored data years later using the same part version.
+/// Why it matters: shared wording such as the cooling-off paragraph is in
+/// most customer documents. If the driver rendered without the parts, or
+/// verified against a different version, every such document would be
+/// wrong or would fail its own integrity check.
+#[tokio::test]
+async fn a_template_with_a_shared_part_is_rendered_and_verified_with_it() {
+    let w = World::new().await;
+    let mut kit = Kit::ready();
+    let before = kit.log.len();
+    kit.ok(
+        "config",
+        "author",
+        Command::RegisterPart(ic_documents::template::Part {
+            id: "cooling-off".into(),
+            version: 1,
+            bodies: std::collections::BTreeMap::from([("en".to_string(), "You may cancel within 14 days.".to_string())]),
+        }),
+    );
+    let mut welcome = template("welcome", DocumentKind::PolicyWording, "Welcome {{name}}. {{> cooling-off}}");
+    welcome.parts.push(ic_documents::template::PartRef {
+        id: "cooling-off".into(),
+        version: 1,
+    });
+    kit.activate(welcome, &sample_data());
+    for envelope in &kit.log[before..] {
+        assert!(w.driver.module.propose(envelope.clone()).await.unwrap().result.is_ok());
+    }
+
+    w.driver.issue(w.request("w1", "welcome")).await.unwrap();
+    assert_eq!(w.driver.read("w1").await.unwrap().text, "Welcome Aroha. You may cancel within 14 days.");
+    assert!(w.driver.verify("w1").await.unwrap());
+}

@@ -33,6 +33,8 @@ Out, on each applied command: events with a hash-chained sequence (question `tra
 
 Questions (`{"q": "..."}`): `waiting`, `config`, `run`, `submission`, `batch`, `queued_submissions`, `unconfirmed_submissions`, `submission_in_progress`, `control_totals`, `authority`, `payee`, `refund`, `represent`, `reconciliation`, `readiness`, `outbox` and `trail`.
 
+For the financial close (`docs/finance.md`), both with `as_at`: `fund_cash_settlement` answers `{green, items, count}`, green when no reconciliation break opened by that day is still open and no run valued by that day is still waiting for the bank's settlement; `aged_unidentified_receipts` answers `{as_at, items, total_minor, count}` with unidentified receipts oldest first and who owns each. Both list at most 200 items; the count and total cover everything.
+
 ## Running it
 
 The module needs nothing: it is in the node binary. The pump is `ic-payments-pump`, deployed by `deploy/k8s/payments.yaml`, two replicas in each voter region.
