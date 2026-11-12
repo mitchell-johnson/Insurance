@@ -362,6 +362,12 @@ async fn a_bad_file_is_refused_with_its_reason() {
         ("empty.csv", vec![], "no_header"),
         ("twice.csv", b"Emp No,Emp No\nE009,E009\n".to_vec(), "duplicate_column"),
         ("quote.csv", b"Emp No,First\n\"E009,Zed\n".to_vec(), "unclosed_quote"),
+        (
+            "wide.csv",
+            format!("Emp No,First\n{}\n", vec!["x"; 201].join(",")).into_bytes(),
+            "too_many_fields",
+        ),
+        ("long.csv", "x\n".repeat(250_002).into_bytes(), "too_many_rows"),
     ];
     for (file, bytes, code) in cases {
         d.upload(caller::EMPLOYER, "admin-bo", SCHEME, file, bytes).await.unwrap();

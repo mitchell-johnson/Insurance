@@ -218,19 +218,11 @@ const EVENT_BATCH: usize = 500;
 const OUTBOX_BATCH: usize = 64;
 
 impl Host {
-    /// Open the logs and start every group's member. Existing logs are
-    /// replayed, so a restarted node comes back with the state it had.
-    pub async fn start(settings: &Settings) -> Result<Arc<Self>, String> {
-        Self::start_with(settings, &[]).await
-    }
-
-    /// As [`Self::start`], and a member of each module's group besides.
-    /// Every node of a cluster hosts the same modules.
-    pub async fn start_with(settings: &Settings, specs: &[ModuleSpec]) -> Result<Arc<Self>, String> {
-        Self::start_full(settings, specs, None).await
-    }
-
-    /// As [`Self::start_with`], with automatic fail-back to preferred nodes.
+    /// Open the logs and start every group's member, and a member of each
+    /// module's group besides. Existing logs are replayed, so a restarted
+    /// node comes back with the state it had. Every node of a cluster hosts
+    /// the same modules. `failback` turns on automatic fail-back to
+    /// preferred nodes.
     pub async fn start_full(settings: &Settings, specs: &[ModuleSpec], failback: Option<FailbackSettings>) -> Result<Arc<Self>, String> {
         let mut modules = BTreeMap::new();
         for spec in specs {
@@ -836,16 +828,6 @@ impl Running {
         self.relay.abort();
         self.host.shutdown().await;
     }
-}
-
-/// Run a node until `stop` resolves.
-pub async fn serve(settings: Settings, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
-    serve_with(settings, Vec::new(), stop).await
-}
-
-/// Run a node and its modules until `stop` resolves.
-pub async fn serve_with(settings: Settings, modules: Vec<ModuleSpec>, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
-    serve_full(settings, modules, None, stop).await
 }
 
 /// Run a node, its modules and fail-back until `stop` resolves.
