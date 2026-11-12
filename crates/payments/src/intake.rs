@@ -19,6 +19,14 @@ fn statement_number(source: &str) -> Option<u32> {
     source.strip_prefix("reinsurance:statement:")?.parse().ok()
 }
 
+/// What is known of one claims run: the payments of it that are still to
+/// settle, and what has settled so far.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimsRun {
+    pub outstanding: BTreeSet<Id>,
+    pub settled_minor: i64,
+}
+
 /// One released payment that has not yet been settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Waiting {
@@ -46,6 +54,10 @@ pub struct Waiting {
     /// bank refuses it before it settles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claim: Option<String>,
+    /// The claims run it went out in, when it was not released by hand:
+    /// claims is told the run's settled total once all of it has settled.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run: Option<String>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -79,6 +91,9 @@ impl PaymentsState {
             source: waiting.source.clone(),
             amount_minor: waiting.amount_minor,
         });
+        if let Some(run) = &waiting.run {
+            self.claims_runs.entry(run.clone()).or_default().outstanding.insert(waiting.payment.clone());
+        }
         self.waiting.insert(waiting.payment.clone(), waiting);
         Ok(())
     }
@@ -154,6 +169,9 @@ impl PaymentsState {
     /// raised to release it again under a new reference.
     pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
         let Some(waiting) = self.waiting.remove(&n.item) else { return };
+        // It will be released again under a new reference, in whatever run
+        // claims then puts it; this run is finished with it.
+        self.claims_run_moved(&waiting, 0);
         if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
             self.push_outbox(OutboxEntry {
                 key: format!("claim-payment-failed-{}", n.item),
@@ -167,6 +185,43 @@ impl PaymentsState {
                 },
                 about: Some(About::Item(n.item.clone())),
             });
+        }
+    }
+
+    /// A payment of a claims run settled (`settled_minor` is its amount) or
+    /// left the run unpaid (zero). When nothing of the run is outstanding
+    /// any more, claims is given the total that settled, which it compares
+    /// with what it sent out.
+    fn claims_run_moved(&mut self, waiting: &Waiting, settled_minor: i64) {
+        let (Some(run), Some(policy)) = (&waiting.run, &waiting.policy) else { return };
+        let Some(known) = self.claims_runs.get_mut(run) else { return };
+        known.outstanding.remove(&waiting.payment);
+        known.settled_minor += settled_minor;
+        if !known.outstanding.is_empty() {
+            return;
+        }
+        let total = known.settled_minor;
+        self.claims_runs.remove(run);
+        if total > 0 {
+            self.push_outbox(OutboxEntry {
+                key: format!("claims-run-confirmed-{run}"),
+                instruction: Instruction::CoreAt {
+                    policy: policy.clone(),
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::ConfirmRun {
+                        run: run.clone(),
+                        settled_minor: total,
+                    }))),
+                },
+                about: Some(About::Item(waiting.payment.clone())),
+            });
+        }
+    }
+
+    /// A waiting payment settled: it is finished with here.
+    pub(crate) fn waiting_settled(&mut self, n: &NewItem) {
+        if let Some(waiting) = self.waiting.remove(&n.item) {
+            self.claims_run_moved(&waiting, n.amount_minor);
         }
     }
 
