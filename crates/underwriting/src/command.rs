@@ -201,6 +201,14 @@ pub struct DelegatedDecision {
     pub consent_ref: String,
 }
 
+/// One layer of an issued policy, as the core numbered it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IssuedLayer {
+    pub life: LifeId,
+    pub cover: String,
+    pub layer: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged, like the core's commands.
 #[serde(rename_all = "snake_case")]
@@ -405,6 +413,10 @@ pub enum Command {
     },
     PolicyIssued {
         proposal: ProposalId,
+        /// The layers the core wrote, from its reply, so that capacity is
+        /// confirmed against them.
+        #[serde(default)]
+        layers: Vec<IssuedLayer>,
     },
     IssueRejected {
         proposal: ProposalId,
@@ -622,6 +634,9 @@ pub enum Effect {
         policy: PolicyId,
         life: LifeId,
         cover: String,
+        /// The layers this cover was issued as.
+        #[serde(default)]
+        layers: Vec<u32>,
     },
     /// Rating factors for the reinsurer's rate tables and listing.
     RecordRiskFactors {

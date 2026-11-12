@@ -459,7 +459,7 @@ impl UnderwritingState {
             }),
 
             InterimIssued { proposal } => self.with(&proposal, cx, |_, p, _| crate::external::interim_issued(p)),
-            PolicyIssued { proposal } => self.with(&proposal, cx, |_, p, cx| crate::external::policy_issued(p, cx)),
+            PolicyIssued { proposal, layers } => self.with(&proposal, cx, |_, p, cx| crate::external::policy_issued(p, cx, &layers)),
             IssueRejected { proposal, code } => self.with(&proposal, cx, |_, p, cx| crate::external::issue_rejected(p, cx, code)),
 
             Sweep { after, max } => self.sweep(cx, after, max),

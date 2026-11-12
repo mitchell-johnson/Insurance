@@ -149,7 +149,7 @@ pub(crate) fn interim_issued(p: &mut Proposal) -> Result<(), Reject> {
 
 /// The core issued the policy: confirm the capacity, tell the reinsurance
 /// module the rating factors, and end the interim cover the policy replaces.
-pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
+pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::command::IssuedLayer]) -> Result<(), Reject> {
     if p.status != ProposalStatus::Issuing {
         return reject("not_issuing", format!("proposal {} is {}", p.id, p.status.key()));
     }
@@ -165,6 +165,7 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject>
                 policy: p.policy.clone(),
                 life: f.life.clone(),
                 cover: cover.clone(),
+                layers: layers.iter().filter(|l| l.life == f.life && &l.cover == cover).map(|l| l.layer).collect(),
             });
         }
         cx.effect(Effect::RecordRiskFactors {
