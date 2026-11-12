@@ -120,6 +120,8 @@ Modules call `/internal/v1/commands` with a token from the workforce tenant. The
 
 The core's own events (issue, billing, lapse, cancellation, cover changes) arrive through the module host and need nobody to send them.
 
+**The commission module is carried across by the portal service** (`forward.rs`). Every 15 seconds `ic-portal` asks the `distribution` module on the nodes which parties changed, reads each one's position and engagements, and records the engagements, licence history, workbench status, held lines, debts, documents and cases in the channels. The two modules share no code: the forwarder reads that module's answers as JSON, and `tests/forward.rs` checks the questions and answers against that module's own types. Everything it sends is safe to send twice, so a restart republishes once and two copies of the service do no harm.
+
 ## Running it
 
 | Setting | Meaning |
@@ -130,7 +132,8 @@ The core's own events (issue, billing, lapse, cancellation, cover changes) arriv
 | `IC_CUSTOMER_AUTHORITY`, `IC_CUSTOMER_TENANT_ID`, `IC_CUSTOMER_AUDIENCE`, `IC_CUSTOMER_CLIENT_ID` | The same for the External ID tenant and the adviser and employer portals. |
 | `IC_ENTRA_SCOPE`, `IC_CUSTOMER_SCOPE` | The scope the pages ask for. Default `<audience>/.default`. |
 | `IC_REGIONS`, `IC_HOME_REGION` | Which node is in which region. Without them, one region. |
-| `IC_LEDGER_PATIENCE_SECS`, `IC_PORTAL_HEARTBEAT_SECS` | Defaults 10 and 15. |
+| `IC_LEDGER_PATIENCE_SECS`, `IC_PORTAL_HEARTBEAT_SECS`, `IC_PORTAL_FORWARD_SECS` | Defaults 10, 15 and 15. |
+| `IC_PORTAL_CURRENCY` | The currency of the commission module's balances. Default `NZD`. |
 | `IC_AUTH=dev` | Trust `x-dev-subject` and `x-dev-roles` headers. For a laptop. The service refuses to start with it in Kubernetes. |
 
 **On AKS.** `deploy/k8s/portal.yaml` holds the service account, the settings, the deployment and its network policy; the identity is the `portalClientId` output of `infra/main.bicep`. In Entra, register:
@@ -156,4 +159,7 @@ node crates/channels/tests/browser/check.js
 - **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).
 - **The browser check is not run by CI.** CI has no browser. Run it before changing anything under `ui/`.
 - **Freshness depends on a heartbeat.** The gateway tells the module the stream is current every 15 seconds once it has confirmed the module is caught up. The heartbeat is a command, so it needs a majority; without one, answers go stale after two minutes and say so, which is the truth.
-- **Modules reach the workbench over HTTP today.** Each owning module must send its own positions; until it does, the workbench is empty for that module's money. Commission is the first publisher.
+- **Only commission is carried across automatically.** Finance, reinsurance, group administration and claims must send their own workbench positions through `/internal/v1/commands`; until they do, the workbench shows none of their money.
+- **Approved workbench actions on commission money are not yet carried to the commission module.** That module checks maker and checker itself and wants each person's act as its own command. Until that is wired, an action approved in the staff console waits as approved.
+- **Licence loss above the provider.** The forwarder records each party's own licence and each adviser's provider. A group above the provider is not yet carried across, so its licence loss reaches advisers only through the provider's own record.
+- **Commission balances are taken to be in one currency** (`IC_PORTAL_CURRENCY`, default NZD), because that module's answers carry none.

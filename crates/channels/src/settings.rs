@@ -46,6 +46,10 @@ pub struct PortalSettings {
     pub heartbeat: Duration,
     /// How the web pages sign people in.
     pub ui: UiConfig,
+    /// How often the commission module's changes are carried to the channels.
+    pub forward: Duration,
+    /// The currency of the commission module's balances.
+    pub currency: String,
 }
 
 impl PortalSettings {
@@ -73,6 +77,10 @@ impl PortalSettings {
     ///   `IC_HOME_REGION`: the region that normally holds the leaders. Without
     ///   them every node is taken to be in one region.
     /// - `IC_PORTAL_HEARTBEAT_SECS`: default 15.
+    /// - `IC_PORTAL_FORWARD_SECS`: how often the commission module's changes
+    ///   (engagements, licences, held money) are carried to the channels;
+    ///   default 15. `IC_PORTAL_CURRENCY`: the currency of those balances;
+    ///   default `NZD`.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
         let raw = &get;
         let get = |key: &str| raw(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
@@ -154,6 +162,12 @@ impl PortalSettings {
             regions,
             heartbeat: Duration::from_secs(seconds("IC_PORTAL_HEARTBEAT_SECS", 15)?),
             ui,
+            forward: Duration::from_secs(seconds("IC_PORTAL_FORWARD_SECS", 15)?),
+            currency: match get("IC_PORTAL_CURRENCY") {
+                Some(c) if c.len() == 3 && c.chars().all(|ch| ch.is_ascii_uppercase()) => c,
+                Some(c) => return Err(format!("IC_PORTAL_CURRENCY must be a three-letter code such as NZD, not {c:?}")),
+                None => "NZD".to_string(),
+            },
         })
     }
 

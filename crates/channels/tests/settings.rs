@@ -35,6 +35,7 @@ fn a_laptop_configuration_and_its_guard() {
         (Identity::Dev, Identity::Dev, UiConfig::Dev)
     );
     assert_eq!((s.patience, s.heartbeat), (Duration::from_secs(10), Duration::from_secs(15)));
+    assert_eq!((s.forward, s.currency.as_str()), (Duration::from_secs(15), "NZD"));
     assert_eq!((s.regions.home.as_str(), s.regions.nodes["local"].len(), s.nodes.len()), ("local", 3, 3));
     assert_eq!(s.client().nodes().len(), 3);
     assert!(matches!(s.customers.auth(), ic_api::auth::Auth::Dev));
@@ -112,6 +113,15 @@ fn bad_values_are_refused_at_start() {
     assert!(load(&[NODES, OPEN, DEV, ("IC_PORTAL_LISTEN", "nowhere")])
         .unwrap_err()
         .contains("IC_PORTAL_LISTEN"));
+    assert!(load(&[NODES, OPEN, DEV, ("IC_PORTAL_CURRENCY", "dollars")])
+        .unwrap_err()
+        .contains("IC_PORTAL_CURRENCY"));
+    assert_eq!(
+        load(&[NODES, OPEN, DEV, ("IC_PORTAL_CURRENCY", "AUD"), ("IC_PORTAL_FORWARD_SECS", "3")])
+            .unwrap()
+            .forward,
+        Duration::from_secs(3)
+    );
     assert!(load(&[NODES, OPEN, DEV, ("IC_LEDGER_PATIENCE_SECS", "soon")])
         .unwrap_err()
         .contains("IC_LEDGER_PATIENCE_SECS"));

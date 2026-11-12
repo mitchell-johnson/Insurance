@@ -1994,6 +1994,7 @@ dependencies = [
  "http-body-util",
  "ic-api",
  "ic-core",
+ "ic-distribution",
  "ic-ledger",
  "ic-log",
  "ic-money",

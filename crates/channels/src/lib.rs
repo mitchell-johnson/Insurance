@@ -20,6 +20,7 @@
 pub mod classes;
 pub mod directory;
 pub mod feed;
+pub mod forward;
 pub mod http;
 pub mod identity;
 pub mod ops;
