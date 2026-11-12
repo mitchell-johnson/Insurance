@@ -287,7 +287,9 @@ impl Command {
             }
             Command::RecordRiskFactors { .. } => &["new-business", "group-admin", "migration"],
             Command::SetSchemeTerms { .. } | Command::NotePossibleMatch { .. } | Command::ClearPossibleMatch { .. } => &["group-admin"],
-            Command::Claim(_) => &["claims"],
+            // Claims facts arrive as the core's events. The command is for
+            // loading and for a fact operations enter by hand.
+            Command::Claim(_) => &["claims", "reinsurance-ops"],
             Command::ReinsurerConsent { .. } | Command::Recapture { .. } | Command::MoveTreatyVersion { .. } => &["reinsurance-ops"],
             Command::ResolveDispute { .. } => &["reinsurance-ops", "finance"],
             Command::CutStatement { .. }
@@ -485,6 +487,7 @@ pub enum Notice {
         reference: String,
     },
     DisputeResolved {
+        claim: ClaimId,
         reference: String,
         repay_minor: i64,
     },
@@ -649,6 +652,11 @@ pub struct Reinsurance {
     pub(crate) noticed: u64,
     /// Notices their audience refused, set aside for a person.
     pub(crate) notices_refused: BTreeSet<u64>,
+    /// How many times a person has sent a refused notice again. It is part
+    /// of the key a notice for the core is sent under, because the core
+    /// answers a key it has refused with the same refusal.
+    #[serde(default)]
+    pub(crate) notice_retries: BTreeMap<u64, u32>,
     pub(crate) notices_abandoned: Vec<crate::outbox::AbandonedNotice>,
 
     /// Refused instructions a person decided not to send, kept for audit.
@@ -1012,7 +1020,7 @@ impl Reinsurance {
                 self.clear_possible(ctx, &policy, &life, Some(&party));
                 Ok(())
             }
-            Command::Claim(fact) => self.claim_fact(ctx, *fact),
+            Command::Claim(fact) => self.take_claim_fact(ctx, *fact),
             Command::ReinsurerConsent {
                 claim,
                 reinsurer,

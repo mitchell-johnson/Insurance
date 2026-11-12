@@ -103,7 +103,7 @@ async fn the_close_service_runs_against_a_real_node() {
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);
     let patience = Duration::from_secs(20);
     let books = ClusterBooks::new(client.clone(), patience);
-    let modules = ClusterModules::new(client.clone());
+    let modules = ClusterModules::new(client.clone(), 1);
 
     // The ledger, through the cluster.
     let envelope = |key: &str, caller: &str, actor: Option<&str>, command: FinCommand| FinEnvelope {
@@ -131,6 +131,12 @@ async fn the_close_service_runs_against_a_real_node() {
     assert_eq!(books.ask(json!({ "q": "status" })).await.unwrap()["configured"], json!(true));
     assert!(matches!(books.ask(json!({ "q": "nonsense" })).await, Err(DriverError::Answer(_))));
     assert!(modules.ask("no-such-module", json!("x")).await.is_err());
+    // The core's partitions, asked together under one name. Nothing is waiting to be invested.
+    assert_eq!(
+        modules.ask("core", json!({ "waiting_cash": { "as_at": "2027-11-30" } })).await.unwrap(),
+        json!({ "as_at": "2027-11-30", "items": [], "total_minor": 0, "count": 0 })
+    );
+    assert!(matches!(modules.ask("core", json!("anything else")).await, Err(DriverError::Answer(_))));
 
     // The core closes one business day.
     let (day, next) = (d(2027, 11, 15), d(2027, 11, 16));

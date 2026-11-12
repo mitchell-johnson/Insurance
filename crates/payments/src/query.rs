@@ -125,13 +125,16 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             policy: policy.clone(),
             claim: claim.clone(),
         },
-        // Claims released a payment: that is the instruction to pay it.
-        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind == "claim_paid" => {
+        // Claims released a payment: that is the instruction to pay it. A
+        // benefit (`claim_paid`) and a provider's evidence or rehabilitation
+        // cost (`claim_cost_paid`) both leave the policy's benefit payable.
+        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && (kind == "claim_paid" || kind == "claim_cost_paid") => {
+            let what = if kind == "claim_paid" { "claim" } else { "claim-cost" };
             let field = |name: &str| detail.get(name).cloned().unwrap_or_default();
             crate::Command::OfferPayment {
                 waiting: Box::new(crate::intake::Waiting {
                     payment: field("payment_ref"),
-                    source: format!("claim:{subject}:{}", field("payment_ref")),
+                    source: format!("{what}:{subject}:{}", field("payment_ref")),
                     payee: field("payee"),
                     account_ref: field("account_ref"),
                     policy: ic_core::PolicyId::from(field("policy").as_str()),
