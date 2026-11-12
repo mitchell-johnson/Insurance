@@ -97,6 +97,14 @@ mod tests {
             }
             .verifies(&msg));
         }
+        // Thirty-two bytes that are not a point on the curve are not a key.
+        for y in 2u8..20 {
+            assert!(!SignedStep {
+                public_key: STANDARD.encode([y; 32]),
+                ..step.clone()
+            }
+            .verifies(&msg));
+        }
     }
 
     /// Purpose: message parts are separated, so ("ab", "c") and ("a", "bc") sign differently.
