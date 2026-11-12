@@ -35,6 +35,7 @@ mod reopen;
 mod transfer;
 mod underwritten;
 mod unwind;
+pub mod voluntary;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};

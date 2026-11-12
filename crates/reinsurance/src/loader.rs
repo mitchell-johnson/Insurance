@@ -136,6 +136,7 @@ fn run_scenario(treaty: &Treaty, s: &Scenario) -> Result<(), String> {
             excluded: false,
             excess_path: None,
             migrated: None,
+            continues: None,
         })
         .collect();
     let on = s.covers.iter().map(|c| c.start).max().unwrap_or_default();

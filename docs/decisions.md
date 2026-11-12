@@ -52,7 +52,7 @@ A module hosted from the first start is shown every event. One added later start
 
 ### Claims stay on the partition they were made on
 
-A policy with an open claim, or a claim with a reserve, an unpaid admission or an overpayment outstanding, cannot be transferred to another group. The other gaps in claims operations are listed in `docs/claims.md`.
+A policy's claims move with it when it is transferred to another group: they travel in the transfer record and are registered again on the target (changed 12 November 2026; before that a policy with an open claim could not move). Only a claim in a prepared payment run holds a transfer back. The other gaps in claims operations are listed in `docs/claims.md`.
 
 ### Fail-back is built; the second region is not provisioned
 

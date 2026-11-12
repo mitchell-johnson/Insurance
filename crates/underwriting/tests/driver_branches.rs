@@ -413,6 +413,8 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
                 outcome: NonDisclosureOutcome::Avoid,
                 review: "ND-1".into(),
                 decision: None,
+                terms: vec![],
+                premium: Some(ic_underwriting::command::PremiumOnAvoidance::Refund),
             },
             None,
             Value::Null,

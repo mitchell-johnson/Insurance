@@ -14,10 +14,18 @@ use crate::event::Event;
 use crate::machine::{Ctx, Reject};
 use crate::policy::{Policy, PolicyStatus, ReceiptRecord};
 use crate::postings::PostingSet;
+use crate::LifeId;
 
 /// Allocation order on a single policy: oldest receivable first.
-fn allocate(policy: &Policy, mut amount: i64) -> BTreeMap<u32, i64> {
-    let mut open: Vec<_> = policy.receivables.iter().filter(|r| r.outstanding_minor > 0 && !r.closed).collect();
+/// Money is set only against what its payer owes: the policyholder's
+/// against the policyholder's receivables, a scheme member's against that
+/// member's.
+pub(crate) fn allocate(policy: &Policy, mut amount: i64, payer: Option<&LifeId>) -> BTreeMap<u32, i64> {
+    let mut open: Vec<_> = policy
+        .receivables
+        .iter()
+        .filter(|r| r.outstanding_minor > 0 && !r.closed && r.payer.as_ref() == payer)
+        .collect();
     open.sort_by_key(|r| (r.due, r.id));
     let mut out = BTreeMap::new();
     for r in open {
@@ -31,7 +39,7 @@ fn allocate(policy: &Policy, mut amount: i64) -> BTreeMap<u32, i64> {
     out
 }
 
-fn apply_allocations(policy: &mut Policy, allocations: &BTreeMap<u32, i64>, sign: i64) {
+pub(crate) fn apply_allocations(policy: &mut Policy, allocations: &BTreeMap<u32, i64>, sign: i64) {
     for r in &mut policy.receivables {
         if let Some(a) = allocations.get(&r.id) {
             r.outstanding_minor -= sign * a;
@@ -64,7 +72,7 @@ pub(crate) fn apply_receipt(
     }
     let c = policy.currency;
     let allocations = if policy.status == PolicyStatus::InForce {
-        allocate(policy, amount.minor)
+        allocate(policy, amount.minor, None)
     } else {
         BTreeMap::new()
     };
@@ -88,6 +96,7 @@ pub(crate) fn apply_receipt(
             allocations,
             to_suspense_minor: to_suspense,
             reversed: false,
+            member: None,
         },
     );
     ctx.emit(Event::ReceiptApplied {
@@ -116,7 +125,12 @@ pub(crate) fn reverse_receipt(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     let c = policy.currency;
     // Money that went to suspense may since have been consumed by later
     // billings or refunded. If it is no longer there, a person decides.
-    if ledger.natural_balance(&accounts::policy_suspense(&policy.id, c).id) < rec.to_suspense_minor as i128 {
+    // A member's receipt went to the member's own credit, not the scheme's.
+    let suspense = match &rec.member {
+        Some(life) => accounts::member_suspense(&policy.id, life, c),
+        None => accounts::policy_suspense(&policy.id, c),
+    };
+    if ledger.natural_balance(&suspense.id) < rec.to_suspense_minor as i128 {
         return Err(Reject::new(
             "suspense_consumed",
             "part of this receipt has since been applied or refunded; raise an exception item",
@@ -132,7 +146,7 @@ pub(crate) fn reverse_receipt(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     let mut set = PostingSet::new();
     set.credit(accounts::settlement(c), rec.amount_minor as i128, Dimensions::default());
     set.debit(accounts::premium_receivable(&policy.id, c), allocated as i128, Dimensions::default());
-    set.debit(accounts::policy_suspense(&policy.id, c), rec.to_suspense_minor as i128, Dimensions::default());
+    set.debit(suspense, rec.to_suspense_minor as i128, Dimensions::default());
     let mut detail = BTreeMap::new();
     detail.insert("receipt".to_string(), receipt.to_string());
     let postings = set.into_postings(ledger)?;
@@ -141,10 +155,18 @@ pub(crate) fn reverse_receipt(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     if let Some(r) = policy.receipts.get_mut(receipt) {
         r.reversed = true;
     }
-    ctx.emit(Event::ReceiptReversed {
-        policy: policy.id.clone(),
-        receipt: receipt.to_string(),
-        amount_minor: rec.amount_minor,
+    ctx.emit(match rec.member {
+        Some(life) => Event::MemberReceiptReversed {
+            policy: policy.id.clone(),
+            life,
+            receipt: receipt.to_string(),
+            amount_minor: rec.amount_minor,
+        },
+        None => Event::ReceiptReversed {
+            policy: policy.id.clone(),
+            receipt: receipt.to_string(),
+            amount_minor: rec.amount_minor,
+        },
     });
     refresh_standing(catalog, policy, ctx);
     Ok(())
@@ -157,10 +179,10 @@ pub(crate) fn apply_suspense(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut
     }
     let c = policy.currency;
     let balance = ledger.available(&accounts::policy_suspense(&policy.id, c).id);
-    if balance <= 0 || policy.outstanding_minor() <= 0 {
+    if balance <= 0 || policy.policyholder_outstanding_minor() <= 0 {
         return Ok(());
     }
-    let allocations = allocate(policy, i64::try_from(balance).unwrap_or(i64::MAX));
+    let allocations = allocate(policy, i64::try_from(balance).unwrap_or(i64::MAX), None);
     let allocated: i64 = allocations.values().sum();
     if allocated == 0 {
         return Ok(());
