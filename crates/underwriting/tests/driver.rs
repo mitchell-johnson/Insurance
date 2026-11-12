@@ -245,11 +245,12 @@ async fn a_clean_application_becomes_a_policy_with_nobody_carrying() {
 
     // In the ledger, in force, on the version that was quoted.
     let policy = b.module.with(|w| w.p("P1").policy.clone());
-    let cluster = b.ledger.cluster.lock().unwrap();
-    let issued = &cluster.state(0).policies[&policy];
-    assert_eq!((issued.status, issued.product_hash.as_str()), (PolicyStatus::InForce, b.product_hash.as_str()));
-    let layer = issued.covers["life"].layers[0].id;
-    drop(cluster);
+    let layer = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let issued = &cluster.state(0).policies[&policy];
+        assert_eq!((issued.status, issued.product_hash.as_str()), (PolicyStatus::InForce, b.product_hash.as_str()));
+        issued.covers["life"].layers[0].id
+    };
 
     // The reservation stands in for exactly the layer the core wrote.
     let ri = b.reinsurance.module.state();
