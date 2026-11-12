@@ -108,6 +108,8 @@ pub enum Command {
     Staff(StaffCommand),
     /// The held balance workbench.
     Workbench(WorkbenchCommand),
+    /// A command for another module that two people put their names to.
+    Countersign(crate::countersign::CountersignCommand),
     /// A module publishes rows of its own into the audience-scoped views:
     /// a claim's status, a held balance, a proposal's progress.
     PublishRows {
@@ -202,6 +204,9 @@ pub struct Data {
     pub requests: BTreeMap<String, Request>,
     #[serde(default)]
     pub workbench: Workbench,
+    /// Commands for other modules waiting for a second person.
+    #[serde(default)]
+    pub countersign: crate::countersign::Countersign,
     /// The latest business date any partition has reported.
     pub today: Option<NaiveDate>,
     keys: BTreeSet<String>,
@@ -683,6 +688,9 @@ impl ChannelState {
                 };
                 let events = self.data.workbench.apply(&authority, &actor, at, command)?;
                 effects.extend(events.into_iter().map(Effect::Workbench));
+            }
+            Command::Countersign(command) => {
+                self.data.countersign.apply(&self.data.staff, &actor, at, command)?;
             }
             Command::PublishRows { rows, remove } => {
                 let Actor::Module(module) = &actor else {

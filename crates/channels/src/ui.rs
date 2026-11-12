@@ -18,6 +18,7 @@ pub const COMPLAINTS: &str = include_str!("../ui/complaints.html");
 pub const FINANCE: &str = include_str!("../ui/finance.html");
 pub const OPS: &str = include_str!("../ui/ops.html");
 pub const PRICING: &str = include_str!("../ui/pricing.html");
+pub const REINSURANCE: &str = include_str!("../ui/reinsurance.html");
 pub const STATUS: &str = include_str!("../ui/status.html");
 pub const SCRIPT: &str = include_str!("../ui/app.js");
 pub const STYLE: &str = include_str!("../ui/app.css");

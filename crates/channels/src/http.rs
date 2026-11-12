@@ -141,6 +141,8 @@ pub struct AppState {
     pub finance: Arc<dyn crate::forward::Source>,
     /// The core's partitions, where claims live, for the claims console.
     pub claims: Arc<dyn crate::claims::Partitions>,
+    /// The reinsurance module, for the exceptions console.
+    pub reinsurance: Arc<dyn crate::forward::Source>,
     /// The complaints module, for the complaints and conduct workbench.
     pub complaints: Arc<dyn crate::forward::Source>,
 }
@@ -209,7 +211,7 @@ impl From<Reject> for Problem {
         let status = match r.code.as_str() {
             "forbidden" | "not_authorised" | "adviser_read_only" => StatusCode::FORBIDDEN,
             "not_found" | "unknown_party" | "unknown_policy" => StatusCode::NOT_FOUND,
-            "duplicate" | "already_resolved" | "not_awaiting" | "already_approved" => StatusCode::CONFLICT,
+            "duplicate" | "already_resolved" | "not_awaiting" | "already_approved" | "separation" | "signed" | "exists" => StatusCode::CONFLICT,
             "step_up_required" => StatusCode::UNAUTHORIZED,
             _ => StatusCode::UNPROCESSABLE_ENTITY,
         };
@@ -950,6 +952,147 @@ impl AppState {
     }
 }
 
+impl AppState {
+    /// What this person may do in the reinsurance exceptions console. Nobody
+    /// without a reinsurance action gets as far as that module.
+    async fn reinsurance_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::ReinsuranceStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include reinsurance"));
+        }
+        Ok((session, standing))
+    }
+
+    /// Send one command to the reinsurance module and say what became of it.
+    async fn to_reinsurance(&self, envelope: Value) -> Answer {
+        let output = self
+            .reinsurance
+            .tell(envelope)
+            .await
+            .map_err(|e| module_problem("reinsurance", StatusCode::BAD_REQUEST, e))?;
+        if let Some(refused) = output["result"].get("Err") {
+            return Err(Problem::new(
+                StatusCode::CONFLICT,
+                refused["code"].as_str().unwrap_or("refused"),
+                refused["message"].as_str().unwrap_or("the reinsurance module refused it"),
+            ));
+        }
+        ok(json!({ "accepted": true, "duplicate": output["duplicate"] }))
+    }
+}
+
+/// The business date a reinsurance command is made on: the latest any
+/// partition has reported, or today's date while none has.
+fn business_date(standing: &Value, at: At) -> String {
+    standing["today"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| chrono::DateTime::from_timestamp(at, 0).map(|t| t.date_naive().to_string()).unwrap_or_default())
+}
+
+/// One of the console's questions to the reinsurance module. `me` answers
+/// from here, with the abandonments waiting for a signature.
+async fn reinsurance_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.reinsurance_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::reinsurance::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s
+        .reinsurance
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("reinsurance", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// A person's command about an exception. One a person sends alone goes
+/// straight to the module; an abandonment is kept until someone else signs.
+async fn reinsurance_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.reinsurance_standing(&headers, &method, &uri, &body).await?;
+    if standing["operate"] != true {
+        return Err(Problem::forbidden("you may read the exceptions but hold no role to act on them"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let command: Value = parse(&body)?;
+    let (name, countersigned) = crate::reinsurance::check(&command).map_err(Problem::bad_request)?;
+    if countersigned {
+        let reason = command[name]["reason"].as_str().unwrap_or_default().to_string();
+        let prepare = crate::countersign::CountersignCommand::Prepare {
+            id: key.clone(),
+            module: crate::reinsurance::MODULE.to_string(),
+            command: command.clone(),
+            reason,
+        };
+        s.propose(format!("countersign:{key}"), Actor::Staff(session.party), Command::Countersign(prepare))
+            .await?;
+        return ok(json!({ "prepared": key, "needs": "a second person with reinsurance.approve to sign it" }));
+    }
+    let on = business_date(&standing, session.at);
+    s.to_reinsurance(crate::reinsurance::envelope(&key, &on, command, None)).await
+}
+
+/// Sign, or take back, an abandonment waiting for a second person.
+async fn reinsurance_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((verb, id)): Path<(String, String)>) -> Answer {
+    use crate::countersign::CountersignCommand as C;
+    let (session, standing) = s.reinsurance_standing(&headers, &method, &uri, b"").await?;
+    let actor = Actor::Staff(session.party.clone());
+    let fresh = |what: &str| format!("countersign:{id}:{what}:{}:{}", session.party.0, session.at);
+    match verb.as_str() {
+        "withdraw" => {
+            s.propose(fresh("withdraw"), actor, Command::Countersign(C::Withdraw { id: id.clone() }))
+                .await?;
+            return ok(json!({ "withdrawn": id }));
+        }
+        "sign" => {}
+        _ => return Err(Problem::not_found()),
+    }
+    s.propose(fresh("sign"), actor.clone(), Command::Countersign(C::Sign { id: id.clone() }))
+        .await?;
+    // The command as prepared, now signed, from the replicated record.
+    let (_, standing_now) = s.reinsurance_standing(&headers, &method, &uri, b"").await?;
+    let pending = standing_now["pending"]
+        .as_array()
+        .and_then(|all| all.iter().find(|p| p["id"] == id.as_str()))
+        .cloned()
+        .ok_or_else(Problem::not_found)?;
+    let on = business_date(&standing, session.at);
+    // The key is the proposal's, so a sign repeated after a lost answer applies once.
+    let sent = s
+        .to_reinsurance(crate::reinsurance::envelope(
+            &format!("countersigned:{id}"),
+            &on,
+            pending["command"].clone(),
+            Some(&session.party),
+        ))
+        .await;
+    match &sent {
+        // Unreachable: leave it signed, so signing again finishes it.
+        Err(problem) if problem.status == StatusCode::SERVICE_UNAVAILABLE => {}
+        // Done, or refused for good: either way it no longer waits.
+        _ => {
+            s.propose(fresh("settle"), actor, Command::Countersign(C::Settle { id })).await?;
+        }
+    }
+    sent
+}
+
 fn claims_down(reason: String) -> Problem {
     Problem::new(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -1453,6 +1596,9 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/complaints/commands", post(complaints_command))
         .route("/staff/v1/complaints/{question}", get(complaints_question))
         .route("/staff/v1/claims/commands", post(claims_command))
+        .route("/staff/v1/reinsurance/commands", post(reinsurance_command))
+        .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
+        .route("/staff/v1/reinsurance/{question}", get(reinsurance_question))
         .route("/staff/v1/claims/{question}", get(claims_question))
         .route("/staff/v1/finance/commands", post(finance_command))
         .route("/staff/v1/finance/{question}", get(finance_question))
@@ -1471,6 +1617,7 @@ pub fn router(state: Shared) -> Router {
         .route("/complaints", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS) }))
         .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
+        .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))

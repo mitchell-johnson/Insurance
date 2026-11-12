@@ -114,6 +114,12 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// What a member of staff may do in the reinsurance exceptions console,
+    /// and the abandonments waiting for a signature.
+    ReinsuranceStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// Whether a member of staff may open the claims console.
     ClaimsStaff {
         staff: PartyId,
@@ -415,6 +421,14 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
         }),
         Question::FinanceStaff { staff, at } => crate::finance::standing(&d.staff, &staff, at),
         Question::ClaimsStaff { staff, at } => crate::claims::standing(&d.staff, &staff, at),
+        Question::ReinsuranceStaff { staff, at } => {
+            let mut standing = crate::reinsurance::standing(&d.staff, &staff, at);
+            if standing["view"] == true {
+                standing["pending"] = json!(d.countersign.waiting(crate::reinsurance::MODULE));
+            }
+            standing["today"] = json!(d.today);
+            standing
+        }
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
         Question::Workbench { staff, party, at } => {
             let record = party.as_ref().map_or_else(|| "counterparty:*".to_string(), |p| format!("counterparty:{p}"));
