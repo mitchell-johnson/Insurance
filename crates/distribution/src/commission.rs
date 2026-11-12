@@ -208,14 +208,14 @@ impl DistributionState {
                 net_by_cover_type,
                 ..
             } => {
-                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type);
+                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type, false);
                 if let Some(reference) = &reference {
                     self.receipts.insert(format!("{policy}/{receipt}"), reference.clone());
                 }
                 self.premium_applied(&policy, reference, net_by_cover_type);
             }
             CoreEvent::SuspenseApplied { policy, net_by_cover_type, .. } => {
-                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type);
+                let reference = self.earn(ctx, partition, &policy, &cause, date, &net_by_cover_type, false);
                 self.premium_applied(&policy, reference, net_by_cover_type);
             }
             CoreEvent::ReceiptReversed { policy, receipt, .. } => {
@@ -252,6 +252,19 @@ impl DistributionState {
                 // nothing else changes.
                 if let Some(p) = self.policies.get_mut(&policy) {
                     p.partition = partition;
+                }
+            }
+            CoreEvent::Module { module, kind, detail, .. } if module == "claims" && kind == "premium_waived" => {
+                // Premium the insurer paid for the customer during a claim.
+                // It earns as premium received does, where the schedule
+                // the layer was written under says so.
+                let net: BTreeMap<String, i64> = detail
+                    .iter()
+                    .filter_map(|(k, v)| Some((k.strip_prefix("net:")?.to_string(), v.parse().ok()?)))
+                    .collect();
+                if let Some(policy) = detail.get("policy").map(|p| PolicyId(p.clone())) {
+                    let reference = self.earn(ctx, partition, &policy, &cause, date, &net, true);
+                    self.premium_applied(&policy, reference, net);
                 }
             }
             CoreEvent::Module { module, kind, subject, detail } if module == "claims" && CLAIMS_OVERPAYMENT_KINDS.contains(&kind.as_str()) => {
@@ -353,7 +366,16 @@ impl DistributionState {
     /// Work out what a premium earns. Split it across the layers of each
     /// cover type in proportion to each layer's premium, build the components
     /// for each layer, and allocate each by its book's rule in force that day.
-    fn earn(&mut self, ctx: &mut Ctx, partition: PartitionId, policy: &PolicyId, cause: &str, date: NaiveDate, net: &BTreeMap<String, i64>) -> Option<String> {
+    fn earn(
+        &mut self,
+        ctx: &mut Ctx,
+        partition: PartitionId,
+        policy: &PolicyId,
+        cause: &str,
+        date: NaiveDate,
+        net: &BTreeMap<String, i64>,
+        waived: bool,
+    ) -> Option<String> {
         let record = self.policies.get(policy)?;
         let product = record.product_code.clone();
         let reference = format!("ce:{cause}");
@@ -382,9 +404,17 @@ impl DistributionState {
                 .collect();
             for (layer, premium) in layers.iter().zip(split(*amount, &weights)) {
                 let Some(terms) = &layer.terms else { continue };
+                if waived
+                    && !self
+                        .config
+                        .schedule_version(&terms.schedule, terms.schedule_version)
+                        .is_none_or(|s| s.earns_on_waived_premium)
+                {
+                    continue;
+                }
                 let books = layer.books_on(date);
                 let mut parts: Vec<(CommissionType, i64, i64)> = vec![];
-                if terms.rates.initial_ppm > 0 && layer.initial_paid.is_none() && premium > 0 {
+                if terms.rates.initial_ppm > 0 && layer.initial_paid.is_none() && premium > 0 && !waived {
                     parts.push((
                         CommissionType::Initial,
                         portion(terms.annual_premium_minor, terms.rates.initial_ppm),
@@ -1130,7 +1160,7 @@ impl DistributionState {
         };
         let mut out = BTreeMap::new();
         let partition = copy.policies.get(policy).map_or(0, |p| p.partition);
-        if let Some(reference) = copy.earn(&mut ctx, partition, policy, "dry-run", date, net) {
+        if let Some(reference) = copy.earn(&mut ctx, partition, policy, "dry-run", date, net, false) {
             for l in copy.allocations.get(&reference).map(|a| a.lines.as_slice()).unwrap_or_default() {
                 *out.entry(l.payee.clone()).or_insert(0) += l.amount_minor;
             }

@@ -648,6 +648,10 @@ fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &
     if total == 0 || policy.status != PolicyStatus::InForce {
         return Ok(());
     }
+    // The part of what is waived that pays for cover, by cover type, as a
+    // receipt reports it: commission agreements may earn on waived premium.
+    let waived: BTreeMap<u32, i64> = policy.receivables.iter().filter(mine).map(|r| (r.id, r.outstanding_minor)).collect();
+    let net = crate::counterparty::net_by_cover_type(&policy.receivables, &waived);
     let c = policy.currency;
     let (expense, d) = incurred(policy, cover, "premium_waiver");
     let mut set = PostingSet::new();
@@ -672,7 +676,10 @@ fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &
         module: MODULE.to_string(),
         kind: "premium_waived".to_string(),
         subject: claim.to_string(),
-        detail: [("policy".to_string(), policy.id.to_string()), ("amount_minor".to_string(), total.to_string())].into(),
+        detail: [("policy".to_string(), policy.id.to_string()), ("amount_minor".to_string(), total.to_string())]
+            .into_iter()
+            .chain(net.into_iter().map(|(cover_type, amount)| (format!("net:{cover_type}"), amount.to_string())))
+            .collect(),
     });
     if let Some(product) = state.catalog.product(&policy.product_hash) {
         arrears::refresh(product, policy, ctx);
