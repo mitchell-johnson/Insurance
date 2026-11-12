@@ -275,6 +275,10 @@ pub struct PendingInvoice {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LapseRecord {
+    /// Underwriting's decision that the policy may be reinstated, and on
+    /// what terms. It belongs to this lapse and goes with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<ReinstatementApproval>,
     pub lapsed_on: NaiveDate,
     /// The lapse entry's postings and the receivables as they were, so that
     /// reinstatement can restore exactly what the lapse wrote off.
@@ -282,6 +286,31 @@ pub struct LapseRecord {
     pub receivables_before: Vec<Receivable>,
     /// What must be in suspense to reinstate.
     pub arrears_minor: i64,
+}
+
+/// Underwriting's decision on a lapsed policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReinstatementApproval {
+    /// The underwriting decision.
+    pub reference: String,
+    /// The last day the decision can be relied on: a declaration of health
+    /// goes stale.
+    pub valid_until: NaiveDate,
+    /// Terms that differ from the ones the cover lapsed on. Sensitive:
+    /// never copied into an event.
+    #[serde(default)]
+    pub terms: Vec<LayerTerms>,
+}
+
+/// The underwriting terms on one life's cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerTerms {
+    pub cover: String,
+    pub life: LifeId,
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
 }
 
 /// Why a policy was unwound to a date.

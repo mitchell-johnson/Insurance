@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use common::*;
 use ic_core::command::{CoverSpec, IssuePolicy};
 use ic_core::{GroupId, PolicyId};
@@ -255,6 +255,10 @@ fn alteration() -> Entry {
     Entry::Alteration { policy: "POL-1".into() }
 }
 
+fn reinstatement() -> Entry {
+    Entry::Reinstatement { policy: "POL-1".into() }
+}
+
 fn increase() -> Entry {
     Entry::Increase { policy: "POL-1".into() }
 }
@@ -360,11 +364,18 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             "the core refused to end interim cover: odd",
         ),
         (
-            terms("P1", Entry::Reinstatement { policy: "POL-1".into() }, vec![cover(1)]),
+            terms("P1", reinstatement(), vec![cover(1)]),
             None,
             Value::Null,
             vec![],
-            "the core has no command yet for a reinstatement",
+            "proposal P1 is not known to the module",
+        ),
+        (
+            terms("P1", reinstatement(), vec![CoverSpec { life: None, ..cover(1) }]),
+            None,
+            known.clone(),
+            vec![],
+            "the reinstatement of life names no life",
         ),
         (
             terms("P1", alteration(), vec![CoverSpec { life: None, ..cover(1) }]),
@@ -614,6 +625,30 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
         "{told:?}"
     );
     assert_eq!(script.with(|s| s.core.len()), 1);
+
+    // A reinstatement: one decision for the policy as "underwriting", good for as long as
+    // the proposal is, answered like an issue either way.
+    let back = terms("P1", reinstatement(), vec![cover(1)]);
+    let expires: NaiveDate = serde_json::from_value(a_proposal()["expires_on"].clone()).unwrap();
+    let (_, script) = carry(back.clone(), None, a_proposal(), &[]).await;
+    let sent = script.with(|s| s.core.clone());
+    assert!(
+        matches!(&sent[..], [(key, caller, ic_core::Command::ApproveReinstatement(r))]
+            if key == "P1/reinstatement" && caller == "underwriting" && r.reference == "P1/terms" && r.valid_until == expires
+                && r.terms.len() == 1 && r.terms[0].cover == "life" && r.terms[0].loadings == cover(1).loadings),
+        "{sent:?}"
+    );
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::PolicyIssued { layers, .. })] if key == "P1/terms/issued" && caller == "issuer" && layers.is_empty()),
+        "{told:?}"
+    );
+    let (_, script) = carry(back, None, a_proposal(), &[("P1/reinstatement", "window_closed")]).await;
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "window_closed"),
+        "{told:?}"
+    );
 
     let (_, script) = carry(interim(), None, Value::Null, &[]).await;
     let told = script.with(|s| s.told.clone());

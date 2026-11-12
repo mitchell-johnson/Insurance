@@ -934,3 +934,69 @@ fn an_offset_across_partitions_nets_through_clearing_to_zero() {
     assert_eq!(w.dist.actions["net"].state, ActionState::Completed);
     w.assert_reconciled();
 }
+
+/// Purpose: a release that would leave less held than another module is actively collecting
+/// from the party (a claim overpayment that is pursued) needs legal's signature; one that leaves
+/// the debt covered does not; a recovery that is only held asks nothing; and a release prepared
+/// before the debt appeared is refused at its last signature until it is prepared again.
+/// Why it matters: the claim ledger's debt is outside this module's balances, so nothing else
+/// stops held commission being paid out to a party the insurer is chasing for money. Legal's
+/// signature makes paying it anyway a decision somebody took, not an oversight.
+#[test]
+fn a_release_to_a_party_pursued_for_a_debt_elsewhere_needs_legal() {
+    let (mut w, _, held) = suspended();
+    w.act("early", "fap-one", release(held)).unwrap();
+    assert!(!w.dist.actions["early"].needed.contains(&Role::Legal));
+
+    // Claims' word arrives on a partition of its own, so the core's later events are still read.
+    let mut seq = 0;
+    let mut overpayment = |w: &mut World, reference: &str, outstanding: &str, status: &str| {
+        seq += 1;
+        let detail = [
+            ("overpayment", reference),
+            ("party", "fap-one"),
+            ("outstanding_minor", outstanding),
+            ("status", status),
+        ];
+        let record = ic_core::EventRecord {
+            id: format!("9-{seq}"),
+            partition: 9,
+            seq,
+            business_date: w.today(),
+            log_index: 0,
+            traceparent: None,
+            event: ic_core::event::Event::Module {
+                module: "claims".into(),
+                kind: "overpayment_raised".into(),
+                subject: "clm-1".into(),
+                detail: detail.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            },
+        };
+        w.send(module("event-relay"), Command::Ingest(Box::new(record))).unwrap();
+    };
+
+    // Held for the insurer's own error: nothing is asked of the held balance.
+    overpayment(&mut w, "clm-1/overpayment/1", "99900", "held");
+    w.act("not-chased", "fap-one", release(held)).unwrap();
+    assert!(!w.dist.actions["not-chased"].needed.contains(&Role::Legal));
+
+    // Pursued for 100.00: a release that leaves 100.00 held is routine, a full one is not.
+    overpayment(&mut w, "clm-1/overpayment/2", "10000", "pursued");
+    w.act("covered", "fap-one", release(held - 100_00)).unwrap();
+    assert!(!w.dist.actions["covered"].needed.contains(&Role::Legal));
+    w.act("full", "fap-one", release(held)).unwrap();
+    assert!(w.dist.actions["full"].needed.contains(&Role::Legal));
+
+    // Prepared before the debt was known: stopped at the last signature, and still open.
+    let late = w.sign("early", finance_approver(), Role::CounterpartyFinanceApprover);
+    assert_eq!(code(late), "owes_elsewhere");
+    assert_eq!(w.dist.actions["early"].state, ActionState::Proposed);
+
+    // With legal's signature the money goes, whichever of the two signs last.
+    w.sign("full", legal(), Role::Legal).unwrap();
+    w.sign("full", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
+    assert_eq!(w.held("fap-one"), 0);
+    w.settle("pay:full");
+    assert_eq!(w.dist.actions["full"].state, ActionState::Completed);
+    w.assert_reconciled();
+}

@@ -150,6 +150,7 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                         start: effective,
                     },
                     origin: old.origin,
+                    continues: None,
                 });
                 next_id += 1;
             }

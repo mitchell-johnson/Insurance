@@ -71,7 +71,7 @@ The shipped return is illustrative. Its lines and account mappings are for finan
 - The movement rows are the difference each event makes to its policy; the in-force rows come from the dates each cover was known between. An extract is `reconciled` when the two agree: opening plus movements equals closing.
 - `Extract::bytes` is the file (CSV), `name` the path it is stored under in immutable storage, and `record` the `ExtractRecord` to register with `RegisterExtract`: content hash, row count, control totals and the Merkle root of its date.
 
-Each cover row carries the life's age last birthday on the extract date (on the day of the movement, in the movement extract), sex and smoker status, where the core published them; the experience extract groups by five-year age band at the period end, sex and smoker status. The date of birth stays in the mart and is never in a file. Lives that join a scheme after issue carry no factors yet, occupation class is not published, and claims that do not end a policy are not in the experience extract. The layouts are definition version 2.
+Each cover row carries the life's age last birthday on the extract date (on the day of the movement, in the movement extract), sex, smoker status and occupation class, where the core published them; the experience extract groups by five-year age band at the period end, sex, smoker status and occupation class. The date of birth stays in the mart and is never in a file. A member who joins or changes after issue carries the factors the core published with that notice, from that business date on: factors are kept by the date they were recorded, so a correction never changes an extract as at an earlier date. The experience extract counts claims two ways. `ending_claims` are the claims that ended a policy, from the core's termination. `admitted_claims`, `admitted_minor` and `admitted_monthly_minor` come from the facts the claims module publishes through the core (`claim_reserved`, `claim_admitted`, `admission_reversed`) and cover every admitted claim, including trauma, income and health claims that leave the policy in force. A claim is placed in its rating cell when it is registered, on the life's age at the event date, and counted once on the business date it is admitted; a further admission adds money only, and a reversal takes the claim and the money back on the date it is decided, so an extract already cut does not change. A death claim is in both counts. The layouts are definition version 4.
 
 ## The close driver
 
@@ -105,11 +105,12 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 `ic_finance::tables::validate` is the gate a rate table passes before activation, against the schema declared for it in `config/finance/tables.star`:
 
 - manifest (model, model version, basis report, author), schema, shape (every rating cell present, age bands without gap or overlap), range and precision;
+- a schema that declares `occupation_classes` needs every cell once for each class, and each class's rows are checked and compared with the previous version on their own;
 - the rate never falls from one age band to the next, never jumps by more than the schema's largest step, and a smoker is never rated below a non-smoker. The adjacent-age checks are the control that catches a cell mis-keyed by a factor of ten, which a range check passes;
 - against the previous version: a small uniform change passes, a larger move in a cell is listed for the actuary, and a cell that moves by more than the blocking factor blocks;
 - `cross_check` for tables that must line up, such as a premium table and the reinsurer's.
 
-A blocking finding stops activation. After validation a proposed version is priced against the book: the question `{"q":"table_dry_run","as_at","request":{covers, per_life, age_at_start, current, proposed}}` prices every cover in force on a closed date under both versions and answers with the annual premium under each, the movement by age band, sex and smoker status, the twenty covers that move most, and the covers the proposed version leaves without a rate (which fails the run). Premiums are before loadings, discounts, fees and tax, so the figures show the movement and are not a bill. A scheme's benefit category is not published to finance, so category tables are not priced. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
+A blocking finding stops activation. After validation a proposed version is priced against the book: the question `{"q":"table_dry_run","as_at","request":{covers, per_life, age_at_start, current, proposed}}` prices every cover in force on a closed date under both versions and answers with the annual premium under each, the movement by age band, sex and smoker status, the twenty covers that move most, and the covers the proposed version leaves without a rate (which fails the run). Premiums are before loadings, discounts, fees and tax, so the figures show the movement and are not a bill. A row for one occupation class prices only lives of that class. A scheme's benefit category is not published to finance, so category tables are not priced. The test suite runs every shipped table through its schema, so a table edited in the repository that breaks a rule fails CI.
 
 ## Who may send what
 
@@ -125,6 +126,8 @@ Commands are `FinEnvelope { key, caller, actor, roles, command }`. The caller is
 | `close-workflow` | `ClosePeriod`, and the checks it reports |
 | the caller a check or aged kind names | `ReportCheck`, `ReportAgedItems` |
 
+The console people use is `/finance` in the portal (`docs/channels.md`, "The finance console"). It sends under `finance-console` with the roles below and refuses the commands that belong to services.
+
 Roles: `finance_operator` enters, `finance_approver` approves journals, `finance_lead` approves configuration and fund transfers, waives, signs off and restates, `appointed_actuary` signs actuarial journals and quarter ends.
 
 ## Setting it up
@@ -135,5 +138,4 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 ## Not built yet
 
-- Rating factors for members who join a scheme after issue, occupation class, and claims that do not end a policy, on the extracts. They need those facts on the core's or the claims module's events.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.

@@ -470,6 +470,22 @@ impl DistributionState {
         balances
     }
 
+    /// What a release would leave the insurer short of: the amount another
+    /// module is actively collecting from the party (a recovery that is
+    /// pursued or being offset) less what would still be held after the
+    /// release. A recovery that is held, under an arrangement, written off or
+    /// recovered asks nothing of the held balance.
+    fn short_of_owed_elsewhere(&self, party: &PartyId, release_minor: i64) -> i64 {
+        let collecting: i64 = self
+            .memo
+            .values()
+            .filter(|m| &m.party == party && matches!(m.status.as_str(), "pursued" | "offset"))
+            .map(|m| m.outstanding_minor.max(0))
+            .sum();
+        let held: i64 = self.held_available(party).iter().map(|(_, v)| *v).sum();
+        (collecting - (held - release_minor)).max(0)
+    }
+
     /// What the party owes on an account, by partition, as positive amounts.
     fn owed(&self, party: &PartyId, debt: Debt) -> Vec<(PartitionId, i64)> {
         self.by_partition(party, debt.ledger())
@@ -636,7 +652,9 @@ impl DistributionState {
                     .payees
                     .get(party)
                     .is_some_and(|p| p.accounts.iter().any(|a| &a.account_ref == account_ref && a.appointment_ref.is_some()));
-                if ceased || appointed {
+                // Paying out held money that another module is collecting
+                // against is a decision for legal, not a routine release.
+                if ceased || appointed || self.short_of_owed_elsewhere(party, amount) > 0 {
                     legal = true;
                 }
             }
@@ -760,6 +778,17 @@ impl DistributionState {
         if last {
             // The position may have moved since the action was prepared.
             self.check_action(&record.party, &record.action, today)?;
+            // A debt elsewhere may have appeared since: legal must have seen it.
+            let legal_signed = as_role == Role::Legal || record.approvals.iter().any(|(r, _)| *r == Role::Legal);
+            if matches!(record.action, Action::Release { .. }) && !legal_signed {
+                let short = self.short_of_owed_elsewhere(&record.party, amount);
+                if short > 0 {
+                    return reject(
+                        "owes_elsewhere",
+                        format!("{} is being pursued for a debt in another ledger and the release would leave {short} of it uncovered; prepare it again so that legal signs", record.party),
+                    );
+                }
+            }
         }
         if let Some(a) = self.actions.get_mut(id) {
             a.needed.remove(at);
