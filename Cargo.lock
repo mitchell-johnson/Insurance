@@ -2077,6 +2077,7 @@ dependencies = [
  "chrono-tz 0.10.4",
  "hex",
  "ic-azure",
+ "ic-complaints",
  "ic-core",
  "ic-log",
  "ic-raft",

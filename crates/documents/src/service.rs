@@ -39,6 +39,8 @@ pub struct Config {
     pub customer_master_scope: String,
     pub event_hubs_namespace: String,
     pub event_hub: String,
+    /// The hub the complaints module's events go to.
+    pub complaints_event_hub: String,
     /// The key Event Grid must present with each delivery.
     pub webhook_key: String,
     pub listen: String,
@@ -87,6 +89,7 @@ impl Config {
             customer_master_scope: need("IC_CUSTOMER_MASTER_SCOPE")?,
             event_hubs_namespace: need("IC_EVENT_HUBS_NAMESPACE")?,
             event_hub: get("IC_DOCUMENTS_EVENT_HUB").unwrap_or_else(|| "documents-events".into()),
+            complaints_event_hub: get("IC_COMPLAINTS_EVENT_HUB").unwrap_or_else(|| "complaints-events".into()),
             webhook_key,
             listen: get("IC_DOCUMENTS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(seconds),

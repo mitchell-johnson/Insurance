@@ -155,9 +155,10 @@ impl StateMachine for DocumentsState {
             actor: env.actor.clone(),
             events: vec![],
         };
-        // Core events are de-duplicated by the checkpoint, so their keys
-        // need not be kept for ever.
-        let remember = !matches!(env.command, Command::ObserveCoreEvents { .. });
+        // Core events are de-duplicated by the checkpoint, and letting time
+        // pass or acknowledging the stream twice changes nothing the second
+        // time, so the keys of these frequent commands are not kept.
+        let remember = !matches!(env.command, Command::ObserveCoreEvents { .. } | Command::Tick | Command::MarkPublished { .. });
         let result = if !env.command.allowed_callers().contains(&env.caller.as_str()) {
             reject("not_allowed", format!("{} may not send {}", env.caller, env.command.name()))
         } else if env.actor.is_empty() {

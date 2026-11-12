@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use ic_azure::credential::AzureCredential;
 use ic_documents::channels::{AzureChannels, HttpDirectory};
+use ic_documents::complaints_relay::{run_relay, ClusterComplaints, Relay};
 use ic_documents::crypto::KeyVaultWrap;
 use ic_documents::driver::{ClusterCore, ClusterModule, Driver, EventHubsPublisher};
 use ic_documents::service::{router, run_cycles, serve, Config};
@@ -42,6 +43,13 @@ async fn main() -> Result<(), String> {
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
     let partitions = client.partitions(Duration::from_secs(60)).await?;
     let core = ClusterCore::new(client.clone(), partitions, Duration::from_secs(10));
+    let relay = Relay {
+        module: ClusterComplaints::new(client.clone(), Duration::from_secs(10)),
+        actor: "documents-service".to_string(),
+        clock: Arc::new(chrono::Utc::now),
+        batch: 100,
+    };
+    let complaints_stream = EventHubsPublisher::new(&config.event_hubs_namespace, &config.complaints_event_hub, credential.clone());
     let driver = Arc::new(Driver {
         module: ClusterModule::new(client, Duration::from_secs(10)),
         objects: BlobVault::new(&config.vault_endpoint, &config.vault_container, credential.clone()),
@@ -64,6 +72,8 @@ async fn main() -> Result<(), String> {
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     tracing::info!(?config, "documents service started");
     let web = tokio::spawn(serve(listener, router(driver.clone(), &config.webhook_key), stop_signal()));
+    let complaints = tokio::spawn(run_relay(relay, complaints_stream, config.cycle_every, stop_signal(), |_| {}));
     run_cycles(driver, publisher, Some(core), config.cycle_every, stop_signal(), |_| {}).await;
+    complaints.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
