@@ -303,3 +303,75 @@ fn the_question_and_the_saved_state() {
     let older: DocumentsState = serde_json::from_value(saved).unwrap();
     assert_eq!(ask(&older), json!([]));
 }
+
+/// Purpose: avoiding a policy for non-disclosure requires one avoidance
+/// letter, a mandatory notice copied to any lender, and not the general
+/// "your policy has ended" letter as well; and the policy's life is
+/// recorded as ended for the retention of its contractual documents.
+/// Why it matters: avoidance takes away cover the policyholder thought
+/// they had and may keep their premium, so they must be told, provably,
+/// once; a lender loses its security on the same day; and a schedule kept
+/// for ever because the module never saw the policy end breaks the
+/// retention rules.
+#[test]
+fn an_avoided_policy_requires_the_avoidance_letter() {
+    let mut kit = Kit::ready();
+    let today = kit.today();
+    observe(
+        &mut kit,
+        vec![
+            recorded(1, today, "int-1", "lender", today),
+            core(
+                2,
+                today,
+                CoreEvent::PolicyStatusChanged {
+                    policy: policy("pol-1"),
+                    from: PolicyStatus::InForce,
+                    to: PolicyStatus::Avoided,
+                },
+            ),
+            core(
+                3,
+                today,
+                CoreEvent::PolicyAvoided {
+                    policy: policy("pol-1"),
+                    case: "nd-1".into(),
+                    premium: ic_core::PremiumOnAvoidance::Refund,
+                    refunded_minor: 120_00,
+                },
+            ),
+        ],
+    );
+    let kinds: Vec<(&str, DocumentKind)> = kit.state.triggers.values().map(|t| (t.id.as_str(), t.kind)).collect();
+    assert_eq!(kinds, vec![("7-3:AvoidanceNotice", DocumentKind::AvoidanceNotice)]);
+    assert_eq!(kit.state.triggers["7-3:AvoidanceNotice"].copy_to, vec![party("lender")]);
+    assert_eq!(DocumentKind::AvoidanceNotice.class(), ic_documents::DocumentClass::MandatoryNotice);
+
+    let data = sample_data();
+    kit.activate(
+        template("avoidance", DocumentKind::AvoidanceNotice, "Dear {{name}}. We have avoided your policy."),
+        &data,
+    );
+    let mut letter = kit.issue_spec("a1", DocumentKind::AvoidanceNotice, "avoidance");
+    letter.trigger_event = Some("7-3".into());
+    assert_eq!(kit.issue_err(letter.clone()), "interested_party_missing");
+    letter.recipients.push(recipient("lender", RecipientRole::InterestedParty, &[Channel::Post]));
+    kit.issue(letter);
+    assert!(kit.state.documents["a1"].requires_proof());
+    assert!(kit.state.triggers.is_empty());
+
+    // The policy's life ended on the day it was avoided: a schedule issued
+    // under it is now kept for a period from that day, not for ever.
+    let mut schedule = kit.issue_spec("s1", DocumentKind::PolicySchedule, "schedule");
+    schedule.wordings = vec![tref("wording", 1)];
+    kit.issue(schedule);
+    let answer = ic_documents::module::answer(&kit.state, json!({ "policy_documents": { "policy": "pol-1" } })).unwrap();
+    let s1 = answer.as_array().unwrap().iter().find(|d| d["id"] == "s1").unwrap().clone();
+    assert_eq!(s1["destroy_after"], json!((today + days(2557)).to_string()), "seven years from the avoidance");
+    // A policy still in force keeps its schedule with no date set.
+    let mut other = kit.issue_spec("s2", DocumentKind::PolicySchedule, "schedule");
+    other.policy = Some(policy("pol-2"));
+    other.wordings = vec![tref("wording", 1)];
+    kit.issue(other);
+    assert_eq!(kit.state.documents["s2"].destroy_after, None);
+}
