@@ -243,11 +243,16 @@ pub enum TaskKind {
     ExclusionMatch,
     /// A death notified late: check the cadence of the death register feed.
     DeathRegisterCadence,
+    /// The periodic check that a person paid for life is still alive.
+    ProofOfLife,
 }
 
 impl TaskKind {
     pub fn review(self) -> bool {
-        matches!(self, TaskKind::MedicalReview | TaskKind::IncomeDeclaration | TaskKind::ReturnToWork)
+        matches!(
+            self,
+            TaskKind::MedicalReview | TaskKind::IncomeDeclaration | TaskKind::ReturnToWork | TaskKind::ProofOfLife
+        )
     }
 }
 
@@ -652,6 +657,12 @@ impl Claim {
     /// from the bank is owed to its provider, not to the claimant.
     pub fn benefit_payable_minor(&self) -> i64 {
         self.payable_minor - self.cost_payable_minor
+    }
+    /// Payments are held, not cancelled, while a proof of life is overdue.
+    pub fn held_for_proof_of_life(&self) -> bool {
+        self.tasks
+            .iter()
+            .any(|t| t.kind == TaskKind::ProofOfLife && t.completed_on.is_none() && t.overdue)
     }
     /// Proceeds interested parties are still to be paid before the claimant.
     pub fn interests_unpaid_minor(&self) -> i64 {

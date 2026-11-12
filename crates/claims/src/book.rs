@@ -67,7 +67,8 @@ impl ClaimsState {
             (TaskKind::MedicalReview, self.rules.medical_review_months),
             (TaskKind::IncomeDeclaration, self.rules.income_declaration_months),
         ];
-        for (kind, months) in plan {
+        let proof = (self.rules.proof_of_life_months > 0).then_some((TaskKind::ProofOfLife, self.rules.proof_of_life_months));
+        for (kind, months) in plan.into_iter().chain(proof) {
             let on = plus_months(terms.first_period, months.max(1));
             if on < terms.end {
                 reviews.insert(kind, on);
@@ -720,7 +721,8 @@ impl ClaimsState {
                 for c in self.in_payment.iter().filter_map(|id| self.claims.get(id)).filter(|c| c.in_run.is_none()) {
                     cx.core.work(1);
                     let Some(s) = c.schedule.as_ref() else { continue };
-                    if c.claim_type == crate::ClaimType::PremiumWaiver {
+                    // A waiver pays nobody; an overdue proof of life holds the money where it is.
+                    if c.claim_type == crate::ClaimType::PremiumWaiver || c.held_for_proof_of_life() {
                         continue;
                     }
                     let Some(payee) = c.payee.as_ref() else {

@@ -547,6 +547,8 @@ impl ClaimsState {
             TaskKind::QualityReview => self.authority.has_role(who, Role::QualityReviewer) && !claim.touched_by.contains(who),
             // The question and the opinion are both held in the clinical store.
             TaskKind::MedicalOpinion => self.authority.has_role(who, Role::MedicalOfficer) && vault_ref,
+            // The certificate, declaration or register match is on file.
+            TaskKind::ProofOfLife => owns && vault_ref,
             TaskKind::CaseConference => (owns || profile.senior) && attendees >= 2,
             TaskKind::SeniorReview | TaskKind::ExclusionMatch => profile.senior,
             TaskKind::DeathRegisterCadence => self.leads(who),
