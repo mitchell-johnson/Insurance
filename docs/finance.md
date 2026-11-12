@@ -126,6 +126,8 @@ Commands are `FinEnvelope { key, caller, actor, roles, command }`. The caller is
 | `close-workflow` | `ClosePeriod`, and the checks it reports |
 | the caller a check or aged kind names | `ReportCheck`, `ReportAgedItems` |
 
+The console people use is `/finance` in the portal (`docs/channels.md`, "The finance console"). It sends under `finance-console` with the roles below and refuses the commands that belong to services.
+
 Roles: `finance_operator` enters, `finance_approver` approves journals, `finance_lead` approves configuration and fund transfers, waives, signs off and restates, `appointed_actuary` signs actuarial journals and quarter ends.
 
 ## Setting it up
