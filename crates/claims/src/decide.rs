@@ -587,6 +587,7 @@ impl ClaimsState {
                     returned: false,
                     released_by: signers.first().cloned(),
                     run: None,
+                    cost_item: None,
                 });
                 cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true);
             }
