@@ -127,11 +127,15 @@ pub fn fact_from_event(kind: &str, subject: &str, detail: &BTreeMap<String, Stri
             period_end: text("period_end").map(|_| date("period_end")).transpose()?,
             ex_gratia: flag("ex_gratia"),
         },
-        // The bank sent a payment back: it is no longer paid.
+        // A returned fee paid to a provider was never a benefit payment.
+        "payment_returned" if flag("cost") => return Ok(None),
+        // The bank sent a payment back: it is no longer paid. What came
+        // back includes any interest for late payment, which is the
+        // insurer's own cost and was never counted as paid.
         "payment_returned" => ClaimFact::Paid {
             claim,
             payment_ref: format!("returned:{}", need("payment_ref")?),
-            amount_minor: -amount("amount_minor")?,
+            amount_minor: text("interest_minor").map_or(Ok(0), |_| amount("interest_minor"))? - amount("amount_minor")?,
             period_end: None,
             ex_gratia: flag("ex_gratia"),
         },
