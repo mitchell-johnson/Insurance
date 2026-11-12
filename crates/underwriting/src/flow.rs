@@ -295,15 +295,16 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     let proposal = p.id.clone();
     let (product, expires, commencement) = (p.product_code.clone(), p.expires_on, cx.today);
     let covers: Vec<_> = p.covers_on(life).cloned().collect();
-    let alteration = matches!(p.entry, Entry::Alteration { .. });
+    let alteration = matches!(p.entry, Entry::Alteration { .. } | Entry::Reinstatement { .. });
     let f = life_mut(p, life)?;
     close_cases(f, cx);
     let Some(decision) = f.decisions.last().cloned() else {
         return reject("no_decision", "there is no decision to act on");
     };
     // Cover that is already in force with a legacy system was ceded there.
-    // Cover whose terms alone are changing is in force and ceded here: its
-    // sum insured does not change, and reserving it again would count the
+    // Cover whose terms alone are changing, or that is coming back from a
+    // lapse inside the reinstatement window, is ceded here already: its sum
+    // insured does not change, and reserving it again would count the
     // life's cover twice against the retention.
     let ceded = matches!(decision.source, DecisionSource::Migrated { .. }) || alteration;
     for c in &covers {
@@ -505,7 +506,7 @@ pub(crate) fn settle(cfg: &Config, p: &mut Proposal, cx: &mut Cx) -> Result<(), 
 }
 
 /// Loading percent as the fraction the core rates with.
-fn loading(percent: u32) -> Result<DecStr, Reject> {
+pub(crate) fn loading(percent: u32) -> Result<DecStr, Reject> {
     DecStr::parse(&format!("{}.{:02}", percent / 100, percent % 100)).map_err(|e| Reject::new("loading", e.to_string()))
 }
 

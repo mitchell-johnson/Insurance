@@ -663,3 +663,57 @@ async fn an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force() {
     assert!(ri.reservation("P1/L1/life/1").is_some());
     assert!(ri.reservation("P2/L1/life/1").is_none() && ri.reservation("P3/L1/life/1").is_none());
 }
+
+/// Purpose: a lapsed policy goes through underwriting for reinstatement and the decision
+/// reaches the core as an approval recorded against the lapse, carrying the decided loading
+/// and good for as long as the proposal is; no reinsurance capacity is reserved for cover
+/// already ceded; and the proposal ends issued with nothing left in the outbox.
+/// Why it matters: collections can only reinstate a long-lapsed policy once the core holds
+/// underwriting's decision. A decision that stayed in underwriting's outbox would leave a
+/// customer who has paid their arrears and passed underwriting unable to get their cover back.
+#[tokio::test]
+async fn a_reinstatement_decision_is_recorded_against_the_lapse() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    {
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        for _ in 0..95 {
+            cluster.end_of_day().unwrap();
+        }
+        assert_eq!(cluster.state(0).policies[&policy].status, PolicyStatus::Lapsed);
+    }
+    let hash = b.product_hash.clone();
+    let expires = b.module.with(|w| {
+        w.days(95);
+        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 500_000_00)], false);
+        open.quote.product_hash = hash;
+        open.entry = Entry::Reinstatement { policy: policy.clone() };
+        open.policy = policy.clone();
+        open.policy_number = number;
+        open.group = group;
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.disclose("P2", "L1", &yes("smoked_last_12_months"));
+        w.p("P2").expires_on
+    });
+    b.pass().await;
+    b.module.with(|w| w.respond("P2", "L1", ic_underwriting::command::OfferResponse::Accept));
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("P2"), ProposalStatus::Issued { .. }), "{:?}", b.status("P2"));
+
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let held = &cluster.state(0).policies[&policy];
+    assert_eq!(held.status, PolicyStatus::Lapsed, "the decision alone reinstates nothing");
+    let approval = held.lapse.as_ref().unwrap().approval.clone().expect("the decision is with the lapse");
+    assert_eq!((approval.reference.as_str(), approval.valid_until), ("P2/issue/1", expires));
+    assert_eq!(
+        (approval.terms.len(), approval.terms[0].cover.as_str(), approval.terms[0].loadings[0].as_str()),
+        (1, "life", "0.50")
+    );
+    assert!(b.reinsurance.module.state().reservation("P2/L1/life/1").is_none());
+}

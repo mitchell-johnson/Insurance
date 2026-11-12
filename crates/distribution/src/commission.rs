@@ -186,7 +186,7 @@ impl DistributionState {
                     self.add_layer(ctx, &policy, info, LayerOrigin::Original, date);
                 }
             }
-            CoreEvent::LayerAdded { policy, layer, origin } => self.add_layer(ctx, &policy, layer, origin, date),
+            CoreEvent::LayerAdded { policy, layer, origin, .. } => self.add_layer(ctx, &policy, layer, origin, date),
             CoreEvent::LayersMerged {
                 policy,
                 cover,

@@ -642,6 +642,11 @@ async fn verification_detects_a_changed_document() {
         Err(DriverError::Vault(VaultError::Crypto(CryptoError::Unreadable)))
     );
 
+    assert_eq!(
+        w.driver.pdf("old-1", &ic_documents::pdf::Fonts::bundled()).await,
+        Err(DriverError::Vault(VaultError::Crypto(CryptoError::Unreadable)))
+    );
+
     w.driver.objects.corrupt(&doc.blob);
     assert_eq!(
         w.driver.verify("n1").await,
@@ -727,4 +732,40 @@ async fn a_template_with_a_shared_part_is_rendered_and_verified_with_it() {
     w.driver.issue(w.request("w1", "welcome")).await.unwrap();
     assert_eq!(w.driver.read("w1").await.unwrap().text, "Welcome Aroha. You may cancel within 14 days.");
     assert!(w.driver.verify("w1").await.unwrap());
+}
+
+/// Purpose: an issued document can be fetched as a PDF of the text on
+/// record, in large print when it was issued in that format, and a
+/// document that does not exist is reported as not found.
+/// Why it matters: this is the copy a customer downloads from the portal.
+/// It must be the stored text, not a fresh rendering from today's data,
+/// and a customer who asked for large print must get it every time.
+#[tokio::test]
+async fn an_issued_document_can_be_fetched_as_a_pdf() {
+    let w = World::new().await;
+    let fonts = ic_documents::pdf::Fonts::bundled();
+    w.driver.issue(w.renewal("n1")).await.unwrap();
+    let file = w.driver.pdf("n1", &fonts).await.unwrap();
+    assert!(file.starts_with(b"%PDF-"));
+    assert_eq!(w.driver.pdf("n1", &fonts).await.unwrap(), file);
+    let title = w.driver.read("n1").await.unwrap();
+    assert!(!title.text.is_empty());
+
+    let mut large = w.renewal("n2");
+    large.format = Some(ic_documents::template::AlternateFormat::LargePrint);
+    w.driver.issue(large).await.unwrap();
+    let bigger = w.driver.pdf("n2", &fonts).await.unwrap();
+    assert_ne!(bigger, file);
+    // The text is set at 18 point, which the content stream says.
+    let has_size = |file: &[u8], size: &str| {
+        use std::io::Read;
+        let start = file.windows(7).position(|w| w == b"stream\n").unwrap() + 7;
+        let end = start + file[start..].windows(10).position(|w| w == b"\nendstream").unwrap();
+        let mut content = String::new();
+        flate2::read::ZlibDecoder::new(&file[start..end]).read_to_string(&mut content).unwrap();
+        content.contains(&format!("/F1 {size} Tf"))
+    };
+    assert!(has_size(&bigger, "18") && !has_size(&file, "18") && has_size(&file, "11"));
+
+    assert_eq!(w.driver.pdf("nope", &fonts).await, Err(DriverError::NotFound("document nope".into())));
 }

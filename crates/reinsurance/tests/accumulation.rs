@@ -685,6 +685,7 @@ fn an_underwritten_excess_layer_is_ceded_and_follows_the_member() {
         policy: scheme.clone(),
         layer: layer("group-life", "group_life", 1, "M1", 400 * K, d(2027, 3, 1)),
         origin: ic_core::LayerOrigin::UnderwrittenExcess,
+        continues: None,
     };
     b.today = d(2027, 3, 1);
     b.feed(2, vec![excess.clone()]);
@@ -864,5 +865,177 @@ fn unlinked_members_can_be_ceded_as_an_excess_per_member() {
     assert_eq!((over.retained_minor, over.treaty_ceded(), over.unplaced_minor), (140 * K, 60 * K, 0));
     let under = b.ri.cession(&key("S1", "group-life", 0, "M2"), on).unwrap();
     assert_eq!((under.retained_minor, under.treaty_ceded()), (100 * K, 0));
+    b.assert_reconciles();
+}
+
+/// What the core emits when underwriting changes the terms of a layer: the layer ends and
+/// is written again from the same day, the new one naming the one it continues or not.
+fn terms_altered(policy: &str, cover: &str, old: u32, new: u32, sum: i64, on: chrono::NaiveDate, continues: Option<u32>) -> Vec<Event> {
+    vec![
+        Event::LayerEnded {
+            policy: PolicyId::from(policy),
+            cover: cover.into(),
+            layer: old,
+            life: "L1".into(),
+            effective: on,
+            sum_insured_minor: sum,
+        },
+        Event::LayerAdded {
+            policy: PolicyId::from(policy),
+            layer: layer(cover, cover, new, "L1", sum, on),
+            origin: ic_core::LayerOrigin::Original,
+            continues,
+        },
+    ]
+}
+
+/// Purpose: when underwriting changes the loadings or exclusions on cover in force, the
+/// layer the core writes in its place keeps the old layer's place in the life's retention
+/// order, so what is retained and ceded on every cover of the life is the same the day
+/// after as the day before; a second change of terms keeps it again. The same pair of
+/// events without the link is new business and goes to the back of the order.
+/// Why it matters: under a treaty that reallocates freed retention, treating a change of
+/// terms as an ending and a new start hands the retention to the life's later covers and
+/// cedes the altered cover instead. Nothing about the risk's size changed, yet premiums
+/// would move between the insurer and its reinsurers on two covers and the reinsurer's
+/// listing would show a cancellation and new business that never happened.
+#[test]
+fn a_change_of_underwriting_terms_keeps_the_cover_s_place_in_the_retention() {
+    let run = |continues: bool| {
+        let mut b = Bench::empty();
+        let source = RETAIL.replace(
+            "recapture_after_years = 10,",
+            "recapture_after_years = 10,\n    reallocate_freed_retention = True,",
+        );
+        let treaty = Box::new(ic_reinsurance::loader::load_treaty("t.star", &source).unwrap());
+        b.ok("config", Command::ActivateTreaty { treaty });
+        b.issue(
+            1,
+            "P1",
+            "anna",
+            vec![
+                layer("life", "life", 1, "L1", 400 * K, d(2027, 2, 1)),
+                layer("trauma", "trauma", 1, "L1", 400 * K, d(2027, 3, 1)),
+            ],
+        );
+        let trauma_before = b.ri.cession_record(&key("P1", "trauma", 1, "L1")).to_vec();
+        b.today = d(2027, 9, 1);
+        b.feed(1, terms_altered("P1", "life", 1, 2, 400 * K, d(2027, 9, 1), continues.then_some(1)));
+        b.today = d(2027, 11, 1);
+        b.feed(1, terms_altered("P1", "life", 2, 3, 400 * K, d(2027, 11, 1), continues.then_some(2)));
+        b.assert_reconciles();
+        assert!(b.ri.cession(&key("P1", "life", 1, "L1"), d(2027, 9, 1)).is_none(), "the old layer has ended");
+        assert!(b.ri.cession(&key("P1", "life", 2, "L1"), d(2027, 11, 1)).is_none());
+        let unchanged = b.ri.cession_record(&key("P1", "trauma", 1, "L1")) == &trauma_before[..];
+        let retained = |cover: &str, layer: u32, on| b.ri.cession(&key("P1", cover, layer, "L1"), on).unwrap().retained_minor;
+        (
+            retained("life", 2, d(2027, 9, 1)),
+            retained("life", 3, d(2027, 11, 1)),
+            retained("trauma", 1, d(2027, 11, 1)),
+            unchanged,
+        )
+    };
+    assert_eq!(run(true), (400 * K, 400 * K, 100 * K, true));
+    assert_eq!(run(false), (100 * K, 100 * K, 400 * K, false));
+}
+
+/// Purpose: a layer written again on new terms stays on the treaty version it was ceded
+/// under, counts its years toward recapture from when the cover first began, is listed to
+/// the reinsurer from that date, and keeps its facultative placement; because a facultative
+/// reinsurer took the risk on the old terms, an exception asks a person to tell it, and
+/// closes only when they record where its answer is filed. A layer whose predecessor this
+/// module never saw is ceded as new cover.
+/// Why it matters: in-force cover moves to a new treaty version only by negotiation, and a
+/// facultative placement is a contract on one named risk. Losing either because a loading
+/// changed would leave cover above the automatic limit unplaced, or priced on terms the
+/// reinsurer never agreed for it; and a reinsurer not told of a material change in a risk
+/// it accepted individually can decline the claim.
+#[test]
+fn a_change_of_underwriting_terms_keeps_the_treaty_and_the_facultative_placement() {
+    let mut b = Bench::new();
+    b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 5000 * K, d(2027, 2, 1))]);
+    let old = key("P1", "life", 1, "L1");
+    let fac = Command::RecordFacultativeTerms(Box::new(ic_reinsurance::machine::FacultativeTerms {
+        target: ic_reinsurance::machine::FacTarget::Risk(old.clone()),
+        reference: "FAC-1".into(),
+        reinsurer: south(),
+        amount_minor: 500 * K,
+        rate: 2_000_000,
+        terms_ref: "vault/FAC-1".into(),
+        loading: Some("+50".into()),
+        exclusions: vec![],
+    }));
+    b.ok("reinsurance-ops", fac);
+    let before = b.ri.cession(&old, d(2027, 2, 1)).unwrap().clone();
+    assert_eq!((before.facultative_ceded(), before.unplaced_minor), (500 * K, 0));
+    // A new version of the treaty is in force by the time the terms change.
+    let v2 = ic_reinsurance::loader::load_treaty(
+        "t.star",
+        &RETAIL
+            .replace("version = 1", "version = 2")
+            .replace("effective_from = \"2027-01-01\"", "effective_from = \"2028-01-01\"")
+            .replace("commission = \"0.20\"", "commission = \"0.25\""),
+    )
+    .unwrap();
+    b.ok("config", Command::ActivateTreaty { treaty: Box::new(v2) });
+
+    b.today = d(2028, 6, 1);
+    let applied = b.feed(1, terms_altered("P1", "life", 1, 2, 5000 * K, d(2028, 6, 1), Some(1)));
+    let new = key("P1", "life", 2, "L1");
+    let after = b.ri.cession(&new, d(2028, 6, 1)).unwrap().clone();
+    assert_eq!(after, before, "the same cession, on the same treaty version, with the same facultative share");
+    assert_eq!(after.treaty.as_ref().unwrap().version, 1);
+    let id = "facultative_terms_altered:P1/life/2/L1";
+    assert!(applied.notices.iter().any(
+        |n| matches!(n, Notice::ExceptionOpened { id: opened, code, detail } if opened == id && code == "facultative_terms_altered" && detail.contains("FAC-1"))
+    ));
+    b.assert_reconciles();
+
+    // Ten years run from 2027, when the cover began, not from the day its terms changed.
+    let recapture = |effective| Command::Recapture {
+        treaty: retail(),
+        effective,
+        keys: vec![new.clone()],
+    };
+    assert_eq!(b.refused("reinsurance-ops", recapture(d(2037, 1, 31))), "recapture_not_allowed");
+    let mut later = Bench {
+        ri: b.ri.clone(),
+        ..Bench::empty()
+    };
+    later.index = b.index;
+    later.today = d(2037, 2, 1);
+    later.ok("reinsurance-ops", recapture(d(2037, 2, 1)));
+
+    // Telling the reinsurer closes the exception; a second change before that moves it on.
+    let told = |key: &ic_reinsurance::RiskKey, reference: &str| Command::FacultativeReinsurerTold {
+        key: key.clone(),
+        reference: reference.into(),
+    };
+    assert_eq!(b.refused("reinsurance-ops", told(&new, " ")), "reference_required");
+    assert_eq!(b.refused("reinsurance-ops", told(&old, "vault/re-1")), "nothing_to_tell");
+    assert_eq!(b.refused("claims", told(&new, "vault/re-1")), "caller_not_allowed");
+    b.today = d(2028, 7, 1);
+    let again = b.feed(1, terms_altered("P1", "life", 2, 3, 5000 * K, d(2028, 7, 1), Some(2)));
+    assert!(again
+        .notices
+        .iter()
+        .any(|n| matches!(n, Notice::ExceptionClosed { id: closed } if closed == id)));
+    let newest = key("P1", "life", 3, "L1");
+    assert_eq!(b.ri.exceptions().keys().collect::<Vec<_>>(), vec!["facultative_terms_altered:P1/life/3/L1"]);
+    assert_eq!(b.ri.cession(&newest, d(2028, 7, 1)), Some(&before));
+    b.ok("reinsurance-ops", told(&newest, "vault/re-1"));
+    assert!(b.ri.exceptions().is_empty());
+    b.assert_reconciles();
+    // The layer arriving again (the policy landing on another partition) asks nobody twice.
+    let landed = b.feed(1, terms_altered("P1", "life", 2, 3, 5000 * K, d(2028, 7, 1), Some(2)));
+    assert!(landed.notices.is_empty() && b.ri.exceptions().is_empty());
+    assert_eq!(b.ri.cession(&newest, d(2028, 7, 1)), Some(&before));
+
+    // A layer said to continue one this module never saw is simply new cover, on today's version.
+    b.today = d(2028, 8, 1);
+    b.issue(2, "P7", "bella", vec![]);
+    b.feed(2, terms_altered("P7", "life", 4, 5, 300 * K, d(2028, 8, 1), Some(4)));
+    let orphan = b.ri.cession(&key("P7", "life", 5, "L1"), d(2028, 8, 1)).unwrap();
+    assert_eq!((orphan.retained_minor, orphan.treaty.as_ref().unwrap().version), (300 * K, 2));
     b.assert_reconciles();
 }

@@ -17,10 +17,10 @@ use ic_product::schedule::period_start;
 use crate::billing::{raise_receivable, Bill};
 use crate::cash;
 use crate::catalog::Catalog;
-use crate::command::{AlteredTerms, UnderwrittenLayer};
+use crate::command::{AlteredTerms, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
-use crate::policy::{CoverStatus, Layer, LayerOrigin, Policy, PolicyStatus, ReceivableKind};
+use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
 use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 use crate::LifeId;
 
@@ -85,6 +85,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             exclusions: spec.exclusions,
             loading_itemised: false,
             rated_from: None,
+            member_pays: MemberPays::Nothing,
         });
     }
     ctx.emit(Event::LayerAdded {
@@ -98,6 +99,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             start: effective,
         },
         origin: LayerOrigin::Increase,
+        continues: None,
     });
 
     if let (Some(period), Some(without)) = (billed, without) {
@@ -230,6 +232,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 exclusions: spec.exclusions.clone(),
                 loading_itemised: old.loading_itemised,
                 rated_from: Some(old.rating_start()),
+                member_pays: MemberPays::Nothing,
             });
         }
         ctx.emit(Event::LayerEnded {
@@ -251,6 +254,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 start: effective,
             },
             origin: old.origin,
+            continues: Some(old.id),
         });
     }
     if let (Some(period), Some(without)) = (billed, without) {
@@ -258,4 +262,64 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
         adjust(ledger, policy, ctx, &spec.life, effective, period, &with, &without)?;
     }
     Ok(())
+}
+
+/// Underwriting's decision on a lapsed policy, kept with the lapse until the
+/// policy is reinstated or the window closes. A later decision replaces an
+/// earlier one.
+pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, today: NaiveDate, spec: ReinstatementTerms) -> Result<(), Reject> {
+    let Some(lapse) = policy.lapse.as_ref().filter(|_| policy.status == PolicyStatus::Lapsed) else {
+        return Err(Reject::new("not_lapsed", "only a lapsed policy can be reinstated"));
+    };
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?;
+    let window = product.arrears().map_or(0, |r| r.reinstatement_days) as i64;
+    if (today - lapse.lapsed_on).num_days() > window {
+        return Err(Reject::new("window_closed", "the reinstatement window has closed; this needs a new policy"));
+    }
+    if spec.reference.is_empty() {
+        return Err(Reject::new("reference", "the decision carries underwriting's reference"));
+    }
+    if spec.valid_until < today {
+        return Err(Reject::new("decision_expired", "the decision can no longer be relied on"));
+    }
+    for t in &spec.terms {
+        let cover = policy
+            .covers
+            .get(&t.cover)
+            .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
+            .ok_or_else(|| Reject::new("unknown_cover", format!("{} is not a cover on this policy that is priced per life", t.cover)))?;
+        if !cover.layers.iter().any(|l| l.life == t.life && l.in_force_on(today)) {
+            return Err(Reject::new("unknown_life", format!("life {} has no {} cover to reinstate", t.life, t.cover)));
+        }
+        if t.loadings.iter().any(|l| l.get().is_negative()) {
+            return Err(Reject::new("invalid_loading", "a loading cannot be negative"));
+        }
+    }
+    if let Some(lapse) = policy.lapse.as_mut() {
+        lapse.approval = Some(ReinstatementApproval {
+            reference: spec.reference,
+            valid_until: spec.valid_until,
+            terms: spec.terms,
+        });
+    }
+    Ok(())
+}
+
+/// One life's cover put on underwriting's terms as the policy is reinstated.
+/// Cover already on them is left alone.
+pub(crate) fn reinstated_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, terms: LayerTerms) -> Result<(), Reject> {
+    let spec = AlteredTerms {
+        policy: policy.id.clone(),
+        cover: terms.cover,
+        life: terms.life,
+        loadings: terms.loadings,
+        exclusions: terms.exclusions,
+        reference: String::new(),
+    };
+    match alter_terms(ledger, catalog, policy, ctx, spec) {
+        Err(r) if r.code == "no_change" => Ok(()),
+        done => done,
+    }
 }

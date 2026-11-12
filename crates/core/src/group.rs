@@ -10,15 +10,16 @@ use ic_product::ProductDefinition;
 
 use serde::{Deserialize, Serialize};
 
-use crate::billing::{raise_receivable, Bill};
+use crate::billing::{raise_receivable, raise_receivable_for, Bill};
 use crate::bitemporal::Bitemporal;
 use crate::catalog::Catalog;
 use crate::command::{ExcessLayer, MemberChange};
 use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::lifecycle::{member_covers, BACKDATING_LIMIT_DAYS};
 use crate::machine::{CoreState, Ctx, Reject, APPLY_BUDGET, MAX_MEMBERSHIP_CHUNK, SCHEME_BILLING_CHUNK};
-use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, PendingInvoice, Policy, PolicyStatus, ReceivableKind};
-use crate::premium::{add_premium, excess_layers_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
+use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind};
+use crate::premium::{add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
+use crate::voluntary;
 use crate::{LifeId, PartyId, PolicyId};
 use ic_product::RateBasis;
 
@@ -50,6 +51,7 @@ pub(crate) fn bill_scheme_step(
     let mut priced = pending.premium.clone();
     let mut members = pending.members;
     let mut loading_minor = 0i64;
+    let mut member_bills: Vec<(LifeId, Bill)> = Vec::new();
     for (id, life) in policy.lives.range::<LifeId, _>(range) {
         if visited == SCHEME_BILLING_CHUNK {
             break;
@@ -66,22 +68,41 @@ pub(crate) fn bill_scheme_step(
             continue;
         }
         ctx.work += 4;
-        let p = member_period_premium(catalog, product, policy, life, period.0)?;
+        let excess = excess_layers_on(policy, id, period.0);
+        let (p, line) = if excess.iter().any(|(_, l)| !l.member_pays.is_nothing()) {
+            // Part of this member's cover is paid for by the member. The
+            // employer is billed as if that part were not there, and the
+            // difference is the member's own bill.
+            ctx.work += 8;
+            let f = factors_on(life, period.0)?;
+            let owned: Vec<(String, Layer)> = excess.iter().map(|(c, l)| (c.to_string(), (*l).clone())).collect();
+            let employers = employer_part(&owned);
+            let refs: Vec<(&str, &Layer)> = employers.iter().map(|(c, l)| (c.as_str(), l)).collect();
+            let whole = member_premium_detail(catalog, product, policy, id, f, period.0, &excess, Loadings::All)?;
+            let p = member_premium_detail(catalog, product, policy, id, f, period.0, &refs, Loadings::All)?;
+            let line = member_premium_detail(catalog, product, policy, id, f, period.0, &refs, Loadings::ItemisedOnly)?.total();
+            member_bills.push((id.clone(), Bill::from_modal(policy, &whole).minus(&Bill::from_modal(policy, &p))));
+            (p, line)
+        } else {
+            let p = member_period_premium(catalog, product, policy, life, period.0)?;
+            // A loading the member has not agreed to show stays off the member's
+            // line and reaches the invoice only in the chunk's total.
+            let hidden = excess.iter().any(|(_, l)| !l.loadings.is_empty() && !l.loading_itemised);
+            let line = if hidden {
+                ctx.work += 4;
+                member_period_line(catalog, product, policy, life, period.0)?.total()
+            } else {
+                p.total()
+            };
+            (p, line)
+        };
         add_premium(&mut priced, &p)?;
         members += declared.map_or(1, |d| d.headcount);
-        // A loading the member has not agreed to show stays off the member's
-        // line and reaches the invoice only in the chunk's total.
-        let hidden = excess_layers_on(policy, id, period.0)
-            .iter()
-            .any(|(_, l)| !l.loadings.is_empty() && !l.loading_itemised);
-        let line = if hidden {
-            ctx.work += 4;
-            member_period_line(catalog, product, policy, life, period.0)?.total()
-        } else {
-            p.total()
-        };
         loading_minor += p.total() - line;
         lines.push((id.clone(), line));
+    }
+    for (life, bill) in member_bills {
+        bill_member(ledger, policy, ctx, &life, &bill, period, period.0, false)?;
     }
     let complete = visited < SCHEME_BILLING_CHUNK || last.as_ref() == policy.lives.keys().next_back();
     pending.premium = priced;
@@ -120,6 +141,55 @@ pub(crate) fn bill_scheme_step(
     Ok(true)
 }
 
+/// A member's layers as the employer is billed for them: without the layers
+/// the member pays for, and without the loading where the member pays that.
+fn employer_part(layers: &[(String, Layer)]) -> Vec<(String, Layer)> {
+    layers
+        .iter()
+        .filter(|(_, l)| l.member_pays != MemberPays::All)
+        .map(|(cover, l)| {
+            let mut l = l.clone();
+            if l.member_pays == MemberPays::Loading {
+                l.loadings.clear();
+            }
+            (cover.clone(), l)
+        })
+        .collect()
+}
+
+/// Bill a member for cover the member pays for themselves, and set any
+/// credit the member holds against it.
+#[allow(clippy::too_many_arguments)]
+fn bill_member(
+    ledger: &mut Ledger,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: &LifeId,
+    bill: &Bill,
+    period: Period,
+    due: NaiveDate,
+    adjustment: bool,
+) -> Result<(), Reject> {
+    let (kind, entry) = if adjustment {
+        (ReceivableKind::Adjustment, "member_premium_adjusted")
+    } else {
+        (ReceivableKind::Period, "member_premium_due")
+    };
+    if let Some(receivable) = raise_receivable_for(ledger, policy, ctx, bill, kind, period, due, entry, Some(life))? {
+        ctx.emit(Event::MemberPremiumBilled {
+            policy: policy.id.clone(),
+            life: life.clone(),
+            receivable,
+            period_start: period.0,
+            period_end: period.1,
+            total_minor: bill.total(),
+            adjustment,
+        });
+        voluntary::apply_credit(ledger, policy, ctx, life)?;
+    }
+    Ok(())
+}
+
 /// Billed periods a change effective on `effective` reaches into.
 fn affected_periods(policy: &Policy, effective: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     (0..policy.periods_billed)
@@ -143,6 +213,9 @@ struct Deltas {
     shown: Vec<(Period, Bill)>,
     /// Loading that reaches the scheme only as a total.
     loading: Vec<(Period, Bill)>,
+    /// What the member pays for themselves. Never part of the scheme's
+    /// invoice or its totals.
+    member: Vec<(Period, Bill)>,
     work: u32,
 }
 
@@ -180,6 +253,9 @@ fn deltas(
     after: &[(String, Layer)],
 ) -> Result<Deltas, Reject> {
     let mut out = Deltas::default();
+    let member_paid = before.iter().chain(after).any(|(_, l)| !l.member_pays.is_nothing());
+    let (whole_before, whole_after) = (before, after);
+    let (before, after) = (&employer_part(before)[..], &employer_part(after)[..]);
     let hidden = before.iter().chain(after).any(|(_, l)| !l.loadings.is_empty() && !l.loading_itemised);
     for (start, end) in affected_periods(policy, effective) {
         out.work += if hidden { 24 } else { 12 };
@@ -205,6 +281,16 @@ fn deltas(
         } else {
             full.clone()
         };
+        if member_paid {
+            out.work += 12;
+            let whole = price(&new, whole_after, Loadings::All)?
+                .minus(&price(&old, whole_before, Loadings::All)?)
+                .scaled(remaining, days);
+            let member = whole.minus(&full);
+            if !member.is_zero() {
+                out.member.push(((from, end), member));
+            }
+        }
         let loading = full.minus(&shown);
         if !shown.is_zero() {
             out.shown.push(((from, end), shown));
@@ -238,6 +324,9 @@ fn post_deltas(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, life
                 total_minor: delta.total(),
             });
         }
+    }
+    for (period, delta) in d.member {
+        bill_member(ledger, policy, ctx, life, &delta, period, ctx.date, true)?;
     }
     Ok(())
 }
@@ -519,6 +608,7 @@ pub(crate) fn apply_membership(
                 policy: policy.id.clone(),
                 layer,
                 origin: LayerOrigin::UnderwrittenExcess,
+                continues: None,
             });
         }
         post_deltas(ledger, policy, ctx, &s.life, s.effective, s.deltas)?;
@@ -641,6 +731,9 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
     if spec.loadings.iter().any(|l| l.get().is_negative()) {
         return Err(Reject::new("invalid_loading", "a loading cannot be negative"));
     }
+    if spec.member_pays == MemberPays::Loading && spec.loadings.is_empty() {
+        return Err(Reject::new("invalid_payer", "the member cannot pay the loading on a layer that has none"));
+    }
     let before = member_layers(policy, &spec.life);
     let id = policy.covers[&spec.cover].layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     let layer = Layer {
@@ -654,6 +747,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
         exclusions: spec.exclusions,
         loading_itemised: spec.loading_itemised,
         rated_from: None,
+        member_pays: spec.member_pays,
     };
     let mut after = before.clone();
     after.push((spec.cover.clone(), layer.clone()));
@@ -668,6 +762,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
             policy: policy.id.clone(),
             layer,
             origin: LayerOrigin::UnderwrittenExcess,
+            continues: None,
         });
     }
     post_deltas(ledger, policy, ctx, &spec.life, spec.start, d)

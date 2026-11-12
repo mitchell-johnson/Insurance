@@ -139,9 +139,18 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                     return Err(invalid(file, "policy fee is negative"));
                 }
             }
-            Feature::Arrears { grace_days, lapse_days, .. } => {
+            Feature::Arrears {
+                grace_days,
+                lapse_days,
+                reinstatement_days,
+                reinstatement_evidence_free_days,
+                ..
+            } => {
                 if lapse_days < grace_days {
                     return Err(invalid(file, "lapse_days is shorter than grace_days"));
+                }
+                if reinstatement_evidence_free_days.is_some_and(|free| free > *reinstatement_days) {
+                    return Err(invalid(file, "reinstatement_evidence_free_days is longer than reinstatement_days"));
                 }
             }
             Feature::MultiCoverDiscount { percent, .. } => {

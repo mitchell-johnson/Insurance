@@ -162,6 +162,16 @@ impl NonDisclosureOutcome {
     }
 }
 
+/// What becomes of the premiums paid on a policy avoided for non-disclosure.
+/// The law the contract is under decides which is open to the insurer; the
+/// two seniors who decide the remedy record which applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PremiumOnAvoidance {
+    Refund,
+    Retain,
+}
+
 /// Terms for one life as they arrive from a legacy system.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MigratedLife {
@@ -479,6 +489,9 @@ pub enum Command {
         reasons: BTreeSet<String>,
         /// For a variation: the terms that would have been offered.
         varied_terms: Vec<CoverTerms>,
+        /// For an avoidance: whether the premiums paid are refunded or kept.
+        #[serde(default)]
+        premium: Option<PremiumOnAvoidance>,
     },
 
     // --- decisions that arrive as data ---
@@ -717,6 +730,13 @@ pub enum Effect {
         outcome: NonDisclosureOutcome,
         review: String,
         decision: Option<String>,
+        /// For a variation: the terms the life's cover is treated as having
+        /// been written on. Sensitive.
+        #[serde(default)]
+        terms: Vec<ic_core::policy::LayerTerms>,
+        /// For an avoidance: what becomes of the premiums paid.
+        #[serde(default)]
+        premium: Option<PremiumOnAvoidance>,
     },
     /// A notice for the correspondence module. The reasons are plain words
     /// the recipient may be told; they imply health, so a notice is not an

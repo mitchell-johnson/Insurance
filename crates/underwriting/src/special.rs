@@ -571,6 +571,7 @@ impl UnderwritingState {
 
     /// Close a review. A remedy needs a second senior and is a command to
     /// the core in its own right; the decision is never edited.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn close_review(
         &mut self,
         cx: &mut Cx,
@@ -580,6 +581,7 @@ impl UnderwritingState {
         countersigned_by: Option<String>,
         reasons: BTreeSet<String>,
         varied_terms: Vec<CoverTerms>,
+        premium: Option<crate::command::PremiumOnAvoidance>,
     ) -> Result<(), Reject> {
         let Some(review) = self.reviews.get(id).filter(|r| !r.closed).cloned() else {
             return reject("unknown_review", format!("no open review {id}"));
@@ -609,6 +611,30 @@ impl UnderwritingState {
             }
             if varying != !varied_terms.is_empty() || (varying && !varied_terms.iter().all(|t| t.outcome.is_accept())) {
                 return reject("terms", "a variation carries the terms that would have been offered, and nothing else does");
+            }
+            if (outcome == NonDisclosureOutcome::Avoid) != premium.is_some() {
+                return reject(
+                    "premium",
+                    "an avoidance records whether the premiums paid are refunded or kept, and nothing else does",
+                );
+            }
+            let mut terms = Vec::new();
+            for t in &varied_terms {
+                if let CoverOutcome::Accept {
+                    loading_percent, exclusions, ..
+                } = &t.outcome
+                {
+                    terms.push(ic_core::policy::LayerTerms {
+                        cover: t.cover.clone(),
+                        life: life.clone(),
+                        loadings: if *loading_percent > 0 {
+                            vec![flow::loading(*loading_percent)?]
+                        } else {
+                            vec![]
+                        },
+                        exclusions: exclusions.iter().map(|e| e.code.clone()).collect(),
+                    });
+                }
             }
             let mut signatures = Vec::new();
             for s in &signers {
@@ -651,6 +677,8 @@ impl UnderwritingState {
                     outcome,
                     review: id.to_string(),
                     decision: varying.then(|| result.clone()),
+                    terms,
+                    premium,
                 });
             }
             Ok(())

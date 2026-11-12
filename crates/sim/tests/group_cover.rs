@@ -71,6 +71,7 @@ fn excess(id: &PolicyId, start: NaiveDate, loading: Option<&str>, itemised: bool
         loadings: loading.map(|l| DecStr::parse(l).unwrap()).into_iter().collect(),
         exclusions: vec![],
         loading_itemised: itemised,
+        member_pays: Default::default(),
         reference: "uw-1".into(),
     }
 }

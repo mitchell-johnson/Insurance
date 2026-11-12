@@ -217,6 +217,11 @@ pub enum Event {
         policy: PolicyId,
         layer: LayerInfo,
         origin: LayerOrigin,
+        /// The layer this one takes the place of when underwriting changed
+        /// its terms and nothing else: the same cover carried on, not new
+        /// business.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        continues: Option<u32>,
     },
     /// A layer stopped from a date: an underwritten layer given up, reduced
     /// or ended because the member left.
@@ -318,6 +323,51 @@ pub enum Event {
     ReceiptReversed {
         policy: PolicyId,
         receipt: String,
+        amount_minor: i64,
+    },
+    /// A scheme member was billed for cover the member pays for themselves:
+    /// a period's premium, or an adjustment to periods already billed.
+    /// Sensitive: the amount can include an underwriting loading, so it
+    /// goes to the member and never to the employer.
+    MemberPremiumBilled {
+        policy: PolicyId,
+        life: LifeId,
+        receivable: u32,
+        period_start: NaiveDate,
+        period_end: NaiveDate,
+        total_minor: i64,
+        adjustment: bool,
+    },
+    /// Money from a scheme member, set against what the member owes; the
+    /// rest is the member's credit.
+    MemberReceiptApplied {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        allocated_minor: i64,
+        to_credit_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
+    MemberReceiptReversed {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        amount_minor: i64,
+    },
+    /// A member's credit was set against what the member owes.
+    MemberCreditApplied {
+        policy: PolicyId,
+        life: LifeId,
+        amount_minor: i64,
+        /// As on `ReceiptApplied`.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
+    MemberCreditRefunded {
+        policy: PolicyId,
+        life: LifeId,
         amount_minor: i64,
     },
     /// What the policy owes after a command changed it. Read models and cash

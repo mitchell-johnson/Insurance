@@ -258,7 +258,7 @@ impl Reinsurance {
                     "policy": self.policies.get(&key.policy).map_or("", |p| p.number.as_str()),
                     "cover": key.cover,
                     "layer": key.layer,
-                    "from": risk.start,
+                    "from": risk.began(),
                     "sum_at_risk_minor": sum_at_risk,
                     "ceded_minor": ceded,
                     "premium_minor": premium,

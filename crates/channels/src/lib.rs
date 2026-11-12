@@ -17,6 +17,7 @@
 //! - [`classes`]: data classes and masking.
 //! - [`feed`]: audience-scoped rows and the per-party device sync feed.
 
+pub mod claims;
 pub mod classes;
 pub mod complaints;
 pub mod directory;

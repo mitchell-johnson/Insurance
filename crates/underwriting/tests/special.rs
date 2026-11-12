@@ -9,7 +9,9 @@ use common::*;
 use ic_core::{LifeId, PartyId, PolicyId};
 use ic_underwriting::case::{CaseType, Queue};
 use ic_underwriting::codes::AppliedExclusion;
-use ic_underwriting::command::{Applied, Command, DelegatedDecision, Effect, Event, MigratedLife, MigratedPolicy, NonDisclosureOutcome, Reject, View};
+use ic_underwriting::command::{
+    Applied, Command, DelegatedDecision, Effect, Event, MigratedLife, MigratedPolicy, NonDisclosureOutcome, PremiumOnAvoidance, Reject, View,
+};
 use ic_underwriting::config::{DelegatedAuthority, SampleRates, Settings};
 use ic_underwriting::evidence::EvidenceKind;
 use ic_underwriting::model::{CoverOutcome, CoverTerms, DecisionSource, DecisionStatus, ProposalStatus, Signing, Stage};
@@ -460,7 +462,9 @@ fn claims_reads_terms_and_opens_the_file_with_a_logged_purpose() {
 /// never touched the life; it reports the legal basis of the contract's date; no action closes
 /// it with one signature; a variation or an avoidance needs a second, different senior, is
 /// recorded against the original decision without editing it, and goes to the core as its own
-/// command. A variation carries the terms that would have been offered.
+/// command. A variation carries the terms that would have been offered, and the remedy takes
+/// them to the core; an avoidance records whether the premiums paid are refunded or kept, and
+/// is refused without that.
 /// Why it matters: avoiding a policy at claim time is the most serious thing an insurer does
 /// to a customer. The remedy depends on the law in force at the contract date, and must never
 /// rest on the person who underwrote the case or on one person alone.
@@ -513,6 +517,7 @@ fn a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy() {
         countersigned_by: second.map(str::to_string),
         reasons: set(reasons),
         varied_terms: terms,
+        premium: None,
     };
     let vary = NonDisclosureOutcome::Vary;
     assert_eq!(
@@ -579,7 +584,8 @@ fn a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy() {
                 decided_by: "sam".into(),
                 countersigned_by: None,
                 reasons: set(&["RC-0980"]),
-                varied_terms: vec![]
+                varied_terms: vec![],
+                premium: None,
             }
         )
         .unwrap_err()
@@ -587,7 +593,19 @@ fn a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy() {
         "unknown_review"
     );
 
+    let mut kept = close(vary, "sam", Some("sue"), &["RC-0980"], vec![accept("life", 50, None)]);
+    if let Command::RecordNonDisclosureOutcome { premium, .. } = &mut kept {
+        *premium = Some(PremiumOnAvoidance::Refund);
+    }
+    assert_eq!(console(&mut w, kept).unwrap_err().code, "premium");
     let varied = console(&mut w, close(vary, "sam", Some("sue"), &["RC-0980"], vec![accept("life", 50, None)])).unwrap();
+    // The remedy carries the terms themselves: the core is not asked to look them up.
+    assert!(
+        matches!(&varied.effects[0], Effect::NonDisclosureRemedy { terms, premium: None, .. }
+            if terms.len() == 1 && terms[0].cover == "life" && terms[0].life == LifeId::from("L1") && terms[0].loadings[0].as_str() == "0.50"),
+        "{:?}",
+        varied.effects[0]
+    );
     assert_eq!(varied.view, Some(View::NonDisclosure { decision: "P1/L1/d2".into() }));
     assert!(
         matches!(&varied.effects[0], Effect::NonDisclosureRemedy { key, outcome: NonDisclosureOutcome::Vary, decision: Some(d), .. } if key == "ndr/CLM-1/L1/remedy" && d == "P1/L1/d2")
@@ -635,6 +653,7 @@ fn a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy() {
             countersigned_by: None,
             reasons: set(&["RC-0980"]),
             varied_terms: vec![],
+            premium: None,
         },
     )
     .unwrap();
@@ -651,25 +670,27 @@ fn a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy() {
         },
     )
     .unwrap();
-    let avoided = console(
-        &mut w2,
-        Command::RecordNonDisclosureOutcome {
-            review: "ndr/CLM-3/L1".into(),
-            outcome: NonDisclosureOutcome::Avoid,
-            decided_by: "sam".into(),
-            countersigned_by: Some("sue".into()),
-            reasons: set(&["RC-0980"]),
-            varied_terms: vec![],
-        },
-    )
-    .unwrap();
+    let avoid = |premium| Command::RecordNonDisclosureOutcome {
+        review: "ndr/CLM-3/L1".into(),
+        outcome: NonDisclosureOutcome::Avoid,
+        decided_by: "sam".into(),
+        countersigned_by: Some("sue".into()),
+        reasons: set(&["RC-0980"]),
+        varied_terms: vec![],
+        premium,
+    };
+    // Whether the premiums go back is part of the decision, not something left to the core.
+    assert_eq!(console(&mut w2, avoid(None)).unwrap_err().code, "premium");
+    let avoided = console(&mut w2, avoid(Some(PremiumOnAvoidance::Retain))).unwrap();
     assert!(matches!(
         &avoided.effects[0],
         Effect::NonDisclosureRemedy {
             outcome: NonDisclosureOutcome::Avoid,
             decision: None,
+            premium: Some(PremiumOnAvoidance::Retain),
+            terms,
             ..
-        }
+        } if terms.is_empty()
     ));
     assert_eq!(
         [NonDisclosureOutcome::NoAction, NonDisclosureOutcome::Vary, NonDisclosureOutcome::Avoid].map(NonDisclosureOutcome::key),

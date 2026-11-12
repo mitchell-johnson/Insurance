@@ -408,11 +408,13 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 policy: pol.clone(),
                 layer: layer("life", 2, "l1", 200, day(2)),
                 origin: LayerOrigin::Increase,
+                continues: None,
             },
             Event::LayerAdded {
                 policy: pol.clone(),
                 layer: layer("life", 3, "l1", 50, day(2)),
                 origin: LayerOrigin::Indexation,
+                continues: None,
             },
         ],
         (2, 6, 1550),
@@ -450,6 +452,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 policy: sch.clone(),
                 layer: layer("group-life", 1, "m2", 1000, day(4)),
                 origin: LayerOrigin::UnderwrittenExcess,
+                continues: None,
             },
             Event::PremiumAdjusted {
                 policy: sch.clone(),
@@ -480,6 +483,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 policy: pol.clone(),
                 layer: layer("trauma", 2, "l1", 40, day(5)),
                 origin: LayerOrigin::Original,
+                continues: None,
             },
             Event::LayerUnwound {
                 policy: pol.clone(),
@@ -514,6 +518,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 policy: pol.clone(),
                 layer: layer("life", 4, "l1", 25, day(7)),
                 origin: LayerOrigin::Increase,
+                continues: None,
             },
         ],
         (1, 1, 350),
