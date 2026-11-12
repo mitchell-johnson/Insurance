@@ -236,16 +236,7 @@ impl Failback {
             GroupKey::Partition(p) => client.business_date(*p).await.map(|_| ()),
             GroupKey::Module(m) => client.query_module(m, &serde_json::Value::Null).await.map(|_| ()),
         };
-        let took = started.elapsed();
-        match answered {
-            Err(e) => Ok(Err(format!("{key} did not answer after its leader was moved: {e}"))),
-            Ok(()) if took > budget => Err(format!(
-                "{key} took {} ms to answer after its leader was moved; the budget is {} ms",
-                took.as_millis(),
-                budget.as_millis()
-            )),
-            Ok(()) => Ok(Ok(())),
-        }
+        judge(key, answered.map_err(|e| e.to_string()), started.elapsed(), budget)
     }
 
     /// Why this node should not move anything just now, if there is a reason.
@@ -421,11 +412,72 @@ impl Failback {
                 ((mine.last_applied, mine.state_hash), (theirs.last_applied, theirs.state_hash))
             }
         };
-        if mine.0 == theirs.0 && mine.1 != theirs.1 {
-            return Err(format!(
-                "node {to} holds a different state of {key} at the same log entry: it must not lead, and the difference must be found"
-            ));
-        }
-        Ok(true)
+        agree(key, to, &mine, &theirs).map(|()| true)
+    }
+}
+
+/// What a moved group's first answer says about the move. `Ok(Err(..))`
+/// when it has not answered, which a handover is allowed for a short while;
+/// `Err` when it answered too slowly.
+fn judge(key: &GroupKey, answered: Result<(), String>, took: Duration, budget: Duration) -> Result<Result<(), String>, String> {
+    match answered {
+        Err(e) => Ok(Err(format!("{key} did not answer after its leader was moved: {e}"))),
+        Ok(()) if took > budget => Err(format!(
+            "{key} took {} ms to answer after its leader was moved; the budget is {} ms",
+            took.as_millis(),
+            budget.as_millis()
+        )),
+        Ok(()) => Ok(Ok(())),
+    }
+}
+
+/// Two members' (last applied entry, state hash). The same entry with
+/// another hash is a replica that has diverged: it is never given the lead.
+fn agree<I: PartialEq>(key: &GroupKey, to: NodeId, mine: &(I, String), theirs: &(I, String)) -> Result<(), String> {
+    if mine.0 == theirs.0 && mine.1 != theirs.1 {
+        return Err(format!(
+            "node {to} holds a different state of {key} at the same log entry: it must not lead, and the difference must be found"
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Purpose: a voter that reports another state hash at the same log entry is
+    /// refused the lead, for a partition and for a module, and the refusal names the
+    /// node and the group; the same hash, or a hash at another entry, is no objection.
+    /// Why it matters: a replica that has diverged and is handed the lead would serve
+    /// and replicate wrong balances. This comparison is the last check before a
+    /// handover, and a real divergence cannot be staged in a cluster test.
+    #[test]
+    fn a_voter_with_a_different_state_is_never_given_the_lead() {
+        let hash = |h: &str| h.to_string();
+        let partition = GroupKey::Partition(3);
+        let refused = agree(&partition, 2, &(7u64, hash("a")), &(7, hash("b"))).unwrap_err();
+        assert!(refused.contains("node 2") && refused.contains("partition 3"), "{refused}");
+        let refused = agree(&GroupKey::Module("finance".to_string()), 2, &(7u64, hash("a")), &(7, hash("b"))).unwrap_err();
+        assert!(refused.contains("module finance"), "{refused}");
+        assert_eq!(agree(&partition, 2, &(7u64, hash("a")), &(7, hash("a"))), Ok(()));
+        assert_eq!(agree(&partition, 2, &(7u64, hash("a")), &(6, hash("b"))), Ok(()));
+    }
+
+    /// Purpose: after a handover, an answer inside the budget confirms the move, no
+    /// answer is reported as not yet confirmed, and an answer slower than the budget
+    /// is an error that says how long it took and what the budget is.
+    /// Why it matters: fail-back halts itself when a moved group is slow, so that a
+    /// preferred region that cannot carry the load does not take every group. A wrong
+    /// reading either halts a healthy fail-back or lets a slow one carry on.
+    #[test]
+    fn a_moved_group_is_judged_by_how_soon_it_answers() {
+        let key = GroupKey::Partition(0);
+        let (fast, slow, budget) = (Duration::from_millis(10), Duration::from_millis(900), Duration::from_millis(500));
+        assert_eq!(judge(&key, Ok(()), fast, budget), Ok(Ok(())));
+        let waiting = judge(&key, Err("no leader".to_string()), slow, budget).unwrap().unwrap_err();
+        assert!(waiting.contains("partition 0 did not answer") && waiting.contains("no leader"), "{waiting}");
+        let late = judge(&key, Ok(()), slow, budget).unwrap_err();
+        assert!(late.contains("900 ms") && late.contains("500 ms"), "{late}");
     }
 }

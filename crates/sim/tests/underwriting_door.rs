@@ -90,3 +90,42 @@ fn only_the_migration_load_issues_a_migrated_policy() {
     c.submit(0, "new-business", issue_command(ordinary.clone())).unwrap();
     assert!(!c.state(0).policies[&ordinary.policy].migrated);
 }
+
+/// Purpose: a policy issued on quoted terms is issued only while the product version the quote
+/// was priced on is still the one in force for the inception date; a different version is
+/// refused whole, with nothing written; and only new business may issue this way.
+/// Why it matters: an applicant accepts an offer at a price. If the product changed between
+/// the offer and the issue, issuing anyway would bind the insurer and the customer to terms
+/// neither of them saw.
+#[test]
+fn a_quoted_issue_is_refused_when_the_product_has_changed() {
+    let mut c = cluster();
+    let application = term_life(4, start(), d(1990, 3, 10), Sex::Female, false, 250_000_00, None, Frequency::Monthly, None);
+    let id = application.policy.clone();
+    let quoted = |hash: &str| Command::IssueQuoted {
+        expected_product_hash: hash.to_string(),
+        issue: Box::new(application.clone()),
+    };
+
+    assert_eq!(code(c.submit(0, "new-business", quoted("the-version-before-this-one"))), "product_changed");
+    assert!(!c.state(0).policies.contains_key(&id));
+    let mut unknown = application.clone();
+    unknown.product_code = "no-such-product".into();
+    let no_product = Command::IssueQuoted {
+        expected_product_hash: "x".into(),
+        issue: Box::new(unknown),
+    };
+    assert_eq!(code(c.submit(0, "new-business", no_product)), "product_changed");
+
+    // The hash the core itself holds for the product is the one a quote carries.
+    let other = term_life(5, start(), d(1990, 3, 10), Sex::Female, false, 250_000_00, None, Frequency::Monthly, None);
+    c.submit(0, "new-business", issue_command(other.clone())).unwrap();
+    let in_force = c.state(0).policies[&other.policy].product_hash.clone();
+
+    assert_eq!(code(c.submit(0, "group-admin", quoted(&in_force))), "caller_not_allowed");
+    c.submit(0, "new-business", quoted(&in_force)).unwrap();
+    let policy = &c.state(0).policies[&id];
+    assert_eq!((policy.status, policy.product_hash.as_str()), (PolicyStatus::InForce, in_force.as_str()));
+    assert_eq!(code(c.submit(0, "new-business", quoted(&in_force))), "policy_exists");
+    days(&mut c, 3);
+}

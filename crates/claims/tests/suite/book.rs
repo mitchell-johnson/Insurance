@@ -588,6 +588,10 @@ fn a_death_notified_late_ends_the_benefit_and_raises_the_overpayment() {
     };
     w.decided("ip-1", "sam", pursue, "R-OK");
     assert_eq!(w.claim("ip-1").overpayments[0].status, RecoveryStatus::Pursued);
+
+    // The customer master may send the death again. The benefit has ended, so nothing more is raised.
+    w.ok(died("party-life", d(2027, 3, 10)));
+    assert_eq!(w.claim("ip-1").overpayments.len(), 1);
 }
 
 /// Purpose: a death notified promptly ends the benefit at the day after death without a

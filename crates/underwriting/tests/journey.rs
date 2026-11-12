@@ -113,7 +113,13 @@ fn a_clean_application_is_issued_straight_through() {
         ),
         "unknown_proposal"
     );
-    let issued = w.ok("issuer", Command::PolicyIssued { proposal: "P1".into() });
+    let issued = w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
     assert!(matches!(w.p("P1").status, ProposalStatus::Issued { .. }));
     assert!(matches!(&issued.effects[0], Effect::ConfirmCapacity { reservation, cover, .. } if reservation == "P1/L1/life/1" && cover == "life"));
     assert!(matches!(
@@ -133,7 +139,16 @@ fn a_clean_application_is_issued_straight_through() {
         }
     ));
     assert!(!w.p("P1").interim_in_force());
-    assert_eq!(w.err("issuer", Command::PolicyIssued { proposal: "P1".into() }), "not_issuing");
+    assert_eq!(
+        w.err(
+            "issuer",
+            Command::PolicyIssued {
+                proposal: "P1".into(),
+                layers: vec![],
+            }
+        ),
+        "not_issuing"
+    );
     assert_eq!(
         w.err(
             "issuer",
