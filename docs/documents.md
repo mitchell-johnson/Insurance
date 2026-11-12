@@ -42,7 +42,7 @@ Each recipient has a chain of channels from their preferences. For a document th
 - **Post**: a print file is placed in the print outbox container. It is deemed delivered `post_deemed_days` (5 by default) later unless it is returned. Returned post reverses a deemed delivery.
 - **Push**: sent by the app services, which hold device registrations. This driver records it as not available and moves on.
 
-Contact details are fetched from the customer master at the moment of sending, for the relationship the document is sent under, and only a masked form is recorded. Email carries the text only for ordinary, personal and financial documents; insurance-sensitive and clinical documents send a pointer to the secure inbox. SMS always sends a pointer.
+Contact details are fetched from the customer master (`crates/customers`, `docs/customers.md`) at the moment of sending, for the relationship the document is sent under, and only a masked form is recorded. Email carries the text only for ordinary, personal and financial documents; insurance-sensitive and clinical documents send a pointer to the secure inbox. SMS always sends a pointer. The customer master also says when a person has died: nothing is then sent to them on any channel, each attempt is recorded as having no contact point, and the document shows as undelivered for staff to send to whoever acts for the estate.
 
 Every provider call carries an id derived from the document, party, channel and attempt, so a retry after a crash is the same operation to the provider.
 
@@ -106,7 +106,6 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 
 ## Not built, or waiting on others
 
-- **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
 - **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
 - **The insurer's own typeface.** PDFs are set in the bundled Liberation Sans. `Fonts::new` and `AzureChannels::with_fonts` take other TrueType faces, but the service has no setting for them yet. Text in a script the font lacks (Chinese, for example) goes as text without a PDF.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

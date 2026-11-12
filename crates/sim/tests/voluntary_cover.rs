@@ -294,3 +294,89 @@ fn a_members_money_stays_the_members_when_the_scheme_ends() {
     c.submit(p, "policy-servicing", refund).unwrap();
     days(&mut c, 3);
 }
+
+/// Purpose: a member billed for cover of their own has their own standing. Paying late
+/// inside the grace period restores it; a member who does not pay within the product's
+/// lapse period loses the cover they pay for and only that, with what they owed written
+/// off; and through all of it the scheme's standing, the employer's invoice and the
+/// member's employer-paid cover are untouched.
+/// Why it matters: the design gives voluntary cover its own standing, separate from the
+/// employer's. If one member's missed payment put the scheme into arrears the employer
+/// would be chased, and in the end every member's cover lapsed, for a debt that is not
+/// the employer's; and if unpaid voluntary cover never lapsed the insurer would be on risk
+/// for cover nobody is paying for.
+#[test]
+fn a_member_who_does_not_pay_loses_only_the_cover_they_pay_for() {
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    // The employer pays a year ahead, so the scheme is never in arrears.
+    let employer_pays = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "emp-1".into(),
+        amount: Money::new(12 * (11_00 + 90_62), NZD),
+    };
+    c.submit(p, "cash-matching", employer_pays).unwrap();
+    let standing = |c: &Cluster| c.state(p).policies[&id].member_standing.get(&exec()).copied();
+
+    days(&mut c, 2);
+    assert_eq!(
+        standing(&c),
+        Some(Standing::InGrace),
+        "the member's first bill was due on the day the layer was added"
+    );
+    c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-1", 25_38)).unwrap();
+    assert_eq!(standing(&c), Some(Standing::Paid));
+    c.take_events();
+
+    // December's bill and every one after it go unpaid.
+    days(&mut c, 29 + 119);
+    assert_eq!(standing(&c), Some(Standing::InGrace), "one day short of the lapse period");
+    assert_eq!(c.state(p).policies[&id].covers["group-life"].layers[0].end, None);
+    let owed = member_owes(&c, p, &id);
+    assert!(owed >= 4 * 25_38, "{owed}");
+    days(&mut c, 2);
+
+    let policy = c.state(p).policies[&id].clone();
+    let today = c.business_date().unwrap();
+    assert_eq!(standing(&c), None, "the member has no cover of their own left to stand on");
+    assert_eq!(member_owes(&c, p, &id), 0);
+    let ended = policy.covers["group-life"].layers[0].end.expect("the member's layer has ended");
+    assert!(ended < today);
+    assert_eq!((policy.status, policy.standing), (PolicyStatus::InForce, Some(Standing::Paid)));
+    assert!(policy.lives[&exec()].in_force_on(today), "the member is still a member");
+    let seen = events(&mut c);
+    let lapsed = seen.iter().find_map(|e| match e {
+        Event::MemberCoverLapsed {
+            life,
+            layers,
+            effective,
+            arrears_minor,
+            ..
+        } if *life == exec() => Some((layers.clone(), *effective, *arrears_minor)),
+        _ => None,
+    });
+    let (layers, effective, arrears) = lapsed.expect("the lapse is announced");
+    assert_eq!((layers, effective), (vec![("group-life".to_string(), 1)], ended));
+    assert!(arrears > 0 && arrears <= owed, "{arrears} of {owed}");
+    assert!(seen.iter().any(|e| matches!(e, Event::LayerEnded { layer: 1, life, .. } if *life == exec())));
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::MemberStandingChanged { to: None, life, .. } if *life == exec())));
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::StandingChanged { .. })),
+        "the scheme's standing never moved"
+    );
+    assert_eq!(credit(&c, p, &id), 0, "nothing was paid ahead, so nothing comes back");
+
+    // The next invoice still has the member at the automatic amount, and nothing more is
+    // billed to the member.
+    days(&mut c, 31);
+    let seen = events(&mut c);
+    let lines = seen.iter().rev().find_map(|e| match e {
+        Event::SchemeInvoiceChunk { lines, .. } => Some(lines.clone()),
+        _ => None,
+    });
+    assert_eq!(lines.unwrap(), vec![(exec(), 90_62), (LifeId("staff-1".into()), 11_00)]);
+    assert!(!seen.iter().any(|e| matches!(e, Event::MemberPremiumBilled { .. })));
+}

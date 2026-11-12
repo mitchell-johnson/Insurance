@@ -338,6 +338,27 @@ pub enum Event {
         total_minor: i64,
         adjustment: bool,
     },
+    /// The standing of a scheme member on cover the member pays for
+    /// themselves. It says nothing about the scheme's own standing.
+    MemberStandingChanged {
+        policy: PolicyId,
+        life: LifeId,
+        from: Option<Standing>,
+        to: Option<Standing>,
+        oldest_unpaid_due: Option<NaiveDate>,
+    },
+    /// A member's own cover ended because the member did not pay for it.
+    /// Each layer also has its `LayerEnded`. The cover the employer pays
+    /// for is untouched.
+    MemberCoverLapsed {
+        policy: PolicyId,
+        life: LifeId,
+        /// Cover code and layer number of each layer ended.
+        layers: Vec<(String, u32)>,
+        effective: NaiveDate,
+        /// What the member owed and was written off.
+        arrears_minor: i64,
+    },
     /// Money from a scheme member, set against what the member owes; the
     /// rest is the member's credit.
     MemberReceiptApplied {

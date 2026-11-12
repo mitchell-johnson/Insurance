@@ -29,12 +29,23 @@ use crate::vault::{ObjectStore, VaultError};
 pub const SCOPE_COMMUNICATION: &str = "https://communication.azure.com/.default";
 
 /// Where to reach a person on one channel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Contact {
     pub name: String,
     /// An email address, a phone number in international form, or a postal
     /// address with one line per line.
     pub destination: String,
+    /// The language the person prefers, where the customer master knows it.
+    #[serde(default)]
+    pub language: Option<String>,
+    /// The format the person asked for: `standard`, `large_print`, `audio`
+    /// or `braille`.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// The person has died. Nothing is sent in their name: what is owed
+    /// goes to whoever represents the estate, as a recipient in their own right.
+    #[serde(default)]
+    pub deceased: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -115,15 +126,20 @@ pub struct MemoryDirectory {
 }
 
 impl MemoryDirectory {
-    pub fn set(&self, party: &str, channel: Channel, name: &str, destination: &str) {
-        let contact = Contact {
-            name: name.to_string(),
-            destination: destination.to_string(),
-        };
+    pub fn set_contact(&self, party: &str, channel: Channel, contact: Contact) {
         self.contacts
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert((party.to_string(), channel), contact);
+    }
+
+    pub fn set(&self, party: &str, channel: Channel, name: &str, destination: &str) {
+        let contact = Contact {
+            name: name.to_string(),
+            destination: destination.to_string(),
+            ..Contact::default()
+        };
+        self.set_contact(party, channel, contact);
     }
 
     pub fn remove(&self, party: &str, channel: Channel) {

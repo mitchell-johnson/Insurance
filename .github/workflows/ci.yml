@@ -63,9 +63,20 @@ jobs:
           done
           docker logs temporal
           exit 1
+      # The customer master's store tests: each test makes its own database.
+      - name: Start a PostgreSQL server
+        run: |
+          docker run -d --name postgres -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 -c max_connections=300 -c fsync=off
+          for _ in $(seq 1 60); do
+            if docker exec postgres pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then exit 0; fi
+            sleep 1
+          done
+          docker logs postgres
+          exit 1
       - name: Tests, with the coverage floor
         env:
           IC_TEST_TEMPORAL_ADDRESS: 127.0.0.1:7233
+          IC_TEST_POSTGRES_URL: host=127.0.0.1 user=postgres dbname=postgres
         run: |
           cargo llvm-cov --workspace --locked --lcov --output-path lcov.info --fail-under-lines "$COVERAGE_FLOOR"
       - name: Coverage by file
