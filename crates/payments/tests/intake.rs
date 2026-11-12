@@ -281,8 +281,10 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
 /// Purpose: another module's driver offers a payment that is not policy
 /// money (a reinsurer's net settlement) with a plain JSON command; it waits,
 /// joins a reinsurer run for the reinsurer's payee, and when it settles the
-/// asking module's source is on the event and nothing is sent to the core;
-/// a release that names a policy without its payable is refused.
+/// asking module's source is on the event, nothing is sent to the core, and
+/// the reinsurance module is told in its own command that the statement is
+/// paid, or that the bank refused or returned it; a release that names a
+/// policy without its payable is refused.
 /// Why it matters: this is the wire format the reinsurance driver sends.
 /// If it drifts, settlements due sit in an outbox and no reinsurer is paid;
 /// if a non-policy payment produced a core instruction it would be refused
@@ -316,8 +318,75 @@ fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
         source: "reinsurance:statement:7".to_string(),
         amount_minor: 90_000_00
     }));
-    assert!(desk.state.outbox.is_empty(), "nothing for the core: this is not policy money");
     assert!(desk.state.waiting.is_empty());
+    // Nothing for the core, because this is not policy money. The
+    // reinsurance module is told, in its own command, that its statement is paid.
+    let told = |desk: &Desk| -> Vec<(String, serde_json::Value)> {
+        let entries = desk.state.outbox.values();
+        entries
+            .filter_map(|e| match &e.instruction {
+                Instruction::Module { module, command } => Some((module.clone(), command.clone())),
+                Instruction::Notify { .. } => None,
+                other => panic!("not for the core: {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(
+        told(&desk),
+        vec![(
+            "reinsurance".to_string(),
+            json!({"key": "payments:settled:ri-stmt-7", "caller": "payments", "on": "2027-11-15",
+                   "command": {"record_settlement": {"number": 7, "payment_ref": "ri-stmt-7", "amount_minor": 90_000_00}}})
+        )]
+    );
+
+    // The bank sends it back two days later: the statement is owed again.
+    desk.at(t(2027, 11, 17, 9, 0));
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "ri-stmt-7".to_string(),
+            reason: ic_payments::model::ReturnReason::Other("beneficiary bank closed".to_string()),
+            returned_on: d(2027, 11, 17),
+        },
+    );
+    let returned = &told(&desk)[1].1;
+    assert_eq!(returned["key"], json!("payments:returned:ri-stmt-7:2027-11-17"));
+    assert_eq!(returned["command"]["settlement_returned"]["number"], json!(7));
+    assert!(returned["command"]["settlement_returned"]["reason"]
+        .as_str()
+        .unwrap()
+        .contains("beneficiary bank closed"));
+
+    // One the bank refuses outright is reported the same way, and a source
+    // that is not a statement number tells nobody.
+    for (payment, source) in [("ri-stmt-8", "reinsurance:statement:8"), ("ri-other", "reinsurance:statement:latest")] {
+        let mut offered = released(payment, "re-1", 40_000_00 + payment.len() as i64);
+        (offered.source, offered.policy, offered.payable) = (source.to_string(), None, None);
+        desk.ok(&svc(), offer(offered));
+    }
+    desk.prepare("r2", RunType::Reinsurer, d(2027, 11, 18));
+    desk.ok(&mia(), take("r2", &["ri-stmt-8", "ri-other"]));
+    let submission = desk.approve("r2");
+    desk.deliver(&submission);
+    desk.ok(
+        &svc(),
+        Command::RecordAcknowledgement {
+            submission,
+            refused: None,
+            rejected: [
+                ("ri-stmt-8".to_string(), "account_closed".to_string()),
+                ("ri-other".to_string(), "account_closed".to_string()),
+            ]
+            .into(),
+        },
+    );
+    let all = told(&desk);
+    assert_eq!(all.len(), 3);
+    assert_eq!(
+        all[2].1["command"],
+        json!({"settlement_returned": {"number": 8, "payment_ref": "ri-stmt-8", "reason": "account_closed"}})
+    );
 }
 
 /// Purpose: when the bank refuses a claim payment, or sends it back before
