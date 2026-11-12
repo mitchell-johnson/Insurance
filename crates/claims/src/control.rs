@@ -105,7 +105,8 @@ impl ClaimsState {
             ReinsuranceNotice::LargeClaimNotification { claim, .. }
             | ReinsuranceNotice::ReinsurerConsentRequired { claim, .. }
             | ReinsuranceNotice::ReinsurerConsent { claim, .. }
-            | ReinsuranceNotice::DisputedItemRaised { claim, .. } => claim.clone(),
+            | ReinsuranceNotice::DisputedItemRaised { claim, .. }
+            | ReinsuranceNotice::DisputeResolved { claim, .. } => claim.clone(),
         };
         let mut claim = self.claim(&id)?;
         match notice {
@@ -160,6 +161,19 @@ impl ClaimsState {
                 // Settled by people under the treaty, never reversed automatically.
                 note(&mut claim, cx, None, format!("disputed_item:{reinsurer}"));
                 claim.reinsurance.disputed_items.push((reinsurer, reference));
+            }
+            ReinsuranceNotice::DisputeResolved { reference, repay_minor, .. } => {
+                // The settlement is the reinsurance module's entry. Claims
+                // records that the item is closed and for how much, so the
+                // claim's file shows no dispute left open.
+                if !claim.reinsurance.disputed_items.iter().any(|(_, r)| *r == reference) {
+                    return Err(Reject::new("unknown_dispute", "no such disputed item was raised on this claim"));
+                }
+                if claim.reinsurance.disputes_settled.contains_key(&reference) {
+                    return Ok(());
+                }
+                note(&mut claim, cx, None, format!("dispute_resolved:{reference}"));
+                claim.reinsurance.disputes_settled.insert(reference, repay_minor);
             }
         }
         self.commit(claim);

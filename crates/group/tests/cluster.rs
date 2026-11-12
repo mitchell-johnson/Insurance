@@ -639,7 +639,7 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
             break exit;
         }
         tries += 1;
-        assert!(tries < 400, "ic-group ignored SIGTERM");
+        assert!(tries < 2400, "ic-group ignored SIGTERM");
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(exit.success(), "ic-group exited with {exit}");

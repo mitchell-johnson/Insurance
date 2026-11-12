@@ -113,6 +113,15 @@ pub enum Command {
         run: Id,
         items: Vec<NewItem>,
     },
+    /// Another module released a payment: keep it until a maker puts it in a run.
+    OfferPayment {
+        waiting: Box<crate::intake::Waiting>,
+    },
+    /// Put released payments into a run.
+    TakeWaiting {
+        run: Id,
+        payments: BTreeSet<Id>,
+    },
     RemoveRunItem {
         run: Id,
         item: Id,
@@ -293,6 +302,11 @@ pub enum Event {
         run: Id,
         count: usize,
     },
+    PaymentOffered {
+        payment: Id,
+        source: String,
+        amount_minor: i64,
+    },
     RunItemRemoved {
         run: Id,
         item: Id,
@@ -453,6 +467,9 @@ pub struct PaymentsState {
     /// Dishonoured collections that may be presented once more.
     pub represent: BTreeSet<Id>,
     pub refunds: BTreeMap<Id, Refund>,
+    /// Payments other modules released, until they settle.
+    #[serde(default)]
+    pub waiting: BTreeMap<Id, crate::intake::Waiting>,
     pub books: BTreeMap<Id, Book>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
@@ -553,6 +570,8 @@ impl PaymentsState {
                 urgent,
             } => self.prepare_run(tx, run, run_type, fund, currency, value_date, urgent),
             Command::AddRunItems { run, items } => self.add_run_items(tx, &run, items),
+            Command::OfferPayment { waiting } => self.offer_payment(tx, *waiting),
+            Command::TakeWaiting { run, payments } => self.take_waiting(tx, &run, payments),
             Command::RemoveRunItem { run, item } => self.remove_run_item(tx, &run, &item),
             Command::CheckRun { run } => self.check_run(tx, &run),
             Command::ReleaseItem { run, item } => self.release_item(tx, &run, &item),

@@ -95,6 +95,17 @@ struct Position {
     ceased: Option<(NaiveDate, String)>,
     #[serde(default)]
     open_cases: Vec<String>,
+    #[serde(default)]
+    memo: Vec<Memo>,
+}
+
+/// A debt another module keeps in its own ledger, such as a claim overpayment.
+#[derive(Debug, Deserialize)]
+struct Memo {
+    owner: String,
+    reference: String,
+    outstanding_minor: i64,
+    as_at: NaiveDate,
 }
 
 #[derive(Debug, Deserialize)]
@@ -284,6 +295,20 @@ pub fn commands_for(
                 since: today,
             });
         }
+    }
+    // What the party owes in another module's ledger, so the approver sees the whole of it. It is worked in
+    // the module that owns it; an action against it here is refused by the commission module.
+    for m in position.memo.iter().filter(|m| m.outstanding_minor != 0) {
+        items.push(Item {
+            id: format!("memo/{}/{}", m.owner, m.reference),
+            kind: ItemKind::Overpayment,
+            amount_minor: -m.outstanding_minor.abs(),
+            currency: currency.to_string(),
+            period: None,
+            book: None,
+            reason: None,
+            since: m.as_at,
+        });
     }
     out.push((
         PUBLISHER,

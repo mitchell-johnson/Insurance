@@ -702,3 +702,77 @@ fn recapture_and_a_negotiated_move_change_cover_from_a_date() {
     assert_eq!(b.ri.cession(&k, d(2037, 1, 31)).unwrap().treaty_ceded(), 300 * K);
     b.assert_reconciles();
 }
+
+/// Purpose: after a statement is cut, a change on another treaty does not flag it, and a
+/// change to one of its own rows that is put back before anything is issued leaves a
+/// supplementary listing with no rows, which still clears the flag.
+/// Why it matters: the flag blocks settlement. Raising it for cover the statement never
+/// listed would hold a reinsurer's money for nothing, and listing a row as changed when it
+/// is back as it was sent would tell the reinsurer something untrue.
+#[test]
+fn a_supplementary_listing_shows_only_rows_that_still_differ() {
+    let mut b = billed();
+    b.ok("month-end", cut(d(2027, 3, 31)));
+    // A scheme written from 1 March on the group treaty reaches the period, not the statement.
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 200 * K)]);
+    assert!(!b.ri.statement(1).unwrap().supplementary_due);
+    // An expiry from 15 March is reported late, then unwound.
+    let expired = b.feed(
+        1,
+        vec![ic_core::event::Event::CoverExpired {
+            policy: PolicyId::from("P1"),
+            cover: "life".into(),
+            on: d(2027, 3, 15),
+        }],
+    );
+    assert!(expired.notices.contains(&Notice::SupplementaryListingDue { statement: 1 }));
+    let unwound = b.feed(
+        1,
+        vec![ic_core::event::Event::CoverExpiryUnwound {
+            policy: PolicyId::from("P1"),
+            cover: "life".into(),
+            layers: vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))],
+            reference: "REM-7".into(),
+        }],
+    );
+    assert!(!unwound.notices.contains(&Notice::SupplementaryListingDue { statement: 1 }), "said once");
+    assert!(b.ri.statement(1).unwrap().supplementary_due);
+    let applied = b.ok(
+        "reinsurance-ops",
+        Command::IssueSupplementaryListing {
+            number: 1,
+            reason: "expiry reported in error".into(),
+        },
+    );
+    let (_, body) = document(&applied);
+    assert_eq!(body["rows"], serde_json::json!([]));
+    let s = b.ri.statement(1).unwrap();
+    assert!(!s.supplementary_due && s.supplementary_issued == 1);
+    b.assert_reconciles();
+}
+
+/// Purpose: comparing a proposed treaty version looks only at lives with cover on that
+/// treaty; a scheme member on another treaty is not in the answer.
+/// Why it matters: the comparison is what people read before moving cover to new terms. Rows
+/// for cover the treaty does not touch would be noise at best and, recalculated against the
+/// wrong terms, a false alarm.
+#[test]
+fn a_treaty_comparison_looks_only_at_cover_on_that_treaty() {
+    let mut b = billed();
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 200 * K)]);
+    let same = load_treaty("t.star", RETAIL).unwrap();
+    assert!(b.ri.compare_treaty(&same, d(2027, 4, 2)).is_empty());
+    let narrower = load_treaty(
+        "t.star",
+        &RETAIL
+            .replace("version = 1", "version = 3")
+            .replace("automatic_limit = dollars(4000000)", "automatic_limit = dollars(200000)")
+            .replace(
+                &RETAIL[RETAIL.find("SCENARIOS").unwrap()..],
+                "SCENARIOS = [scenario(\"x\", covers = [covered(dollars(800000), \"2027-02-01\")], expect = [expect(retained = dollars(500000), ceded = dollars(200000), unplaced = dollars(100000))])]\n",
+            ),
+    )
+    .unwrap();
+    let changes = b.ri.compare_treaty(&narrower, d(2027, 4, 2));
+    assert!(matches!(&changes[..], [(k, Some(_), Some(then))] if *k == key("P1", "life", 1, "L1") && then.unplaced_minor == 100 * K));
+}

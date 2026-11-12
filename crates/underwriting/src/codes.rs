@@ -143,6 +143,24 @@ impl ExclusionLibrary {
         self.entries.contains_key(code)
     }
 
+    /// The library as the claims rules carry it. Claims cannot depend on
+    /// this crate (its state lives in the core, which this crate depends
+    /// on), so its rules hold the same entries as data and are activated
+    /// from this. The two matchers are held equal by a test.
+    pub fn for_claims(&self) -> BTreeMap<String, ic_core::claims_module::config::Exclusion> {
+        self.entries
+            .iter()
+            .map(|(code, e)| {
+                let exclusion = ic_core::claims_module::config::Exclusion {
+                    applies_to: e.applies_to.clone(),
+                    cause_tags: e.cause_tags.clone(),
+                    verbatim: e.category == ExclusionCategory::Verbatim,
+                };
+                (code.clone(), exclusion)
+            })
+            .collect()
+    }
+
     /// Does this exclusion catch a claim with these coded causes on this
     /// date? Errs towards a person: anything not judged with certainty goes
     /// to an assessor and is never silently treated as not applying.
