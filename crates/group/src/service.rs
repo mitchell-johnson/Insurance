@@ -62,11 +62,18 @@ impl Config {
     /// Read through `get`, which is `std::env::var` in production. Every
     /// setting without a default is required: a service that started
     /// without its storage would fail at the first file, not at start.
-    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+    ///
+    /// A secret is given as `KEY`, or as `KEY_FILE` naming a file that
+    /// holds it (a mounted Key Vault secret), read through `read`.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         let need = |key: &str| get(key).ok_or_else(|| format!("{key} is not set"));
         let secret = |key: &str| {
-            let value = need(key)?;
+            let value = match (get(key), get(&format!("{key}_FILE"))) {
+                (Some(value), _) => value,
+                (None, Some(path)) => read(&path).map_err(|e| format!("{key}_FILE cannot be read: {e}"))?.trim().to_string(),
+                (None, None) => return Err(format!("{key} is not set")),
+            };
             if value.len() < MIN_SECRET {
                 return Err(format!("{key} must be at least {MIN_SECRET} characters"));
             }
@@ -81,7 +88,7 @@ impl Config {
             None => 5,
         };
         Ok(Self {
-            cluster: need("IC_CLUSTER_NODES")?,
+            cluster: get("IC_CLUSTER_NODES").or_else(|| get("IC_NODES")).ok_or("IC_CLUSTER_NODES is not set")?,
             quarantine_endpoint: need("IC_GROUP_QUARANTINE_ENDPOINT")?,
             quarantine_container: get("IC_GROUP_QUARANTINE_CONTAINER").unwrap_or_else(|| "group-quarantine".into()),
             event_hubs_namespace: need("IC_GROUP_EVENT_HUBS_NAMESPACE")?,
