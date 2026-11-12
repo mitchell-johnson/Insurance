@@ -8,9 +8,10 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::*;
+use ic_log::StateMachine;
 use ic_underwriting::authority::DEFAULT_POLICIES;
 use ic_underwriting::command::Command;
-use ic_underwriting::machine::RESULTS_KEPT;
+use ic_underwriting::machine::{KEYS_KEPT_DAYS, RESULTS_KEPT};
 use ic_underwriting::model::{CoverOutcome, ProposalStatus, Stage};
 use ic_underwriting::questions::Answer;
 use ic_underwriting::rules::{Action, Condition, Disposition, Rule, RuleInput, RuleSet};
@@ -177,4 +178,53 @@ fn a_repeat_older_than_the_results_kept_still_changes_nothing() {
     let late = w.send_keyed("first", "new-business", open).unwrap();
     assert!(late.duplicate && late.events.is_empty() && late.effects.is_empty());
     assert!(w.s == before, "the repeat changed nothing");
+}
+
+/// Purpose: keys are forgotten once they are older than the horizon, measured in business days
+/// from the day each was first used. A key a day inside the horizon is still a repeat; past it
+/// the same key is taken as new. A command forgets at most a hundred old keys, so a backlog is
+/// cleared over the commands that follow, and a state restored from JSON forgets the same keys.
+/// Why it matters: without a horizon every key ever sent is held for ever, and the module's
+/// snapshot grows with every command. Forgetting must be bounded per command so no single
+/// command stalls the group, and deterministic so every replica forgets the same keys.
+#[test]
+fn keys_older_than_the_horizon_are_forgotten_a_bounded_number_at_a_time() {
+    let mut w = World::new();
+    for _ in 0..250 {
+        w.ok("effects-driver", Command::AcknowledgeEffects { through: 0 });
+    }
+    let open = Command::OpenProposal(Box::new(w.open_command("P1", &["L1"], &[("L1", "life", "life", 500_000_00)], false)));
+    w.send_keyed("open-p1", "new-business", open.clone()).unwrap();
+    let tick = |w: &mut World, key: &str| w.send_keyed(key, "effects-driver", Command::AcknowledgeEffects { through: 0 }).unwrap();
+
+    w.days(KEYS_KEPT_DAYS);
+    tick(&mut w, "tick-1");
+    assert!(
+        w.send_keyed("open-p1", "new-business", open.clone()).unwrap().duplicate,
+        "the last day inside the horizon"
+    );
+
+    w.days(1);
+    let restored: ic_underwriting::UnderwritingState = serde_json::from_value(serde_json::to_value(&w.s).unwrap()).unwrap();
+    tick(&mut w, "tick-2");
+    tick(&mut w, "tick-3");
+    // Over 250 keys are a day too old: two commands forget a hundred each, and the rest wait.
+    let mut replica = restored;
+    for key in ["tick-2", "tick-3"] {
+        let at = w.log.iter().rposition(|e| e.key == key).unwrap();
+        replica.apply(at as u64 + 1, w.log[at].clone()).unwrap();
+    }
+    assert!(replica == w.s, "a restored replica forgets the same keys");
+    assert!(
+        w.send_keyed("open-p1", "new-business", Command::Withdraw { proposal: "P1".into() })
+            .unwrap()
+            .duplicate,
+        "two commands have not yet reached the key used last of the old day"
+    );
+    tick(&mut w, "tick-4");
+    let again = w.send_keyed("open-p1", "new-business", open).unwrap_err();
+    assert_eq!(
+        again.code, "duplicate_proposal",
+        "forgotten, the key is new, and the proposal it opened refuses a second"
+    );
 }
