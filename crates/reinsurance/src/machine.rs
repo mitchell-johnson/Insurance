@@ -225,6 +225,12 @@ pub enum Command {
         treaty: TreatyId,
         reinsurer: ReinsurerId,
     },
+    /// The facultative reinsurer of a cover has been told of its new
+    /// underwriting terms. `reference` is where its answer is filed.
+    FacultativeReinsurerTold {
+        key: RiskKey,
+        reference: String,
+    },
 
     // --- migration ---
     /// A cession as the legacy system held it. Nothing is recalculated.
@@ -309,6 +315,7 @@ impl Command {
             // The payments module says what the bank did with a settlement;
             // people record one that was paid some other way.
             Command::RecordSettlement { .. } | Command::SettlementReturned { .. } => &["payments", "reinsurance-ops", "finance", "month-end"],
+            Command::FacultativeReinsurerTold { .. } => &["reinsurance-ops"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
             | Command::InstructionRefused { .. }
@@ -348,6 +355,7 @@ impl Command {
             Command::SettlementReturned { .. } => "settlement_returned",
             Command::IssueSupplementaryListing { .. } => "issue_supplementary_listing",
             Command::ReviewProfitCommission { .. } => "review_profit_commission",
+            Command::FacultativeReinsurerTold { .. } => "facultative_reinsurer_told",
             Command::LoadMigratedCession { .. } => "load_migrated_cession",
             Command::LoadOpeningBalance { .. } => "load_opening_balance",
             Command::AcknowledgeInstructions { .. } => "acknowledge_instructions",
@@ -954,7 +962,7 @@ impl Reinsurance {
             }
             if to.is_none() {
                 let years = self.treaty(current).and_then(|t| t.recapture_after_years);
-                let earliest = years.and_then(|y| risk.start.checked_add_months(chrono::Months::new(12 * y)));
+                let earliest = years.and_then(|y| risk.began().checked_add_months(chrono::Months::new(12 * y)));
                 if earliest.is_none_or(|e| effective < e) {
                     return Err(Reject::new(
                         "recapture_not_allowed",
@@ -1068,6 +1076,20 @@ impl Reinsurance {
             Command::SettlementReturned { number, payment_ref, reason } => self.settlement_returned(ctx, number, &payment_ref, &reason),
             Command::IssueSupplementaryListing { number, reason } => self.issue_supplementary(ctx, number, reason),
             Command::ReviewProfitCommission { treaty, reinsurer } => self.review_profit_commission(ctx, treaty, reinsurer),
+            Command::FacultativeReinsurerTold { key, reference } => {
+                let id = format!("facultative_terms_altered:{key}");
+                if reference.trim().is_empty() {
+                    return Err(Reject::new("reference_required", "say where the reinsurer's answer is filed"));
+                }
+                if !self.exceptions.contains_key(&id) {
+                    return Err(Reject::new(
+                        "nothing_to_tell",
+                        format!("no change of terms on {key} is waiting to be told to a reinsurer"),
+                    ));
+                }
+                self.set_exception(ctx, id, "facultative_terms_altered", None);
+                Ok(())
+            }
             Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),
             Command::InstructionRefused { seq, code, message } => self.instruction_refused(ctx, seq, &code, &message),
             Command::AbandonInstruction { seq, reason, approved_by } => self.abandon_instruction(ctx, seq, reason, approved_by),
