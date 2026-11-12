@@ -134,7 +134,7 @@ Owned by the thread "Build portal and app services". Full description: [channels
 - Browser check, not run by CI: `cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &` then `POLICY=pol-00000001 node crates/channels/tests/browser/check.js`. All pages passed on 2026-11-12.
 - No known failing checks in this crate at hand-over.
 
-### Unit pricing (`ic-pricing`)
+## Unit pricing (`ic-pricing`)
 
 Unit pricing decides which price is right. The core's investment ledger (section "Units and funds") decides what a price does. The module is the crate `crates/pricing`. It is hosted on every ledger node as the module group `unit-pricing` (one line in `ic_node::modules()`), because a price is one fact for every partition. Its driver is the binary `ic-unit-pricing`. The full reference is [unit-pricing.md](unit-pricing.md): file formats, commands, roles, questions and settings.
 
