@@ -857,6 +857,7 @@ fn a_settlement_due_is_offered_to_payments_once_per_statement() {
         reinsurer: "north-re".into(),
         currency: ic_money::Currency::NZD,
         net_minor,
+        attempt: 0,
     };
     assert_eq!(
         payments_command(&due(90_000_00)).unwrap(),

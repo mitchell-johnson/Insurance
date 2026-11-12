@@ -494,6 +494,7 @@ fn every_notice_names_its_audience() {
                 reinsurer: north(),
                 currency: ic_money::Currency::NZD,
                 net_minor: 1,
+                attempt: 0,
             },
             Audience::Payments,
         ),

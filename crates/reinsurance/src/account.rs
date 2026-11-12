@@ -112,6 +112,11 @@ pub struct Statement {
     pub supplementary_due: bool,
     #[serde(default)]
     pub supplementary_issued: u32,
+    /// Each time a returned settlement was offered to payments again: the
+    /// day, and where the decision is filed. The payment reference of the
+    /// n-th offer again is `ri-stmt-<number>-<n + 1>`.
+    #[serde(default)]
+    pub reoffers: Vec<(NaiveDate, String)>,
 }
 
 /// The last profit commission review of a treaty with a reinsurer.
@@ -366,6 +371,7 @@ impl Reinsurance {
             held: None,
             supplementary_due: false,
             supplementary_issued: 0,
+            reoffers: vec![],
         });
         Ok(())
     }
@@ -443,6 +449,7 @@ impl Reinsurance {
             reinsurer: s.reinsurer,
             currency: s.currency,
             net_minor: s.net_minor,
+            attempt: 0,
         });
         self.statement_mut(number)?.status = StatementStatus::Instructed;
         Ok(())
@@ -485,6 +492,40 @@ impl Reinsurance {
         }
         let detail = format!("payment {payment_ref} for statement {number} came back from the bank: {reason}");
         self.set_exception(ctx, format!("settlement_returned:{number}"), "settlement_returned", Some(detail));
+        Ok(())
+    }
+
+    /// A person's decision to pay a returned settlement again, once the
+    /// reinsurer's bank details are put right in payments. The offer is a
+    /// new payment with its own reference, because a reference is never
+    /// used twice; its source is the statement, as before.
+    pub(crate) fn reoffer_settlement(&mut self, ctx: &mut Ctx, number: u32, reference: String) -> Result<(), Reject> {
+        let exception = format!("settlement_returned:{number}");
+        let open = self.exceptions.contains_key(&exception);
+        let s = self.statement_mut(number)?;
+        if !open || s.status != StatementStatus::Instructed {
+            return Err(Reject::new("not_returned", format!("statement {number} has no returned settlement waiting")));
+        }
+        if s.net_minor <= 0 {
+            return Err(Reject::new(
+                "nothing_to_pay",
+                format!("statement {number} is owed by the reinsurer; it is collected, not paid"),
+            ));
+        }
+        if reference.trim().is_empty() {
+            return Err(Reject::new("reference_required", "say where the decision to pay again is filed"));
+        }
+        s.reoffers.push((ctx.on, reference));
+        let notice = Notice::SettlementDue {
+            statement: number,
+            treaty: s.treaty.clone(),
+            reinsurer: s.reinsurer.clone(),
+            currency: s.currency,
+            net_minor: s.net_minor,
+            attempt: s.reoffers.len() as u32,
+        };
+        ctx.notices.push(notice);
+        self.set_exception(ctx, exception, "settlement_returned", None);
         Ok(())
     }
 

@@ -217,6 +217,11 @@ pub enum Command {
         payment_ref: String,
         reason: String,
     },
+    /// Offer a returned settlement to payments again, as a new payment.
+    ReofferSettlement {
+        number: u32,
+        reference: String,
+    },
     IssueSupplementaryListing {
         number: u32,
         reason: String,
@@ -329,7 +334,7 @@ impl Command {
             // The payments module says what the bank did with a settlement;
             // people record one that was paid some other way.
             Command::RecordSettlement { .. } | Command::SettlementReturned { .. } => &["payments", "reinsurance-ops", "finance", "month-end"],
-            Command::FacultativeReinsurerTold { .. } | Command::ResumeRecoveries { .. } => &["reinsurance-ops"],
+            Command::FacultativeReinsurerTold { .. } | Command::ResumeRecoveries { .. } | Command::ReofferSettlement { .. } => &["reinsurance-ops"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
             | Command::AcknowledgeDelivered { .. }
@@ -368,6 +373,7 @@ impl Command {
             Command::InstructSettlement { .. } => "instruct_settlement",
             Command::RecordSettlement { .. } => "record_settlement",
             Command::SettlementReturned { .. } => "settlement_returned",
+            Command::ReofferSettlement { .. } => "reoffer_settlement",
             Command::IssueSupplementaryListing { .. } => "issue_supplementary_listing",
             Command::ReviewProfitCommission { .. } => "review_profit_commission",
             Command::FacultativeReinsurerTold { .. } => "facultative_reinsurer_told",
@@ -557,6 +563,9 @@ pub enum Notice {
         reinsurer: ReinsurerId,
         currency: ic_money::Currency,
         net_minor: i64,
+        /// 0 for the first offer; n for the n-th offer again after a return.
+        #[serde(default)]
+        attempt: u32,
     },
 }
 
@@ -1104,6 +1113,7 @@ impl Reinsurance {
                 amount_minor,
             } => self.record_settlement(ctx, number, payment_ref, amount_minor),
             Command::SettlementReturned { number, payment_ref, reason } => self.settlement_returned(ctx, number, &payment_ref, &reason),
+            Command::ReofferSettlement { number, reference } => self.reoffer_settlement(ctx, number, reference),
             Command::IssueSupplementaryListing { number, reason } => self.issue_supplementary(ctx, number, reason),
             Command::ReviewProfitCommission { treaty, reinsurer } => self.review_profit_commission(ctx, treaty, reinsurer),
             Command::FacultativeReinsurerTold { key, reference } => {

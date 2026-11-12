@@ -78,13 +78,15 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
     }
     // Payments keeps a settlement due to a reinsurer as a payment waiting for a maker,
     // once however often it is offered. Money due from a reinsurer is not a payment.
-    let due = |statement: u32, net_minor: i64| Notice::SettlementDue {
+    let offer = |statement: u32, net_minor: i64, attempt: u32| Notice::SettlementDue {
         statement,
         treaty: "retail".into(),
         reinsurer: "north-re".into(),
         currency: ic_money::Currency::NZD,
         net_minor,
+        attempt,
     };
+    let due = |statement: u32, net_minor: i64| offer(statement, net_minor, 0);
     for _ in 0..2 {
         assert_eq!(audiences.hand_on(11, &due(7, 90_000_00), on).await.unwrap(), Handed::Taken);
     }
@@ -93,6 +95,19 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
     assert_eq!(
         waiting,
         serde_json::json!([{"payment": "ri-stmt-7", "source": "reinsurance:statement:7", "payee": "north-re", "amount_minor": 90_000_00}])
+    );
+    // Offered again after a return, it is a new payment with its own reference and the
+    // same statement as its source, which payments' settlement signals read.
+    let again = offer(7, 90_000_00, 1);
+    assert_eq!(audiences.hand_on(13, &again, on).await.unwrap(), Handed::Taken);
+    let waiting = client.query_module("payments", &serde_json::json!({"q": "waiting"})).await.unwrap().unwrap();
+    assert!(
+        waiting
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w["payment"] == "ri-stmt-7-2" && w["source"] == "reinsurance:statement:7"),
+        "{waiting}"
     );
     // What payments says back about a settlement is read by the reinsurance module,
     // which here knows no such statement.

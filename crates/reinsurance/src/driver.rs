@@ -157,18 +157,27 @@ pub fn payments_command(notice: &Notice) -> Option<Value> {
         statement,
         reinsurer,
         net_minor,
+        attempt,
         ..
     } = notice
     else {
         return None;
     };
+    // An offer again after a return is a new payment: a reference is never reused.
+    let (key, payment) = match attempt {
+        0 => (format!("reinsurance:settlement:{statement}"), format!("ri-stmt-{statement}")),
+        n => (
+            format!("reinsurance:settlement:{statement}:{}", n + 1),
+            format!("ri-stmt-{statement}-{}", n + 1),
+        ),
+    };
     (*net_minor > 0).then(|| {
         serde_json::json!({
-            "key": format!("reinsurance:settlement:{statement}"),
+            "key": key,
             "actor": {"id": crate::delivery::CALLER, "roles": ["service"]},
             "at": "1970-01-01T00:00:00",
             "command": {"type": "offer_payment", "waiting": {
-                "payment": format!("ri-stmt-{statement}"),
+                "payment": payment,
                 "source": format!("reinsurance:statement:{statement}"),
                 "payee": reinsurer,
                 "amount_minor": net_minor,

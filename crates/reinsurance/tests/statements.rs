@@ -207,6 +207,7 @@ fn settlement_is_agreed_checked_and_paid_once() {
         [Notice::SettlementDue {
             statement: 1,
             net_minor: 7_18,
+            attempt: 0,
             currency: ic_money::Currency::NZD,
             ..
         }]
@@ -326,6 +327,120 @@ fn a_settlement_the_bank_returns_is_owed_again() {
         }
     );
     assert!(g.ri.exceptions().is_empty());
+}
+
+/// Purpose: a person offers a returned settlement to payments again, as a new offer numbered
+/// after the first, which closes the return's exception; it is refused when no return is
+/// waiting, when the reinsurer owes the money, without a filed reference, or from anyone but
+/// operations, and a second return can be offered a third time.
+/// Why it matters: a returned payment is still owed to the reinsurer. Payments never reuses a
+/// payment reference, so offering the same reference again would be refused and the reinsurer
+/// would go unpaid; and paying again without a person's decision could pay twice to the bank
+/// details that bounced.
+#[test]
+fn a_returned_settlement_is_offered_again_as_a_new_payment() {
+    let mut g = Bench::new();
+    g.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K)]);
+    g.premium_due(2, "S1", 1, d(2027, 2, 1), d(2027, 3, 1), &[("group_life", 100_00)]);
+    g.today = d(2027, 3, 2);
+    g.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: group(),
+            reinsurer: north(),
+            period_end: d(2027, 2, 28),
+        },
+    );
+    let reoffer = |reference: &str| Command::ReofferSettlement {
+        number: 1,
+        reference: reference.into(),
+    };
+    let returned = |payment_ref: &str| Command::SettlementReturned {
+        number: 1,
+        payment_ref: payment_ref.into(),
+        reason: "account closed".into(),
+    };
+    assert_eq!(g.refused("reinsurance-ops", reoffer("OPS-1")), "not_returned");
+    g.ok("finance", instruct(1));
+    assert_eq!(g.refused("reinsurance-ops", reoffer("OPS-1")), "not_returned");
+    g.ok("payments", returned("ri-stmt-1"));
+    assert_eq!(g.refused("reinsurance-ops", reoffer(" ")), "reference_required");
+    assert_eq!(g.refused("payments", reoffer("OPS-1")), "caller_not_allowed");
+    let applied = g.ok("reinsurance-ops", reoffer("OPS-1"));
+    assert!(
+        matches!(&applied.notices[..], [Notice::SettlementDue { attempt: 1, net_minor: 25_50, .. }, Notice::ExceptionClosed { id }] if id == "settlement_returned:1")
+    );
+    let command = ic_reinsurance::driver::payments_command(&applied.notices[0]).unwrap();
+    assert_eq!(command["command"]["waiting"]["payment"], "ri-stmt-1-2");
+    assert_eq!(command["command"]["waiting"]["source"], "reinsurance:statement:1");
+    assert_eq!(command["key"], "reinsurance:settlement:1:2");
+    assert_eq!(g.refused("reinsurance-ops", reoffer("OPS-1")), "not_returned", "one decision, one offer");
+
+    g.ok("payments", returned("ri-stmt-1-2"));
+    let applied = g.ok("reinsurance-ops", reoffer("OPS-2"));
+    assert!(matches!(&applied.notices[0], Notice::SettlementDue { attempt: 2, .. }));
+    assert_eq!(
+        g.ri.statement(1).unwrap().reoffers,
+        vec![(d(2027, 3, 2), "OPS-1".to_string()), (d(2027, 3, 2), "OPS-2".to_string())]
+    );
+    g.ok(
+        "payments",
+        Command::RecordSettlement {
+            number: 1,
+            payment_ref: "ri-stmt-1-3".into(),
+            amount_minor: 25_50,
+        },
+    );
+    assert!(g.ri.exceptions().is_empty());
+    assert_eq!(without_keys(&g.replayed()), without_keys(&g.ri));
+
+    // Money owed by the reinsurer is collected, never paid.
+    let mut owed = Bench::new();
+    owed.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+    owed.today = d(2027, 6, 10);
+    owed.ok(
+        "claims",
+        Command::Claim(Box::new(ic_reinsurance::claims::ClaimFact::Reserved {
+            claim: ic_reinsurance::ClaimId::from("C1"),
+            policy: ic_core::PolicyId::from("P1"),
+            cover: "life".into(),
+            life: ic_core::LifeId::from("L1"),
+            event_date: d(2027, 6, 1),
+            gross_reserve_minor: 800 * K,
+            periodic: false,
+            catastrophe_event: None,
+        })),
+    );
+    owed.ok(
+        "claims",
+        Command::Claim(Box::new(ic_reinsurance::claims::ClaimFact::Paid {
+            claim: ic_reinsurance::ClaimId::from("C1"),
+            payment_ref: "PAY-1".into(),
+            amount_minor: 800 * K,
+            period_end: None,
+            ex_gratia: false,
+        })),
+    );
+    owed.today = d(2027, 7, 2);
+    owed.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: retail(),
+            reinsurer: north(),
+            period_end: d(2027, 6, 30),
+        },
+    );
+    assert!(owed.ri.statement(1).unwrap().net_minor < 0);
+    owed.ok(
+        "reinsurance-ops",
+        Command::AgreeStatement {
+            number: 1,
+            reference: "RE-1".into(),
+        },
+    );
+    owed.ok("finance", instruct(1));
+    owed.ok("payments", returned("ri-stmt-1"));
+    assert_eq!(owed.refused("reinsurance-ops", reoffer("OPS-1")), "nothing_to_pay");
 }
 
 /// Purpose: statements that cannot be cut, and operations on statements that do not exist, are
