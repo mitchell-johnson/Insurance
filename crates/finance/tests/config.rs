@@ -17,7 +17,7 @@ fn invalid<T: std::fmt::Debug>(result: Result<T, ConfigError>) -> String {
     }
 }
 
-/// Purpose: the shipped chart loads, maps every account role the core posts to exactly one
+/// Purpose: the shipped chart loads, maps every account role the core declares to exactly one
 /// locked account, and gets a content hash that changes when the source does.
 /// Why it matters: a role the chart does not map stops the feed in production, and the hash
 /// is what an approver is approving. Both need to be true of the file actually shipped.
@@ -25,24 +25,15 @@ fn invalid<T: std::fmt::Debug>(result: Result<T, ConfigError>) -> String {
 fn the_shipped_chart_maps_every_core_role() {
     let chart = chart();
     assert_eq!((chart.version, chart.retained_earnings.as_str()), (1, "3900"));
-    for role in [
-        "settlement",
-        "premium_receivable",
-        "unearned_premium",
-        "earned_premium",
-        "policy_suspense",
-        "benefit_payable",
-        "gst_payable",
-        "levy_payable",
-        "unit_account",
-        "fund_unit_position",
-        "fund_cash_position",
-        "pending_investment_cash",
-        "policy_loan",
-        "transfer_in_transit",
-        "lapse_write_off",
-        "rounding",
-    ] {
+    // Every role the core declares, read from the core's own source, so that a role
+    // added there without an account here fails this test and not the feed.
+    let declared: Vec<&str> = include_str!("../../core/src/accounts.rs")
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("pub const "))
+        .filter_map(|rest| rest.split_once(": &str = \"")?.1.strip_suffix("\";"))
+        .collect();
+    assert!(declared.len() >= 31 && declared.contains(&"claims_incurred"), "{declared:?}");
+    for role in declared {
         let account = chart.account_for_role(role).unwrap_or_else(|| panic!("{role} is not mapped"));
         assert!(account.control, "{role} is fed by the core and must be locked");
     }
@@ -108,7 +99,8 @@ fn a_chart_version_can_add_but_never_redefine() {
     assert!(invalid(next(&|c| c.version = 3)).contains("cannot follow"));
     assert!(invalid(next(&|c| c.accounts.remove(3).code.clear())).contains("cannot be removed"));
     assert!(invalid(next(&|c| c.accounts[0].class = AccountClass::Liability)).contains("class or its lock"));
-    assert!(invalid(next(&|c| c.accounts[21].control = true)).contains("class or its lock"));
+    let lock = |c: &mut Chart| c.accounts.iter_mut().find(|a| a.code == "2400").unwrap().control = true;
+    assert!(invalid(next(&lock)).contains("class or its lock"));
     assert!(invalid(next(&|c| c.accounts[0].roles.clear())).contains("cannot be moved"));
     assert!(invalid(next(&|c| c.retained_earnings = "2700".to_string())).contains("retained earnings"));
 }
