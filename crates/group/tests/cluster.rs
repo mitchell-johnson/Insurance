@@ -340,6 +340,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         entry,
         policy: policy.clone(),
         effective: d(2027, 11, 1),
+        employer_may_see_loading: false,
         covers: vec![ic_core::command::CoverSpec {
             code: "group-life".into(),
             life: Some(life("E003")),
