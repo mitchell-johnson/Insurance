@@ -27,6 +27,7 @@ pub mod role {
     pub const CLAIM_RECOVERY_RECEIVABLE: &str = "claim_recovery_receivable";
     pub const CLAIMS_INCURRED: &str = "claims_incurred";
     pub const EX_GRATIA: &str = "ex_gratia";
+    pub const CLAIMS_HANDLING: &str = "claims_handling";
     pub const CLAIM_RECOVERY_WRITE_OFF: &str = "claim_recovery_write_off";
 
     pub const SETTLEMENT: &str = "settlement";
@@ -40,6 +41,8 @@ pub mod role {
     pub const TRANSFER_IN_TRANSIT: &str = "transfer_in_transit";
     pub const FUND_UNIT_POSITION: &str = "fund_unit_position";
     pub const FUND_CASH_POSITION: &str = "fund_cash_position";
+    /// What a unit pricing error cost the insurer to put right.
+    pub const PRICING_ERROR: &str = "pricing_error";
 
     /// What is owed to, or by, one reinsurer under one treaty.
     pub const REINSURER_ACCOUNT: &str = "reinsurer_account";
@@ -160,6 +163,16 @@ pub fn ex_gratia(product: &str, c: Currency) -> Account {
         role::EX_GRATIA,
     )
 }
+/// What it costs to handle claims: report fees, rehabilitation providers.
+/// Never mixed with what is paid under the contract.
+pub fn claims_handling(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/claims_handling/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::CLAIMS_HANDLING,
+    )
+}
 pub fn claim_recovery_write_off(product: &str, c: Currency) -> Account {
     acct(
         format!("int/claim_recovery_write_off/{product}/{c}"),
@@ -253,6 +266,15 @@ pub fn fund_cash_position(fund: &FundId, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::FUND_CASH_POSITION,
+    )
+}
+/// The cost of making a fund and its investors whole after a price error.
+pub fn pricing_error(fund: &FundId, c: Currency) -> Account {
+    acct(
+        format!("int/pricing_error/{}/{c}", fund.0),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::PRICING_ERROR,
     )
 }
 

@@ -760,3 +760,156 @@ fn reviews_fall_due_by_date_and_never_stop_the_benefit() {
     assert!(c.tasks.iter().any(|t| t.id == "senior-review/duration"));
     assert!(c.tasks.iter().any(|t| t.id == "review/MedicalReview/2027-09-01"));
 }
+
+fn pay_cost(id: &str, who: &str, payment: &str, item: &str, provider: &str) -> Command {
+    Command::PayCost {
+        claim: id.into(),
+        payment_ref: payment.into(),
+        item: item.into(),
+        provider: provider.into(),
+        actor: actor(who),
+    }
+}
+
+/// Evidence `item` asked for on a claim and, when `cost` is given, received at that cost.
+fn evidence(w: &mut World, id: &str, item: &str, cost: Option<i64>) {
+    w.ok(Command::RequestEvidence {
+        claim: id.into(),
+        evidence: item.into(),
+        kind: "medical_report".into(),
+        from: "treating-doctor".into(),
+        actor: actor("ana"),
+    });
+    if let Some(cost_minor) = cost {
+        w.ok(Command::ReceiveEvidence {
+            claim: id.into(),
+            evidence: item.into(),
+            vault_ref: format!("vault-{item}"),
+            cost_minor,
+        });
+    }
+}
+
+/// Purpose: the cost of received evidence or a completed rehabilitation task is paid to its
+/// provider once, for exactly the amount recorded on the item, by the claim's owner within
+/// their payment authority, as a handling cost and never as a benefit.
+/// Why it matters: a doctor's report fee or a rehabilitation invoice is real money leaving the
+/// insurer. If it could be paid twice, for an amount nobody recorded, or be counted as benefit
+/// paid to the claimant, claims cost and the claimant's own entitlement would both be wrong.
+#[test]
+fn a_handling_cost_is_paid_once_to_its_provider() {
+    let mut w = World::new();
+    w.open_claim("c-1");
+    evidence(&mut w, "c-1", "e-1", Some(150));
+    evidence(&mut w, "c-1", "e-2", None);
+    w.task("c-1", "rehab", TaskKind::Rehabilitation, "ana");
+
+    assert_eq!(w.refused(pay_cost("c-1", "ben", "k-1", "e-1", "lab")), "not_owner");
+    // Not received, not completed, unknown, or with nobody to pay: there is no cost to pay.
+    for (item, provider) in [("e-2", "lab"), ("rehab", "gym"), ("e-9", "lab"), ("e-1", "")] {
+        assert_eq!(w.refused(pay_cost("c-1", "ana", "k-1", item, provider)), "no_cost");
+    }
+    w.core.refuse_next = 1;
+    assert_eq!(w.refused(pay_cost("c-1", "ana", "k-1", "e-1", "lab")), "ledger");
+    w.ok(pay_cost("c-1", "ana", "k-1", "e-1", "lab"));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::HandlingCost { payment_ref, amount_minor: 150, payee, kind, .. })
+            if payment_ref == "k-1" && payee == "lab" && kind == "evidence"
+    ));
+    let notice = w.core.noticed("claim_cost_paid")[0].clone();
+    assert_eq!(
+        (notice["policy"].as_str(), notice["payment_ref"].as_str(), notice["net_minor"].as_str()),
+        (w.claim("c-1").policy.as_str(), "k-1", "150")
+    );
+    assert_eq!(
+        (notice["payee"].as_str(), notice["kind"].as_str(), notice["item"].as_str()),
+        ("lab", "evidence", "e-1")
+    );
+    // No benefit was paid and nothing is owed to the claimant because of it.
+    assert!(w.core.noticed("claim_paid").is_empty());
+    let c = w.claim("c-1");
+    assert_eq!((c.paid_minor(false), c.payable_minor, c.cost_payable_minor), (0, 0, 0));
+    assert_eq!(w.refused(pay_cost("c-1", "ana", "k-2", "e-1", "lab")), "cost_paid");
+
+    w.ok(Command::CompleteTask {
+        claim: "c-1".into(),
+        task: "rehab".into(),
+        outcome: "programme finished".into(),
+        attendees: vec![],
+        vault_ref: None,
+        spend_minor: 2_000,
+        actor: actor("ana"),
+    });
+    assert_eq!(w.refused(pay_cost("c-1", "ana", "k-1", "rehab", "gym")), "payment_exists");
+    // A new authority version puts the spend above the assessor's payment limit.
+    let mut book = authority();
+    book.version = 2;
+    book.profiles.get_mut("assessor").expect("in the book").max_payment_minor = 1_999;
+    w.ok(Command::ActivateAuthority { book: Box::new(book) });
+    assert_eq!(w.refused(pay_cost("c-1", "ana", "k-2", "rehab", "gym")), "authority");
+    let mut book = authority();
+    book.version = 3;
+    w.ok(Command::ActivateAuthority { book: Box::new(book) });
+    w.ok(pay_cost("c-1", "ana", "k-2", "rehab", "gym"));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::HandlingCost { amount_minor: 2_000, kind, .. }) if kind == "rehabilitation"
+    ));
+}
+
+/// Purpose: a handling cost payment the bank returns is owed to the provider again and to
+/// nobody else: the claimant cannot be paid it, a paid claim stays paid, and paying the provider
+/// again releases the same money without expensing the cost a second time.
+/// Why it matters: returned money sits in the same payable as the claimant's benefit. Without
+/// keeping the two apart, a bounced lab fee could be paid out to the claimant, or expensed twice
+/// when it is sent again, and a settled claim would reopen over an invoice.
+#[test]
+fn a_returned_handling_cost_is_owed_to_the_provider_again() {
+    let mut w = World::new();
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    evidence(&mut w, "c-1", "e-1", Some(150));
+    w.ok(pay_cost("c-1", "ana", "k-1", "e-1", "lab"));
+    w.ok(pay("c-1", "ana", "p-1", 200_000, None));
+    let returned = |claim: &str, payment: &str| Command::PaymentReturned {
+        claim: claim.into(),
+        payment_ref: payment.into(),
+    };
+    w.ok(returned("c-1", "k-1"));
+    let c = w.claim("c-1");
+    assert_eq!(
+        (c.status, c.payable_minor, c.cost_payable_minor, c.benefit_payable_minor()),
+        (Status::Paid, 150, 150, 0)
+    );
+    assert!(c.tasks.iter().any(|t| t.id == "payment-failure/k-1"));
+    assert_eq!(w.refused(pay("c-1", "ana", "p-2", 150, None)), "exceeds_payable");
+    w.ok(pay_cost("c-1", "ana", "k-2", "e-1", "lab"));
+    // Released from what came back, and the claim's ledger is closed again.
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay { payment_ref, amount_minor: 150, payee, close: true, .. }) if payment_ref == "k-2" && payee == "lab"
+    ));
+    let c = w.claim("c-1");
+    assert_eq!(
+        (c.status, c.payable_minor, c.cost_payable_minor, c.paid_minor(false)),
+        (Status::Paid, 0, 0, 200_000)
+    );
+    assert_eq!(w.core.noticed("claim_cost_paid").len(), 2);
+
+    // The cost comes back before the benefit is paid: the benefit leaves the claim open, and
+    // paying the provider again is what closes it.
+    admitted(&mut w, "c-2", 200_000);
+    w.verify_payee("c-2", "ana");
+    evidence(&mut w, "c-2", "e-1", Some(150));
+    w.ok(pay_cost("c-2", "ana", "k-1", "e-1", "lab"));
+    w.ok(returned("c-2", "k-1"));
+    assert_eq!(w.refused(pay("c-2", "ana", "p-1", 200_150, None)), "exceeds_payable");
+    w.ok(pay("c-2", "ana", "p-1", 200_000, None));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { close: false, .. })));
+    assert_eq!(w.claim("c-2").status, Status::Admitted);
+    w.ok(pay_cost("c-2", "ana", "k-2", "e-1", "lab"));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { close: true, .. })));
+    let c = w.claim("c-2");
+    assert_eq!((c.status, c.payable_minor, c.closed_on.is_some()), (Status::Paid, 0, true));
+}

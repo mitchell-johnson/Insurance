@@ -65,3 +65,17 @@ Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a 
 ### Payments are built against a fake bank
 
 No bank is connected. The payments module, the pump and the drill are complete and tested against a fake bank that checks what a bank checks, in the module's own batch format over HTTPS. A real bank's file layout, transport and mutual TLS are one trait per bank and are not built. `docs/payments.md`, "What is not built", lists this and the module's other gaps.
+
+### Unit-linked business is part built
+
+The core's investment ledger holds funds, unit prices, unit orders and unit holdings: a fund and a price are activated through the log, an order waits with its cash in pending investment cash until the price for its date is active, executes once in an entry that balances in dollars and in units, and a switch places its buy when its sell executes. The reconciliation checks each fund's units on issue against what policies hold. What is not built, so no unit-linked product can be sold yet:
+
+- **Price correction after execution** is built in the core and not yet run by anything. A corrected price is taken at any time. `ReplayOrders { superseded, limit, materiality_minor }` (caller `unit-orders`) then puts a chunk of the orders executed at the old price on the new one: the side the customer fixed stays fixed, a policy that is owed gets units (cash if it is no longer in force), a policy given too much has units taken back as far as it holds them and never cash, and what cannot be taken back the insurer pays the fund through the pricing error account (`pricing_error`). Entries are `unit_price_correction` with the pricing date as value date. The `ToReplay` question lists superseded prices with orders still on them. Three limits: nothing sends `ReplayOrders` on its own; cash owed to a policy that has left sits in its pending investment cash until money out is built; and an order of a policy that has since moved partition is not replayed and stays on the `ToReplay` list.
+- **Money out.** A sell leaves its proceeds in pending investment cash. Paying a withdrawal or surrender through benefit payable and the payments module is not written.
+- **Charges in units.** Policy fees and insurance charges as sell orders on a cycle are not written, and there is no unit-linked product with a fund menu and contribution rules. Cash reaches pending investment cash only by an explicit allocation from suspense.
+- **The run.** Nothing sends `ExecuteOrders` on its own yet; the daily workflow does not execute orders. The `Executable` question lists what is waiting.
+- **Fund files.** There is no fund definition file or loader; a fund is activated by a command built by hand.
+- **Moving partition.** A policy with units, pending cash or pending orders is refused a transfer between groups (`policy_invested`).
+- **Opening loads** for migrated holdings.
+
+Unit pricing itself (valuation intake, checks, maker and checker, suspension) is a separate module, `crates/pricing`.

@@ -26,6 +26,7 @@ use chrono::NaiveDate;
 use ic_azure::blob::WormStore;
 use ic_azure::merkle::{root_name, verify_published, PublishedRoot};
 use ic_azure::AzureError;
+use ic_core::invest::WaitingCash;
 use ic_core::Reject;
 use ic_ledger::{sha256, Hash32};
 use serde_json::{json, Value};
@@ -145,6 +146,36 @@ pub fn reinsurance_sources() -> Vec<Source> {
         reports: Reports::Check("reinsurance_sweep".to_string()),
         question: |end| json!({ "sweep_check": { "period_end": end } }),
     }]
+}
+
+/// The name the core's partitions are asked under, beside the modules.
+pub const CORE: &str = "core";
+
+/// The most aged items one report lists. The total and count cover all.
+pub const MAX_AGED_ITEMS: usize = 2_000;
+
+/// What the core's investment ledger owes: cash waiting to be invested.
+pub fn core_sources() -> Vec<Source> {
+    vec![Source {
+        caller: "investment".to_string(),
+        module: CORE.to_string(),
+        reports: Reports::Aged("pending_investment_cash".to_string()),
+        question: |as_at| json!({ "waiting_cash": { "as_at": as_at } }),
+    }]
+}
+
+/// Every partition's waiting cash as one aged report: one item for each
+/// policy, oldest first, so what a long list cuts off is the newest.
+pub fn waiting_cash_report(as_at: NaiveDate, mut waiting: Vec<WaitingCash>) -> Value {
+    waiting.retain(|w| w.amount_minor != 0);
+    waiting.sort_by(|a, b| (a.since, &a.policy).cmp(&(b.since, &b.policy)));
+    let total: i64 = waiting.iter().map(|w| w.amount_minor).sum();
+    let items: Vec<Value> = waiting
+        .iter()
+        .take(MAX_AGED_ITEMS)
+        .map(|w| json!({ "party": w.policy, "reason": "pending_investment_cash", "amount_minor": w.amount_minor, "since": w.since }))
+        .collect();
+    json!({ "as_at": as_at, "items": items, "total_minor": total, "count": waiting.len() })
 }
 
 /// What one pass did.

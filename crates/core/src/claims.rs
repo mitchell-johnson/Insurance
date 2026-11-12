@@ -269,7 +269,16 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             amount_minor,
             payee,
             ..
-        } => ex_gratia(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee),
+        } => goodwill_or_cost(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee, None),
+        Instruction::HandlingCost {
+            claim,
+            cover,
+            payment_ref,
+            amount_minor,
+            payee,
+            kind,
+            ..
+        } => goodwill_or_cost(&mut s.ledger, p, ctx, &claim, &cover, payment_ref, amount_minor, payee, Some(kind)),
         Instruction::Close {
             claim, outcome, overpayment, ..
         } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
@@ -575,9 +584,11 @@ fn payment_returned(policy: &mut Policy, claim: &str, payment_ref: &str) -> Resu
     }
 }
 
-/// A goodwill payment: its own posting type and its own expense account.
+/// A goodwill payment, or with `cost` a cost of handling the claim owed to a
+/// third party. Each has its own posting type and its own expense account,
+/// and neither is ever mixed with what is paid under the contract.
 #[allow(clippy::too_many_arguments)]
-fn ex_gratia(
+fn goodwill_or_cost(
     ledger: &mut Ledger,
     policy: &mut Policy,
     ctx: &mut Ctx<'_>,
@@ -586,21 +597,26 @@ fn ex_gratia(
     payment_ref: String,
     amount: i64,
     payee: String,
+    cost: Option<String>,
 ) -> Result<(), Reject> {
     let record = known(policy, claim)?;
     if amount <= 0 || record.payments.contains_key(&payment_ref) {
-        return invalid("an ex gratia payment is new and positive");
+        return invalid("an ex gratia or handling cost payment is new and positive");
     }
     let c = policy.currency;
-    let (_, d) = incurred(policy, cover, "ex_gratia");
+    let (entry, expense) = match &cost {
+        None => ("claim_ex_gratia", accounts::ex_gratia(&policy.product_code, c)),
+        Some(_) => ("claim_handling_cost", accounts::claims_handling(&policy.product_code, c)),
+    };
+    let (_, d) = incurred(policy, cover, cost.as_deref().unwrap_or("ex_gratia"));
     let mut set = PostingSet::new();
-    set.debit(accounts::ex_gratia(&policy.product_code, c), i128::from(amount), d.clone());
+    set.debit(expense, i128::from(amount), d.clone());
     set.credit(accounts::benefit_payable(&policy.id, c), i128::from(amount), d);
     post(
         ledger,
         policy,
         ctx,
-        "claim_ex_gratia",
+        entry,
         set,
         claim,
         &[("payment_ref", payment_ref.clone()), ("payee", payee)],
@@ -608,7 +624,7 @@ fn ex_gratia(
     if let Some(record) = policy.claims.get_mut(claim) {
         record.payable_minor += amount;
     }
-    instruct(policy, claim, payment_ref, amount, true);
+    instruct(policy, claim, payment_ref, amount, cost.is_none());
     Ok(())
 }
 

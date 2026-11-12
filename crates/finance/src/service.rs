@@ -6,12 +6,14 @@ use std::future::Future;
 use std::time::Duration;
 
 use ic_azure::blob::WormStore;
+use ic_core::invest::{Question, Reply};
 use ic_core::Reject;
+use ic_ledger::PartitionId;
 use ic_raft::ClusterClient;
 use serde_json::Value;
 
 use crate::books::{FinApplied, FinEnvelope};
-use crate::driver::{Books, Driver, DriverError, Modules, Pass};
+use crate::driver::{waiting_cash_report, Books, Driver, DriverError, Modules, Pass, CORE};
 use crate::host::MODULE;
 
 /// Settings of the close service, read from the environment.
@@ -86,24 +88,46 @@ impl Books for ClusterBooks {
     }
 
     async fn ask(&self, question: Value) -> Result<Value, DriverError> {
-        ClusterModules { client: self.client.clone() }.ask(MODULE, question).await
+        ClusterModules::new(self.client.clone(), 0).ask(MODULE, question).await
     }
 }
 
-/// Every module of the node, asked by name.
+/// Every module of the node, asked by name, and the core's partitions under
+/// the name [`CORE`].
 #[derive(Clone)]
 pub struct ClusterModules {
     client: ClusterClient,
+    partitions: PartitionId,
 }
 
 impl ClusterModules {
-    pub fn new(client: ClusterClient) -> Self {
-        Self { client }
+    pub fn new(client: ClusterClient, partitions: PartitionId) -> Self {
+        Self { client, partitions }
+    }
+
+    /// The core keeps a policy's money on its partition, so a question to
+    /// the core is asked of every partition and the answers put together.
+    async fn ask_core(&self, question: Value) -> Result<Value, DriverError> {
+        let Some(as_at) = question.get("waiting_cash").and_then(|w| serde_json::from_value(w["as_at"].clone()).ok()) else {
+            return Err(DriverError::Answer(format!("not a question the core is asked for the close: {question}")));
+        };
+        let mut waiting = Vec::new();
+        for partition in 0..self.partitions {
+            match self.client.investment(partition, &Question::WaitingCash).await {
+                Ok(Reply::WaitingCash(found)) => waiting.extend(found),
+                Ok(other) => return Err(DriverError::Answer(format!("partition {partition} answered {other:?}"))),
+                Err(e) => return Err(DriverError::Unavailable(e.to_string())),
+            }
+        }
+        Ok(waiting_cash_report(as_at, waiting))
     }
 }
 
 impl Modules for ClusterModules {
     async fn ask(&self, module: &str, question: Value) -> Result<Value, DriverError> {
+        if module == CORE {
+            return self.ask_core(question).await;
+        }
         self.client
             .query_module(module, &question)
             .await

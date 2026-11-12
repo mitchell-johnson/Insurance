@@ -78,6 +78,81 @@ pub enum ClaimFact {
         #[serde(default)]
         insurer_error: bool,
     },
+    /// A closed claim was opened again. The reserve follows as its own fact.
+    Reopened {
+        claim: ClaimId,
+    },
+}
+
+/// The claims module's name on its published facts.
+pub const CLAIMS_MODULE: &str = "claims";
+
+/// The claim fact in one of the claims module's published events
+/// (`Event::Module { module: "claims", kind, subject, detail }`, where the
+/// subject is the claim). `Ok(None)` for the kinds reinsurance has no use
+/// for. `Err` says which value of a kind it does use could not be read.
+pub fn fact_from_event(kind: &str, subject: &str, detail: &BTreeMap<String, String>) -> Result<Option<ClaimFact>, String> {
+    let claim = ClaimId::from(subject);
+    let text = |key: &str| detail.get(key).filter(|v| !v.is_empty()).cloned();
+    let need = |key: &str| text(key).ok_or_else(|| format!("{kind} has no {key}"));
+    let amount = |key: &str| need(key)?.parse::<i64>().map_err(|e| format!("{kind}: {key} is not an amount: {e}"));
+    let date = |key: &str| need(key)?.parse::<NaiveDate>().map_err(|e| format!("{kind}: {key} is not a date: {e}"));
+    let flag = |key: &str| text(key).is_some_and(|v| v == "true");
+    Ok(Some(match kind {
+        "claim_reserved" => ClaimFact::Reserved {
+            claim,
+            policy: PolicyId::from(need("policy")?.as_str()),
+            cover: need("cover")?,
+            life: LifeId::from(need("life")?.as_str()),
+            event_date: date("event_date")?,
+            gross_reserve_minor: amount("gross_reserve_minor")?,
+            periodic: flag("periodic"),
+            catastrophe_event: text("catastrophe_event"),
+        },
+        "claim_reserve_changed" => ClaimFact::ReserveChanged {
+            claim,
+            gross_reserve_minor: amount("gross_reserve_minor")?,
+        },
+        // A benefit in payment is admitted with no sum: what is expected of
+        // the reinsurers stays on the reserve.
+        "claim_admitted" if detail.contains_key("monthly_minor") => return Ok(None),
+        "claim_admitted" => ClaimFact::Admitted {
+            claim,
+            admitted_minor: amount("admitted_minor")?,
+        },
+        "claim_paid" => ClaimFact::Paid {
+            claim,
+            payment_ref: need("payment_ref")?,
+            amount_minor: amount("amount_minor")?,
+            period_end: text("period_end").map(|_| date("period_end")).transpose()?,
+            ex_gratia: flag("ex_gratia"),
+        },
+        // The bank sent a payment back: it is no longer paid.
+        "payment_returned" => ClaimFact::Paid {
+            claim,
+            payment_ref: format!("returned:{}", need("payment_ref")?),
+            amount_minor: -amount("amount_minor")?,
+            period_end: None,
+            ex_gratia: flag("ex_gratia"),
+        },
+        "claim_closed" => ClaimFact::Closed {
+            claim,
+            outcome: text("outcome"),
+        },
+        "claim_reopened" => ClaimFact::Reopened { claim },
+        "admission_reversed" => ClaimFact::AdmissionReversed {
+            claim,
+            decided_on: date("decided_on")?,
+            reason_code: need("reason_code")?,
+            cause: text("cause"),
+        },
+        "overpayment_written_off" => ClaimFact::OverpaymentWrittenOff {
+            claim,
+            amount_minor: amount("amount_minor")?,
+            insurer_error: flag("insurer_error"),
+        },
+        _ => return Ok(None),
+    }))
 }
 
 impl ClaimFact {
@@ -89,7 +164,8 @@ impl ClaimFact {
             | ClaimFact::Paid { claim, .. }
             | ClaimFact::Closed { claim, .. }
             | ClaimFact::AdmissionReversed { claim, .. }
-            | ClaimFact::OverpaymentWrittenOff { claim, .. } => claim,
+            | ClaimFact::OverpaymentWrittenOff { claim, .. }
+            | ClaimFact::Reopened { claim } => claim,
         }
     }
 }
@@ -269,7 +345,31 @@ impl Reinsurance {
         out
     }
 
-    pub(crate) fn claim_fact(&mut self, ctx: &mut Ctx, fact: ClaimFact) -> Result<(), Reject> {
+    /// Take a claim fact. One that is taken settles the exception an
+    /// earlier fact for the same claim left when it could not be.
+    pub(crate) fn take_claim_fact(&mut self, ctx: &mut Ctx, fact: ClaimFact) -> Result<(), Reject> {
+        let id = fact.claim().clone();
+        self.claim_fact(ctx, fact)?;
+        self.set_exception(ctx, format!("claim_fact:{id}"), "claim_fact_not_taken", None);
+        Ok(())
+    }
+
+    /// A fact the claims module published on a partition. The feed is never
+    /// refused for one: a fact that cannot be read or taken opens an
+    /// exception on its claim, and the events behind it carry on.
+    pub(crate) fn claims_event(&mut self, ctx: &mut Ctx, at: &str, kind: &str, subject: &str, detail: &BTreeMap<String, String>) {
+        let taken = match fact_from_event(kind, subject, detail) {
+            Ok(None) => return,
+            Ok(Some(fact)) => self.take_claim_fact(ctx, fact).map_err(|e| format!("{}: {}", e.code, e.message)),
+            Err(unreadable) => Err(unreadable),
+        };
+        if let Err(why) = taken {
+            let detail = format!("the claims fact {kind} at event {at} was not taken: {why}. Recoveries on claim {subject} are not right until it is entered");
+            self.set_exception(ctx, format!("claim_fact:{subject}"), "claim_fact_not_taken", Some(detail));
+        }
+    }
+
+    fn claim_fact(&mut self, ctx: &mut Ctx, fact: ClaimFact) -> Result<(), Reject> {
         let id = fact.claim().clone();
         if let ClaimFact::Reserved {
             policy,
@@ -363,6 +463,13 @@ impl Reinsurance {
             ClaimFact::Closed { .. } => {
                 if book.status == ClaimStatus::Open {
                     book.status = ClaimStatus::Closed;
+                }
+            }
+            // A reversed admission stays with the people settling its
+            // disputed items, whatever claims does next.
+            ClaimFact::Reopened { .. } => {
+                if book.status == ClaimStatus::Closed {
+                    book.status = ClaimStatus::Open;
                 }
             }
             ClaimFact::AdmissionReversed {
@@ -482,6 +589,7 @@ impl Reinsurance {
             ));
         }
         let (treaty, reinsurer, partition, policy) = (item.treaty.clone(), item.reinsurer.clone(), item.partition, item.policy.clone());
+        let claim = item.claim.clone();
         let on = ctx.on;
         self.book(
             ctx,
@@ -499,6 +607,7 @@ impl Reinsurance {
         }
         self.set_exception(ctx, format!("disputed_item:{reference}"), "disputed_item", None);
         ctx.notices.push(Notice::DisputeResolved {
+            claim,
             reference: reference.to_string(),
             repay_minor,
         });

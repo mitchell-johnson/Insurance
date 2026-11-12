@@ -230,7 +230,7 @@ impl ClaimsState {
         let Some(payee) = claim.payee.as_ref().map(|p| p.party.clone()) else {
             return Err(Reject::new("payee_not_verified", "verify the payee before the first payment"));
         };
-        if amount_minor <= 0 || amount_minor > claim.payable_minor || claim.in_run.is_some() {
+        if amount_minor <= 0 || amount_minor > claim.benefit_payable_minor() || claim.in_run.is_some() {
             return Err(Reject::new(
                 "exceeds_payable",
                 "the amount is not within what is admitted and unpaid, or the claim is in a run",
@@ -257,7 +257,7 @@ impl ClaimsState {
                 "a returned benefit period is paid again for exactly what came back",
             ));
         }
-        let close = claim.payable_minor == amount_minor && claim.status != Status::InPayment;
+        let close = claim.payable_minor == amount_minor && claim.cost_payable_minor == 0 && claim.status != Status::InPayment;
         cx.core.execute(Instruction::Pay {
             claim: id.to_string(),
             policy: claim.policy.clone(),
@@ -284,6 +284,7 @@ impl ClaimsState {
                 returned: false,
                 released_by: Some(actor.staff.clone()),
                 run: None,
+                cost_item: None,
             }),
         }
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
@@ -295,6 +296,100 @@ impl ClaimsState {
             claim.due.clear();
             cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
         }
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// Pay what a piece of evidence or a rehabilitation task cost to the
+    /// provider. The amount is the cost already recorded on the item, so
+    /// nothing is paid that was not first recorded, and an item is paid once.
+    pub(crate) fn pay_cost(&mut self, cx: &mut Cx<'_>, id: &str, payment_ref: String, item: &str, provider: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        let Some(amount_minor) = claim.cost_of(item).filter(|_| !provider.is_empty()) else {
+            return Err(Reject::new(
+                "no_cost",
+                "there is no received evidence or completed rehabilitation task with a cost under that ID",
+            ));
+        };
+        if amount_minor > self.authority.profile(&actor.staff)?.max_payment_minor {
+            return Err(Reject::new("authority", "your authority profile does not cover a payment of this size"));
+        }
+        let mine = |p: &&Payment| p.cost_item.as_deref() == Some(item);
+        if claim.payments.iter().filter(mine).any(|p| !p.returned) {
+            return Err(Reject::new("cost_paid", "that cost has been paid"));
+        }
+        let used = claim.payments.iter().any(|p| p.payment_ref == payment_ref)
+            || claim.schedule.iter().flat_map(|s| s.periods.values()).any(|p| p.payment_ref == payment_ref);
+        if used {
+            return Err(Reject::new("payment_exists", "that payment reference has been used on this claim"));
+        }
+        // A payment the bank sent back left the money in benefit payable:
+        // it is released again. Otherwise the cost is expensed now.
+        let reissue = claim.payments.iter().any(|p| mine(&p)) && claim.cost_payable_minor >= amount_minor;
+        // Where the returned cost was the last money owed on the claim,
+        // paying it again closes the claim's ledger, as the last benefit payment does.
+        let close = reissue && claim.payable_minor == amount_minor && (claim.closed_on.is_some() || claim.status == Status::Admitted);
+        let kind = if claim.evidence.iter().any(|e| e.id == item) {
+            "evidence"
+        } else {
+            "rehabilitation"
+        };
+        cx.core.execute(if reissue {
+            Instruction::Pay {
+                claim: id.to_string(),
+                policy: claim.policy.clone(),
+                payment_ref: payment_ref.clone(),
+                amount_minor,
+                payee: provider.to_string(),
+                close,
+            }
+        } else {
+            Instruction::HandlingCost {
+                claim: id.to_string(),
+                policy: claim.policy.clone(),
+                cover: claim.cover.clone(),
+                payment_ref: payment_ref.clone(),
+                amount_minor,
+                payee: provider.to_string(),
+                kind: kind.to_string(),
+            }
+        })?;
+        if reissue {
+            claim.payable_minor -= amount_minor;
+            claim.cost_payable_minor -= amount_minor;
+        }
+        if close && claim.status == Status::Admitted {
+            claim.status = Status::Paid;
+            claim.closed_on = Some(cx.today);
+            claim.due.clear();
+            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+        }
+        claim.payments.push(Payment {
+            payment_ref: payment_ref.clone(),
+            amount_minor,
+            paid_on: cx.today,
+            ex_gratia: false,
+            returned: false,
+            released_by: Some(actor.staff.clone()),
+            run: None,
+            cost_item: Some(item.to_string()),
+        });
+        note(&mut claim, cx, Some(actor), format!("cost_paid:{item}"));
+        // The payments module's instruction, apart from `claim_paid` so no
+        // reader takes a handling cost for a benefit.
+        cx.notify(
+            "claim_cost_paid",
+            id,
+            &[
+                ("policy", claim.policy.clone()),
+                ("payment_ref", payment_ref),
+                ("net_minor", amount_minor.to_string()),
+                ("payee", provider.to_string()),
+                ("kind", kind.to_string()),
+                ("item", item.to_string()),
+            ],
+        );
         self.commit(claim);
         Ok(())
     }
@@ -317,10 +412,13 @@ impl ClaimsState {
             payment_ref: payment_ref.to_string(),
         })?;
         let mut came_back = (0, None);
+        let mut cost = 0;
         if let Some(p) = lump.and_then(|i| claim.payments.get_mut(i)) {
             p.returned = true;
             came_back = (p.amount_minor, p.run.clone());
+            cost = p.cost_item.as_ref().map_or(0, |_| p.amount_minor);
         }
+        claim.cost_payable_minor += cost;
         if let Some(p) = period.and_then(|k| claim.schedule.as_mut()?.periods.get_mut(&k)) {
             p.returned = true;
             came_back = (p.gross_minor - p.offset_minor, Some(p.run.clone()));
@@ -330,7 +428,8 @@ impl ClaimsState {
         if let Some(r) = run.and_then(|r| self.runs.get_mut(&r)) {
             r.returned_minor += amount;
         }
-        if claim.status == Status::Paid {
+        // A returned handling cost is owed to a provider: the claimant's claim stays as it was.
+        if claim.status == Status::Paid && cost == 0 {
             claim.status = Status::Admitted;
             claim.closed_on = None;
         }
@@ -484,7 +583,7 @@ impl ClaimsState {
                         claim: c.id.clone(),
                         period_start: benefit_date,
                         period_end: benefit_date,
-                        gross_minor: c.payable_minor,
+                        gross_minor: c.benefit_payable_minor(),
                         offset: None,
                         payee: provider.unwrap_or_else(|| c.policyholder.clone()),
                     });
@@ -553,7 +652,7 @@ impl ClaimsState {
         let stale = || Reject::new("stale_item", "the claim has moved since the run was prepared");
         let mut closed = false;
         if run.kind == RunKind::Provider {
-            if claim.status != Status::Admitted || claim.payable_minor != item.gross_minor {
+            if claim.status != Status::Admitted || claim.payable_minor != item.gross_minor || claim.cost_payable_minor != 0 {
                 return Err(stale());
             }
             cx.core.execute(Instruction::Pay {
@@ -572,6 +671,7 @@ impl ClaimsState {
                 returned: false,
                 released_by: run.approved_by.clone(),
                 run: Some(run.id.clone()),
+                cost_item: None,
             });
             claim.payable_minor = 0;
             claim.status = Status::Paid;

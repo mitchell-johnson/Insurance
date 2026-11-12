@@ -42,7 +42,11 @@ fn waiting(desk: &Desk) -> Vec<String> {
 }
 
 fn claim_paid(id: &str, detail: serde_json::Value) -> ic_core::EventRecord {
-    let event = json!({"module": {"module": "claims", "kind": "claim_paid", "subject": "clm-1", "detail": detail}});
+    claims_event(id, "claim_paid", detail)
+}
+
+fn claims_event(id: &str, kind: &str, detail: serde_json::Value) -> ic_core::EventRecord {
+    let event = json!({"module": {"module": "claims", "kind": kind, "subject": "clm-1", "detail": detail}});
     serde_json::from_value(json!({"id": id, "partition": 3, "seq": 78, "business_date": "2027-11-15", "log_index": 901, "event": event})).unwrap()
 }
 
@@ -170,4 +174,35 @@ fn a_waiting_payment_is_paid_only_to_a_payee_that_is_certain() {
     );
     assert_eq!(desk.code(&mia(), take("r1", &["pay-2"])), "ambiguous_payee");
     assert_eq!(waiting(&desk), vec!["pay-1", "pay-2"]);
+}
+
+/// Purpose: a provider's evidence or rehabilitation cost that claims
+/// releases waits like a benefit, under its own reference and marked as a
+/// cost, for the provider's payee, with no account reference; other claims
+/// events offer nothing.
+/// Why it matters: these costs leave the same benefit payable and the core
+/// settles them only under the reference claims gave. Left out of the
+/// intake they are paid by hand, which is where a reference is mistyped;
+/// taking every claims event in would pay things nobody released.
+#[test]
+fn a_released_provider_cost_waits_like_a_benefit() {
+    let mut desk = Desk::new();
+    desk.payee("prov-1", PayeeKind::Provider, "0207654321");
+    let detail = json!({"policy": "pol-1", "payment_ref": "clm-1-cost-1", "net_minor": "45000", "payee": "party-prov-1",
+        "kind": "evidence", "item": "gp-report"});
+    for envelope in react(&claims_event("3-80", "claim_cost_paid", detail.clone())) {
+        desk.state.apply(4000, envelope).unwrap();
+    }
+    let held = &desk.state.waiting["clm-1-cost-1"];
+    assert_eq!(
+        (held.source.as_str(), held.amount_minor, held.account_ref.as_str()),
+        ("claim-cost:clm-1:clm-1-cost-1", 450_00, "")
+    );
+    assert_eq!(held.payable, PayableKind::Benefit);
+    assert!(react(&claims_event("3-81", "claim_admitted", detail)).is_empty());
+
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["clm-1-cost-1"]));
+    let item = &desk.state.runs["r1"].items["clm-1-cost-1"].new;
+    assert_eq!(item.counterparty, ic_payments::model::Counterparty::Payee("prov-1".to_string()));
 }

@@ -48,6 +48,12 @@ impl Reinsurance {
                 continue;
             }
             self.checkpoints.insert(rec.partition, rec.seq);
+            if let Event::Module { module, kind, subject, detail } = &rec.event {
+                if module == crate::claims::CLAIMS_MODULE {
+                    self.claims_event(ctx, &rec.id, kind, subject, detail);
+                }
+                continue;
+            }
             self.project(ctx, rec.partition, rec.business_date, rec.event);
         }
         Ok(())
