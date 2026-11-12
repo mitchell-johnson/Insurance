@@ -445,8 +445,12 @@ pub enum Notice {
         excess_minor: i64,
         reference: String,
     },
+    /// For underwriting: a reinsurer answered a facultative referral. An
+    /// offer carries its reference; the terms are read with a question.
     FacultativeTermsRecorded {
         reservation_id: String,
+        offered: bool,
+        reference: String,
     },
     CapacityReleased {
         reservation_id: String,
@@ -519,7 +523,7 @@ impl Notice {
     pub fn audience(&self) -> Audience {
         match self {
             Notice::RequireUnderwrittenExcess { .. } => Audience::Group,
-            Notice::FacultativeTermsRecorded { .. } | Notice::CapacityReleased { .. } => Audience::Underwriting,
+            Notice::FacultativeTermsRecorded { .. } => Audience::Underwriting,
             Notice::LargeClaimNotification { .. }
             | Notice::ReinsurerConsentRequired { .. }
             | Notice::ReinsurerConsent { .. }
@@ -527,7 +531,11 @@ impl Notice {
             | Notice::DisputeResolved { .. } => Audience::Claims,
             Notice::SettlementDue { .. } => Audience::Payments,
             Notice::Document { .. } | Notice::ReleaseLogged { .. } => Audience::Records,
-            Notice::ExceptionOpened { .. } | Notice::ExceptionClosed { .. } | Notice::SupplementaryListingDue { .. } => Audience::Staff,
+            // Underwriting releases capacity itself and has no use for being
+            // told; a hold that lapsed by its date is for the people watching.
+            Notice::ExceptionOpened { .. } | Notice::ExceptionClosed { .. } | Notice::SupplementaryListingDue { .. } | Notice::CapacityReleased { .. } => {
+                Audience::Staff
+            }
         }
     }
 }
@@ -962,7 +970,7 @@ impl Reinsurance {
                 layers,
             } => self.confirm(ctx, &reservation_id, policy, cover, layers),
             Command::RecordFacultativeTerms(terms) => self.record_facultative(ctx, *terms),
-            Command::DeclineFacultative { reservation_id, reference } => self.decline_facultative(&reservation_id, reference),
+            Command::DeclineFacultative { reservation_id, reference } => self.decline_facultative(ctx, &reservation_id, reference),
             Command::LogEvidenceRelease {
                 subject,
                 treaty,

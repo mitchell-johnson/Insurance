@@ -327,8 +327,10 @@ impl Reinsurance {
                 terms_ref: t.terms_ref.clone(),
             });
         }
+        let mut reference = String::new();
         if let FacTarget::Reservation(id) = t.target {
             if let Some(r) = self.reservations.get_mut(&id) {
+                reference = t.reference.clone();
                 r.facultative = FacultativeStatus::Offered {
                     reference: t.reference,
                     reinsurer: t.reinsurer,
@@ -338,15 +340,24 @@ impl Reinsurance {
                     terms_ref: t.terms_ref,
                 };
             }
-            ctx.notices.push(Notice::FacultativeTermsRecorded { reservation_id: id });
+            ctx.notices.push(Notice::FacultativeTermsRecorded {
+                reservation_id: id,
+                offered: true,
+                reference,
+            });
         }
         Ok(())
     }
 
-    pub(crate) fn decline_facultative(&mut self, id: &str, reference: String) -> Result<(), Reject> {
+    pub(crate) fn decline_facultative(&mut self, ctx: &mut Ctx, id: &str, reference: String) -> Result<(), Reject> {
         match self.reservations.get_mut(id) {
             Some(r) if r.status == ReservationStatus::Held && r.facultative == FacultativeStatus::Pending => {
-                r.facultative = FacultativeStatus::Declined { reference };
+                r.facultative = FacultativeStatus::Declined { reference: reference.clone() };
+                ctx.notices.push(Notice::FacultativeTermsRecorded {
+                    reservation_id: id.to_string(),
+                    offered: false,
+                    reference,
+                });
                 Ok(())
             }
             Some(_) => Err(Reject::new("reservation_not_held", "the proposal is not waiting for facultative terms")),
