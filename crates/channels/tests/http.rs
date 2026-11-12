@@ -102,6 +102,10 @@ fn portal() -> Portal {
         ("sub-cmp2", "cmp-2"),
         ("sub-lex", "lex-1"),
         ("sub-con", "con-1"),
+        ("sub-gl1", "gl-1"),
+        ("sub-gl2", "gl-2"),
+        ("sub-gllead", "gl-lead"),
+        ("sub-aud", "aud-1"),
     ] {
         w.dir(
             module("identity"),
@@ -171,6 +175,14 @@ fn portal() -> Portal {
                 },
                 template("complaints-legal", &[workbench_complaints::LEGAL], &[DataClass::Ordinary]),
                 template("conduct", &[workbench_complaints::CONDUCT], &[DataClass::Ordinary]),
+                template("ledger-operator", &[ic_channels::finance::actions::OPERATE], &[DataClass::Financial]),
+                template("ledger-approver", &[ic_channels::finance::actions::APPROVE], &[DataClass::Financial]),
+                template(
+                    "ledger-lead",
+                    &[ic_channels::finance::actions::LEAD, ic_channels::finance::actions::ACTUARY],
+                    &[DataClass::Financial],
+                ),
+                template("ledger-reader", &[ic_channels::finance::actions::VIEW], &[DataClass::Financial]),
             ],
             profiles: vec![
                 Profile {
@@ -201,6 +213,10 @@ fn portal() -> Portal {
         ("cmp-2", "complaints-junior"),
         ("lex-1", "complaints-legal"),
         ("con-1", "conduct"),
+        ("gl-1", "ledger-operator"),
+        ("gl-2", "ledger-approver"),
+        ("gl-lead", "ledger-lead"),
+        ("aud-1", "ledger-reader"),
     ] {
         w.send(
             staff("alice"),
@@ -235,6 +251,7 @@ fn portal() -> Portal {
     .unwrap();
     let pricing = Arc::new(common::pricing::seeded(w.at));
     let complaints = Arc::new(common::complaints::seeded(w.at));
+    let finance = Arc::new(common::finance::seeded());
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -248,6 +265,7 @@ fn portal() -> Portal {
         ui: UiConfig::Dev,
         pricing: pricing.clone(),
         complaints: complaints.clone(),
+        finance: finance.clone(),
     }));
     Portal {
         app,
@@ -747,7 +765,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 12);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 16);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1019,7 +1037,7 @@ async fn region_loss_is_shown_to_operators_and_said_plainly_to_customers() {
 #[tokio::test]
 async fn pages_are_served_locked_down() {
     let portal = portal();
-    for path in ["/", "/adviser", "/employer", "/staff", "/pricing", "/ops", "/status"] {
+    for path in ["/", "/adviser", "/employer", "/staff", "/pricing", "/complaints", "/finance", "/ops", "/status"] {
         let response = portal
             .app
             .clone()
@@ -1267,6 +1285,7 @@ async fn the_unit_pricing_console() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1470,6 +1489,7 @@ async fn the_complaints_and_conduct_workbench() {
         ui: UiConfig::Dev,
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1489,6 +1509,156 @@ async fn the_complaints_and_conduct_workbench() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(problem["title"], "complaints_unavailable");
+    }
+}
+
+/// Purpose: the finance console end to end against the finance ledger's own code: only staff with a finance action get in and a
+/// reader cannot act; the close dashboard, checks, work and trial balance are shown; a journal is proposed with exact amounts,
+/// refused to someone without the approver's role and to its own maker, and posted when a second person approves it; commands that
+/// ledger takes only from its own services never leave the console; and its refusals come back with their codes.
+/// Why it matters: manual journals and the close are how people change and sign the books. The ledger trusts the console about who
+/// the person is and which roles they hold, so a console that let a reader post, stated roles nobody holds, or rounded an amount in
+/// the browser would break the controls auditors test first.
+#[tokio::test]
+async fn the_finance_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/finance/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/finance/commands", command).await }
+    };
+    let journal = |id: &str, lines: Value| {
+        json!({ "propose_journal": { "journal": { "id": id, "kind": "accrual", "period": "2027-11", "value_date": "2027-11-30", "lines": lines,
+            "reason": "month-end accrual", "evidence": ["vault://evidence/1"] } } })
+    };
+    let lines = |minor: Value| {
+        json!([
+            { "account": "6500", "currency": "NZD", "signed_minor": minor, "fund": "SF1-life" },
+            { "account": "2500", "currency": "NZD", "signed_fine": -25_000_000_000_i64, "fund": "SF1-life" },
+        ])
+    };
+
+    // Who gets in, and who may act.
+    for outsider in ["sub-kiri", "sub-sue", "sub-cmp1"] {
+        assert_eq!(ask(outsider, "status").await.0, StatusCode::FORBIDDEN, "{outsider}");
+        assert_eq!(tell(outsider, journal("j0", lines(json!(250_00)))).await.0, StatusCode::FORBIDDEN);
+    }
+    assert_eq!(ask("sub-aud", "me").await.1, json!({ "view": true, "roles": [] }));
+    assert_eq!(ask("sub-gllead", "me").await.1["roles"], json!(["finance_lead", "appointed_actuary"]));
+    let (status, problem) = tell("sub-aud", journal("j0", lines(json!(250_00)))).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(problem["detail"].as_str().unwrap().contains("no role"));
+
+    // What is shown.
+    let (status, state) = ask("sub-aud", "status").await;
+    assert_eq!((status, &state["configured"]), (StatusCode::OK, &json!(true)), "{state}");
+    assert!(state["chart"].is_number() && state["close_config"].is_number());
+    assert!(ask("sub-aud", "work").await.1["closing"].is_array());
+    let (status, dashboard) = ask("sub-aud", "dashboard?period=2027-11&today=2027-12-03").await;
+    assert_eq!(status, StatusCode::OK, "{dashboard}");
+    assert!(!dashboard["steps"].as_array().unwrap().is_empty());
+    for fine in [
+        "checks?period=2027-11",
+        "trial_balance?period=2027-11&fund=SF1-life",
+        "movements?period=2027-11",
+        "aged_suspense?as_at=2027-11-30",
+    ] {
+        assert_eq!(ask("sub-aud", fine).await.0, StatusCode::OK, "{fine}");
+    }
+    // Only the console's questions, each with its fields; one the ledger cannot read is its refusal.
+    for bad in [
+        "table_dry_run?as_at=2027-11-30",
+        "dashboard?period=2027-11",
+        "checks?period=November",
+        "extract?kind=x&period=2027-11&limit=many",
+        "journal?id=nope",
+    ] {
+        assert_eq!(ask("sub-aud", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // What is not a person's command never leaves the console.
+    for not_theirs in [
+        json!({ "configure": { "partitions": 9, "year_end_month": 6 } }),
+        json!({ "ingest": { "partition": 0, "events": [] } }),
+        json!({ "report_aged_items": { "kind": "suspense", "as_at": "2027-11-30", "items": [], "total_minor": 0, "count": 0 } }),
+        json!({ "approve_journal": { "id": "j1" }, "close_period": { "period": "2027-11" } }),
+        json!("close_period"),
+        journal("j0", lines(json!(9_300_000_000_000_i64))),
+        journal("j0", lines(json!("250.00"))),
+    ] {
+        assert_eq!(tell("sub-gl1", not_theirs.clone()).await.0, StatusCode::BAD_REQUEST, "{not_theirs}");
+    }
+    assert_eq!(tell("sub-gl1", json!({ "approve_journal": { "id": 7 } })).await.0, StatusCode::BAD_REQUEST);
+
+    // A check people do is reported from the console; one a module owns is not, and the ledger says so.
+    let report = |check: &str| json!({ "report_check": { "period": "2027-11", "check": check, "outcome": { "result": "green" } } });
+    assert_eq!(tell("sub-gl1", report("tax_reconciliation")).await.0, StatusCode::OK);
+    let (status, problem) = tell("sub-gl1", report("commission_sweep")).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("caller")), "{problem}");
+
+    // A journal: proposed in minor units, kept exactly, posted only by a second person with the approver's role.
+    let keyed = [("x-dev-subject", "sub-gl1".to_string()), ("idempotency-key", "j1".to_string())];
+    let proposal = journal("j1", lines(json!(250_00)));
+    let (status, first) = portal.send("POST", "/staff/v1/finance/commands", &keyed, Some(proposal.clone())).await;
+    assert_eq!((status, &first["duplicate"]), (StatusCode::OK, &json!(false)), "{first}");
+    assert_eq!(
+        portal.send("POST", "/staff/v1/finance/commands", &keyed, Some(proposal.clone())).await.1["duplicate"],
+        true
+    );
+    let unkeyed = [("x-dev-subject", "sub-gl1".to_string())];
+    assert_eq!(
+        portal.send("POST", "/staff/v1/finance/commands", &unkeyed, Some(proposal)).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let held = ask("sub-gl2", "journal?id=j1").await.1;
+    assert_eq!(
+        (&held["maker"], &held["status"]["status"], &held["draft"]["lines"][0]["signed_fine"]),
+        (&json!("gl-1"), &json!("proposed"), &json!(25_000_000_000_i64)),
+        "{held}"
+    );
+    let approve = json!({ "approve_journal": { "id": "j1" } });
+    let (status, problem) = tell("sub-gl1", approve.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("authority")), "{problem}");
+    assert_eq!(tell("sub-gl2", approve).await.0, StatusCode::OK);
+    assert_eq!(ask("sub-aud", "journal?id=j1").await.1["status"]["status"], "approved");
+    let balance = ask("sub-aud", "trial_balance?period=2027-11").await.1;
+    assert!(balance.as_array().unwrap().iter().any(|row| row["account"] == "6500"), "{balance}");
+    // The ledger keeps maker and checker apart whatever roles one person holds.
+    assert_eq!(tell("sub-gllead", journal("j2", lines(json!(250_00)))).await.0, StatusCode::OK);
+    let (status, problem) = tell("sub-gllead", json!({ "approve_journal": { "id": "j2" } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("separation")), "{problem}");
+
+    // The ledger has no leader.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+    }));
+    for (method, path, body) in [
+        ("GET", "/staff/v1/finance/work", None),
+        ("POST", "/staff/v1/finance/commands", Some(json!({ "close_period": { "period": "2027-11" } }))),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-dev-subject", "sub-gllead")
+            .header("idempotency-key", "k");
+        let bytes = body.map(|b| b.to_string()).unwrap_or_default();
+        let response = down.clone().oneshot(request.body(Body::from(bytes)).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+        let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+        assert_eq!(problem["title"], "finance_unavailable");
     }
 }
 

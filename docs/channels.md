@@ -6,7 +6,7 @@
 
 - **The channel module** (`state.rs`) runs as a Raft group named `channels` on the ledger nodes, registered in `crates/node`. It reads the core's events and is told the rest by the other modules. Nothing in it reads a clock: every command carries its time.
 - **The portal service** (`http.rs`, `main.rs`, binary `ic-portal`) is a gateway with no state of its own. It checks the caller's token, asks the module a question or proposes a command, and answers. Any number of copies can run; losing one loses nothing.
-- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/ops`, `/status`. They load nothing from anywhere else.
+- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/ops`, `/status`. They load nothing from anywhere else.
 - **The customer app** is not in this repository. Its whole contract is the `/app/v1` API below, including the offline sync protocol. The native app belongs with the bank's app.
 
 ## Who signs in, and how
@@ -151,6 +151,30 @@ The portal service holds none of this. It passes the console's questions to the 
 | `POST /staff/v1/unit-pricing/commands` | One of `prepare_price`, `approve_price`, `reject_price`, `suspend_fund`, `resume_fund`, `raise_price_error`, `close_error`, `republish`, in that module's own JSON, with an `Idempotency-Key`. |
 
 Someone without a unit pricing action is refused before anything reaches that module, and a command is refused here if the person lacks its role. That module checks the role again, enforces that an approver is never the preparer, and keeps who did what; its refusals come back as `409` with its own code (`403` for `unauthorised`). If it has no leader the console answers `503 unit_pricing_unavailable`. Valuation files arrive through the administrator's storage account, not the console. The two modules share no code; `tests/http.rs` runs the console against that module's own state machine.
+
+## The finance console
+
+`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, and retries a stalled feed.
+
+As with the other consoles, the portal service holds none of it. It passes the questions to the `finance` module on the nodes and sends each command as the person who gave it, under the caller `finance-console`:
+
+| Staff action | Role in the finance ledger |
+| --- | --- |
+| `finance.view` | none: opens the console to read |
+| `finance.operate` | `finance_operator` |
+| `finance.approve` | `finance_approver` |
+| `finance.lead` | `finance_lead` |
+| `finance.actuary` | `appointed_actuary` |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/finance/me` | Whether you may open the console, and your roles. |
+| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, with that question's fields as query parameters. |
+| `POST /staff/v1/finance/commands` | One of that module's commands in its own JSON, with an `Idempotency-Key`. Commands only its own services send (the configuration, the core's event feed, Merkle roots, extracts, conduct facts, and the check and aged item reports other modules make) are refused. |
+
+- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range.
+- **Who may.** The ledger checks every role itself and keeps maker and checker apart whatever roles one person holds. A refusal for want of a role comes back as `403 authority`, any other as `409` with its code, and `503 finance_unavailable` when it has no leader.
+- **Not on the page.** A chart of accounts, a close configuration and a return definition are proposed from their files through the command route; the page only approves them.
 
 ## Operations console and status page (addendum entry 6)
 
