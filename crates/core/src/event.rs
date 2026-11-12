@@ -279,6 +279,15 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         net_by_cover_type: BTreeMap<String, i64>,
     },
+    /// Premium already paid for periods whose billing was reversed is the
+    /// policyholder's money again, in suspense. The amounts are the part that
+    /// had paid for cover, by cover type, as on `ReceiptApplied`: commission
+    /// earned on it is taken back.
+    PremiumUnapplied {
+        policy: PolicyId,
+        reference: String,
+        net_by_cover_type: BTreeMap<String, i64>,
+    },
     SuspenseRefunded {
         policy: PolicyId,
         amount_minor: i64,

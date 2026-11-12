@@ -6,16 +6,15 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::*;
-use ic_core::counterparty::CounterpartyPosting;
 use ic_core::{Command as CoreCommand, Reject};
 use ic_distribution::config::{BookOutcome, Change, MoveRequest};
-use ic_distribution::host::{ask, module_spec, posting_envelope, refusal, Question, CORE_CALLER, MODULE};
+use ic_distribution::host::{ask, module_spec, refusal, Question, CORE_CALLER, MODULE, OUTBOX};
 use ic_distribution::rules::Share;
 use ic_distribution::structure::{LicenceState, PartyKind};
 use ic_distribution::workbench::Action;
-use ic_distribution::{Actor, BookId, Command, Envelope};
+use ic_distribution::{Actor, BookId, Command, Envelope, Event};
 use ic_money::{Currency::NZD, Money};
-use ic_raft::ModuleState;
+use ic_raft::{CoreOutcome, CorePosting, ModuleState, Route};
 use ic_sim::Cluster;
 use serde_json::{json, Value};
 
@@ -50,17 +49,36 @@ impl Hosted {
                 self.index += 1;
                 self.module.on_event(self.index, e);
             }
-            let unconfirmed: Vec<(u16, CounterpartyPosting)> = serde_json::from_value(self.ask(json!("unconfirmed"))).unwrap();
-            if events.is_empty() && unconfirmed.is_empty() {
+            let items = (OUTBOX.read)(self.ask((OUTBOX.pending)(100))).unwrap();
+            if events.is_empty() && items.is_empty() {
                 break;
             }
-            for (partition, posting) in unconfirmed {
-                let envelope = posting_envelope(posting, "salt".into());
-                assert_eq!(envelope.caller, CORE_CALLER);
-                let applied = self.cluster.submit_keyed(partition, &envelope.key, &envelope.caller, envelope.command);
-                applied.result.unwrap();
+            for item in items {
+                self.carry(&item);
             }
         }
+    }
+
+    /// Offer one outbox item to the core and tell the module what became of it.
+    fn carry(&mut self, item: &CorePosting) -> CoreOutcome {
+        assert_eq!(item.envelope.caller, CORE_CALLER);
+        let Route::Partition(partition) = item.route.clone() else {
+            panic!("a posting names its partition: {item:?}");
+        };
+        let applied = self
+            .cluster
+            .submit_keyed(partition, &item.envelope.key, &item.envelope.caller, item.envelope.command.clone());
+        let outcome = match applied.result {
+            Ok(_) => CoreOutcome::Applied {
+                partition,
+                log_index: applied.index,
+                duplicate: false,
+            },
+            Err(reject) => CoreOutcome::Refused(reject),
+        };
+        self.index += 1;
+        self.module.apply(self.index, (OUTBOX.outcome)(item, &outcome)).unwrap();
+        outcome
     }
 
     fn ask(&self, question: Value) -> Value {
@@ -351,4 +369,79 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
     assert!(matches!(envelope.command, Command::PostingRefused { ref code, .. } if code == "ledger_closed"));
     let state: ic_distribution::DistributionState = serde_json::from_value(saved).unwrap();
     assert!(ask(&state, Question::Unconfirmed).unwrap().as_array().unwrap().is_empty());
+}
+
+/// Purpose: the outbox the node carries to the core lists postings oldest first and within the
+/// limit asked; a posting the core applied is not offered again although it stays unconfirmed
+/// until the core's own event is read; an outcome heard twice changes nothing; a posting the
+/// core refuses or cannot route leaves the outbox, is recorded as refused and raises a task;
+/// and every envelope keeps the posting's own reference as its key.
+/// Why it matters: this is the only path by which commission reaches the ledger on a deployed
+/// node. An item dropped before its outcome is commission never posted; an item offered for
+/// ever blocks every posting behind it; a key that changed between offers would post the same
+/// commission twice after a leader change.
+#[test]
+fn the_outbox_is_carried_once_in_order_and_a_refusal_is_final() {
+    let mut w = worked_example();
+    w.auto_deliver = false;
+    let (policy, partition) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    w.pay(&policy, "r2");
+    w.outbox.clear();
+
+    let read = |w: &World, limit: usize| {
+        let question: Question = serde_json::from_value((OUTBOX.pending)(limit)).unwrap();
+        (OUTBOX.read)(ask(&w.dist, question).unwrap()).unwrap()
+    };
+    let all = read(&w, 100);
+    assert_eq!(all.len(), 2, "one posting for each premium: {all:?}");
+    let one = read(&w, 1);
+    assert_eq!((one.len(), &one[0].id), (1, &all[0].id), "the limit is kept and the oldest comes first");
+    for item in &all {
+        assert_eq!(item.route, Route::Partition(partition));
+        assert_eq!(item.envelope.key, format!("{CORE_CALLER}:{}", item.id));
+        assert_eq!(item.envelope.caller, CORE_CALLER);
+        assert!(matches!(&item.envelope.command, CoreCommand::PostCounterparty(p) if p.reference == item.id));
+    }
+    let first_paid = w.dist.allocations[&all[0].id].date;
+    assert!(first_paid < w.dist.allocations[&all[1].id].date, "oldest first");
+
+    // The core applies the first; the module hears so before it reads the event.
+    let apply = |w: &mut World, item: &CorePosting, outcome: &CoreOutcome| {
+        let envelope: Envelope = serde_json::from_value((OUTBOX.outcome)(item, outcome)).unwrap();
+        w.send_keyed(&envelope.key.clone(), envelope.actor, envelope.command)
+    };
+    let applied = w
+        .cluster
+        .submit_keyed(partition, &all[0].envelope.key, CORE_CALLER, all[0].envelope.command.clone());
+    applied.result.unwrap();
+    let outcome = CoreOutcome::Applied {
+        partition,
+        log_index: applied.index,
+        duplicate: false,
+    };
+    apply(&mut w, &all[0], &outcome).unwrap();
+    let left = read(&w, 100);
+    assert_eq!(left.iter().map(|i| i.id.clone()).collect::<Vec<_>>(), vec![all[1].id.clone()]);
+    assert_eq!(w.dist.unconfirmed().len(), 2, "delivered is not confirmed until the event is read");
+    // Heard a second time, after a leader change: nothing moves.
+    assert!(apply(&mut w, &all[0], &outcome).unwrap().is_empty());
+    w.sync();
+    assert_eq!(w.dist.unconfirmed().len(), 1);
+
+    // The second cannot be routed. It is recorded as refused, raises a task and is not offered again.
+    let events = apply(&mut w, &all[1], &CoreOutcome::Unroutable("no partition holds it".into())).unwrap();
+    assert!(
+        events.iter().any(|e| matches!(e, Event::PostingRefused { code, .. } if code == "unroutable")),
+        "{events:?}"
+    );
+    assert!(events.iter().any(|e| matches!(e, Event::TaskCreated { kind, .. } if kind == "posting_refused")));
+    assert!(read(&w, 100).is_empty());
+    assert!(w.dist.unconfirmed().is_empty());
+    // A refusal for a posting already settled is itself refused and changes nothing.
+    let late = apply(&mut w, &all[0], &CoreOutcome::Refused(Reject::new("ledger_closed", "closed")));
+    assert_eq!(code(late), "posting_settled");
+    assert!((OUTBOX.read)(json!("not a list")).unwrap_err().contains("not an outbox answer"));
 }
