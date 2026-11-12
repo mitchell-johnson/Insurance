@@ -198,13 +198,17 @@ pub(crate) fn issue_rejected(p: &mut Proposal, cx: &mut Cx, code: String) -> Res
         proposal: p.id.clone(),
         code: code.clone(),
     });
-    cx.effect(Effect::Notify {
-        to: Recipient::UnderwritingManager,
-        kind: NoticeKind::IssueFailed,
-        proposal: p.id.clone(),
-        life: None,
-        reasons: vec![],
-    });
+    // The core's billing catching up is not a person's problem until the
+    // sweep has tried again and given up.
+    if code != BILLING_BEHIND {
+        cx.effect(Effect::Notify {
+            to: Recipient::UnderwritingManager,
+            kind: NoticeKind::IssueFailed,
+            proposal: p.id.clone(),
+            life: None,
+            reasons: vec![],
+        });
+    }
     p.status = ProposalStatus::IssueFailed { code };
     Ok(())
 }
@@ -230,8 +234,34 @@ struct Swept {
     escalated: u32,
 }
 
+/// The core refuses cover written for today until the day's billing has
+/// run. The end of day catches billing up, so the next day's sweep tries
+/// again.
+const BILLING_BEHIND: &str = "billing_behind";
+
+/// How many times in all the core is asked before a refusal for billing
+/// that is behind is left to a person.
+const MOST_ISSUE_ATTEMPTS: u32 = 5;
+
 /// What the passing of time does to one proposal.
 fn sweep_one(cfg: &Config, p: &mut Proposal, cx: &mut Cx, n: &mut Swept) -> Result<(), Reject> {
+    if matches!(&p.status, ProposalStatus::IssueFailed { code } if code == BILLING_BEHIND) {
+        if cx.today <= p.expires_on && p.issue_attempts < MOST_ISSUE_ATTEMPTS {
+            return flow::issue(p, cx);
+        }
+        // Still refused, or out of time: now it is a person's.
+        p.status = ProposalStatus::IssueFailed {
+            code: "billing_behind_retries_exhausted".to_string(),
+        };
+        cx.effect(Effect::Notify {
+            to: Recipient::UnderwritingManager,
+            kind: NoticeKind::IssueFailed,
+            proposal: p.id.clone(),
+            life: None,
+            reasons: vec![],
+        });
+        return Ok(());
+    }
     if p.status != ProposalStatus::Open {
         return Ok(());
     }
