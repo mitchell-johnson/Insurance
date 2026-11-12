@@ -129,6 +129,16 @@ pub struct UnderwrittenLayer {
     pub reference: String,
 }
 
+/// Less cover for one life on a retail policy, at the owner's request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReduceCover {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// The cover the life keeps. Zero gives the cover up for this life.
+    pub sum_insured_minor: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged: internally tagged enums cannot carry 128-bit integers in JSON.
 #[serde(rename_all = "snake_case")]
@@ -266,6 +276,10 @@ pub enum Command {
     /// the terms underwriting decided. The rest of a period already billed
     /// is billed as an adjustment, due today.
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
+    /// Reduce or give up one life's cover on a retail policy from today,
+    /// newest layer first, with the billed premium for the days left
+    /// credited back.
+    ReduceCover(Box<ReduceCover>),
     /// End an underwritten layer from a date (a reduction, or the member
     /// giving the extra cover up). A leaver's layers end with the leave.
     EndExcessLayer {
@@ -424,6 +438,7 @@ impl Command {
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::AddUnderwrittenLayer(_) => &["underwriting"],
+            Command::ReduceCover(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
@@ -464,6 +479,7 @@ impl Command {
             Command::AddExcessLayer(_) => "add_excess_layer",
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
+            Command::ReduceCover(_) => "reduce_cover",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
