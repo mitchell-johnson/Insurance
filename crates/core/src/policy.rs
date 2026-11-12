@@ -1,7 +1,7 @@
 //! The policy model: policy, cover, cover layer and the three kinds of life
 //! record. Retail and group business share one structure.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use ic_ledger::{EntryId, PartitionId, Posting};
@@ -127,6 +127,27 @@ pub enum LayerOrigin {
     UnderwrittenExcess,
 }
 
+/// Who pays for an underwritten layer on a scheme member's cover.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemberPays {
+    /// The employer pays, on the scheme invoice.
+    #[default]
+    Nothing,
+    /// The member pays the loading; the standard rate stays on the scheme
+    /// invoice. Used where a total of loadings would identify the few
+    /// members who have one.
+    Loading,
+    /// The member pays for the whole layer: voluntary cover.
+    All,
+}
+
+impl MemberPays {
+    pub fn is_nothing(&self) -> bool {
+        *self == MemberPays::Nothing
+    }
+}
+
 /// One tranche of a cover with its own start date. Frozen forever at the end
 /// of the spine phase. Reinsurance cession, commission book and clawback
 /// exposure attach here in later phases.
@@ -156,6 +177,9 @@ pub struct Layer {
     /// entry age.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rated_from: Option<NaiveDate>,
+    /// What of this layer's premium the member pays for themselves.
+    #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
+    pub member_pays: MemberPays,
 }
 
 impl Layer {
@@ -168,7 +192,7 @@ impl Layer {
     }
     /// Layers are merged when nothing distinguishes them.
     pub fn same_terms(&self, o: &Layer) -> bool {
-        self.life == o.life && self.end == o.end && self.loadings == o.loadings && self.exclusions == o.exclusions
+        self.life == o.life && self.end == o.end && self.loadings == o.loadings && self.exclusions == o.exclusions && self.member_pays == o.member_pays
     }
 }
 
@@ -217,6 +241,10 @@ pub struct Receivable {
     pub earned_fine: BTreeMap<String, i128>,
     /// Closed by lapse, cancellation or transfer: no longer earns.
     pub closed: bool,
+    /// The scheme member who owes this, for cover the member pays for
+    /// themselves. Absent on everything the policyholder owes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payer: Option<LifeId>,
     /// The journal entry that raised it, so a reversal can name what it
     /// reverses. Absent on receivables raised before this was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -261,6 +289,10 @@ pub struct ReceiptRecord {
     pub allocations: BTreeMap<u32, i64>,
     pub to_suspense_minor: i64,
     pub reversed: bool,
+    /// The scheme member who paid, for a receipt against the member's own
+    /// account. What was not allocated went to the member's credit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<LifeId>,
 }
 
 /// A scheme invoice being built across several commands, so that no single
@@ -383,6 +415,10 @@ pub struct Policy {
     pub next_receivable_id: u32,
     pub receivables: Vec<Receivable>,
     pub receipts: BTreeMap<String, ReceiptRecord>,
+    /// Scheme members who have, or have had, money of their own held on
+    /// this policy: each has a member suspense account in the ledger.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub member_accounts: BTreeSet<LifeId>,
     pub anniversaries_processed: u32,
     pub pending_invoice: Option<PendingInvoice>,
     pub lapse: Option<LapseRecord>,
@@ -512,9 +548,36 @@ impl Policy {
     pub fn unearned_fine(&self) -> i128 {
         self.receivables.iter().map(Receivable::unearned_fine).sum()
     }
-    /// Due date of the oldest receivable with money still owed on it.
+    /// Due date of the oldest receivable the policyholder still owes money
+    /// on. What a scheme member owes for their own cover does not count
+    /// against the scheme.
     pub fn oldest_unpaid_due(&self) -> Option<NaiveDate> {
-        self.receivables.iter().filter(|r| r.outstanding_minor > 0).map(|r| r.due).min()
+        self.receivables
+            .iter()
+            .filter(|r| r.outstanding_minor > 0 && r.payer.is_none())
+            .map(|r| r.due)
+            .min()
+    }
+    /// Due date of the oldest receivable a member still owes money on.
+    pub fn member_oldest_unpaid_due(&self, life: &LifeId) -> Option<NaiveDate> {
+        self.receivables
+            .iter()
+            .filter(|r| r.outstanding_minor > 0 && r.payer.as_ref() == Some(life))
+            .map(|r| r.due)
+            .min()
+    }
+    /// What the policyholder owes, leaving out what scheme members owe for
+    /// cover they pay for themselves.
+    pub fn policyholder_outstanding_minor(&self) -> i64 {
+        self.receivables.iter().filter(|r| r.payer.is_none()).map(|r| r.outstanding_minor).sum()
+    }
+    /// What a member owes for cover they pay for themselves.
+    pub fn member_outstanding_minor(&self, life: &LifeId) -> i64 {
+        self.receivables
+            .iter()
+            .filter(|r| r.payer.as_ref() == Some(life))
+            .map(|r| r.outstanding_minor)
+            .sum()
     }
     /// Record when each receivable stopped being owed, and forget it for
     /// one that is owed again. Run after every command that touches the

@@ -8,7 +8,7 @@ use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LifeFactors, LifeKind, ReopenedChoice, UnwindCause};
+use crate::policy::{LifeFactors, LifeKind, MemberPays, ReopenedChoice, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -108,6 +108,10 @@ pub struct ExcessLayer {
     /// The member agreed to the employer seeing this layer's loaded premium.
     #[serde(default)]
     pub loading_itemised: bool,
+    /// What of the layer's premium the member pays for themselves. Left
+    /// out, the employer pays for all of it.
+    #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
+    pub member_pays: MemberPays,
     /// The underwriting decision this layer comes from.
     pub reference: String,
 }
@@ -322,6 +326,21 @@ pub enum Command {
         receipt: String,
     },
     /// Pay a credit balance in suspense back to the policyholder.
+    /// Money from a scheme member for cover the member pays for themselves.
+    /// It is set against what that member owes; the rest is held as the
+    /// member's credit.
+    ApplyMemberReceipt {
+        policy: PolicyId,
+        life: LifeId,
+        receipt: String,
+        amount: Money,
+    },
+    /// Pay a scheme member's credit back to the member.
+    RefundMemberCredit {
+        policy: PolicyId,
+        life: LifeId,
+        amount: Money,
+    },
     RefundSuspense {
         policy: PolicyId,
         amount: Money,
@@ -464,6 +483,8 @@ impl Command {
             Command::Investment(command) => command.allowed_callers(),
             Command::Interest(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
+            Command::ApplyMemberReceipt { .. } => &["cash-matching"],
+            Command::RefundMemberCredit { .. } => &["cash-matching", "policy-servicing"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
                 &["payments"]
@@ -504,6 +525,8 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::ApplyMemberReceipt { .. } => "apply_member_receipt",
+            Command::RefundMemberCredit { .. } => "refund_member_credit",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",
             Command::Interest(_) => "interest",

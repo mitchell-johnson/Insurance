@@ -14,10 +14,12 @@ use crate::catalog::Catalog;
 use crate::command::IssuePolicy;
 use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::machine::{CoreState, Ctx, Reject, MAX_MEMBERSHIP_CHUNK};
-use crate::policy::{CancellationRecord, Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, Policy, PolicyStatus, Standing};
+use crate::policy::{
+    CancellationRecord, Cover, CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, Policy, PolicyStatus, Standing,
+};
 use crate::postings::{div_half_even, PostingSet};
 use crate::premium::{member_period_premium, member_sum_insured, retail_period_premium};
-use crate::{arrears, billing, cash, earning, LifeId};
+use crate::{arrears, billing, cash, earning, voluntary, LifeId};
 
 /// How far back a policy may be incepted or a change backdated.
 pub(crate) const BACKDATING_LIMIT_DAYS: u64 = 400;
@@ -172,6 +174,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
                 exclusions: spec.exclusions,
                 loading_itemised: false,
                 rated_from: None,
+                member_pays: MemberPays::Nothing,
             });
         }
     }
@@ -210,6 +213,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         claims: BTreeMap::new(),
         refunds_raised: BTreeMap::new(),
         payouts: BTreeMap::new(),
+        member_accounts: BTreeSet::new(),
         interests: BTreeMap::new(),
         payments: BTreeMap::new(),
         cessions: BTreeMap::new(),
@@ -384,6 +388,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             exclusions,
                             loading_itemised: false,
                             rated_from: None,
+                            member_pays: MemberPays::Nothing,
                         });
                         added.push(LayerInfo {
                             cover: cover.code.clone(),
@@ -534,6 +539,9 @@ pub(crate) fn close_out(
     cover_ends: NaiveDate,
     detail: BTreeMap<String, String>,
 ) -> Result<(), Reject> {
+    // What members owe for their own cover is closed first, so that what
+    // they paid ahead goes back to them and not to the policyholder.
+    voluntary::close_all(ledger, product, policy, ctx)?;
     let c = policy.currency;
     let mut set = PostingSet::new();
     let mut refund_fine: i128 = 0;

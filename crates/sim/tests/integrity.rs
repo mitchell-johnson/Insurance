@@ -413,6 +413,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             loadings: vec![],
             exclusions: vec![],
             loading_itemised: false,
+            member_pays: Default::default(),
             reference: "uw".into(),
         })),
         Command::EndExcessLayer {

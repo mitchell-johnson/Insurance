@@ -20,7 +20,7 @@ use crate::catalog::Catalog;
 use crate::command::{AlteredTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
-use crate::policy::{CoverStatus, Layer, LayerOrigin, Policy, PolicyStatus, ReceivableKind};
+use crate::policy::{CoverStatus, Layer, LayerOrigin, MemberPays, Policy, PolicyStatus, ReceivableKind};
 use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 use crate::LifeId;
 
@@ -85,6 +85,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             exclusions: spec.exclusions,
             loading_itemised: false,
             rated_from: None,
+            member_pays: MemberPays::Nothing,
         });
     }
     ctx.emit(Event::LayerAdded {
@@ -230,6 +231,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 exclusions: spec.exclusions.clone(),
                 loading_itemised: old.loading_itemised,
                 rated_from: Some(old.rating_start()),
+                member_pays: MemberPays::Nothing,
             });
         }
         ctx.emit(Event::LayerEnded {

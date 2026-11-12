@@ -11,8 +11,9 @@ use ic_product::{ArrearsRules, ProductDefinition};
 use crate::accounts::{self, dims};
 use crate::event::Event;
 use crate::machine::{Ctx, Reject};
-use crate::policy::{LapseRecord, Policy, PolicyStatus, Standing};
+use crate::policy::{LapseRecord, Policy, PolicyStatus, Receivable, Standing};
 use crate::postings::{div_half_even, PostingSet};
+use crate::voluntary;
 
 pub(crate) enum Derived {
     Standing(Standing),
@@ -84,16 +85,16 @@ pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut
     }
 }
 
-/// Lapse: cover ends. Open receivables are written off against unearned
-/// premium (reversing the unearned part); earned-but-unpaid premium goes to
-/// the lapse write-off account; tax on the unpaid part is reversed; premium
-/// that was paid but not yet earned is returned to policy suspense.
-fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+/// The postings that close open receivables as a lapse does: what is owed
+/// is written off, against unearned premium first and the rest to the lapse
+/// write-off account, with the tax on the unpaid part reversed. Returns what
+/// was owed and the premium that was paid but not yet earned, which the
+/// caller returns to whoever paid it.
+pub(crate) fn write_off(policy: &Policy, set: &mut PostingSet, mine: impl Fn(&Receivable) -> bool) -> (i64, i128) {
     let c = policy.currency;
-    let mut set = PostingSet::new();
     let mut arrears: i64 = 0;
     let mut leftover_fine: i128 = 0;
-    for r in policy.receivables.iter().filter(|r| !r.closed) {
+    for r in policy.receivables.iter().filter(|r| !r.closed && mine(r)) {
         let outstanding = r.outstanding_minor.max(0);
         let unearned = r.unearned_fine();
         let (gst_rev, levies_rev): (i64, BTreeMap<String, i64>) = if r.total_minor != 0 {
@@ -123,6 +124,18 @@ fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, 
         leftover_fine += unearned - from_unearned;
         arrears += outstanding;
     }
+    (arrears, leftover_fine)
+}
+
+/// Lapse: cover ends. Open receivables are written off against unearned
+/// premium (reversing the unearned part); earned-but-unpaid premium goes to
+/// the lapse write-off account; tax on the unpaid part is reversed; premium
+/// that was paid but not yet earned is returned to policy suspense.
+fn lapse(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
+    voluntary::close_all(ledger, product, policy, ctx)?;
+    let c = policy.currency;
+    let mut set = PostingSet::new();
+    let (arrears, leftover_fine) = write_off(policy, &mut set, |_| true);
     let (refund, rem) = AccrualAmount::new(leftover_fine, c).round_to_money(product.rounding)?;
     set.credit(accounts::policy_suspense(&policy.id, c), refund.minor as i128, Dimensions::default());
     set.credit(accounts::rounding(c), rem.fine, dims(policy, None, "rounding"));
