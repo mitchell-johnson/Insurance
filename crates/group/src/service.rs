@@ -371,7 +371,12 @@ pub async fn run_passes<M, C, P, D, F>(
 {
     tokio::pin!(stop);
     loop {
-        let pass = driver.run_once().await;
+        // Stopping does not wait for a pass to finish: every step of a pass
+        // is taken again from where it was, so one cut short loses nothing.
+        let pass = tokio::select! {
+            () = &mut stop => return,
+            pass = driver.run_once() => pass,
+        };
         match &pass {
             Ok(p) if p.failed == 0 => tracing::debug!(done = p.done, "group pass"),
             Ok(p) => tracing::warn!(done = p.done, waiting = p.failed, "a group pass left work waiting on something outside"),

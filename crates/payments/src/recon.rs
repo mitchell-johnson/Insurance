@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use chrono::NaiveDate;
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine};
+use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
 
 impl PaymentsState {
     pub(crate) fn open_exception(&mut self, tx: &mut Tx<'_>, id: Id, exception: Exception) {
@@ -203,5 +203,76 @@ impl PaymentsState {
         }
         tx.emit(Event::InstructionCompleted { key: done.key });
         Ok(())
+    }
+}
+
+/// The most items one report to the financial close carries. The count and
+/// the total always cover everything.
+const MAX_REPORTED: usize = 200;
+
+impl PaymentsState {
+    /// The month-end question from the financial close: has every bank
+    /// account's cash been accounted for as at this day? Green when no
+    /// reconciliation break opened on or before it is still open and no
+    /// submission for a run valued on or before it is still without the
+    /// bank's settlement. Each item says what is outstanding and where.
+    pub fn fund_cash_settlement(&self, as_at: NaiveDate) -> serde_json::Value {
+        let mut items = Vec::new();
+        for (id, e) in self.exceptions.iter().filter(|(_, e)| e.resolution.is_none() && e.opened_on <= as_at) {
+            items.push(serde_json::json!({
+                "exception": id,
+                "kind": e.kind,
+                "account": e.account,
+                "fund": self.config.as_ref().and_then(|c| c.accounts.get(&e.account)).map(|a| a.fund.clone()),
+                "amount_minor": e.amount_minor,
+                "since": e.opened_on,
+                "owner": e.owner,
+            }));
+        }
+        for (id, s) in &self.submissions {
+            let outstanding = s.settled_on.is_none() && !matches!(s.status, SubmissionStatus::Failed(_));
+            let Some(run) = self.runs.get(&s.run).filter(|r| outstanding && r.value_date <= as_at) else {
+                continue;
+            };
+            items.push(serde_json::json!({
+                "submission": id,
+                "status": s.status,
+                "account": s.account,
+                "fund": run.fund,
+                "value_date": run.value_date,
+            }));
+        }
+        let count = items.len();
+        items.truncate(MAX_REPORTED);
+        serde_json::json!({ "green": count == 0, "as_at": as_at, "items": items, "count": count })
+    }
+
+    /// Money received that nobody has identified, oldest first, for the
+    /// financial close's aged-items check. `action` is the owner's name once
+    /// someone has taken the item, so an item nobody owns shows as such.
+    pub fn aged_unidentified_receipts(&self, as_at: NaiveDate) -> serde_json::Value {
+        let mut open: Vec<(&Id, &Exception)> = self
+            .exceptions
+            .iter()
+            .filter(|(_, e)| e.kind == ExceptionKind::UnidentifiedReceipt && e.resolution.is_none() && e.opened_on <= as_at)
+            .collect();
+        open.sort_by_key(|(id, e)| (e.opened_on, (*id).clone()));
+        let total: i64 = open.iter().map(|(_, e)| e.amount_minor).sum();
+        let count = open.len();
+        let items: Vec<serde_json::Value> = open
+            .into_iter()
+            .take(MAX_REPORTED)
+            .map(|(id, e)| {
+                serde_json::json!({
+                    "party": id,
+                    "reason": format!("unidentified receipt on {}: {}", e.account, e.reference),
+                    "amount_minor": e.amount_minor,
+                    "since": e.opened_on,
+                    "owner": e.owner,
+                    "action": e.owner.as_ref().map(|owner| format!("assigned to {owner}")),
+                })
+            })
+            .collect();
+        serde_json::json!({ "kind": "unidentified_receipts", "as_at": as_at, "items": items, "total_minor": total, "count": count })
     }
 }
