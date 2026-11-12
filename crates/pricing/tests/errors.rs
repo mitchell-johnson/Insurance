@@ -300,7 +300,7 @@ fn movements_build_holdings_and_extracts() {
         units_micro: UNITS / 2,
     };
     // The 2nd's extract was taken when the 3rd was priced against it.
-    let third = "growth@2026-11-03";
+    let third = "growth:2026-11-03";
     assert_eq!(h.state.extracts_due(10).len(), 1);
     h.ok(CALLER_INTAKE, "driver", &[], executed(0));
     assert!(!h.state.extracts.contains_key(third));
@@ -408,7 +408,7 @@ fn valuations_are_taken_one_by_one() {
     );
     match out {
         Output::Valuations { accepted, refused } => {
-            assert_eq!(accepted, vec!["growth@2026-11-02".to_string()]);
+            assert_eq!(accepted, vec!["growth:2026-11-02".to_string()]);
             assert_eq!(refused.len(), 1);
         }
         other => panic!("{other:?}"),

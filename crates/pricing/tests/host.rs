@@ -78,8 +78,8 @@ fn answers_each_question() {
     assert_eq!(ask(&h, json!({"q": "error", "id": "E1"}))["cause"], "bond");
     let due = ask(&h, json!({"q": "extracts_due", "limit": 50}));
     assert_eq!(due[0]["currency"], "NZD");
-    assert_eq!(due[0]["extract"]["id"], "growth@2026-11-02");
-    assert_eq!(due[1]["extract"]["id"], "growth@2026-11-03");
+    assert_eq!(due[0]["extract"]["id"], "growth:2026-11-02");
+    assert_eq!(due[1]["extract"]["id"], "growth:2026-11-03");
     let check = ask(&h, json!({"q": "close_check", "as_at": "2026-11-04"}));
     let kinds: Vec<&str> = check["items"].as_array().into_iter().flatten().filter_map(|i| i["kind"].as_str()).collect();
     assert_eq!(kinds, vec!["open_price_error", "extract_not_written", "extract_not_written"]);
@@ -141,7 +141,7 @@ fn core_events_become_movements() {
         kind: OrderKind::Withdrawal,
         cash_minor: 1_000_00,
         units_micro: 497_512,
-        price_id: "growth@2026-11-03.1".into(),
+        price_id: "growth:2026-11-03.1".into(),
         pricing_date: day(3),
     });
     let envelopes = react(&sell);
@@ -164,7 +164,7 @@ fn core_events_become_movements() {
         kind: OrderKind::PremiumAllocation,
         cash_minor: 1_000_00,
         units_micro: 497_265,
-        price_id: "growth@2026-11-03.1".into(),
+        price_id: "growth:2026-11-03.1".into(),
         pricing_date: day(3),
     });
     assert!(matches!(&react(&buy)[0].command, Command::RecordMovement(m) if m.units_micro == 497_265 && m.kind == MovementKind::Buy));
@@ -173,8 +173,8 @@ fn core_events_become_movements() {
         policy: "POL-1".into(),
         fund: fund_id("growth"),
         pricing_date: day(3),
-        from_price: "growth@2026-11-03.1".into(),
-        to_price: "growth@2026-11-03.2".into(),
+        from_price: "growth:2026-11-03.1".into(),
+        to_price: "growth:2026-11-03.2".into(),
         units_delta_micro: -2_450,
         cash_delta_minor: 0,
         borne_minor: 5_00,
@@ -182,12 +182,12 @@ fn core_events_become_movements() {
     });
     match &react(&replayed)[0].command {
         Command::RecordMovement(m) => {
-            assert_eq!(m.id, "O-10/replay/growth@2026-11-03.2");
+            assert_eq!(m.id, "O-10/replay/growth:2026-11-03.2");
             assert_eq!(
                 (m.kind, m.units_micro, m.borne_minor, m.uncompensated),
                 (MovementKind::Correction, -2_450, 5_00, true)
             );
-            assert_eq!(m.price_id.as_deref(), Some("growth@2026-11-03.2"));
+            assert_eq!(m.price_id.as_deref(), Some("growth:2026-11-03.2"));
         }
         other => panic!("{other:?}"),
     }

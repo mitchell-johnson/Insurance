@@ -12,10 +12,13 @@
 //! [`PricingState`] is the deterministic state machine, hosted in its own
 //! replicated group as module `unit-pricing` ([`host::module_spec`]).
 
+pub mod adapters;
 pub mod command;
+pub mod driver;
 pub mod extract;
 pub mod fund;
 pub mod host;
+pub mod service;
 pub mod state;
 pub mod strike;
 pub mod valuation;
