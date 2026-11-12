@@ -119,6 +119,7 @@ fn settings_are_required_defaulted_and_never_printed() {
     );
     assert_eq!((config.key_name.as_str(), config.event_hub.as_str()), ("documents-kek", "documents-events"));
     assert_eq!(config.complaints_event_hub, "complaints-events");
+    assert_eq!(config.conduct_officer, "conduct-officer");
     assert_eq!((config.listen.as_str(), config.cycle_every), ("0.0.0.0:8080", Duration::from_secs(15)));
     let printed = format!("{config:?}");
     assert!(printed.contains("node-0:7000") && !printed.contains(KEY));

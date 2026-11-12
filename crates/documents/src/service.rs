@@ -41,6 +41,8 @@ pub struct Config {
     pub event_hub: String,
     /// The hub the complaints module's events go to.
     pub complaints_event_hub: String,
+    /// Who owns a conduct case a licence event opens.
+    pub conduct_officer: String,
     /// The key Event Grid must present with each delivery.
     pub webhook_key: String,
     pub listen: String,
@@ -90,6 +92,7 @@ impl Config {
             event_hubs_namespace: need("IC_EVENT_HUBS_NAMESPACE")?,
             event_hub: get("IC_DOCUMENTS_EVENT_HUB").unwrap_or_else(|| "documents-events".into()),
             complaints_event_hub: get("IC_COMPLAINTS_EVENT_HUB").unwrap_or_else(|| "complaints-events".into()),
+            conduct_officer: get("IC_CONDUCT_OFFICER").unwrap_or_else(|| "conduct-officer".into()),
             webhook_key,
             listen: get("IC_DOCUMENTS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(seconds),
