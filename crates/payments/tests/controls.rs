@@ -217,6 +217,7 @@ fn an_authority_moves_through_its_states() {
         authority: "a1".to_string(),
         policy: policy("pol-1"),
         party: "x".to_string(),
+        life: None,
         account: account("Ana", number),
         sole_name: false,
     };
@@ -306,6 +307,7 @@ fn a_deceased_payers_account_is_never_drawn_on_again() {
         authority: "a4".to_string(),
         policy: policy("pol-4"),
         party: "x".to_string(),
+        life: None,
         account: account("Ana", "0101234567"),
         sole_name: false,
     };

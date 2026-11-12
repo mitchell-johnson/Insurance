@@ -78,6 +78,11 @@ pub enum AuthorityStatus {
 pub struct Authority {
     pub policy: PolicyId,
     pub party: String,
+    /// The scheme member this authority collects for, where a member pays
+    /// for their own cover. What it collects is then that member's money
+    /// and is never applied to the employer's bill.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub life: Option<ic_core::LifeId>,
     pub account: AccountDetails,
     /// The account is in the payer's sole name. If the payer dies, nothing
     /// more may be collected from it or refunded to it.
