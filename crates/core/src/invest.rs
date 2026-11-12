@@ -379,6 +379,29 @@ pub enum InvestEvent {
         reference: String,
         amount_minor: i64,
     },
+    /// Pending investment cash was raised to benefit payable, to be paid
+    /// under the payout's ID as the payment reference.
+    PayoutRaised {
+        policy: PolicyId,
+        payout: String,
+        amount_minor: i64,
+        reason: PayoutReason,
+    },
+    /// The bank sent a payout's payment back: it is owed again and needs a
+    /// new payment reference before it can be paid.
+    PayoutReturned {
+        policy: PolicyId,
+        payout: String,
+        payment: String,
+        amount_minor: i64,
+    },
+    /// A returned payout is to be paid again under a new reference.
+    PayoutReinstructed {
+        policy: PolicyId,
+        payout: String,
+        payment: String,
+        amount_minor: i64,
+    },
     UnitOrderPlaced {
         order_id: String,
         policy: PolicyId,
@@ -444,6 +467,21 @@ pub enum InvestCommand {
     CancelOrder {
         order_id: String,
     },
+    /// Raise pending investment cash that no buy order is counting on to
+    /// the policy's benefit payable, to be paid out. The payments module
+    /// settles it with the payout's ID as the payment reference.
+    RaisePayout {
+        policy: PolicyId,
+        payout: String,
+        amount_minor: i64,
+        reason: PayoutReason,
+    },
+    /// Give a payout the bank sent back a new payment reference.
+    ReinstructPayout {
+        policy: PolicyId,
+        payout: String,
+        payment: String,
+    },
     /// Execute up to `limit` of the orders pending for this fund and pricing
     /// date at the price in force. Sent again until nothing is pending.
     ExecuteOrders {
@@ -469,6 +507,7 @@ impl InvestCommand {
             InvestCommand::ActivateUnitPrice(_) => &["unit-pricing"],
             InvestCommand::AllocateCash { .. } => &["policy-servicing", "cash-matching"],
             InvestCommand::PlaceOrder(_) | InvestCommand::CancelOrder { .. } => &["policy-servicing", "claims", "fees"],
+            InvestCommand::RaisePayout { .. } | InvestCommand::ReinstructPayout { .. } => &["policy-servicing", "claims"],
             InvestCommand::ExecuteOrders { .. } | InvestCommand::ReplayOrders { .. } => &["unit-orders"],
         }
     }
@@ -480,6 +519,8 @@ impl InvestCommand {
             InvestCommand::AllocateCash { .. } => "allocate_investment_cash",
             InvestCommand::PlaceOrder(_) => "place_unit_order",
             InvestCommand::CancelOrder { .. } => "cancel_unit_order",
+            InvestCommand::RaisePayout { .. } => "raise_investment_payout",
+            InvestCommand::ReinstructPayout { .. } => "reinstruct_investment_payout",
             InvestCommand::ExecuteOrders { .. } => "execute_unit_orders",
             InvestCommand::ReplayOrders { .. } => "replay_unit_orders",
         }
@@ -488,7 +529,9 @@ impl InvestCommand {
     /// The policy the command is about, where it names one.
     pub fn policy<'a>(&'a self, book: &'a InvestmentBook) -> Option<&'a PolicyId> {
         match self {
-            InvestCommand::AllocateCash { policy, .. } => Some(policy),
+            InvestCommand::AllocateCash { policy, .. } | InvestCommand::RaisePayout { policy, .. } | InvestCommand::ReinstructPayout { policy, .. } => {
+                Some(policy)
+            }
             InvestCommand::PlaceOrder(order) => Some(&order.policy),
             InvestCommand::CancelOrder { order_id } => book.orders.get(order_id).map(|o| &o.order.policy),
             _ => None,
@@ -649,6 +692,178 @@ pub(crate) fn allocate_cash(
     ctx.emit(crate::Event::Investment(InvestEvent::CashAllocated {
         policy: policy.id.clone(),
         reference,
+        amount_minor,
+    }));
+    Ok(())
+}
+
+/// Why unit-linked money is leaving. It is the posting type on the payable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayoutReason {
+    Withdrawal,
+    Surrender,
+    /// Cash owed after a price error to a policyholder who has left.
+    PriceRemediation,
+}
+
+impl PayoutReason {
+    pub fn posting_type(self) -> &'static str {
+        match self {
+            PayoutReason::Withdrawal => "unit_withdrawal",
+            PayoutReason::Surrender => "unit_surrender",
+            PayoutReason::PriceRemediation => "unit_price_remediation",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PayoutState {
+    /// In benefit payable, waiting for the bank.
+    Owed,
+    Settled,
+    /// Sent back by the bank: in benefit payable again, with no payment
+    /// reference it can be paid under until it is reinstructed.
+    Returned,
+}
+
+/// Unit-linked money raised to benefit payable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Payout {
+    pub amount_minor: i64,
+    pub reason: PayoutReason,
+    /// The payment reference it is, or was last, to be paid under.
+    pub payment: String,
+    pub state: PayoutState,
+    pub raised_on: NaiveDate,
+}
+
+/// What the policy's benefit payable holds for payouts not yet settled.
+pub(crate) fn payouts_outstanding(policy: &Policy) -> i128 {
+    policy
+        .payouts
+        .values()
+        .filter(|p| p.state != PayoutState::Settled)
+        .map(|p| p.amount_minor as i128)
+        .sum()
+}
+
+fn owed_under<'a>(policy: &'a mut Policy, payment: &str) -> Option<(&'a String, &'a mut Payout)> {
+    policy.payouts.iter_mut().find(|(_, p)| p.payment == payment)
+}
+
+/// Whether this payment is a payout waiting for the bank, for that amount.
+pub(crate) fn payout_instructed(policy: &Policy, payment: &str, amount_minor: i64) -> bool {
+    policy
+        .payouts
+        .values()
+        .any(|p| p.payment == payment && p.state == PayoutState::Owed && p.amount_minor == amount_minor)
+}
+
+/// The bank settled a benefit payment: if it paid a payout, that is done.
+pub(crate) fn payout_settled(policy: &mut Policy, payment: &str) {
+    if let Some((_, payout)) = owed_under(policy, payment).filter(|(_, p)| p.state == PayoutState::Owed) {
+        payout.state = PayoutState::Settled;
+    }
+}
+
+/// The bank sent a settled payment back: if it paid a payout, the payout
+/// is owed again and servicing is told, so it can find out where to pay.
+pub(crate) fn payout_returned(policy: &mut Policy, ctx: &mut Ctx<'_>, payment: &str) {
+    let id = policy.id.clone();
+    if let Some((payout, record)) = owed_under(policy, payment).filter(|(_, p)| p.state == PayoutState::Settled) {
+        record.state = PayoutState::Returned;
+        ctx.emit(crate::Event::Investment(InvestEvent::PayoutReturned {
+            policy: id,
+            payout: payout.clone(),
+            payment: payment.to_string(),
+            amount_minor: record.amount_minor,
+        }));
+    }
+}
+
+/// Raise pending investment cash to benefit payable. Allowed on a policy
+/// that is no longer in force, since that is when the last of it is paid.
+pub(crate) fn raise_payout(
+    ledger: &mut Ledger,
+    book: &mut InvestmentBook,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    payout: String,
+    amount_minor: i64,
+    reason: PayoutReason,
+) -> Result<(), Reject> {
+    if !plain(&payout) || amount_minor <= 0 {
+        return Err(bad("invalid_payout", "a payout has a plain identifier and an amount above zero"));
+    }
+    if let Some(existing) = policy.payouts.get(&payout) {
+        return if existing.amount_minor == amount_minor && existing.reason == reason {
+            Ok(())
+        } else {
+            Err(bad("duplicate_payout", format!("{payout} was raised with other content")))
+        };
+    }
+    // The payout's ID is its payment reference, so it must be free.
+    if policy.payments.contains_key(&payout) || policy.payouts.values().any(|p| p.payment == payout) {
+        return Err(bad("duplicate_payout", format!("{payout} is already a payment reference on this policy")));
+    }
+    let c = policy.currency;
+    let pending = accounts::pending_investment_cash(&policy.id, c);
+    if -ledger.balance(&pending.id) - committed_cash(book, &policy.id) < amount_minor as i128 {
+        return Err(bad("cash_committed", "that cash is waiting for a pending buy order or is not there"));
+    }
+    let dims = accounts::dims(policy, None, reason.posting_type());
+    let mut set = PostingSet::new();
+    set.debit(pending, amount_minor as i128, dims.clone());
+    set.credit(accounts::benefit_payable(&policy.id, c), amount_minor as i128, dims);
+    let postings = set.into_postings(ledger)?;
+    let detail = BTreeMap::from([("payout".to_string(), payout.clone())]);
+    ctx.post(ledger, "investment_payout_raised", Some(policy), ctx.date, postings, detail)?;
+    policy.payouts.insert(
+        payout.clone(),
+        Payout {
+            amount_minor,
+            reason,
+            payment: payout.clone(),
+            state: PayoutState::Owed,
+            raised_on: ctx.date,
+        },
+    );
+    book.note_waiting(ledger, policy, ctx.date);
+    ctx.emit(crate::Event::Investment(InvestEvent::PayoutRaised {
+        policy: policy.id.clone(),
+        payout,
+        amount_minor,
+        reason,
+    }));
+    Ok(())
+}
+
+/// A payout the bank sent back is paid again under a new reference, once
+/// servicing knows where the money should go.
+pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: &str, payment: String) -> Result<(), Reject> {
+    let Some(record) = policy.payouts.get(payout) else {
+        return Err(bad("unknown_payout", format!("{payout} is not a payout on this policy")));
+    };
+    if record.state == PayoutState::Owed && record.payment == payment {
+        return Ok(());
+    }
+    if record.state != PayoutState::Returned {
+        return Err(bad("payout_not_returned", format!("{payout} has not been sent back by the bank")));
+    }
+    if !plain(&payment) || policy.payments.contains_key(&payment) || policy.payouts.values().any(|p| p.payment == payment) {
+        return Err(bad("duplicate_payment", format!("{payment} is not a free payment reference on this policy")));
+    }
+    let amount_minor = record.amount_minor;
+    if let Some(record) = policy.payouts.get_mut(payout) {
+        record.payment = payment.clone();
+        record.state = PayoutState::Owed;
+    }
+    ctx.emit(crate::Event::Investment(InvestEvent::PayoutReinstructed {
+        policy: policy.id.clone(),
+        payout: payout.to_string(),
+        payment,
         amount_minor,
     }));
     Ok(())

@@ -7,8 +7,10 @@ use chrono::NaiveDate;
 use ic_core::accounts;
 use ic_core::event::Event;
 use ic_core::invest::{
-    Direction, FundDefinition, InvestCommand, InvestEvent, InvestmentBook, NewOrder, OrderAmount, OrderKind, OrderState, Question, Replayable, Reply, UnitPrice,
+    Direction, FundDefinition, InvestCommand, InvestEvent, InvestmentBook, NewOrder, OrderAmount, OrderKind, OrderState, PayoutReason, PayoutState, Question,
+    Replayable, Reply, UnitPrice,
 };
+use ic_core::payments::PayableKind;
 use ic_core::{Command, PolicyId, Reject};
 use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
 use ic_product::{Frequency, Sex};
@@ -949,4 +951,158 @@ fn a_corrected_price_is_replayed_over_the_orders_executed_at_it() {
     assert_eq!(borne(&c), 4_100_00);
     assert!(to_replay(&c).is_empty());
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
+fn payout(c: &mut Cluster, policy: &PolicyId, id: &str, amount_minor: i64, reason: PayoutReason) -> Result<(), Reject> {
+    invest(
+        c,
+        "policy-servicing",
+        InvestCommand::RaisePayout {
+            policy: policy.clone(),
+            payout: id.to_string(),
+            amount_minor,
+            reason,
+        },
+    )
+}
+
+fn pay(c: &mut Cluster, policy: &PolicyId, payment: &str, minor: i64) -> Result<(), Reject> {
+    let settle = Command::SettlePayable {
+        policy: policy.clone(),
+        payment: payment.to_string(),
+        payable: PayableKind::Benefit,
+        refund: None,
+        amount: Money::new(minor, NZD),
+        bank_account: "nz-main-benefits".to_string(),
+    };
+    c.submit(0, "payments", settle)
+}
+
+/// Purpose: unit-linked money leaves through the policy's benefit payable. Cash no buy
+/// order is counting on is raised from pending investment cash to the payable under a
+/// payout ID, once however often it is sent; the payments module can settle exactly that
+/// payout, for exactly that amount, under that ID and nothing else; a payment the bank
+/// sends back makes the payout owed again, and it can be paid only after it is given a
+/// new payment reference. A policy that is no longer in force can still be paid what it
+/// is owed. The claims reconciliation of benefit payable stays clean throughout.
+/// Why it matters: a withdrawal is a customer's own money and it must leave once, to the
+/// bank, for the amount asked. Cash paid straight out of the investment ledger would skip
+/// the payee checks and the bank reconciliation every other payment goes through, and a
+/// payable that any payment reference could draw on would let one withdrawal be paid twice.
+#[test]
+fn a_withdrawal_is_paid_through_benefit_payable() {
+    let (mut c, policy) = invested();
+    let payable = |c: &Cluster| c.state(0).ledger.natural_balance(&accounts::benefit_payable(&policy, NZD).id);
+    let state_of = |c: &Cluster, id: &str| c.state(0).policies[&policy].payouts[id].state;
+    let reinstruct = |c: &mut Cluster, id: &str, payment: &str| {
+        invest(
+            c,
+            "policy-servicing",
+            InvestCommand::ReinstructPayout {
+                policy: policy.clone(),
+                payout: id.to_string(),
+                payment: payment.to_string(),
+            },
+        )
+    };
+    // NZD 1,000 of the 5,000 is waiting for a buy order.
+    place(
+        &mut c,
+        order("buy-1", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 1_000_00 }, start()),
+    )
+    .unwrap();
+    assert_eq!(code(payout(&mut c, &policy, "wd-1", 4_000_01, PayoutReason::Withdrawal)), "cash_committed");
+    assert_eq!(code(payout(&mut c, &policy, "wd-1", 0, PayoutReason::Withdrawal)), "invalid_payout");
+    assert_eq!(code(payout(&mut c, &policy, "wd 1", 500_00, PayoutReason::Withdrawal)), "invalid_payout");
+    let by_payments = InvestCommand::RaisePayout {
+        policy: policy.clone(),
+        payout: "wd-1".to_string(),
+        amount_minor: 500_00,
+        reason: PayoutReason::Withdrawal,
+    };
+    assert_eq!(code(invest(&mut c, "payments", by_payments)), "caller_not_allowed");
+
+    let raise = Command::Investment(Box::new(InvestCommand::RaisePayout {
+        policy: policy.clone(),
+        payout: "wd-1".to_string(),
+        amount_minor: 500_00,
+        reason: PayoutReason::Withdrawal,
+    }));
+    let applied = c.submit_keyed(0, "raise-wd-1", "policy-servicing", raise);
+    assert_eq!(applied.result, Ok(()));
+    let entry = &applied.entries[0].body;
+    assert_eq!((entry.kind.as_str(), entry.detail["payout"].as_str()), ("investment_payout_raised", "wd-1"));
+    assert!(entry.postings.iter().all(|p| p.dims.posting_type.as_deref() == Some("unit_withdrawal")));
+    assert_eq!((pending_cash(&c, &policy), payable(&c)), (4_500_00, 500_00));
+    // Sent again it changes nothing; with other content it is refused.
+    payout(&mut c, &policy, "wd-1", 500_00, PayoutReason::Withdrawal).unwrap();
+    assert_eq!((pending_cash(&c, &policy), payable(&c)), (4_500_00, 500_00));
+    assert_eq!(code(payout(&mut c, &policy, "wd-1", 600_00, PayoutReason::Withdrawal)), "duplicate_payout");
+    assert_eq!(code(payout(&mut c, &policy, "wd-1", 500_00, PayoutReason::Surrender)), "duplicate_payout");
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // Only that payout, for that amount, can be settled.
+    assert_eq!(code(pay(&mut c, &policy, "wd-1", 400_00)), "payment_not_instructed");
+    assert_eq!(code(pay(&mut c, &policy, "someone-else", 500_00)), "payment_not_instructed");
+    assert_eq!(code(reinstruct(&mut c, "wd-1", "wd-1b")), "payout_not_returned");
+    reinstruct(&mut c, "wd-1", "wd-1").unwrap();
+    pay(&mut c, &policy, "wd-1", 500_00).unwrap();
+    assert_eq!((payable(&c), state_of(&c, "wd-1")), (0, PayoutState::Settled));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+    // Its reference is spent: a second payout cannot take it.
+    assert_eq!(code(payout(&mut c, &policy, "wd-1", 500_00, PayoutReason::Withdrawal)), "accepted");
+    assert_eq!(pending_cash(&c, &policy), 4_500_00);
+
+    // The bank sends it back. It is owed again, and payable only under a new reference.
+    c.submit(
+        0,
+        "payments",
+        Command::ReturnPayment {
+            policy: policy.clone(),
+            payment: "wd-1".to_string(),
+        },
+    )
+    .unwrap();
+    assert_eq!((payable(&c), state_of(&c, "wd-1")), (500_00, PayoutState::Returned));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+    assert_eq!(code(pay(&mut c, &policy, "wd-1b", 500_00)), "payment_not_instructed");
+    assert_eq!(code(reinstruct(&mut c, "wd-none", "wd-1b")), "unknown_payout");
+    assert_eq!(code(reinstruct(&mut c, "wd-1", "wd-1")), "duplicate_payment");
+    assert_eq!(code(reinstruct(&mut c, "wd-1", "wd 1b")), "duplicate_payment");
+    reinstruct(&mut c, "wd-1", "wd-1b").unwrap();
+    // A new payout cannot take a reference another payout is to be paid under.
+    assert_eq!(code(payout(&mut c, &policy, "wd-1b", 10_00, PayoutReason::Withdrawal)), "duplicate_payout");
+    pay(&mut c, &policy, "wd-1b", 500_00).unwrap();
+    assert_eq!((payable(&c), state_of(&c, "wd-1")), (0, PayoutState::Settled));
+
+    // A policy that has ended is still paid what it holds in cash.
+    invest(&mut c, "policy-servicing", InvestCommand::CancelOrder { order_id: "buy-1".to_string() }).unwrap();
+    c.submit(0, "policy-servicing", Command::CancelPolicy { policy: policy.clone() }).unwrap();
+    payout(&mut c, &policy, "sur-1", 4_500_00, PayoutReason::Surrender).unwrap();
+    assert_eq!((pending_cash(&c, &policy), payable(&c)), (0, 4_500_00));
+    let Reply::WaitingCash(waiting) = c.state(0).investment.answer(&c.state(0).ledger, &c.state(0).policies, &Question::WaitingCash) else {
+        unreachable!()
+    };
+    assert!(waiting.is_empty());
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    let seen = invest_events(&mut c);
+    let has = |want: &dyn Fn(&InvestEvent) -> bool| seen.iter().any(want);
+    assert!(has(
+        &|e| matches!(e, InvestEvent::PayoutRaised { payout, amount_minor: 500_00, reason: PayoutReason::Withdrawal, .. } if payout == "wd-1")
+    ));
+    assert!(has(
+        &|e| matches!(e, InvestEvent::PayoutReturned { payout, payment, amount_minor: 500_00, .. } if payout == "wd-1" && payment == "wd-1")
+    ));
+    assert!(has(
+        &|e| matches!(e, InvestEvent::PayoutReinstructed { payout, payment, .. } if payout == "wd-1" && payment == "wd-1b")
+    ));
+    assert!(has(&|e| matches!(
+        e,
+        InvestEvent::PayoutRaised {
+            reason: PayoutReason::Surrender,
+            ..
+        }
+    )));
+    assert_eq!(seen.iter().filter(|e| matches!(e, InvestEvent::PayoutRaised { .. })).count(), 2);
 }
