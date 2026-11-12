@@ -474,6 +474,9 @@ pub struct PaymentsState {
     /// Payments other modules released, until they settle.
     #[serde(default)]
     pub waiting: BTreeMap<Id, crate::intake::Waiting>,
+    /// Claims runs with payments still to settle.
+    #[serde(default)]
+    pub claims_runs: BTreeMap<String, crate::intake::ClaimsRun>,
     pub books: BTreeMap<Id, Book>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,

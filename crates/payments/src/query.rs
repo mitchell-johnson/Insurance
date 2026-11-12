@@ -126,6 +126,7 @@ fn payout_waiting(policy: &ic_core::PolicyId, policyholder: &ic_core::PartyId, p
             account_ref: String::new(),
             policy: Some(policy.clone()),
             claim: None,
+            run: None,
             amount_minor,
             payable: Some(ic_core::PayableKind::Benefit),
         }),
@@ -154,6 +155,7 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                     account_ref: field("account_ref"),
                     policy: Some(ic_core::PolicyId::from(field("policy").as_str())),
                     claim: Some(subject.clone()),
+                    run: Some(field("run")).filter(|run| !run.is_empty()),
                     // An amount that cannot be read is refused by the
                     // module as not positive; nothing is guessed.
                     amount_minor: field("net_minor").parse().unwrap_or(0),
