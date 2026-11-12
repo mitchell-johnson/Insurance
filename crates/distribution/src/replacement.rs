@@ -128,7 +128,7 @@ impl DistributionState {
     /// The whole of a layer given up was matched: the clawback raised when
     /// it went is reversed, to the parties who bore it, and its exposure
     /// items carry on under the new layer on their original clock.
-    fn continue_exposure(&mut self, ctx: &mut Ctx, old: &str, new_key: &str, new: &LayerRecord, today: NaiveDate) -> Vec<String> {
+    pub(crate) fn continue_exposure(&mut self, ctx: &mut Ctx, old: &str, new_key: &str, new: &LayerRecord, today: NaiveDate) -> Vec<String> {
         let items: Vec<(String, String, i64)> = self
             .exposures
             .values()
@@ -138,7 +138,7 @@ impl DistributionState {
         let mut references: Vec<&String> = items.iter().map(|(_, r, _)| r).collect();
         references.dedup();
         for reference in references {
-            self.reverse_allocation(ctx, reference, &format!("replaced:{}", old.replace('/', ".")), today, Some(old));
+            self.reverse_allocation(ctx, reference, &format!("carried:{}", old.replace('/', ".")), today, Some(old));
         }
         for (id, _, amount) in &items {
             if let Some(e) = self.exposures.get_mut(id) {

@@ -446,3 +446,56 @@ fn a_decision_between_premiums_and_a_reinstatement_after_a_match_pay_nobody_twic
     assert!(w.payable("fap-one") >= fap_one, "renewal on the arrears, and no second reversal");
     w.assert_reconciled();
 }
+
+/// Purpose: underwriting changes the terms on cover a life already holds. The core ends the
+/// layer and starts another in its place, saying which it carries on. Commission treats it as
+/// the same cover: nobody is clawed back, the exposure carries on under the new layer on its
+/// original clock, the new layer needs no terms of its own and earns no second initial
+/// commission, later premium earns trail on it, and the old layer is not cover given up that
+/// the replacement rule could match.
+/// Why it matters: a loading or an exclusion added after a claim review or a late disclosure
+/// is not the customer giving cover up. Read as an ending it claws back an adviser's whole
+/// initial commission for a decision underwriting made, and then pays nobody trail.
+#[test]
+fn a_layer_underwriting_rewrote_carries_its_commission_on() {
+    let (mut w, policy, _) = advised_in(scene(Settings::default()));
+    w.days(20);
+    let (a_co, fap_one) = (w.payable("a-co"), w.payable("fap-one"));
+    let before = w.events.len();
+    let command = CoreCommand::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+        policy: policy.clone(),
+        cover: "life".into(),
+        life: ic_core::LifeId("life-1".into()),
+        loadings: vec![ic_money::DecStr::parse("1.5").unwrap()],
+        exclusions: vec![],
+        reference: "uw-2".into(),
+    }));
+    w.core(&policy, "underwriting", command).unwrap();
+    let events = w.events[before..].to_vec();
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::TaskCreated { kind, .. } if kind == "layer_needs_terms")),
+        "{events:?}"
+    );
+    let (old, new) = (&w.dist.layers[&layer_of(&policy)], &w.dist.layers[&format!("{policy}/life/2")]);
+    assert!(old.ended.is_some() && old.given_up.is_none());
+    assert_eq!((new.start, new.ended, new.initial_paid.is_some()), (old.start, None, true));
+    assert_eq!(new.terms, old.terms);
+    let open: Vec<_> = w.dist.exposures.values().filter(|e| e.open).collect();
+    assert_eq!(open.iter().map(|e| e.amount_minor - e.clawed_minor).sum::<i64>(), 1_200_00);
+    assert!(open.iter().all(|e| e.layer == format!("{policy}/life/2")));
+    // The loading raises the premium for the rest of the month; commission is on cash, later.
+    assert!(w.payable("fap-one") >= fap_one && w.payable("a-co") >= a_co, "nobody is clawed back");
+    w.assert_reconciled();
+
+    w.days(15);
+    let before = w.events.len();
+    assert!(w.pay(&policy, "r2") > 0);
+    assert!(paid(&w, &earned(&w, before)).keys().all(|(_, kind)| kind == "Renewal"));
+    w.assert_reconciled();
+
+    // Writing new cover on the life is new business: nothing was given up.
+    let more = w.issue_for(2, PERSON, 500_000_00);
+    assert_eq!(matched(&w.write(&more, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap()), None);
+}

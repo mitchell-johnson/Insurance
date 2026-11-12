@@ -186,7 +186,15 @@ impl DistributionState {
                     self.add_layer(ctx, &policy, info, LayerOrigin::Original, date);
                 }
             }
-            CoreEvent::LayerAdded { policy, layer, origin, .. } => self.add_layer(ctx, &policy, layer, origin, date),
+            CoreEvent::LayerAdded {
+                policy,
+                layer,
+                origin,
+                continues,
+            } => match continues.map(|old| layer_key(&policy, &layer.cover, old)) {
+                Some(old) if self.layers.contains_key(&old) => self.layer_carried_on(ctx, &policy, &old, layer, date),
+                _ => self.add_layer(ctx, &policy, layer, origin, date),
+            },
             CoreEvent::LayersMerged {
                 policy,
                 cover,
@@ -387,6 +395,35 @@ impl DistributionState {
             p.layers.push(key.clone());
         }
         self.layers.insert(key, record);
+    }
+
+    /// Underwriting changed a layer's terms and nothing else: the core ends
+    /// the layer and starts another in its place. It is the same cover, so
+    /// the new layer takes the old one's writing, books, terms, clock and
+    /// any replacement match; the clawback the ending raised is reversed and
+    /// its exposure items carry on; and the old layer was not given up.
+    /// Inside cooling-off the ending reversed the initial commission, and the
+    /// new layer earns it again on its next premium.
+    fn layer_carried_on(&mut self, ctx: &mut Ctx, policy: &PolicyId, old: &str, info: LayerInfo, date: NaiveDate) {
+        let key = layer_key(policy, &info.cover, info.layer);
+        let Some(before) = self.layers.get_mut(old).filter(|_| old != key) else {
+            return;
+        };
+        before.given_up = None;
+        before.ended.get_or_insert(info.start);
+        let mut new = before.clone();
+        new.layer = info.layer;
+        new.sum_insured_minor = info.sum_insured_minor;
+        new.ended = None;
+        new.matched_away_minor = 0;
+        if self.layers.contains_key(&key) {
+            return;
+        }
+        self.layers.insert(key.clone(), new.clone());
+        if let Some(p) = self.policies.get_mut(policy) {
+            p.layers.push(key.clone());
+        }
+        self.continue_exposure(ctx, old, &key, &new, date);
     }
 
     /// Where an amount for a payee goes on a day: paid, or held and why.
@@ -1030,6 +1067,8 @@ impl DistributionState {
                 x.amount_minor = amount;
                 x.clawed_minor = clawed;
                 x.layer = to.to_string();
+                // What was clawed back was on the share given up.
+                x.last_clawback = None;
             }
         }
     }
