@@ -64,6 +64,15 @@ pub struct UnderwritingState {
     pub(crate) evidence: BTreeMap<String, (ProposalId, LifeId)>,
     pub(crate) reservations: BTreeMap<String, (ProposalId, LifeId, String)>,
     pub(crate) decisions: BTreeMap<String, (ProposalId, LifeId)>,
+    /// Decisions by the time they took effect, so a peer review sample
+    /// reads only its period. A decision stays here once superseded; the
+    /// draw checks it is still in force.
+    #[serde(default)]
+    pub(crate) effective: BTreeMap<DateTime<Utc>, BTreeSet<String>>,
+    /// Whether `effective` covers every decision. A state kept from before
+    /// the index has it built by the first draw.
+    #[serde(default)]
+    pub(crate) effective_indexed: bool,
     pub(crate) by_policy: BTreeMap<PolicyId, BTreeSet<ProposalId>>,
     pub(crate) by_adviser: BTreeMap<String, BTreeSet<ProposalId>>,
     /// Relationships underwriters have declared with people.
@@ -275,6 +284,9 @@ impl UnderwritingState {
             }
             for d in &f.decisions {
                 self.decisions.insert(d.reference.clone(), (id.clone(), life.clone()));
+                if let Some(at) = d.effective_at {
+                    self.effective.entry(at).or_default().insert(d.reference.clone());
+                }
             }
         }
         self.by_policy.entry(p.policy.clone()).or_default().insert(id.clone());

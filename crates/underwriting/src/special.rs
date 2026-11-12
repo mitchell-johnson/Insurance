@@ -700,34 +700,57 @@ impl UnderwritingState {
     }
 
     /// Draw the period's peer review sample: weighted to declines and
-    /// non-standard terms, and repeatable from the seed.
+    /// non-standard terms, and repeatable from the seed. Only decisions that
+    /// took effect in the period are read, through `effective`.
     pub(crate) fn draw_sample(&mut self, cx: &mut Cx, period: &str, from: DateTime<Utc>, to: DateTime<Utc>, seed: u64) -> Result<(), Reject> {
         if period.is_empty() || to <= from {
             return reject("period", "a sample is drawn for a named period with a start before its end");
         }
+        if !self.effective_indexed {
+            for (at, reference) in self
+                .proposals
+                .values()
+                .flat_map(|p| p.lives.values().flat_map(|f| f.decisions.iter()))
+                .filter_map(|d| Some((d.effective_at?, d.reference.clone())))
+                .collect::<Vec<_>>()
+            {
+                self.effective.entry(at).or_default().insert(reference);
+            }
+            self.effective_indexed = true;
+        }
         let rates = self.config.settings.sample.clone();
         let mut drawn = Vec::new();
-        for p in self.proposals.values_mut() {
-            for d in p.lives.values_mut().flat_map(|f| f.decisions.iter_mut()) {
-                let in_period = d.status == DecisionStatus::Effective && d.effective_at.is_some_and(|t| t >= from && t < to);
-                if !in_period || d.sampled_for.is_some() || matches!(d.source, DecisionSource::Migrated { .. }) {
-                    continue;
-                }
-                let rate = if d.any_decline() {
-                    rates.decline_per_mille
-                } else if d.all_standard() {
-                    rates.standard_per_mille
-                } else {
-                    rates.non_standard_per_mille
-                };
-                let digest = Sha256::digest(format!("{seed}|{}", d.reference).as_bytes());
-                let roll = u64::from_be_bytes([digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]]) % 1000;
-                if roll < u64::from(rate) {
-                    d.sampled_for = Some(period.to_string());
-                    drawn.push(d.reference.clone());
-                }
+        let candidates: Vec<String> = self.effective.range(from..to).flat_map(|(_, refs)| refs.iter().cloned()).collect();
+        for reference in candidates {
+            let Some((id, life)) = self.decisions.get(&reference) else {
+                continue;
+            };
+            let Some(d) = self
+                .proposals
+                .get_mut(id)
+                .and_then(|p| p.lives.get_mut(life))
+                .and_then(|f| f.decisions.iter_mut().find(|d| d.reference == reference))
+            else {
+                continue;
+            };
+            if d.status != DecisionStatus::Effective || d.sampled_for.is_some() || matches!(d.source, DecisionSource::Migrated { .. }) {
+                continue;
+            }
+            let rate = if d.any_decline() {
+                rates.decline_per_mille
+            } else if d.all_standard() {
+                rates.standard_per_mille
+            } else {
+                rates.non_standard_per_mille
+            };
+            let digest = Sha256::digest(format!("{seed}|{}", d.reference).as_bytes());
+            let roll = u64::from_be_bytes([digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]]) % 1000;
+            if roll < u64::from(rate) {
+                d.sampled_for = Some(period.to_string());
+                drawn.push(reference);
             }
         }
+        drawn.sort();
         for decision in &drawn {
             cx.event(Event::PeerReviewSampled {
                 decision: decision.clone(),
