@@ -1148,6 +1148,15 @@ async fn claims_question(
             let reply = s.claims.ask(partition, question).await.map_err(claims_down)?;
             ok(json!(reply)["remittance"].clone())
         }
+        Q::Work { .. } => {
+            let answers = s.claims_everywhere(&question).await?;
+            let found = answers.into_iter().find_map(|(p, reply)| match reply {
+                R::Work(Some(view)) => Some((p, view)),
+                _ => None,
+            });
+            let (partition, view) = found.ok_or_else(Problem::not_found)?;
+            ok(json!({ "partition": partition, "view": view }))
+        }
         Q::Book | Q::Report => {
             let partitions: Vec<Value> = s
                 .claims_everywhere(&question)
