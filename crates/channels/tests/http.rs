@@ -40,6 +40,7 @@ struct Portal {
     scheme: PolicyId,
     pricing: Arc<common::pricing::PricingModule>,
     claims: Arc<common::claims::ClaimsCore>,
+    reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
 }
 
 fn healthy() -> RegionReport {
@@ -109,6 +110,9 @@ fn portal() -> Portal {
         ("sub-cl1", "cl-1"),
         ("sub-cllead", "cl-lead"),
         ("sub-clnew", "cl-new"),
+        ("sub-ri1", "ri-1"),
+        ("sub-ri2", "ri-2"),
+        ("sub-riview", "ri-view"),
         ("sub-aud", "aud-1"),
     ] {
         w.dir(
@@ -188,6 +192,13 @@ fn portal() -> Portal {
                 ),
                 template("ledger-reader", &[ic_channels::finance::actions::VIEW], &[DataClass::Financial]),
                 template("claims", &[ic_channels::claims::actions::WORK], &[DataClass::InsuranceSensitive]),
+                template("ri-ops", &[ic_channels::reinsurance::actions::OPERATE], &[DataClass::Financial]),
+                template(
+                    "ri-lead",
+                    &[ic_channels::reinsurance::actions::OPERATE, ic_channels::reinsurance::actions::APPROVE],
+                    &[DataClass::Financial],
+                ),
+                template("ri-reader", &[ic_channels::reinsurance::actions::VIEW], &[DataClass::Financial]),
             ],
             profiles: vec![
                 Profile {
@@ -226,6 +237,9 @@ fn portal() -> Portal {
         ("cl-lead", "claims"),
         // Given the claims action here but not yet in the claims module's authority book.
         ("cl-new", "claims"),
+        ("ri-1", "ri-ops"),
+        ("ri-2", "ri-lead"),
+        ("ri-view", "ri-reader"),
     ] {
         w.send(
             staff("alice"),
@@ -262,6 +276,7 @@ fn portal() -> Portal {
     let complaints = Arc::new(common::complaints::seeded(w.at));
     let finance = Arc::new(common::finance::seeded());
     let claims = Arc::new(common::claims::seeded());
+    let reinsurance = Arc::new(common::reinsurance::seeded());
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -277,6 +292,7 @@ fn portal() -> Portal {
         complaints: complaints.clone(),
         finance: finance.clone(),
         claims: claims.clone(),
+        reinsurance: reinsurance.clone(),
     }));
     Portal {
         app,
@@ -289,6 +305,7 @@ fn portal() -> Portal {
         scheme,
         pricing,
         claims,
+        reinsurance,
     }
 }
 
@@ -777,7 +794,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 19);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 22);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1058,6 +1075,7 @@ async fn pages_are_served_locked_down() {
         "/complaints",
         "/finance",
         "/claims",
+        "/reinsurance",
         "/ops",
         "/status",
     ] {
@@ -1310,6 +1328,7 @@ async fn the_unit_pricing_console() {
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1515,6 +1534,7 @@ async fn the_complaints_and_conduct_workbench() {
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1534,6 +1554,127 @@ async fn the_complaints_and_conduct_workbench() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
         let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(problem["title"], "complaints_unavailable");
+    }
+}
+
+/// Purpose: staff see the reinsurance module's open exceptions and act on them: one person sends what they may do alone, an
+/// abandonment is prepared by one person and sent only when a different person signs it, as `approved_by`, and a signature
+/// whose send was interrupted is finished by signing again.
+/// Why it matters: abandoning a notice or an instruction leaves a reinsurer untold or two ledgers apart. The reinsurance
+/// module takes the console's word for who approved it, so if the console let one person do both halves, or let the page type
+/// the approver, the two-person rule would exist only on paper.
+#[tokio::test]
+async fn the_reinsurance_exceptions_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/reinsurance/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/reinsurance/commands", command).await }
+    };
+    let decide = |who: &'static str, verb: &'static str, id: String| {
+        let portal = &portal;
+        async move { portal.write("POST", who, &format!("/staff/v1/reinsurance/{verb}/{id}"), json!({})).await }
+    };
+
+    // Only people with a reinsurance action get in; a reader cannot act.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-riview", "me").await;
+    assert_eq!((status, &me["operate"], &me["approve"]), (StatusCode::OK, &json!(false), &json!(false)), "{me}");
+    let (status, exceptions) = ask("sub-riview", "exceptions").await;
+    assert_eq!((status, exceptions["delivery:1"]["code"].is_string()), (StatusCode::OK, true), "{exceptions}");
+    let abandon = json!({ "abandon_instruction": { "seq": 1, "reason": "the policy was entered in error and cancelled" } });
+    assert_eq!(tell("sub-riview", abandon.clone()).await.0, StatusCode::FORBIDDEN);
+
+    // What the page may not send.
+    for bad in [
+        json!({ "abandon_instruction": { "seq": 1, "reason": "x", "approved_by": "ri-1" } }),
+        json!({ "abandon_instruction": { "seq": 1, "reason": " " } }),
+        json!({ "acknowledge_instructions": { "through": 1 } }),
+        json!({ "retry_notice": 1 }),
+        json!("exceptions"),
+    ] {
+        assert_eq!(tell("sub-ri1", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // One person prepares an abandonment; it waits, and its preparer cannot sign it.
+    let (status, prepared) = tell("sub-ri1", abandon).await;
+    assert_eq!(status, StatusCode::OK, "{prepared}");
+    let id = prepared["prepared"].as_str().unwrap().to_string();
+    let waiting = ask("sub-ri2", "me").await.1["pending"].clone();
+    assert_eq!((&waiting[0]["id"], &waiting[0]["by"]), (&json!(id), &json!("ri-1")), "{waiting}");
+    assert!(portal.reinsurance.open("delivery:1"), "nothing reached the module yet");
+    let (status, problem) = decide("sub-ri1", "sign", id.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("separation")), "{problem}");
+    assert_eq!(decide("sub-riview", "sign", id.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(decide("sub-ri2", "withdraw", id.clone()).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(decide("sub-ri2", "approve", id.clone()).await.0, StatusCode::NOT_FOUND);
+
+    // The partitions' module has no leader when the second person signs: it stays signed, and signing again finishes it.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
+    }));
+    for (path, body) in [
+        ("/staff/v1/reinsurance/exceptions", None),
+        ("/staff/v1/reinsurance/commands", Some(json!({ "retry_notice": { "seq": 4 } }))),
+        (&*format!("/staff/v1/reinsurance/sign/{id}"), Some(json!({}))),
+    ] {
+        let request = Request::builder()
+            .method(if body.is_some() { "POST" } else { "GET" })
+            .uri(path)
+            .header("x-dev-subject", "sub-ri2")
+            .header("idempotency-key", "k");
+        let response = down
+            .clone()
+            .oneshot(request.body(Body::from(body.map(|b| b.to_string()).unwrap_or_default())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
+    assert_eq!(ask("sub-ri2", "me").await.1["pending"][0]["signed_by"], "ri-2");
+    assert_eq!(decide("sub-ri1", "withdraw", id.clone()).await.1["title"], "signed");
+    let (status, sent) = decide("sub-ri2", "sign", id.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert!(!portal.reinsurance.open("delivery:1"), "the abandonment closed the exception");
+    assert_eq!(ask("sub-ri2", "me").await.1["pending"], json!([]));
+    let abandoned = ask("sub-riview", "abandoned").await.1;
+    assert!(abandoned.to_string().contains("ri-2"), "the signer is the approver: {abandoned}");
+    assert_eq!(decide("sub-ri2", "sign", id).await.0, StatusCode::NOT_FOUND);
+
+    // A prepared abandonment the module refuses is finished with; one taken back never goes.
+    let (_, prepared) = tell("sub-ri1", json!({ "abandon_notice": { "seq": 77, "reason": "no such notice" } })).await;
+    let refused = prepared["prepared"].as_str().unwrap().to_string();
+    assert_eq!(decide("sub-ri2", "sign", refused).await.0, StatusCode::CONFLICT);
+    assert_eq!(ask("sub-ri2", "me").await.1["pending"], json!([]));
+    let (_, prepared) = tell("sub-ri1", json!({ "abandon_notice": { "seq": 78, "reason": "raised in error" } })).await;
+    let taken_back = prepared["prepared"].as_str().unwrap().to_string();
+    assert_eq!(decide("sub-ri1", "withdraw", taken_back).await.0, StatusCode::OK);
+    assert_eq!(ask("sub-ri2", "me").await.1["pending"], json!([]));
+
+    // What one person sends alone goes straight to the module, which decides.
+    let (status, problem) = tell("sub-ri1", json!({ "retry_notice": { "seq": 999 } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_refused")), "{problem}");
+
+    // The other questions.
+    assert_eq!(ask("sub-riview", "notices").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-riview", "abandoned_notices").await.0, StatusCode::OK);
+    assert!(ask("sub-riview", "sweep_check?period_end=2027-02-28").await.1["green"].is_boolean());
+    for bad in ["sweep_check", "statement?number=first", "statement", "reconcile", "sweep_check?period_end=soon"] {
+        assert_eq!(ask("sub-riview", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
 
@@ -1665,6 +1806,7 @@ async fn the_claims_console() {
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -1833,6 +1975,7 @@ async fn the_finance_console() {
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),

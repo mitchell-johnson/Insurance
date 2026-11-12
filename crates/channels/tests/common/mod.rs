@@ -6,6 +6,7 @@ pub mod claims;
 pub mod complaints;
 pub mod finance;
 pub mod pricing;
+pub mod reinsurance;
 
 use base64::Engine;
 use chrono::NaiveDate;
