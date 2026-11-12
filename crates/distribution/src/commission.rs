@@ -290,6 +290,7 @@ impl DistributionState {
                 PolicyStatus::Lapsed => self.policy_ended(ctx, &policy, &cause, date, EndKind::Lapsed),
                 PolicyStatus::Cancelled => self.policy_ended(ctx, &policy, &cause, date, EndKind::Cancelled),
                 PolicyStatus::Terminated => self.policy_ended(ctx, &policy, &cause, date, EndKind::Claim),
+                PolicyStatus::Avoided => self.policy_avoided(ctx, &policy, &cause, date),
                 PolicyStatus::Expired | PolicyStatus::Matured | PolicyStatus::Surrendered | PolicyStatus::PaidUp => {
                     self.policy_ended(ctx, &policy, &cause, date, EndKind::Other)
                 }
@@ -924,6 +925,81 @@ impl DistributionState {
                 p.last_clawback = Some(reference);
             }
         }
+    }
+
+    /// The policy was avoided for non-disclosure and is treated as never
+    /// having been in force, so it earned nobody anything. Every line of
+    /// commission still standing on it is reversed, initial and renewal,
+    /// from whoever received it, and any clawback is given back to whoever
+    /// bore it: after this every party nets to nothing on the policy. This
+    /// is so whether the insurer refunds the premium or keeps it. Its cover
+    /// was never given up, so the replacement rule does not look at it.
+    fn policy_avoided(&mut self, ctx: &mut Ctx, policy: &PolicyId, cause: &str, date: NaiveDate) {
+        let Some(record) = self.policies.get_mut(policy).filter(|p| p.ended.is_none()) else {
+            return;
+        };
+        record.ended = Some((date, EndKind::Avoided));
+        let partition = record.partition;
+        // What stands on the policy is the sum of every allocation except
+        // the ones that restate another in place (a move to held, a
+        // reallocation under a backdated rule), whose originals were
+        // rewritten to match.
+        let mut net: BTreeMap<String, (AllocLine, i64)> = BTreeMap::new();
+        for a in self
+            .allocations
+            .values()
+            .filter(|a| &a.policy == policy && !matches!(a.kind.as_str(), "commission_held" | "commission_reallocated"))
+        {
+            for l in &a.lines {
+                let key = serde_json::to_string(&AllocLine { amount_minor: 0, ..l.clone() }).unwrap_or_default();
+                net.entry(key).or_insert_with(|| (l.clone(), 0)).1 += l.amount_minor;
+            }
+        }
+        let lines: Vec<AllocLine> = net
+            .into_values()
+            .filter(|(_, amount)| *amount != 0)
+            .map(|(l, amount)| AllocLine { amount_minor: -amount, ..l })
+            .collect();
+        for e in self.exposures.values_mut().filter(|e| &e.policy == policy) {
+            e.open = false;
+        }
+        for l in self.layers.values_mut().filter(|l| &l.policy == policy) {
+            l.ended.get_or_insert(l.start);
+            l.given_up = None;
+        }
+        self.premiums.remove(policy);
+        if lines.is_empty() {
+            return;
+        }
+        let reference = format!("cr:{cause}");
+        let references: Vec<String> = self
+            .allocations
+            .values_mut()
+            .filter(|a| &a.policy == policy && a.kind == "commission_earned" && a.reversed_by.is_none())
+            .map(|a| {
+                a.reversed_by = Some(reference.clone());
+                a.reference.clone()
+            })
+            .collect();
+        ctx.emit(Event::CommissionReversed {
+            reference: reference.clone(),
+            reverses: references.first().cloned().unwrap_or_default(),
+        });
+        self.record_allocation(
+            ctx,
+            Allocation {
+                reference,
+                partition,
+                policy: policy.clone(),
+                kind: "commission_reversed".into(),
+                cause: cause.to_string(),
+                date,
+                lines,
+                reverses: None,
+                exposures: vec![],
+                reversed_by: None,
+            },
+        );
     }
 
     /// One layer of a cover ended while the policy carries on: the cover was

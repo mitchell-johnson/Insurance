@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use common::*;
 use ic_core::event::{Event as CoreEvent, LayerInfo};
-use ic_core::{Command as CoreCommand, EventRecord, LayerOrigin, PolicyId, UnwindCause};
+use ic_core::{Command as CoreCommand, EventRecord, LayerOrigin, PolicyId, PolicyStatus, UnwindCause};
 use ic_distribution::config::Change;
 use ic_distribution::model::Schedule;
 use ic_distribution::rules::{Share, WHOLE};
@@ -939,4 +939,58 @@ fn clawback_by_cause_falls_on_the_engagement_that_submitted_the_alteration() {
     w.activate("by-cause-off", vec![by_cause(false, 3)]).unwrap();
     assert_eq!(cut(&mut w, &policy, 100_000_00), only("fap-one", 240_00));
     w.assert_reconciled();
+}
+
+/// Purpose: a policy avoided for non-disclosure is treated as never having been in force:
+/// every line of commission on it is reversed, initial and renewal, from whoever received it,
+/// and a clawback already raised on it is given back to whoever bore it, so each party nets
+/// to nothing on the policy; nothing is left at risk; a later premium event earns nothing;
+/// and the result is the same whether the premium is refunded or kept.
+/// Why it matters: avoidance unwinds the contract from the start. Commission left on it is
+/// paid for business that legally never existed, and a clawback left standing charges the
+/// liable provider for commission that has already been taken back from the adviser.
+#[test]
+fn an_avoided_policy_earns_nobody_anything() {
+    for premium in [ic_core::PremiumOnAvoidance::Refund, ic_core::PremiumOnAvoidance::Retain] {
+        let (mut w, policy, _) = advised_in(worked_example());
+        // A month of renewal, and a cut that claws back part of the initial commission.
+        w.days(31);
+        w.pay(&policy, "r2");
+        let p = w.cluster.locate(&policy).unwrap();
+        let life = w.cluster.state(p).policies[&policy].covers["life"].layers[0].life.clone();
+        let reduce = CoreCommand::ReduceCover(Box::new(ic_core::command::ReduceCover {
+            policy: policy.clone(),
+            cover: "life".into(),
+            life,
+            sum_insured_minor: 400_000_00,
+        }));
+        w.core(&policy, "policy-servicing", reduce).unwrap();
+        assert!(w.events.iter().any(|e| matches!(e, Event::ClawbackRaised { .. })));
+        assert!(w.payable("a-co") > 0 && w.payable("fap-one") > 0);
+
+        let avoid = CoreCommand::AvoidPolicy {
+            policy: policy.clone(),
+            case: "nd-1".into(),
+            premium,
+        };
+        w.core(&policy, "underwriting", avoid).unwrap();
+        assert_eq!((w.payable("a-co"), w.held("a-co")), (0, 0), "{premium:?}");
+        assert_eq!((w.payable("fap-one"), w.held("fap-one")), (0, 0), "{premium:?}");
+        assert!(w.dist.clawback_exposure(w.today()).is_empty());
+        assert!(w.dist.layers.values().all(|l| l.given_up.is_none()));
+        w.assert_reconciled();
+
+        // The same status again, or anything later, changes nothing.
+        let count = w.dist.allocations.len();
+        inject(
+            &mut w,
+            p,
+            CoreEvent::PolicyStatusChanged {
+                policy: policy.clone(),
+                from: PolicyStatus::InForce,
+                to: PolicyStatus::Avoided,
+            },
+        );
+        assert_eq!(w.dist.allocations.len(), count);
+    }
 }
