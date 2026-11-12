@@ -11,6 +11,7 @@ It issues and services policies (retail term life, health, and group schemes), b
 | `ic-node` | A ledger node. Holds a replica of every partition's Raft group (the log, the policy state, the ledger and the read models) and of every module's group. | StatefulSet of three on AKS |
 | `ic-api` | The public HTTP API. A stateless gateway that routes each request to the partition that owns the policy. | Deployment |
 | `ic-worker` | Runs the end-of-day close as a Temporal workflow, so a close survives any process dying part-way. | Deployment, plus a nightly CronJob |
+| `ic-reinsurance` | Carries the reinsurance module's cessions and entries from its group on the nodes to the partitions. Holds no state. | Deployment |
 | `ic-admin` | The operator's command: bootstrap, status, membership changes. | Job, or by hand |
 | `ic-simulate` | A synthetic insurer that runs a year of business in seconds, for sizing and soak runs. | Developer tool |
 
@@ -26,7 +27,7 @@ Azure services do the work that should not be ours:
 | The cluster token | Key Vault, mounted through the Secrets Store CSI driver |
 | Logs and metrics | Container Insights and Application Insights (JSON lines on stdout) |
 
-[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core.
+[docs/architecture.md](docs/architecture.md) explains the design. [docs/operations.md](docs/operations.md) is the runbook. [docs/decisions.md](docs/decisions.md) lists what is deliberately not done yet and the decisions still open. [docs/modules.md](docs/modules.md) is the contract for the modules built beside the core. [docs/finance.md](docs/finance.md) describes the finance ledger, the close, returns and the table validation suite.
 
 ## Try it
 
