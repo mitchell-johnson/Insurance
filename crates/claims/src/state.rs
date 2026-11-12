@@ -95,8 +95,13 @@ impl Cx<'_> {
             .filter(|p| p.party == payee)
             .map(|p| p.account_ref.clone())
             .unwrap_or_default();
+        // The run it went out in, so the payments module can confirm the run once every item has settled.
+        let lump = claim.payments.iter().find(|p| p.payment_ref == payment_ref).and_then(|p| p.run.clone());
+        let periods = claim.schedule.iter().flat_map(|s| s.periods.values());
+        let run = lump.or_else(|| periods.filter(|p| p.payment_ref == payment_ref).map(|p| p.run.clone()).next());
         let detail = [
             ("policy", claim.policy.clone()),
+            ("run", run.unwrap_or_default()),
             ("account_ref", account_ref),
             ("payment_ref", payment_ref.to_string()),
             ("amount_minor", gross_minor.to_string()),
@@ -247,6 +252,12 @@ impl ClaimsState {
                 actor,
             } => self.pay_cost(cx, &claim, payment_ref, &item, &provider, &actor),
             Command::StartWaiver { claim, from, actor } => self.start_waiver(cx, &claim, from, &actor),
+            Command::PayInterest {
+                claim,
+                payment_ref,
+                party,
+                actor,
+            } => self.pay_interest(cx, &claim, payment_ref, &party, &actor),
             Command::PaymentReturned { claim, payment_ref } => self.payment_returned(cx, &claim, &payment_ref),
             Command::DeclareIncome {
                 claim,
@@ -491,11 +502,12 @@ impl ClaimsState {
             }
             Due::Review(kind) => {
                 open_task(claim, cx, format!("review/{kind:?}/{on}"), kind, Some(on));
-                claim.due.insert((plus_days(on, self.rules.review_grace_days), Due::ReviewOverdue(kind)));
-                let months = match kind {
-                    TaskKind::MedicalReview => self.rules.medical_review_months,
-                    _ => self.rules.income_declaration_months,
+                let (grace, months) = match kind {
+                    TaskKind::ProofOfLife => (self.rules.proof_of_life_grace_days, self.rules.proof_of_life_months),
+                    TaskKind::MedicalReview => (self.rules.review_grace_days, self.rules.medical_review_months),
+                    _ => (self.rules.review_grace_days, self.rules.income_declaration_months),
                 };
+                claim.due.insert((plus_days(on, grace), Due::ReviewOverdue(kind)));
                 if let Some(s) = claim.schedule.as_mut() {
                     let next = plus_months(on, months.max(1));
                     if next < s.end {

@@ -1,14 +1,45 @@
-# The reinsurance driver: carries the reinsurance module's instructions from
-# its group on the ledger nodes to the partitions (docs/reinsurance.md). It
-# holds no state. It talks only to the ledger nodes, with the cluster token,
-# so it runs under the workers' identity, which may read that one secret.
+# The reinsurance driver (docs/reinsurance.md). It carries the reinsurance
+# module's instructions from its group on the ledger nodes to the partitions
+# and its notices to whoever they are for: other modules on the nodes, the
+# write-once records container, and the event hub reinsurance operations
+# are alerted from. It holds no state.
+#
+# It runs under an identity of its own, which may write to that container,
+# send to that hub and read the cluster token. Set the values marked REPLACE
+# from the outputs of infra/reinsurance.bicep and infra/main.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-reinsurance
+  annotations:
+    azure.workload.identity/client-id: REPLACE-reinsuranceIdentityClientId
+---
+# The cluster token, mounted as a file under the driver's identity. It never
+# becomes a Kubernetes Secret.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-reinsurance-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-reinsuranceIdentityClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: ic-reinsurance
 spec:
   # Two, so delivery carries on when one dies. Both may run at once: the core
-  # applies each instruction once.
+  # applies each instruction once, a record's name is written once, and a
+  # notice published twice carries the same ID.
   replicas: 2
   selector:
     matchLabels:
@@ -19,7 +50,7 @@ spec:
         app: ic-reinsurance
         azure.workload.identity/use: "true"
     spec:
-      serviceAccountName: ic-worker
+      serviceAccountName: ic-reinsurance
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true
@@ -34,6 +65,11 @@ spec:
           envFrom:
             - configMapRef:
                 name: ic-ledger
+            # IC_BLOB_ENDPOINT and IC_EVENT_HUBS_ENDPOINT. The container and
+            # hub have the names infra/reinsurance.bicep gives them, which
+            # are the driver's defaults.
+            - configMapRef:
+                name: ic-azure
           resources:
             requests:
               cpu: 50m
@@ -55,7 +91,7 @@ spec:
             driver: secrets-store.csi.k8s.io
             readOnly: true
             volumeAttributes:
-              secretProviderClass: ic-worker-token
+              secretProviderClass: ic-reinsurance-token
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget

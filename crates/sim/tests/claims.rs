@@ -1570,3 +1570,52 @@ fn a_waived_premium_is_billed_and_paid_from_claims_expense() {
         .any(|e| e.body.kind == "premium_waived" && e.body.detail["claim"] == "clm-ip"));
     clean(&c);
 }
+
+/// Purpose: an assignment recorded on the policy in the core reaches the claim: the lender
+/// standing on the event date is owed its extent of the proceeds, the claimant cannot be paid
+/// that money, and both payments settle on the real ledger and close the claim.
+/// Why it matters: the core records the interest and claims enforces it, in two crates owned
+/// apart. Only a test through the real state machine proves the record the core keeps is the
+/// one the claims workflow reads, as at the event date, and cannot skip.
+#[test]
+fn a_lender_recorded_on_the_policy_is_paid_before_the_claimant() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    let assignment = ic_core::interest::InterestCommand::Record {
+        policy: id.clone(),
+        interest: "int-1".into(),
+        party: ic_core::PartyId("party-bank".into()),
+        notice_received: today,
+        extent_minor: Some(50_000_00),
+        effective_from: today,
+        notice: "vault-notice-1".into(),
+    };
+    c.submit(0, "policy-servicing", Command::Interest(Box::new(assignment))).unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    verify_payee(&mut c, "clm-1");
+    let due = claim(&c, "clm-1").interests.clone();
+    assert_eq!((due.len(), due[0].party.as_str(), due[0].owed_minor), (1, "party-bank", 50_000_00));
+
+    assert_eq!(code(run(&mut c, pay("clm-1", "pay-1", 30_000_01, None))), "interest_first");
+    ok(&mut c, pay("clm-1", "pay-1", 30_000_00, None));
+    ok(
+        &mut c,
+        claims::Command::PayInterest {
+            claim: "clm-1".into(),
+            payment_ref: "int-pay-1".into(),
+            party: "party-bank".into(),
+            actor: actor("sam"),
+        },
+    );
+    assert_eq!(claim(&c, "clm-1").status, Status::Paid);
+    c.submit(0, "payments", settle(&id, "pay-1", 30_000_00)).unwrap();
+    c.submit(0, "payments", settle(&id, "int-pay-1", 50_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    let to_bank = module_events(&c, "claim_paid").into_iter().find(|e| e["payment_ref"] == "int-pay-1").unwrap();
+    assert_eq!((to_bank["payee"].as_str(), to_bank["account_ref"].as_str()), ("party-bank", ""));
+    days(&mut c, 2);
+}

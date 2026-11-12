@@ -312,6 +312,7 @@ impl Reinsurance {
                 effective,
                 covers,
                 party,
+                ..
             } => {
                 self.set_lives(ctx, &policy, &[LifeInfo::new(life.clone(), party)]);
                 self.set_member(ctx, &policy, partition, &life, effective, &covers);

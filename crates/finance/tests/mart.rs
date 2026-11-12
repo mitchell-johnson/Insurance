@@ -160,8 +160,8 @@ fn extracts_reconcile_are_frozen_and_satisfy_the_close() {
     );
 
     // The files as they would be stored, registered with the ledger.
-    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v2.csv");
-    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v2");
+    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v3.csv");
+    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v3");
     assert_eq!(in_force_nov.bytes().iter().filter(|b| **b == b'\n').count() as u64, in_force_nov.rows() + 1);
     let red = |w: &World| {
         let checks = w.books.state.checks(nov);
@@ -444,6 +444,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 life: "m1".into(),
                 effective: day(2),
                 covers: vec![member_cover("m1", 350)],
+                info: None,
             },
             Event::LayerAdded {
                 policy: sch.clone(),
@@ -537,6 +538,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 effective: day(9),
                 covers: vec![member_cover("m3", 500)],
                 party: None,
+                info: None,
             },
             Event::TransferLanded {
                 policy: moved_in.clone(),
@@ -701,4 +703,112 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
     assert_eq!(ages("in_force").last().map(String::as_str), Some("40"));
     let lapsed_days = mart.experience(day(6), day(7)).unwrap();
     assert!(rows(&lapsed_days).iter().all(|r| r["product"] != "term-life"));
+}
+
+/// Purpose: a scheme is issued with one member, a second joins the next day with her
+/// factors (born 1980, female, non-smoker, occupation class 2), and three days later the
+/// employer corrects her to a smoker in a class typed with a comma in it. The in-force
+/// and movement extracts carry her age, sex, smoker status and class from the day she
+/// joined; the extract as at the day she joined is the same file to the byte after the
+/// correction; the later extract carries the corrected factors with the comma replaced;
+/// a notice with no factors changes nothing; and the experience extract splits her
+/// exposure between the two classes by what was recorded at each period end.
+/// Why it matters: most of a scheme's members join after issue, so without this the
+/// extracts for group business would be blank in every rating column. And a correction
+/// must not rewrite a file the actuary has already valued from.
+#[test]
+fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
+    let day = |n: u32| d(2028, 3, n);
+    let sch = PolicyId::from("sch-1");
+    let mut s = Stream::new(day(1));
+    let info = |smoker: bool, class: &str| {
+        Some(LifeInfo {
+            date_of_birth: Some(d(1980, 6, 1)),
+            sex: Some(Sex::Female),
+            smoker: Some(smoker),
+            occupation_class: Some(class.to_string()),
+            ..LifeInfo::new("m2".into(), None)
+        })
+    };
+    s.push(Event::PolicyIssued {
+        policy: sch.clone(),
+        number: "N".to_string(),
+        group: "grp".into(),
+        policyholder: "party-x".into(),
+        product_code: "group-life".to_string(),
+        product_hash: "h".to_string(),
+        inception: day(1),
+        lives: vec![],
+        layers: vec![],
+        members: vec![member_cover("m1", 300)],
+    });
+    s.close(day(2));
+    s.push(Event::MemberJoined {
+        policy: sch.clone(),
+        life: "m2".into(),
+        effective: day(2),
+        covers: vec![member_cover("m2", 400)],
+        party: None,
+        info: info(false, "2"),
+    });
+    s.close(day(3));
+    let before = mart_of(1, &s.events).in_force(day(2)).unwrap();
+    let joined = rows(&before).into_iter().find(|r| r["life"] == "m2").unwrap();
+    assert_eq!(
+        (
+            joined["age"].as_str(),
+            joined["sex"].as_str(),
+            joined["smoker"].as_str(),
+            joined["occupation_class"].as_str()
+        ),
+        ("47", "female", "false", "2")
+    );
+    let first = rows(&before).into_iter().find(|r| r["life"] == "m1").unwrap();
+    assert_eq!((first["age"].as_str(), first["occupation_class"].as_str()), ("", ""));
+
+    s.close(day(4));
+    s.close(day(5));
+    // A notice with no factors, then the correction.
+    s.push(Event::MemberChanged {
+        policy: sch.clone(),
+        life: "m2".into(),
+        effective: day(5),
+        covers: vec![member_cover("m2", 400)],
+        info: None,
+    });
+    s.push(Event::MemberChanged {
+        policy: sch.clone(),
+        life: "m2".into(),
+        effective: day(5),
+        covers: vec![member_cover("m2", 450)],
+        info: info(true, "4,heavy"),
+    });
+    s.close(day(6));
+    let mart = mart_of(1, &s.events);
+    assert_eq!(mart.in_force(day(2)).unwrap().bytes(), before.bytes(), "the extract as at 2 March changed");
+    let after = rows(&mart.in_force(day(5)).unwrap()).into_iter().find(|r| r["life"] == "m2").unwrap();
+    assert_eq!(
+        (
+            after["smoker"].as_str(),
+            after["occupation_class"].as_str(),
+            after["sum_insured_minor"].as_str()
+        ),
+        ("true", "4_heavy", "450")
+    );
+
+    let moved = rows(&mart.movement(day(1), day(5)).unwrap());
+    let classes: Vec<&str> = moved.iter().filter(|r| r["life"] == "m2").map(|r| r["occupation_class"].as_str()).collect();
+    assert_eq!(classes.first(), Some(&"2"));
+    assert_eq!(classes.last(), Some(&"4_heavy"));
+    assert!(mart.movement(day(1), day(5)).unwrap().reconciled);
+
+    // Exposure sits in the cell of the factors recorded at the end of the period asked.
+    let cell = |from, to, class: &str| {
+        let x = mart.experience(from, to).unwrap();
+        assert!(x.reconciled);
+        rows(&x).into_iter().find(|r| r["occupation_class"] == class).map(|r| r["cover_days"].clone())
+    };
+    assert_eq!(cell(day(2), day(4), "2").as_deref(), Some("3"));
+    assert_eq!(cell(day(2), day(5), "4_heavy").as_deref(), Some("4"));
+    assert_eq!(cell(day(2), day(5), "2"), None);
 }

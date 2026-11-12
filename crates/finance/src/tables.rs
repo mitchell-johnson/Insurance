@@ -39,6 +39,10 @@ pub struct TableSchema {
     /// is not rated by category.
     #[serde(default)]
     pub categories: Vec<String>,
+    /// The occupation classes every table must carry. Empty when the table
+    /// is not rated by occupation class.
+    #[serde(default)]
+    pub occupation_classes: Vec<String>,
     /// The ages every key must cover, without gap or overlap. `None` when
     /// the table is not rated by age.
     #[serde(default)]
@@ -140,6 +144,7 @@ struct Key {
     sex: Option<Sex>,
     smoker: Option<bool>,
     category: Option<String>,
+    occupation_class: Option<String>,
 }
 
 impl Key {
@@ -148,6 +153,7 @@ impl Key {
             sex: row.sex,
             smoker: row.smoker,
             category: row.category.clone(),
+            occupation_class: row.occupation_class.clone(),
         }
     }
 
@@ -165,6 +171,9 @@ impl Key {
         }
         if let Some(category) = &self.category {
             parts.push(category.clone());
+        }
+        if let Some(class) = &self.occupation_class {
+            parts.push(format!("class {class}"));
         }
         if parts.is_empty() {
             "all".to_string()
@@ -229,15 +238,23 @@ fn required_keys(schema: &TableSchema) -> BTreeSet<Key> {
     } else {
         schema.categories.iter().cloned().map(Some).collect()
     };
+    let classes: Vec<Option<String>> = if schema.occupation_classes.is_empty() {
+        vec![None]
+    } else {
+        schema.occupation_classes.iter().cloned().map(Some).collect()
+    };
     let mut keys = BTreeSet::new();
     for sex in &sexes {
         for smoker in &smokers {
             for category in &categories {
-                keys.insert(Key {
-                    sex: *sex,
-                    smoker: *smoker,
-                    category: category.clone(),
-                });
+                for class in &classes {
+                    keys.insert(Key {
+                        sex: *sex,
+                        smoker: *smoker,
+                        category: category.clone(),
+                        occupation_class: class.clone(),
+                    });
+                }
             }
         }
     }
@@ -462,6 +479,7 @@ fn compare(table: &RateTable, previous: &RateTable, schema: &TableSchema, by_age
             sex: key.sex,
             smoker: key.smoker,
             category: key.category.clone(),
+            occupation_class: key.occupation_class.clone(),
             annual_rate: schema.rate_min.clone(),
         };
         let at = cell(key, &row, by_age);
@@ -603,7 +621,12 @@ fn rate_for(table: &RateTable, age: u32, c: &RatedCover) -> Option<i128> {
         .rows
         .iter()
         .find(|r| {
-            age >= r.age_from && age <= r.age_to && (r.sex.is_none() || r.sex == c.sex) && (r.smoker.is_none() || r.smoker == c.smoker) && r.category.is_none()
+            age >= r.age_from
+                && age <= r.age_to
+                && (r.sex.is_none() || r.sex == c.sex)
+                && (r.smoker.is_none() || r.smoker == c.smoker)
+                && r.category.is_none()
+                && (r.occupation_class.is_none() || r.occupation_class == c.occupation_class)
         })
         .and_then(|r| scaled(r.annual_rate.as_str()))
         .map(|(rate, _)| rate)
