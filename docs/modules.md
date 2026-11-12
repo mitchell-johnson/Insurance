@@ -69,6 +69,40 @@ A module that reads events is declared with `hosted_reading(state, query, react)
 - `react` sees events only. To change a policy the module's driver sends the core a command, as above.
 - A reader outside the cluster uses the same routes: `ClusterClient::acknowledge_events(partition, consumer, 0)` registers it, `events(partition, consumer, after, max)` reads from its checkpoint, `acknowledge_events` lets the partition release what it has, and `unsubscribe` ends it. A reader that stops acknowledging holds events in every member's state: `backlog.events` in `GET /v1/status` is the figure to watch.
 
+### Posting to the core
+
+A module changes the ledger only by sending the core a command. It does not
+call the core while applying its own command, because that would not be
+deterministic. It writes the command to an outbox in its own replicated
+state, in the same step as whatever caused it, and the host carries it:
+
+```rust
+ModuleSpec::new(MODULE, make)?.posting_to_core(Outbox { pending, read, outcome })
+```
+
+- `pending(limit)` is the question that lists the oldest unsent items.
+- `read(answer)` turns the module's answer into `CorePosting { id, route, envelope }`,
+  oldest first. `route` is `Route::Partition(p)` when the module knows the
+  partition and `Route::Policy(id)` when the host should find the partition
+  that holds the policy.
+- `outcome(posting, outcome)` is the module command that records what became
+  of the item: `Applied { partition, log_index, duplicate }`, `Refused(reject)`
+  with the core's own reason, or `Unroutable`.
+
+The node that leads the module's group carries the outbox on every
+housekeeping pass. The rules a module must keep:
+
+- Remove an item only on hearing its outcome. A node lost between the core
+  applying the command and the module hearing of it means the item is offered
+  again, so the envelope's idempotency key must be the item's own and never
+  change; the core then answers the second offer with the first result.
+- The outcome command carries its own idempotency key and may arrive twice.
+- A refusal is final. Offering the same command again changes nothing, so
+  record it and raise whatever a person needs to see.
+- Items are carried oldest first and one that cannot be offered holds back
+  those behind it. If the module answers an outcome with a refusal of its own
+  the host cannot tell, and carries on with the next item.
+
 ## Changing the core
 
 The core's commands and events are a published interface. Any thread may extend it; nobody may break it.
