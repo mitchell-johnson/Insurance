@@ -25,6 +25,8 @@ pub(crate) struct Plan {
     /// Money already paid that the decision makes an overpayment.
     pub overpaid_minor: i64,
     pub health: Option<HealthAmount>,
+    /// What each interested party takes of a lump sum before the claimant.
+    pub interests: Vec<crate::model::InterestDue>,
 }
 
 fn refuse<T>(code: &str, message: &str) -> Result<T, Reject> {
@@ -171,6 +173,24 @@ impl ClaimsState {
                         if facts.standing.as_deref() == Some("in_grace") {
                             // A claim in grace is payable less the premium owing.
                             plan.deduct_minor = facts.outstanding_premium_minor.clamp(0, amount);
+                        }
+                        if plan.health.is_none() {
+                            // Proceeds go to recorded interests first, in priority order, each up to its extent.
+                            let mut left = amount - plan.deduct_minor;
+                            let mut recorded: Vec<_> = facts.interests.iter().collect();
+                            recorded.sort_by(|a, b| (a.priority, &a.party).cmp(&(b.priority, &b.party)));
+                            for i in recorded {
+                                let owed = i.extent_minor.map_or(left, |e| e.clamp(0, left));
+                                left -= owed;
+                                if owed > 0 {
+                                    plan.interests.push(crate::model::InterestDue {
+                                        party: i.party.clone(),
+                                        priority: i.priority,
+                                        owed_minor: owed,
+                                        paid_minor: 0,
+                                    });
+                                }
+                            }
                         }
                         if claim.claim_type == ClaimType::Death && facts.ends_on_death && facts.policy_status == "in_force" {
                             plan.terminate = Some(Termination {
@@ -534,6 +554,14 @@ impl ClaimsState {
                     claim.admitted_minor += plan.amount_minor;
                     claim.payable_minor += plan.amount_minor - plan.deduct_minor;
                     claim.reserve_minor = 0;
+                    for due in &plan.interests {
+                        cx.notify(
+                            "interest_to_be_paid",
+                            &id,
+                            &[("party", due.party.clone()), ("owed_minor", due.owed_minor.to_string())],
+                        );
+                    }
+                    claim.interests.extend(plan.interests.iter().cloned());
                     if let Some(priced) = &plan.health {
                         self.use_health(cx, claim, priced, plan.amount_minor);
                     }
@@ -594,6 +622,7 @@ impl ClaimsState {
                     run: None,
                     cost_item: None,
                     interest_minor: 0,
+                    interested_party: None,
                 });
                 cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true, 0);
             }

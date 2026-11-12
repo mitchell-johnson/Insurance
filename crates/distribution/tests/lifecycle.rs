@@ -709,3 +709,106 @@ fn a_layer_removed_while_the_policy_continues_is_clawed_back_once() {
     assert_eq!(from, ["a-co", "fap-one"].into());
     assert!(lines.iter().all(|l| l.commission_type == Some(ic_distribution::rules::CommissionType::Initial)));
 }
+
+/// Purpose: when the core reduces a cover and a layer is cut in part, the share of the initial
+/// commission on the part given up is clawed back from the liable party (or, inside
+/// cooling-off, reversed from the payees who received it); the part kept carries on with its
+/// terms, its share of the premium and its share of the clawback exposure; it is not treated
+/// as new business, so it needs no new terms and earns no second initial commission; later
+/// premium earns renewal on it; and the module's balances agree with the core's ledgers.
+/// Why it matters: the core records a partial cut as one layer ending and a smaller one
+/// starting. Read naively that claws back the whole layer and then leaves the kept cover
+/// with no commission terms at all, so the adviser loses commission on cover the customer
+/// still holds, or is paid initial commission twice on the same cover.
+#[test]
+fn a_cover_reduced_in_part_is_clawed_back_in_proportion_and_carries_on() {
+    let reduce = |w: &mut World, policy: &PolicyId, keep: i64| {
+        let p = w.cluster.locate(policy).unwrap();
+        let life = w.cluster.state(p).policies[policy].covers["life"].layers[0].life.clone();
+        let command = CoreCommand::ReduceCover(Box::new(ic_core::command::ReduceCover {
+            policy: policy.clone(),
+            cover: "life".into(),
+            life,
+            sum_insured_minor: keep,
+        }));
+        w.core(policy, "policy-servicing", command).unwrap();
+    };
+    let initial = |w: &World, policy: &PolicyId| {
+        w.dist
+            .exposures
+            .values()
+            .filter(|e| &e.policy == policy && e.open)
+            .map(|e| e.amount_minor)
+            .sum::<i64>()
+    };
+
+    // Three weeks in, past cooling-off: 500,000 of cover reduced to 300,000.
+    let (mut w, policy, _) = advised_in(worked_example());
+    w.days(20);
+    let (a_before, fap_before) = (w.payable("a-co"), w.payable("fap-one"));
+    let before = w.events.len();
+    reduce(&mut w, &policy, 300_000_00);
+    let events = w.events[before..].to_vec();
+    let clawed: i64 = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ClawbackRaised { total_minor, .. } => Some(*total_minor),
+            _ => None,
+        })
+        .sum();
+    assert_eq!(clawed, 480_00, "two fifths of the 1,200.00 initial commission");
+    assert_eq!(
+        (w.payable("a-co"), w.payable("fap-one")),
+        (a_before, fap_before - 480_00),
+        "from the liable party alone"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::TaskCreated { kind, .. } if kind == "layer_needs_terms")),
+        "{events:?}"
+    );
+    let (old, new) = (&w.dist.layers[&layer_of(&policy, 1)], &w.dist.layers[&layer_of(&policy, 2)]);
+    assert!(old.ended.is_some() && new.ended.is_none());
+    assert_eq!((new.sum_insured_minor, new.start, new.initial_paid.is_some()), (300_000_00, old.start, true));
+    assert_eq!(new.terms.as_ref().unwrap().annual_premium_minor, 720_00);
+    assert_eq!(initial(&w, &policy), 720_00, "the kept share is still at risk, on the new layer");
+    assert!(w
+        .dist
+        .exposures
+        .values()
+        .filter(|e| e.policy == policy && e.open)
+        .all(|e| e.layer == layer_of(&policy, 2)));
+    w.assert_reconciled();
+
+    // The next premium earns renewal on the kept layer and no initial commission.
+    w.days(15);
+    let before = w.events.len();
+    assert!(w.pay(&policy, "r2") > 0);
+    let earned: Vec<String> = w.events[before..]
+        .iter()
+        .filter_map(|e| match e {
+            Event::CommissionEarned { reference, .. } => Some(reference.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(earned.len(), 1);
+    let lines = &w.dist.allocations[&earned[0]].lines;
+    assert!(
+        lines
+            .iter()
+            .all(|l| l.commission_type == Some(ic_distribution::rules::CommissionType::Renewal) && l.layer == Some(layer_of(&policy, 2))),
+        "{lines:?}"
+    );
+    w.assert_reconciled();
+
+    // The same reduction on the day the policy started is inside cooling-off.
+    let (mut w, policy, _) = advised_in(worked_example());
+    let (a_before, fap_before) = (w.payable("a-co"), w.payable("fap-one") + w.held("fap-one"));
+    reduce(&mut w, &policy, 300_000_00);
+    let back = (a_before - w.payable("a-co"), fap_before - w.payable("fap-one") - w.held("fap-one"));
+    assert_eq!(back.0 + back.1, 480_00, "two fifths of the initial commission is reversed");
+    assert!(back.0 > 0 && back.1 > 0, "from each payee who received it: {back:?}");
+    assert_eq!(initial(&w, &policy), 720_00);
+    w.assert_reconciled();
+}

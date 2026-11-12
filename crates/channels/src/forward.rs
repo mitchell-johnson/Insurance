@@ -40,6 +40,10 @@ pub const PUBLISHER: &str = "commission";
 /// Who it speaks as for engagements, licences and status.
 pub const STRUCTURE: &str = "distribution";
 
+/// How an error begins when the module was reached and would not answer,
+/// as against not being reached at all.
+pub const REFUSED: &str = "refused: ";
+
 type Asked<'a> = Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>>;
 
 /// Another module on the nodes: somewhere a question can be put and a command sent.
@@ -62,7 +66,8 @@ impl Source for Hosted {
     fn ask(&self, question: Value) -> Asked<'_> {
         Box::pin(async move {
             match self.client.query_module(self.module, &question).await {
-                Ok(answer) => answer,
+                Ok(Ok(answer)) => Ok(answer),
+                Ok(Err(refusal)) => Err(format!("{REFUSED}{refusal}")),
                 Err(e) => Err(e.to_string()),
             }
         })
@@ -71,7 +76,7 @@ impl Source for Hosted {
     fn tell(&self, envelope: Value) -> Asked<'_> {
         Box::pin(async move {
             match self.client.propose_module_until(self.module, &envelope, self.patience).await {
-                Ok(reply) => reply.result,
+                Ok(reply) => reply.result.map_err(|refusal| format!("{REFUSED}{refusal}")),
                 Err(e) => Err(e.to_string()),
             }
         })

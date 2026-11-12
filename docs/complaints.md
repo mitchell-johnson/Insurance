@@ -83,6 +83,6 @@ Idempotency keys are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotte
 
 ## Not built, or waiting on others
 
-- **The workbench.** The complaints and conduct screens belong to the portal and app services, which do not yet call this module.
+- **The workbench** is built by the portal service: page `/complaints` and the routes under `/staff/v1/complaints` (`docs/channels.md`). It reads this module as JSON, and `crates/channels/tests/http.rs` runs it against `ComplaintsState`, so renaming a command, question or field here fails that test.
 - **Issuing letters.** The documents service does not yet answer `AcknowledgementDue`, `DeadlockReached` or `PopulationComplete` by issuing a document: that needs the complainant's contact details and the wording, which come from the customer master and templates not yet written.
 - **The timer values** in tests are short for testing. The real periods come from the conduct regime and the scheme's terms and need compliance sign-off before go-live.

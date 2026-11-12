@@ -343,6 +343,20 @@ pub struct Payment {
     /// Interest for late payment sent with it, on top of the amount.
     #[serde(default)]
     pub interest_minor: i64,
+    /// The interested party it went to, where it was not paid to the payee.
+    #[serde(default)]
+    pub interested_party: Option<String>,
+}
+
+/// What an interested party is owed from this claim's proceeds, fixed at
+/// the admission from the interests then in force.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InterestDue {
+    pub party: String,
+    pub priority: u32,
+    pub owed_minor: i64,
+    /// Released to them and not returned.
+    pub paid_minor: i64,
 }
 
 /// One paid period of a benefit in payment.
@@ -602,6 +616,9 @@ pub struct Claim {
     /// Times an earlier decision on this claim was overturned on review.
     pub overturns: u32,
     pub closed_on: Option<NaiveDate>,
+    /// Lenders and assignees paid before the claimant, in priority order.
+    #[serde(default)]
+    pub interests: Vec<InterestDue>,
     /// Premiums for periods starting on or after this date are paid from
     /// claims expense while the benefit runs.
     #[serde(default)]
@@ -635,6 +652,10 @@ impl Claim {
     /// from the bank is owed to its provider, not to the claimant.
     pub fn benefit_payable_minor(&self) -> i64 {
         self.payable_minor - self.cost_payable_minor
+    }
+    /// Proceeds interested parties are still to be paid before the claimant.
+    pub fn interests_unpaid_minor(&self) -> i64 {
+        self.interests.iter().map(|i| i.owed_minor - i.paid_minor).sum()
     }
     /// What a piece of evidence or a rehabilitation task cost, once recorded.
     pub fn cost_of(&self, item: &str) -> Option<i64> {

@@ -109,6 +109,17 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             }
             let old = cover.layers[i].clone();
             cover.layers[i].end = Some(effective);
+            if old.sum_insured_minor > cut {
+                ctx.emit(Event::LayerReduced {
+                    policy: id.clone(),
+                    cover: spec.cover.clone(),
+                    layer: old.id,
+                    continued_as: next_id,
+                    effective,
+                    sum_insured_minor: old.sum_insured_minor,
+                    kept_minor: old.sum_insured_minor - cut,
+                });
+            }
             ctx.emit(Event::LayerEnded {
                 policy: id.clone(),
                 cover: spec.cover.clone(),
