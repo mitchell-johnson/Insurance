@@ -623,6 +623,9 @@ impl CoreState {
         } else {
             f(self, &mut policy)
         };
+        if let Some(today) = self.business_date {
+            policy.stamp_settled(today);
+        }
         self.policies.insert(id.clone(), policy);
         r
     }

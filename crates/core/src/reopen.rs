@@ -303,6 +303,7 @@ fn set_cancellation_aside(
             earned_fine: BTreeMap::new(),
             closed: false,
             entry: ctx.entries.get(posted).map(|e| e.id),
+            settled_on: None,
         });
         ctx.emit(Event::PremiumDue {
             policy: policy.id.clone(),

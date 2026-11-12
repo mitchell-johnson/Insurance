@@ -265,6 +265,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
     });
     // Premium is in advance: the first period is due at issue.
     let r = billing::bill_due_periods(&mut state.ledger, &state.catalog, &product, &mut policy, ctx);
+    policy.stamp_settled(ctx.date);
     state.policies.insert(policy.id.clone(), policy);
     r.map(|_| ())
 }

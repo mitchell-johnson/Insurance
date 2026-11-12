@@ -38,6 +38,10 @@ pub struct CoverFacts {
     pub standing: Option<String>,
     /// Premium owing today. A claim in grace is payable less this.
     pub outstanding_premium_minor: i64,
+    /// Premium that was due and unpaid on the event date and has been paid
+    /// since. The standing above already counts it as unpaid on that date.
+    #[serde(default)]
+    pub premium_paid_since_event_minor: i64,
     pub cover_type: String,
     pub cover_start: Option<NaiveDate>,
     /// The sum insured on the event date. A layer that starts after the
