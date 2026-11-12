@@ -649,7 +649,11 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
         let opened = w.ok("new-business", Command::OpenProposal(Box::new(open)));
         assert!(opened.effects.is_empty());
         let disclosed = w.disclose(id, "L1", &clean());
-        let applied = w.automatic(&disclosed);
+        // A change of terms alone reserves no capacity: the cover is already ceded, so the
+        // terms are ready as soon as they are decided.
+        let alteration = matches!(entry, Entry::Alteration { .. });
+        assert_eq!(World::reservations(&disclosed).is_empty(), alteration);
+        let applied = if alteration { disclosed } else { w.automatic(&disclosed) };
         assert!(
             matches!(&applied.effects[0], Effect::ApplyTerms { entry: e, covers, effective, .. } if e == &entry && covers.len() == 1 && *effective == w.today())
         );

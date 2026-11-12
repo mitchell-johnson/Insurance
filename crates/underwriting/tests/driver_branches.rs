@@ -360,11 +360,18 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             "the core refused to end interim cover: odd",
         ),
         (
-            terms("P1", alteration(), vec![cover(1)]),
+            terms("P1", Entry::Reinstatement { policy: "POL-1".into() }, vec![cover(1)]),
             None,
             Value::Null,
             vec![],
-            "the core has no command yet for an alteration or a reinstatement",
+            "the core has no command yet for a reinstatement",
+        ),
+        (
+            terms("P1", alteration(), vec![CoverSpec { life: None, ..cover(1) }]),
+            None,
+            known.clone(),
+            vec![],
+            "the alteration on life names no life",
         ),
         (
             terms("P1", increase(), vec![cover(1)]),
@@ -574,6 +581,39 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
         matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "sum_insured"),
         "{told:?}"
     );
+
+    // An alteration: the same, as a change of terms on the cover held. A cover already on
+    // the terms is nothing to write, and the rest still goes.
+    let two = terms(
+        "P1",
+        alteration(),
+        vec![
+            cover(1),
+            CoverSpec {
+                code: "trauma".into(),
+                ..cover(2)
+            },
+        ],
+    );
+    let (_, script) = carry(two.clone(), None, a_proposal(), &[("P1/alteration/L1/life", "no_change")]).await;
+    let sent = script.with(|s| s.core.clone());
+    let keys: Vec<_> = sent.iter().map(|(key, caller, _)| (key.as_str(), caller.as_str())).collect();
+    assert_eq!(keys, [("P1/alteration/L1/life", "underwriting"), ("P1/alteration/L1/trauma", "underwriting")]);
+    assert!(
+        matches!(&sent[1].2, ic_core::Command::AlterUnderwrittenTerms(t) if t.cover == "trauma" && t.loadings == cover(2).loadings && t.reference == "P1/terms")
+    );
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::PolicyIssued { .. })] if key == "P1/terms/issued" && caller == "issuer"),
+        "{told:?}"
+    );
+    let (_, script) = carry(two, None, a_proposal(), &[("P1/alteration/L1/life", "billing_behind")]).await;
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, _, Command::IssueRejected { code, .. })] if key == "P1/terms/rejected" && code == "billing_behind"),
+        "{told:?}"
+    );
+    assert_eq!(script.with(|s| s.core.len()), 1);
 
     let (_, script) = carry(interim(), None, Value::Null, &[]).await;
     let told = script.with(|s| s.told.clone());
