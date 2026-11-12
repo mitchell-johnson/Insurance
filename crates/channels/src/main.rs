@@ -54,10 +54,19 @@ async fn main() -> Result<(), String> {
         clock: Arc::new(wall_clock),
         regions: Live::new(settings.client(), settings.regions.clone()),
         ui: settings.ui.clone(),
+        pricing: Arc::new(forward::Hosted {
+            client: settings.client(),
+            module: ic_channels::pricing::MODULE,
+            patience: settings.patience,
+        }),
     });
     let beat = tokio::spawn(heartbeat(channel.clone(), settings.client(), settings.heartbeat, Arc::new(wall_clock)));
     let carry = tokio::spawn(forward(
-        Arc::new(forward::Hosted { client: settings.client() }),
+        Arc::new(forward::Hosted {
+            client: settings.client(),
+            module: forward::COMMISSION_MODULE,
+            patience: settings.patience,
+        }),
         channel,
         settings.forward,
         Arc::new(wall_clock),

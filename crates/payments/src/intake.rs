@@ -6,11 +6,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::NaiveDate;
 use ic_core::{PayableKind, PolicyId};
 use serde::{Deserialize, Serialize};
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{Counterparty, Id, NewItem, Reject, Role};
+use crate::model::{About, Counterparty, Id, Instruction, NewItem, OutboxEntry, Reject, Role};
+
+/// The statement a reinsurer settlement pays, from the source the
+/// reinsurance module gave it.
+fn statement_number(source: &str) -> Option<u32> {
+    source.strip_prefix("reinsurance:statement:")?.parse().ok()
+}
 
 /// One released payment that has not yet been settled.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +42,10 @@ pub struct Waiting {
     /// another counterparty is not policy money.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub policy: Option<PolicyId>,
+    /// The claim it pays, when claims released it: claims is told if the
+    /// bank refuses it before it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<String>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -135,6 +146,66 @@ impl PaymentsState {
             });
         }
         self.add_run_items(tx, run, items)
+    }
+
+    /// The bank refused or sent back an item before it settled. Its
+    /// reference is spent. If claims released it, claims is told the payment
+    /// failed, so the money goes back to benefit payable there and a task is
+    /// raised to release it again under a new reference.
+    pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
+        let Some(waiting) = self.waiting.remove(&n.item) else { return };
+        if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
+            self.push_outbox(OutboxEntry {
+                key: format!("claim-payment-failed-{}", n.item),
+                instruction: Instruction::CoreAt {
+                    policy,
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::PaymentReturned {
+                        claim,
+                        payment_ref: n.item.clone(),
+                    }))),
+                },
+                about: Some(About::Item(n.item.clone())),
+            });
+        }
+    }
+
+    /// A reinsurer settlement is paid: the reinsurance module records it
+    /// against the statement, in that module's own command.
+    pub(crate) fn origin_settled(&mut self, n: &NewItem, on: NaiveDate) {
+        let Some(number) = statement_number(&n.source) else { return };
+        self.push_outbox(OutboxEntry {
+            key: format!("reinsurance-settled-{}", n.item),
+            instruction: Instruction::Module {
+                module: "reinsurance".to_string(),
+                command: serde_json::json!({
+                    "key": format!("payments:settled:{}", n.item),
+                    "caller": "payments",
+                    "on": on,
+                    "command": {"record_settlement": {"number": number, "payment_ref": n.item, "amount_minor": n.amount_minor}},
+                }),
+            },
+            about: Some(About::Item(n.item.clone())),
+        });
+    }
+
+    /// A reinsurer settlement was refused or sent back by the bank, before
+    /// or after it settled: the statement is owed again.
+    pub(crate) fn origin_returned(&mut self, n: &NewItem, on: NaiveDate, reason: &str) {
+        let Some(number) = statement_number(&n.source) else { return };
+        self.push_outbox(OutboxEntry {
+            key: format!("reinsurance-returned-{}", n.item),
+            instruction: Instruction::Module {
+                module: "reinsurance".to_string(),
+                command: serde_json::json!({
+                    "key": format!("payments:returned:{}:{on}", n.item),
+                    "caller": "payments",
+                    "on": on,
+                    "command": {"settlement_returned": {"number": number, "payment_ref": n.item, "reason": reason}},
+                }),
+            },
+            about: Some(About::Item(n.item.clone())),
+        });
     }
 
     /// Released payments that are in no run.

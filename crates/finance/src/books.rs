@@ -277,6 +277,16 @@ pub enum FinCommand {
         total_minor: i64,
         count: u32,
     },
+    /// Record the action taken on one aged item: who owns it and where the
+    /// action is written up. It stops the item turning the check red.
+    DocumentAgedItem {
+        kind: String,
+        party: String,
+        /// The date the item has been held since, as the report gives it.
+        since: NaiveDate,
+        action: String,
+        owner: String,
+    },
     WaiveCheck {
         period: PeriodId,
         check: String,
@@ -345,6 +355,7 @@ impl FinCommand {
             FinCommand::ProposeYearEndClose { .. } => "propose_year_end_close",
             FinCommand::ReportCheck { .. } => "report_check",
             FinCommand::ReportAgedItems { .. } => "report_aged_items",
+            FinCommand::DocumentAgedItem { .. } => "document_aged_item",
             FinCommand::WaiveCheck { .. } => "waive_check",
             FinCommand::SignOff { .. } => "sign_off",
             FinCommand::ClosePeriod { .. } => "close_period",
@@ -425,6 +436,13 @@ pub enum FinEvent {
         as_at: NaiveDate,
         total_minor: i64,
         count: u32,
+    },
+    AgedItemDocumented {
+        kind: String,
+        party: String,
+        action: String,
+        owner: String,
+        by: String,
     },
     CheckWaived {
         period: PeriodId,
@@ -1055,6 +1073,21 @@ impl FinanceState {
                     return reject("aged", "a later report is already recorded");
                 }
                 let index = ctx.index;
+                // An action documented here against an item stays with it
+                // while the same holding is reported again without one.
+                let mut items = items;
+                if let Some(earlier) = self.aged.get(&kind) {
+                    for item in items.iter_mut().filter(|i| i.action.is_none()) {
+                        if let Some(was) = earlier
+                            .items
+                            .iter()
+                            .find(|e| e.party == item.party && e.since == item.since && e.action.is_some())
+                        {
+                            item.action = was.action.clone();
+                            item.owner = was.owner.clone();
+                        }
+                    }
+                }
                 self.aged.insert(
                     kind.clone(),
                     AgedReport {
@@ -1070,6 +1103,35 @@ impl FinanceState {
                     as_at,
                     total_minor,
                     count,
+                });
+                Ok(())
+            }
+            FinCommand::DocumentAgedItem {
+                kind,
+                party,
+                since,
+                action,
+                owner,
+            } => {
+                let by = ctx.actor_with(&[ROLE_OPERATOR, ROLE_LEAD])?;
+                if action.trim().is_empty() || owner.trim().is_empty() {
+                    return reject("aged_action", "a documented action needs a reference and an owner");
+                }
+                let item = self
+                    .aged
+                    .get_mut(&kind)
+                    .and_then(|r| r.items.iter_mut().find(|i| i.party == party && i.since == since));
+                let Some(item) = item else {
+                    return reject("aged_item", format!("the latest {kind} report lists nothing held for {party} since {since}"));
+                };
+                item.action = Some(action.clone());
+                item.owner = Some(owner.clone());
+                ctx.events.push(FinEvent::AgedItemDocumented {
+                    kind,
+                    party,
+                    action,
+                    owner,
+                    by,
                 });
                 Ok(())
             }

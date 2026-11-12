@@ -77,6 +77,30 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#lookup button").click();
     await p.locator("#lookup-msg .banner.bad, #pol-view:not([hidden])").first().waitFor();
   }, expectStatus: [403, 404, 422] });
+  await visit(browser, "/pricing", { subject: "sub-up1" }, { run: async (p) => {
+    await sees(p, "preparer, approver");
+    await sees(p, "valuations/bad.csv");
+    await p.selectOption("#pfund", "growth"); await p.fill("#pdate", "2027-11-12");
+    await p.locator("#show-val").click();
+    await sees(p, "1010000");
+    await p.locator("#prepare button").first().click();
+    await sees(p, "Someone else approves it.");
+    await p.locator("#work").getByText("growth:2027-11-12.1").waitFor();
+    await p.getByRole("button", { name: "Details" }).first().click();
+    await p.locator("#detail:not([hidden])").waitFor();
+    await sees(p, "units on issue");
+    // The preparer cannot approve their own price.
+    await p.getByRole("button", { name: "Approve", exact: true }).click();
+    await p.locator("#work-msg .banner.bad").waitFor();
+  }, expectStatus: [409] });
+  await visit(browser, "/pricing", { subject: "sub-lead" }, { run: async (p) => {
+    await sees(p, "lead");
+    await p.selectOption("#sfund", "cash"); await p.fill("#sfrom", "2027-11-15"); await p.fill("#sreason", "administrator outage");
+    await p.locator("#suspend button").click();
+    await sees(p, "Suspended.");
+    await sees(p, "administrator outage (lead-1)");
+  } });
+  await visit(browser, "/pricing", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
   console.log("all pages check out");

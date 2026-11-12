@@ -533,6 +533,12 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             }
         }
     }
+    let employer_may_see_loading = matches!(p.entry, Entry::GroupExcess { .. })
+        && !lives.is_empty()
+        && p.lives
+            .values()
+            .filter(|f| f.stage == Stage::Accepted)
+            .all(|f| f.consents.contains_key(&crate::model::ConsentKind::EmployerSeesLoading));
     p.issue_attempts += 1;
     p.status = ProposalStatus::Issuing;
     let key = format!("{}/issue/{}", p.id, p.issue_attempts);
@@ -567,6 +573,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             policy: p.policy.clone(),
             effective: cx.today,
             covers,
+            employer_may_see_loading,
         },
     });
     Ok(())

@@ -233,6 +233,7 @@ fn terms(proposal: &str, entry: Entry, covers: Vec<CoverSpec>) -> Effect {
         policy: "POL-1".into(),
         effective: d(2027, 2, 1),
         covers,
+        employer_may_see_loading: false,
     }
 }
 
@@ -597,6 +598,34 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                 loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
                 exclusions: vec!["EX-BACK".into()],
                 member_consents_to_itemising: false,
+            },
+        ),
+        (
+            match terms("grp-uw:north:shore:12", excess(), vec![cover(300_000_00)]) {
+                Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    ..
+                } => Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    employer_may_see_loading: true,
+                },
+                other => other,
+            },
+            ExcessDecision::Accepted {
+                sum_insured_minor: 300_000_00,
+                loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
+                exclusions: vec!["EX-BACK".into()],
+                member_consents_to_itemising: true,
             },
         ),
         (ended("grp-uw:north:shore:12", excess(), "declined"), ExcessDecision::Declined),

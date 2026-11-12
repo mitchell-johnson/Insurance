@@ -101,6 +101,27 @@ One place to see and resolve money held from an adviser, a provider or any other
 - **Proof of debt**: an extract of what the party owes, for a liquidator.
 - **Carrying it out.** An approved action is handed to the module that owns the money, which reports back. The workbench records the outcome; it does not move money.
 
+## The unit pricing console
+
+`/pricing` is the staff screen for the unit pricing module (`docs/unit-pricing.md`): the prices waiting for a person with their checks, valuation files that could not be read, prices overdue, the valuation received for a fund and date, prices in force, funds and their suspensions, and price errors with their corrections and remediation. From it a preparer prepares a price, an approver approves it (accepting each failed check with a reason when it is held) or rejects it, and a lead suspends and resumes a fund, raises and closes a price error, and offers a price again to partitions that refused it.
+
+The portal service holds none of this. It passes the console's questions to the `unit-pricing` module on the nodes and sends each command there as the person who gave it, under the caller `unit-pricing-console`, with the roles their staff templates give them:
+
+| Staff action | Role in the unit pricing module |
+| --- | --- |
+| `unit_pricing.view` | none: opens the console to read |
+| `unit_pricing.prepare` | `unit_pricing_preparer` |
+| `unit_pricing.approve` | `unit_pricing_approver` |
+| `unit_pricing.lead` | `unit_pricing_lead` |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/unit-pricing/me` | Whether you may open the console, and your roles. |
+| `GET /staff/v1/unit-pricing/{question}` | One of `status`, `funds`, `work`, `errors`, `price?id=`, `error?id=`, `prices?fund=&from=&to=`, `valuations?fund=&pricing_date=`, `late?as_at=`. That module's other questions are not asked from here. |
+| `POST /staff/v1/unit-pricing/commands` | One of `prepare_price`, `approve_price`, `reject_price`, `suspend_fund`, `resume_fund`, `raise_price_error`, `close_error`, `republish`, in that module's own JSON, with an `Idempotency-Key`. |
+
+Someone without a unit pricing action is refused before anything reaches that module, and a command is refused here if the person lacks its role. That module checks the role again, enforces that an approver is never the preparer, and keeps who did what; its refusals come back as `409` with its own code (`403` for `unauthorised`). If it has no leader the console answers `503 unit_pricing_unavailable`. Valuation files arrive through the administrator's storage account, not the console. The two modules share no code; `tests/http.rs` runs the console against that module's own state machine.
+
 ## Operations console and status page (addendum entry 6)
 
 `IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which region normally leads. From that and what the nodes report:

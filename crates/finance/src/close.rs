@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate, Weekday};
 use ic_ledger::Hash32;
 use serde::{Deserialize, Serialize};
 
@@ -91,6 +91,10 @@ pub struct CloseConfig {
     pub checks: Vec<CheckDecl>,
     #[serde(default)]
     pub aged: Vec<AgedDecl>,
+    /// Public holidays as observed (a holiday that falls on a weekend is
+    /// listed on the weekday it is taken). Step due dates skip them.
+    #[serde(default)]
+    pub holidays: BTreeSet<NaiveDate>,
     #[serde(default)]
     pub content_hash: String,
 }
@@ -108,6 +112,11 @@ impl CloseConfig {
         let invalid = |m: String| Err(ConfigError::Invalid(m));
         if self.version == 0 {
             return invalid("a close configuration needs a version of at least 1".to_string());
+        }
+        // A holiday on a weekend moves nothing, so it is the calendar date
+        // typed where the observed day was meant.
+        if let Some(day) = self.holidays.iter().find(|h| matches!(h.weekday(), Weekday::Sat | Weekday::Sun)) {
+            return invalid(format!("holiday {day} falls on a weekend; list the weekday it is observed on"));
         }
         let mut ids = BTreeSet::new();
         for c in &self.checks {

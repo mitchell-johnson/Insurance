@@ -168,6 +168,7 @@ async fn the_portal_service_on_real_nodes() {
         clock: Arc::new(wall_clock),
         regions: live.clone(),
         ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
     }));
 
     // The identity service binds Kiri's sign-in, through the service, as a module.
@@ -267,6 +268,7 @@ async fn the_portal_service_on_real_nodes() {
         clock: Arc::new(wall_clock),
         regions: Live::new(nodes.client.clone(), Regions::single(nodes.peers.values().cloned().collect())),
         ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
     }));
     let (status, problem) = call(&impatient, "GET", "/app/v1/me", &kiri, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable")));
