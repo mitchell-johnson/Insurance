@@ -104,19 +104,17 @@ impl Reinsurance {
     }
 
     pub(crate) fn abandon_instruction(&mut self, ctx: &mut Ctx, seq: u64, reason: String, approved_by: String) -> Result<(), Reject> {
-        if !self.exceptions.contains_key(&refusal(seq)) {
+        // The exception exists only while the instruction waits.
+        let Some(instruction) = self.outbox.get(&seq).filter(|_| self.exceptions.contains_key(&refusal(seq))).cloned() else {
             return Err(Reject::new("not_refused", format!("instruction {seq} has not been refused by the core")));
-        }
+        };
         if reason.trim().is_empty() || approved_by.trim().is_empty() {
             return Err(Reject::new(
                 "reason_required",
                 "abandoning an instruction needs a reason and the person who approved it",
             ));
         }
-        // The exception exists only while the instruction waits.
-        let Some(instruction) = self.outbox.remove(&seq) else {
-            return Err(Reject::new("unknown_instruction", format!("instruction {seq} is not waiting to be delivered")));
-        };
+        self.outbox.remove(&seq);
         self.abandoned.push(Abandoned {
             seq,
             instruction,

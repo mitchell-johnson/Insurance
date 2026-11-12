@@ -255,24 +255,23 @@ impl Reinsurance {
             .and_then(|k| self.risk(&k))
             .map(|r| (r.facultative.clone(), r.excluded))
             .unwrap_or_default();
-        self.pending_terms
-            .insert((policy.clone(), cover.clone()), crate::capacity::PendingTerms { terms, excluded });
         self.confirming.insert((policy.clone(), cover.clone()), id.to_string());
         if let Some(r) = self.reservations.get_mut(id) {
             r.status = confirmed;
             forget_offer_detail(&mut r.facultative);
         }
         let first = self.policy_risks(&policy).into_iter().find(|k| k.cover == cover && layers.contains(&k.layer));
-        if let Some(key) = first {
-            if let Some(pending) = self.pending_terms.remove(&(policy, cover)) {
-                if let Some(risk) = self.risk_mut(ctx, &key) {
-                    let start = risk.start;
-                    risk.facultative.extend(pending.terms.into_iter().map(|f| Facultative { from: start, ..f }));
-                    risk.excluded = pending.excluded;
-                }
-            }
-            self.settle_confirmed(ctx, &key);
-        }
+        let Some(key) = first else {
+            // The core's event has not arrived yet: the terms wait for the
+            // cover's first layer.
+            self.pending_terms.insert((policy, cover), crate::capacity::PendingTerms { terms, excluded });
+            return Ok(());
+        };
+        let Some(risk) = self.risk_mut(ctx, &key) else { return Ok(()) };
+        let start = risk.start;
+        risk.facultative.extend(terms.into_iter().map(|f| Facultative { from: start, ..f }));
+        risk.excluded = excluded;
+        self.settle_confirmed(ctx, &key);
         Ok(())
     }
 
@@ -281,9 +280,9 @@ impl Reinsurance {
     pub(crate) fn settle_confirmed(&mut self, ctx: &mut Ctx, key: &RiskKey) {
         let cover = (key.policy.clone(), key.cover.clone());
         let Some(id) = self.confirming.get(&cover).cloned() else { return };
-        let Some(ReservationStatus::Confirmed { layers, .. }) = self.reservations.get(&id).map(|r| &r.status) else {
-            return;
-        };
+        // Only a confirmed reservation is ever in `confirming`.
+        let status = self.reservations.get(&id).map(|r| &r.status);
+        let Some(ReservationStatus::Confirmed { layers, .. }) = status else { return };
         let have = self.policy_risks(&key.policy);
         if layers.iter().all(|l| have.iter().any(|k| k.cover == key.cover && k.layer == *l)) {
             self.drop_reservation_risk(ctx, &id);

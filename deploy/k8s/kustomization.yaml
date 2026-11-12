@@ -17,11 +17,13 @@ resources:
   - worker.yaml
   - payments.yaml
   - reinsurance.yaml
+  - underwriting.yaml
   - bootstrap.yaml
   - admin.yaml
   - network.yaml
   - group.yaml
   - documents.yaml
+  - finance.yaml
 images:
   - name: insurance-core
     newName: REPLACE-registry.azurecr.io/insurance-core
