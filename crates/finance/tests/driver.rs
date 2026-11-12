@@ -206,7 +206,7 @@ fn a_month_goes_from_its_last_day_to_closed() {
     assert_eq!(first.roots_recorded.len(), 18, "15 November to 2 December");
     assert_eq!(
         first.extracts_registered,
-        ["in_force:2027-11-30:v3", "movement:2027-11-30:v3", "experience:2027-11-30:v3"]
+        ["in_force:2027-11-30:v4", "movement:2027-11-30:v4", "experience:2027-11-30:v4"]
     );
     assert_eq!(
         first.reports_sent,
@@ -379,20 +379,20 @@ fn an_interrupted_or_conflicting_extract_is_never_registered_wrongly() {
     let earlier = driver_after(d(2027, 12, 3), |_| true);
     block(earlier.pass()).unwrap();
     let driver = driver_after(d(2027, 12, 3), |_| true);
-    let name = "extracts/2027-11-30/in_force-v3.csv";
+    let name = "extracts/2027-11-30/in_force-v4.csv";
     let stored = block(earlier.extracts.get(name)).unwrap().unwrap();
     block(driver.extracts.put_new(name, "text/csv", stored.clone())).unwrap();
     // Another file under the movement extract's name.
-    block(driver.extracts.put_new("extracts/2027-11-30/movement-v3.csv", "text/csv", b"other".to_vec())).unwrap();
+    block(driver.extracts.put_new("extracts/2027-11-30/movement-v4.csv", "text/csv", b"other".to_vec())).unwrap();
 
     let pass = block(driver.pass()).unwrap();
-    assert_eq!(pass.extracts_registered, ["in_force:2027-11-30:v3", "experience:2027-11-30:v3"]);
+    assert_eq!(pass.extracts_registered, ["in_force:2027-11-30:v4", "experience:2027-11-30:v4"]);
     assert_eq!(
         pass.waiting,
-        ["2027-11: extracts/2027-11-30/movement-v3.csv is already stored with other content"]
+        ["2027-11: extracts/2027-11-30/movement-v4.csv is already stored with other content"]
     );
     assert_eq!(block(driver.extracts.get(name)).unwrap().unwrap(), stored);
-    assert_eq!(block(driver.extracts.get("extracts/2027-11-30/movement-v3.csv")).unwrap().unwrap(), b"other");
+    assert_eq!(block(driver.extracts.get("extracts/2027-11-30/movement-v4.csv")).unwrap().unwrap(), b"other");
     assert!(matches!(status(&driver, nov(), "valuation_extracts"), CheckStatus::Red { .. }));
 
     // Pages that are not one file.
