@@ -411,7 +411,7 @@ Also built since this section was first written: a policy avoided for non-disclo
 
 ### Open questions for Mitchell
 
-- The replacement rule's settings are my defaults and the design notes say to confirm them with compliance: a window of 12 months (`replacement_window_months`), an amount tolerance of 5% where the advisers are unrelated (`replacement_amount_tolerance_ppm`), and "related" meaning the same provider or any provider under the same group (`Structure::related`). Still open.
+- The replacement rule's settings are my defaults and the design notes say to confirm them with compliance: a window of 12 months (`replacement_window_months`), an amount tolerance of 5% where the advisers are unrelated (`replacement_amount_tolerance_ppm`), and "related" meaning the same provider or any provider under the same group (`Structure::related`). Mitchell confirmed the 12-month window and the 5% tolerance on 13 November 2026.
 - Answered by Mitchell, 13 November 2026: a disputed match is decided by whoever holds `case.manage` (the conduct officer or compliance). On paying held money to a party claims is pursuing, Mitchell left it to Claude, provided it can be changed later: the default is legal's signature, and an approved change set (`Change::ReleaseOwedElsewhere(Refused)`) switches it to refusal.
 
 ### Known failing checks
