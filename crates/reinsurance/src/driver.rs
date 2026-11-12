@@ -142,6 +142,41 @@ pub fn underwriting_command(notice: &Notice, on: NaiveDate) -> Option<Value> {
     }))
 }
 
+/// The name of the payments module's replicated group.
+pub const PAYMENTS_MODULE: &str = "payments";
+
+/// A settlement due to a reinsurer as the payments module's command, in its
+/// own wire format: a released payment that waits there for a maker to take
+/// it into a reinsurer run. The reinsurer is named by its ID here, which is
+/// its payee or party in payments. The time is the epoch on purpose: it
+/// leaves that module's clock alone. `None` for any other notice, and for a
+/// net that is not a payment: money due from a reinsurer arrives on the bank
+/// statement and is identified there.
+pub fn payments_command(notice: &Notice) -> Option<Value> {
+    let Notice::SettlementDue {
+        statement,
+        reinsurer,
+        net_minor,
+        ..
+    } = notice
+    else {
+        return None;
+    };
+    (*net_minor > 0).then(|| {
+        serde_json::json!({
+            "key": format!("reinsurance:settlement:{statement}"),
+            "actor": {"id": crate::delivery::CALLER, "roles": ["service"]},
+            "at": "1970-01-01T00:00:00",
+            "command": {"type": "offer_payment", "waiting": {
+                "payment": format!("ri-stmt-{statement}"),
+                "source": format!("reinsurance:statement:{statement}"),
+                "payee": reinsurer,
+                "amount_minor": net_minor,
+            }},
+        })
+    })
+}
+
 /// What a module's reply to a notice means. The host refuses what the module
 /// cannot read, and the module refuses in its own answer: group
 /// administration answers `{"result": {"Ok": null} | {"Err": reject}}`,
@@ -166,13 +201,16 @@ pub fn handed(reply: Result<Value, String>) -> Result<Handed, DriverError> {
 
 impl Audiences for ClusterAudiences {
     fn reached(&self) -> Vec<Audience> {
-        vec![Audience::Group, Audience::Underwriting]
+        vec![Audience::Group, Audience::Underwriting, Audience::Payments]
     }
 
     async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
         let (module, command) = match notice.audience() {
             Audience::Group => (GROUP_MODULE, group_command(seq, notice, on)),
             Audience::Underwriting => (UNDERWRITING_MODULE, underwriting_command(notice, on)),
+            // Nothing to pay is nothing to say.
+            Audience::Payments if matches!(notice, Notice::SettlementDue { net_minor, .. } if *net_minor <= 0) => return Ok(Handed::Taken),
+            Audience::Payments => (PAYMENTS_MODULE, payments_command(notice)),
             _ => ("", None),
         };
         let command = command.ok_or_else(|| DriverError::Answer(format!("notice {seq} is not for a module this carrier reaches")))?;

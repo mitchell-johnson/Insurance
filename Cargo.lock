@@ -2208,6 +2208,7 @@ dependencies = [
  "ic-documents",
  "ic-finance",
  "ic-group",
+ "ic-money",
  "ic-payments-service",
  "ic-pricing",
  "ic-raft",

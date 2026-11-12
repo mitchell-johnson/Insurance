@@ -457,10 +457,34 @@ impl Reinsurance {
         }
         let net = s.net_minor;
         let detail = (amount_minor != net).then(|| format!("statement {number} is for {net} but payment {payment_ref} was for {amount_minor}"));
-        if detail.is_none() {
+        let settled = detail.is_none();
+        if settled {
             s.status = StatementStatus::Settled { payment_ref };
         }
         self.set_exception(ctx, format!("settlement_mismatch:{number}"), "settlement_mismatch", detail);
+        if settled {
+            self.set_exception(ctx, format!("settlement_returned:{number}"), "settlement_returned", None);
+        }
+        Ok(())
+    }
+
+    /// The bank sent a settlement back. The statement is owed again and a
+    /// person is told: nothing is paid a second time without one. A return
+    /// of some other payment than the one recorded changes nothing.
+    pub(crate) fn settlement_returned(&mut self, ctx: &mut Ctx, number: u32, payment_ref: &str, reason: &str) -> Result<(), Reject> {
+        let s = self.statement_mut(number)?;
+        match &s.status {
+            StatementStatus::Settled { payment_ref: paid } if paid == payment_ref => s.status = StatementStatus::Instructed,
+            StatementStatus::Instructed if !payment_ref.is_empty() => {}
+            _ => {
+                return Err(Reject::new(
+                    "not_settled",
+                    format!("statement {number} was not settled by payment {payment_ref}"),
+                ))
+            }
+        }
+        let detail = format!("payment {payment_ref} for statement {number} came back from the bank: {reason}");
+        self.set_exception(ctx, format!("settlement_returned:{number}"), "settlement_returned", Some(detail));
         Ok(())
     }
 

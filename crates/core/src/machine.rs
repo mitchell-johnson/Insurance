@@ -14,7 +14,7 @@ use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::interest::{self, RestrictedAction};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, underwritten, unwind, PolicyId};
+use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reduce, reinsurance, reopen, transfer, underwritten, unwind, PolicyId};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -445,6 +445,15 @@ impl CoreState {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                     group::add_excess_layer(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::ReduceCover(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    interest::permit(p, ctx.date, RestrictedAction::ReduceCover)?;
+                    reduce::reduce(&mut s.ledger, &s.catalog, p, ctx, *spec)?;
+                    interest::consume(p, ctx, RestrictedAction::ReduceCover);
+                    Ok(())
                 })
             }
             Command::AddUnderwrittenLayer(spec) => {
