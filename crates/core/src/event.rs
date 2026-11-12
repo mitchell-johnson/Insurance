@@ -213,6 +213,23 @@ pub enum Event {
         effective: NaiveDate,
         sum_insured_minor: i64,
     },
+    /// A layer was cut in part: it ends on `effective` and the part kept
+    /// carries on as a new layer. Published before the `LayerEnded` and
+    /// `LayerAdded` that record the two halves, so that a reader that keeps
+    /// something per layer (commission terms, clawback exposure) can carry
+    /// the kept share across instead of treating it as cover given up and
+    /// new cover written.
+    LayerReduced {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        continued_as: u32,
+        effective: NaiveDate,
+        /// The layer's sum insured before the cut.
+        sum_insured_minor: i64,
+        /// What carries on in the new layer.
+        kept_minor: i64,
+    },
     /// The part of a retrospective adjustment that is underwriting loading.
     /// It names no member: loadings reach the scheme only in aggregate.
     LoadingAdjusted {
