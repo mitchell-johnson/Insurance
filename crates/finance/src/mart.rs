@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
-use ic_core::{LayerOrigin, LifeId, PolicyId, PolicyStatus};
+use ic_core::{LayerOrigin, LifeId, PolicyId, PolicyStatus, PremiumOnAvoidance};
 use ic_ledger::{sha256, AccountUnit, Hash32, PartitionId};
 use ic_product::Sex;
 use serde::{Deserialize, Serialize};
@@ -621,6 +621,25 @@ impl Mart {
                     other => status_name(*other),
                 };
                 self.change(partition, policy, date, None, &kind, |row| row.statuses.push((date, *to)));
+            }
+            // The status change before this event took the policy out of the
+            // book. A refund gives back every premium billed, so the premium
+            // the movements have counted comes off; where the insurer keeps
+            // what was paid, how much of what was billed that is is in the
+            // ledger and not known here, so the premium stands.
+            Event::PolicyAvoided {
+                policy,
+                premium: PremiumOnAvoidance::Refund,
+                ..
+            } => {
+                let key = (partition, policy.clone());
+                let (billed, inception) = match self.policies.get_mut(&key) {
+                    Some(row) => (std::mem::take(&mut row.premiums).values().sum::<i64>(), row.inception),
+                    None => (0, None),
+                };
+                if billed != 0 {
+                    self.premium(partition, policy, date, inception, "premium_refunded_on_avoidance", None, -billed);
+                }
             }
             Event::LayerAdded { policy, layer, origin, .. } => {
                 self.change(partition, policy, date, Some(layer.start), origin_name(*origin), |row| {

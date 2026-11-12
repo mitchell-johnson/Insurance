@@ -608,6 +608,7 @@ Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a 
 7. **Azure.** `infra/finance.bicep` and `deploy/k8s/finance.yaml` have never been deployed, and the service has not run in the integrated Mac cycle.
 8. **Tax and analytical review** are reported by a person at the console; nothing works them out.
 9. **Table validation is a library and a CI test.** Activating a rate table in the core does not require a passed validation report or dry run; nothing enforces the gate at activation.
+10. **Avoided policies (non-disclosure).** Built: the policy leaves the in-force book on the day it is avoided (movement kind `avoided`), and where every premium is refunded the premium billed comes off as `premium_refunded_on_avoidance` (`mart.rs`, `Event::PolicyAvoided`). Not built: where the insurer keeps the premium, the mart cannot tell how much of what was billed was paid and kept, so the movement extract's premium stands; the kept amount is in the ledger under `avoidance_premium_retained`. The experience extract keeps the exposure of an avoided policy up to the day it was avoided, because extracts already cut cannot change; whether a study should leave avoided policies out altogether is a question for the actuary.
 
 ### Questions for Mitchell
 
