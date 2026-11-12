@@ -174,6 +174,12 @@ pub enum Feature {
         lapse_days: u32,
         suspend_after_grace: bool,
         reinstatement_days: u32,
+        /// Days after the lapse within which paying the arrears is enough.
+        /// Later than this, inside the window, the policy is reinstated only
+        /// on underwriting's decision. Not set: the whole window is free
+        /// of evidence.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reinstatement_evidence_free_days: Option<u32>,
     },
     Indexation {
         rate_code: String,
@@ -233,6 +239,7 @@ pub struct ArrearsRules {
     pub lapse_days: u32,
     pub suspend_after_grace: bool,
     pub reinstatement_days: u32,
+    pub reinstatement_evidence_free_days: Option<u32>,
 }
 
 impl ProductDefinition {
@@ -246,11 +253,13 @@ impl ProductDefinition {
                 lapse_days,
                 suspend_after_grace,
                 reinstatement_days,
+                reinstatement_evidence_free_days,
             } => Some(ArrearsRules {
                 grace_days: *grace_days,
                 lapse_days: *lapse_days,
                 suspend_after_grace: *suspend_after_grace,
                 reinstatement_days: *reinstatement_days,
+                reinstatement_evidence_free_days: *reinstatement_evidence_free_days,
             }),
             _ => None,
         })

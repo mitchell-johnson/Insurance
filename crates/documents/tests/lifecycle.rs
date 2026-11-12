@@ -223,6 +223,7 @@ fn replayed_history_sends_nothing() {
                     policy: pol.clone(),
                     layer,
                     origin: ic_core::LayerOrigin::Indexation,
+                    continues: None,
                 },
             ),
         ]),

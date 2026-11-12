@@ -245,9 +245,12 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
     }
 
     async fn group_of(&self, proposal: &ProposalId) -> Result<Option<GroupId>, DriverError> {
+        Ok(self.proposal(proposal).await?.map(|p| p.group))
+    }
+
+    async fn proposal(&self, proposal: &ProposalId) -> Result<Option<Proposal>, DriverError> {
         let answer = self.underwriting.ask(Query::Proposal { proposal: proposal.clone() }).await?;
-        let found: Option<Proposal> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
-        Ok(found.map(|p| p.group))
+        serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))
     }
 
     /// Carry the outbox until it is empty. What was delivered before a stop
@@ -680,7 +683,43 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
-            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for a reinstatement on underwriting's terms".to_string()),
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry: Entry::Reinstatement { .. },
+                policy,
+                covers,
+                ..
+            } => {
+                let Some(found) = self.proposal(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let mut terms = Vec::new();
+                for cover in covers {
+                    let Some(life) = &cover.life else {
+                        return Ok(Step::Park(format!("the reinstatement of {} names no life", cover.code)));
+                    };
+                    terms.push(ic_core::policy::LayerTerms {
+                        cover: cover.code.clone(),
+                        life: life.clone(),
+                        loadings: cover.loadings.clone(),
+                        exclusions: cover.exclusions.clone(),
+                    });
+                }
+                // The decision is recorded against the lapse; the policy comes back when
+                // the arrears are paid and the reinstatement is asked for. It can be relied
+                // on for as long as the proposal's own terms can.
+                let decision = ic_core::Command::ApproveReinstatement(Box::new(ic_core::command::ReinstatementTerms {
+                    policy: policy.clone(),
+                    reference: key.clone(),
+                    valid_until: found.expires_on,
+                    terms,
+                }));
+                let sent = format!("{proposal}/reinstatement");
+                let answer = self.core.send(home_partition(&found.group), &sent, "underwriting", decision).await?;
+                let outcome = answer.refused.map_or(Ok(Vec::new()), |r| Err(r.code));
+                self.issue_answer(key, proposal, outcome).await?
+            }
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
             other => match self.forward.forward(other).await? {

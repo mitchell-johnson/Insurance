@@ -148,6 +148,7 @@ fn indexation_steps_inherit_their_terms_and_an_unwound_step_gives_its_initial_ba
                 life: ic_core::LifeId("life-1".into()),
             },
             origin: LayerOrigin::Increase,
+            continues: None,
         },
     );
     assert!(events
@@ -418,6 +419,7 @@ fn stray_and_repeated_events_post_nothing() {
                 life: ic_core::LifeId("life-1".into()),
             },
             origin: LayerOrigin::Increase,
+            continues: None,
         },
     ] {
         let events = inject(&mut w, partition, event.clone());

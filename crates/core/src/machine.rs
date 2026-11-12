@@ -456,6 +456,10 @@ impl CoreState {
                     Ok(())
                 })
             }
+            Command::ApproveReinstatement(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx.date, *spec))
+            }
             Command::AlterUnderwrittenTerms(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
