@@ -2259,6 +2259,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-pricing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-raft",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "ic-product"
 version = "0.1.0"
 dependencies = [
