@@ -415,6 +415,8 @@ pub enum Instruction {
     /// Send this command to the partition that holds the policy. The key
     /// of the outbox entry is the idempotency key.
     Core { caller: String, command: Box<ic_core::Command> },
+    /// Tell another hosted module something, in that module's own words.
+    Module { module: String, command: serde_json::Value },
     /// A command that does not itself name its policy (one for the claims
     /// module): send it to the partition that holds this policy.
     CoreAt {

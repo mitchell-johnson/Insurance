@@ -297,4 +297,26 @@ pub struct Trigger {
     /// For a notice with a clock.
     pub purpose: Option<String>,
     pub business_date: NaiveDate,
+    /// Parties with an interest in the policy standing on the business
+    /// date, such as a lender it is assigned to, who are owed a copy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub copy_to: Vec<PartyId>,
+}
+
+/// An interest in a policy as the core reported it: who holds it and for
+/// how long. The documents module keeps only what it needs to know who is
+/// owed a copy of a notice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StandingInterest {
+    pub party: PartyId,
+    pub from: NaiveDate,
+    /// The date the release takes effect. The interest stands before it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<NaiveDate>,
+}
+
+impl StandingInterest {
+    pub fn stands_on(&self, on: NaiveDate) -> bool {
+        self.from <= on && self.until.is_none_or(|until| until > on)
+    }
 }
