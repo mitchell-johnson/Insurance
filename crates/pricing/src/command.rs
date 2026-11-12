@@ -352,7 +352,10 @@ mod tests {
                 executed_through: None,
                 units_micro: 0,
             },
-            Command::PreparePrice { fund: f.clone(), pricing_date: d },
+            Command::PreparePrice {
+                fund: f.clone(),
+                pricing_date: d,
+            },
             Command::ApprovePrice {
                 price: "p".into(),
                 accepted: BTreeMap::new(),

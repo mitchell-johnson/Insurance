@@ -691,7 +691,11 @@ impl PricingState {
             return Err(refuse("reason_required", "each accepted check needs a reason"));
         }
         let key = slot(&p.fund, p.pricing_date);
-        if let Some(other) = self.prices.values().find(|x| x.status == PriceStatus::Activating && x.fund == p.fund && x.pricing_date == p.pricing_date) {
+        if let Some(other) = self
+            .prices
+            .values()
+            .find(|x| x.status == PriceStatus::Activating && x.fund == p.fund && x.pricing_date == p.pricing_date)
+        {
             return Err(refuse("in_flight", format!("{} is being activated for this date", other.id)));
         }
         if self.valuations.get(&key).map_or(0, |v| v.len() as u32) != p.valuation_revision {

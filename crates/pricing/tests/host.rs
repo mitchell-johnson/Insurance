@@ -183,7 +183,10 @@ fn core_events_become_movements() {
     match &react(&replayed)[0].command {
         Command::RecordMovement(m) => {
             assert_eq!(m.id, "O-10/replay/growth@2026-11-03.2");
-            assert_eq!((m.kind, m.units_micro, m.borne_minor, m.uncompensated), (MovementKind::Correction, -2_450, 5_00, true));
+            assert_eq!(
+                (m.kind, m.units_micro, m.borne_minor, m.uncompensated),
+                (MovementKind::Correction, -2_450, 5_00, true)
+            );
             assert_eq!(m.price_id.as_deref(), Some("growth@2026-11-03.2"));
         }
         other => panic!("{other:?}"),
