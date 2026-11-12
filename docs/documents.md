@@ -70,6 +70,8 @@ The module publishes `doc-<seq>` events to the `documents-events` Event Hub: tem
 
 The module host feeds the module every partition's events. `triggers.rs` maps them to the documents they require: a schedule after issue and every change to cover, a lapse or suspension notice when standing changes, a receipt when a payment is applied. A trigger is a statement that a document is due; a service with access to the policy and customer data answers it by asking the driver to issue. Events older than `live_event_days` are recorded but trigger nothing, so a replay cannot send a flood of old letters.
 
+**Interested parties.** The core reports every interest noted on a policy, such as an assignment to a lender, and its release (`Event::Interest`). The module keeps who holds each interest and between which dates, from events of any age. A trigger for a lapse notice (raised when the policy enters grace, which is the arrears notice), a suspension notice or the letter that a policy has ended lists in `copy_to` the parties whose interest stood on the event's date. `IssueDocument` refuses a lapse or suspension notice, and any document answering a trigger with copies owed, with `interested_party_missing` unless every party whose interest stands on the day of issue is a recipient. The notice clock still runs from delivery to the addressees. An interest stops being owed copies on the date its release takes effect. Question `interested_parties` (`policy`, `on`) answers who is owed a copy.
+
 ## Azure
 
 | Need | Service | Notes |
@@ -90,9 +92,10 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 - Settings are listed on `service::Config`. The webhook key is read from the file `IC_DOCUMENTS_WEBHOOK_KEY_FILE` names when that is set, which is how the deployment supplies it. All are required except the container names, key name, hub names, conduct officer, listen address and cycle interval.
 - **Deploying.** `infra/documents.bicep` creates the vault storage account and its two containers, the wrapping key, Communication Services, the two Event Hubs, the service's identity and its role assignments, and the Event Grid subscription for delivery reports. `deploy/k8s/documents.yaml` runs two copies of the service. The template is deployed twice: first without `deliveryReportsUrl`, then, once the service is reachable at its public address, with it, because Event Grid creates a webhook subscription only after calling it. Three things need a person: verifying the email sending domain and linking it to the Communication Services resource, buying the SMS number or short code, and routing `https://<host>/v1/delivery-reports` (that path only) through the ingress to the `ic-documents` service. The template and manifest have not been deployed from here; check the Communication Services role ID as the template's parameter describes before the first deployment.
 
+**Idempotency keys** are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotten as `Tick` passes, at most 200 a tick. Core events, `Tick` and `MarkPublished` are frequent and leave none.
+
 ## Not built, or waiting on others
 
 - **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
 - **Rendering to PDF, large print, audio and braille.** Documents are text. The requested format is recorded on the document and passed to the print house; producing the other formats is not built.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.
-- **Idempotency keys are kept for ever**, except for core events, `Tick` and `MarkPublished`, which are frequent and leave none. The rest are small, but there is no pruning.

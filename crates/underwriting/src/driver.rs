@@ -632,6 +632,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 proposal,
                 entry: Entry::GroupExcess { .. },
                 covers,
+                employer_may_see_loading,
                 ..
             } => {
                 let (Some((scheme, case)), [cover]) = (excess_case(proposal), covers.as_slice()) else {
@@ -641,7 +642,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     sum_insured_minor: cover.sum_insured_minor,
                     loadings: cover.loadings.clone(),
                     exclusions: cover.exclusions.clone(),
-                    member_consents_to_itemising: false,
+                    member_consents_to_itemising: *employer_may_see_loading,
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }

@@ -681,6 +681,11 @@ pub enum Effect {
         policy: PolicyId,
         effective: NaiveDate,
         covers: Vec<ic_core::command::CoverSpec>,
+        /// Every life whose terms these are agreed, by signed step, that
+        /// the employer may see a loaded premium. Only ever true for a
+        /// scheme member's excess cover.
+        #[serde(default)]
+        employer_may_see_loading: bool,
     },
     /// A proposal on a policy already in force ended with no terms to
     /// apply: declined, lapsed or withdrawn. Whoever asked is told, so the
