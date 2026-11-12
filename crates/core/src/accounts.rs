@@ -38,6 +38,7 @@ pub mod role {
     pub const GST_PAYABLE: &str = "gst_payable";
     pub const LEVY_PAYABLE: &str = "levy_payable";
     pub const LAPSE_WRITE_OFF: &str = "lapse_write_off";
+    pub const AVOIDANCE_PREMIUM_RETAINED: &str = "avoidance_premium_retained";
     pub const ROUNDING: &str = "rounding";
     pub const TRANSFER_IN_TRANSIT: &str = "transfer_in_transit";
     pub const FUND_UNIT_POSITION: &str = "fund_unit_position";
@@ -238,6 +239,16 @@ pub fn earned_premium(product: &str, cover_type: &str, c: Currency) -> Account {
         AccountUnit::Fine(c),
         AccountClass::Income,
         role::EARNED_PREMIUM,
+    )
+}
+/// Premium the insurer keeps on a policy avoided for non-disclosure, where
+/// the approved case decided it is not refunded.
+pub fn avoidance_premium_retained(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/avoidance_premium_retained/{product}/{c}"),
+        AccountUnit::Fine(c),
+        AccountClass::Income,
+        role::AVOIDANCE_PREMIUM_RETAINED,
     )
 }
 pub fn gst_payable(c: Currency) -> Account {

@@ -498,12 +498,14 @@ impl<W: KeyWrapper> Store<W> {
             }
         }
         let (key, wrapped) = self.keys.issue(&id).await.map_err(StoreError::Unavailable)?;
-        let Some(EventBody::Created { group, .. }) = bodies.first() else {
-            unreachable!("party::create starts with Created")
-        };
+        // party::create always starts with Created.
+        let group = bodies.iter().find_map(|b| match b {
+            EventBody::Created { group, .. } => Some(group.clone()),
+            _ => None,
+        });
         tx.execute(
             "insert into parties (id, kind, lifecycle, group_id, version, head_hash, created_at, updated_at) values ($1, $2, 'prospect', $3, 0, $4, $5, $5)",
-            &[&id.0, &kind_text(kind), group, &GENESIS.to_vec(), &now],
+            &[&id.0, &kind_text(kind), &group, &GENESIS.to_vec(), &now],
         )
         .await
         .map_err(db)?;
@@ -583,6 +585,21 @@ impl<W: KeyWrapper> Store<W> {
             }
         }
         let written = self.append(&tx, &mut loaded, bodies, who, now).await?;
+        // Claims is told of every death, whoever recorded it; a death
+        // retracted before it was told is never sent.
+        let died = written.iter().any(|r| matches!(r.body, EventBody::Deceased { .. }));
+        let retracted = written.iter().any(|r| matches!(r.body, EventBody::DeathRetracted { .. }));
+        if let (true, Change::MarkDeceased { date_of_death }) = (died, change) {
+            tx.execute(
+                "insert into death_relay (party_id, date_of_death, recorded_at) values ($1, $2, $3) on conflict do nothing",
+                &[&id.0, date_of_death, &now],
+            )
+            .await
+            .map_err(db)?;
+        }
+        if retracted {
+            tx.execute("delete from death_relay where party_id = $1", &[&id.0]).await.map_err(db)?;
+        }
         let outcome = Outcome {
             party: id.clone(),
             version: loaded.party.version,
@@ -816,6 +833,44 @@ impl<W: KeyWrapper> Store<W> {
             .collect()
     }
 
+    /// Deaths not yet told to claims on every partition, oldest first, with
+    /// the attempts made so far.
+    pub async fn deaths_to_relay(&self, limit: i64) -> Result<Vec<(PartyId, NaiveDate, i32)>> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "select party_id, date_of_death, attempts from death_relay order by recorded_at, party_id limit $1",
+                &[&limit],
+            )
+            .await
+            .map_err(db)?;
+        Ok(rows.iter().map(|r| (PartyId(r.get(0)), r.get(1), r.get(2))).collect())
+    }
+
+    /// A death every partition has accepted: nothing more to send.
+    pub async fn death_relayed(&self, party: &PartyId, date: NaiveDate) -> Result<()> {
+        let client = self.client().await?;
+        client
+            .execute("delete from death_relay where party_id = $1 and date_of_death = $2", &[&party.0, &date])
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
+    /// A death not yet accepted everywhere: kept, with the reason, to be
+    /// tried again.
+    pub async fn death_failed(&self, party: &PartyId, date: NaiveDate, error: &str) -> Result<()> {
+        let client = self.client().await?;
+        client
+            .execute(
+                "update death_relay set attempts = attempts + 1, last_error = $3 where party_id = $1 and date_of_death = $2",
+                &[&party.0, &date, &error],
+            )
+            .await
+            .map_err(db)?;
+        Ok(())
+    }
+
     pub async fn published(&self, ids: &[i64], now: DateTime<Utc>) -> Result<()> {
         let client = self.client().await?;
         client
@@ -943,6 +998,7 @@ impl<W: KeyWrapper> Store<W> {
         self.append(tx, &mut l, vec![EventBody::Shredded], &who, now).await?;
         for sql in [
             "delete from party_keys where party_id = $1",
+            "delete from death_relay where party_id = $1",
             "delete from blind_index where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",

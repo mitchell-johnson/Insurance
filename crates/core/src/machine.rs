@@ -15,7 +15,8 @@ use crate::interest::{self, RestrictedAction};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
 use crate::{
-    arrears, billing, cash, claims, earning, group, lifecycle, payments, reduce, reinsurance, reopen, transfer, underwritten, unwind, voluntary, PolicyId,
+    arrears, billing, cash, claims, earning, group, lifecycle, nondisclosure, payments, reduce, reinsurance, reopen, transfer, underwritten, unwind, voluntary,
+    PolicyId,
 };
 
 /// The apply budget: no single command may do more than this many units of
@@ -458,6 +459,16 @@ impl CoreState {
                     Ok(())
                 })
             }
+            Command::AvoidPolicy { policy, case, premium } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                if s.investment.holds_anything(&s.ledger, p) {
+                    return Err(Reject::new(
+                        "policy_invested",
+                        "a policy with units, pending investment cash or pending unit orders cannot be avoided yet",
+                    ));
+                }
+                nondisclosure::avoid(&mut s.ledger, &s.catalog, p, ctx, case, premium)
+            }),
+            Command::VaryForNonDisclosure { policy, case, terms } => self.with_policy(&policy, true, |_, p| nondisclosure::vary(p, ctx, case, terms)),
             Command::ApproveReinstatement(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx.date, *spec))

@@ -945,3 +945,97 @@ fn claims_that_leave_the_policy_in_force_are_on_the_experience_extract() {
     let copy: Mart = serde_json::from_value(serde_json::to_value(&mart).unwrap()).unwrap();
     assert_eq!(copy.experience(day(1), day(5)).unwrap().bytes(), whole.bytes());
 }
+
+/// Purpose: the real claims module, hosted in the real core, admits a provider's invoice
+/// of $95 on a health policy straight through, capped at the $60 limit. The mart, fed
+/// only the core's event stream, counts one admitted claim of $60 in the health product's
+/// cell, with the insured's age band, and the policy stays in force.
+/// Why it matters: the mart reads the claims module's facts by the names of their keys.
+/// The other tests write those facts by hand, so this is the one that fails if the
+/// claims module renames a key or stops publishing a fact, which would otherwise show
+/// only as claims quietly missing from the actuary's experience study.
+#[test]
+fn the_real_claims_module_feeds_the_experience_extract() {
+    use ic_core::claims_module as claims;
+    let start = d(2027, 11, 15);
+    let mut w = World::new(2, start);
+    let approved = || ("config-ann".to_string(), vec!["config-bob".to_string(), "config-cat".to_string()]);
+    let rules = claims::Rules {
+        version: 1,
+        straight_through_max_minor: [(claims::ClaimType::Health, 2_000_00)].into(),
+        health_benefits: [(
+            "gp".to_string(),
+            claims::config::HealthBenefit {
+                per_event_minor: 60_00,
+                per_year_minor: 600_00,
+                lifetime_minor: i64::MAX / 4,
+                copay_pct: 0,
+                excess_minor: 0,
+            },
+        )]
+        .into(),
+        prepared_by: approved().0,
+        approved_by: approved().1,
+        ..claims::Rules::default()
+    };
+    let wrap = |c: claims::Command| Command::Claims(Box::new(c));
+    w.core
+        .activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(rules) }))
+        .unwrap();
+
+    let book = claims::AuthorityBook {
+        version: 1,
+        profiles: Default::default(),
+        staff: Default::default(),
+        prepared_by: approved().0,
+        approved_by: approved().1,
+    };
+    w.core
+        .activate_everywhere(wrap(claims::Command::ActivateAuthority { book: Box::new(book) }))
+        .unwrap();
+
+    let issue = ic_sim::persona::health_family(1, start, &[d(1988, 5, 5)], ic_product::Frequency::Monthly);
+    let (p, id) = (w.core.partition_of(&issue.group), issue.policy.clone());
+    w.core.submit(p, "new-business", issue_command(issue)).unwrap();
+    w.pay(p, &id, "r-h", 2_000_00);
+    w.until(d(2027, 11, 25));
+    let invoice = claims::command::Notification {
+        claim: "clm-h".into(),
+        policy: id.0.clone(),
+        cover: "hospital".into(),
+        life: Some("life-1".into()),
+        claim_type: claims::ClaimType::Health,
+        event_date: d(2027, 11, 25),
+        channel: claims::Channel::Provider,
+        notifier: claims::Notifier::Provider,
+        claimant: Some("party-claimant".into()),
+        claimed_minor: None,
+        flags: claims::Flags::default(),
+        health: Some(claims::HealthItem {
+            category: "gp".into(),
+            invoice_minor: 95_00,
+            provider: Some("provider-7".into()),
+            pre_approval_request: false,
+            settles_pre_approval: None,
+        }),
+        underwriters: vec![],
+        catastrophe_event: None,
+        cause_code: None,
+    };
+    w.core.submit(p, "claims", wrap(claims::Command::Notify(Box::new(invoice)))).unwrap();
+    w.until(d(2027, 12, 2));
+
+    let nov = period(2027, 11);
+    let mart = mart_of(2, &w.events);
+    let experience = mart.experience(nov.start(), nov.end()).unwrap();
+    assert!(experience.reconciled);
+    assert_eq!((total(&experience, "admitted_claims"), total(&experience, "admitted_minor")), (1, 60_00));
+    let cell = rows(&experience).into_iter().find(|r| r["admitted_claims"] == "1").unwrap();
+    assert!(
+        !cell["product"].is_empty() && !cell["cover_type"].is_empty(),
+        "the claim was not placed: {cell:?}"
+    );
+    assert_eq!(cell["age_band"], "35-39");
+    assert_ne!(cell["cover_days"], "0", "the policy the claim is on has no exposure in its cell");
+    assert_eq!(total(&experience, "ending_claims"), 0);
+}
