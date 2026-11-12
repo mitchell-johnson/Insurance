@@ -148,7 +148,18 @@ fn a_reversal_stops_the_benefit_and_holds_the_overpayment() {
         (reversed[0]["reason_code"].as_str(), reversed[0]["cause"].as_str()),
         ("R-REV", "rules_unmapped")
     );
-    assert_eq!(w.core.noticed("overpayment_raised")[0]["amount_minor"], "6000");
+    // The event carries the whole position, so the held balance workbench needs no other source.
+    let raised = &w.core.noticed("overpayment_raised")[0];
+    assert_eq!(raised["amount_minor"], "6000");
+    assert_eq!(
+        (
+            raised["outstanding_minor"].as_str(),
+            raised["status"].as_str(),
+            raised["insurer_error"].as_str()
+        ),
+        ("6000", "held", "true")
+    );
+    assert!(raised.contains_key("party") && raised.contains_key("overpayment") && raised.contains_key("good_faith"));
     assert_eq!(w.core.noticed("claim_closed").last().expect("published")["outcome"], "admission_reversed");
 
     // Nothing is asked of the customer, and no further benefit is prepared.
@@ -230,7 +241,9 @@ fn recovering_the_insurers_own_error_needs_conduct_and_legal() {
         o.history.iter().map(|(_, s, _)| *s).collect::<Vec<_>>(),
         vec![RecoveryStatus::Held, RecoveryStatus::Held, RecoveryStatus::Pursued]
     );
-    assert_eq!(w.core.noticed("recovery_status_changed").last().expect("published")["status"], "pursued");
+    let changed = w.core.noticed("recovery_status_changed");
+    let changed = changed.last().expect("published");
+    assert_eq!((changed["status"].as_str(), changed["outstanding_minor"].as_str()), ("pursued", "6000"));
     assert_eq!(w.state.claimant_view("ip-1").expect("the claim exists").repayment_asked_minor, 6_000);
 
     // An arrangement is a case of its own on the recoveries queue.
@@ -287,7 +300,8 @@ fn repayment_and_write_off_move_the_ledger_and_the_record_together() {
         Some(Instruction::RecoverOverpayment { amount_minor: 1_000, .. })
     ));
     assert_eq!(w.claim("ip-1").overpayments[0].outstanding_minor(), 5_000);
-    assert_eq!(w.core.noticed("overpayment_recovered")[0]["amount_minor"], "1000");
+    let recovered = &w.core.noticed("overpayment_recovered")[0];
+    assert_eq!((recovered["amount_minor"].as_str(), recovered["outstanding_minor"].as_str()), ("1000", "5000"));
 
     let write_off = Request::WriteOff { overpayment: op.into() };
     assert_eq!(
@@ -308,6 +322,7 @@ fn repayment_and_write_off_move_the_ledger_and_the_record_together() {
     ));
     let written = w.core.noticed("overpayment_written_off");
     assert_eq!((written[0]["amount_minor"].as_str(), written[0]["insurer_error"].as_str()), ("5000", "true"));
+    assert_eq!((written[0]["status"].as_str(), written[0]["outstanding_minor"].as_str()), ("written_off", "0"));
     assert_eq!(w.undecided("ip-1", "sam", write_off, "R-OK"), "unknown_overpayment");
     assert_eq!(w.undecided("ip-1", "sam", status(op, RecoveryStatus::Pursued), "R-OK"), "unknown_overpayment");
     let report = w.state.report();

@@ -9,9 +9,33 @@
 
 use crate::command::Actor;
 use crate::config::Queue;
-use crate::model::{Claim, OverpaymentCause, RecoveryStatus, TaskKind};
+use crate::model::{Claim, Overpayment, OverpaymentCause, RecoveryStatus, TaskKind};
 use crate::port::{Instruction, Reject};
 use crate::state::{note, open_task, ClaimsState, Cx};
+
+/// Publish a change to an overpayment with its whole position, so a reader
+/// such as the held balance workbench needs no other source: who owes it,
+/// what is left, how it is being recovered and whose mistake it was.
+pub(crate) fn publish(cx: &mut Cx<'_>, kind: &str, claim: &Claim, o: &Overpayment, extra: &[(&str, String)]) {
+    let party = claim
+        .claimant
+        .clone()
+        .or_else(|| claim.life_party.clone())
+        .unwrap_or_else(|| claim.policyholder.clone());
+    let mut detail = vec![
+        ("claim", claim.id.clone()),
+        ("policy", claim.policy.clone()),
+        ("overpayment", o.id.clone()),
+        ("party", party),
+        ("outstanding_minor", o.outstanding_minor().to_string()),
+        ("status", o.status.code().to_string()),
+        ("cause", format!("{:?}", o.cause)),
+        ("insurer_error", (o.cause == OverpaymentCause::InsurerError).to_string()),
+        ("good_faith", o.good_faith.to_string()),
+    ];
+    detail.extend(extra.iter().cloned());
+    cx.notify(kind, &claim.id, &detail);
+}
 
 impl ClaimsState {
     /// Record an overpayment found outside a replay: a provider billing
@@ -50,11 +74,7 @@ impl ClaimsState {
             amount_minor,
         })?;
         // A false declaration also goes to the compliance module, which reads this.
-        cx.notify(
-            "overpayment_raised",
-            id,
-            &[("amount_minor", amount_minor.to_string()), ("cause", format!("{cause:?}"))],
-        );
+        publish(cx, "overpayment_raised", &claim, &o, &[("amount_minor", amount_minor.to_string())]);
         claim.overpayments.push(o);
         note(&mut claim, cx, Some(actor), "overpayment_raised");
         self.commit(claim);
@@ -83,8 +103,9 @@ impl ClaimsState {
             o.status = RecoveryStatus::Recovered;
             o.history.push((cx.today, RecoveryStatus::Recovered, 0));
         }
+        let o = o.clone();
         note(&mut claim, cx, None, "repayment_recorded");
-        cx.notify("overpayment_recovered", id, &[("amount_minor", amount_minor.to_string())]);
+        publish(cx, "overpayment_recovered", &claim, &o, &[("amount_minor", amount_minor.to_string())]);
         self.commit(claim);
         Ok(())
     }
@@ -100,18 +121,21 @@ impl ClaimsState {
         instalment_minor: i64,
         decision: u32,
     ) {
-        let id = claim.id.clone();
+        let mut changed = None;
         if let Some(o) = claim.overpayments.iter_mut().find(|o| o.id == overpayment) {
             o.status = status;
             o.offset_pct = if status == RecoveryStatus::Offset { offset_pct } else { 0 };
             o.instalment_minor = if status == RecoveryStatus::Arrangement { instalment_minor } else { 0 };
             o.history.push((cx.today, status, decision));
+            changed = Some(o.clone());
         }
         if status == RecoveryStatus::Arrangement {
             // A repayment arrangement is a case of its own.
             open_task(claim, cx, format!("repayment-arrangement/{decision}"), TaskKind::RepaymentArrangement, None);
         }
-        cx.notify("recovery_status_changed", &id, &[("status", status.code().to_string())]);
+        if let Some(o) = changed {
+            publish(cx, "recovery_status_changed", claim, &o, &[]);
+        }
     }
 
     /// Write off what is left of an overpayment.
@@ -131,16 +155,8 @@ impl ClaimsState {
         o.status = RecoveryStatus::WrittenOff;
         o.history.push((cx.today, RecoveryStatus::WrittenOff, decision));
         // Whether a reinsurer shares the cost is agreed under the treaty.
-        let insurer_error = o.cause == OverpaymentCause::InsurerError;
-        cx.notify(
-            "overpayment_written_off",
-            &id,
-            &[
-                ("claim", id.clone()),
-                ("amount_minor", amount.to_string()),
-                ("insurer_error", insurer_error.to_string()),
-            ],
-        );
+        let o = o.clone();
+        publish(cx, "overpayment_written_off", claim, &o, &[("amount_minor", amount.to_string())]);
         Ok(())
     }
 }

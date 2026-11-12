@@ -428,11 +428,7 @@ impl ClaimsState {
         claim.closed_on = Some(cx.today);
         claim.due.clear();
         if let Some(o) = overpayment {
-            cx.notify(
-                "overpayment_raised",
-                &claim.id,
-                &[("amount_minor", o.amount_minor.to_string()), ("cause", format!("{:?}", o.cause))],
-            );
+            crate::overpay::publish(cx, "overpayment_raised", claim, &o, &[("amount_minor", o.amount_minor.to_string())]);
             claim.overpayments.push(o);
         }
         cx.notify("claim_closed", &claim.id, &[("outcome", status.code().to_string())]);

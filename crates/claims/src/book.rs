@@ -372,11 +372,7 @@ impl ClaimsState {
                 overpayment: o.id.clone(),
                 amount_minor: over,
             })?;
-            cx.notify(
-                "overpayment_raised",
-                id,
-                &[("amount_minor", over.to_string()), ("cause", format!("{:?}", o.cause))],
-            );
+            crate::overpay::publish(cx, "overpayment_raised", &claim, &o, &[("amount_minor", over.to_string())]);
             claim.overpayments.push(o);
         }
         if under > 0 {
