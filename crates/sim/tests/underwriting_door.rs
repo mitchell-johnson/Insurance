@@ -471,7 +471,7 @@ fn a_change_of_terms_that_cannot_be_priced_or_is_not_underwritings_is_refused() 
 fn evidence_after_thirty_days(c: &mut Cluster, n: u64) -> PolicyId {
     let source = include_str!("../../../products/term_life.star")
         .replace("code = \"term-life\"", "code = \"term-life-evidence\"")
-        .replace("reinstatement_days = 180", "reinstatement_days = 180, reinstatement_evidence_free_days = 30");
+        .replace("reinstatement_evidence_free_days = 60", "reinstatement_evidence_free_days = 30");
     let product = ic_product::loader::load_product("term_life_evidence.star", &source).unwrap();
     c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
     let mut issue = term_life(n, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
@@ -607,7 +607,7 @@ fn a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms() 
 /// Purpose: underwriting's decision on a lapsed policy is refused, with nothing written, from
 /// any other caller; on a policy that is not lapsed; with no reference; already out of date;
 /// for a cover or a life the policy does not have; for a negative loading; and after the
-/// reinstatement window has closed. On a product that asks for no evidence, a decision that
+/// reinstatement window has closed. Inside the product's evidence-free days, a decision that
 /// carries terms is still applied when the policy is reinstated.
 /// Why it matters: the decision is what lets a risk back onto the books after months off
 /// them, and it can change the terms a claim is assessed on. Each refusal is a way of
@@ -644,7 +644,8 @@ fn a_reinstatement_decision_that_cannot_stand_is_refused() {
     }
     assert!(c.state(0).policies[&id] == lapsed, "a refused decision wrote nothing");
 
-    // The shipped product asks for no evidence, but terms underwriting decided still apply.
+    // Five days lapsed is inside the shipped product's evidence-free days, but terms
+    // underwriting decided still apply.
     c.submit(0, "underwriting", approve(&id, good_until, vec![loaded("life-1", "life", "0.25")]))
         .unwrap();
     pay(&mut c, &id, "catch-up");
