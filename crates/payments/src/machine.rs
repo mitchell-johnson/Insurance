@@ -217,6 +217,12 @@ pub enum Command {
         closing_minor: i64,
         lines: Vec<StatementLine>,
     },
+    /// A driver has recorded every message a bank's channel has sent up to
+    /// this one, so no driver need read them again.
+    NoteMessagesRead {
+        channel: Id,
+        through: u64,
+    },
     AssignException {
         exception: Id,
         owner: String,
@@ -480,6 +486,9 @@ pub struct PaymentsState {
     /// Claims runs with payments still to settle.
     #[serde(default)]
     pub claims_runs: BTreeMap<String, crate::intake::ClaimsRun>,
+    /// How far each channel's messages from the bank have been recorded.
+    #[serde(default)]
+    pub messages_read: BTreeMap<Id, u64>,
     pub books: BTreeMap<Id, Book>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
@@ -620,6 +629,7 @@ impl PaymentsState {
             Command::ResolveException { exception, resolution } => self.resolve_exception(tx, &exception, resolution),
             Command::CompleteInstruction { entry, refused } => self.complete_instruction(tx, entry, refused),
             Command::StartDrill { drill, region } => self.start_drill(tx, drill, region),
+            Command::NoteMessagesRead { channel, through } => self.note_messages_read(tx, channel, through),
             Command::RecordDrillProbe { drill, channel, probe } => self.record_drill_probe(tx, &drill, channel, probe),
             Command::CloseDrill { drill } => self.close_drill(tx, &drill),
             Command::Prune { before } => self.prune(tx, before),

@@ -177,7 +177,9 @@ fn policy_summary(state: &ChannelState, viewer: &PartyId, policy: &PolicyId, at:
         return None;
     }
     let entry = state.data.view.policy(policy)?;
-    Some(json!({ "policy": policy, "number": entry.number, "product": entry.product_code, "status": entry.status, "relationships": relationships }))
+    Some(
+        json!({ "policy": policy, "number": entry.number, "product": entry.product_code, "status": entry.status, "ended": crate::state::ended(entry.status), "relationships": relationships }),
+    )
 }
 
 /// A member of staff as the commission module's own authorisation wants

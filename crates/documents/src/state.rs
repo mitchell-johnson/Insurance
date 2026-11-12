@@ -1589,6 +1589,7 @@ impl DocumentsState {
                         | PolicyStatus::Expired
                         | PolicyStatus::Cancelled
                         | PolicyStatus::Terminated
+                        | PolicyStatus::Avoided
                 ),
             ),
             ic_core::Event::PolicyReinstated { policy } => (policy, false),
@@ -1884,11 +1885,11 @@ pub(crate) fn standing_notice(to: Option<Standing>) -> Option<(DocumentKind, &'s
 
 /// Whether a document the core's events require is copied to the parties
 /// with an interest in the policy: the notices of arrears and suspension,
-/// and the letter that says the policy has ended.
+/// the letter that says the policy has ended, and the avoidance letter.
 fn copied_to_interests(kind: DocumentKind) -> bool {
     matches!(
         kind,
-        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::GeneralCorrespondence
+        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::GeneralCorrespondence | DocumentKind::AvoidanceNotice
     )
 }
 

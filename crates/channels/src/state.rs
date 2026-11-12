@@ -246,6 +246,14 @@ impl<'de> Deserialize<'de> for ChannelState {
     }
 }
 
+/// Whether a policy has ended, whatever the reason: lapsed, surrendered,
+/// matured, expired, cancelled, ended by a claim, or avoided for
+/// non-disclosure (treated as never in force). Pages show it as ended.
+pub fn ended(status: ic_core::PolicyStatus) -> bool {
+    use ic_core::PolicyStatus as S;
+    !matches!(status, S::Quoted | S::Proposed | S::InForce | S::PaidUp)
+}
+
 fn reject(code: &str, message: impl Into<String>) -> Reject {
     Reject::new(code, message)
 }
@@ -329,7 +337,7 @@ impl ChannelState {
             None,
             false,
             json!({
-                "number": entry.number, "product": entry.product_code, "status": entry.status, "standing": entry.standing,
+                "number": entry.number, "product": entry.product_code, "status": entry.status, "ended": ended(entry.status), "standing": entry.standing,
                 "indexation_declined": extras.and_then(|e| e.indexation_declined),
                 "last_anniversary": extras.and_then(|e| e.last_anniversary).map(|(n, on)| json!({ "number": n, "on": on })),
             }),

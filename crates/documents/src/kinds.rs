@@ -36,6 +36,9 @@ pub enum DocumentKind {
     LapseNotice,
     DeadlockNotice,
     ClaimDecisionLetter,
+    /// The decision to avoid a policy for non-disclosure: treated as never
+    /// in force, what happens to the premium, and the right to complain.
+    AvoidanceNotice,
     DisclosureStatement,
 
     PremiumReceipt,
@@ -52,7 +55,7 @@ pub enum DocumentKind {
 }
 
 impl DocumentKind {
-    pub const ALL: [DocumentKind; 25] = [
+    pub const ALL: [DocumentKind; 26] = [
         DocumentKind::PolicyWording,
         DocumentKind::PolicySchedule,
         DocumentKind::Endorsement,
@@ -67,6 +70,7 @@ impl DocumentKind {
         DocumentKind::LapseNotice,
         DocumentKind::DeadlockNotice,
         DocumentKind::ClaimDecisionLetter,
+        DocumentKind::AvoidanceNotice,
         DocumentKind::DisclosureStatement,
         DocumentKind::PremiumReceipt,
         DocumentKind::Statement,
@@ -84,7 +88,7 @@ impl DocumentKind {
         use DocumentKind::*;
         match self {
             PolicyWording | PolicySchedule | Endorsement | OfferOfTerms | AcceptanceRecord | GroupSchemeTerms | AgencyAgreement => DocumentClass::Contractual,
-            RenewalNotice | PremiumChangeNotice | FeeChangeNotice | SuspensionNotice | LapseNotice | DeadlockNotice | ClaimDecisionLetter
+            RenewalNotice | PremiumChangeNotice | FeeChangeNotice | SuspensionNotice | LapseNotice | DeadlockNotice | ClaimDecisionLetter | AvoidanceNotice
             | DisclosureStatement => DocumentClass::MandatoryNotice,
             PremiumReceipt | Statement | AdviserStatement | ReinsurerStatement | Invoice | Reminder | GeneralCorrespondence => DocumentClass::Informational,
             RemediationLetter | MigrationNotice | ComplaintOutcome => DocumentClass::GeneratedEvidence,
