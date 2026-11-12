@@ -174,6 +174,7 @@ fn portal() -> Portal {
             }],
             documents: vec![],
             cases: vec![],
+            conduct: None,
         }),
     )
     .unwrap();

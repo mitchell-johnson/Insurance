@@ -48,6 +48,7 @@ fn staffed() -> World {
                     1_000_000_00,
                 ),
                 template("legal", &[actions::VIEW, actions::APPROVE_LEGAL], "legal-1", 10_000_000_00),
+                template("conduct", &[actions::VIEW, actions::APPROVE_CONDUCT], "legal-1", 10_000_000_00),
             ],
             profiles: vec![profile("none", 0), profile("finance-1", 100_000_00), profile("legal-1", 10_000_000_00)],
             admin: p("alice"),
@@ -61,6 +62,7 @@ fn staffed() -> World {
         ("fin-2", "counterparty-finance"),
         ("fin-3", "counterparty-finance"),
         ("lex", "legal"),
+        ("con", "conduct"),
     ] {
         w.send(
             staff("alice"),
@@ -95,6 +97,7 @@ fn publish(items: Vec<Item>) -> Command {
         items,
         documents: vec![],
         cases: vec![],
+        conduct: None,
     })
 }
 
@@ -132,7 +135,35 @@ fn release(amount: i64) -> Action {
 }
 
 fn approve(id: &str, legal: bool) -> Command {
-    Command::Workbench(WorkbenchCommand::Approve { id: id.to_string(), legal })
+    Command::Workbench(WorkbenchCommand::Approve {
+        id: id.to_string(),
+        legal,
+        conduct: false,
+    })
+}
+
+fn approve_conduct(id: &str) -> Command {
+    Command::Workbench(WorkbenchCommand::Approve {
+        id: id.to_string(),
+        legal: false,
+        conduct: true,
+    })
+}
+
+/// The commission module says which conduct cases are open on the FAP now.
+fn conduct(w: &mut World, open: &[&str]) {
+    let held = Some(HoldReason::SuspendedLicence);
+    w.send(
+        module("commission"),
+        Command::Workbench(WorkbenchCommand::Publish {
+            party: p(FAP),
+            items: vec![item("h-10", ItemKind::Held, 80_000_00, "2027-10", held)],
+            documents: vec![],
+            cases: vec![],
+            conduct: Some(open.iter().map(|c| (*c).to_string()).collect()),
+        }),
+    )
+    .unwrap();
 }
 
 fn ready(effects: &Result<Vec<Effect>, Reject>) -> bool {
@@ -163,6 +194,7 @@ fn a_position_is_built_from_what_modules_publish() {
                 filed: d(2025, 1, 1),
             }],
             cases: vec!["conduct-77".into()],
+            conduct: None,
         }),
     )
     .unwrap();
@@ -275,7 +307,17 @@ fn a_release_is_prepared_approved_and_posted() {
     assert_eq!(effects, vec![Effect::Workbench(WorkbenchEvent::Prepared { id: "a1".into() })]);
     assert_eq!(code(w.send(staff("fin-1"), prepare("a1", release(1)))), "duplicate");
     let a1 = &w.ch.data.workbench.proposals["a1"];
-    assert_eq!((a1.needs, a1.module.as_str()), (Needs { approvers: 1, legal: false }, "commission"));
+    assert_eq!(
+        (a1.needs, a1.module.as_str()),
+        (
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false
+            },
+            "commission"
+        )
+    );
     // What is already promised cannot be promised again.
     assert_eq!(code(w.send(staff("fin-2"), prepare("a2", release(40_000_01)))), "exceeds_held");
 
@@ -319,6 +361,98 @@ fn a_release_is_prepared_approved_and_posted() {
     w.send(staff("fin-2"), prepare("a2", release(80_000_00))).unwrap();
 }
 
+/// Purpose: while a conduct case is open on a party, an action on its held money also needs the conduct officer, in a seat only that
+/// role can fill and fills once; when the case closes, new actions no longer need it, and another module's publication does not
+/// clear it.
+/// Why it matters: a conduct case means customers may be owed redress by this party. Paying its held commission away on finance's
+/// word alone is how the money that should have met that redress leaves, and the commission module would refuse the action anyway.
+#[test]
+fn an_open_conduct_case_brings_in_the_conduct_officer() {
+    let mut w = staffed();
+    conduct(&mut w, &["cc-1"]);
+    // Finance publishing its own items says nothing about conduct, and leaves the case standing.
+    w.send(module("finance"), publish(vec![item("f-1", ItemKind::Advance, -10_00, "2027-09", None)]))
+        .unwrap();
+    w.send(staff("fin-1"), prepare("c1", release(1_000_00))).unwrap();
+    assert_eq!(
+        w.ch.data.workbench.proposals["c1"].needs,
+        Needs {
+            approvers: 1,
+            legal: false,
+            conduct: true
+        }
+    );
+    assert_eq!(w.ch.data.workbench.position(&p(FAP)).unwrap()["conduct_cases"], json!(["cc-1"]));
+
+    assert_eq!(
+        code(w.send(staff("fin-2"), approve_conduct("c1"))),
+        "not_authorised",
+        "finance cannot sit in the conduct officer's seat"
+    );
+    assert_eq!(
+        code(w.send(staff("con"), approve("c1", false))),
+        "not_authorised",
+        "nor the conduct officer in finance's"
+    );
+    let both = Command::Workbench(WorkbenchCommand::Approve {
+        id: "c1".into(),
+        legal: true,
+        conduct: true,
+    });
+    assert_eq!(code(w.send(staff("lex"), both)), "one_seat");
+    assert_eq!(code(w.send(staff("lex"), approve("c1", true))), "not_needed");
+    assert!(!ready(&w.send(staff("fin-2"), approve("c1", false))), "finance alone does not release it");
+    assert_eq!(code(w.send(staff("fin-3"), approve("c1", false))), "not_needed");
+    assert!(ready(&w.send(staff("con"), approve_conduct("c1"))));
+    let approvals = &w.ch.data.workbench.proposals["c1"].approvals;
+    assert_eq!(
+        approvals.iter().map(|a| (a.by.to_string(), a.conduct)).collect::<Vec<_>>(),
+        [("fin-2".to_string(), false), ("con".to_string(), true)]
+    );
+
+    // The seat is filled once, in either order.
+    w.send(staff("fin-1"), prepare("c2", release(1_000_00))).unwrap();
+    assert!(!ready(&w.send(staff("con"), approve_conduct("c2"))));
+    w.send(
+        staff("alice"),
+        Command::Staff(StaffCommand::Employ {
+            party: p("con-2"),
+            team: "conduct".into(),
+            manager: None,
+            templates: vec!["conduct".into()],
+        }),
+    )
+    .unwrap();
+    assert_eq!(code(w.send(staff("con-2"), approve_conduct("c2"))), "not_needed");
+    assert!(ready(&w.send(staff("fin-2"), approve("c2", false))));
+
+    // The case closes: a new action is finance's alone again, and nobody is asked to sign as conduct officer.
+    conduct(&mut w, &[]);
+    w.send(staff("fin-1"), prepare("c3", release(1_000_00))).unwrap();
+    assert_eq!(
+        w.ch.data.workbench.proposals["c3"].needs,
+        Needs {
+            approvers: 1,
+            legal: false,
+            conduct: false
+        }
+    );
+    assert_eq!(code(w.send(staff("con"), approve_conduct("c3"))), "not_needed");
+
+    // A command written before the conduct officer's seat existed still reads: neither flag is needed.
+    let old: WorkbenchCommand = serde_json::from_value(json!({ "approve": { "id": "c3" } })).unwrap();
+    assert_eq!(
+        old,
+        WorkbenchCommand::Approve {
+            id: "c3".into(),
+            legal: false,
+            conduct: false
+        }
+    );
+    let older: WorkbenchCommand = serde_json::from_value(json!({ "publish": { "party": FAP, "items": [] } })).unwrap();
+    assert!(matches!(older, WorkbenchCommand::Publish { conduct: None, .. }));
+}
+
 /// Purpose: above the threshold an action needs two approvers plus legal, each a different person, and nobody can prepare or approve beyond their own authority.
 /// Why it matters: the addendum's control on large releases; one person approving twice, or legal's seat being filled by finance, would defeat it.
 #[test]
@@ -326,7 +460,14 @@ fn large_actions_need_two_approvers_and_legal() {
     let mut w = staffed();
     held(&mut w);
     w.send(staff("fin-1"), prepare("big", release(60_000_00))).unwrap();
-    assert_eq!(w.ch.data.workbench.proposals["big"].needs, Needs { approvers: 2, legal: true });
+    assert_eq!(
+        w.ch.data.workbench.proposals["big"].needs,
+        Needs {
+            approvers: 2,
+            legal: true,
+            conduct: false
+        }
+    );
 
     assert!(!ready(&w.send(staff("fin-2"), approve("big", false))));
     assert_eq!(code(w.send(staff("fin-2"), approve("big", false))), "already_approved");
@@ -380,7 +521,11 @@ fn a_new_account_for_a_party_in_liquidation_needs_legal() {
     w.send(staff("fin-1"), prepare("n0", to_new())).unwrap();
     assert_eq!(
         w.ch.data.workbench.proposals["n0"].needs,
-        Needs { approvers: 1, legal: false },
+        Needs {
+            approvers: 1,
+            legal: false,
+            conduct: false
+        },
         "an ordinary party's new account follows payee verification alone"
     );
 
@@ -396,7 +541,14 @@ fn a_new_account_for_a_party_in_liquidation_needs_legal() {
         )
         .unwrap();
         w.send(staff("fin-1"), prepare(id, to_new())).unwrap();
-        assert_eq!(w.ch.data.workbench.proposals[id].needs, Needs { approvers: 1, legal: true });
+        assert_eq!(
+            w.ch.data.workbench.proposals[id].needs,
+            Needs {
+                approvers: 1,
+                legal: true,
+                conduct: false
+            }
+        );
     }
     assert!(!ready(&w.send(staff("fin-2"), approve("n1", false))));
     assert!(ready(&w.send(staff("lex"), approve("n1", true))));
@@ -487,18 +639,62 @@ fn the_other_actions_are_validated_against_the_position() {
 
     // Good ones, and what each needs.
     for (id, action, needs) in [
-        ("off", offset(30_000_00, "cb-1"), Needs { approvers: 1, legal: false }),
-        ("wo-small", Action::WriteOff { amount_minor: 1_000_00 }, Needs { approvers: 1, legal: false }),
-        ("wo", Action::WriteOff { amount_minor: 1_000_01 }, Needs { approvers: 2, legal: false }),
+        (
+            "off",
+            offset(30_000_00, "cb-1"),
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false,
+            },
+        ),
+        (
+            "wo-small",
+            Action::WriteOff { amount_minor: 1_000_00 },
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false,
+            },
+        ),
+        (
+            "wo",
+            Action::WriteOff { amount_minor: 1_000_01 },
+            Needs {
+                approvers: 2,
+                legal: false,
+                conduct: false,
+            },
+        ),
         (
             "split",
             Action::Split {
                 shares: vec![share("a", 10_000_00, "ag-1"), share("b", 5_000_00, "ag-2")],
             },
-            Needs { approvers: 1, legal: false },
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false,
+            },
         ),
-        ("div", dividend(3_000_00), Needs { approvers: 1, legal: false }),
-        ("hold", hold("L-2027-9"), Needs { approvers: 1, legal: false }),
+        (
+            "div",
+            dividend(3_000_00),
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false,
+            },
+        ),
+        (
+            "hold",
+            hold("L-2027-9"),
+            Needs {
+                approvers: 1,
+                legal: false,
+                conduct: false,
+            },
+        ),
     ] {
         w.send(staff("fin-1"), prepare(id, action)).unwrap();
         assert_eq!(w.ch.data.workbench.proposals[id].needs, needs, "{id}");
@@ -570,6 +766,7 @@ fn the_daily_control_and_its_thresholds() {
             items: vec![old, aud],
             documents: vec![],
             cases: vec![],
+            conduct: None,
         }),
     )
     .unwrap();
@@ -621,7 +818,14 @@ fn the_daily_control_and_its_thresholds() {
     }
     w.send(staff("alice"), change(lower, "bob")).unwrap();
     w.send(staff("fin-1"), prepare("a", release(10_000_01))).unwrap();
-    assert_eq!(w.ch.data.workbench.proposals["a"].needs, Needs { approvers: 2, legal: true });
+    assert_eq!(
+        w.ch.data.workbench.proposals["a"].needs,
+        Needs {
+            approvers: 2,
+            legal: true,
+            conduct: false
+        }
+    );
     // With no bands the control is one total.
     w.send(
         staff("bob"),
@@ -656,6 +860,7 @@ fn the_proof_of_debt_extract_reconciles_and_traces() {
             ],
             documents: vec![],
             cases: vec![],
+            conduct: None,
         }),
     )
     .unwrap();
@@ -870,4 +1075,63 @@ async fn approved_actions_are_replayed_in_the_commission_module() {
         let closed = local.with(|s| serde_json::to_value(&s.data.workbench.proposals[id]).unwrap());
         assert_eq!((closed["state"].as_str(), closed["code"].as_str()), (Some("failed"), Some(code)), "{id}");
     }
+}
+
+/// Purpose: the conduct officer's approval is replayed in the commission module as that person signing in the `conduct_officer`
+/// role, in that module's own types; if that module did not want the signature the action carries on to its other approvals, while
+/// any other signature it does not want still fails the action.
+/// Why it matters: the workbench asks for the conduct officer whenever a conduct case is open and the commission module asks by its
+/// own rules. Where the two differ, an action everyone has signed must still be paid, not left failed over a signature to spare.
+#[tokio::test]
+async fn the_conduct_officers_signature_is_replayed() {
+    use ic_channels::forward::{carry_actions, envelopes_for};
+    use ic_channels::http::{Channel, Local};
+    use ic_channels::query::Question;
+
+    let mut w = staffed();
+    conduct(&mut w, &["cc-1"]);
+    for id in ["k1", "k2"] {
+        w.send(staff("fin-1"), prepare(id, release(1_000_00))).unwrap();
+        w.send(staff("con"), approve_conduct(id)).unwrap();
+        w.send(staff("fin-2"), approve(id, false)).unwrap();
+    }
+    let at = w.at;
+    let local = Local::new(w.ch);
+    let question = Question::WorkbenchApproved {
+        module: "commission".into(),
+        at,
+    };
+    let waiting = local.ask(question).await.unwrap();
+    let proposal: Proposal = serde_json::from_value(waiting[0]["proposal"].clone()).unwrap();
+    let envelopes = envelopes_for(&proposal, &waiting[0]["people"]);
+    assert_eq!(envelopes.len(), 3);
+    let signed: ic_distribution::Envelope = serde_json::from_value(envelopes[1].clone()).unwrap();
+    let ic_distribution::Actor::Staff(officer) = &signed.actor else {
+        panic!("the conduct officer signs as a person")
+    };
+    assert_eq!(officer.id.to_string(), "con");
+    assert_eq!(
+        officer.templates.iter().flat_map(|t| t.roles.iter().map(|r| r.key())).collect::<Vec<_>>(),
+        ["conduct_officer"]
+    );
+    assert_eq!(envelopes[1]["command"]["approve_action"], json!({ "id": "k1", "as_role": "conduct_officer" }));
+
+    let commission = Commission::default();
+    let refuse = |key: &str| {
+        let refusal = ("approval_not_needed".to_string(), "not waiting for that signature".to_string());
+        commission.refuse.lock().unwrap().insert(key.to_string(), refusal);
+    };
+    // That module did not need the conduct officer on k1: finance's signature still follows.
+    refuse("workbench:k1:approve:con");
+    // It did not need finance's on k2, which is a real disagreement.
+    refuse("workbench:k2:approve:fin-2");
+    *commission.record.lock().unwrap() = (json!({ "state": "proposed", "needed": [] }), None);
+    assert_eq!(carry_actions(&commission, &local, at).await, Ok(2));
+    let keys: Vec<String> = commission.told.lock().unwrap().iter().map(|e| e["key"].as_str().unwrap().to_string()).collect();
+    assert!(keys.contains(&"workbench:k1:approve:fin-2".to_string()), "{keys:?}");
+    assert_eq!(keys.len(), 6);
+    let closed = |id: &str| local.with(|s| serde_json::to_value(&s.data.workbench.proposals[id]).unwrap());
+    // Nothing refused k1, so what that module's record says decides it; k2 carries the refusal.
+    assert_eq!(closed("k1")["code"], "needs_more_approval");
+    assert_eq!(closed("k2")["code"], "approval_not_needed");
 }
