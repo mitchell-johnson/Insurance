@@ -30,7 +30,7 @@ pub const LATE_LOOKBACK_DAYS: u64 = 60;
 
 /// The key for one fund on one pricing date.
 pub fn slot(fund: &FundId, date: NaiveDate) -> String {
-    format!("{}@{date}", fund.0)
+    format!("{}:{date}", fund.0)
 }
 
 /// One valuation as it was received.
@@ -536,7 +536,7 @@ impl PricingState {
 
     /// The latest active price of a fund before a date.
     fn previous_active(&self, fund: &FundId, before: NaiveDate) -> Option<&Price> {
-        let prefix = format!("{}@", fund.0);
+        let prefix = format!("{}:", fund.0);
         self.active
             .range(prefix.clone()..)
             .take_while(|(k, _)| k.starts_with(&prefix))
@@ -992,7 +992,7 @@ impl PricingState {
     /// A partition has executed every order of a fund through `through`:
     /// mark each priced date up to then that has no extract yet.
     fn record_executed_through(&mut self, fund: &FundId, partition: PartitionId, through: NaiveDate) -> Result<(), Output> {
-        let prefix = format!("{}@", fund.0);
+        let prefix = format!("{}:", fund.0);
         let dates: Vec<NaiveDate> = self
             .active
             .range(prefix.clone()..)

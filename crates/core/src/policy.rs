@@ -412,6 +412,10 @@ pub struct Policy {
     /// bank has settled it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payouts: BTreeMap<String, crate::invest::Payout>,
+    /// Lenders' and assignees' interests in the policy, by interest ID.
+    /// Released ones are kept, so the past can still be asked about.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub interests: BTreeMap<String, crate::interest::Interest>,
     /// Payments settled from a payable, by payment ID, so a payment the
     /// bank sends back can be reversed exactly.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

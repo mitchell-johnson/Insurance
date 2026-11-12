@@ -533,6 +533,7 @@ pub fn schedule() -> Schedule {
         cooling_off_days: 14,
         initial_earned: InitialEarned::FirstPremium,
         initial_on_indexation: false,
+        earns_on_waived_premium: true,
         replacement_carries_clawback: false,
     }
 }

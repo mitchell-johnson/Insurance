@@ -319,7 +319,7 @@ mod tests {
 
     fn previous(mid: &str, nav: &str) -> Previous {
         Previous {
-            price_id: "growth@2026-11-11#1".into(),
+            price_id: "growth:2026-11-11.1".into(),
             pricing_date: day(11),
             mid: d(mid),
             nav: d(nav),

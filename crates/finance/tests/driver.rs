@@ -15,7 +15,8 @@ use ic_azure::AzureError;
 use ic_core::Reject;
 use ic_finance::close::{Capacity, CheckStatus, Outcome, PeriodStatus};
 use ic_finance::driver::{
-    self, core_sources, distribution_sources, payments_sources, reinsurance_sources, Driver, DriverError, Pass, Reports, Source, SUBLEDGER_CHECK,
+    self, core_sources, distribution_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver, DriverError, Pass, Reports, Source,
+    SUBLEDGER_CHECK,
 };
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
@@ -112,6 +113,7 @@ fn sources() -> Vec<Source> {
     all.extend(payments_sources());
     all.extend(reinsurance_sources());
     all.extend(core_sources());
+    all.extend(unit_pricing_sources());
     all.push(Source {
         caller: "collections".to_string(),
         module: "ops".to_string(),
@@ -219,6 +221,7 @@ fn a_month_goes_from_its_last_day_to_closed() {
             "fund_cash_settlement",
             "aged:unidentified_receipts",
             "aged:pending_investment_cash",
+            "unit_pricing",
             "aged:policy_suspense",
             SUBLEDGER_CHECK
         ]
@@ -332,6 +335,7 @@ fn a_module_that_does_not_answer_is_reported_and_asked_again() {
             "fund_cash_settlement",
             "aged:unidentified_receipts",
             "aged:pending_investment_cash",
+            "unit_pricing",
             "aged:policy_suspense",
             SUBLEDGER_CHECK
         ]

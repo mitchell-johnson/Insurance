@@ -16,4 +16,4 @@ pub mod rating;
 pub mod schedule;
 
 pub use definition::*;
-pub use loader::{load_definitions, load_product, load_rate_table, LoadError};
+pub use loader::{load_definitions, load_fund_source, load_product, load_rate_table, LoadError};

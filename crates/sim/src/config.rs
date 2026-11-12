@@ -1,6 +1,7 @@
 //! The configuration shipped in this repository, loaded through the same
 //! Starlark pipeline production uses.
 
+use ic_core::invest::{load_fund, FundDefinition, InvestCommand};
 use ic_core::Command;
 use ic_money::DecStr;
 use ic_product::{load_definitions, load_product, load_rate_table, LoadError};
@@ -19,7 +20,28 @@ const RATES: [(&str, &str); 4] = [
         include_str!("../../../products/rates/group_life_standard.star"),
     ),
 ];
+const FUNDS: [(&str, &str); 3] = [
+    ("funds/cash.star", include_str!("../../../products/funds/cash.star")),
+    ("funds/balanced.star", include_str!("../../../products/funds/balanced.star")),
+    ("funds/growth.star", include_str!("../../../products/funds/growth.star")),
+];
 const DEFINITIONS: &str = include_str!("../../../products/definitions/library.star");
+
+/// The funds shipped in this repository. The unit pricing module activates
+/// the same definitions on its own side.
+pub fn shipped_funds() -> Result<Vec<FundDefinition>, LoadError> {
+    FUNDS.iter().map(|(file, source)| load_fund(file, source)).collect()
+}
+
+/// Activation commands for the shipped funds. Separate from the product
+/// configuration because a fund is also activated in the unit pricing
+/// module, and the two must be given the same definitions together.
+pub fn shipped_fund_activations() -> Result<Vec<Command>, LoadError> {
+    Ok(shipped_funds()?
+        .into_iter()
+        .map(|fund| Command::Investment(Box::new(InvestCommand::ActivateFund(Box::new(fund)))))
+        .collect())
+}
 
 /// Activation commands for everything shipped, in dependency order.
 pub fn shipped_activations() -> Result<Vec<Command>, LoadError> {

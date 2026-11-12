@@ -13,6 +13,7 @@ pub mod command;
 pub mod counterparty;
 pub mod event;
 pub mod ids;
+pub mod interest;
 pub mod invest;
 pub mod machine;
 pub mod payments;
