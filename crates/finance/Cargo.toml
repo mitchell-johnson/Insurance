@@ -13,6 +13,7 @@ ic-log.workspace = true
 ic-core.workspace = true
 ic-product.workspace = true
 ic-raft.workspace = true
+ic-azure.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -24,6 +25,7 @@ starlark.workspace = true
 [dev-dependencies]
 ic-sim.workspace = true
 proptest.workspace = true
+tokio.workspace = true
 
 [lints]
 workspace = true

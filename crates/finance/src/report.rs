@@ -448,7 +448,7 @@ impl FinanceState {
 }
 
 /// What the close needs from outside the ledger: the worklist of its drivers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct Work {
     /// Dates checked against the core on every partition whose Merkle root
     /// has not been recorded.
@@ -457,7 +457,7 @@ pub struct Work {
     pub closing: Vec<PeriodWork>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct PeriodWork {
     pub period: PeriodId,
     pub start: NaiveDate,
@@ -476,7 +476,7 @@ pub struct PeriodWork {
 }
 
 /// Part of an extract file, for a driver that stores it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct ExtractPage {
     pub id: String,
     pub name: String,

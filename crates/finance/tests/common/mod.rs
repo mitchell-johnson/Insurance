@@ -157,6 +157,11 @@ pub struct World {
     pub roots: BTreeMap<NaiveDate, Hash32>,
     /// Every event the core has published, in the order it was taken.
     pub events: Vec<EventRecord>,
+    /// Each partition's chain head at the close of each date.
+    pub heads: BTreeMap<NaiveDate, BTreeMap<PartitionId, Hash32>>,
+    /// Whether `days` records each day's Merkle root in the books itself.
+    /// Off for tests of the driver that does it in production.
+    pub record_roots: bool,
 }
 
 impl World {
@@ -172,6 +177,8 @@ impl World {
             books: Books::ready(partitions),
             roots: BTreeMap::new(),
             events: Vec::new(),
+            heads: BTreeMap::new(),
+            record_roots: true,
         }
     }
 
@@ -201,6 +208,10 @@ impl World {
             let events = self.core.take_events();
             self.books.feed(&events).unwrap();
             self.events.extend(events);
+            self.heads.insert(close.closed, close.heads.clone());
+            if !self.record_roots {
+                continue;
+            }
             self.books
                 .send(
                     "feed",
