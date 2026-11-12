@@ -7,6 +7,7 @@ use std::collections::BTreeSet;
 
 use common::*;
 use ic_core::{LifeId, PartyId, PolicyId};
+use ic_log::StateMachine;
 use ic_underwriting::case::{CaseType, Queue};
 use ic_underwriting::codes::AppliedExclusion;
 use ic_underwriting::command::{
@@ -994,4 +995,71 @@ fn a_declared_conflict_removes_the_underwriter_from_the_case() {
     )
     .unwrap();
     assert_eq!(w.s.workload("amy"), 0);
+}
+
+/// Purpose: a peer review draw reads only the decisions that took effect in its period: one
+/// made ten days earlier is not drawn into a later period, and is drawn into its own. A state
+/// kept from before decisions were indexed by when they took effect builds the index on its
+/// first draw and draws exactly what a replica that always had it draws.
+/// Why it matters: the draw is a command every replica applies in turn. Read across the whole
+/// book it would hold the group for longer every month the book grows; and a replica restored
+/// from an older snapshot that drew a different sample would no longer agree with the others.
+#[test]
+fn a_peer_review_draw_reads_only_its_period_and_old_states_draw_the_same() {
+    let mut w = World::new();
+    let all = Settings {
+        version: 2,
+        sample: SampleRates {
+            standard_per_mille: 1000,
+            non_standard_per_mille: 1000,
+            decline_per_mille: 1000,
+        },
+        ..Settings::default()
+    };
+    w.ok(
+        "config",
+        Command::ActivateSettings {
+            settings: Box::new(all),
+            approval: approval(),
+        },
+    );
+    let first_day = w.now;
+    w.open("P1", 100_000_00);
+    let clean_one = w.disclose("P1", "L1", &clean());
+    w.automatic(&clean_one);
+    w.days(10);
+    w.open("P2", 100_000_00);
+    let clean_two = w.disclose("P2", "L1", &clean());
+    w.automatic(&clean_two);
+
+    let day = chrono::Duration::days(1);
+    let draw = |period: &str, from, to| Command::DrawPeerReviewSample {
+        period: period.into(),
+        from,
+        to,
+        seed: 1,
+    };
+    let now = w.now;
+    let later = console(&mut w, draw("later", now - day, now + day)).unwrap();
+    assert_eq!(
+        later.view,
+        Some(View::Sample {
+            decisions: vec!["P2/L1/d1".into()]
+        })
+    );
+
+    let mut old = serde_json::to_value(&w.s).unwrap();
+    let fields = old.as_object_mut().unwrap();
+    assert!(fields.remove("effective").is_some() && fields.remove("effective_indexed").is_some());
+    let mut replica: ic_underwriting::UnderwritingState = serde_json::from_value(old).unwrap();
+    let earlier = console(&mut w, draw("earlier", first_day - day, first_day + day)).unwrap();
+    assert_eq!(
+        earlier.view,
+        Some(View::Sample {
+            decisions: vec!["P1/L1/d1".into()]
+        })
+    );
+    let replayed = replica.apply(w.log.len() as u64, w.log.last().unwrap().clone()).unwrap();
+    assert_eq!(replayed.view, earlier.view);
+    assert!(replica == w.s, "the replica built the same index and marked the same decision");
 }

@@ -34,7 +34,13 @@ pub mod actions {
 }
 
 /// Commands one person sends.
-pub const DIRECT: [&str; 4] = ["retry_notice", "record_settlement", "facultative_reinsurer_told", "resume_recoveries"];
+pub const DIRECT: [&str; 5] = [
+    "retry_notice",
+    "record_settlement",
+    "facultative_reinsurer_told",
+    "resume_recoveries",
+    "reoffer_settlement",
+];
 /// Commands that need a second person: they leave the books apart, or a
 /// reinsurer untold.
 pub const COUNTERSIGNED: [&str; 2] = ["abandon_notice", "abandon_instruction"];
