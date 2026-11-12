@@ -689,10 +689,17 @@ fn claims_facts_published_by_the_core_drive_the_recoveries() {
         (180 * K, 120 * K)
     );
     // The bank sends the payment back: nothing is due from the reinsurers until it is paid again.
-    b.feed(
-        1,
-        vec![published("payment_returned", "C1", &[("payment_ref", "PAY-1"), ("amount_minor", "80000000")])],
-    );
+    // A provider's fee that comes back was never a benefit, so it changes nothing. The
+    // benefit comes back with the interest paid for lateness, which was never counted.
+    let fee = [("payment_ref", "FEE-1"), ("amount_minor", "25000"), ("cost", "true"), ("ex_gratia", "false")];
+    assert!(b.feed(1, vec![published("payment_returned", "C1", &fee)]).instructions.is_empty());
+    let back = [
+        ("payment_ref", "PAY-1"),
+        ("amount_minor", "80012345"),
+        ("interest_minor", "12345"),
+        ("cost", "false"),
+    ];
+    b.feed(1, vec![published("payment_returned", "C1", &back)]);
     assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 0);
     assert_eq!(claim(&b, "C1").paid_minor, 0);
     let mut again = pay;
@@ -793,6 +800,11 @@ fn a_claims_fact_that_cannot_be_taken_is_raised_and_the_feed_goes_on() {
             published("claim_reserve_changed", "C7", &[("gross_reserve_minor", "100")]),
             published("claim_paid", "C8", &[("amount_minor", "100")]),
             published("admission_reversed", "C9", &[("decided_on", "tomorrow"), ("reason_code", "R-1")]),
+            published(
+                "payment_returned",
+                "C6",
+                &[("payment_ref", "P"), ("amount_minor", "5"), ("interest_minor", "some")],
+            ),
             published("claim_reserved", "C2", &RESERVED),
         ],
     );
@@ -805,10 +817,11 @@ fn a_claims_fact_that_cannot_be_taken_is_raised_and_the_feed_goes_on() {
     assert!(why("C7").contains("unknown_claim"), "{}", why("C7"));
     assert!(why("C8").contains("claim_paid has no payment_ref"), "{}", why("C8"));
     assert!(why("C9").contains("decided_on is not a date"), "{}", why("C9"));
+    assert!(why("C6").contains("interest_minor is not an amount"), "{}", why("C6"));
     assert_eq!(b.ri.exceptions()["claim_fact:C1"].code, "claim_fact_not_taken");
     // The fact behind the bad ones was taken, and the feed has moved past all five.
     assert!(b.ri.claim(&ClaimId::from("C2")).is_some());
-    assert_eq!(applied.notices.iter().filter(|n| matches!(n, Notice::ExceptionOpened { .. })).count(), 4);
+    assert_eq!(applied.notices.iter().filter(|n| matches!(n, Notice::ExceptionOpened { .. })).count(), 5);
     b.feed(1, vec![published("claim_reserve_changed", "C2", &[("gross_reserve_minor", "100")])]);
     // Operations enter the fact that could not be read, which settles the exception.
     assert_eq!(

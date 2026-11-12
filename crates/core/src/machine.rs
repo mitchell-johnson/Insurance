@@ -639,6 +639,19 @@ impl CoreState {
             InvestCommand::ExecuteOrders { fund, pricing_date, limit } => {
                 invest::execute_orders(&mut self.ledger, &mut self.investment, &self.policies, ctx, &fund, pricing_date, limit)
             }
+            InvestCommand::ReplayOrders {
+                superseded,
+                limit,
+                materiality_minor,
+            } => invest::replay_orders(
+                &mut self.ledger,
+                &mut self.investment,
+                &self.policies,
+                ctx,
+                &superseded,
+                limit,
+                materiality_minor,
+            ),
         }
     }
 
