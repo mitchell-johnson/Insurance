@@ -12,8 +12,11 @@ use ic_raft::ModuleSpec;
 pub fn modules() -> Result<Vec<ModuleSpec>, String> {
     // One module to a line, so two threads adding a module do not collide.
     Ok(vec![
-        ic_channels::query::module_spec()?, //
-        ic_documents::module_spec()?,       //
-        ic_underwriting::module_spec()?,    //
+        ic_channels::query::module_spec()?,
+        ic_distribution::host::module_spec()?,
+        ic_documents::module_spec()?,
+        ic_group::module_spec()?,
+        ic_payments_service::module_spec()?,
+        ic_underwriting::module_spec()?,
     ])
 }

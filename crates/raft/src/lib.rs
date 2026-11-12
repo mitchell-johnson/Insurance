@@ -18,6 +18,7 @@
 //! - [`server`]: a node process hosting a member of every partition's group.
 //! - [`auth`]: the cluster token every caller of a node must present.
 //! - [`client`]: how callers find a partition's leader and retry safely.
+//! - [`failback`]: handing leadership back to the preferred region.
 //! - [`module`]: a replicated group for a module whose state spans partitions.
 //!
 //! The state machine is held in memory. It is snapshotted to disk as the log
@@ -29,6 +30,7 @@
 
 pub mod auth;
 pub mod client;
+pub mod failback;
 mod group;
 pub mod machine;
 pub mod module;
@@ -43,7 +45,7 @@ pub mod types;
 pub use auth::ClusterAuth;
 pub use client::{ClusterClient, EndOfDayView};
 pub use machine::Machine;
-pub use module::{hosted, hosted_reading, ModuleReply, ModuleSpec, ModuleState, ModuleStatus};
+pub use module::{hosted, hosted_reading, CoreOutcome, CorePosting, ModuleReply, ModuleSpec, ModuleState, ModuleStatus, Outbox, Route};
 pub use node::{Node, NodeStatus, ProposeError};
 pub use peers::Identity;
 pub use query::{Answer, PolicyView, Query};

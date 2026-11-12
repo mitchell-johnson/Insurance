@@ -10,6 +10,7 @@ pub mod accounts;
 pub mod bitemporal;
 pub mod catalog;
 pub mod command;
+pub mod counterparty;
 pub mod event;
 pub mod ids;
 pub mod machine;
@@ -17,6 +18,7 @@ pub mod payments;
 pub mod policy;
 pub mod premium;
 pub mod recon;
+pub mod reinsurance;
 
 mod arrears;
 mod billing;

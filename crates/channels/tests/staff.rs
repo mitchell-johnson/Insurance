@@ -1289,3 +1289,58 @@ fn external_elevation_is_capped_and_fails_closed() {
     // Own access lists the active external grant for its holder.
     assert_eq!(s.own_access(&p("col"), T0 + 10)["grants"].as_array().unwrap().len(), 1);
 }
+
+/// Purpose: staff declare their own personal connections, only a staff administrator who is not the person concerned can remove one,
+/// and an attempt on a record with no path or on a personal record is flagged in the log and raised as an event.
+/// Why it matters: looking up a relative, an ex-partner or oneself is the classic misuse of an insurer's systems. A declaration the
+/// person could quietly withdraw, or a refused attempt nobody is told about, would not deter it.
+#[test]
+fn personal_connections_and_flagged_attempts() {
+    let mut s = staffed();
+    assert_eq!(
+        code(s.apply(&p("stranger"), T0, StaffCommand::DeclareConnection { party: p("cousin") })),
+        "forbidden"
+    );
+    s.apply(&p("ana"), T0, StaffCommand::DeclareConnection { party: p("cousin") }).unwrap();
+    assert_eq!(s.own_access(&p("ana"), T0)["connections"], serde_json::json!(["cousin"]));
+    let end = |staff: &str, party: &str| StaffCommand::EndConnection {
+        staff: p(staff),
+        party: p(party),
+    };
+    assert_eq!(code(s.apply(&p("ana"), T0, end("ana", "cousin"))), "forbidden");
+    assert_eq!(code(s.apply(&p("ben"), T0, end("ana", "cousin"))), "forbidden");
+    assert_eq!(code(s.apply(&p("alice"), T0, end("ana", "nobody"))), "unknown_connection");
+    assert_eq!(code(s.apply(&p("alice"), T0, end("ben", "cousin"))), "unknown_connection");
+
+    // A refusal for want of a path, and one for a personal record, are each flagged; an ordinary refusal is not.
+    let record = |s: &mut StaffState, denial: Denial| {
+        let request = request("ana", "claim.view", DataClass::Ordinary);
+        let decision = Decision {
+            allowed: false,
+            denied: Some(denial),
+            template: None,
+            profile: None,
+            grant: None,
+            classes: BTreeSet::new(),
+        };
+        s.apply(&p("ana"), T0, StaffCommand::Record { request, decision }).unwrap()
+    };
+    let flagged = |events: &[StaffEvent]| {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StaffEvent::AccessFlagged { staff, reason, .. } => Some((staff.to_string(), reason.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(flagged(&record(&mut s, Denial::Whose)), [("ana".to_string(), "no_path".to_string())]);
+    assert_eq!(flagged(&record(&mut s, Denial::Personal)), [("ana".to_string(), "personal".to_string())]);
+    assert!(flagged(&record(&mut s, Denial::Why)).is_empty());
+    let flags: Vec<Option<String>> = s.recent[&p("ana")].iter().map(|r| r.flag.clone()).collect();
+    assert_eq!(flags, [Some("no_path".to_string()), Some("personal".to_string()), None]);
+    assert!(Denial::Personal.explain().contains("colleague"));
+
+    s.apply(&p("alice"), T0, end("ana", "cousin")).unwrap();
+    assert!(s.connections[&p("ana")].is_empty());
+}

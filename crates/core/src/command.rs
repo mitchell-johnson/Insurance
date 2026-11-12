@@ -301,6 +301,32 @@ pub enum Command {
         payment: String,
     },
 
+    // --- reinsurance: cessions and entries worked out beside the core ---
+    /// Record the cession on a layer or member cover from a date.
+    RecordCession {
+        policy: PolicyId,
+        cover: String,
+        layer: u32,
+        life: LifeId,
+        from: NaiveDate,
+        segments: Vec<crate::reinsurance::CessionSegment>,
+    },
+    /// Post one reinsurance entry: ceded premium, commission, a recoverable,
+    /// a recovery due, a settlement sweep. A negative amount reverses.
+    PostReinsurance {
+        kind: crate::reinsurance::ReinsurancePosting,
+        treaty: String,
+        reinsurer: String,
+        currency: ic_money::Currency,
+        /// The policy the entry is for. Absent for an entry that belongs to
+        /// the treaty as a whole.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<PolicyId>,
+        amount_minor: i64,
+        value_date: NaiveDate,
+        reference: String,
+    },
+
     // --- policy transfer between groups ---
     BeginTransfer {
         policy: PolicyId,
@@ -319,6 +345,10 @@ pub enum Command {
         policy: PolicyId,
         transfer_id: String,
     },
+
+    // --- counterparties: commission payees, reinsurers, employers, debtors ---
+    /// Post one balanced entry to counterparty accounts on this partition.
+    PostCounterparty(Box<crate::counterparty::CounterpartyPosting>),
 }
 
 impl Command {
@@ -346,10 +376,12 @@ impl Command {
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
+            Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
                 &["payments"]
             }
             Command::BeginTransfer { .. } | Command::LandTransfer { .. } | Command::CompleteTransfer { .. } | Command::AbortTransfer { .. } => &["transfer"],
+            Command::PostCounterparty(_) => &["distribution", "counterparty-finance"],
         }
     }
 
@@ -380,6 +412,8 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::RecordCession { .. } => "record_cession",
+            Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",
             Command::ReleaseRefundPayable { .. } => "release_refund_payable",
             Command::SettlePayable { .. } => "settle_payable",
@@ -388,6 +422,7 @@ impl Command {
             Command::LandTransfer { .. } => "land_transfer",
             Command::CompleteTransfer { .. } => "complete_transfer",
             Command::AbortTransfer { .. } => "abort_transfer",
+            Command::PostCounterparty(_) => "post_counterparty",
         }
     }
 }

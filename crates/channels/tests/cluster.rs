@@ -19,6 +19,7 @@ use ic_channels::http::{router, AppState, Channel, Hosted};
 use ic_channels::ops::{Level, Live, RegionSource, Regions, StatusPage};
 use ic_channels::query::{module_spec, Question, MODULE};
 use ic_channels::serve::{beat, heartbeat, module_current, wall_clock};
+use ic_channels::ui::UiConfig;
 use ic_core::{Command, Envelope};
 use ic_product::{Frequency, Sex};
 use ic_raft::client::fresh_salt;
@@ -166,6 +167,7 @@ async fn the_portal_service_on_real_nodes() {
         workforce: Auth::Dev,
         clock: Arc::new(wall_clock),
         regions: live.clone(),
+        ui: UiConfig::Dev,
     }));
 
     // The identity service binds Kiri's sign-in, through the service, as a module.
@@ -264,6 +266,7 @@ async fn the_portal_service_on_real_nodes() {
         workforce: Auth::Dev,
         clock: Arc::new(wall_clock),
         regions: Live::new(nodes.client.clone(), Regions::single(nodes.peers.values().cloned().collect())),
+        ui: UiConfig::Dev,
     }));
     let (status, problem) = call(&impatient, "GET", "/app/v1/me", &kiri, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable")));

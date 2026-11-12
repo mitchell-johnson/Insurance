@@ -1,1 +1,51 @@
-<!doctype html><title>adviser</title>
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Adviser portal</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Adviser portal</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div><div id="readonly"></div>
+<section><h2>Your engagements</h2><div id="engagements"></div></section>
+<section><h2>Held from you</h2><div id="held"></div></section>
+<section><h2>Your book</h2><div id="book"></div></section>
+<section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div>
+  <form id="change"><h2>Prepare a change for the customer to approve</h2>
+  <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
+  <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
+  <p class="muted">The customer approves in their app with their device. Nothing changes until they do.</p></form><div id="change-msg" aria-live="polite"></div></section>
+<section><h2>Requests you have made</h2><div id="requests"></div></section></main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "customers";
+let current = null;
+$("out").addEventListener("click", () => signOut(R));
+const standing = (s) => s.state === "active" ? "Active" : s.state === "ended" ? "Ended" : `Read-only since ${s.since}: licence of ${s.licence_of} is ${s.status}`;
+async function open(policy, canTransact) {
+  const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(policy.policy));
+  current = policy.policy;
+  $("detail").hidden = false;
+  $("detail-title").textContent = `Policy ${policy.number}`;
+  put($("rows"), table(["What", "Details"], view.rows.map((r) => [r.kind, h("pre", {}, JSON.stringify(r.body, null, 1))])));
+  $("send").disabled = !canTransact;
+  $("detail").scrollIntoView({ behavior: "smooth" });
+}
+async function load() {
+  const book = await api(R, "GET", "/adviser/v1/book");
+  clear($("readonly"));
+  if (book.read_only) $("readonly").append(h("div", { class: "banner warn", role: "status" }, h("strong", {}, "Your access is read-only. "), "You can see your book. Nothing can be quoted, submitted or changed until the licence your engagement depends on is restored or you move to another provider."));
+  put($("engagements"), table(["Engagement", "Provider", "From", "To", "Standing"], book.engagements.map((e) => [e.engagement, e.fap, e.from, e.to || "", standing(e.standing)])));
+  const totals = Object.entries(book.held.held || {});
+  put($("held"), totals.length ? h("p", {}, "Total held: ", h("strong", {}, totals.map(([c, v]) => money(v, c)).join(", ")), ". It is released when the reason below is resolved.") : h("p", { class: "muted" }, "Nothing is being held from you."),
+    totals.length ? table(["Period", "Book", "Amount", "Why it is held", "Since"], book.held.entries.map((e) => [e.period || "", e.book || "", money(e.amount_minor, e.currency), String(e.reason || "").replace(/_/g, " "), e.since])) : null);
+  put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.status, p.engagement,
+    h("button", { class: "quiet", on: { click: run($("msg"), () => open(p, p.can_transact)) } }, "Open")])));
+  const requests = await api(R, "GET", "/app/v1/requests");
+  put($("requests"), table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, r.policy || "", r.kind, String(r.status).replace(/_/g, " ")])));
+}
+$("change").addEventListener("submit", run($("change-msg"), async () => {
+  await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: current, kind: $("kind").value, module: "policy-servicing", payload: { note: $("note").value } });
+  await load();
+  return "Sent. The customer has been asked to approve it in their app.";
+}));
+signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>
