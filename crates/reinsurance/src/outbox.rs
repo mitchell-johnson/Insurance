@@ -11,7 +11,7 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::machine::{Ctx, Instruction, Notice, Reinsurance, Reject};
+use crate::machine::{Audience, Ctx, Instruction, Notice, Reinsurance, Reject};
 
 /// A refused instruction a person decided not to send.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +21,20 @@ pub struct Abandoned {
     pub reason: String,
     pub approved_by: String,
     pub on: NaiveDate,
+}
+
+/// A refused notice a person decided not to send.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AbandonedNotice {
+    pub seq: u64,
+    pub notice: Notice,
+    pub reason: String,
+    pub approved_by: String,
+    pub on: NaiveDate,
+}
+
+fn notice_refusal(seq: u64) -> String {
+    format!("notice:{seq}")
 }
 
 fn refusal(seq: u64) -> String {
@@ -36,6 +50,22 @@ impl Reinsurance {
     /// The oldest notices not yet handed on, with their numbers.
     pub fn notices(&self, limit: usize) -> Vec<(u64, &Notice)> {
         self.notice_box.iter().take(limit).map(|(seq, n)| (*seq, n)).collect()
+    }
+
+    /// The oldest notices for one audience still to be handed on. Those the
+    /// audience refused are left out until a person sends them again.
+    pub fn notices_for(&self, audience: Audience, limit: usize) -> Vec<(u64, &Notice)> {
+        self.notice_box
+            .iter()
+            .filter(|(seq, n)| n.audience() == audience && !self.notices_refused.contains(seq))
+            .take(limit)
+            .map(|(seq, n)| (*seq, n))
+            .collect()
+    }
+
+    /// Refused notices that were abandoned, oldest first.
+    pub fn notices_abandoned(&self) -> &[AbandonedNotice] {
+        &self.notices_abandoned
     }
 
     /// Refused instructions that were abandoned, oldest first.
@@ -98,14 +128,64 @@ impl Reinsurance {
         Ok(())
     }
 
-    pub(crate) fn acknowledge_notices(&mut self, through: u64) -> Result<(), Reject> {
-        if through > self.noticed {
+    pub(crate) fn acknowledge_notices(&mut self, seqs: &[u64]) -> Result<(), Reject> {
+        if let Some(ahead) = seqs.iter().find(|seq| **seq > self.noticed) {
             return Err(Reject::new(
                 "unknown_notice",
-                format!("notice {through} has not been raised; the last is {}", self.noticed),
+                format!("notice {ahead} has not been raised; the last is {}", self.noticed),
             ));
         }
-        self.notice_box = self.notice_box.split_off(&(through + 1));
+        for seq in seqs {
+            // One set aside as refused leaves only by a person's decision.
+            if !self.notices_refused.contains(seq) {
+                self.notice_box.remove(seq);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn notice_refused(&mut self, ctx: &mut Ctx, seq: u64, code: &str, message: &str) -> Result<(), Reject> {
+        let Some(notice) = self.notice_box.get(&seq) else {
+            return Err(Reject::new("unknown_notice", format!("notice {seq} is not waiting to be handed on")));
+        };
+        if code.trim().is_empty() {
+            return Err(Reject::new("reason_required", "a refusal carries the refuser's code"));
+        }
+        let detail = format!("notice {seq} for {:?} was refused: {code}: {message}", notice.audience());
+        self.notices_refused.insert(seq);
+        self.set_exception(ctx, notice_refusal(seq), "notice_refused", Some(detail));
+        Ok(())
+    }
+
+    pub(crate) fn retry_notice(&mut self, ctx: &mut Ctx, seq: u64) -> Result<(), Reject> {
+        if !self.notices_refused.remove(&seq) {
+            return Err(Reject::new("not_refused", format!("notice {seq} has not been refused")));
+        }
+        self.set_exception(ctx, notice_refusal(seq), "notice_refused", None);
+        Ok(())
+    }
+
+    pub(crate) fn abandon_notice(&mut self, ctx: &mut Ctx, seq: u64, reason: String, approved_by: String) -> Result<(), Reject> {
+        if !self.notices_refused.contains(&seq) {
+            return Err(Reject::new("not_refused", format!("notice {seq} has not been refused")));
+        }
+        if reason.trim().is_empty() || approved_by.trim().is_empty() {
+            return Err(Reject::new(
+                "reason_required",
+                "abandoning a notice needs a reason and the person who approved it",
+            ));
+        }
+        self.notices_refused.remove(&seq);
+        if let Some(notice) = self.notice_box.remove(&seq) {
+            self.notices_abandoned.push(AbandonedNotice {
+                seq,
+                notice,
+                reason,
+                approved_by,
+                on: ctx.on,
+            });
+        }
+        self.set_exception(ctx, notice_refusal(seq), "notice_refused", None);
         Ok(())
     }
 }

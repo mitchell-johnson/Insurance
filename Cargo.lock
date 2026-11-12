@@ -2163,7 +2163,9 @@ dependencies = [
 name = "ic-node"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "ic-channels",
+ "ic-core",
  "ic-distribution",
  "ic-documents",
  "ic-group",

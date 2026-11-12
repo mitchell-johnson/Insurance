@@ -4,7 +4,7 @@
 //! instruction once.
 
 use ic_raft::{ClusterAuth, ClusterClient};
-use ic_reinsurance::driver::{ClusterCore, ClusterModule, Driver};
+use ic_reinsurance::driver::{ClusterAudiences, ClusterCore, ClusterModule, Driver};
 use ic_reinsurance::service::Config;
 
 async fn stop_signal() {
@@ -36,10 +36,11 @@ async fn main() -> Result<(), String> {
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
     let driver = Driver {
         module: ClusterModule::new(client.clone(), config.patience),
-        core: ClusterCore::new(client, config.patience),
+        core: ClusterCore::new(client.clone(), config.patience),
         batch: config.batch,
     };
     tracing::info!(?config, "reinsurance driver started");
-    driver.run(config.cycle_every, stop_signal(), |_| {}).await;
+    let audiences = ClusterAudiences::new(client, config.patience);
+    driver.run(&audiences, config.cycle_every, stop_signal(), |_, _| {}).await;
     Ok(())
 }
