@@ -21,11 +21,18 @@ sha2.workspace = true
 hex.workspace = true
 thiserror.workspace = true
 starlark.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "ic-finance-close"
+path = "src/bin/ic-finance-close.rs"
 
 [dev-dependencies]
 ic-sim.workspace = true
 proptest.workspace = true
-tokio.workspace = true
+ic-azure = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

@@ -180,6 +180,29 @@ pub struct HeldLine {
     pub entries: Vec<String>,
 }
 
+/// A receivable another module keeps in its own ledger, shown here so that
+/// one screen has everything a party owes. It is not in this module's
+/// accounts or its control totals, and it is worked in the module that owns it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoLine {
+    /// The module that owns it: `claims`.
+    pub owner: String,
+    /// The owner's reference, for example `clm-1/overpayment/1`.
+    pub reference: String,
+    pub party: PartyId,
+    /// The owner's case: a claim ID.
+    pub case_ref: String,
+    pub policy: Option<ic_core::PolicyId>,
+    pub outstanding_minor: i64,
+    /// The owner's own status code.
+    pub status: String,
+    pub cause: String,
+    pub insurer_error: bool,
+    pub good_faith: bool,
+    /// The business date of the owner's latest word on it.
+    pub as_at: NaiveDate,
+}
+
 /// Everything the workbench shows for one party.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Position {
@@ -195,6 +218,8 @@ pub struct Position {
     pub open_cases: Vec<String>,
     pub notes: Vec<(String, PositionNote)>,
     pub actions_in_progress: Vec<String>,
+    /// Owed to the insurer in another module's ledger and still outstanding.
+    pub memo: Vec<MemoLine>,
 }
 
 /// A statement of what a party owes and is owed, by period, with lineage,
@@ -308,6 +333,7 @@ impl DistributionState {
                 .filter(|a| &a.party == party && matches!(a.state, ActionState::Proposed | ActionState::Posting))
                 .map(|a| a.id.clone())
                 .collect(),
+            memo: self.memo.values().filter(|m| &m.party == party && m.outstanding_minor != 0).cloned().collect(),
         }
     }
 
