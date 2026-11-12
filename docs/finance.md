@@ -33,7 +33,7 @@ A period moves to closing when its last day has closed on every partition. `conf
 | --- | --- |
 | Worked out by the ledger | `control_check`, `valuation_extracts`, `unapproved_journals`, `actuarial_journals` (quarter ends), `trial_balance`, `fund_balance` |
 | Reported by a named caller | `commission_sweep` (commission), `reinsurance_sweep` (reinsurance, quarter ends), `fund_cash_settlement` (payments), `subledger_reconciliations` (close-workflow), `actuarial_handover` (reporting, quarter ends), `tax_reconciliation` and `analytical_review` (finance-console) |
-| Aged items reported by a named caller | `aged:held_balance` (commission), `aged:policy_suspense` (collections), `aged:pending_investment_cash` (investment) |
+| Aged items reported by a named caller | `aged:held_balance` (commission), `aged:unidentified_receipts` (payments), `aged:policy_suspense` (collections), `aged:pending_investment_cash` (investment) |
 
 - A blocking check that is red stops sign-off. The finance lead may waive it on the record with a reason, a remediation owner who is someone else, and a date. A waiver never clears the item: the next period's check starts red again and the earlier waiver stays on the dashboard until it is green.
 - Held balances are a blocking month-end item. An item older or larger than the threshold with no documented action turns `aged:held_balance` red and names the party.
@@ -77,7 +77,7 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 - asks the ledger what the close is waiting for (`{"q": "work"}`);
 - reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
 - for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
-- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep;
 - reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
 - closes a period that is signed off with nothing blocking, oldest first.
 
@@ -95,7 +95,7 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 | `IC_FINANCE_EXTRACTS_ENDPOINT`, `IC_FINANCE_EXTRACTS_CONTAINER` | where extracts are written (container defaults to `finance-extracts`) |
 | `IC_FINANCE_PASS_SECONDS` | seconds between passes, 60 by default |
 
-It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
+`deploy/k8s/finance.yaml` runs two replicas under their own service account. It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
 
 ## Actuarial tables
 
@@ -134,6 +134,6 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 - Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
 - A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
-- Sources for the reports reinsurance, payments, collections and investment owe. The driver takes any module's answer; only commission's questions are wired.
+- Sources for policy suspense (collections) and pending investment cash. The driver takes any module's answer; commission, payments and reinsurance are wired. Pending investment cash will come from the core's investment ledger when it is built.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.

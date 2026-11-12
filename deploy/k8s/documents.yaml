@@ -1,0 +1,210 @@
+# The documents service: issues, stores and delivers every document, takes
+# delivery reports from Azure Communication Services, and runs the complaints
+# relay (docs/documents.md, docs/complaints.md). Stateless; the documents and
+# complaints modules are in their replicated groups on the ledger nodes.
+#
+# Set the values marked REPLACE from the outputs of infra/documents.bicep
+# and infra/main.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-documents
+  annotations:
+    azure.workload.identity/client-id: REPLACE-documentsClientId
+---
+# The cluster token and the webhook key, mounted as files under the
+# service's identity. They never become Kubernetes Secrets.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-documents-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-documentsClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+        - |
+          objectName: documents-webhook-key
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-documents
+data:
+  IC_CLUSTER_NODES: "ic-node-1.ic-node:7000,ic-node-2.ic-node:7000,ic-node-3.ic-node:7000"
+  IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
+  IC_DOCUMENTS_WEBHOOK_KEY_FILE: /mnt/secrets/documents-webhook-key
+  # Outputs of infra/documents.bicep.
+  IC_DOCUMENTS_VAULT_ENDPOINT: REPLACE-documentsVaultEndpoint
+  IC_COMMUNICATION_ENDPOINT: REPLACE-communicationEndpoint
+  # Outputs of infra/main.bicep.
+  IC_DOCUMENTS_KEY_VAULT: REPLACE-keyVaultUrl
+  IC_EVENT_HUBS_NAMESPACE: REPLACE-eventHubsEndpoint
+  # The verified sender address and the SMS number or short code bought for
+  # the Communication Services resource.
+  IC_DOCUMENTS_EMAIL_FROM: REPLACE-sender-address
+  IC_DOCUMENTS_SMS_FROM: REPLACE-sms-sender
+  # Where contact points are fetched at the moment of sending.
+  IC_CUSTOMER_MASTER_URL: REPLACE-customer-master-url
+  IC_CUSTOMER_MASTER_SCOPE: REPLACE-customer-master-scope
+  # Who owns a conduct case a licence event opens.
+  IC_CONDUCT_OFFICER: REPLACE-conduct-officer-id
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-documents
+spec:
+  selector:
+    app: ic-documents
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Two copies: every step is safe to repeat, so both may run the cycle.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-documents
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-documents
+  template:
+    metadata:
+      labels:
+        app: ic-documents
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-documents
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-documents
+      containers:
+        - name: documents
+          image: insurance-core
+          command: ["/usr/local/bin/ic-documents"]
+          envFrom:
+            - configMapRef:
+                name: ic-documents
+          env:
+            - name: IC_DOCUMENTS_LISTEN
+              value: 0.0.0.0:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          # The process does not start listening until a ledger node has
+          # answered, so a pod that cannot reach the cluster never becomes
+          # ready and the rollout stops.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-documents-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-documents
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-documents
+---
+# The service hears from the ingress controller's namespace only: Event Grid
+# posts delivery reports to /v1/delivery-reports through the ingress, and
+# must present the webhook key. Route only that path to this service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-documents
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-documents
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              insurance-core/ingress: "true"
+      ports:
+        - port: 8080
+---
+# The ledger nodes also hear from the documents service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-documents
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-documents
+      ports:
+        - port: 7000

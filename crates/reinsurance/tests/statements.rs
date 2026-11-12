@@ -702,3 +702,198 @@ fn recapture_and_a_negotiated_move_change_cover_from_a_date() {
     assert_eq!(b.ri.cession(&k, d(2037, 1, 31)).unwrap().treaty_ceded(), 300 * K);
     b.assert_reconciles();
 }
+
+/// Purpose: after a statement is cut, a change on another treaty does not flag it, and a
+/// change to one of its own rows that is put back before anything is issued leaves a
+/// supplementary listing with no rows, which still clears the flag.
+/// Why it matters: the flag blocks settlement. Raising it for cover the statement never
+/// listed would hold a reinsurer's money for nothing, and listing a row as changed when it
+/// is back as it was sent would tell the reinsurer something untrue.
+#[test]
+fn a_supplementary_listing_shows_only_rows_that_still_differ() {
+    let mut b = billed();
+    b.ok("month-end", cut(d(2027, 3, 31)));
+    // A scheme written from 1 March on the group treaty reaches the period, not the statement.
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 200 * K)]);
+    assert!(!b.ri.statement(1).unwrap().supplementary_due);
+    // An expiry from 15 March is reported late, then unwound.
+    let expired = b.feed(
+        1,
+        vec![ic_core::event::Event::CoverExpired {
+            policy: PolicyId::from("P1"),
+            cover: "life".into(),
+            on: d(2027, 3, 15),
+        }],
+    );
+    assert!(expired.notices.contains(&Notice::SupplementaryListingDue { statement: 1 }));
+    let unwound = b.feed(
+        1,
+        vec![ic_core::event::Event::CoverExpiryUnwound {
+            policy: PolicyId::from("P1"),
+            cover: "life".into(),
+            layers: vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))],
+            reference: "REM-7".into(),
+        }],
+    );
+    assert!(!unwound.notices.contains(&Notice::SupplementaryListingDue { statement: 1 }), "said once");
+    assert!(b.ri.statement(1).unwrap().supplementary_due);
+    let applied = b.ok(
+        "reinsurance-ops",
+        Command::IssueSupplementaryListing {
+            number: 1,
+            reason: "expiry reported in error".into(),
+        },
+    );
+    let (_, body) = document(&applied);
+    assert_eq!(body["rows"], serde_json::json!([]));
+    let s = b.ri.statement(1).unwrap();
+    assert!(!s.supplementary_due && s.supplementary_issued == 1);
+    b.assert_reconciles();
+}
+
+/// Purpose: comparing a proposed treaty version looks only at lives with cover on that
+/// treaty; a scheme member on another treaty is not in the answer.
+/// Why it matters: the comparison is what people read before moving cover to new terms. Rows
+/// for cover the treaty does not touch would be noise at best and, recalculated against the
+/// wrong terms, a false alarm.
+#[test]
+fn a_treaty_comparison_looks_only_at_cover_on_that_treaty() {
+    let mut b = billed();
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 200 * K)]);
+    let same = load_treaty("t.star", RETAIL).unwrap();
+    assert!(b.ri.compare_treaty(&same, d(2027, 4, 2)).is_empty());
+    let narrower = load_treaty(
+        "t.star",
+        &RETAIL
+            .replace("version = 1", "version = 3")
+            .replace("automatic_limit = dollars(4000000)", "automatic_limit = dollars(200000)")
+            .replace(
+                &RETAIL[RETAIL.find("SCENARIOS").unwrap()..],
+                "SCENARIOS = [scenario(\"x\", covers = [covered(dollars(800000), \"2027-02-01\")], expect = [expect(retained = dollars(500000), ceded = dollars(200000), unplaced = dollars(100000))])]\n",
+            ),
+    )
+    .unwrap();
+    let changes = b.ri.compare_treaty(&narrower, d(2027, 4, 2));
+    assert!(matches!(&changes[..], [(k, Some(_), Some(then))] if *k == key("P1", "life", 1, "L1") && then.unplaced_minor == 100 * K));
+}
+
+/// Purpose: the close check finance asks for is green only when every treaty whose
+/// statement period ends on the date has had its statement cut, no cut statement is waiting
+/// on a supplementary listing, the core has taken every instruction, and the module
+/// reconciles; each thing in the way is named, and a treaty whose period has not ended is
+/// not asked for a statement.
+/// Why it matters: this answer is the `reinsurance_sweep` step of the financial close. Green
+/// with a statement uncut, or with entries the core has not posted, would close a period in
+/// which the reinsurer accounts in the ledger do not net to the statements. Red for a yearly
+/// treaty in March would block every close for nothing.
+#[test]
+fn the_close_check_names_what_stands_in_the_way() {
+    use ic_reinsurance::host::{answer, Query};
+    let check = |b: &Bench, period_end| answer(&b.ri, serde_json::to_value(Query::SweepCheck { period_end }).unwrap()).unwrap();
+    let kinds = |v: &serde_json::Value| -> Vec<String> { v["items"].as_array().unwrap().iter().map(|i| i["kind"].as_str().unwrap().to_string()).collect() };
+    let delivered = |b: &mut Bench| {
+        let through = b.ri.outbox(usize::MAX).last().map_or(0, |(seq, _)| *seq);
+        b.ok("driver", Command::AcknowledgeInstructions { through });
+    };
+    // Anna's February premium, under a treaty that states monthly, quarterly or yearly.
+    let with_period = |period: &str| {
+        let mut b = Bench::empty();
+        let source = RETAIL.replace("statements(\"quarterly\"", &format!("statements(\"{period}\""));
+        b.ok(
+            "config",
+            Command::ActivateTreaty {
+                treaty: Box::new(load_treaty("t.star", &source).unwrap()),
+            },
+        );
+        b.ok(
+            "config",
+            Command::ActivateRateTable {
+                table: Box::new(ic_reinsurance::loader::load_rate_table("r.star", RATES).unwrap()),
+            },
+        );
+        b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+        b.factors("P1", "L1", d(1990, 3, 10), false);
+        b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+        b.today = d(2028, 1, 5);
+        b
+    };
+    let (feb, mar, dec) = (d(2027, 2, 28), d(2027, 3, 31), d(2027, 12, 31));
+    for (period, due) in [
+        ("monthly", [true, true, true]),
+        ("quarterly", [false, true, true]),
+        ("yearly", [false, false, true]),
+    ] {
+        let mut b = with_period(period);
+        assert_eq!(kinds(&check(&b, mar)).last().map(String::as_str), Some("instructions_not_delivered"));
+        delivered(&mut b);
+        for (end, due) in [feb, mar, dec].into_iter().zip(due) {
+            let answer = check(&b, end);
+            assert_eq!(answer["green"], !due, "{period} to {end}: {answer}");
+            assert_eq!(kinds(&answer), vec!["statement_not_cut"; if due { 2 } else { 0 }], "{period} to {end}");
+        }
+        // Nothing valued by the end of January, so nothing is owed a statement then.
+        assert_eq!(check(&b, d(2027, 1, 31)), serde_json::json!({"green": true, "items": []}));
+    }
+
+    let mut b = with_period("quarterly");
+    delivered(&mut b);
+    let uncut = check(&b, mar);
+    assert_eq!(
+        uncut["items"][0],
+        serde_json::json!({"kind": "statement_not_cut", "treaty": "retail-life-surplus", "reinsurer": "reinsurer-north", "net_minor": 7_18})
+    );
+    for reinsurer in [north(), south()] {
+        b.ok(
+            "month-end",
+            Command::CutStatement {
+                treaty: retail(),
+                reinsurer,
+                period_end: mar,
+            },
+        );
+    }
+    delivered(&mut b);
+    assert_eq!(check(&b, mar), serde_json::json!({"green": true, "items": []}));
+
+    // A backdated increase: the listing sent is now wrong, and the core is owed entries.
+    b.add_layer(1, "P1", layer("life", "life", 2, "L1", 100 * K, d(2027, 2, 15)));
+    let first = b.ri.outbox(1)[0].0;
+    b.ok(
+        "driver",
+        Command::InstructionRefused {
+            seq: first,
+            code: "period_closed".into(),
+            message: "the value date is in a closed period".into(),
+        },
+    );
+    let red = check(&b, mar);
+    assert_eq!(red["green"], false);
+    assert_eq!(
+        kinds(&red),
+        [
+            "supplementary_listing_due",
+            "supplementary_listing_due",
+            "instruction_refused",
+            "instructions_not_delivered"
+        ]
+    );
+    assert_eq!(red["items"][0]["statement"], 1);
+    assert!(red["items"][2]["detail"].as_str().unwrap().contains("period_closed"));
+    // The statement was cut after February, so February's close does not see its flag.
+    assert!(!kinds(&check(&b, feb)).contains(&"supplementary_listing_due".to_string()));
+    delivered(&mut b);
+    for number in [1, 2] {
+        let reason = "backdated increase".to_string();
+        b.ok("reinsurance-ops", Command::IssueSupplementaryListing { number, reason });
+    }
+    delivered(&mut b);
+    assert_eq!(check(&b, mar)["green"], true, "the correction itself waits for the next statement");
+
+    // Damage the module cannot explain is in the way too.
+    let mut v = serde_json::to_value(&b.ri).unwrap();
+    v["exceptions"]["over_retention:P1/life/1/L1"] = serde_json::json!({"code": "over_retention", "detail": "x", "opened_on": "2027-04-02"});
+    let damaged: ic_reinsurance::Reinsurance = serde_json::from_value(v).unwrap();
+    let broken = answer(&damaged, serde_json::json!({"sweep_check": {"period_end": "2027-03-31"}})).unwrap();
+    assert_eq!(kinds(&broken), ["does_not_reconcile"]);
+    assert!(broken["items"][0]["detail"].as_str().unwrap().contains("exception item disagree"));
+}

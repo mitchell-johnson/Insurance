@@ -1,0 +1,127 @@
+# The finance close service: carries Merkle roots, extracts and other
+# modules' month-end reports between the finance ledger on the ledger nodes
+# and Azure Blob Storage (docs/finance.md). It holds no state.
+#
+# Set the values marked REPLACE from the outputs of infra/finance.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-finance-close
+  annotations:
+    azure.workload.identity/client-id: REPLACE-financeCloseIdentityClientId
+---
+# The cluster token, mounted as a file under the service's identity. It
+# never becomes a Kubernetes Secret.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-finance-close-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-financeCloseIdentityClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-finance-close
+data:
+  IC_FINANCE_ROOTS_ENDPOINT: REPLACE-rootsEndpoint
+  IC_FINANCE_EXTRACTS_ENDPOINT: REPLACE-extractsEndpoint
+  IC_FINANCE_PASS_SECONDS: "60"
+  IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-finance-close
+spec:
+  # Two, so the close carries on when one dies. Both may run at once: the
+  # ledger applies each command once and a file is written once.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-finance-close
+  template:
+    metadata:
+      labels:
+        app: ic-finance-close
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-finance-close
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: driver
+          image: insurance-core
+          command: ["/usr/local/bin/ic-finance-close"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            # After ic-ledger: the token is mounted under this service's identity.
+            - configMapRef:
+                name: ic-finance-close
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # An extract is held whole while it is hashed and written.
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-finance-close-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-finance-close
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-finance-close
+---
+# The ledger nodes also hear from the close service. Network policies add
+# up: this is beside the ic-node policy in network.yaml, not instead of it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-finance-close
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-finance-close
+      ports:
+        - port: 7000

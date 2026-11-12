@@ -315,8 +315,17 @@ pub async fn run_from(
     read: impl Fn(&str) -> std::io::Result<String>,
     stop: impl Future<Output = ()> + Send + 'static,
 ) -> Result<(), String> {
-    let config = Config::from_lookup(&get)?;
+    // The webhook key is a mounted Key Vault secret in production, so that
+    // it never sits in a manifest or a Kubernetes Secret.
+    let key_from_file = match get("IC_DOCUMENTS_WEBHOOK_KEY_FILE") {
+        Some(path) => Some(read(&path).map_err(|e| format!("IC_DOCUMENTS_WEBHOOK_KEY_FILE {path}: {e}"))?),
+        None => None,
+    };
+    let config = Config::from_lookup(|key| match (key, &key_from_file) {
+        ("IC_DOCUMENTS_WEBHOOK_KEY", Some(from_file)) => Some(from_file.clone()),
+        _ => get(key),
+    })?;
     let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
-    let auth = ClusterAuth::from_lookup(&get, read)?;
+    let auth = ClusterAuth::from_lookup(&get, &read)?;
     run(config, credential, auth, stop).await
 }

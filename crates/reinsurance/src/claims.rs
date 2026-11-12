@@ -328,8 +328,8 @@ impl Reinsurance {
         let unknown = || Reject::new("unknown_claim", format!("no claim {id}"));
         let book = self.claims.get_mut(&id).ok_or_else(unknown)?;
         match fact {
-            ClaimFact::Reserved { .. } => {}
-            ClaimFact::ReserveChanged { gross_reserve_minor, .. } => {
+            // A claim reserved for the first time was taken in above.
+            ClaimFact::Reserved { gross_reserve_minor, .. } | ClaimFact::ReserveChanged { gross_reserve_minor, .. } => {
                 if gross_reserve_minor < 0 {
                     return Err(Reject::new("invalid_amount", "a reserve cannot be negative"));
                 }
