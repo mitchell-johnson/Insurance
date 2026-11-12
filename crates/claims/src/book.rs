@@ -285,7 +285,7 @@ impl ClaimsState {
         }
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
         note(&mut claim, cx, Some(actor), format!("paid:{payment_ref}"));
-        cx.paid(id, &payment_ref, amount_minor, amount_minor, &payee, period_end, false);
+        cx.paid(&claim, &payment_ref, amount_minor, amount_minor, &payee, period_end, false);
         if close && claim.status == Status::Admitted {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
@@ -609,7 +609,7 @@ impl ClaimsState {
         }
         Self::meet_timer(claim, TimerKind::Payment, cx.today);
         cx.paid(
-            &claim.id,
+            claim,
             &payment_ref,
             item.gross_minor,
             item.net_minor(),

@@ -99,6 +99,8 @@ fn a_lump_sum_is_released_within_what_was_admitted() {
     assert_eq!((c.status, c.payable_minor, c.paid_minor(false)), (Status::Admitted, 150_000, 50_000));
     assert_eq!(c.timers[&TimerKind::Payment].met_on, Some(d(2027, 3, 1)));
     let notice = w.core.noticed("claim_paid")[0].clone();
+    // The payments module settles on this policy's ledger and checks the account against its own payee.
+    assert_eq!((notice["policy"].as_str(), notice["account_ref"].as_str()), (c.policy.as_str(), "acct-1"));
     assert_eq!(
         (notice["payment_ref"].as_str(), notice["amount_minor"].as_str(), notice["net_minor"].as_str()),
         ("p-1", "50000", "50000")

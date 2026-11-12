@@ -588,7 +588,7 @@ impl ClaimsState {
                     released_by: signers.first().cloned(),
                     run: None,
                 });
-                cx.paid(&id, payment_ref, *amount_minor, *amount_minor, &payee, None, true);
+                cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true);
             }
             Request::EndBenefit { end, reason } => {
                 let cause = if *reason == crate::EndReason::Death {

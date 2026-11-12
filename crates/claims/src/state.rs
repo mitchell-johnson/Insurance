@@ -74,8 +74,20 @@ impl Cx<'_> {
     /// A payment was released. This notice is the payments module's
     /// instruction to pay: it carries the payee and the net amount, and the
     /// gross amount the reinsurance module recovers against.
-    pub fn paid(&mut self, claim: &str, payment_ref: &str, gross_minor: i64, net_minor: i64, payee: &str, period_end: Option<NaiveDate>, ex_gratia: bool) {
+    ///
+    /// The policy is the one whose ledger holds the benefit payable. The
+    /// account reference is the verified payee's; it is blank for a
+    /// provider, whose account the payments module holds.
+    pub fn paid(&mut self, claim: &Claim, payment_ref: &str, gross_minor: i64, net_minor: i64, payee: &str, period_end: Option<NaiveDate>, ex_gratia: bool) {
+        let account_ref = claim
+            .payee
+            .as_ref()
+            .filter(|p| p.party == payee)
+            .map(|p| p.account_ref.clone())
+            .unwrap_or_default();
         let detail = [
+            ("policy", claim.policy.clone()),
+            ("account_ref", account_ref),
             ("payment_ref", payment_ref.to_string()),
             ("amount_minor", gross_minor.to_string()),
             ("net_minor", net_minor.to_string()),
@@ -83,7 +95,7 @@ impl Cx<'_> {
             ("period_end", period_end.map(|d| d.to_string()).unwrap_or_default()),
             ("ex_gratia", ex_gratia.to_string()),
         ];
-        self.notify("claim_paid", claim, &detail);
+        self.notify("claim_paid", &claim.id, &detail);
     }
 
     pub fn notify(&mut self, kind: &str, claim: &str, detail: &[(&str, String)]) {
