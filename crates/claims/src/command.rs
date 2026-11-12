@@ -176,6 +176,13 @@ pub enum ReinsuranceNotice {
         reinsurer: String,
         reference: String,
     },
+    /// People settled a disputed item under the treaty. `repay_minor` is
+    /// what the insurer repays the reinsurer, which may be nothing.
+    DisputeResolved {
+        claim: String,
+        reference: String,
+        repay_minor: i64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

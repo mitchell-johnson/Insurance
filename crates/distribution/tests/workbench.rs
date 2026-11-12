@@ -336,6 +336,7 @@ fn maker_checker_and_authority_limits_hold_on_every_signature() {
     assert_eq!(code(w.sign("big", finance(), Role::CounterpartyFinanceApprover)), "not_authorised");
     assert_eq!(code(w.sign("big", legal(), Role::CounterpartyFinanceApprover)), "not_authorised");
     assert_eq!(code(w.sign("big", conduct(), Role::ConductOfficer)), "approval_not_needed");
+    assert_eq!(code(w.sign("big", compliance(), Role::Compliance)), "approval_not_needed");
     assert_eq!(code(w.sign("big", admin(), Role::DistributionAdmin)), "approval_not_needed");
     w.sign("big", finance_approver(), Role::CounterpartyFinanceApprover).unwrap();
     assert_eq!(code(w.sign("big", finance_approver(), Role::CounterpartyFinanceApprover)), "not_authorised");

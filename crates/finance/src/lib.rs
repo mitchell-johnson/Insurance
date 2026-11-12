@@ -34,6 +34,7 @@ pub mod mart;
 pub mod period;
 pub mod report;
 pub mod returns;
+pub mod service;
 pub mod tables;
 
 pub use books::{FinApplied, FinCommand, FinEnvelope, FinEvent, FinanceState};

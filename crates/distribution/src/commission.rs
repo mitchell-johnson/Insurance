@@ -33,6 +33,14 @@ fn split(total: i64, weights: &[i64]) -> Vec<i64> {
     out
 }
 
+/// The claims events that carry an overpayment's whole position.
+const CLAIMS_OVERPAYMENT_KINDS: [&str; 4] = [
+    "overpayment_raised",
+    "recovery_status_changed",
+    "overpayment_recovered",
+    "overpayment_written_off",
+];
+
 fn ledger_of(dest: Dest) -> PartyLedger {
     match dest {
         Dest::Payable => PartyLedger::CommissionPayable,
@@ -245,6 +253,9 @@ impl DistributionState {
                 if let Some(p) = self.policies.get_mut(&policy) {
                     p.partition = partition;
                 }
+            }
+            CoreEvent::Module { module, kind, subject, detail } if module == "claims" && CLAIMS_OVERPAYMENT_KINDS.contains(&kind.as_str()) => {
+                self.claims_overpayment(&subject, &detail, date)
             }
             CoreEvent::CounterpartyPosted {
                 entry,
@@ -505,6 +516,33 @@ impl DistributionState {
 
     /// Reverse an allocation with a new one: the same payees, the same
     /// accounts, the opposite sign. With `only_layer`, just that layer's lines.
+    /// Claims said where one of its overpayments stands. Every one of its
+    /// events carries the whole position, so the latest replaces what was
+    /// held. One that names no party or no reference cannot be shown and is
+    /// left out; claims' own records are unaffected.
+    fn claims_overpayment(&mut self, claim: &str, detail: &BTreeMap<String, String>, date: NaiveDate) {
+        let (Some(reference), Some(party)) = (detail.get("overpayment"), detail.get("party").filter(|p| !p.is_empty())) else {
+            return;
+        };
+        let flag = |name: &str| detail.get(name).is_some_and(|v| v == "true");
+        let text = |name: &str| detail.get(name).cloned().unwrap_or_default();
+        let line = crate::workbench::MemoLine {
+            owner: "claims".into(),
+            reference: reference.clone(),
+            party: PartyId(party.clone()),
+            case_ref: claim.to_string(),
+            policy: detail.get("policy").map(|p| PolicyId(p.clone())),
+            outstanding_minor: detail.get("outstanding_minor").and_then(|v| v.parse().ok()).unwrap_or(0),
+            status: text("status"),
+            cause: text("cause"),
+            insurer_error: flag("insurer_error"),
+            good_faith: flag("good_faith"),
+            as_at: date,
+        };
+        self.changed.insert(line.party.clone(), self.seq);
+        self.memo.insert(format!("claims:{reference}"), line);
+    }
+
     fn premium_applied(&mut self, policy: &PolicyId, reference: Option<String>, net: BTreeMap<String, i64>) {
         if net.is_empty() || !self.policies.contains_key(policy) {
             return;
