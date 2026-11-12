@@ -135,6 +135,8 @@ pub struct AppState {
     pub regions: Arc<dyn RegionSource>,
     /// How the web pages sign people in.
     pub ui: UiConfig,
+    /// The unit pricing module, for the staff console.
+    pub pricing: Arc<dyn crate::forward::Source>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -746,6 +748,82 @@ async fn staff_admin(State(s): State<Shared>, headers: HeaderMap, method: Method
     ok(view)
 }
 
+impl AppState {
+    /// What this person may do in the unit pricing console. Nobody without
+    /// a unit pricing action gets as far as that module.
+    async fn pricing_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::PricingStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include unit pricing"));
+        }
+        Ok((session, standing))
+    }
+}
+
+fn pricing_down(reason: String) -> Problem {
+    Problem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "unit_pricing_unavailable",
+        format!("unit pricing could not be reached: {reason}"),
+    )
+}
+
+/// One of the console's questions to the unit pricing module: the work
+/// queue, funds, prices, valuations, errors. `me` answers from here.
+async fn pricing_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.pricing_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::pricing::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s.pricing.ask(question).await.map_err(pricing_down)?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// One person's command to the unit pricing module: prepare, approve,
+/// reject, suspend, resume, raise or close a price error, republish. It goes
+/// as that person with the roles they hold; that module checks them again
+/// and keeps who did what.
+async fn pricing_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.pricing_standing(&headers, &method, &uri, &body).await?;
+    let command: Value = parse(&body)?;
+    let Some((name, role)) = crate::pricing::role_for(&command) else {
+        return Err(Problem::bad_request("that is not a command the unit pricing console sends"));
+    };
+    if !standing["roles"].as_array().is_some_and(|held| held.iter().any(|r| r == role)) {
+        return Err(Problem::forbidden(format!("{name} needs the role {role}")));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, command);
+    let output = s.pricing.tell(envelope).await.map_err(pricing_down)?;
+    if let Some(refused) = output.get("refused") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        let status = if code == "unauthorised" {
+            StatusCode::FORBIDDEN
+        } else {
+            StatusCode::CONFLICT
+        };
+        return Err(Problem::new(status, code, refused["message"].as_str().unwrap_or("unit pricing refused it")));
+    }
+    ok(json!({ "accepted": true, "output": output }))
+}
+
 /// A refusal by the four questions, with the reason the person is given.
 impl AppState {
     /// Write a staff read to the access log, then refuse it if it was not
@@ -1012,6 +1090,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))
         .route("/staff/v1/workbench/{party}/proof-of-debt", get(proof_of_debt))
+        .route("/staff/v1/unit-pricing/commands", post(pricing_command))
+        .route("/staff/v1/unit-pricing/{question}", get(pricing_question))
         .route("/internal/v1/commands", post(module_command))
         .route("/internal/v1/pending", get(module_pending))
         .route("/ops/v1/regions", get(ops_regions))
@@ -1022,6 +1102,7 @@ pub fn router(state: Shared) -> Router {
         .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
         .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
         .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
+        .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
         .route("/ui/config.json", get(ui_config))

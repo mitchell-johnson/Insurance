@@ -14,6 +14,7 @@ pub const ADVISER: &str = include_str!("../ui/adviser.html");
 pub const EMPLOYER: &str = include_str!("../ui/employer.html");
 pub const STAFF: &str = include_str!("../ui/staff.html");
 pub const OPS: &str = include_str!("../ui/ops.html");
+pub const PRICING: &str = include_str!("../ui/pricing.html");
 pub const STATUS: &str = include_str!("../ui/status.html");
 pub const SCRIPT: &str = include_str!("../ui/app.js");
 pub const STYLE: &str = include_str!("../ui/app.css");

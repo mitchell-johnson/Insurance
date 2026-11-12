@@ -42,22 +42,26 @@ pub const STRUCTURE: &str = "distribution";
 
 type Asked<'a> = Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>>;
 
-/// The commission module: somewhere a question can be put and a command sent.
+/// Another module on the nodes: somewhere a question can be put and a command sent.
 pub trait Source: Send + Sync {
     fn ask(&self, question: Value) -> Asked<'_>;
     /// Send one command envelope. The answer is that module's output.
     fn tell(&self, envelope: Value) -> Asked<'_>;
 }
 
-/// The module on the ledger nodes.
+/// A module on the ledger nodes.
 pub struct Hosted {
     pub client: ClusterClient,
+    /// The module's name there.
+    pub module: &'static str,
+    /// How long a command looks for a leader before giving up.
+    pub patience: Duration,
 }
 
 impl Source for Hosted {
     fn ask(&self, question: Value) -> Asked<'_> {
         Box::pin(async move {
-            match self.client.query_module(COMMISSION_MODULE, &question).await {
+            match self.client.query_module(self.module, &question).await {
                 Ok(answer) => answer,
                 Err(e) => Err(e.to_string()),
             }
@@ -66,7 +70,7 @@ impl Source for Hosted {
 
     fn tell(&self, envelope: Value) -> Asked<'_> {
         Box::pin(async move {
-            match self.client.propose_module(COMMISSION_MODULE, &envelope).await {
+            match self.client.propose_module_until(self.module, &envelope, self.patience).await {
                 Ok(reply) => reply.result,
                 Err(e) => Err(e.to_string()),
             }
