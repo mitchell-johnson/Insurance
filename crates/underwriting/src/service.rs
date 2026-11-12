@@ -65,6 +65,9 @@ impl Config {
 pub struct Cluster {
     client: ClusterClient,
     patience: Duration,
+    /// How many partitions the ledger has. A group's home is its frozen
+    /// number modulo this.
+    partitions: PartitionId,
 }
 
 /// What a module that answers with a `result` made of a command.
@@ -75,8 +78,12 @@ struct Answered<R> {
 
 impl Cluster {
     /// `patience` is how long one command keeps looking for a leader.
-    pub fn new(client: ClusterClient, patience: Duration) -> Self {
-        Self { client, patience }
+    pub fn new(client: ClusterClient, partitions: PartitionId, patience: Duration) -> Self {
+        Self {
+            client,
+            patience,
+            partitions: partitions.max(1),
+        }
     }
 
     /// One command to a module. The host refuses what the module cannot
@@ -88,7 +95,9 @@ impl Cluster {
             .propose_module_until(module, &command, self.patience)
             .await
             .map_err(|e| DriverError::Unavailable(e.to_string()))?;
-        let answer = reply.result.map_err(|e| DriverError::Answer(format!("{module} could not read the command: {e}")))?;
+        let answer = reply
+            .result
+            .map_err(|e| DriverError::Answer(format!("{module} could not read the command: {e}")))?;
         serde_json::from_value(answer).map_err(|e| DriverError::Answer(format!("{module} answered in a form this driver does not read: {e}")))
     }
 
@@ -140,7 +149,7 @@ impl Core for Cluster {
         };
         let reply = self
             .client
-            .propose_until(partition, &envelope, self.patience)
+            .propose_until(partition % self.partitions, &envelope, self.patience)
             .await
             .map_err(|e| DriverError::Unavailable(e.to_string()))?;
         Ok(CoreAnswer {
@@ -157,11 +166,17 @@ impl Schemes for Cluster {
     }
 }
 
-/// The driver over the cluster. Notices, evidence requests and delegate
-/// file requests have no receiver yet and are parked with that reason.
-pub fn driver(client: ClusterClient, config: &Config, clock: fn() -> DateTime<Utc>) -> Driver<Cluster, Cluster, Cluster, Cluster, NothingConnected> {
-    let cluster = Cluster::new(client, config.patience);
-    Driver {
+/// The driver over the cluster, once the nodes have said how many
+/// partitions there are. Notices, evidence requests and delegate file
+/// requests have no receiver yet and are parked with that reason.
+pub async fn connect(
+    client: ClusterClient,
+    config: &Config,
+    clock: fn() -> DateTime<Utc>,
+) -> Result<Driver<Cluster, Cluster, Cluster, Cluster, NothingConnected>, String> {
+    let partitions = client.partitions(config.patience).await?;
+    let cluster = Cluster::new(client, partitions, config.patience);
+    Ok(Driver {
         underwriting: cluster.clone(),
         reinsurer: cluster.clone(),
         core: cluster.clone(),
@@ -169,17 +184,19 @@ pub fn driver(client: ClusterClient, config: &Config, clock: fn() -> DateTime<Ut
         forward: NothingConnected,
         batch: config.batch,
         clock,
-    }
+    })
 }
 
 /// The process: settings from `get`, the cluster token from `get` or the
-/// file it names, and cycles until `stop`.
+/// file it names, and cycles until `stop`. It ends with an error, for the
+/// platform to start it again, when no node answers at the start.
 pub async fn serve(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>, stop: impl Future<Output = ()>) -> Result<(), String> {
     let config = Config::from_lookup(&get)?;
     let auth = ClusterAuth::from_lookup(&get, read)?;
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
+    let driver = connect(client, &config, Utc::now).await?;
     tracing::info!(?config, "underwriting driver started");
-    driver(client, &config, Utc::now).run(config.cycle_every, config.sweep_page, stop, |_, _| {}).await;
+    driver.run(config.cycle_every, config.sweep_page, stop, |_, _| {}).await;
     tracing::info!("underwriting driver stopped");
     Ok(())
 }

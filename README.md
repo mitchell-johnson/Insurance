@@ -12,6 +12,7 @@ It issues and services policies (retail term life, health, and group schemes), b
 | `ic-api` | The public HTTP API. A stateless gateway that routes each request to the partition that owns the policy. | Deployment |
 | `ic-worker` | Runs the end-of-day close as a Temporal workflow, so a close survives any process dying part-way. | Deployment, plus a nightly CronJob |
 | `ic-reinsurance` | Carries the reinsurance module's cessions and entries from its group on the nodes to the partitions. Holds no state. | Deployment |
+| `ic-underwriting` | Carries the underwriting module's effects to reinsurance, the core and group administration, and runs its daily sweep. Holds no state. | Deployment |
 | `ic-admin` | The operator's command: bootstrap, status, membership changes. | Job, or by hand |
 | `ic-simulate` | A synthetic insurer that runs a year of business in seconds, for sizing and soak runs. | Developer tool |
 

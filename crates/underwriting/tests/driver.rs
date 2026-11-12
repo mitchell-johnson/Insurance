@@ -512,3 +512,40 @@ async fn with_nothing_connected_notices_are_parked_and_the_policy_still_issues()
     );
     assert_eq!(b.module.with(|w| (w.s.outbox(0, 10).len(), w.s.parked().len())), (0, pass.parked.len()));
 }
+
+/// Purpose: the day's sweep goes through every open proposal a page at a time and lapses the
+/// ones past their expiry, telling how many pages and lapses there were. Run again on the same
+/// day it reports the same and changes nothing, and the lapse notices it produced are carried
+/// on the next pass like any other effect.
+/// Why it matters: nothing else moves time forward for a proposal. Without the sweep an
+/// abandoned application holds reinsurance capacity and interim cover for ever; and because
+/// two drivers run, a sweep that did its work twice would chase a doctor twice for one report.
+#[tokio::test]
+async fn the_daily_sweep_pages_through_open_proposals_once_a_day() {
+    let b = bench(TakesAll::default());
+    b.module.with(|w| {
+        w.now = DateTime::parse_from_rfc3339("2026-10-01T09:00:00Z").unwrap().with_timezone(&Utc);
+    });
+    for id in ["P1", "P2", "P3"] {
+        b.open(id, 500_000_00);
+    }
+    b.pass().await;
+
+    let swept = b.driver.sweep(2).await.unwrap();
+    assert_eq!((swept.pages, swept.lapsed), (2, 3), "{swept:?}");
+    for id in ["P1", "P2", "P3"] {
+        assert!(matches!(b.status(id), ProposalStatus::Lapsed { .. }), "{:?}", b.status(id));
+    }
+
+    let before = b.module.with(|w| w.s.clone());
+    assert_eq!(b.driver.sweep(2).await.unwrap(), swept);
+    assert!(b.module.with(|w| w.s == before), "the second sweep of the day changed nothing");
+
+    let mut day = None;
+    let (pass, sweep) = b.driver.cycle(&mut day, 2).await;
+    assert_eq!(sweep, Some(Ok(swept)));
+    assert_eq!(day, Some(start()));
+    assert!(pass.unwrap().delivered >= 3, "the lapse notices were carried");
+    let (_, sweep) = b.driver.cycle(&mut day, 2).await;
+    assert_eq!(sweep, None, "one sweep a day from this driver");
+}

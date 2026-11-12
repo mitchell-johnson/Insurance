@@ -369,7 +369,13 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             }
             match &sweep {
                 None => {}
-                Some(Ok(s)) => tracing::info!(pages = s.pages, lapsed = s.lapsed, chased = s.chased, escalated = s.escalated, "underwriting daily sweep"),
+                Some(Ok(s)) => tracing::info!(
+                    pages = s.pages,
+                    lapsed = s.lapsed,
+                    chased = s.chased,
+                    escalated = s.escalated,
+                    "underwriting daily sweep"
+                ),
                 Some(Err(e)) => tracing::warn!(error = %e, "the underwriting daily sweep could not finish"),
             }
             seen(&pass, &sweep);
