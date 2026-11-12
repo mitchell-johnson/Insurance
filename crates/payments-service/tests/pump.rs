@@ -1223,3 +1223,45 @@ async fn the_binarys_modes_report_failure_as_failure() {
     assert!(sydney.run(&args(&["once"]), quick, never()).await.unwrap_err().contains("channel anz-file"));
     sydney.run(&[], quick, tokio::time::sleep(std::time::Duration::from_millis(20))).await.unwrap();
 }
+
+/// Purpose: a pump started afresh does not read again the bank messages an
+/// earlier pump recorded; but a message the module did not take holds the
+/// recorded place before it, so a fresh pump is offered it again, and what
+/// came after it is recorded once only.
+/// Why it matters: a pump restarts on every deployment. Reading a bank's
+/// whole history each time gets slower every day the system runs; skipping
+/// a message the module never took would lose a settlement or a return for
+/// good, which is money moved that the ledger never hears about.
+#[tokio::test]
+async fn a_restarted_pump_carries_on_where_the_last_one_stopped() {
+    let world = World::new().await;
+    let statement = |day: u32, opening: i64| BankMessage::Statement {
+        account: "anz-sf1-collection".to_string(),
+        date: d(2027, 11, day),
+        opening_minor: opening,
+        closing_minor: opening,
+        lines: vec![],
+    };
+    let read = |world: &World| world.state().messages_read.values().copied().max().unwrap_or(0);
+    world.bank.push(statement(15, 1_000_000_00));
+    let first = world.pump("akl", "a").pass().await;
+    assert_eq!(first.messages, 1, "{:?}", first.problems);
+    assert_eq!(read(&world), 1);
+    assert_eq!(world.pump("akl", "b").pass().await, Default::default(), "nothing is read twice");
+
+    world.bank.push(BankMessage::Settlement {
+        id: "never-sent".to_string(),
+        settled_on: d(2027, 11, 16),
+    });
+    world.bank.push(statement(16, 1_000_000_00));
+    let second = world.pump("akl", "c").pass().await;
+    assert_eq!(second.messages, 1, "{:?}", second.problems);
+    assert_eq!(read(&world), 1, "the place stops before the message the module did not take");
+    assert_eq!(world.state().books["anz-sf1-collection"].statement_date, Some(d(2027, 11, 16)));
+    let exceptions = world.state().exceptions.len();
+
+    let third = world.pump("akl", "d").pass().await;
+    assert!(third.problems.iter().any(|p| p.contains("message 2")), "{:?}", third.problems);
+    assert_eq!(third.messages, 1, "the later statement is offered again and answered as before");
+    assert_eq!(world.state().exceptions.len(), exceptions, "and recorded once");
+}

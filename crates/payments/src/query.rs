@@ -106,6 +106,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "authority" => found(state.authorities.get(text(&question, "authority")?)),
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
+        "messages_read" => found(Some(&state.messages_read)),
         "represent" => found(Some(&state.represent)),
         "waiting" => found(Some(state.waiting_payments())),
         "fund_cash_settlement" => Ok(state.fund_cash_settlement(as_at(&question)?)),
