@@ -212,9 +212,23 @@ pub struct ClaimBook {
     pub consent: BTreeMap<ReinsurerId, (bool, String)>,
     /// What this claim adds to each aggregate treaty's retained loss.
     pub aggregate: BTreeMap<TreatyId, i64>,
+    /// Recoveries handed back to a reinsurer when a disputed item was
+    /// settled, on a claim since resumed. They were billed, and are owed
+    /// again, so what is billed in all is the recovery plus these.
+    #[serde(default, with = "pairs")]
+    pub repaid: BTreeMap<(TreatyId, ReinsurerId), i64>,
 }
 
 impl ClaimBook {
+    /// Everything billed for recoveries of `net`: the recoveries and what
+    /// was handed back on the way.
+    fn billed(&self, mut net: ByReinsurer) -> ByReinsurer {
+        for (key, repaid) in &self.repaid {
+            *net.entry(key.clone()).or_default() += repaid;
+        }
+        net
+    }
+
     fn gross(&self) -> i64 {
         self.reserve_minor
             .max(self.admitted_minor.unwrap_or(0))
@@ -263,6 +277,9 @@ pub struct DisputedItem {
     pub written_off_minor: i64,
     #[serde(default)]
     pub insurer_error: bool,
+    /// Its repayment has been taken into the claim's account by a resumption.
+    #[serde(default)]
+    pub resumed: bool,
     #[serde(default)]
     pub resolution: Option<Resolution>,
 }
@@ -270,6 +287,10 @@ pub struct DisputedItem {
 /// The reference of a disputed item.
 pub fn dispute_reference(claim: &ClaimId, treaty: &TreatyId, reinsurer: &ReinsurerId) -> String {
     format!("DSP/{claim}/{treaty}/{reinsurer}")
+}
+
+fn reopened_exception(claim: &ClaimId) -> String {
+    format!("reopened_after_reversal:{claim}")
 }
 
 type ByReinsurer = BTreeMap<(TreatyId, ReinsurerId), i64>;
@@ -422,6 +443,7 @@ impl Reinsurance {
                             consent_due: BTreeMap::new(),
                             consent: BTreeMap::new(),
                             aggregate: BTreeMap::new(),
+                            repaid: BTreeMap::new(),
                         },
                     );
                 }
@@ -470,8 +492,16 @@ impl Reinsurance {
                 }
             }
             // A reversed admission stays with the people settling its
-            // disputed items, whatever claims does next.
+            // disputed items, whatever claims does next: they are told, and
+            // recoveries start again only when one of them says so.
             ClaimFact::Reopened { .. } => {
+                if book.status == ClaimStatus::Reversed {
+                    let detail = format!(
+                        "claim {id} was reopened after its admission was reversed; nothing more is recovered on it until its disputed items are settled and recoveries are resumed"
+                    );
+                    self.set_exception(ctx, reopened_exception(&id), "reopened_after_reversal", Some(detail));
+                    return Ok(());
+                }
                 if book.status == ClaimStatus::Closed {
                     book.status = ClaimStatus::Open;
                 }
@@ -509,7 +539,9 @@ impl Reinsurance {
         let items: Vec<(String, DisputedItem)> = book
             .due
             .iter()
-            .filter(|(_, amount)| **amount > 0)
+            // What the reinsurer has paid and not been handed back.
+            .map(|(key, billed)| (key, billed - book.repaid.get(key).copied().unwrap_or(0)))
+            .filter(|(_, amount)| *amount > 0)
             .map(|((treaty, reinsurer), amount)| {
                 let clauses = self
                     .latest_treaty(treaty)
@@ -530,7 +562,7 @@ impl Reinsurance {
                     reinsurer: reinsurer.clone(),
                     policy: book.policy.clone(),
                     partition,
-                    amount_minor: *amount,
+                    amount_minor: amount,
                     raised_on: ctx.on,
                     decided_on,
                     reason_code: reason_code.to_string(),
@@ -538,9 +570,17 @@ impl Reinsurance {
                     clauses,
                     written_off_minor: 0,
                     insurer_error: false,
+                    resumed: false,
                     resolution: None,
                 };
-                (dispute_reference(id, treaty, reinsurer), item)
+                // A second reversal does not write over the record of the first.
+                let first = dispute_reference(id, treaty, reinsurer);
+                let reference = (2..)
+                    .map(|n| format!("{first}/{n}"))
+                    .take_while(|_| self.disputes.contains_key(&first))
+                    .find(|r| !self.disputes.contains_key(r))
+                    .unwrap_or(first);
+                (reference, item)
             })
             .collect();
         for (reference, item) in items {
@@ -556,6 +596,45 @@ impl Reinsurance {
             self.set_exception(ctx, format!("disputed_item:{reference}"), "disputed_item", Some(detail));
             self.disputes.insert(reference, item);
         }
+    }
+
+    /// Recoveries start again on a claim that claims reopened after its
+    /// admission was reversed. Every disputed item on it must have been
+    /// settled first. What the insurer repaid under those settlements is no
+    /// longer counted as recovered, so it is billed again if the claim still
+    /// carries it.
+    pub(crate) fn resume_recoveries(&mut self, ctx: &mut Ctx, id: &ClaimId, reference: &str) -> Result<(), Reject> {
+        let exception = reopened_exception(id);
+        if !self.exceptions.contains_key(&exception) {
+            return Err(Reject::new(
+                "not_reopened",
+                format!("claim {id} is not a claim reopened after its admission was reversed"),
+            ));
+        }
+        if reference.trim().is_empty() {
+            return Err(Reject::new("reference_required", "say where the decision to resume is filed"));
+        }
+        let mine: Vec<&DisputedItem> = self.disputes.values().filter(|d| &d.claim == id).collect();
+        if mine.iter().any(|d| d.resolution.is_none()) {
+            return Err(Reject::new("disputes_open", format!("claim {id} has disputed items that are not settled")));
+        }
+        let repaid: Vec<((TreatyId, ReinsurerId), i64)> = mine
+            .iter()
+            .filter(|d| !d.resumed)
+            .map(|d| ((d.treaty.clone(), d.reinsurer.clone()), d.resolution.as_ref().map_or(0, |r| r.repay_minor)))
+            .collect();
+        for item in self.disputes.values_mut().filter(|d| &d.claim == id) {
+            item.resumed = true;
+        }
+        if let Some(book) = self.claims.get_mut(id) {
+            for (key, repaid) in repaid.into_iter().filter(|(_, repaid)| *repaid != 0) {
+                *book.repaid.entry(key).or_default() += repaid;
+            }
+            book.status = ClaimStatus::Open;
+        }
+        self.set_exception(ctx, exception, "reopened_after_reversal", None);
+        self.sync_claim(ctx, id);
+        Ok(())
     }
 
     pub(crate) fn resolve_dispute(
@@ -689,13 +768,13 @@ impl Reinsurance {
             ClaimStatus::Reversed => (book.due.clone(), book.due.clone()),
             ClaimStatus::Closed => {
                 let due = self.recoveries(&book, book.paid_minor, book.ex_gratia_minor);
-                (due.clone(), due)
+                (due.clone(), book.billed(due))
             }
             ClaimStatus::Open => {
                 let incurred = book.admitted_minor.unwrap_or(book.reserve_minor).max(book.paid_minor);
                 (
                     self.recoveries(&book, incurred, book.ex_gratia_minor),
-                    self.recoveries(&book, book.paid_minor, book.ex_gratia_minor),
+                    book.billed(self.recoveries(&book, book.paid_minor, book.ex_gratia_minor)),
                 )
             }
         };

@@ -738,11 +738,114 @@ fn claims_facts_published_by_the_core_drive_the_recoveries() {
     // A reopening does not take a reversed admission away from the people settling it.
     b.feed(1, vec![published("claim_reopened", "C1", &[("basis", "Complaint")])]);
     assert_eq!(claim(&b, "C1").status, ClaimStatus::Reversed);
+    assert!(b.ri.exceptions().contains_key("reopened_after_reversal:C1"));
     let written_off = [("amount_minor", "80000000"), ("insurer_error", "true"), ("status", "written_off")];
     b.feed(1, vec![published("overpayment_written_off", "C1", &written_off)]);
     let item = b.ri.dispute(&dispute_reference(&ClaimId::from("C1"), &retail(), &north())).unwrap();
     assert!(item.insurer_error && item.written_off_minor == 800 * K);
     assert!(b.ri.exceptions().keys().all(|k| !k.starts_with("claim_fact:")));
+    b.assert_reconciles();
+    assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
+}
+
+/// Purpose: when claims reopens a claim whose admission was reversed, reinsurance operations
+/// are told once and nothing changes until they act; they can resume recoveries only after
+/// every disputed item on the claim is settled, and then what was repaid to a reinsurer
+/// under a settlement is billed to it again while what was left with the insurer is not; a
+/// second reversal raises new disputed items beside the settled ones.
+/// Why it matters: a reversal overturned on review puts the claim back in payment for
+/// years. Left reversed here, every later benefit would be paid with no recovery and nobody
+/// told. Resumed by the machine, the insurer could bill a reinsurer for money still in
+/// dispute, or lose the record of what was agreed the first time.
+#[test]
+fn recoveries_resume_on_a_reopened_claim_only_when_its_disputes_are_settled() {
+    let mut b = anna();
+    let pay = [("payment_ref", "PAY-1"), ("amount_minor", "80000000"), ("ex_gratia", "false")];
+    let reversal = |on: &'static str| published("admission_reversed", "C1", &[("decided_on", on), ("reason_code", "R-1")]);
+    b.feed(
+        1,
+        vec![
+            published("claim_reserved", "C1", &RESERVED),
+            published("claim_admitted", "C1", &[("admitted_minor", "80000000")]),
+            published("claim_paid", "C1", &pay),
+            reversal("2027-06-10"),
+        ],
+    );
+    let due = |b: &Bench| (b.posted(PostingKind::RecoveryDue, &north()), b.posted(PostingKind::RecoveryDue, &south()));
+    assert_eq!(due(&b), (180 * K, 120 * K));
+    let resume = |reference: &str| Command::ResumeRecoveries {
+        claim: ClaimId::from("C1"),
+        reference: reference.into(),
+    };
+    assert_eq!(b.refused("reinsurance-ops", resume("vault/d-1")), "not_reopened");
+
+    let reopened = b.feed(1, vec![published("claim_reopened", "C1", &[("basis", "InternalReview")])]);
+    assert!(reopened
+        .notices
+        .iter()
+        .any(|n| matches!(n, Notice::ExceptionOpened { id, code, .. } if id == "reopened_after_reversal:C1" && code == "reopened_after_reversal")));
+    assert!(reopened.instructions.is_empty());
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Reversed);
+    assert!(b
+        .feed(1, vec![published("claim_reopened", "C1", &[("basis", "InternalReview")])])
+        .notices
+        .is_empty());
+    assert_eq!(b.refused("reinsurance-ops", resume(" ")), "reference_required");
+    assert_eq!(b.refused("claims", resume("vault/d-1")), "caller_not_allowed");
+    assert_eq!(b.refused("reinsurance-ops", resume("vault/d-1")), "disputes_open");
+
+    // North was repaid in full when the admission was reversed; south kept what it had paid.
+    let id = ClaimId::from("C1");
+    for (reinsurer, repay) in [(north(), 180 * K), (south(), 0)] {
+        b.ok(
+            "finance",
+            Command::ResolveDispute {
+                reference: dispute_reference(&id, &retail(), &reinsurer),
+                repay_minor: repay,
+                agreement_ref: "AG-1".into(),
+                prepared_by: "kim".into(),
+                approved_by: "lee".into(),
+            },
+        );
+    }
+    let resumed = b.ok("reinsurance-ops", resume("vault/d-1"));
+    assert!(resumed
+        .notices
+        .iter()
+        .any(|n| matches!(n, Notice::ExceptionClosed { id } if id == "reopened_after_reversal:C1")));
+    assert_eq!(claim(&b, "C1").status, ClaimStatus::Open);
+    assert_eq!(due(&b), (360 * K, 120 * K), "north is billed again for what it was repaid, south for nothing");
+    assert_eq!(b.posted(PostingKind::DisputeSettlement, &north()), 180 * K);
+    assert!(b.ri.exceptions().is_empty());
+    assert_eq!(b.refused("reinsurance-ops", resume("vault/d-1")), "not_reopened");
+    b.assert_reconciles();
+
+    // Reversed a second time: new items, and the first settlements are still on record.
+    b.today = d(2027, 9, 1);
+    let again = b.feed(1, vec![reversal("2027-09-01")]);
+    assert_eq!(again.notices.iter().filter(|n| matches!(n, Notice::DisputedItemRaised { .. })).count(), 2);
+    let first = dispute_reference(&id, &retail(), &north());
+    assert_eq!(b.ri.dispute(&first).unwrap().resolution.as_ref().unwrap().repay_minor, 180 * K);
+    let second = b.ri.dispute(&format!("{first}/2")).unwrap();
+    assert!(second.resolution.is_none() && second.amount_minor == 180 * K && second.decided_on == d(2027, 9, 1));
+    // And a third time, after the same path, beside both.
+    b.feed(1, vec![published("claim_reopened", "C1", &[("basis", "DisputeScheme")])]);
+    for reinsurer in [north(), south()] {
+        b.ok(
+            "finance",
+            Command::ResolveDispute {
+                reference: format!("{}/2", dispute_reference(&id, &retail(), &reinsurer)),
+                repay_minor: 0,
+                agreement_ref: "AG-2".into(),
+                prepared_by: "kim".into(),
+                approved_by: "lee".into(),
+            },
+        );
+    }
+    b.ok("reinsurance-ops", resume("vault/d-2"));
+    assert_eq!(due(&b), (360 * K, 120 * K), "nothing was repaid the second time, so nothing is billed again");
+    b.feed(1, vec![reversal("2027-10-01")]);
+    assert!(b.ri.dispute(&format!("{first}/3")).is_some());
     b.assert_reconciles();
     assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
 }
