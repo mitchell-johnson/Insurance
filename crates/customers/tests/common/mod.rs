@@ -258,3 +258,38 @@ impl World {
         c.execute(statement, &[]).await.map_err(|e| e.to_string())
     }
 }
+
+/// The core as the death relay sees it, in memory: what was proposed, and
+/// partitions that refuse or cannot be reached.
+#[derive(Default)]
+pub struct FakeCore {
+    pub partitions: u16,
+    pub refuse: std::sync::Mutex<Option<u16>>,
+    pub unreachable: std::sync::Mutex<bool>,
+    /// Proposals go unanswered.
+    pub lost: std::sync::Mutex<bool>,
+    pub proposed: std::sync::Mutex<Vec<(u16, String, Value)>>,
+}
+
+impl ic_customers::relay::Core for FakeCore {
+    async fn partitions(&self) -> Result<u16, String> {
+        if *self.unreachable.lock().unwrap() {
+            return Err("no cluster".into());
+        }
+        Ok(self.partitions)
+    }
+
+    async fn propose(&self, partition: u16, key: &str, command: &ic_core::Command) -> Result<Option<String>, String> {
+        self.proposed
+            .lock()
+            .unwrap()
+            .push((partition, key.to_string(), serde_json::to_value(command).unwrap()));
+        if *self.lost.lock().unwrap() {
+            return Err("no answer".into());
+        }
+        if *self.refuse.lock().unwrap() == Some(partition) {
+            return Ok(Some("not_open".into()));
+        }
+        Ok(None)
+    }
+}

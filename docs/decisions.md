@@ -60,7 +60,7 @@ The fail-back controller runs on every node and is tested with three nodes in on
 
 ### Group scheme administration
 
-Its gaps are listed in `docs/group.md` under "Known gaps". The ones that matter most today: no test takes a member through a whole underwriting decision with both services up, a member has no way yet to pay a loading billed to them, and its Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
+Its gaps are listed in `docs/group.md` under "Known gaps". The ones that matter most today: a member has no way yet to pay a loading billed to them, and its Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
 
 ### Payments are built against a fake bank
 
@@ -103,3 +103,11 @@ The design gives voluntary cover its own receivable per member and its own stand
 - **Changing who pays** is ending the layer and adding it again from the same date.
 - **Not built**: automatic (formula) cover cannot be member-paid, so dependants' cover paid by the employee is not modelled. A member's lapse does not wait for a proven lapse notice as a policy's lapse does; no notice to the member is raised by the core, and the documents module does not yet act on `MemberStandingChanged`. A member's lapsed cover is not reinstated; it is added again. A scheme holding a member's credit is refused a partition transfer (`member_credit_held`). When a lapsed scheme is reinstated, members' bills closed at the lapse stay closed. Nothing routes a member's payment to `ApplyMemberReceipt` yet: the payments module matches receipts to policies, not to members.
 - **Known rounding**: cancelling a policy on which nothing was paid can leave one cent in policy suspense, from the fraction of a cent of unearned premium. It was there before this work and is not fixed.
+
+### Non-disclosure remedies in the core
+
+The underwriting module decides the remedy on an approved case; the core carries it out with two commands from caller `underwriting`.
+
+- **`AvoidPolicy { policy, case, premium }`** on a retail policy in force: status `Avoided`, every layer ends on the day it started, `PolicyAvoided` is emitted. With `refund`, every premium billed since inception is undone (earned, unearned, GST and levies, including receivables long since pruned from state, whose totals are kept in `policy.pruned`) and what was paid goes to policy suspense; it is paid out by the ordinary suspense refund, not automatically. With `retain`, nothing goes back: premium paid but not yet earned goes to the account role `avoidance_premium_retained`, tax collected stays collected and what was owed is written off. The design notes give no rule for which applies and ask for legal review, so the case carries the choice.
+- **`VaryForNonDisclosure { policy, case, terms }`**: every layer the life has on the cover reads as written on the varied terms from its start; `policy.variations` keeps what each was written on; nothing already billed is billed again and later periods price on the new terms. `TermsVaried` names the layers and not the terms.
+- **Limits**: neither applies to a scheme (`not_retail`). An avoidance is refused while a benefit is owed on the policy (`claim_in_payment`), while it holds units (`policy_invested`), or if any of its billing was closed earlier (`avoidance_needs_review`). Benefits already paid are not recovered by the core; that is a claims case. An avoidance cannot be set aside by a command: a court order restoring the policy would be worked by hand. Policies whose receivables were pruned before `policy.pruned` existed would under-refund; there are none, since nothing is in production.

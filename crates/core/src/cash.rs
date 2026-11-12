@@ -67,7 +67,11 @@ pub(crate) fn apply_receipt(
     if policy.receipts.contains_key(&receipt) {
         return Err(Reject::new("duplicate_receipt", format!("receipt {receipt} has already been applied")));
     }
-    if matches!(policy.status, PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Terminated) && policy.outstanding_minor() == 0 {
+    if matches!(
+        policy.status,
+        PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Terminated | PolicyStatus::Avoided
+    ) && policy.outstanding_minor() == 0
+    {
         return Err(Reject::new("policy_ended", "the policy has ended; the money stays with cash matching"));
     }
     let c = policy.currency;

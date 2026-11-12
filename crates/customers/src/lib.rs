@@ -23,6 +23,7 @@ pub mod keys;
 pub mod matching;
 pub mod model;
 pub mod party;
+pub mod relay;
 pub mod retention;
 pub mod service;
 pub mod store;

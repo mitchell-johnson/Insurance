@@ -16,7 +16,10 @@ use tokio_postgres::{Client, Config, NoTls};
 pub const SCOPE_POSTGRES: &str = "https://ossrdbms-aad.database.windows.net/.default";
 
 /// The migrations, in order. Each runs once, in one transaction.
-const MIGRATIONS: &[(i32, &str)] = &[(1, include_str!("../migrations/001_init.sql"))];
+pub const MIGRATIONS: &[(i32, &str)] = &[
+    (1, include_str!("../migrations/001_init.sql")),
+    (2, include_str!("../migrations/002_death_relay.sql")),
+];
 
 #[derive(Clone)]
 enum Password {
