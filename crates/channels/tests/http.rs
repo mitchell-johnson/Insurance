@@ -265,6 +265,7 @@ fn portal() -> Portal {
                 book: None,
                 reason: Some(HoldReason::SuspendedLicence),
                 since: open(),
+                status: None,
             }],
             documents: vec![],
             cases: vec![],

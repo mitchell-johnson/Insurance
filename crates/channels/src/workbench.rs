@@ -89,6 +89,10 @@ pub struct Item {
     #[serde(default)]
     pub reason: Option<HoldReason>,
     pub since: NaiveDate,
+    /// The owning module's own status, on a debt another module keeps: a
+    /// claim overpayment that is `pursued` or `offset` is being collected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -463,9 +467,18 @@ impl Workbench {
         let new_account_at_risk = matches!(action, Action::Release { new_account: true, .. })
             && matches!(position.current_status(), PartyStatus::InLiquidation | PartyStatus::Deceased);
         let second_for_write_off = matches!(action, Action::WriteOff { .. }) && amount > self.settings.write_off_second_above_minor;
+        // Paying out held money that another module is collecting against is a decision for legal, as the commission
+        // module also decides: a release that leaves less held than is being pursued or offset elsewhere.
+        let collecting: i64 = position
+            .all()
+            .filter(|(_, i)| i.kind == ItemKind::Overpayment && matches!(i.status.as_deref(), Some("pursued" | "offset")))
+            .map(|(_, i)| i.amount_minor.abs())
+            .sum();
+        let held: i64 = position.held().values().sum();
+        let leaves_collecting_short = matches!(action, Action::Release { .. }) && collecting > held - amount;
         Needs {
             approvers: if above || second_for_write_off { 2 } else { 1 },
-            legal: above || new_account_at_risk,
+            legal: above || new_account_at_risk || leaves_collecting_short,
             conduct: !position.conduct.is_empty(),
         }
     }

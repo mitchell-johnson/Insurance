@@ -88,6 +88,7 @@ fn item(id: &str, kind: ItemKind, amount: i64, period: &str, reason: Option<Hold
         book: Some("book-7".into()),
         reason,
         since: d(2027, 10, 1),
+        status: None,
     }
 }
 
@@ -359,6 +360,37 @@ fn a_release_is_prepared_approved_and_posted() {
     assert_eq!(code(w.send(module("commission"), missing)), "not_found");
     // Once posted it no longer counts against the held balance here: the module republishes.
     w.send(staff("fin-2"), prepare("a2", release(80_000_00))).unwrap();
+}
+
+/// Purpose: a release that would leave less held than another module is actively collecting from the party (a claim
+/// overpayment that is pursued or being offset) needs legal; one that leaves enough, or a debt that is only held, does not.
+/// Why it matters: the commission module applies the same rule at its last signature. A workbench that did not ask legal
+/// would collect every other signature for an action that module then refuses as `owes_elsewhere`.
+#[test]
+fn a_release_short_of_what_claims_is_collecting_needs_legal() {
+    let mut w = staffed();
+    let held = Some(HoldReason::SuspendedLicence);
+    let owed = |status: &str| Item {
+        status: Some(status.to_string()),
+        ..item("memo/claims/clm-1/overpayment/1", ItemKind::Overpayment, -70_000_00, "2027-09", None)
+    };
+    let publish_with = |status: &str| {
+        publish(vec![
+            item("h-10", ItemKind::Held, 50_000_00, "2027-10", held),
+            item("h-11", ItemKind::Held, 30_000_00, "2027-11", held),
+            owed(status),
+        ])
+    };
+    w.send(module("commission"), publish_with("pursued")).unwrap();
+    w.send(staff("fin-1"), prepare("short", release(20_000_00))).unwrap();
+    w.send(staff("fin-1"), prepare("enough", release(5_000_00))).unwrap();
+    let needs = |w: &World, id: &str| w.ch.data.workbench.proposals[id].needs.legal;
+    assert!(needs(&w, "short"), "80,000 held less 20,000 leaves less than the 70,000 being pursued");
+    assert!(!needs(&w, "enough"));
+    // A debt the owner is only holding asks nothing of the held money.
+    w.send(module("commission"), publish_with("held")).unwrap();
+    w.send(staff("fin-1"), prepare("held-debt", release(20_000_00))).unwrap();
+    assert!(!needs(&w, "held-debt"));
 }
 
 /// Purpose: while a conduct case is open on a party, an action on its held money also needs the conduct officer, in a seat only that

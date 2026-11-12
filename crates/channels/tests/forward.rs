@@ -342,8 +342,8 @@ async fn a_pass_carries_engagements_licences_and_held_money() {
         assert_eq!(position.net()["NZD"], 950_00 - 300_00 - 120_00 - 75_00);
         let overpaid = &position.items["commission"]["memo/claims/clm-1/overpayment/1"];
         assert_eq!(
-            (overpaid.kind, overpaid.amount_minor, overpaid.since),
-            (ItemKind::Overpayment, -75_00, d(2027, 11, 20))
+            (overpaid.kind, overpaid.amount_minor, overpaid.since, overpaid.status.as_deref()),
+            (ItemKind::Overpayment, -75_00, d(2027, 11, 20), Some("open"))
         );
         assert!(!position.items["commission"].contains_key("memo/claims/clm-1/overpayment/2"));
         assert_eq!((position.documents.len(), position.cases.len()), (1, 1));
