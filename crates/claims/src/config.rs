@@ -189,6 +189,28 @@ pub struct HealthBenefit {
     pub excess_minor: i64,
 }
 
+/// Simple interest on a lump sum, from the end of the free days after the
+/// admission to the day the payment is released.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LateInterest {
+    pub annual_rate_bps: u32,
+    /// Days after the admission in which a payment carries no interest.
+    pub free_days: u32,
+}
+
+impl LateInterest {
+    /// Interest on `amount_minor` admitted on `admitted` and paid on `paid`,
+    /// by days over a 365 day year, rounded down.
+    pub fn on(&self, amount_minor: i64, admitted: chrono::NaiveDate, paid: chrono::NaiveDate) -> i64 {
+        let days = (paid - admitted).num_days() - i64::from(self.free_days);
+        if days <= 0 || amount_minor <= 0 {
+            return 0;
+        }
+        let interest = i128::from(amount_minor) * i128::from(self.annual_rate_bps) * i128::from(days) / (10_000 * 365);
+        i64::try_from(interest).unwrap_or(i64::MAX)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct Rules {
     pub version: u32,
@@ -232,6 +254,10 @@ pub struct Rules {
     /// A death notified more than this many days after it happened prompts a
     /// check of the death register feed.
     pub late_death_days: u32,
+    /// Interest on a lump sum paid late, where the law or the product
+    /// requires it. Absent: no interest is paid.
+    #[serde(default)]
+    pub late_interest: Option<LateInterest>,
     /// At or below this an estate is paid on the simplified process.
     pub estate_simplified_max_minor: i64,
     #[serde(default)]
