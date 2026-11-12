@@ -617,3 +617,128 @@ fn a_licence_case_closes_only_when_everything_owed_is_done() {
     let quiet = !kit.tick().iter().any(|e| matches!(e, Event::TimerEscalated { subject, .. } if subject == CASE));
     assert!(quiet, "a closed case has no timers");
 }
+
+/// Purpose: the register lists every letter that is owed and not yet
+/// issued (an acknowledgement, a deadlock notice, a letter to each customer
+/// of a completed licence case), stops listing each once it is recorded,
+/// leaves migrated complaints and other kinds of conduct case alone, and
+/// never answers with more than it was asked for.
+/// Why it matters: the documents service issues exactly what this list
+/// names. A letter missing from it is never sent and its timer escalates;
+/// one that stays on it after being recorded is sent again every pass.
+#[test]
+fn the_register_lists_the_letters_that_are_owed() {
+    let mut kit = populated();
+    let due = |kit: &Kit, limit: usize| -> Vec<(LetterKind, String, String)> {
+        kit.state
+            .letters_due(limit)
+            .into_iter()
+            .map(|l| (l.kind, l.subject, l.party.0.to_string()))
+            .collect()
+    };
+    let licence_letters: Vec<_> = ["cust-1", "cust-2", "cust-3"]
+        .iter()
+        .map(|c| (LetterKind::LicenceNotice, CASE.to_string(), c.to_string()))
+        .collect();
+    assert_eq!(due(&kit, 10), licence_letters);
+    let first = &kit.state.letters_due(1)[0];
+    assert_eq!(first.detail["status"], "revoked");
+    assert_eq!(first.detail["effective"], "2027-11-12");
+    assert_eq!((first.since, first.due), (kit.today(), None));
+
+    // A breach is written to by the people handling it, and a licence
+    // case still gathering its population is not ready.
+    kit.ok("conduct", "conduct-officer", open("breach-1", ConductKind::Breach, false));
+    kit.ok(
+        "conduct",
+        "conduct-officer",
+        Command::AttachPopulation {
+            case: "breach-1".into(),
+            customers: vec![party("cust-9")],
+            advisers: vec![],
+            policies: vec![],
+        },
+    );
+    kit.ok(
+        "conduct",
+        "conduct-officer",
+        Command::CompletePopulation {
+            case: "breach-1".into(),
+            customers: 1,
+            policies: 0,
+        },
+    );
+    assert_eq!(due(&kit, 10), licence_letters);
+
+    // Complaints come first: the acknowledgement, with the date it is due.
+    kit.record(intake("c1", Process::Service));
+    kit.ok(
+        "complaints",
+        "lead",
+        Command::AddRepresentative {
+            complaint: "c1".into(),
+            representative: Representative {
+                party: party("lawyer-1"),
+                relationship: "lawyer".into(),
+                authority_document: "doc-authority".into(),
+            },
+        },
+    );
+    let mut old = intake("c0", Process::Service);
+    old.received_on = Some(kit.today() - Duration::days(3));
+    old.acknowledged_on = None;
+    kit.ok("migration", "migration", Command::RecordComplaint(Box::new(old)));
+    let letters = kit.state.letters_due(10);
+    assert_eq!(letters.len(), 4);
+    assert_eq!((letters[0].kind, letters[0].subject.as_str()), (LetterKind::Acknowledgement, "c1"));
+    assert_eq!(letters[0].representatives, vec![party("lawyer-1")]);
+    assert_eq!(letters[0].due, Some(kit.today() + Duration::days(timers().acknowledge_days as i64)));
+    assert_eq!(due(&kit, 2).len(), 2, "no more than was asked for");
+    assert_eq!(due(&kit, 1), vec![(LetterKind::Acknowledgement, "c1".to_string(), "aroha".to_string())]);
+
+    // The documents service records each as a handler would.
+    kit.ok(
+        "documents",
+        "documents-service",
+        Command::RecordAcknowledgement {
+            complaint: "c1".into(),
+            document: "complaint-ack:c1".into(),
+        },
+    );
+    assert_eq!(due(&kit, 10), licence_letters);
+    kit.assign("c1", "reviewer-1", 3);
+    kit.ok("complaints", "reviewer-1", Command::DeclareDeadlock { complaint: "c1".into() });
+    assert_eq!(due(&kit, 1), vec![(LetterKind::DeadlockNotice, "c1".to_string(), "aroha".to_string())]);
+    kit.ok(
+        "documents",
+        "documents-service",
+        Command::RecordDeadlockNotice {
+            complaint: "c1".into(),
+            document: "complaint-deadlock:c1".into(),
+        },
+    );
+    kit.ok(
+        "documents",
+        "documents-service",
+        Command::RecordCustomerNotified {
+            case: CASE.into(),
+            customer: party("cust-2"),
+            document: "licence-notice".into(),
+        },
+    );
+    kit.ok(
+        "conduct",
+        "conduct-officer",
+        Command::ExcludeCustomer {
+            case: CASE.into(),
+            customer: party("cust-3"),
+            reason: "deceased, estate settled".into(),
+        },
+    );
+    assert_eq!(due(&kit, 10), licence_letters[..1].to_vec());
+
+    // The question, as the documents service asks it.
+    let answer = ic_complaints::module::answer(&kit.state, serde_json::json!({ "letters_due": { "limit": 5 } })).unwrap();
+    assert_eq!(answer[0]["kind"], "licence_notice");
+    assert_eq!(answer[0]["party"], "cust-1");
+}

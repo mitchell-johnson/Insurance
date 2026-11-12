@@ -104,6 +104,10 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 
 **Idempotency keys** are remembered for 90 days (`KEEP_KEYS_DAYS`) and then forgotten as `Tick` passes, at most 200 a tick. Core events, `Tick` and `MarkPublished` are frequent and leave none.
 
+**Letters for complaints and conduct cases.** Beside the relay, the service issues the letters the complaints register lists as owed and records each on its complaint or case (`complaint_letters.rs`; `docs/complaints.md`, "Letters").
+
+**Issuing twice.** `Driver::issue` keys the command on the document id and a digest of the request. The same request again changes nothing; a request that was refused and then put right is judged afresh.
+
 ## Not built, or waiting on others
 
 - **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
