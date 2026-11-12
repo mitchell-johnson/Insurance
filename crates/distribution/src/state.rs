@@ -588,6 +588,9 @@ pub struct DistributionState {
     pub(crate) allocations_by_date: BTreeMap<NaiveDate, Vec<String>>,
     /// `policy/receipt` to the allocation it earned.
     pub(crate) receipts: BTreeMap<String, String>,
+    /// Every application of premium to a policy, oldest first.
+    #[serde(default)]
+    pub(crate) premiums: BTreeMap<PolicyId, Vec<crate::model::PremiumRecord>>,
     /// Everything asked of the core, by reference.
     pub requested: BTreeMap<String, Requested>,
     pub movements: Vec<Movement>,
@@ -640,6 +643,7 @@ impl DistributionState {
             allocations: BTreeMap::new(),
             allocations_by_date: BTreeMap::new(),
             receipts: BTreeMap::new(),
+            premiums: BTreeMap::new(),
             requested: BTreeMap::new(),
             movements: vec![],
             positions: BTreeMap::new(),
