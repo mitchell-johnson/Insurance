@@ -601,6 +601,7 @@ impl Mart {
                 life,
                 effective,
                 covers,
+                ..
             } => {
                 self.change(partition, policy, date, Some(*effective), "member_changed", |row| {
                     row.end(date, |s| s.layer.is_none() && s.life == *life);

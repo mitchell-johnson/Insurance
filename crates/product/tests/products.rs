@@ -59,6 +59,7 @@ fn term_life_exact_premium() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     // age band 33-37: 0.45 * 1.42^3 = 1.2885 per thousand; 500,000 cover
@@ -89,6 +90,7 @@ fn loading_applies_to_base() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     let base = cover_premium(p.cover("life").unwrap(), &life, &f, 500_000_00).unwrap();
@@ -248,6 +250,7 @@ fn rating_refuses_what_it_cannot_price() {
         sex: Some(Sex::Female),
         smoker: Some(false),
         category: None,
+        occupation_class: None,
         loadings: vec![],
     };
     assert!(matches!(

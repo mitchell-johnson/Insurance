@@ -458,6 +458,7 @@ fn compare(table: &RateTable, previous: &RateTable, schema: &TableSchema, by_age
             sex: key.sex,
             smoker: key.smoker,
             category: key.category.clone(),
+            occupation_class: None,
             annual_rate: schema.rate_min.clone(),
         };
         let at = cell(key, &row, by_age);

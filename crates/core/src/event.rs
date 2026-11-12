@@ -97,6 +97,8 @@ pub struct LifeInfo {
     pub sex: Option<Sex>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smoker: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
 }
 
 impl LifeInfo {
@@ -108,6 +110,19 @@ impl LifeInfo {
             date_of_birth: None,
             sex: None,
             smoker: None,
+            occupation_class: None,
+        }
+    }
+
+    /// A life with the rating factors given.
+    pub fn with_factors(life: LifeId, party: Option<PartyId>, factors: Option<&crate::policy::LifeFactors>) -> Self {
+        Self {
+            life,
+            party,
+            date_of_birth: factors.and_then(|f| f.date_of_birth),
+            sex: factors.and_then(|f| f.sex),
+            smoker: factors.and_then(|f| f.smoker),
+            occupation_class: factors.and_then(|f| f.occupation_class.clone()),
         }
     }
 }
@@ -460,6 +475,10 @@ pub enum Event {
         /// identified.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         party: Option<PartyId>,
+        /// The member's rating factors as last recorded, for the extracts.
+        /// Sensitive like any life's factors; absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        info: Option<LifeInfo>,
     },
     MemberLeft {
         policy: PolicyId,
@@ -473,6 +492,10 @@ pub enum Event {
         /// The member's cover on the details just notified.
         #[serde(default)]
         covers: Vec<MemberCover>,
+        /// The member's rating factors as last recorded, for the extracts.
+        /// Sensitive like any life's factors; absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        info: Option<LifeInfo>,
     },
     MemberIdentified {
         policy: PolicyId,

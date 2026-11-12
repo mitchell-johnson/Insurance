@@ -37,6 +37,9 @@ pub struct RatingFactors {
     /// Group scheme benefit category.
     #[serde(default)]
     pub category: Option<String>,
+    /// Occupation class, where the life has one.
+    #[serde(default)]
+    pub occupation_class: Option<String>,
     /// Loadings as fractions of the base premium, for example `0.50`.
     #[serde(default)]
     pub loadings: Vec<DecStr>,
@@ -52,6 +55,7 @@ fn lookup(table: &RateTable, f: &RatingFactors) -> Result<Dec, RatingError> {
                 && (r.sex.is_none() || r.sex == f.sex)
                 && (r.smoker.is_none() || r.smoker == f.smoker)
                 && (r.category.is_none() || r.category == f.category)
+                && (r.occupation_class.is_none() || r.occupation_class == f.occupation_class)
         })
         .map(|r| r.annual_rate.get())
         .ok_or_else(|| RatingError::NoRate {
