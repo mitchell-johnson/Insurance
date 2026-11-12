@@ -155,6 +155,8 @@ pub struct World {
     pub books: Books,
     /// The Merkle root the core published for each closed date.
     pub roots: BTreeMap<NaiveDate, Hash32>,
+    /// Every event the core has published, in the order it was taken.
+    pub events: Vec<EventRecord>,
 }
 
 impl World {
@@ -169,6 +171,7 @@ impl World {
             core,
             books: Books::ready(partitions),
             roots: BTreeMap::new(),
+            events: Vec::new(),
         }
     }
 
@@ -197,6 +200,7 @@ impl World {
             self.roots.insert(close.closed, close.merkle_root);
             let events = self.core.take_events();
             self.books.feed(&events).unwrap();
+            self.events.extend(events);
             self.books
                 .send(
                     "feed",
