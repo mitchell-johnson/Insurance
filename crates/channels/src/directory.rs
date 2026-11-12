@@ -557,7 +557,12 @@ impl Directory {
                         "a licence change names its source: the regulator's notice or our own record",
                     ));
                 }
-                self.licences.entry(party.clone()).or_default().push(LicenceChange {
+                // The same change told twice, as a forwarder may after a restart, is one change.
+                let known = self.licences.entry(party.clone()).or_default();
+                if known.iter().any(|c| c.status == status && c.effective == effective && c.source == source) {
+                    return Ok(touched);
+                }
+                known.push(LicenceChange {
                     status,
                     effective,
                     source,

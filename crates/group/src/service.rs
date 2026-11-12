@@ -1,0 +1,386 @@
+//! The group service: the driver run as a process.
+//!
+//! It runs the driver's pass on a timer and serves the routes the portals
+//! and the other services use: upload a file, send a command, ask a
+//! question. It holds no state: any number can run, and one that stops is
+//! simply restarted. It sits behind the portal gateway, which has already
+//! established who the person is; callers present the service key.
+
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Bytes;
+use axum::extract::{DefaultBodyLimit, Path, State};
+use axum::http::{HeaderMap, StatusCode};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use ic_azure::credential::AzureCredential;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::command::{caller, Envelope, GroupCommand, Resolution};
+use crate::driver::{Core, CustomerMaster, Driver, DriverError, FileStore, Module, Pass, Peers};
+use crate::host::Question;
+use crate::record::MemberIdentity;
+
+/// The largest file an employer may upload.
+pub const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
+pub const MIN_SECRET: usize = 32;
+
+/// Where everything is. Read from the environment; the two secrets come
+/// from mounted Key Vault secrets.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Config {
+    /// The ledger nodes, `host:port` separated by commas.
+    pub cluster: String,
+    pub quarantine_endpoint: String,
+    pub quarantine_container: String,
+    pub event_hubs_namespace: String,
+    pub event_hub: String,
+    pub customer_master: String,
+    pub customer_master_scope: String,
+    /// The name the reinsurance module is hosted under.
+    pub reinsurance_module: String,
+    /// Salts member fingerprints. It must never change.
+    pub fingerprint_salt: String,
+    /// What callers of this service must present.
+    pub api_key: String,
+    pub listen: String,
+    pub cycle_every: Duration,
+}
+
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the salt or the key.
+        write!(f, "Config(cluster {}, listen {})", self.cluster, self.listen)
+    }
+}
+
+impl Config {
+    /// Read through `get`, which is `std::env::var` in production. Every
+    /// setting without a default is required: a service that started
+    /// without its storage would fail at the first file, not at start.
+    pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
+        let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let need = |key: &str| get(key).ok_or_else(|| format!("{key} is not set"));
+        let secret = |key: &str| {
+            let value = need(key)?;
+            if value.len() < MIN_SECRET {
+                return Err(format!("{key} must be at least {MIN_SECRET} characters"));
+            }
+            Ok(value)
+        };
+        let seconds = match get("IC_GROUP_CYCLE_SECONDS") {
+            Some(text) => text
+                .parse::<u64>()
+                .ok()
+                .filter(|s| *s > 0)
+                .ok_or("IC_GROUP_CYCLE_SECONDS must be a whole number of seconds above zero")?,
+            None => 5,
+        };
+        Ok(Self {
+            cluster: need("IC_CLUSTER_NODES")?,
+            quarantine_endpoint: need("IC_GROUP_QUARANTINE_ENDPOINT")?,
+            quarantine_container: get("IC_GROUP_QUARANTINE_CONTAINER").unwrap_or_else(|| "group-quarantine".into()),
+            event_hubs_namespace: need("IC_GROUP_EVENT_HUBS_NAMESPACE")?,
+            event_hub: get("IC_GROUP_EVENT_HUB").unwrap_or_else(|| "group-events".into()),
+            customer_master: need("IC_GROUP_CUSTOMER_MASTER")?,
+            customer_master_scope: need("IC_GROUP_CUSTOMER_MASTER_SCOPE")?,
+            reinsurance_module: get("IC_GROUP_REINSURANCE_MODULE").unwrap_or_else(|| "reinsurance".into()),
+            fingerprint_salt: secret("IC_GROUP_FINGERPRINT_SALT")?,
+            api_key: secret("IC_GROUP_API_KEY")?,
+            listen: get("IC_GROUP_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
+            cycle_every: Duration::from_secs(seconds),
+        })
+    }
+}
+
+/// The customer master over HTTP, with an Entra ID token. The route is
+/// this module's proposal: no customer master exists in the repository.
+/// It answers with a [`Resolution`]: one high-confidence match is
+/// `linked`, no candidate creates the person and is `created`, and
+/// anything between is `possible` with the candidates.
+#[derive(Clone)]
+pub struct HttpCustomerMaster {
+    base: String,
+    scope: String,
+    credential: AzureCredential,
+    http: reqwest::Client,
+}
+
+impl HttpCustomerMaster {
+    /// `scope` is the Entra ID scope of the customer master's API.
+    pub fn new(base: &str, scope: &str, credential: AzureCredential) -> Self {
+        Self {
+            base: base.trim_end_matches('/').to_string(),
+            scope: scope.to_string(),
+            credential,
+            http: ic_azure::http_client(),
+        }
+    }
+}
+
+impl CustomerMaster for HttpCustomerMaster {
+    async fn resolve(&self, scheme: &str, identity: &MemberIdentity) -> Result<Resolution, String> {
+        let token = self.credential.token(&self.scope).await.map_err(|e| e.to_string())?;
+        let body = json!({
+            "source": format!("group-scheme:{scheme}"),
+            "given_name": identity.given_name,
+            "family_name": identity.family_name,
+            "date_of_birth": identity.date_of_birth,
+            "email": identity.email,
+            "national_id": identity.national_id,
+            "create_if_none": true,
+        });
+        let resp = self
+            .http
+            .post(format!("{}/v1/parties/match", self.base))
+            .bearer_auth(token)
+            .json(&body)
+            .send()
+            .await
+            // The error may quote the request: say only that it failed.
+            .map_err(|e| format!("the customer master could not be reached: {}", e.without_url()))?;
+        let status = resp.status().as_u16();
+        if !(200..300).contains(&status) {
+            return Err(format!("the customer master returned {status}"));
+        }
+        let answer: Resolution = resp.json().await.map_err(|_| "the customer master's answer was not a resolution".to_string())?;
+        match &answer {
+            Resolution::Possible { candidates } if candidates.is_empty() => Err("the customer master named no candidates".to_string()),
+            _ => Ok(answer),
+        }
+    }
+}
+
+struct Web<M, C, P, D, F> {
+    driver: Arc<Driver<M, C, P, D, F>>,
+    /// The key callers must present, hashed so that the comparison takes
+    /// the same time whatever was presented.
+    key_hash: [u8; 32],
+}
+
+type Answer = (StatusCode, Json<Value>);
+
+fn refused(status: StatusCode, code: &str, message: &str) -> Answer {
+    (status, Json(json!({ "error": { "code": code, "message": message } })))
+}
+
+fn failed(e: DriverError) -> Answer {
+    match e {
+        DriverError::Refused(reject) => refused(StatusCode::UNPROCESSABLE_ENTITY, &reject.code, &reject.message),
+        // Nothing is known to have happened: the caller sends the same again.
+        DriverError::Unavailable(_) => refused(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "try again shortly"),
+        DriverError::Answer(_) => refused(StatusCode::BAD_GATEWAY, "unexpected_answer", "the module's answer could not be read"),
+    }
+}
+
+impl<M, C, P, D, F> Web<M, C, P, D, F> {
+    fn authorised(&self, headers: &HeaderMap) -> Result<(), Answer> {
+        let presented = headers
+            .get("authorization")
+            .and_then(|v| v.as_bytes().strip_prefix(b"Bearer "))
+            .map(|key| -> [u8; 32] { Sha256::digest(key).into() });
+        if presented == Some(self.key_hash) {
+            Ok(())
+        } else {
+            Err(refused(StatusCode::UNAUTHORIZED, "unauthorised", "the service key is missing or wrong"))
+        }
+    }
+}
+
+/// The channels a person or another service reaches the module through.
+/// The driver's own commands are not among them.
+const OUTSIDE_CALLERS: [&str; 6] = [
+    caller::STAFF,
+    caller::EMPLOYER,
+    caller::MEMBER,
+    caller::UNDERWRITING,
+    caller::REINSURANCE,
+    caller::CASH,
+];
+
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
+    headers.get(name).and_then(|v| v.to_str().ok()).map(str::trim).filter(|v| !v.is_empty())
+}
+
+async fn upload<M, C, P, D, F>(
+    State(web): State<Arc<Web<M, C, P, D, F>>>,
+    Path((scheme, file)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Answer
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    if let Err(answer) = web.authorised(&headers) {
+        return answer;
+    }
+    let (Some(who), Some(actor)) = (header(&headers, "x-ic-caller"), header(&headers, "x-ic-actor")) else {
+        return refused(StatusCode::BAD_REQUEST, "missing_identity", "x-ic-caller and x-ic-actor say who is uploading");
+    };
+    if ![caller::EMPLOYER, caller::STAFF].contains(&who) {
+        return refused(StatusCode::FORBIDDEN, "caller_not_allowed", "files come from the employer or from staff");
+    }
+    if body.is_empty() {
+        return refused(StatusCode::BAD_REQUEST, "empty_file", "the file is empty");
+    }
+    match web.driver.upload(who, actor, &scheme, &file, body.to_vec()).await {
+        Ok(()) => (StatusCode::ACCEPTED, Json(json!({ "scheme": scheme, "file": file, "status": "quarantined" }))),
+        Err(DriverError::Unavailable(e)) if e.contains("names are") => refused(StatusCode::BAD_REQUEST, "invalid_name", &e),
+        Err(e) => failed(e),
+    }
+}
+
+/// A command from a portal or another service. The business date is the
+/// core's, never the caller's.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Request {
+    key: String,
+    caller: String,
+    actor: String,
+    command: GroupCommand,
+}
+
+async fn command<M, C, P, D, F>(State(web): State<Arc<Web<M, C, P, D, F>>>, headers: HeaderMap, body: Bytes) -> Answer
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    if let Err(answer) = web.authorised(&headers) {
+        return answer;
+    }
+    let request: Request = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_command", &e.to_string()),
+    };
+    if request.key.is_empty() || request.actor.is_empty() || !OUTSIDE_CALLERS.contains(&request.caller.as_str()) {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "caller_not_allowed",
+            "a command needs a key, an actor and a caller this service takes",
+        );
+    }
+    if matches!(request.command, GroupCommand::ReceiveFile { .. }) {
+        return refused(StatusCode::BAD_REQUEST, "use_upload", "a file is received by uploading it");
+    }
+    let today = match web.driver.core.business_date().await {
+        Ok(Some(today)) => today,
+        _ => return failed(DriverError::Unavailable("the business date is not open".to_string())),
+    };
+    let envelope = Envelope {
+        // Callers' keys cannot collide with the driver's own.
+        key: format!("api:{}:{}", request.caller, request.key),
+        caller: request.caller,
+        actor: request.actor,
+        today,
+        command: request.command,
+    };
+    match web.driver.module.propose(envelope).await {
+        Ok(outcome) => match outcome.result {
+            Ok(()) => (StatusCode::OK, Json(json!({ "applied": true, "duplicate": outcome.duplicate }))),
+            Err(reject) => failed(DriverError::Refused(reject)),
+        },
+        Err(e) => failed(e),
+    }
+}
+
+async fn question<M, C, P, D, F>(State(web): State<Arc<Web<M, C, P, D, F>>>, headers: HeaderMap, body: Bytes) -> Answer
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    if let Err(answer) = web.authorised(&headers) {
+        return answer;
+    }
+    let question: Question = match serde_json::from_slice(&body) {
+        Ok(q) => q,
+        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_question", &e.to_string()),
+    };
+    // The outbox carries commands with underwriting terms: it is the driver's alone.
+    if matches!(question, Question::Outbox { .. }) {
+        return refused(StatusCode::FORBIDDEN, "not_available", "the outbox is not served here");
+    }
+    match web.driver.module.ask(question).await {
+        Ok(answer) => (StatusCode::OK, Json(answer)),
+        Err(DriverError::Answer(e)) => refused(StatusCode::NOT_FOUND, "not_found", &e),
+        Err(e) => failed(e),
+    }
+}
+
+/// The service's routes: `POST /v1/schemes/{scheme}/files/{file}` to
+/// upload, `POST /v1/commands`, `POST /v1/questions`, and `GET /healthz`.
+pub fn router<M, C, P, D, F>(driver: Arc<Driver<M, C, P, D, F>>, api_key: &str) -> Router
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    let web = Arc::new(Web {
+        driver,
+        key_hash: Sha256::digest(api_key.as_bytes()).into(),
+    });
+    Router::new()
+        .route("/v1/schemes/{scheme}/files/{file}", post(upload::<M, C, P, D, F>))
+        .route("/v1/commands", post(command::<M, C, P, D, F>))
+        .route("/v1/questions", post(question::<M, C, P, D, F>))
+        .route("/healthz", get(|| async { "ok" }))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .with_state(web)
+}
+
+/// Run the driver's pass every `every` until `stop` completes. A pass that
+/// could not do everything says so in the log and the next one tries
+/// again; nothing here ends the loop but `stop`.
+pub async fn run_passes<M, C, P, D, F>(
+    driver: Arc<Driver<M, C, P, D, F>>,
+    every: Duration,
+    stop: impl Future<Output = ()>,
+    mut seen: impl FnMut(&Result<Pass, DriverError>),
+) where
+    M: Module,
+    C: Core,
+    P: Peers,
+    D: CustomerMaster,
+    F: FileStore,
+{
+    tokio::pin!(stop);
+    loop {
+        let pass = driver.run_once().await;
+        match &pass {
+            Ok(p) if p.failed == 0 => tracing::debug!(done = p.done, "group pass"),
+            Ok(p) => tracing::warn!(done = p.done, waiting = p.failed, "a group pass left work waiting on something outside"),
+            Err(e) => tracing::warn!(error = %e, "a group pass could not run"),
+        }
+        seen(&pass);
+        // With work flowing, go straight round again; otherwise wait.
+        let busy = matches!(&pass, Ok(p) if p.done > 0);
+        tokio::select! {
+            () = &mut stop => return,
+            () = tokio::time::sleep(if busy { Duration::from_millis(10) } else { every }) => {}
+        }
+    }
+}
+
+/// Serve the routes on `listener` until `stop` completes.
+pub async fn serve(listener: tokio::net::TcpListener, routes: Router, stop: impl Future<Output = ()> + Send + 'static) -> Result<(), DriverError> {
+    axum::serve(listener, routes)
+        .with_graceful_shutdown(stop)
+        .await
+        .map_err(|e| DriverError::Unavailable(e.to_string()))
+}

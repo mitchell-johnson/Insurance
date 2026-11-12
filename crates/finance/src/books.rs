@@ -52,6 +52,10 @@ pub const MAX_JOURNAL_LINES: usize = 500;
 /// Most aged items one report may carry.
 pub const MAX_AGED_ITEMS: usize = 2_000;
 
+/// The caller recorded on every journal posted from the core's events,
+/// whichever command happened to release them.
+pub const FEED: &str = "feed";
+
 pub const ROLE_OPERATOR: &str = "finance_operator";
 pub const ROLE_APPROVER: &str = "finance_approver";
 pub const ROLE_LEAD: &str = "finance_lead";
@@ -222,6 +226,16 @@ pub enum FinCommand {
         partition: PartitionId,
         events: Vec<EventRecord>,
     },
+    /// One event of a partition's stream, as the node hosting the ledger
+    /// delivers them. Unlike `Ingest`, an event the books cannot take yet is
+    /// kept, in order, until they can: it is never refused and lost.
+    CoreEvent {
+        record: Box<EventRecord>,
+    },
+    /// Try again to take in the events held for a partition.
+    RetryFeed {
+        partition: PartitionId,
+    },
     /// The signed Merkle root published for a business date.
     RecordMerkleRoot {
         date: NaiveDate,
@@ -303,7 +317,8 @@ impl FinCommand {
     pub fn allowed_callers(&self) -> &'static [&'static str] {
         match self {
             FinCommand::Configure { .. } => &["operator"],
-            FinCommand::Ingest { .. } | FinCommand::RecordMerkleRoot { .. } => &["feed"],
+            FinCommand::Ingest { .. } | FinCommand::CoreEvent { .. } | FinCommand::RecordMerkleRoot { .. } => &["feed"],
+            FinCommand::RetryFeed { .. } => &["operator", "finance-console"],
             FinCommand::RegisterExtract { .. } => &["reporting"],
             FinCommand::RecordConductFacts { .. } => &["claims", "complaints"],
             FinCommand::ClosePeriod { .. } => &["finance-console", "close-workflow"],
@@ -320,6 +335,8 @@ impl FinCommand {
             FinCommand::ProposeCloseConfig { .. } => "propose_close_config",
             FinCommand::ApproveConfig { .. } => "approve_config",
             FinCommand::Ingest { .. } => "ingest",
+            FinCommand::CoreEvent { .. } => "core_event",
+            FinCommand::RetryFeed { .. } => "retry_feed",
             FinCommand::RecordMerkleRoot { .. } => "record_merkle_root",
             FinCommand::ProposeJournal { .. } => "propose_journal",
             FinCommand::ApproveJournal { .. } => "approve_journal",
@@ -438,6 +455,15 @@ pub enum FinEvent {
     },
     ConductFactsRecorded {
         count: u32,
+    },
+    /// Events from a partition are being held because the books cannot take
+    /// the next one. Nothing is lost; the feed resumes when the cause is fixed.
+    FeedStalled {
+        partition: PartitionId,
+        code: String,
+    },
+    FeedResumed {
+        partition: PartitionId,
     },
     ReturnFiled {
         id: String,
@@ -676,6 +702,12 @@ pub struct FinanceState {
     #[serde(default)]
     pub returns: BTreeMap<String, Vec<FiledReturn>>,
     next_event_seq: u64,
+    /// Events delivered by the host and not yet taken into the books.
+    #[serde(default)]
+    inbox: BTreeMap<PartitionId, Vec<EventRecord>>,
+    /// Why each stalled partition's next event was refused.
+    #[serde(default)]
+    pub stalled: BTreeMap<PartitionId, Reject>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -748,6 +780,8 @@ impl FinanceState {
             conduct_seen: BTreeSet::new(),
             returns: BTreeMap::new(),
             next_event_seq: 1,
+            inbox: BTreeMap::new(),
+            stalled: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -815,7 +849,7 @@ impl FinanceState {
     pub fn apply_envelope(&mut self, index: u64, env: FinEnvelope) -> FinApplied {
         // The feed is idempotent by its own cursor, so its keys are not kept:
         // there would be one for every batch of events for ever.
-        let keyed = !matches!(env.command, FinCommand::Ingest { .. });
+        let keyed = !matches!(env.command, FinCommand::Ingest { .. } | FinCommand::CoreEvent { .. });
         if keyed {
             if let Some(stored) = self.idempotency.get(&env.key) {
                 return FinApplied {
@@ -881,6 +915,7 @@ impl FinanceState {
                 }
                 self.settings = Some(Settings { partitions, year_end_month });
                 ctx.events.push(FinEvent::Configured { partitions, year_end_month });
+                self.drain_all(ctx);
                 Ok(())
             }
             FinCommand::ProposeChart { chart } => {
@@ -899,7 +934,33 @@ impl FinanceState {
                 let id = format!("close:{}:{}", config.version, config.content_hash);
                 self.propose(ctx, id, ConfigItem::Close(config))
             }
-            FinCommand::ApproveConfig { id } => self.approve_config(ctx, &id),
+            FinCommand::ApproveConfig { id } => {
+                self.approve_config(ctx, &id)?;
+                // A new chart may place the role the feed was waiting on.
+                self.drain_all(ctx);
+                Ok(())
+            }
+            FinCommand::CoreEvent { record } => {
+                let partition = record.partition;
+                let queue = self.inbox.get(&partition);
+                let expected = queue.and_then(|q| q.last()).map_or(self.next_event_seq(partition), |last| last.seq + 1);
+                if record.seq < expected {
+                    return Ok(());
+                }
+                if record.seq > expected {
+                    return reject("gap", format!("expected event {expected} of partition {partition}, got {}", record.seq));
+                }
+                self.inbox.entry(partition).or_default().push(*record);
+                // While stalled, events queue until the cause is fixed.
+                if !self.stalled.contains_key(&partition) {
+                    self.drain(ctx, partition);
+                }
+                Ok(())
+            }
+            FinCommand::RetryFeed { partition } => {
+                self.drain(ctx, partition);
+                Ok(())
+            }
             FinCommand::Ingest { partition, events } => self.ingest(ctx, partition, events),
             FinCommand::RecordMerkleRoot { date, root, reference } => {
                 match self.roots.get(&date) {
@@ -1201,6 +1262,55 @@ impl FinanceState {
 
     // ---- the feed ------------------------------------------------------
 
+    /// How many events the host has delivered that the books have not yet taken.
+    pub fn held_events(&self, partition: PartitionId) -> usize {
+        self.inbox.get(&partition).map_or(0, Vec::len)
+    }
+
+    fn drain_all(&mut self, ctx: &mut Ctx<'_>) {
+        for partition in self.inbox.keys().copied().collect::<Vec<_>>() {
+            self.drain(ctx, partition);
+        }
+    }
+
+    /// Take the events held for a partition into the books, in order, as
+    /// far as they will go. What cannot be taken stays held.
+    fn drain(&mut self, ctx: &mut Ctx<'_>, partition: PartitionId) {
+        let mut held = self.inbox.remove(&partition).unwrap_or_default();
+        let mut failure = None;
+        while !held.is_empty() {
+            let take = held.len().min(MAX_INGEST_EVENTS);
+            match self.ingest(ctx, partition, held[..take].to_vec()) {
+                Ok(()) => {
+                    held.drain(..take);
+                }
+                Err(e) => {
+                    failure = Some(e);
+                    break;
+                }
+            }
+        }
+        if !held.is_empty() {
+            self.inbox.insert(partition, held);
+        }
+        match failure {
+            Some(e) => {
+                if self.stalled.get(&partition).map(|was| &was.code) != Some(&e.code) {
+                    ctx.events.push(FinEvent::FeedStalled {
+                        partition,
+                        code: e.code.clone(),
+                    });
+                }
+                self.stalled.insert(partition, e);
+            }
+            None => {
+                if self.stalled.remove(&partition).is_some() {
+                    ctx.events.push(FinEvent::FeedResumed { partition });
+                }
+            }
+        }
+    }
+
     fn ingest(&mut self, ctx: &mut Ctx<'_>, partition: PartitionId, events: Vec<EventRecord>) -> Result<(), Reject> {
         let Some(chart) = &self.chart else {
             return reject("chart", "no chart of accounts is active");
@@ -1390,7 +1500,7 @@ impl FinanceState {
                 // A prior-period journal takes effect on the last day of the period it belongs to.
                 let value_date = origin.map_or(close.date, PeriodId::end);
                 let salt = format!("feed:{partition}:{}:{}", close.date, journals.len());
-                if let Some((entry, lines)) = Self::post_lines(chart, &mut ledger, kind, close.date, value_date, &lines, detail, ctx.caller, &salt)
+                if let Some((entry, lines)) = Self::post_lines(chart, &mut ledger, kind, close.date, value_date, &lines, detail, FEED, &salt)
                     .map_err(|e| Reject::new("feed_unbalanced", format!("partition {partition} on {}: {}", close.date, e.message)))?
                 {
                     journals.push((origin, entry, lines));

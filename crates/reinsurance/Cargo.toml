@@ -12,13 +12,21 @@ ic-ledger.workspace = true
 ic-log.workspace = true
 ic-product.workspace = true
 ic-core.workspace = true
+ic-raft.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 hex.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
 starlark.workspace = true
+
+[[bin]]
+name = "ic-reinsurance"
+path = "src/bin/ic-reinsurance.rs"
 
 [dev-dependencies]
 ic-sim.workspace = true

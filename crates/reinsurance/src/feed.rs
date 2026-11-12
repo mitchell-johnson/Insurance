@@ -19,7 +19,12 @@ impl Reinsurance {
         // Check the whole batch before applying any of it.
         let mut expected = self.checkpoints.clone();
         for rec in &events {
-            let at = expected.get(&rec.partition).copied().unwrap_or(0);
+            // A partition's first event may be any: a module added to a
+            // running cluster starts at the oldest event the partition holds.
+            let Some(at) = expected.get(&rec.partition).copied() else {
+                expected.insert(rec.partition, rec.seq);
+                continue;
+            };
             if rec.seq > at + 1 {
                 return Err(Reject::new(
                     "gap",
@@ -29,7 +34,17 @@ impl Reinsurance {
             expected.insert(rec.partition, at.max(rec.seq));
         }
         for rec in events {
-            if rec.seq <= self.checkpoint(rec.partition) {
+            if !self.checkpoints.contains_key(&rec.partition) && rec.seq > 1 {
+                // Never silent: covers issued before this are not counted
+                // against any retention until they are loaded.
+                let detail = format!(
+                    "partition {} was first read at event {}: the {} before it were not seen, so cover written earlier is missing from the accumulation",
+                    rec.partition,
+                    rec.seq,
+                    rec.seq - 1
+                );
+                self.set_exception(ctx, format!("feed_start:{}", rec.partition), "events_not_seen", Some(detail));
+            } else if rec.seq <= self.checkpoint(rec.partition) {
                 continue;
             }
             self.checkpoints.insert(rec.partition, rec.seq);
