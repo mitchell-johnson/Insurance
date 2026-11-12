@@ -16,7 +16,7 @@ use crate::event::{ExceptionKind, FileSummary, GroupEvent, Outbound, Reinsurance
 use crate::mapping::{FileKind, FileMapping, RowReject};
 use crate::model::{ChangeKind, Membership, Proposed};
 use crate::record::MemberRow;
-use crate::terms::{MemberBasis, SchemeTerms};
+use crate::terms::{ExcessLoading, MemberBasis, SchemeTerms};
 use crate::work::{Item, Work};
 
 /// Rows accepted in one `SubmitRows` command.
@@ -136,6 +136,11 @@ pub struct ExcessCase {
     pub ended_by_leave: bool,
     #[serde(default)]
     pub reference: Option<String>,
+    /// The layer carries a loading that is billed to the employer inside
+    /// the scheme's one total. Kept so the module can tell when too few
+    /// members are left in that total; never put in an event.
+    #[serde(default)]
+    pub in_employer_total: bool,
 }
 
 impl ExcessCase {
@@ -451,8 +456,31 @@ impl GroupState {
             .remove(id)
             .ok_or_else(|| Reject::new("unknown_scheme", format!("scheme {id} is not registered")))?;
         let r = f(self, &mut scheme);
+        if r.is_ok() {
+            self.check_loading_total(&scheme);
+        }
         self.schemes.insert(id.to_string(), scheme);
         r
+    }
+
+    /// Whether the employer's one total of loadings still hides whose they
+    /// are. The employer knows which members hold underwritten cover, so a
+    /// total is safe only while at least the scheme's minimum count of
+    /// members hold it. Who pays a loading is settled when terms are
+    /// accepted and is what the member was told, so it is not changed
+    /// here: when leavers or ended cover take the holders below the count
+    /// while a loading is still in the total, staff are told, and told
+    /// that it is over when the number recovers or the total is empty.
+    fn check_loading_total(&mut self, s: &Scheme) {
+        let open = |c: &&ExcessCase| c.end_from.is_none() && matches!(c.status, CaseStatus::Writing | CaseStatus::Accepted);
+        let holders: BTreeSet<&str> = s.cases.values().filter(open).map(|c| c.employee_id.as_str()).collect();
+        let in_total = s.cases.values().filter(open).any(|c| c.in_employer_total);
+        let counted = s.terms.excess_loading == ExcessLoading::EmployerTotal;
+        if counted && in_total && (holders.len() as u32) < s.terms.excess_loading_min_count {
+            self.raise(&s.id, ExceptionKind::LoadingTotalTooSmall, "loadings");
+        } else {
+            self.clear(&s.id, ExceptionKind::LoadingTotalTooSmall, None);
+        }
     }
 
     fn dispatch(&mut self, actor: &str, today: NaiveDate, command: GroupCommand) -> Result<(), Reject> {

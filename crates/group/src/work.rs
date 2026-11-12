@@ -827,6 +827,7 @@ impl GroupState {
                     end_from: None,
                     ended_by_leave: false,
                     reference: reference.clone(),
+                    in_employer_total: false,
                 },
             );
             let request = UnderwritingRequest {
@@ -928,6 +929,7 @@ impl GroupState {
                 c.status = CaseStatus::Writing;
                 c.accepted_minor = sum_insured_minor;
                 let has_loading = !loadings.is_empty();
+                c.in_employer_total = has_loading && !member_pays_loading && !itemised_terms;
                 let layer = ExcessLayer {
                     policy,
                     cover: c.cover.clone(),

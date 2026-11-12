@@ -23,6 +23,18 @@ use crate::model::{AdviserRef, LifeFile, Proposal, ProposalId};
 /// empty result marked as a duplicate.
 pub const RESULTS_KEPT: usize = 20_000;
 
+/// Keys are remembered for this many days from the business day they were
+/// first used, then forgotten, so the set of keys does not grow without
+/// bound. Every sender's keys are either named for the day (the sweep) or
+/// for an effect the driver acknowledges once delivered, and a proposal
+/// lives at most months, so no sender repeats a key this old. A key sent
+/// again after this long is taken as new.
+pub const KEYS_KEPT_DAYS: i64 = 400;
+
+/// At most this many old keys are forgotten by one command, so that no
+/// command does unbounded work.
+const KEYS_FORGOTTEN_PER_COMMAND: usize = 100;
+
 /// A review of the disclosure behind a decision, opened from a claim.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
@@ -41,6 +53,10 @@ pub struct UnderwritingState {
     /// Proposals that can still change by the passing of time.
     pub(crate) open: BTreeSet<ProposalId>,
     pub(crate) seen: BTreeMap<String, u64>,
+    /// The business day each key was first used, oldest first. Keys from
+    /// before this was kept have no day and are never forgotten.
+    #[serde(default)]
+    pub(crate) seen_on: BTreeMap<NaiveDate, BTreeMap<u64, String>>,
     pub(crate) results: BTreeMap<u64, Applied>,
     pub(crate) cases: BTreeMap<String, (ProposalId, LifeId)>,
     /// Open cases and who owns each.
@@ -120,6 +136,7 @@ impl StateMachine for UnderwritingState {
         if !envelope.command.allowed_callers().contains(&envelope.caller.as_str()) {
             return reject("caller", format!("{} may not send this command", envelope.caller));
         }
+        let today = envelope.today;
         let mut cx = Cx {
             at: envelope.at,
             today: envelope.today,
@@ -131,7 +148,9 @@ impl StateMachine for UnderwritingState {
             self.outbox_last += 1;
             self.outbox.insert(self.outbox_last, effect.clone());
         }
-        self.seen.insert(envelope.key, index);
+        self.seen.insert(envelope.key.clone(), index);
+        self.seen_on.entry(today).or_default().insert(index, envelope.key);
+        self.forget_old_keys(today);
         self.results.insert(index, cx.out.clone());
         while self.results.len() > RESULTS_KEPT {
             self.results.pop_first();
@@ -141,6 +160,28 @@ impl StateMachine for UnderwritingState {
 }
 
 impl UnderwritingState {
+    fn forget_old_keys(&mut self, today: NaiveDate) {
+        let Some(horizon) = today.checked_sub_signed(chrono::Duration::days(KEYS_KEPT_DAYS)) else {
+            return;
+        };
+        let mut budget = KEYS_FORGOTTEN_PER_COMMAND;
+        while budget > 0 {
+            let Some(mut day) = self.seen_on.first_entry().filter(|d| *d.key() < horizon) else {
+                return;
+            };
+            while budget > 0 {
+                let Some((_, key)) = day.get_mut().pop_first() else {
+                    break;
+                };
+                self.seen.remove(&key);
+                budget -= 1;
+            }
+            if day.get().is_empty() {
+                day.remove();
+            }
+        }
+    }
+
     /// Effects waiting to be delivered, oldest first, after `after`.
     pub fn outbox(&self, after: u64, max: usize) -> Vec<(u64, Effect)> {
         self.outbox.range(after.saturating_add(1)..).take(max).map(|(n, e)| (*n, e.clone())).collect()

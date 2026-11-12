@@ -260,6 +260,9 @@ pub(crate) fn accept_disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &m
     {
         return reject("unknown_code", "an assessment names a code that is not in the lists");
     }
+    if let Some(tag) = d.risk_tags.iter().find(|t| !crate::questions::is_risk_tag(t)) {
+        return reject("risk_tags", format!("{tag} is not a pursuit, occupation or travel tag"));
+    }
     let adviser = p.adviser.is_some();
     let f = life_mut(p, &d.life)?;
     // An answer the adviser typed is marked, and is allowed only with the
@@ -274,6 +277,7 @@ pub(crate) fn accept_disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &m
         submitted_at: cx.at,
         evidence_of_signing,
         entered_by_adviser: d.entered_by_adviser,
+        risk_tags: d.risk_tags.clone(),
     });
     f.assessments = d.assessments.clone();
     f.rule_set = Some(d.rule_set.clone());

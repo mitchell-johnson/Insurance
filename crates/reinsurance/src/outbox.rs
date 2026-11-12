@@ -44,7 +44,13 @@ fn refusal(seq: u64) -> String {
 impl Reinsurance {
     /// The oldest instructions not yet acknowledged, with their numbers.
     pub fn outbox(&self, limit: usize) -> Vec<(u64, &Instruction)> {
-        self.outbox.iter().take(limit).map(|(seq, i)| (*seq, i)).collect()
+        self.outbox_after(None, limit)
+    }
+
+    /// The oldest instructions not yet acknowledged numbered after `after`.
+    pub fn outbox_after(&self, after: Option<u64>, limit: usize) -> Vec<(u64, &Instruction)> {
+        let from = after.map_or(0, |a| a.saturating_add(1));
+        self.outbox.range(from..).take(limit).map(|(seq, i)| (*seq, i)).collect()
     }
 
     /// The oldest notices not yet handed on, with their numbers.
@@ -93,6 +99,21 @@ impl Reinsurance {
         Ok(())
     }
 
+    pub(crate) fn acknowledge_delivered(&mut self, ctx: &mut Ctx, seqs: &[u64]) -> Result<(), Reject> {
+        if let Some(ahead) = seqs.iter().find(|seq| **seq > self.issued) {
+            return Err(Reject::new(
+                "unknown_instruction",
+                format!("instruction {ahead} has not been issued; the last is {}", self.issued),
+            ));
+        }
+        for seq in seqs {
+            if self.outbox.remove(seq).is_some() {
+                self.set_exception(ctx, refusal(*seq), "instruction_refused", None);
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) fn instruction_refused(&mut self, ctx: &mut Ctx, seq: u64, code: &str, message: &str) -> Result<(), Reject> {
         let Some(instruction) = self.outbox.get(&seq) else {
             return Err(Reject::new("unknown_instruction", format!("instruction {seq} is not waiting to be delivered")));
@@ -101,8 +122,8 @@ impl Reinsurance {
             return Err(Reject::new("reason_required", "a refusal carries the core's code"));
         }
         let detail = format!(
-            "the core refused instruction {seq} ({}) for partition {}: {code}: {message}. Nothing after it is delivered until this is resolved",
-            instruction.id, instruction.partition
+            "the core refused instruction {seq} ({}) for partition {}: {code}: {message}. Nothing after it in its lane ({}) is delivered until this is resolved; other covers and partitions carry on",
+            instruction.id, instruction.partition, instruction.lane()
         );
         self.set_exception(ctx, refusal(seq), "instruction_refused", Some(detail));
         Ok(())

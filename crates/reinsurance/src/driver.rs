@@ -362,8 +362,9 @@ pub struct Pass {
     /// partitions. The module sends the cover's whole record again when the
     /// transfer lands or is abandoned.
     pub dropped: u32,
-    /// The instruction delivery stopped at, and the core's refusal.
-    pub held: Option<(u64, Reject)>,
+    /// Instructions the core refused, with its refusals. Each holds the
+    /// rest of its lane (`Instruction::lane`); other lanes were delivered.
+    pub held: Vec<(u64, Reject)>,
     /// A partition with no business date yet: its instructions wait.
     pub waiting_on: Option<PartitionId>,
 }
@@ -371,7 +372,7 @@ pub struct Pass {
 impl Pass {
     /// The pass did everything there was to do.
     pub fn clear(&self) -> bool {
-        self.held.is_none() && self.waiting_on.is_none()
+        self.held.is_empty() && self.waiting_on.is_none()
     }
 }
 
@@ -404,38 +405,77 @@ impl<M: Module, C: Core> Driver<M, C> {
             .map_err(|e| DriverError::Answer(format!("the module refused the driver: {}: {}", e.code, e.message)))
     }
 
-    /// Carry the outbox to the core until it is empty or something stops
-    /// the pass. What was taken before a stop is acknowledged.
+    /// Carry the outbox to the core, oldest first, to its end. A refused
+    /// instruction holds the rest of its lane and the pass goes on with the
+    /// others; a partition with no business date, or an error, stops the
+    /// pass. What was taken before a stop is acknowledged.
     pub async fn deliver(&self) -> Result<Pass, DriverError> {
         let mut pass = Pass::default();
+        let mut blocked: BTreeSet<String> = BTreeSet::new();
+        let mut after: Option<u64> = None;
         loop {
-            let answer = self.module.ask(Query::Outbox { limit: self.batch.max(1) }).await?;
+            let answer = self
+                .module
+                .ask(Query::Outbox {
+                    limit: self.batch.max(1),
+                    after,
+                })
+                .await?;
             let outbox: Vec<(u64, Instruction)> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
             if outbox.is_empty() {
                 return Ok(pass);
             }
-            let mut done: Option<(u64, NaiveDate)> = None;
+            let mut done: Vec<u64> = Vec::new();
+            let mut on: Option<NaiveDate> = None;
             let mut stopped: Option<DriverError> = None;
             for (seq, instruction) in &outbox {
+                after = Some(*seq);
+                let lane = instruction.lane();
+                if blocked.contains(&lane) {
+                    continue;
+                }
                 match self.one(*seq, instruction, &mut pass).await {
-                    Ok(Some(on)) => done = Some((*seq, on)),
-                    Ok(None) => break,
+                    Ok(Some(date)) => {
+                        done.push(*seq);
+                        on = Some(date);
+                    }
+                    Ok(None) if pass.waiting_on.is_some() => break,
+                    Ok(None) => {
+                        blocked.insert(lane);
+                    }
                     Err(e) => {
                         stopped = Some(e);
                         break;
                     }
                 }
             }
-            if let Some((through, on)) = done {
-                self.tell(format!("ack:{through}"), on, Command::AcknowledgeInstructions { through }).await?;
+            if let Some(on) = on {
+                self.acknowledge(done, on).await?;
             }
             if let Some(e) = stopped {
                 return Err(e);
             }
-            if !pass.clear() {
+            if pass.waiting_on.is_some() {
                 return Ok(pass);
             }
         }
+    }
+
+    /// Tell the module what the core took. A run with nothing held before
+    /// it is acknowledged through its last number; one past a held
+    /// instruction is acknowledged by number. Either key names exactly what
+    /// it acknowledges, so a repeat is the same command.
+    async fn acknowledge(&self, done: Vec<u64>, on: NaiveDate) -> Result<(), DriverError> {
+        let oldest = self.module.ask(Query::Outbox { limit: 1, after: None }).await?;
+        let oldest: Vec<(u64, Instruction)> = serde_json::from_value(oldest).map_err(|e| DriverError::Answer(e.to_string()))?;
+        let contiguous = oldest.first().is_some_and(|(first, _)| *first == done[0]) && done.windows(2).all(|w| w[1] == w[0] + 1);
+        if contiguous {
+            let through = done[done.len() - 1];
+            return self.tell(format!("ack:{through}"), on, Command::AcknowledgeInstructions { through }).await;
+        }
+        let listed: Vec<String> = done.iter().map(u64::to_string).collect();
+        let key = format!("ack-set:{}", crate::account::sha256_hex(&listed.join(",")));
+        self.tell(key, on, Command::AcknowledgeDelivered { seqs: done }).await
     }
 
     /// Deliver one instruction. `Some(date)` when the outbox can move past
@@ -470,7 +510,7 @@ impl<M: Module, C: Core> Driver<M, C> {
                     },
                 )
                 .await?;
-                pass.held = Some((seq, refusal));
+                pass.held.push((seq, refusal));
                 return Ok(None);
             }
         }

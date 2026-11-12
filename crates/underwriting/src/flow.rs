@@ -296,6 +296,7 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     let (product, expires, commencement) = (p.product_code.clone(), p.expires_on, cx.today);
     let covers: Vec<_> = p.covers_on(life).cloned().collect();
     let alteration = matches!(p.entry, Entry::Alteration { .. } | Entry::Reinstatement { .. });
+    let library = cfg.exclusions_on(p.received_on);
     let f = life_mut(p, life)?;
     close_cases(f, cx);
     let Some(decision) = f.decisions.last().cloned() else {
@@ -307,6 +308,23 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     // insured does not change, and reserving it again would count the
     // life's cover twice against the retention.
     let ceded = matches!(decision.source, DecisionSource::Migrated { .. }) || alteration;
+    // What reinsurance is told of the risk, never anything clinical: what
+    // the answers declared, and the pursuits, occupation and travel the
+    // decision excluded for.
+    let declared: BTreeSet<String> = f.disclosures.last().map(|d| d.risk_tags.clone()).unwrap_or_default();
+    let risk_codes = |cover: &str| -> Vec<String> {
+        let mut codes = declared.clone();
+        if let Some(CoverOutcome::Accept { exclusions, .. }) = decision.terms_for(cover) {
+            for e in exclusions {
+                let tags = library
+                    .and_then(|l| l.entries.get(&e.code))
+                    .map(|x| x.cause_tags.as_slice())
+                    .unwrap_or_default();
+                codes.extend(tags.iter().filter(|t| crate::questions::is_risk_tag(t)).cloned());
+            }
+        }
+        codes.into_iter().collect()
+    };
     for c in &covers {
         let accepted = decision.accepted_sum(&c.code, c.sum_insured_minor).filter(|_| !ceded);
         if accepted.is_some_and(|a| f.capacity.get(&c.code).is_some_and(|r| r.amount_minor == a)) {
@@ -338,6 +356,7 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
                 sum_insured_minor: amount,
                 commencement,
                 proposal_expires: expires,
+                risk_codes: risk_codes(&c.code),
             });
         }
     }
