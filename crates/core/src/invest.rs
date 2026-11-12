@@ -212,6 +212,14 @@ pub struct InvestmentBook {
     /// The day each policy's pending investment cash last rose from zero.
     #[serde(default)]
     waiting_since: BTreeMap<String, NaiveDate>,
+    /// `price/order` for every order executed at a price, so that the
+    /// orders a corrected price must replay are found without a scan.
+    #[serde(default)]
+    executed_at: BTreeSet<String>,
+    /// What each fund's cash position has been paid, net, to put price
+    /// errors right. Part of what the position reconciles to.
+    #[serde(default)]
+    remediation_minor: BTreeMap<String, i128>,
 }
 
 fn slot(fund: &FundId, date: NaiveDate) -> String {
@@ -397,6 +405,25 @@ pub enum InvestEvent {
         price_id: String,
         pricing_date: NaiveDate,
     },
+    /// An executed order was put on a corrected price. The deltas are what
+    /// the policy gained: units added to its holding and cash added to its
+    /// pending investment cash, either of which may be negative. `borne_minor`
+    /// is what the insurer paid the fund through the pricing error account
+    /// where the policy could not or should not make the fund whole.
+    UnitOrderReplayed {
+        order_id: String,
+        policy: PolicyId,
+        fund: FundId,
+        pricing_date: NaiveDate,
+        from_price: String,
+        to_price: String,
+        units_delta_micro: i64,
+        cash_delta_minor: i64,
+        borne_minor: i64,
+        /// False where the difference was under the materiality threshold
+        /// and nothing was posted.
+        compensated: bool,
+    },
 }
 
 /// The investment ledger's commands.
@@ -424,6 +451,15 @@ pub enum InvestCommand {
         pricing_date: NaiveDate,
         limit: u32,
     },
+    /// Put up to `limit` of the orders executed at a superseded price on the
+    /// price that corrected it. Sent again until none is left. A difference
+    /// worth less than `materiality_minor` at the corrected price is recorded
+    /// and not compensated.
+    ReplayOrders {
+        superseded: String,
+        limit: u32,
+        materiality_minor: i64,
+    },
 }
 
 impl InvestCommand {
@@ -433,7 +469,7 @@ impl InvestCommand {
             InvestCommand::ActivateUnitPrice(_) => &["unit-pricing"],
             InvestCommand::AllocateCash { .. } => &["policy-servicing", "cash-matching"],
             InvestCommand::PlaceOrder(_) | InvestCommand::CancelOrder { .. } => &["policy-servicing", "claims", "fees"],
-            InvestCommand::ExecuteOrders { .. } => &["unit-orders"],
+            InvestCommand::ExecuteOrders { .. } | InvestCommand::ReplayOrders { .. } => &["unit-orders"],
         }
     }
 
@@ -445,6 +481,7 @@ impl InvestCommand {
             InvestCommand::PlaceOrder(_) => "place_unit_order",
             InvestCommand::CancelOrder { .. } => "cancel_unit_order",
             InvestCommand::ExecuteOrders { .. } => "execute_unit_orders",
+            InvestCommand::ReplayOrders { .. } => "replay_unit_orders",
         }
     }
 
@@ -538,19 +575,8 @@ pub(crate) fn activate_price(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, price
         (None, None) if price.version == 1 => {}
         (None, _) => return Err(invalid("the first price of a date is version 1 and supersedes nothing".to_string())),
         (Some(current), Some(superseded)) if *superseded == current.price_id && price.version > current.version => {
-            // Orders already executed at the superseded price are replayed
-            // at this one; that is not built yet, so a correction is taken
-            // only while none has executed.
-            let executed = book
-                .orders
-                .values()
-                .any(|o| matches!(&o.state, OrderState::Executed { price_id, .. } if *price_id == current.price_id));
-            if executed {
-                return Err(bad(
-                    "replay_required",
-                    format!("orders have executed at {}; a correction after execution needs the replay", current.price_id),
-                ));
-            }
+            // Orders already executed at the superseded price stay as they
+            // are until the replay reaches them (`ReplayOrders`).
         }
         (Some(current), _) => {
             return Err(invalid(format!(
@@ -848,6 +874,7 @@ fn execute_one(
             on: ctx.date,
         };
     }
+    book.executed_at.insert(format!("{}/{order_id}", price.price_id));
     book.note_waiting(ledger, policy, ctx.date);
     ctx.emit(crate::Event::Investment(InvestEvent::UnitOrderExecuted {
         order_id: order.order_id.clone(),
@@ -932,6 +959,180 @@ pub(crate) fn execute_orders(
     Ok(())
 }
 
+/// Put a chunk of the orders executed at a superseded price on the price in
+/// force for the same fund and date.
+///
+/// The side of the order the customer fixed stays fixed, and the other side
+/// is worked out again at the corrected price. Where the policy is owed
+/// units it gets them, or their value in cash if it is no longer in force.
+/// Where it is owed cash the fund pays it. Where the policy was given too
+/// much, units are taken back as far as it still holds them and cash is not
+/// taken back at all; what cannot be taken back the insurer pays the fund
+/// through the pricing error account, so the other investors are not left
+/// short. Every adjustment is posted today with the original pricing date
+/// as its value date.
+pub(crate) fn replay_orders(
+    ledger: &mut Ledger,
+    book: &mut InvestmentBook,
+    policies: &BTreeMap<PolicyId, Policy>,
+    ctx: &mut Ctx<'_>,
+    superseded: &str,
+    limit: u32,
+    materiality_minor: i64,
+) -> Result<(), Reject> {
+    if limit == 0 || limit > MAX_EXECUTION_CHUNK || materiality_minor < 0 {
+        return Err(bad(
+            "invalid_chunk",
+            format!("a chunk is between 1 and {MAX_EXECUTION_CHUNK} orders and a threshold is not negative"),
+        ));
+    }
+    let Some(old) = book.prices.get(superseded).cloned() else {
+        return Err(bad("unknown_price", format!("{superseded} is not a price on this partition")));
+    };
+    let Some(new) = book.price_for(&old.fund, old.pricing_date).filter(|p| p.price_id != old.price_id).cloned() else {
+        return Err(bad(
+            "not_superseded",
+            format!("{superseded} is the price in force; there is nothing to replay it against"),
+        ));
+    };
+    let rounding = book.fund(&old.fund).map(|f| f.unit_rounding).unwrap_or(RoundingMode::HalfEven);
+    let prefix = format!("{superseded}/");
+    let chunk: Vec<String> = book
+        .executed_at
+        .range(prefix.clone()..)
+        .take_while(|k| k.starts_with(&prefix))
+        .cloned()
+        .collect();
+    let mut done = 0u32;
+    for key in chunk {
+        if done == limit {
+            break;
+        }
+        let order_id = key[prefix.len()..].to_string();
+        let Some((order, was_cash, was_units)) = book.orders.get(&order_id).and_then(|o| match &o.state {
+            OrderState::Executed { cash_minor, units_micro, .. } => Some((o.order.clone(), *cash_minor, *units_micro)),
+            _ => None,
+        }) else {
+            book.executed_at.remove(&key);
+            continue;
+        };
+        // A policy in flight is replayed when it has landed or come back.
+        // One that has left for good stays in the index, so the question
+        // `ToReplay` keeps showing it; it does not use up the chunk.
+        let Some(policy) = policies.get(&order.policy).filter(|p| !p.is_frozen() && p.status != PolicyStatus::Transferred) else {
+            continue;
+        };
+        done += 1;
+        let c = policy.currency;
+        let fund = &order.fund;
+        // The side the customer fixed stays; the other is worked out again.
+        // A sell for cash that fell short took the whole holding instead,
+        // and so fixed the units.
+        let cash_fixed = matches!(order.amount, OrderAmount::Cash { minor } if order.direction == Direction::Buy || minor == was_cash);
+        let (now_cash, now_units) = match (order.direction, cash_fixed) {
+            (Direction::Buy, _) => (
+                was_cash,
+                UnitQty::for_cash(Money::new(was_cash, c), new.buy.get(), fund.clone(), rounding)?.micro,
+            ),
+            (Direction::Sell, true) => (
+                was_cash,
+                UnitQty::for_cash(Money::new(was_cash, c), new.sell.get(), fund.clone(), RoundingMode::Up)?.micro,
+            ),
+            (Direction::Sell, false) => (
+                UnitQty::new(was_units, fund.clone()).value_at(new.sell.get(), c, RoundingMode::HalfEven)?.minor,
+                was_units,
+            ),
+        };
+        // What the policy is owed: more units bought or fewer sold, and more
+        // cash for what it sold.
+        let owed_units = match order.direction {
+            Direction::Buy => now_units - was_units,
+            Direction::Sell => was_units - now_units,
+        };
+        let owed_cash = now_cash - was_cash;
+        let value_of = |micro: i64| -> Result<i64, Reject> {
+            Ok(UnitQty::new(micro.abs(), fund.clone())
+                .value_at(new.mid.get(), c, RoundingMode::HalfEven)?
+                .minor)
+        };
+        let material = value_of(owed_units)? + owed_cash.abs() >= materiality_minor.max(1);
+        let unit_account = accounts::unit_account(&policy.id, fund);
+        let pending_cash = accounts::pending_investment_cash(&policy.id, c);
+        let fund_cash = accounts::fund_cash_position(fund, c);
+        let mut set = PostingSet::new();
+        let (mut units_delta, mut cash_delta, mut borne) = (0i64, 0i64, 0i64);
+        if material {
+            if owed_units > 0 && policy.status == PolicyStatus::InForce {
+                units_delta = owed_units;
+            } else if owed_units > 0 {
+                // A policyholder who has left is owed cash, not units.
+                cash_delta += value_of(owed_units)?;
+            } else if owed_units < 0 {
+                let held = -ledger.balance(&unit_account.id);
+                let taken = (-(owed_units as i128)).min(held.max(0)) as i64;
+                units_delta = -taken;
+                borne += value_of(-owed_units - taken)?;
+            }
+            if owed_cash > 0 {
+                cash_delta += owed_cash;
+            } else {
+                borne += -owed_cash;
+            }
+            // Units between the fund and the policy.
+            set.debit(accounts::fund_unit_position(fund), units_delta as i128, Dimensions::default());
+            set.credit(unit_account, units_delta as i128, Dimensions::default());
+            // Cash the fund pays the policy, and cash the insurer pays the fund.
+            set.debit(fund_cash.clone(), cash_delta as i128, Dimensions::default());
+            set.credit(pending_cash, cash_delta as i128, Dimensions::default());
+            set.debit(accounts::pricing_error(fund, c), borne as i128, Dimensions::default());
+            set.credit(fund_cash, borne as i128, Dimensions::default());
+        }
+        if !set.is_empty() {
+            let postings = set.into_postings(ledger)?;
+            let detail = BTreeMap::from([
+                ("order_id".to_string(), order_id.clone()),
+                ("from_price".to_string(), old.price_id.clone()),
+                ("price_id".to_string(), new.price_id.clone()),
+                ("pricing_date".to_string(), new.pricing_date.to_string()),
+            ]);
+            ctx.post(ledger, "unit_price_correction", Some(policy), new.pricing_date, postings, detail)?;
+            // The fund's cash position reconciles to its orders at their
+            // corrected figures; what was settled outside those figures
+            // (cash for a leaver's units, units the insurer paid for) is
+            // kept beside them.
+            *book.remediation_minor.entry(fund.0.clone()).or_default() += borne as i128 - cash_delta as i128 + owed_cash as i128;
+        }
+        // Once put right, the order stands at the corrected figures, however
+        // the difference was settled, so a further correction starts from
+        // them. Below the threshold it keeps the figures the policy has.
+        if let Some(held) = book.orders.get_mut(&order_id) {
+            let (stands_cash, stands_units) = if material { (now_cash, now_units) } else { (was_cash, was_units) };
+            held.state = OrderState::Executed {
+                price_id: new.price_id.clone(),
+                cash_minor: stands_cash,
+                units_micro: stands_units,
+                on: ctx.date,
+            };
+        }
+        book.executed_at.remove(&key);
+        book.executed_at.insert(format!("{}/{order_id}", new.price_id));
+        book.note_waiting(ledger, policy, ctx.date);
+        ctx.emit(crate::Event::Investment(InvestEvent::UnitOrderReplayed {
+            order_id,
+            policy: policy.id.clone(),
+            fund: fund.clone(),
+            pricing_date: new.pricing_date,
+            from_price: old.price_id.clone(),
+            to_price: new.price_id.clone(),
+            units_delta_micro: units_delta,
+            cash_delta_minor: cash_delta,
+            borne_minor: borne,
+            compensated: material,
+        }));
+    }
+    Ok(())
+}
+
 /// A question about the investment ledger on one partition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -950,6 +1151,9 @@ pub enum Question {
     /// The funds and pricing dates that have a price in force and orders
     /// still pending: what the execution run has left to do.
     Executable,
+    /// The superseded prices that still have executed orders on them: what
+    /// the replay run has left to do.
+    ToReplay,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -978,6 +1182,16 @@ pub enum Reply {
     Order(Option<UnitOrder>),
     Holdings(Option<Holdings>),
     Executable(Vec<Executable>),
+    ToReplay(Vec<Replayable>),
+}
+
+/// A superseded price with executed orders still standing on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Replayable {
+    pub superseded: String,
+    pub fund: FundId,
+    pub pricing_date: NaiveDate,
+    pub orders: u32,
 }
 
 impl InvestmentBook {
@@ -1001,7 +1215,31 @@ impl InvestmentBook {
                 }
             })),
             Question::Executable => Reply::Executable(self.executable()),
+            Question::ToReplay => Reply::ToReplay(self.replayable()),
         }
+    }
+
+    /// Superseded prices with executed orders still standing on them.
+    pub fn replayable(&self) -> Vec<Replayable> {
+        let mut counts: BTreeMap<&str, u32> = BTreeMap::new();
+        for key in &self.executed_at {
+            if let Some((price, _)) = key.split_once('/') {
+                *counts.entry(price).or_default() += 1;
+            }
+        }
+        counts
+            .into_iter()
+            .filter_map(|(id, orders)| {
+                let price = self.prices.get(id)?;
+                let current = self.price_for(&price.fund, price.pricing_date)?;
+                (current.price_id != price.price_id).then(|| Replayable {
+                    superseded: price.price_id.clone(),
+                    fund: price.fund.clone(),
+                    pricing_date: price.pricing_date,
+                    orders,
+                })
+            })
+            .collect()
     }
 
     /// Funds and dates with a price in force and orders still pending.
@@ -1068,7 +1306,7 @@ impl InvestmentBook {
             }
             let currency = self.fund(&fund).map(|f| f.currency);
             let cash = currency.map_or(0, |c| -ledger.balance(&accounts::fund_cash_position(&fund, c).id));
-            let net = flows.get(&fund).copied().unwrap_or(0);
+            let net = flows.get(&fund).copied().unwrap_or(0) + self.remediation_minor.get(&fund.0).copied().unwrap_or(0);
             if cash != net {
                 breaks.push(("fund_cash_position", format!("{} holds {cash} and its executed orders net to {net}", fund.0)));
             }

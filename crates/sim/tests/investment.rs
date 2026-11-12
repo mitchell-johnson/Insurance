@@ -7,7 +7,7 @@ use chrono::NaiveDate;
 use ic_core::accounts;
 use ic_core::event::Event;
 use ic_core::invest::{
-    Direction, FundDefinition, InvestCommand, InvestEvent, InvestmentBook, NewOrder, OrderAmount, OrderKind, OrderState, Question, Reply, UnitPrice,
+    Direction, FundDefinition, InvestCommand, InvestEvent, InvestmentBook, NewOrder, OrderAmount, OrderKind, OrderState, Question, Replayable, Reply, UnitPrice,
 };
 use ic_core::{Command, PolicyId, Reject};
 use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
@@ -501,7 +501,8 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
 /// refused, as are a fund that changes currency, an older version, a malformed definition,
 /// a price for an unknown fund, a non-pricing day or a date not yet reached, a price that
 /// is not above zero, and a second price for a date that does not name the one it corrects.
-/// A correction is taken while no order has executed at the price it replaces.
+/// A correction is taken whether or not orders have executed at the price it replaces, and
+/// those that have are left as they are for the replay.
 /// Why it matters: every replica must value every order identically for ever. A price or
 /// a fund's rounding rule that could change under an ID already used would make a replayed
 /// log produce different units from the ones customers were told they hold.
@@ -584,11 +585,14 @@ fn funds_and_prices_are_immutable_once_active() {
     assert_eq!(c.state(0).investment.price_for(&fund_id("growth"), thursday).unwrap().price_id, "p-2");
     execute(&mut c, "growth", thursday).unwrap();
     assert_eq!(units(&c, &policy, "growth"), 40_000_000);
-    // After execution a further correction needs the replay, which says so.
+    // After execution a further correction is still taken; the executed order waits for the replay.
     let mut late = price("p-3", "growth", thursday, "2.6000", "2.6000");
     late.version = 3;
     late.supersedes = Some("p-2".to_string());
-    assert_eq!(code(strike(&mut c, late)), "replay_required");
+    strike(&mut c, late).unwrap();
+    assert_eq!(c.state(0).investment.price_for(&fund_id("growth"), thursday).unwrap().price_id, "p-3");
+    assert_eq!(c.state(0).investment.replayable().len(), 1);
+    assert_eq!(units(&c, &policy, "growth"), 40_000_000);
     let seen = invest_events(&mut c);
     assert!(seen
         .iter()
@@ -734,5 +738,215 @@ fn the_book_answers_its_readers_and_reconciles_to_the_ledger() {
     };
     invest(&mut c, "policy-servicing", back).unwrap();
     assert_eq!(ask(&c, Question::WaitingCash), Reply::WaitingCash(vec![]));
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
+fn correction(id: &str, date: NaiveDate, at: &str, version: u32, supersedes: &str) -> UnitPrice {
+    let mut p = price(id, "growth", date, at, at);
+    p.version = version;
+    p.supersedes = Some(supersedes.to_string());
+    p
+}
+
+fn replay(c: &mut Cluster, superseded: &str, limit: u32, materiality_minor: i64) -> Result<(), Reject> {
+    invest(
+        c,
+        "unit-orders",
+        InvestCommand::ReplayOrders {
+            superseded: superseded.to_string(),
+            limit,
+            materiality_minor,
+        },
+    )
+}
+
+/// What each replayed order was given, as (order, units, cash, borne by the insurer, compensated).
+fn replayed(c: &mut Cluster) -> Vec<(String, i64, i64, i64, bool)> {
+    invest_events(c)
+        .into_iter()
+        .filter_map(|e| match e {
+            InvestEvent::UnitOrderReplayed {
+                order_id,
+                units_delta_micro,
+                cash_delta_minor,
+                borne_minor,
+                compensated,
+                ..
+            } => Some((order_id, units_delta_micro, cash_delta_minor, borne_minor, compensated)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Purpose: when a price is corrected after orders executed at it, the replay puts each of
+/// those orders on the corrected price. The side the customer fixed stays fixed: a buy
+/// keeps its cash and its units change, a sell of units keeps its units and its cash
+/// changes, a sell for cash keeps its cash and its units change. A policy that is owed gets
+/// units, or cash once it is no longer in force. A policy that was given too much has units
+/// taken back only as far as it still holds them and never has cash taken back; the rest
+/// the insurer pays the fund through the pricing error account. A difference below the
+/// materiality threshold is recorded and not paid. The run works in chunks, a repeated
+/// chunk does nothing, the adjustment carries the original pricing date as its value date,
+/// and the book reconciles to the ledger after every step.
+/// Why it matters: a pricing error is the event a unit-linked insurer is judged on. Each
+/// customer must end where the right price would have put them, no customer may be sent a
+/// bill for the insurer's mistake, and the other investors in the fund must not carry the
+/// cost. A replay that paid twice on a retry, or left the fund's cash unexplained, would
+/// turn one error into a second one.
+#[test]
+fn a_corrected_price_is_replayed_over_the_orders_executed_at_it() {
+    let (mut c, policy) = invested();
+    let monday = start();
+    let tuesday = d(2027, 11, 16);
+    let strike = |c: &mut Cluster, p: UnitPrice| invest(c, "unit-pricing", InvestCommand::ActivateUnitPrice(Box::new(p)));
+    let to_replay = |c: &Cluster| {
+        let state = c.state(0);
+        match state.investment.answer(&state.ledger, &state.policies, &Question::ToReplay) {
+            Reply::ToReplay(list) => list,
+            other => panic!("{other:?}"),
+        }
+    };
+    let position = |c: &Cluster| (units(c, &policy, "growth"), pending_cash(c, &policy));
+    let borne = |c: &Cluster| c.state(0).ledger.balance(&accounts::pricing_error(&fund_id("growth"), NZD).id);
+
+    // Monday: two buys at 2.0000 give 500 and 1,000 units.
+    for (id, minor) in [("buy-1", 1_000_00), ("buy-2", 2_000_00)] {
+        place(&mut c, order(id, &policy, "growth", Direction::Buy, OrderAmount::Cash { minor }, monday)).unwrap();
+    }
+    c.end_of_day().unwrap();
+    strike(&mut c, price("p-m", "growth", monday, "2.0000", "2.0000")).unwrap();
+    execute(&mut c, "growth", monday).unwrap();
+    // Tuesday: a sell for NZD 300 takes 150 units and a sell of 200 units fetches NZD 400.
+    place(
+        &mut c,
+        order("sell-c", &policy, "growth", Direction::Sell, OrderAmount::Cash { minor: 300_00 }, tuesday),
+    )
+    .unwrap();
+    place(
+        &mut c,
+        order("sell-u", &policy, "growth", Direction::Sell, OrderAmount::Units { micro: 200_000_000 }, tuesday),
+    )
+    .unwrap();
+    c.end_of_day().unwrap();
+    strike(&mut c, price("p-t", "growth", tuesday, "2.0000", "2.0000")).unwrap();
+    execute(&mut c, "growth", tuesday).unwrap();
+    assert_eq!(position(&c), (1_150_000_000, 2_700_00));
+    assert!(to_replay(&c).is_empty());
+    invest_events(&mut c);
+
+    // Tuesday's price should have been 2.5000: the policy sold too cheaply.
+    assert_eq!(code(replay(&mut c, "p-t", 100, 0)), "not_superseded");
+    strike(&mut c, correction("p-t2", tuesday, "2.5000", 2, "p-t")).unwrap();
+    assert_eq!(
+        to_replay(&c),
+        [Replayable {
+            superseded: "p-t".to_string(),
+            fund: fund_id("growth"),
+            pricing_date: tuesday,
+            orders: 2,
+        }]
+    );
+    assert_eq!(code(replay(&mut c, "p-t", 0, 0)), "invalid_chunk");
+    assert_eq!(code(replay(&mut c, "p-t", 100, -1)), "invalid_chunk");
+    assert_eq!(code(replay(&mut c, "p-none", 100, 0)), "unknown_price");
+    let wrong_caller = InvestCommand::ReplayOrders {
+        superseded: "p-t".to_string(),
+        limit: 100,
+        materiality_minor: 0,
+    };
+    assert_eq!(code(invest(&mut c, "policy-servicing", wrong_caller)), "caller_not_allowed");
+    // One order per chunk. The sell for cash needed only 120 units, so 30 come back.
+    replay(&mut c, "p-t", 1, 0).unwrap();
+    assert_eq!(position(&c), (1_180_000_000, 2_700_00));
+    assert_eq!(to_replay(&c)[0].orders, 1);
+    // The sell of units should have fetched NZD 500, so NZD 100 more is paid.
+    let run = Command::Investment(Box::new(InvestCommand::ReplayOrders {
+        superseded: "p-t".to_string(),
+        limit: 100,
+        materiality_minor: 0,
+    }));
+    let applied = c.submit_keyed(0, "replay-p-t-2", "unit-orders", run);
+    assert_eq!(applied.result, Ok(()));
+    assert_eq!(applied.entries.len(), 1);
+    let entry = &applied.entries[0].body;
+    assert_eq!((entry.kind.as_str(), entry.value_date), ("unit_price_correction", tuesday));
+    assert_eq!(
+        (
+            entry.detail["order_id"].as_str(),
+            entry.detail["from_price"].as_str(),
+            entry.detail["price_id"].as_str()
+        ),
+        ("sell-u", "p-t", "p-t2")
+    );
+    assert_eq!(position(&c), (1_180_000_000, 2_800_00));
+    assert!(to_replay(&c).is_empty());
+    // A repeated chunk finds nothing left on the old price.
+    replay(&mut c, "p-t", 100, 0).unwrap();
+    assert_eq!(position(&c), (1_180_000_000, 2_800_00));
+    assert_eq!(
+        replayed(&mut c),
+        [("sell-c".to_string(), 30_000_000, 0, 0, true), ("sell-u".to_string(), 0, 100_00, 0, true)]
+    );
+    assert_eq!(borne(&c), 0);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // Corrected back to 2.0000: now the policy has been given too much. The 30 units are
+    // taken back; the NZD 100 is not, and the insurer pays it to the fund.
+    strike(&mut c, correction("p-t3", tuesday, "2.0000", 3, "p-t2")).unwrap();
+    replay(&mut c, "p-t2", 100, 0).unwrap();
+    assert_eq!(position(&c), (1_150_000_000, 2_800_00));
+    assert_eq!(
+        replayed(&mut c),
+        [("sell-c".to_string(), -30_000_000, 0, 0, true), ("sell-u".to_string(), 0, 0, 100_00, true)]
+    );
+    assert_eq!(borne(&c), 100_00);
+    let stands = c.state(0).investment.order("sell-u").unwrap();
+    assert_eq!(
+        stands.state,
+        OrderState::Executed {
+            price_id: "p-t3".to_string(),
+            cash_minor: 400_00,
+            units_micro: 200_000_000,
+            on: c.business_date().unwrap(),
+        }
+    );
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // Monday's price moves by a tenth of a cent: about 50 cents and a dollar, under a
+    // threshold of NZD 5. Recorded, not paid, and the orders move to the new price.
+    strike(&mut c, correction("p-m2", monday, "2.0010", 2, "p-m")).unwrap();
+    replay(&mut c, "p-m", 100, 5_00).unwrap();
+    assert_eq!(position(&c), (1_150_000_000, 2_800_00));
+    assert_eq!(replayed(&mut c), [("buy-1".to_string(), 0, 0, 0, false), ("buy-2".to_string(), 0, 0, 0, false)]);
+    assert!(to_replay(&c).is_empty());
+
+    // Monday's price should have been 20.0000: the buys were worth 50 and 100 units, not
+    // 500 and 1,000. The first gives back 450. The second owes 900 and only 700 are left,
+    // so the insurer pays the fund for the other 200 at 20.0000.
+    strike(&mut c, correction("p-m3", monday, "20.0000", 3, "p-m2")).unwrap();
+    replay(&mut c, "p-m2", 100, 0).unwrap();
+    assert_eq!(position(&c), (0, 2_800_00));
+    assert_eq!(
+        replayed(&mut c),
+        [
+            ("buy-1".to_string(), -450_000_000, 0, 0, true),
+            ("buy-2".to_string(), -700_000_000, 0, 4_000_00, true)
+        ]
+    );
+    assert_eq!(borne(&c), 4_100_00);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // The policy is cancelled, then Monday's price is corrected to 10.0000: the buys were
+    // worth 100 and 200 units. A policyholder who has left is paid the value, not units.
+    c.submit(0, "policy-servicing", Command::CancelPolicy { policy: policy.clone() }).unwrap();
+    strike(&mut c, correction("p-m4", monday, "10.0000", 4, "p-m3")).unwrap();
+    replay(&mut c, "p-m3", 100, 0).unwrap();
+    assert_eq!(position(&c), (0, 4_300_00));
+    assert_eq!(
+        replayed(&mut c),
+        [("buy-1".to_string(), 0, 500_00, 0, true), ("buy-2".to_string(), 0, 1_000_00, 0, true)]
+    );
+    assert_eq!(borne(&c), 4_100_00);
+    assert!(to_replay(&c).is_empty());
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }

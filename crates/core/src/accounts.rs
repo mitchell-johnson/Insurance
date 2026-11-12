@@ -40,6 +40,8 @@ pub mod role {
     pub const TRANSFER_IN_TRANSIT: &str = "transfer_in_transit";
     pub const FUND_UNIT_POSITION: &str = "fund_unit_position";
     pub const FUND_CASH_POSITION: &str = "fund_cash_position";
+    /// What a unit pricing error cost the insurer to put right.
+    pub const PRICING_ERROR: &str = "pricing_error";
 
     /// What is owed to, or by, one reinsurer under one treaty.
     pub const REINSURER_ACCOUNT: &str = "reinsurer_account";
@@ -253,6 +255,15 @@ pub fn fund_cash_position(fund: &FundId, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::FUND_CASH_POSITION,
+    )
+}
+/// The cost of making a fund and its investors whole after a price error.
+pub fn pricing_error(fund: &FundId, c: Currency) -> Account {
+    acct(
+        format!("int/pricing_error/{}/{c}", fund.0),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::PRICING_ERROR,
     )
 }
 
