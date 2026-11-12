@@ -2127,6 +2127,8 @@ dependencies = [
  "starlark",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
