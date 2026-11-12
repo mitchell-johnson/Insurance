@@ -236,9 +236,12 @@ fn plain(s: &str) -> bool {
 pub struct UnitsOnIssue {
     pub fund: FundId,
     pub units_micro: i128,
-    /// The latest pricing date with a price in force and no order pending.
+    /// The latest pricing date with a price in force and nothing pending
+    /// for it or for any earlier date.
     pub executed_through: Option<NaiveDate>,
-    /// Orders still pending, counted by pricing date.
+    /// Orders still pending, counted by pricing date. A switch into the
+    /// fund whose sell has not executed counts against the date its buy
+    /// will take.
     pub pending: BTreeMap<NaiveDate, u32>,
 }
 
@@ -310,12 +313,26 @@ impl InvestmentBook {
                 *pending.entry(date).or_default() += 1;
             }
         }
+        // A switch into this fund whose sell has not executed yet will place
+        // a buy here, for the first date from the sell's own on which this
+        // fund prices. It counts against that date now, so the date is not
+        // taken as finished while units can still arrive for it.
+        if let Some(definition) = self.fund(fund) {
+            for order in self.orders.values() {
+                if order.state == OrderState::Pending && order.order.switch_to.as_ref() == Some(fund) {
+                    *pending.entry(next_pricing_date(definition, order.order.pricing_date)).or_default() += 1;
+                }
+            }
+        }
+        // Finished means struck, with nothing pending for that date or any
+        // date before it.
+        let first_pending = pending.keys().next().copied();
         let executed_through = self
             .in_force
             .range(prefix.clone()..)
             .take_while(|(k, _)| k.starts_with(&prefix))
             .filter_map(|(k, _)| k[prefix.len()..].parse::<NaiveDate>().ok())
-            .filter(|date| !pending.contains_key(date))
+            .filter(|date| first_pending.is_none_or(|first| *date < first))
             .max();
         UnitsOnIssue {
             fund: fund.clone(),
@@ -546,20 +563,50 @@ fn bad(code: &str, message: impl Into<String>) -> Reject {
     Reject::new(code, message)
 }
 
-pub(crate) fn activate_fund(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, fund: FundDefinition) -> Result<(), Reject> {
-    let invalid = |m: &str| bad("invalid_fund", m);
+/// What is wrong with a fund definition taken on its own, if anything.
+fn fund_fault(fund: &FundDefinition) -> Option<&'static str> {
     if !plain(&fund.id.0) || fund.id.0.contains('/') {
-        return Err(invalid("a fund is named by a plain identifier"));
+        return Some("a fund is named by a plain identifier");
     }
     if fund.content_hash.is_empty() {
-        return Err(invalid("the fund carries no content hash; load it from its source"));
+        return Some("the fund carries no content hash; load it from its source");
     }
     if fund.version == 0 || fund.price_decimals > 8 {
-        return Err(invalid("versions start at 1 and a price has at most 8 decimals"));
+        return Some("versions start at 1 and a price has at most 8 decimals");
     }
     let cut_off_ok = chrono::NaiveTime::parse_from_str(&fund.cut_off, "%H:%M").is_ok();
     if !cut_off_ok || fund.buy_spread_bps > 10_000 || fund.sell_spread_bps > 10_000 {
-        return Err(invalid("the cut-off is HH:MM and a spread is at most 10000 basis points"));
+        return Some("the cut-off is HH:MM and a spread is at most 10000 basis points");
+    }
+    None
+}
+
+/// Load a fund definition from its Starlark source. The module defines
+/// `FUND` with the `fund(...)` helper. The content hash covers the source
+/// and the helper, so the same file always gives the same definition and a
+/// changed file cannot pass as a version already active.
+pub fn load_fund(file: &str, source: &str) -> Result<FundDefinition, ic_product::LoadError> {
+    let (mut value, hash) = ic_product::load_fund_source(file, source)?;
+    if let Some(fields) = value.as_object_mut() {
+        fields.insert("content_hash".to_string(), hash.into());
+    }
+    let fund: FundDefinition = serde_json::from_value(value).map_err(|e| ic_product::LoadError::Schema {
+        file: file.to_string(),
+        error: e.to_string(),
+    })?;
+    match fund_fault(&fund) {
+        None => Ok(fund),
+        Some(fault) => Err(ic_product::LoadError::Invalid {
+            file: file.to_string(),
+            error: fault.to_string(),
+        }),
+    }
+}
+
+pub(crate) fn activate_fund(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, fund: FundDefinition) -> Result<(), Reject> {
+    let invalid = |m: &str| bad("invalid_fund", m);
+    if let Some(fault) = fund_fault(&fund) {
+        return Err(invalid(fault));
     }
     let versions = book.funds.entry(fund.id.0.clone()).or_default();
     if let Some(active) = versions.get(&fund.version) {

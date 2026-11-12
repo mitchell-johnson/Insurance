@@ -12,6 +12,7 @@ use starlark::syntax::{AstModule, Dialect};
 use crate::{Benefit, Definition, Feature, PremiumType, ProductDefinition, RateTable};
 
 const PRELUDE: &str = include_str!("prelude.star");
+const FUND_PRELUDE: &str = include_str!("fund_prelude.star");
 
 #[derive(Debug, thiserror::Error)]
 pub enum LoadError {
@@ -26,17 +27,36 @@ pub enum LoadError {
 }
 
 fn content_hash(source: &str) -> String {
+    hash_with(PRELUDE, source)
+}
+
+fn hash_with(prelude: &str, source: &str) -> String {
     let mut h = Sha256::new();
     h.update(b"ic.config.v1\0");
     // The authoring kit is part of what the source means.
-    h.update(Sha256::digest(PRELUDE.as_bytes()));
+    h.update(Sha256::digest(prelude.as_bytes()));
     h.update(source.as_bytes());
     hex::encode(h.finalize())
 }
 
 fn eval<T: DeserializeOwned>(file: &str, source: &str, symbol: &'static str) -> Result<T, LoadError> {
+    let json = eval_json(PRELUDE, file, source, symbol)?;
+    serde_json::from_value(json).map_err(|e| LoadError::Schema {
+        file: file.to_string(),
+        error: e.to_string(),
+    })
+}
+
+/// Load a fund module as data, with the hash of its source. The module must
+/// define `FUND`. The investment ledger owns the fund's type and turns this
+/// into a definition (`ic_core::invest::load_fund`).
+pub fn load_fund_source(file: &str, source: &str) -> Result<(serde_json::Value, String), LoadError> {
+    Ok((eval_json(FUND_PRELUDE, file, source, "FUND")?, hash_with(FUND_PRELUDE, source)))
+}
+
+fn eval_json(prelude_source: &str, file: &str, source: &str, symbol: &'static str) -> Result<serde_json::Value, LoadError> {
     let sl = |e: starlark::Error| LoadError::Starlark(e.to_string());
-    let prelude = AstModule::parse("prelude.star", PRELUDE.to_owned(), &Dialect::Standard).map_err(sl)?;
+    let prelude = AstModule::parse("prelude.star", prelude_source.to_owned(), &Dialect::Standard).map_err(sl)?;
     let ast = AstModule::parse(file, source.to_owned(), &Dialect::Standard).map_err(sl)?;
     let globals = Globals::standard();
     let json = Module::with_temp_heap(|module| -> Result<serde_json::Value, LoadError> {
@@ -51,10 +71,7 @@ fn eval<T: DeserializeOwned>(file: &str, source: &str, symbol: &'static str) -> 
         })?;
         v.to_json_value().map_err(|e| LoadError::Starlark(e.to_string()))
     })?;
-    serde_json::from_value(json).map_err(|e| LoadError::Schema {
-        file: file.to_string(),
-        error: e.to_string(),
-    })
+    Ok(json)
 }
 
 fn invalid(file: &str, error: impl Into<String>) -> LoadError {

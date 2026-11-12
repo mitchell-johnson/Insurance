@@ -207,7 +207,8 @@ impl Admin {
     /// key is the content, so running it again does nothing, and running a
     /// newer build activates only what changed.
     pub async fn activate_shipped(&self) -> Result<Value, String> {
-        let activations = ic_sim::config::shipped_activations().map_err(|e| e.to_string())?;
+        let mut activations = ic_sim::config::shipped_activations().map_err(|e| e.to_string())?;
+        activations.extend(ic_sim::config::shipped_fund_activations().map_err(|e| e.to_string())?);
         let partitions = self.partitions().await?;
         let (mut activated, mut unchanged) = (0u64, 0u64);
         for command in &activations {

@@ -136,6 +136,16 @@ pub enum Instruction {
     },
     /// A cost of handling the claim owed to a third party: a report fee, a
     /// rehabilitation provider. Its own expense account, never claims incurred.
+    /// Pay the premiums billed for periods starting in a window from claims
+    /// expense. Nothing is posted where nothing is owing.
+    WaivePremium {
+        claim: String,
+        policy: String,
+        cover: String,
+        from: NaiveDate,
+        /// The first day premiums are no longer waived.
+        until: NaiveDate,
+    },
     HandlingCost {
         claim: String,
         policy: String,
@@ -192,6 +202,7 @@ impl Instruction {
             | Instruction::PaymentReturned { policy, .. }
             | Instruction::ExGratia { policy, .. }
             | Instruction::HandlingCost { policy, .. }
+            | Instruction::WaivePremium { policy, .. }
             | Instruction::Close { policy, .. }
             | Instruction::Reopen { policy, .. }
             | Instruction::RaiseOverpayment { policy, .. }

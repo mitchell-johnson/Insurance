@@ -183,7 +183,8 @@ impl Engine {
         if engine.cluster.business_date().is_none() {
             engine.cluster.open(cfg.opening_date).map_err(|e| e.to_string())?;
             if cfg.load_shipped_config {
-                for cmd in ic_sim::config::shipped_activations().map_err(|e| e.to_string())? {
+                let funds = ic_sim::config::shipped_fund_activations().map_err(|e| e.to_string())?;
+                for cmd in ic_sim::config::shipped_activations().map_err(|e| e.to_string())?.into_iter().chain(funds) {
                     engine.cluster.activate_everywhere(cmd).map_err(|e| e.to_string())?;
                 }
             }

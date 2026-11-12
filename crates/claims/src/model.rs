@@ -532,6 +532,8 @@ pub enum Due {
     /// The date the claim was expected to have ended by.
     ExpectedEnd,
     PreApprovalExpiry,
+    /// The daily look for premiums to waive while a waiver runs.
+    Waiver,
 }
 
 /// A line of the claim's own history: who did what, when and why.
@@ -600,6 +602,10 @@ pub struct Claim {
     /// Times an earlier decision on this claim was overturned on review.
     pub overturns: u32,
     pub closed_on: Option<NaiveDate>,
+    /// Premiums for periods starting on or after this date are paid from
+    /// claims expense while the benefit runs.
+    #[serde(default)]
+    pub waiver_from: Option<NaiveDate>,
     /// Things that happen to this claim on a date, whoever remembers.
     pub due: BTreeSet<(NaiveDate, Due)>,
     pub history: Vec<HistoryItem>,
