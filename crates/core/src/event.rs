@@ -531,6 +531,10 @@ pub enum Event {
     /// was activated, or a unit order was placed, cancelled or executed.
     Investment(crate::invest::InvestEvent),
 
+    /// A lender's interest in a policy was recorded, consented for, or
+    /// released.
+    Interest(crate::interest::InterestEvent),
+
     /// A balanced entry on counterparty accounts. Carries the lines, so the
     /// module that keeps each party's position builds it from this alone.
     CounterpartyPosted {

@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use crate::catalog::Catalog;
 use crate::command::{Command, Envelope};
 use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
+use crate::interest::{self, RestrictedAction};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
 use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reinsurance, reopen, transfer, underwritten, unwind, PolicyId};
@@ -404,7 +405,20 @@ impl CoreState {
                 }
                 self.dispatch(ctx, Command::IssuePolicy(issue))
             }
-            Command::CancelPolicy { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| lifecycle::cancel(&mut s.ledger, &s.catalog, p, ctx)),
+            Command::CancelPolicy { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                // Cancelling at the owner's request gives up the cover a
+                // lender holds as security. The insurer's own cancellations
+                // (avoidance, a scheme ending) are not the owner's act.
+                let owners_request = ctx.caller == "policy-servicing";
+                if owners_request {
+                    interest::permit(p, ctx.date, RestrictedAction::ReduceCover)?;
+                }
+                lifecycle::cancel(&mut s.ledger, &s.catalog, p, ctx)?;
+                if owners_request {
+                    interest::consume(p, ctx, RestrictedAction::ReduceCover);
+                }
+                Ok(())
+            }),
             Command::Reinstate { policy } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| lifecycle::reinstate(&mut s.ledger, &s.catalog, p, ctx)),
             Command::DeclineIndexation { policy, declined } => self.with_policy(&policy, true, |_, p| {
                 p.indexation_declined = declined;
@@ -599,6 +613,10 @@ impl CoreState {
             }),
             Command::Claims(command) => claims::apply(self, ctx, *command),
             Command::Investment(command) => self.invest(ctx, *command),
+            Command::Interest(command) => {
+                let id = command.policy().clone();
+                self.with_policy(&id, true, |_, p| interest::apply(p, ctx, *command))
+            }
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);
@@ -647,7 +665,22 @@ impl CoreState {
                 amount_minor,
                 reason,
             } => self.with_policy(&policy, true, |s, p| {
-                invest::raise_payout(&mut s.ledger, &mut s.investment, p, ctx, payout, amount_minor, reason)
+                // A repeat of a payout already raised asks for nothing new.
+                let restricted = match reason {
+                    _ if p.payouts.contains_key(&payout) => None,
+                    crate::invest::PayoutReason::Withdrawal => Some(RestrictedAction::Withdrawal),
+                    crate::invest::PayoutReason::Surrender => Some(RestrictedAction::Surrender),
+                    // Money the insurer owes for its own error is not the owner taking value out.
+                    crate::invest::PayoutReason::PriceRemediation => None,
+                };
+                if let Some(action) = restricted {
+                    interest::permit(p, ctx.date, action)?;
+                }
+                invest::raise_payout(&mut s.ledger, &mut s.investment, p, ctx, payout, amount_minor, reason)?;
+                if let Some(action) = restricted {
+                    interest::consume(p, ctx, action);
+                }
+                Ok(())
             }),
             InvestCommand::ReinstructPayout { policy, payout, payment } => {
                 self.with_policy(&policy, true, |_, p| invest::reinstruct_payout(p, ctx, &payout, payment))

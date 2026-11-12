@@ -308,6 +308,9 @@ pub enum Command {
     /// A command for the investment ledger: funds, unit prices, unit orders
     /// and their execution.
     Investment(Box<crate::invest::InvestCommand>),
+    /// A lender's or assignee's interest in a policy: recorded, consented
+    /// for, released.
+    Interest(Box<crate::interest::InterestCommand>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -424,6 +427,7 @@ impl Command {
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
+            Command::Interest(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -465,6 +469,7 @@ impl Command {
             Command::RefundSuspense { .. } => "refund_suspense",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",
+            Command::Interest(_) => "interest",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",
