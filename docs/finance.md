@@ -32,7 +32,7 @@ A period moves to closing when its last day has closed on every partition. `conf
 | Kind | Checks |
 | --- | --- |
 | Worked out by the ledger | `control_check`, `valuation_extracts`, `unapproved_journals`, `actuarial_journals` (quarter ends), `trial_balance`, `fund_balance` |
-| Reported by a named caller | `commission_sweep` (commission), `reinsurance_sweep` (reinsurance, quarter ends), `fund_cash_settlement` (payments), `subledger_reconciliations` (close-workflow), `actuarial_handover` (reporting, quarter ends), `tax_reconciliation` and `analytical_review` (finance-console) |
+| Reported by a named caller | `commission_sweep` (commission), `unit_pricing` (unit-pricing), `reinsurance_sweep` (reinsurance, quarter ends), `fund_cash_settlement` (payments), `subledger_reconciliations` (close-workflow), `actuarial_handover` (reporting, quarter ends), `tax_reconciliation` and `analytical_review` (finance-console) |
 | Aged items reported by a named caller | `aged:held_balance` (commission), `aged:unidentified_receipts` (payments), `aged:policy_suspense` (collections), `aged:pending_investment_cash` (investment) |
 
 - A blocking check that is red stops sign-off. The finance lead may waive it on the record with a reason, a remediation owner who is someone else, and a date. A waiver never clears the item: the next period's check starts red again and the earlier waiver stays on the dashboard until it is green.
@@ -77,7 +77,7 @@ The mart is part of the ledger's replicated state: it takes each core event as i
 - asks the ledger what the close is waiting for (`{"q": "work"}`);
 - reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
 - for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
-- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep, and `core_sources()` the pending investment cash on every partition of the core's investment ledger;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances, `payments_sources()` the fund cash settlement and unidentified bank receipts, `reinsurance_sources()` the quarterly reinsurer sweep, `unit_pricing_sources()` the unit pricing check, and `core_sources()` the pending investment cash on every partition of the core's investment ledger;
 - reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
 - closes a period that is signed off with nothing blocking, oldest first.
 

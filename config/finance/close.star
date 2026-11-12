@@ -11,6 +11,7 @@ CLOSE = close_config(
         automatic("control_check", "Core to finance ledger control check, anchored to Merkle roots", "finance_operations", 1),
         reported("commission_sweep", "Commission statement cut and sweep; clearing nets to statements", "distribution_operations", 1, by = "commission"),
         reported("reinsurance_sweep", "Reinsurer statement cut and sweep; clearing nets to statements", "reinsurance_operations", 1, by = "reinsurance", quarterly = True),
+        reported("unit_pricing", "Unit prices struck and approved, no price error open, holdings extracts written", "investment_operations", 1, by = "unit-pricing"),
         reported("fund_cash_settlement", "Statutory fund cash settlement; bank equals ledger position", "treasury", 1, by = "payments"),
         reported("subledger_reconciliations", "Receivable, unearned premium, benefit payable, recoverable and unit reconciliations", "finance_operations", 2, by = "close-workflow"),
         automatic("valuation_extracts", "Valuation extracts cut, hashed and reconciled opening to closing", "reporting", 2),
