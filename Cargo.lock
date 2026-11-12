@@ -2208,6 +2208,7 @@ dependencies = [
  "ic-finance",
  "ic-group",
  "ic-payments-service",
+ "ic-pricing",
  "ic-raft",
  "ic-reinsurance",
  "ic-underwriting",
@@ -2256,6 +2257,24 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ic-pricing"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-raft",
+ "proptest",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

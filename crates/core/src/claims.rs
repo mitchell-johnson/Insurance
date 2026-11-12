@@ -791,7 +791,8 @@ pub(crate) fn reconcile(state: &CoreState, breaks: &mut Vec<crate::recon::Break>
         let core = (sum(|l| l.reserve_minor), sum(|l| l.payable_minor), sum(|l| l.receivable_minor));
         let ledger = (
             state.ledger.natural_balance(&accounts::claim_reserve(&p.id, c).id),
-            state.ledger.natural_balance(&accounts::benefit_payable(&p.id, c).id),
+            // Benefit payable also carries unit-linked money on its way out.
+            state.ledger.natural_balance(&accounts::benefit_payable(&p.id, c).id) - crate::invest::payouts_outstanding(p),
             state.ledger.natural_balance(&accounts::claim_recovery_receivable(&p.id, c).id),
         );
         if ledger != core {

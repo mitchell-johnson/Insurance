@@ -516,17 +516,22 @@ impl CoreState {
                 bank_account,
             } => self.with_policy(&policy, true, |s, p| {
                 let benefit = payable == payments::PayableKind::Benefit;
-                if benefit {
+                if benefit && !crate::invest::payout_instructed(p, &payment, amount.minor) {
                     claims::check_settlement(&s.ledger, p, &payment, amount.minor)?;
                 }
                 payments::settle_payable(&mut s.ledger, p, ctx, payment.clone(), payable, refund, amount, bank_account)?;
                 if benefit {
                     claims::settled(p, &payment);
+                    crate::invest::payout_settled(p, &payment);
                 }
                 Ok(())
             }),
             Command::ReturnPayment { policy, payment } => {
-                self.with_policy(&policy, true, |s, p| payments::return_payment(&mut s.ledger, p, ctx, &payment))?;
+                self.with_policy(&policy, true, |s, p| {
+                    payments::return_payment(&mut s.ledger, p, ctx, &payment)?;
+                    crate::invest::payout_returned(p, ctx, &payment);
+                    Ok(())
+                })?;
                 claims::bank_returned(self, ctx, &policy, &payment)
             }
             Command::RecordCession {
@@ -636,6 +641,17 @@ impl CoreState {
                 self.with_policy(&id, true, |s, p| invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order))
             }
             InvestCommand::CancelOrder { order_id } => invest::cancel_order(&mut self.investment, ctx, &order_id),
+            InvestCommand::RaisePayout {
+                policy,
+                payout,
+                amount_minor,
+                reason,
+            } => self.with_policy(&policy, true, |s, p| {
+                invest::raise_payout(&mut s.ledger, &mut s.investment, p, ctx, payout, amount_minor, reason)
+            }),
+            InvestCommand::ReinstructPayout { policy, payout, payment } => {
+                self.with_policy(&policy, true, |_, p| invest::reinstruct_payout(p, ctx, &payout, payment))
+            }
             InvestCommand::ExecuteOrders { fund, pricing_date, limit } => {
                 invest::execute_orders(&mut self.ledger, &mut self.investment, &self.policies, ctx, &fund, pricing_date, limit)
             }

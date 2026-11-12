@@ -1,0 +1,33 @@
+name: drill
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# The drill builds the shipped image in the release profile, which takes
+# longer than the whole test suite. It has its own queue so the tests and the
+# coverage floor report at their own pace. One run at a time per branch, and
+# only the newest waiting run is kept; a run that has started always finishes.
+concurrency:
+  group: drill-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resilience:
+    name: image and failure drill
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Builds the shipped image, starts three ledger nodes, Temporal, two
+      # workers and the API from it, then kills nodes and a worker, destroys
+      # a node's disk and replaces the node, checking the books throughout.
+      - name: Failure drill on the Compose cluster
+        run: deploy/compose/chaos.sh
+      - name: Logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail 200

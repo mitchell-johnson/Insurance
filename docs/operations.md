@@ -108,7 +108,7 @@ Replace it with a new member under a number that has never been used:
 
 The old pod (`ic-node-3` here) stays in the StatefulSet, shut out and idle, because a StatefulSet cannot remove a pod from the middle. It does no harm. Remove it at the next planned maintenance by re-founding the StatefulSet with the surviving numbers.
 
-Azure managed disks are replicated three times within their zone, so this is a rare event. The failure drill (`deploy/compose/chaos.sh`) rehearses it on every CI run.
+Azure managed disks are replicated three times within their zone, so this is a rare event. The failure drill (`deploy/compose/chaos.sh`) rehearses it on every push to main, in its own workflow (`.github/workflows/drill.yml`).
 
 ## Rotating the cluster token
 
