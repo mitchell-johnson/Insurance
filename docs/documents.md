@@ -78,7 +78,7 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | Print outbox | Blob Storage container | The print house collects from it. |
 | Key wrapping | Key Vault or Managed HSM, RSA key, `wrapKey`/`unwrapKey` | The key never leaves the vault. Wrapped values name the key version, so rotation needs no re-wrap. |
 | Email, SMS | Communication Services | Entra ID authentication; delivery reports through an Event Grid subscription. |
-| Events out | Event Hubs, hub `documents-events`, one partition | |
+| Events out | Event Hubs, hubs `documents-events` and `complaints-events`, one partition each | |
 | Identity | Workload identity | No keys or connection strings anywhere. |
 
 ## Running it
@@ -86,6 +86,7 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 - The module is hosted by the deployed node: `ic_documents::module_spec()` is listed in `ic_node::modules()`.
 - The driver runs as the `ic-documents` binary (`service.rs`): a cycle every `IC_DOCUMENTS_CYCLE_SECONDS` (15 by default) that lets time pass, sends, deletes, instructs the core and publishes, and a webhook at `POST /v1/delivery-reports` for the Event Grid subscription on Communication Services delivery reports. The webhook requires the header `x-webhook-key`, set as a delivery property on the subscription from a Key Vault secret of at least 32 characters. Any number of copies can run.
 - Instructions to the core go to the partition that holds the policy as caller `documents`: `RecordNoticeDelivery` when a notice with a clock is proven delivered, `OpenReopenWindow` when a corrected notice is. The idempotency key is the instruction's own ID. An instruction the core refuses stays in the module's outbox and is reported by every cycle until it is resolved.
+- The same process runs the complaints relay (`complaints_relay.rs`): it keeps time for the complaints module, publishes its events to the hub `complaints-events`, and opens a conduct case for each licence event the commission module reports. See `docs/complaints.md`.
 - Settings are listed on `service::Config`. All are required except the container names, key name, hub name, listen address and cycle interval.
 
 ## Not built, or waiting on others
@@ -93,4 +94,4 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 - **Customer master.** The contact-point route `HttpDirectory` calls is this module's proposal; no customer master exists in the repository yet.
 - **Rendering to PDF, large print, audio and braille.** Documents are text. The requested format is recorded on the document and passed to the print house; producing the other formats is not built.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.
-- **Idempotency keys are kept for ever** (except for core events). They are small, but there is no pruning.
+- **Idempotency keys are kept for ever**, except for core events, `Tick` and `MarkPublished`, which are frequent and leave none. The rest are small, but there is no pruning.

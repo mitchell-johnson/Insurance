@@ -382,6 +382,24 @@ fn the_change_cursor_and_the_engagements_question_feed_a_publisher() {
     assert!(case["licence_event"].as_str().is_some_and(|r| !r.is_empty()));
     assert!(case["policies"].as_array().is_some());
 
+    // Closing the case moves everyone it reaches, because each shows it among their open cases.
+    let cursor = w.dist.seq;
+    w.send(
+        conduct(),
+        Command::CloseCase {
+            id: case["case"].as_str().unwrap().to_string(),
+            outcome: "customers written to".into(),
+        },
+    )
+    .unwrap();
+    let moved = ask(&w.dist, Question::ChangedParties { since: cursor }).unwrap();
+    let names = moved["parties"].as_array().unwrap();
+    assert!(
+        names.contains(&serde_json::json!("fap-one")) && names.contains(&serde_json::json!("adviser-a")),
+        "{moved}"
+    );
+    assert!(ask(&w.dist, Question::ConductCases).unwrap()[0]["closed"].is_array());
+
     // The structure above a provider, so a group's licence can be followed down.
     w.send(
         admin(),

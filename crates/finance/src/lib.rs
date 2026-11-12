@@ -28,6 +28,7 @@ pub mod books;
 pub mod chart;
 pub mod close;
 pub mod config;
+pub mod driver;
 pub mod host;
 pub mod mart;
 pub mod period;

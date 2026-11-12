@@ -2015,6 +2015,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-claims"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "ic-complaints"
 version = "0.1.0"
 dependencies = [
@@ -2035,6 +2047,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-claims",
  "ic-ledger",
  "ic-log",
  "ic-money",
@@ -2077,6 +2090,7 @@ dependencies = [
  "chrono-tz 0.10.4",
  "hex",
  "ic-azure",
+ "ic-complaints",
  "ic-core",
  "ic-log",
  "ic-raft",
@@ -2098,6 +2112,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",
@@ -2111,6 +2126,7 @@ dependencies = [
  "sha2",
  "starlark",
  "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2353,12 +2369,15 @@ dependencies = [
  "hex",
  "ic-azure",
  "ic-core",
+ "ic-group",
  "ic-ledger",
  "ic-log",
  "ic-money",
  "ic-product",
  "ic-raft",
  "ic-readmodel",
+ "ic-reinsurance",
+ "ic-sim",
  "rand 0.8.8",
  "serde",
  "serde_json",

@@ -88,6 +88,7 @@ crates/workflows  the end-of-day close and its Temporal workflow
 crates/azure      Entra, Blob Storage, Key Vault and Event Hubs adapters
 crates/api        the HTTP API, the gateway, ic-admin
 crates/sim        in-process cluster and the synthetic insurer
+crates/claims      intake, assessment, decisions and authority, benefits in payment, overpayments (docs/claims.md)
 crates/reinsurance treaties, per-life accumulation, cessions, capacity, recoveries, reinsurer accounts
 crates/payments   direct debits, payee accounts, payment runs, refunds, bank reconciliation, the evacuation drill (docs/payments.md)
 crates/payments-service  bank channels, the pump (ic-payments-pump), payment evidence

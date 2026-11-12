@@ -47,7 +47,7 @@ A systemic finding names the remediation case opened for everyone else affected,
 
 A conduct case is a restricted case type owned by the conduct officer: a licence event, a breach, an incident, an adviser pattern or a systemic finding.
 
-**Licence events (design addendum, entry 4).** When a licence or authorisation is revoked, suspended or lapses, the commission module sends `OpenConductCase` as caller `distribution` with `ConductKind::LicenceEvent` and the case id `licence:<event id>`. The same event delivered again changes nothing. It then sends the affected customers, advisers and policies in `AttachPopulation` chunks of at most 500, which can be repeated safely, and `CompletePopulation` with the counts, which must match what is attached.
+**Licence events (design addendum, entry 4).** When a licence or authorisation is revoked, suspended or lapses, the commission module opens its own case and reports it in its `conduct_cases` answer. A module cannot call another while it applies a command, so the complaints relay in the documents service carries it across: on every pass it asks module `distribution` for its conduct cases, finds the policyholder of each affected policy from the partition that holds it, and proposes to this module, as caller `distribution`, `OpenConductCase` with `ConductKind::LicenceEvent` and the case id `licence:<event id>`, the customers, advisers and policies in `AttachPopulation` chunks of at most 500, and `CompletePopulation` with the counts the case then holds. Every one of these is safe to repeat, a pass cut short is finished by the next, and a case whose population is complete is left alone. A policy with no holder on record stops that case, and the pass reports it every time until it is resolved, because a population completed without that customer would leave them untold.
 
 From there the case drives:
 
@@ -71,11 +71,17 @@ Events are numbered `cmp-<seq>` without gaps and wait in the module until the re
 
 The module is hosted by the deployed node: `ic_complaints::module_spec()` is listed in `ic_node::modules()`. Commands are proposed with `ClusterClient::propose_module_until("complaints", ...)` and questions asked with `query_module`.
 
+The documents service (`ic-documents`, see `docs/documents.md`) runs the complaints relay beside its own cycle, every `IC_DOCUMENTS_CYCLE_SECONDS`:
+
+- forwards licence cases from the commission module, owned by `IC_CONDUCT_OFFICER` (default `conduct-officer`);
+- sends `Tick` as caller `scheduler`, so timers escalate, deadlock arrives and retention ends;
+- publishes the module's events to the Event Hub `IC_COMPLAINTS_EVENT_HUB` (default `complaints-events`, one partition) and then sends `MarkPublished`. An event is acknowledged only after the hub has it; consumers de-duplicate on the id.
+
+A step that fails is logged and tried again on the next pass, and does not stop the other steps.
+
 ## Not built, or waiting on others
 
-- **The relay and the scheduler.** Nothing yet sends `Tick` on a schedule or publishes the module's events to Event Hubs. Until one does, timers do not escalate in a deployed cluster.
 - **The workbench.** The complaints and conduct screens belong to the portal and app services, which do not yet call this module.
-- **Issuing letters.** The documents service does not yet answer `AcknowledgementDue`, `DeadlockReached` or `PopulationComplete` by issuing a document.
-- **The licence feed.** The commission module does not yet open a conduct case on a licence event.
-- **Idempotency keys are kept for ever.** They are small, but there is no pruning.
+- **Issuing letters.** The documents service does not yet answer `AcknowledgementDue`, `DeadlockReached` or `PopulationComplete` by issuing a document: that needs the complainant's contact details and the wording, which come from the customer master and templates not yet written.
+- **Idempotency keys are kept for ever**, except for `Tick` and `MarkPublished`, which are sent every few seconds and leave none. The rest are small, but there is no pruning.
 - **The timer values** in tests are short for testing. The real periods come from the conduct regime and the scheme's terms and need compliance sign-off before go-live.

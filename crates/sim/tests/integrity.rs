@@ -380,7 +380,11 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         Command::OpenBusinessDate { date: d(2027, 1, 1) },
         Command::AdvanceBusinessDate { to: d(2027, 1, 2) },
         Command::RunEndOfDay { policies: vec![] },
-        Command::IssuePolicy(Box::new(issue)),
+        Command::IssuePolicy(Box::new(issue.clone())),
+        Command::IssueQuoted {
+            expected_product_hash: "h".into(),
+            issue: Box::new(issue),
+        },
         Command::CancelPolicy { policy: p.clone() },
         Command::Reinstate { policy: p.clone() },
         Command::DeclineIndexation {
@@ -488,6 +492,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             policy: p.clone(),
             transfer_id: "t".into(),
         },
+        Command::Claims(Box::new(ic_core::claims_module::Command::DrainDue)),
         Command::PostCounterparty(Box::new(ic_core::counterparty::CounterpartyPosting {
             reference: "ce:0-1".into(),
             kind: "commission_earned".into(),
@@ -517,7 +522,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 29, "{names:?}");
+    assert_eq!(names.len(), 31, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

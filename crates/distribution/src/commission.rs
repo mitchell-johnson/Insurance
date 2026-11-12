@@ -595,12 +595,10 @@ impl DistributionState {
     }
 
     fn reverse_allocation(&mut self, ctx: &mut Ctx, reference: &str, cause: &str, date: NaiveDate, only_layer: Option<&str>) {
-        let Some(original) = self.allocations.get(reference).cloned() else {
+        // Unknown, or already reversed: there is nothing to take back.
+        let Some(original) = self.allocations.get(reference).filter(|a| a.reversed_by.is_none()).cloned() else {
             return;
         };
-        if original.reversed_by.is_some() {
-            return;
-        }
         let lines: Vec<AllocLine> = original
             .lines
             .iter()
@@ -780,10 +778,7 @@ impl DistributionState {
             return;
         };
         record.ended = None;
-        let Some(reference) = record.last_clawback.take() else {
-            return;
-        };
-        let Some(clawback) = self.allocations.get(&reference).cloned() else {
+        let Some((reference, clawback)) = record.last_clawback.take().and_then(|r| self.allocations.get(&r).cloned().map(|a| (r, a))) else {
             return;
         };
         self.reverse_allocation(ctx, &reference, cause, date, None);
@@ -804,12 +799,14 @@ impl DistributionState {
         let Ok(today) = self.date() else { return };
         let references: Vec<String> = self.allocations_by_date.range(from..).flat_map(|(_, v)| v.iter().cloned()).collect();
         for reference in references {
-            let Some(original) = self.allocations.get(&reference).cloned() else {
+            let Some(original) = self
+                .allocations
+                .get(&reference)
+                .filter(|a| a.kind == "commission_earned" && a.reversed_by.is_none())
+                .cloned()
+            else {
                 continue;
             };
-            if original.kind != "commission_earned" || original.reversed_by.is_some() {
-                continue;
-            }
             let mut lines = vec![];
             let mut groups: BTreeMap<(String, CommissionType), Vec<&AllocLine>> = BTreeMap::new();
             for l in original
@@ -900,12 +897,14 @@ impl DistributionState {
         let Ok(today) = self.date() else { return };
         let references: Vec<String> = self.allocations_by_date.range(from..).flat_map(|(_, v)| v.iter().cloned()).collect();
         for reference in references {
-            let Some(original) = self.allocations.get(&reference).cloned() else {
+            let Some(original) = self
+                .allocations
+                .get(&reference)
+                .filter(|a| a.kind == "commission_earned" && a.reversed_by.is_none())
+                .cloned()
+            else {
                 continue;
             };
-            if original.kind != "commission_earned" || original.reversed_by.is_some() {
-                continue;
-            }
             let mut lines = vec![];
             let mut corrected = original.lines.clone();
             for l in corrected.iter_mut().filter(|l| l.dest == Dest::Payable && l.amount_minor > 0) {

@@ -149,6 +149,13 @@ pub enum Command {
 
     // --- policy lifecycle ---
     IssuePolicy(Box<IssuePolicy>),
+    /// Issue on terms that were quoted: refused if the product version in
+    /// force for the inception date is not the one the quote was priced on,
+    /// so the terms issued are the terms offered or nothing is issued.
+    IssueQuoted {
+        expected_product_hash: String,
+        issue: Box<IssuePolicy>,
+    },
     CancelPolicy {
         policy: PolicyId,
     },
@@ -270,6 +277,12 @@ pub enum Command {
         with_claim: Option<String>,
     },
 
+    // --- claims ---
+    /// A command for the claims module, which lives on the policy's
+    /// partition. The module decides; whatever money that moves is posted by
+    /// the core in the same step, so the claim and the ledger commit or fail
+    /// together.
+    Claims(Box<ic_claims::Command>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -370,6 +383,7 @@ impl Command {
             // option and ends a scheme that is terminated.
             // The migration load issues policies written on another system.
             Command::IssuePolicy(_) => &["new-business", "group-admin", "migration"],
+            Command::IssueQuoted { .. } => &["new-business"],
             // Underwriting ends interim cover when the proposal it stood in for ends.
             Command::CancelPolicy { .. } => &["policy-servicing", "group-admin", "underwriting"],
             Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
@@ -382,6 +396,7 @@ impl Command {
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
+            Command::Claims(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -402,6 +417,7 @@ impl Command {
             Command::AdvanceBusinessDate { .. } => "advance_business_date",
             Command::RunEndOfDay { .. } => "run_end_of_day",
             Command::IssuePolicy(_) => "issue_policy",
+            Command::IssueQuoted { .. } => "issue_quoted",
             Command::CancelPolicy { .. } => "cancel_policy",
             Command::Reinstate { .. } => "reinstate",
             Command::DeclineIndexation { .. } => "decline_indexation",
@@ -419,6 +435,7 @@ impl Command {
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
+            Command::Claims(_) => "claims",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",

@@ -708,6 +708,10 @@ pub struct FinanceState {
     /// Why each stalled partition's next event was refused.
     #[serde(default)]
     pub stalled: BTreeMap<PartitionId, Reject>,
+    /// The book of policies and covers, for the extracts. Fed from the same
+    /// events as the books, and needs no chart to take them.
+    #[serde(default)]
+    pub mart: crate::mart::Mart,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -782,6 +786,7 @@ impl FinanceState {
             next_event_seq: 1,
             inbox: BTreeMap::new(),
             stalled: BTreeMap::new(),
+            mart: crate::mart::Mart::default(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -914,6 +919,7 @@ impl FinanceState {
                     return reject("settings", "needs at least one partition and a year-end month from 1 to 12");
                 }
                 self.settings = Some(Settings { partitions, year_end_month });
+                self.mart.set_partitions(partitions);
                 ctx.events.push(FinEvent::Configured { partitions, year_end_month });
                 self.drain_all(ctx);
                 Ok(())
@@ -950,6 +956,8 @@ impl FinanceState {
                 if record.seq > expected {
                     return reject("gap", format!("expected event {expected} of partition {partition}, got {}", record.seq));
                 }
+                // The mart takes the event as it arrives: it needs no chart.
+                self.mart.apply(&record).map_err(|e| Reject::new("mart", e.to_string()))?;
                 self.inbox.entry(partition).or_default().push(*record);
                 // While stalled, events queue until the cause is fixed.
                 if !self.stalled.contains_key(&partition) {
@@ -961,7 +969,14 @@ impl FinanceState {
                 self.drain(ctx, partition);
                 Ok(())
             }
-            FinCommand::Ingest { partition, events } => self.ingest(ctx, partition, events),
+            FinCommand::Ingest { partition, events } => {
+                self.ingest(ctx, partition, events.clone())?;
+                for record in &events {
+                    // In step with the feed just checked: the order cannot be wrong here.
+                    self.mart.apply(record).ok();
+                }
+                Ok(())
+            }
             FinCommand::RecordMerkleRoot { date, root, reference } => {
                 match self.roots.get(&date) {
                     Some(existing) if existing.root == root => return Ok(()),
