@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use ic_channels::forward::{self, forward};
 use ic_channels::http::{router, AppState, Hosted};
 use ic_channels::ops::Live;
 use ic_channels::serve::{heartbeat, wall_clock};
@@ -54,12 +55,20 @@ async fn main() -> Result<(), String> {
         regions: Live::new(settings.client(), settings.regions.clone()),
         ui: settings.ui.clone(),
     });
-    let beat = tokio::spawn(heartbeat(channel, settings.client(), settings.heartbeat, Arc::new(wall_clock)));
+    let beat = tokio::spawn(heartbeat(channel.clone(), settings.client(), settings.heartbeat, Arc::new(wall_clock)));
+    let carry = tokio::spawn(forward(
+        Arc::new(forward::Hosted { client: settings.client() }),
+        channel,
+        settings.forward,
+        Arc::new(wall_clock),
+        settings.currency.clone(),
+    ));
     let listener = tokio::net::TcpListener::bind(settings.listen)
         .await
         .map_err(|e| format!("bind {}: {e}", settings.listen))?;
     tracing::info!(listen = %settings.listen, nodes = settings.nodes.len(), "portal service listening");
     let served = axum::serve(listener, router(state)).with_graceful_shutdown(shutdown()).await;
     beat.abort();
+    carry.abort();
     served.map_err(|e| e.to_string())
 }

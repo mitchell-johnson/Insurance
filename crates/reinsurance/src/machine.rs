@@ -233,6 +233,30 @@ pub enum Command {
         amount_minor: i64,
         reference: String,
     },
+
+    // --- the outbox: what the driver has carried to the core and to others ---
+    /// Every instruction up to and including this one has been applied by
+    /// the core, or was a cession refused for a policy in transfer.
+    AcknowledgeInstructions {
+        through: u64,
+    },
+    /// The core refused the oldest instruction for a reason the driver may
+    /// not pass over. Delivery stops there until a person has looked.
+    InstructionRefused {
+        seq: u64,
+        code: String,
+        message: String,
+    },
+    /// A person's decision that a refused instruction is not to be sent.
+    AbandonInstruction {
+        seq: u64,
+        reason: String,
+        approved_by: String,
+    },
+    /// Every notice up to and including this one has been handed on.
+    AcknowledgeNotices {
+        through: u64,
+    },
 }
 
 impl Command {
@@ -259,6 +283,8 @@ impl Command {
             | Command::IssueSupplementaryListing { .. }
             | Command::ReviewProfitCommission { .. } => &["reinsurance-ops", "finance", "month-end"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
+            Command::AcknowledgeInstructions { .. } | Command::InstructionRefused { .. } | Command::AcknowledgeNotices { .. } => &["driver"],
+            Command::AbandonInstruction { .. } => &["reinsurance-ops"],
         }
     }
 
@@ -293,6 +319,10 @@ impl Command {
             Command::ReviewProfitCommission { .. } => "review_profit_commission",
             Command::LoadMigratedCession { .. } => "load_migrated_cession",
             Command::LoadOpeningBalance { .. } => "load_opening_balance",
+            Command::AcknowledgeInstructions { .. } => "acknowledge_instructions",
+            Command::InstructionRefused { .. } => "instruction_refused",
+            Command::AbandonInstruction { .. } => "abandon_instruction",
+            Command::AcknowledgeNotices { .. } => "acknowledge_notices",
         }
     }
 }
@@ -548,6 +578,16 @@ pub struct Reinsurance {
     #[serde(with = "pairs")]
     pub(crate) aggregate_posted: BTreeMap<(TreatyId, String, ReinsurerId), i64>,
 
+    /// Instructions not yet acknowledged by the driver, in the order they
+    /// were issued, and the number issued so far.
+    pub(crate) outbox: BTreeMap<u64, Instruction>,
+    pub(crate) issued: u64,
+    /// Notices not yet handed on, and the number raised so far.
+    pub(crate) notice_box: BTreeMap<u64, Notice>,
+    pub(crate) noticed: u64,
+
+    /// Refused instructions a person decided not to send, kept for audit.
+    pub(crate) abandoned: Vec<crate::outbox::Abandoned>,
     pub(crate) exceptions: BTreeMap<String, ExceptionItem>,
     pub(crate) releases_logged: u64,
     pub(crate) idempotency: BTreeMap<String, Option<Reject>>,
@@ -945,6 +985,10 @@ impl Reinsurance {
             } => self.record_settlement(ctx, number, payment_ref, amount_minor),
             Command::IssueSupplementaryListing { number, reason } => self.issue_supplementary(ctx, number, reason),
             Command::ReviewProfitCommission { treaty, reinsurer } => self.review_profit_commission(ctx, treaty, reinsurer),
+            Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),
+            Command::InstructionRefused { seq, code, message } => self.instruction_refused(ctx, seq, &code, &message),
+            Command::AbandonInstruction { seq, reason, approved_by } => self.abandon_instruction(ctx, seq, reason, approved_by),
+            Command::AcknowledgeNotices { through } => self.acknowledge_notices(through),
             Command::LoadMigratedCession { key, cession } => {
                 if !cession.balanced() {
                     return Err(Reject::new("unbalanced_cession", "the parts of the cession do not add up to its sum at risk"));
@@ -1035,6 +1079,14 @@ impl Reinsurance {
                 format!("module {} may not send {}", env.caller, env.command.name()),
             ))
         };
+        for instruction in &ctx.instructions {
+            self.issued += 1;
+            self.outbox.insert(self.issued, instruction.clone());
+        }
+        for notice in &ctx.notices {
+            self.noticed += 1;
+            self.notice_box.insert(self.noticed, notice.clone());
+        }
         self.idempotency.insert(env.key, result.clone().err());
         Applied {
             index,

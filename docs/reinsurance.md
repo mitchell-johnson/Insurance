@@ -30,9 +30,25 @@ The core keeps two things for reinsurance, both by command from caller `reinsura
 
 `Reinsurance::to_core` turns an instruction into its command, with the instruction's ID as the idempotency key. The driver's rules are short. An instruction the core accepts, or reports as a duplicate, is done. A cession the core refuses with `policy_transferring` or `policy_transferred` is dropped: the core keeps the refusal against the key, so a retry would not apply, and the module sends the cover's whole record again when the transfer lands or is abandoned. Entries are never refused for a transfer, because premium already billed is owed from the partition that billed it. Any other refusal is a defect and stops the driver for a person to look at.
 
+## Hosting and the driver
+
+The module is hosted on the ledger nodes as the group `reinsurance` (`host.rs`, listed in `ic_node::modules()`). The host shows it every partition's events; each becomes a feed batch keyed by the event's ID. `host::Query` lists the questions it answers: the outbox, a cover's cession, what is retained on a life, a reinsurer's balance, a statement, a listing, exposure, scheme concentration, exceptions and its own reconciliation.
+
+Everything the module issues is numbered and kept in its replicated state (`outbox.rs`) until acknowledged, because a command proposed by the event feed has nobody waiting for its reply. `ic-reinsurance` is the driver process (`driver.rs`, deployed by `deploy/k8s/reinsurance.yaml`). Each pass reads the oldest instructions, sends each to its partition in order, and acknowledges what the core took. It holds no state, and two may run at once.
+
+- A pass cut short by a lost node is finished by the next. The core applies an instruction once.
+- A cession refused because its policy is in transfer is passed over, as described above.
+- Instructions for a partition with no business date yet wait.
+- Any other refusal stops delivery at that instruction and opens the exception `delivery:{n}` with the core's code and message. It stays stopped until the core takes the instruction, or operations abandon it with `abandon_instruction` (a reason and an approver, kept in the state and answered by `Query::Abandoned`). An abandoned posting leaves the module's balance and the ledgers apart by its amount until someone posts the other side.
+
+Settings: `IC_NODES` and the cluster token as for every process, and optionally `IC_REINSURANCE_CYCLE_MS` (2000), `IC_REINSURANCE_PATIENCE_MS` (10000) and `IC_REINSURANCE_BATCH` (100). `tests/cluster.rs` runs the hosted module, the host's feed and the driver against a real node.
+
 ## Known gaps
 
-- **The driver is not running yet.** Everything either side of it is built and tested together: the core takes `record_cession` and `post_reinsurance` from caller `reinsurance` (`crates/core/src/reinsurance.rs`), `delivery.rs` turns each instruction into one of them, and `tests/core.rs` runs the module against real partitions. What is missing is the process that reads the partitions' event streams into the module and sends its instructions on. That waits on two things the core owns: the event feed into module groups, and a node binary that can host module crates. Until then the module runs only in tests.
+- **Notices are not carried yet.** The module keeps every notice it raises (exceptions, underwritten-excess requests for group administration, large-claim and consent notices for claims, documents to file, settlements due) in its outbox, numbered, until acknowledged (`Query::Notices`, `acknowledge_notices`). Nothing yet reads them and hands them on, so they wait there and nobody is told. Carrying them to the group module, to claims and to the staff workbench is the next piece of work.
+- **Claims facts and capacity requests do not arrive yet.** The module takes claim facts (`Command::Claim`) and capacity commands, and the claims and underwriting modules produce them, but nothing translates and carries them between the modules' groups.
+- **A module added to a running cluster** starts at the oldest event each partition still holds and raises `events_not_seen` for that partition. Loading the earlier cover from Event Hubs or the cold tier is not built, here or in the host. Hosted from a cluster's first start, as it is now, it misses nothing.
+- **One refused instruction stops all delivery**, not only delivery for the cover or reinsurer it concerns. That is deliberate while refusals are expected to be defects, and it is the first thing to revisit if they turn out not to be.
 - **Settlement clearing is not paid out.** A settlement instruction moves the statement's net amount to `int/reinsurance_settlement_clearing` on each partition that holds part of it. The payment to, or from, the reinsurer's bank that clears that account belongs to the payments module and is not built.
 - **Hosting.** The state machine is ready for the module host in `ic-raft`, but is not yet registered with the node server, and the feed of partition events into a module group is not on `main` yet.
 - **Joint lives.** The design counts joint cover in full against each life's retention. The core has no joint-life cover yet, so there is nothing to count.
