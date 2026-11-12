@@ -48,6 +48,11 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. |
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
+| `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
+| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
+| `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
+
+**Your record.** The profile routes call the customer master (`docs/customers.md`) with the portal's own Entra token (`IC_CUSTOMERS_URL`, `IC_CUSTOMERS_SCOPE`; both or neither, https unless on localhost). The portal sends only the signed-in party, as both party and actor, with purpose `self_service` or `subject_access`; the master's Cedar policy decides what that shows and allows, and its answer, including a 412 for a stale version, comes back as it is. The portal adds two checks of its own: a change or an export needs a device that proved its key, and only `record` and `set_consent` are sent. The idempotency key is scoped to the person. A portal deployed without the master, or a master that is down or answers 503, gives 503 `customer_master_unavailable`.
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
 

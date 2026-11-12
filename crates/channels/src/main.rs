@@ -47,7 +47,17 @@ async fn main() -> Result<(), String> {
         client: settings.client(),
         patience: settings.patience,
     });
+    let master: Option<Arc<dyn ic_channels::customers::Master>> = match &settings.master {
+        Some((base, scope)) => Some(Arc::new(ic_channels::customers::Hosted {
+            base: base.clone(),
+            scope: scope.clone(),
+            credential: ic_azure::credential::AzureCredential::from_env().map_err(|e| format!("customer master credential: {e}"))?,
+            http: ic_azure::http_client(),
+        })),
+        None => None,
+    };
     let state = Arc::new(AppState {
+        master,
         channel: channel.clone(),
         customers: settings.customers.auth(),
         workforce: settings.workforce.auth(),

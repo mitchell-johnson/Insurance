@@ -52,6 +52,8 @@ pub struct PortalSettings {
     pub currency: String,
     /// How many partitions the ledger has: the claims console asks each.
     pub partitions: ic_ledger::PartitionId,
+    /// The customer master's base URL and token scope, for self-service.
+    pub master: Option<(String, String)>,
 }
 
 impl PortalSettings {
@@ -83,6 +85,9 @@ impl PortalSettings {
     ///   (engagements, licences, held money) are carried to the channels;
     ///   default 15. `IC_PORTAL_CURRENCY`: the currency of those balances;
     ///   default `NZD`.
+    /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master and
+    ///   the scope of its token (`api://<its application>/.default`), set
+    ///   together; without them a person's own record answers 503.
     /// - `IC_PARTITIONS`: how many partitions the ledger has, as the core
     ///   gateway is told; default 64.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
@@ -167,6 +172,12 @@ impl PortalSettings {
             heartbeat: Duration::from_secs(seconds("IC_PORTAL_HEARTBEAT_SECS", 15)?),
             ui,
             forward: Duration::from_secs(seconds("IC_PORTAL_FORWARD_SECS", 15)?),
+            master: match (get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE")) {
+                (Some(url), Some(scope)) if url.starts_with("https://") || local(&url) => Some((url, scope)),
+                (Some(url), Some(_)) => return Err(format!("IC_CUSTOMERS_URL must be https, not {url:?}")),
+                (None, None) => None,
+                _ => return Err("set IC_CUSTOMERS_URL and IC_CUSTOMERS_SCOPE together".to_string()),
+            },
             partitions: match get("IC_PARTITIONS") {
                 None => ic_ledger::PARTITION_COUNT,
                 Some(p) => match p.parse::<ic_ledger::PartitionId>() {
@@ -185,4 +196,10 @@ impl PortalSettings {
     pub fn client(&self) -> ClusterClient {
         ClusterClient::new(self.nodes.clone()).with_auth(self.cluster_auth.clone())
     }
+}
+
+/// Plain HTTP only to this machine, for a master run beside the portal in development.
+fn local(url: &str) -> bool {
+    url.strip_prefix("http://localhost")
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with('/'))
 }
