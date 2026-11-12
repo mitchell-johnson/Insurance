@@ -870,6 +870,14 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
 }
 
 pub(crate) fn place_order(ledger: &Ledger, book: &mut InvestmentBook, policy: &Policy, ctx: &mut Ctx<'_>, order: NewOrder) -> Result<(), Reject> {
+    place(ledger, book, policy, ctx, order, false)
+}
+
+/// `second_half` is the buy a switch places when its sell executes. The
+/// customer committed to it when the switch was placed, before either
+/// fund's price was known, so it keeps the switch's pricing date even where
+/// that price has since been struck.
+fn place(ledger: &Ledger, book: &mut InvestmentBook, policy: &Policy, ctx: &mut Ctx<'_>, order: NewOrder, second_half: bool) -> Result<(), Reject> {
     let invalid = |m: &str| bad("invalid_order", m);
     if !plain(&order.order_id) || order.order_id.contains('/') {
         return Err(invalid("an order is named by a plain identifier"));
@@ -888,13 +896,13 @@ pub(crate) fn place_order(ledger: &Ledger, book: &mut InvestmentBook, policy: &P
     if fund.currency != policy.currency {
         return Err(invalid("the fund is not in the policy's currency"));
     }
-    if order.pricing_date < ctx.date || (order.pricing_date - ctx.date).num_days() > MAX_PRICING_DAYS_AHEAD {
+    if !second_half && (order.pricing_date < ctx.date || (order.pricing_date - ctx.date).num_days() > MAX_PRICING_DAYS_AHEAD) {
         return Err(invalid("the pricing date is today or later, and within 400 days"));
     }
     if !fund.prices_on(order.pricing_date) {
         return Err(invalid("the fund does not price on that date; the order takes its next pricing date"));
     }
-    if book.price_for(&order.fund, order.pricing_date).is_some() {
+    if !second_half && book.price_for(&order.fund, order.pricing_date).is_some() {
         return Err(bad(
             "price_struck",
             "the price for that date is already active; the order takes the next pricing date",
@@ -993,11 +1001,11 @@ pub(crate) fn cancel_order(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, order_i
     Ok(())
 }
 
-/// The next date from `from` on which the fund prices and has not struck.
-fn next_open_date(book: &InvestmentBook, fund: &FundDefinition, from: NaiveDate) -> NaiveDate {
+/// The first date from `from` on which the fund prices.
+fn next_pricing_date(fund: &FundDefinition, from: NaiveDate) -> NaiveDate {
     let mut date = from;
     for _ in 0..MAX_PRICING_DAYS_AHEAD {
-        if fund.prices_on(date) && book.price_for(&fund.id, date).is_none() {
+        if fund.prices_on(date) {
             break;
         }
         date = date.succ_opt().unwrap_or(date);
@@ -1111,10 +1119,10 @@ fn execute_one(
             direction: Direction::Buy,
             amount: OrderAmount::Cash { minor: cash_minor },
             kind: OrderKind::SwitchIn,
-            pricing_date: next_open_date(book, &target, price.pricing_date.max(ctx.date)),
+            pricing_date: next_pricing_date(&target, price.pricing_date),
             switch_to: None,
         };
-        place_order(ledger, book, policy, ctx, buy)?;
+        place(ledger, book, policy, ctx, buy, true)?;
     }
     Ok(true)
 }
