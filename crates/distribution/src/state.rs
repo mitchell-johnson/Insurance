@@ -631,6 +631,9 @@ pub struct DistributionState {
     pub tasks: BTreeMap<String, Task>,
     /// The last event sequence taken from each partition.
     pub checkpoints: BTreeMap<PartitionId, u64>,
+    /// Receivables other modules keep in their own ledgers, by owner and reference.
+    #[serde(default)]
+    pub memo: BTreeMap<String, crate::workbench::MemoLine>,
     /// The module sequence at which each party last changed: its position,
     /// its actions, its documents, its licence or its payee record. What a
     /// publisher reads to send on only what moved.
@@ -682,6 +685,7 @@ impl DistributionState {
             cases: BTreeMap::new(),
             tasks: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
+            memo: BTreeMap::new(),
             changed: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
