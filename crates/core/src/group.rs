@@ -647,6 +647,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
         loadings: spec.loadings,
         exclusions: spec.exclusions,
         loading_itemised: spec.loading_itemised,
+        rated_from: None,
     };
     let mut after = before.clone();
     after.push((spec.cover.clone(), layer.clone()));

@@ -88,6 +88,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
             loadings: spec.loadings,
             exclusions: spec.exclusions,
             loading_itemised: false,
+            rated_from: None,
         });
     }
     ctx.emit(Event::LayerAdded {

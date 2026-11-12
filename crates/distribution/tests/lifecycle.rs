@@ -617,3 +617,95 @@ fn waived_premium_earns_renewal_commission_unless_the_schedule_says_otherwise() 
     stored.as_object_mut().unwrap().remove("earns_on_waived_premium");
     assert!(serde_json::from_value::<Schedule>(stored).unwrap().earns_on_waived_premium);
 }
+
+/// Purpose: when one layer of a cover ends while the policy carries on, the initial commission
+/// still at risk on that layer is clawed back as at the day the reduction took effect, from
+/// the party the rule names as liable and not from whoever was paid; the layer earns nothing
+/// afterwards; the same ending offered again, or the policy lapsing later, claws nothing more;
+/// and a layer removed inside its cooling-off period has its initial commission reversed in
+/// full from the payees who received it.
+/// Why it matters: the design claws commission back on the layers reduced. Without it an
+/// adviser keeps a full year's initial commission on cover the customer removed a month in,
+/// and a later lapse that clawed the same layer again would take the money twice.
+#[test]
+fn a_layer_removed_while_the_policy_continues_is_clawed_back_once() {
+    let ended = |policy: &PolicyId, effective| CoreEvent::LayerEnded {
+        policy: policy.clone(),
+        cover: "life".into(),
+        layer: 1,
+        life: ic_core::LifeId("life-1".into()),
+        effective,
+        sum_insured_minor: 500_000_00,
+    };
+
+    // Three weeks in, past cooling-off, all of the initial commission is still at risk.
+    let (mut w, policy, _) = advised_in(worked_example());
+    let start = w.today();
+    let partition = w.cluster.locate(&policy).unwrap();
+    let effective = start + chrono::Duration::days(20);
+    w.run_until(effective + chrono::Duration::days(3));
+    let requested = w.dist.requested.len();
+    let events = inject(&mut w, partition, ended(&policy, effective));
+    let (reference, total) = events
+        .iter()
+        .find_map(|e| match e {
+            Event::ClawbackRaised { reference, total_minor, .. } => Some((reference.clone(), *total_minor)),
+            _ => None,
+        })
+        .expect("the layer's commission is clawed back");
+    assert_eq!(total, 1_200_00, "the whole initial commission is inside the first year of the scale");
+    let lines = &w.dist.allocations[&reference].lines;
+    assert!(
+        lines.iter().all(|l| l.payee == party("fap-one") && l.amount_minor < 0),
+        "from the liable party: {lines:?}"
+    );
+    let layer = &w.dist.layers[&layer_of(&policy, 1)];
+    assert_eq!(layer.ended, Some(effective));
+    assert!(w.dist.exposures.values().filter(|e| e.policy == policy).all(|e| !e.open));
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // Nothing more: not on a repeat, not on premium for the cover, not when the policy lapses.
+    for later in [
+        ended(&policy, effective),
+        CoreEvent::ReceiptApplied {
+            policy: policy.clone(),
+            receipt: "late".into(),
+            allocated_minor: 100_00,
+            to_suspense_minor: 0,
+            net_by_cover_type: std::collections::BTreeMap::from([("life".to_string(), 90_00)]),
+        },
+        CoreEvent::PolicyStatusChanged {
+            policy: policy.clone(),
+            from: ic_core::PolicyStatus::InForce,
+            to: ic_core::PolicyStatus::Lapsed,
+        },
+        ended(&PolicyId("POL-NOBODY".into()), effective),
+    ] {
+        let events = inject(&mut w, partition, later.clone());
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Event::ClawbackRaised { .. } | Event::CommissionEarned { .. })),
+            "{later:?} produced {events:?}"
+        );
+    }
+    assert_eq!(w.dist.requested.len(), requested + 1);
+
+    // Removed inside cooling-off: the initial commission goes back from those who received it.
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    let today = w.today();
+    let events = inject(&mut w, partition, ended(&policy, today));
+    let reference = events
+        .iter()
+        .find_map(|e| match e {
+            Event::CommissionReversed { reference, .. } => Some(reference.clone()),
+            _ => None,
+        })
+        .expect("the layer's initial commission is reversed");
+    let lines = &w.dist.allocations[&reference].lines;
+    assert_eq!(lines.iter().map(|l| l.amount_minor).sum::<i64>(), -1_200_00);
+    let from: std::collections::BTreeSet<&str> = lines.iter().map(|l| l.payee.0.as_str()).collect();
+    assert_eq!(from, ["a-co", "fap-one"].into());
+    assert!(lines.iter().all(|l| l.commission_type == Some(ic_distribution::rules::CommissionType::Initial)));
+}
