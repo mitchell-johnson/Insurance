@@ -339,3 +339,52 @@ This section is the handover for money in and money out: what exists, where it i
 ### Checks
 
 Nothing in this area is known to fail. Before a push: `cargo fmt --all`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `python3 tools/check_test_docs.py`; `IC_SKIP_TEMPORAL_TESTS=1 cargo test --workspace --locked`. Chain them with `&&`, so a failure stops the push. Most CI runs on main are superseded by the next push before they finish, so judge main by the latest completed run. The coverage table counts a closure that never ran as a missed line: use a named helper that one test exercises. The build container's disk fills from `target/`; delete `target/debug` and build with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0`.
+
+## Finance ledger and reporting (`ic-finance`): state and handover
+
+Written 2026-11-12 so the area can be finished without its build thread. The working description is [finance.md](finance.md); this section says what exists, where, and what is left.
+
+### What is built and where
+
+Everything is in `crates/finance`, configuration in `config/finance/`, with `infra/finance.bicep` and `deploy/k8s/finance.yaml`. CI run 192 on main (commit ea9de28, 2026-11-12) passed with all of it. No check in this area is known to fail.
+
+| Part | File | What it does |
+| --- | --- | --- |
+| Books | `src/books.rs` | The replicated state machine. Commands are `FinEnvelope { key, caller, actor, roles, command }`. Core events arrive as `CoreEvent`, are held per partition and posted in order by `Ingest`; a posting that cannot be mapped stalls that partition's feed until `RetryFeed`. Maker-checker journals, waivers, sign-off, aged items and their documented actions (`DocumentAgedItem`). |
+| Chart | `src/chart.rs`, `config/finance/chart.star` | Maps every core account role to a general ledger account of the same class. |
+| Close | `src/close.rs`, `src/period.rs`, `config/finance/close.star` | Periods, checks (automatic, reported, aged), waivers, sign-off, frozen periods, year-end adjustment period, public holidays. |
+| Reports | `src/report.rs` | Trial balance, movements, sources (lineage back to core entries), backdated and prior-period items, the close dashboard with due dates, the work list the driver reads, aged policy suspense. |
+| Returns and conduct | `src/returns.rs`, `config/finance/returns/` | Return definitions, filing, restatement; conduct facts with overturns counted apart from declines. |
+| Data mart | `src/mart.rs` | In the module's replicated state, fed from the same events before the ledger posts them. In-force, movement and experience extracts, definition version 4. Rating factors are kept by the date recorded; date of birth never leaves the mart. Policy suspense by policy. Admitted claims from the claims module's facts. |
+| Tables | `src/tables.rs`, `config/finance/tables.star` | Validation of a rate table against its schema and previous version; dry run of a proposed version against the in-force book. Pure functions plus the question `table_dry_run`. |
+| Host | `src/host.rs` | Module `finance` on the ledger nodes (`module_spec()`), reading core events; every question the module answers. |
+| Close driver | `src/driver.rs`, `src/service.rs`, `src/bin/ic-finance-close.rs` | Service `ic-finance-close`: a restartable pass on a timer. Records verified Merkle roots, writes extracts to immutable blob storage and registers them, asks each module for its close report and forwards it, reports its own check, closes signed-off periods. |
+
+Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a real in-memory core beside the books. `tests/service.rs` runs a real node with the fake Azure store.
+
+### Seams with other areas
+
+- **Core.** Any new account role in `crates/core/src/accounts.rs` needs a line in `config/finance/chart.star` with the same class; `tests/config.rs::the_shipped_chart_maps_every_core_role` fails the build otherwise, and in production the feed would stall. The investment ledger answers `{"waiting_cash":{"as_at"}}` per partition for the `pending_investment_cash` aged check (`core_sources()`).
+- **Close reports** (`driver.rs`, one `*_sources()` function per module; the caller name must match `by` in `close.star`): distribution (`commission_sweep`, aged `held_balance`), payments (`fund_cash_settlement`, aged `unidentified_receipts`), reinsurance (`reinsurance_sweep`, quarter ends), unit pricing (`unit_pricing`), core (aged `pending_investment_cash`), finance itself (aged `policy_suspense`). A check answer is `{"green","items"}`; an aged answer is `{"as_at","items","total_minor","count"}`.
+- **Claims.** The mart reads `Event::Module { module: "claims" }` facts by key: `claim_reserved` (`policy`, `cover`, `life`, `event_date`), `claim_admitted` (`admitted_minor`, `monthly_minor`), `admission_reversed`. If the claims module renames a key the mart counts nothing for it and does not fail; there is no test against the real claims module, only hand-built events in `tests/mart.rs`. Claims and complaints send `RecordConductFacts`.
+- **Portal.** People act through `/finance` in the portal under caller `finance-console` ([channels.md](channels.md)).
+- **Azure.** Merkle roots are read from, and extracts written to, immutable blob containers (`merkle-roots`, `finance-extracts`). Only the fake store has been exercised.
+
+### Not finished or not started
+
+1. **Temporal workflow for the close.** Not started. The driver is a timed pass whose whole state is in the ledger, so it is safe to restart, but a step is not visible or retryable on its own. To build: one workflow per period wrapping the steps of `Driver::pass` in `src/driver.rs` as activities; the commands are already idempotent by key.
+2. **Mart state grows without bound.** `Mart.movements`, `claims`, `admissions` and ended policy rows are kept for ever inside the module's replicated state and its snapshots. Fine for tests; before production volumes it needs either pruning of anything older than the oldest period that may still be cut (an extract as at a closed date must stay reproducible until it is stored and registered), or moving the mart to its own store. Not started, no measurement taken.
+3. **Scheme benefit category is not published to finance.** The extracts have no category column and `tables::dry_run` cannot price a category table (`rate_for` skips category rows). Needs `category` on `LifeInfo` or `MemberCover` from the core, then a column in `mart.rs` (bump `DEFINITION_VERSION`) and a field on `RatedCover`.
+4. **Loadings are not published**, so the dry run prices before loadings, discounts, fees and tax. It shows movement, not a bill.
+5. **Experience age bands.** Exposure is banded on age at the end of the period asked; a claim on age at the event date. Around a birthday a claim can fall in the band beside its exposure. An actuary should say which basis is wanted (`mart.rs`, `experience`).
+6. **No test against the real claims module** for the admitted-claims feed (see the seam above). `crates/sim/tests/claims.rs` shows how to drive it.
+7. **Azure.** `infra/finance.bicep` and `deploy/k8s/finance.yaml` have never been deployed, and the service has not run in the integrated Mac cycle.
+8. **Tax and analytical review** are reported by a person at the console; nothing works them out.
+9. **Table validation is a library and a CI test.** Activating a rate table in the core does not require a passed validation report or dry run; nothing enforces the gate at activation.
+
+### Questions for Mitchell
+
+- The holiday list in `close.star` is New Zealand national holidays for 2026 to 2028, with no regional anniversary day. Is New Zealand right, and which region's day applies? Someone must add each new year.
+- The chart's account codes, the close's due days and aged thresholds, and the shipped return (`config/finance/returns/insurer_quarterly.star`) are placeholders for finance and compliance to replace with the real chart and the regulator's template.
+- The rate tables under `products/rates/` are synthetic.
+- Is a restartable timed pass acceptable for the close in production, or is the Temporal workflow required first?
