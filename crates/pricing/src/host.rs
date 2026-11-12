@@ -175,12 +175,22 @@ pub fn ask(state: &PricingState, question: Question) -> Result<Value, String> {
 }
 
 /// One of the core's events as the module's own command: an executed unit
-/// order, or an order replayed at a corrected price. Anything else is
-/// ignored. The key is the event's ID, so an event offered twice is taken
+/// order, an order replayed at a corrected price, or a fund the core
+/// activated, so this module holds exactly the definitions the core holds.
+/// Anything else is ignored. The key is the event's ID, so an event offered twice is taken
 /// in once; time is the event's business date, so every member makes the
 /// same command.
 pub fn react(record: &EventRecord) -> Vec<Envelope> {
+    let at: DateTime<Utc> = record.business_date.and_time(chrono::NaiveTime::MIN).and_utc();
     let movement = match &record.event {
+        // One per partition: the key names the version and content, so the
+        // repeats, and the same fund sent by configuration, are taken once.
+        CoreEvent::Investment(InvestEvent::FundActivated { definition: Some(def), .. }) => {
+            let mut envelope = crate::command::activation((**def).clone(), at);
+            envelope.caller = CALLER_EVENTS.to_string();
+            envelope.actor = CALLER_EVENTS.to_string();
+            return vec![envelope];
+        }
         CoreEvent::Investment(InvestEvent::UnitOrderExecuted {
             order_id,
             policy,
@@ -236,7 +246,6 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
         },
         _ => return Vec::new(),
     };
-    let at: DateTime<Utc> = record.business_date.and_time(chrono::NaiveTime::MIN).and_utc();
     vec![Envelope {
         key: format!("event:{}", record.id),
         caller: CALLER_EVENTS.to_string(),

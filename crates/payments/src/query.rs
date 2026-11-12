@@ -124,9 +124,9 @@ fn payout_waiting(policy: &ic_core::PolicyId, policyholder: &ic_core::PartyId, p
             source: format!("payout:{policy}:{payout}"),
             payee: policyholder.to_string(),
             account_ref: String::new(),
-            policy: policy.clone(),
+            policy: Some(policy.clone()),
             amount_minor,
-            payable: ic_core::PayableKind::Benefit,
+            payable: Some(ic_core::PayableKind::Benefit),
         }),
     }
 }
@@ -151,11 +151,11 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                     source: format!("{what}:{subject}:{}", field("payment_ref")),
                     payee: field("payee"),
                     account_ref: field("account_ref"),
-                    policy: ic_core::PolicyId::from(field("policy").as_str()),
+                    policy: Some(ic_core::PolicyId::from(field("policy").as_str())),
                     // An amount that cannot be read is refused by the
                     // module as not positive; nothing is guessed.
                     amount_minor: field("net_minor").parse().unwrap_or(0),
-                    payable: ic_core::PayableKind::Benefit,
+                    payable: Some(ic_core::PayableKind::Benefit),
                 }),
             }
         }
