@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use chrono::{DateTime, Duration, NaiveDate, Utc};
+use ic_core::interest::InterestEvent;
 use ic_core::{PartyId, PolicyId, PolicyStatus, Reject, Standing};
 use ic_log::StateMachine;
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,10 @@ pub struct DocumentsState {
     /// The latest time any command has carried.
     pub now: Option<DateTime<Utc>>,
     policy_ended: BTreeMap<PolicyId, NaiveDate>,
+    /// Interests in each policy, by the core's interest id, as its events
+    /// reported them.
+    #[serde(default)]
+    interests: BTreeMap<PolicyId, BTreeMap<String, StandingInterest>>,
     /// Destruction dates and the documents due on them.
     expiry: BTreeMap<NaiveDate, BTreeSet<String>>,
     #[serde(with = "pairs")]
@@ -636,6 +641,24 @@ impl DocumentsState {
         }
         if issue.recipients.iter().any(|r| r.channels.is_empty() && !proof) {
             return reject("invalid", "every recipient needs a channel");
+        }
+        if let Some(policy) = &issue.policy {
+            let from_trigger = issue
+                .trigger_event
+                .as_ref()
+                .and_then(|event| self.triggers.get(&format!("{event}:{:?}", issue.kind)))
+                .is_some_and(|t| !t.copy_to.is_empty());
+            if from_trigger || matches!(issue.kind, DocumentKind::LapseNotice | DocumentKind::SuspensionNotice) {
+                // A lender the policy is assigned to must hear that it is
+                // in arrears, suspended or ended as the owner does.
+                let owed = self.interested_parties(policy, ctx.today);
+                if let Some(missing) = owed.iter().find(|p| !issue.recipients.iter().any(|r| r.party == **p)) {
+                    return reject(
+                        "interested_party_missing",
+                        format!("{} has an interest in the policy and must receive this document", missing.0),
+                    );
+                }
+            }
         }
         if issue.kind.class() == DocumentClass::MandatoryNotice && issue.trigger_event.is_none() {
             // A notice renders after the event that requires it, so it can
@@ -1451,11 +1474,17 @@ impl DocumentsState {
         let cutoff = ctx.today - days(self.settings.live_event_days);
         for r in records.into_iter().filter(|r| r.seq > checkpoint) {
             self.note_policy_end(&r, ctx);
+            // Who holds an interest is a standing fact, wanted however old
+            // the event that reported it.
+            self.note_interest(&r);
             if r.business_date < cutoff {
                 // Old events are history being replayed, not news.
                 continue;
             }
-            for trigger in crate::triggers::triggers(&r) {
+            for mut trigger in crate::triggers::triggers(&r) {
+                if copied_to_interests(trigger.kind) {
+                    trigger.copy_to = self.interested_parties(&trigger.policy, trigger.business_date);
+                }
                 ctx.events.push(Event::DocumentRequired {
                     trigger: trigger.id.clone(),
                     policy: trigger.policy.clone(),
@@ -1466,6 +1495,51 @@ impl DocumentsState {
         }
         self.checkpoints.insert(partition, expected);
         Ok(())
+    }
+
+    /// A lender or other party with an interest in a policy is owed a copy
+    /// of the notices that warn it may end: the core's events say who they are.
+    fn note_interest(&mut self, record: &ic_core::EventRecord) {
+        let ic_core::Event::Interest(event) = &record.event else { return };
+        match event {
+            InterestEvent::Recorded {
+                policy,
+                interest,
+                party,
+                effective_from,
+                ..
+            } => {
+                self.interests.entry(policy.clone()).or_default().insert(
+                    interest.clone(),
+                    StandingInterest {
+                        party: party.clone(),
+                        from: *effective_from,
+                        until: None,
+                    },
+                );
+            }
+            InterestEvent::Released {
+                policy, interest, effective, ..
+            } => {
+                if let Some(held) = self.interests.get_mut(policy).and_then(|of| of.get_mut(interest)) {
+                    held.until = Some(*effective);
+                }
+            }
+            InterestEvent::ConsentRecorded { .. } | InterestEvent::ConsentUsed { .. } => {}
+        }
+    }
+
+    /// The parties whose interest in a policy stands on a date, each once.
+    pub fn interested_parties(&self, policy: &PolicyId, on: NaiveDate) -> Vec<PartyId> {
+        let standing: BTreeSet<&PartyId> = self
+            .interests
+            .get(policy)
+            .into_iter()
+            .flat_map(|of| of.values())
+            .filter(|i| i.stands_on(on))
+            .map(|i| &i.party)
+            .collect();
+        standing.into_iter().cloned().collect()
     }
 
     /// Contractual documents are kept for the life of the policy and a
@@ -1773,6 +1847,16 @@ pub(crate) fn standing_notice(to: Option<Standing>) -> Option<(DocumentKind, &'s
         Some(Standing::Suspended) => Some((DocumentKind::SuspensionNotice, "suspension")),
         Some(Standing::Paid) | None => None,
     }
+}
+
+/// Whether a document the core's events require is copied to the parties
+/// with an interest in the policy: the notices of arrears and suspension,
+/// and the letter that says the policy has ended.
+fn copied_to_interests(kind: DocumentKind) -> bool {
+    matches!(
+        kind,
+        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::GeneralCorrespondence
+    )
 }
 
 /// Maps whose keys are not plain strings are saved as lists of pairs,

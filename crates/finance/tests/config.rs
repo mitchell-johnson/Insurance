@@ -2,6 +2,8 @@
 
 mod common;
 
+use std::collections::BTreeSet;
+
 use common::*;
 use ic_finance::chart::ChartAccount;
 use ic_finance::close::{AgedDecl, CheckDecl, CheckSource};
@@ -227,15 +229,34 @@ fn periods_order_by_time_and_know_their_financial_year() {
 }
 
 /// Purpose: a close step due a number of working days after period end falls on a weekday,
-/// skipping weekends, and a step due on day zero is due at period end.
+/// skipping weekends and the public holidays the close configuration lists, and a step
+/// due on day zero is due at period end. December 2027 ends on a Friday and the next two
+/// weekdays are the observed New Year holidays, so day one is Wednesday 5 January. The
+/// shipped configuration carries those holidays, and a holiday typed on a weekend (the
+/// calendar date where the observed day was meant) is refused.
 /// Why it matters: the dashboard flags steps as overdue from this date. Counting weekends
-/// would mark the whole team late every time a month ends on a Friday.
+/// or holidays would mark the whole team late after every long weekend, and people learn
+/// to ignore a dashboard that is wrong every January.
 #[test]
 fn close_steps_fall_due_on_working_days() {
+    let none = BTreeSet::new();
     // 31 March 2028 is a Friday.
-    assert_eq!(working_days_after(d(2028, 3, 31), 0), d(2028, 3, 31));
-    assert_eq!(working_days_after(d(2028, 3, 31), 1), d(2028, 4, 3));
-    assert_eq!(working_days_after(d(2028, 3, 31), 5), d(2028, 4, 7));
-    assert_eq!(working_days_after(d(2028, 3, 31), 6), d(2028, 4, 10));
-    assert_eq!(working_days_after(chrono::NaiveDate::MAX, 3), chrono::NaiveDate::MAX);
+    assert_eq!(working_days_after(d(2028, 3, 31), 0, &none), d(2028, 3, 31));
+    assert_eq!(working_days_after(d(2028, 3, 31), 1, &none), d(2028, 4, 3));
+    assert_eq!(working_days_after(d(2028, 3, 31), 5, &none), d(2028, 4, 7));
+    assert_eq!(working_days_after(d(2028, 3, 31), 6, &none), d(2028, 4, 10));
+    assert_eq!(working_days_after(chrono::NaiveDate::MAX, 3, &none), chrono::NaiveDate::MAX);
+
+    let shipped = CloseConfig::load("close.star", include_str!("../../../config/finance/close.star")).unwrap();
+    assert_eq!(working_days_after(d(2027, 12, 31), 1, &none), d(2028, 1, 3));
+    assert_eq!(working_days_after(d(2027, 12, 31), 1, &shipped.holidays), d(2028, 1, 5));
+    // Good Friday and Easter Monday 2028 fall inside the March close.
+    assert_eq!(working_days_after(d(2028, 3, 31), 11, &shipped.holidays), d(2028, 4, 19));
+
+    let mut wrong = shipped.clone();
+    wrong.holidays.insert(d(2028, 1, 1));
+    let Err(ConfigError::Invalid(message)) = wrong.validate() else {
+        panic!("a holiday on a Saturday was accepted")
+    };
+    assert!(message.contains("2028-01-01") && message.contains("weekend"), "{message}");
 }
