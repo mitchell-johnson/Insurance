@@ -519,6 +519,7 @@ pub(crate) fn apply_membership(
                 policy: policy.id.clone(),
                 layer,
                 origin: LayerOrigin::UnderwrittenExcess,
+                continues: None,
             });
         }
         post_deltas(ledger, policy, ctx, &s.life, s.effective, s.deltas)?;
@@ -668,6 +669,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
             policy: policy.id.clone(),
             layer,
             origin: LayerOrigin::UnderwrittenExcess,
+            continues: None,
         });
     }
     post_deltas(ledger, policy, ctx, &spec.life, spec.start, d)

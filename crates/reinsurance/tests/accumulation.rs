@@ -685,6 +685,7 @@ fn an_underwritten_excess_layer_is_ceded_and_follows_the_member() {
         policy: scheme.clone(),
         layer: layer("group-life", "group_life", 1, "M1", 400 * K, d(2027, 3, 1)),
         origin: ic_core::LayerOrigin::UnderwrittenExcess,
+        continues: None,
     };
     b.today = d(2027, 3, 1);
     b.feed(2, vec![excess.clone()]);
