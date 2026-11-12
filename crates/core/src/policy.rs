@@ -80,6 +80,9 @@ pub struct LifeFactors {
     pub category: Option<String>,
     #[serde(default)]
     pub salary_minor: Option<i64>,
+    /// Occupation class, for covers whose rate table is split by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
     /// A ceiling on this member's automatic (formula-driven) cover, below
     /// the category maximum and the automatic acceptance limit. Set where a
     /// reinsurer or the scheme's terms require the excess to be underwritten.

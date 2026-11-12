@@ -114,6 +114,7 @@ pub(crate) fn retail_premium_with(
                 sex: f.sex,
                 smoker: f.smoker,
                 category: f.category.clone(),
+                occupation_class: f.occupation_class.clone(),
                 loadings: layer.loadings.clone(),
             };
             let p = cover_premium(def, table, &rf, layer.sum_insured_minor)?;
@@ -252,6 +253,7 @@ pub fn member_premium_detail(
             sex: f.sex,
             smoker: f.smoker,
             category: f.category.clone(),
+            occupation_class: f.occupation_class.clone(),
             loadings: vec![],
         };
         let mut premium = cover_premium(def, table, &rf, si)?;
