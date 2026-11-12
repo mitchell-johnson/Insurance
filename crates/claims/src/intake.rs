@@ -157,6 +157,7 @@ impl ClaimsState {
             reserve_minor: 0,
             admitted_minor: 0,
             payable_minor: 0,
+            cost_payable_minor: 0,
             in_run: None,
             decisions: vec![],
             pending: None,

@@ -8,6 +8,7 @@
 //! one. A driver that stops anywhere is restarted and carries on: the core
 //! applies an instruction once however often it is sent.
 
+use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -438,12 +439,43 @@ impl<M: Module, C: Core> Driver<M, C> {
         Ok(Some(on))
     }
 
-    /// Hand on the notices for every audience `audiences` reaches. A notice
+    /// Tell the module an audience refused a notice. The key carries the
+    /// number of times a person has sent the notice again, so a refusal
+    /// after a retry is a new command and not the answer to the first. A
+    /// notice refused twice in one round is still being offered, which
+    /// would go round for ever: the round stops instead.
+    async fn set_aside(&self, seq: u64, on: NaiveDate, told: Command, done: &mut BTreeSet<u64>) -> Result<(), DriverError> {
+        if !done.insert(seq) {
+            return Err(DriverError::Answer(format!("notice {seq} was refused and set aside, and is still offered")));
+        }
+        let retries = self.module.ask(Query::NoticeRetries { seq }).await?;
+        self.tell(format!("notice-refused:{seq}:{retries}"), on, told).await
+    }
+
+    /// Send the core the command that tells claims of one notice.
+    async fn tell_claims(&self, seq: u64) -> Result<Handed, DriverError> {
+        let answer = self.module.ask(Query::NoticeDelivery { seq }).await?;
+        let (partition, key, _, command): (PartitionId, String, String, ic_core::Command) =
+            serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
+        let delivery = CoreDelivery {
+            partition,
+            key,
+            caller: crate::delivery::CALLER,
+            command,
+        };
+        Ok(self.core.send(&delivery).await?.map_or_else(Handed::Refused, |()| Handed::Taken))
+    }
+
+    /// Hand on the notices for every audience `audiences` reaches, and the
+    /// notices for claims, which go to the core. A notice
     /// that is refused is set aside in the module, with an exception, and
     /// the ones behind it carry on.
     pub async fn hand_on<A: Audiences>(&self, audiences: &A, on: NaiveDate) -> Result<Round, DriverError> {
         let mut round = Round::default();
-        for audience in audiences.reached() {
+        let mut set_aside = BTreeSet::new();
+        // Claims lives in the core, which this driver already reaches.
+        let reached = audiences.reached().into_iter().filter(|a| *a != Audience::Claims);
+        for audience in reached.chain([Audience::Claims]) {
             loop {
                 let query = Query::Notices {
                     audience: Some(audience),
@@ -456,7 +488,11 @@ impl<M: Module, C: Core> Driver<M, C> {
                 let mut taken = Vec::new();
                 let mut stopped = None;
                 for (seq, notice) in &waiting {
-                    match audiences.hand_on(*seq, notice, on).await {
+                    let handed = match audience {
+                        Audience::Claims => self.tell_claims(*seq).await,
+                        _ => audiences.hand_on(*seq, notice, on).await,
+                    };
+                    match handed {
                         Ok(Handed::Taken) => taken.push(*seq),
                         Ok(Handed::Refused(refusal)) => {
                             let told = Command::NoticeRefused {
@@ -464,7 +500,7 @@ impl<M: Module, C: Core> Driver<M, C> {
                                 code: refusal.code.clone(),
                                 message: refusal.message.clone(),
                             };
-                            if let Err(e) = self.tell(format!("notice-refused:{seq}:{}", refusal.code), on, told).await {
+                            if let Err(e) = self.set_aside(*seq, on, told, &mut set_aside).await {
                                 stopped = Some(e);
                                 break;
                             }
