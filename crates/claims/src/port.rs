@@ -67,6 +67,20 @@ pub struct CoverFacts {
     pub policyholder: String,
     pub product_code: String,
     pub product_version: String,
+    /// Interests recorded on the policy and in force on the event date: a
+    /// lender or an assignee, who is paid before the owner.
+    #[serde(default)]
+    pub interests: Vec<Interest>,
+}
+
+/// A recorded interest in a policy's proceeds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Interest {
+    pub party: String,
+    /// How much of the proceeds, where the interest is for an amount. Absent: all of them.
+    pub extent_minor: Option<i64>,
+    /// Lower is paid first.
+    pub priority: u32,
 }
 
 /// An instruction to the core's ledger. Every one names the claim, carries

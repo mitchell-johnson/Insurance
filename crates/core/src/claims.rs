@@ -220,6 +220,13 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     facts.exclusions = exclusions;
     facts.sum_insured_minor = sum_insured;
     facts.in_force = covered && c.start <= on && policy_live && !matches!(standing, Some("suspended" | "lapsed"));
+    // Whoever holds an assignment standing on the event date is paid first.
+    let standing_interests = crate::interest::ranked(p, on).into_iter().map(|i| ic_claims::port::Interest {
+        party: i.party.to_string(),
+        extent_minor: i.extent_minor,
+        priority: i.priority,
+    });
+    facts.interests = standing_interests.collect();
     Ok(facts)
 }
 

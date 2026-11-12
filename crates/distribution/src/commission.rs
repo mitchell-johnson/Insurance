@@ -189,6 +189,27 @@ impl DistributionState {
                     l.sum_insured_minor = sum_insured_minor;
                 }
             }
+            CoreEvent::LayerReduced {
+                policy,
+                cover,
+                layer,
+                continued_as,
+                effective,
+                sum_insured_minor,
+                kept_minor,
+            } => {
+                let (from, to) = (layer_key(&policy, &cover, layer), layer_key(&policy, &cover, continued_as));
+                self.layer_reduced(
+                    ctx,
+                    &policy,
+                    &from,
+                    (&to, continued_as),
+                    (kept_minor, sum_insured_minor),
+                    &cause,
+                    effective,
+                    date,
+                )
+            }
             CoreEvent::LayerEnded {
                 policy,
                 cover,
@@ -820,6 +841,111 @@ impl DistributionState {
         for e in open {
             if let Some(x) = self.exposures.get_mut(&e.id) {
                 x.open = false;
+            }
+        }
+    }
+
+    /// A layer was cut in part. The part given up is treated as a layer that
+    /// ended: its share of the commission still at risk is clawed back, or,
+    /// inside cooling-off, its share of the initial commission is reversed
+    /// from whoever received it. The part kept carries on as the new layer
+    /// with the same terms, books and start, its premium and its exposure in
+    /// proportion, and it is not new business: it earns no initial commission.
+    fn layer_reduced(
+        &mut self,
+        ctx: &mut Ctx,
+        policy: &PolicyId,
+        from: &str,
+        to: (&str, u32),
+        kept_of: (i64, i64),
+        cause: &str,
+        effective: NaiveDate,
+        date: NaiveDate,
+    ) {
+        let (kept, whole) = kept_of;
+        let (to, to_layer) = to;
+        let Some(partition) = self.policies.get(policy).filter(|p| p.ended.is_none()).map(|p| p.partition) else {
+            return;
+        };
+        let Some(old) = self.layers.get_mut(from).filter(|l| l.ended.is_none() && kept > 0 && kept < whole) else {
+            return;
+        };
+        old.ended = Some(effective);
+        let share = |amount: i64| (amount as i128 * kept as i128 / whole as i128) as i64;
+        let mut new = old.clone();
+        new.layer = to_layer;
+        new.sum_insured_minor = kept;
+        new.ended = None;
+        if let Some(t) = new.terms.as_mut() {
+            t.annual_premium_minor = share(t.annual_premium_minor);
+        }
+        let (start, paid) = (new.start, new.initial_paid.clone());
+        self.layers.insert(to.to_string(), new);
+        if let Some(p) = self.policies.get_mut(policy) {
+            p.layers.push(to.to_string());
+        }
+        // Each exposure item splits: the part kept follows the new layer,
+        // and the part given up is clawed back or reversed now.
+        let open: Vec<Exposure> = self.exposures.values().filter(|e| e.layer == from && e.open).cloned().collect();
+        let mut given_up = vec![];
+        let mut kept_items = vec![];
+        for e in &open {
+            let (amount, clawed) = (share(e.amount_minor), share(e.clawed_minor));
+            given_up.push(Exposure {
+                amount_minor: e.amount_minor - amount,
+                clawed_minor: e.clawed_minor - clawed,
+                ..e.clone()
+            });
+            kept_items.push((e.id.clone(), amount, clawed));
+        }
+        let cooling_off = open.iter().any(|e| (effective - start).num_days() <= e.cooling_off_days as i64);
+        let original = paid
+            .and_then(|r| self.allocations.get(&r))
+            .filter(|a| cooling_off && a.reversed_by.is_none())
+            .cloned();
+        match original {
+            None => {
+                self.claw_back(ctx, policy, partition, cause, effective, date, &given_up);
+            }
+            Some(original) => {
+                let lines: Vec<AllocLine> = original
+                    .lines
+                    .iter()
+                    .filter(|l| l.layer.as_deref() == Some(from) && l.commission_type == Some(CommissionType::Initial))
+                    .map(|l| AllocLine {
+                        amount_minor: -(l.amount_minor - share(l.amount_minor)),
+                        ..l.clone()
+                    })
+                    .filter(|l| l.amount_minor != 0)
+                    .collect();
+                let reference = format!("cr:{cause}");
+                ctx.emit(Event::CommissionReversed {
+                    reference: reference.clone(),
+                    reverses: original.reference.clone(),
+                });
+                self.record_allocation(
+                    ctx,
+                    Allocation {
+                        reference,
+                        partition,
+                        policy: policy.clone(),
+                        kind: "commission_reversed".into(),
+                        cause: cause.to_string(),
+                        date,
+                        lines,
+                        reverses: None,
+                        exposures: vec![],
+                        reversed_by: None,
+                    },
+                );
+            }
+        }
+        // The items that remain are the kept share, on the new layer.
+        for (id, amount, clawed) in kept_items {
+            if let Some(x) = self.exposures.get_mut(&id) {
+                x.amount_minor = amount;
+                x.clawed_minor = clawed;
+                x.layer = to.to_string();
             }
         }
     }

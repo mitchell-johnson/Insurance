@@ -137,6 +137,8 @@ pub struct AppState {
     pub ui: UiConfig,
     /// The unit pricing module, for the staff console.
     pub pricing: Arc<dyn crate::forward::Source>,
+    /// The complaints module, for the complaints and conduct workbench.
+    pub complaints: Arc<dyn crate::forward::Source>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -766,12 +768,110 @@ impl AppState {
     }
 }
 
+/// What to say when another module would not answer or could not be
+/// reached: its own refusal as `refused`, anything else as unavailable.
+fn module_problem(what: &str, refused: StatusCode, reason: String) -> Problem {
+    match reason.strip_prefix(crate::forward::REFUSED) {
+        Some(why) => Problem::new(refused, "refused", why),
+        None => Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &format!("{what}_unavailable"),
+            format!("{} could not be reached: {reason}", what.replace('_', " ")),
+        ),
+    }
+}
+
 fn pricing_down(reason: String) -> Problem {
-    Problem::new(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "unit_pricing_unavailable",
-        format!("unit pricing could not be reached: {reason}"),
-    )
+    module_problem("unit_pricing", StatusCode::BAD_REQUEST, reason)
+}
+
+impl From<crate::complaints::Refusal> for Problem {
+    fn from(refusal: crate::complaints::Refusal) -> Self {
+        match refusal {
+            crate::complaints::Refusal::Bad(why) => Problem::bad_request(why),
+            crate::complaints::Refusal::Forbidden(why) => Problem::forbidden(why),
+        }
+    }
+}
+
+impl AppState {
+    /// What this person may do at the complaints workbench, and the same
+    /// for one other member of staff. Nobody without a seat gets further.
+    async fn complaints_standing(&self, session: &Session, about: Option<PartyId>) -> Result<(Value, Value), Problem> {
+        let answer = self
+            .ask(Question::ComplaintsStaff {
+                staff: session.party.clone(),
+                about,
+                at: session.at,
+            })
+            .await?;
+        if !answer["me"]["seats"].as_array().is_some_and(|seats| !seats.is_empty()) {
+            return Err(Problem::forbidden("your roles do not include complaints"));
+        }
+        Ok((answer["me"].clone(), answer["other"].clone()))
+    }
+}
+
+/// One of the workbench's questions to the complaints module: the queue, a
+/// complaint, its timers, the register, the report, conduct cases. `me`
+/// answers from here.
+async fn complaints_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let (standing, _) = s.complaints_standing(&session, None).await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::complaints::question(&name, &fields, &session.party, &standing)?;
+    // Every question is built here from checked fields, so a refusal is that module saying this person may not see it.
+    let answer = s
+        .complaints
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("complaints", StatusCode::FORBIDDEN, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+#[derive(Deserialize)]
+struct ComplaintsCommand {
+    /// The seat the person acts in: `intake`, `complaints`, `legal` or `conduct`.
+    #[serde(rename = "as")]
+    seat: String,
+    command: Value,
+}
+
+/// One person's command to the complaints module, in the seat they name.
+async fn complaints_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let sent: ComplaintsCommand = parse(&body)?;
+    let about = crate::complaints::depends_on(&sent.command, &session.party);
+    let (standing, other) = s.complaints_standing(&session, about.clone()).await?;
+    let key = key(&headers, &session.party.0)?;
+    let other = about.as_ref().map(|who| (who, &other));
+    let envelope = crate::complaints::envelope(&key, &session.party, &sent.seat, session.at, sent.command, &standing, other)?;
+    let output = s
+        .complaints
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("complaints", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        let code = refused["code"].as_str().unwrap_or("refused");
+        return Err(Problem::new(
+            StatusCode::CONFLICT,
+            code,
+            refused["message"].as_str().unwrap_or("the complaints module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["events"] }))
 }
 
 /// One of the console's questions to the unit pricing module: the work
@@ -1090,6 +1190,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))
         .route("/staff/v1/workbench/{party}/proof-of-debt", get(proof_of_debt))
+        .route("/staff/v1/complaints/commands", post(complaints_command))
+        .route("/staff/v1/complaints/{question}", get(complaints_question))
         .route("/staff/v1/unit-pricing/commands", post(pricing_command))
         .route("/staff/v1/unit-pricing/{question}", get(pricing_question))
         .route("/internal/v1/commands", post(module_command))
@@ -1102,6 +1204,7 @@ pub fn router(state: Shared) -> Router {
         .route("/employer", get(|State(s): State<Shared>| async move { page(&s, crate::ui::EMPLOYER) }))
         .route("/staff", get(|State(s): State<Shared>| async move { page(&s, crate::ui::STAFF) }))
         .route("/ops", get(|State(s): State<Shared>| async move { page(&s, crate::ui::OPS) }))
+        .route("/complaints", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMPLAINTS) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))

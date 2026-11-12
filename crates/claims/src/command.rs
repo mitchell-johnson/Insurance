@@ -331,6 +331,14 @@ pub enum Command {
         provider: String,
         actor: Actor,
     },
+    /// Pay a lender or assignee what their recorded interest takes of the
+    /// proceeds. They are paid before the claimant, in priority order.
+    PayInterest {
+        claim: String,
+        payment_ref: String,
+        party: String,
+        actor: Actor,
+    },
     /// Start waiving premiums on the claim's policy while its benefit is in
     /// payment, where the cover includes waiver of premium.
     StartWaiver {
@@ -446,6 +454,7 @@ impl Command {
             Command::Pay { .. } => "pay",
             Command::PayCost { .. } => "pay_cost",
             Command::StartWaiver { .. } => "start_waiver",
+            Command::PayInterest { .. } => "pay_interest",
             Command::PaymentReturned { .. } => "payment_returned",
             Command::DeclareIncome { .. } => "declare_income",
             Command::PrepareRun { .. } => "prepare_run",

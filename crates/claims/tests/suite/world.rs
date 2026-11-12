@@ -228,6 +228,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         policyholder: "party-holder".into(),
         product_code: "LIFE".into(),
         product_version: "hash-1".into(),
+        interests: vec![],
     }
 }
 

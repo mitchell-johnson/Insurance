@@ -309,6 +309,12 @@ impl ClaimsState {
                 "the amount is not within what is admitted and unpaid, or the claim is in a run",
             ));
         }
+        if amount_minor > claim.benefit_payable_minor() - claim.interests_unpaid_minor() {
+            return Err(Reject::new(
+                "interest_first",
+                "a lender or assignee with a recorded interest is paid before the claimant",
+            ));
+        }
         let used = claim.payments.iter().any(|p| p.payment_ref == payment_ref)
             || claim.schedule.iter().flat_map(|s| s.periods.values()).any(|p| p.payment_ref == payment_ref);
         if used {
@@ -374,6 +380,7 @@ impl ClaimsState {
                 run: None,
                 cost_item: None,
                 interest_minor: interest_minor + carried,
+                interested_party: None,
             }),
         }
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
@@ -389,6 +396,69 @@ impl ClaimsState {
             interest_minor + carried,
         );
         if close && claim.status == Status::Admitted {
+            claim.status = Status::Paid;
+            claim.closed_on = Some(cx.today);
+            claim.due.clear();
+            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+        }
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// Pay an interested party what is left of their share, in one payment.
+    /// A higher priority is paid first. The payment closes the claim where
+    /// it is the last money owed, as a payment to the claimant would.
+    pub(crate) fn pay_interest(&mut self, cx: &mut Cx<'_>, id: &str, payment_ref: String, party: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        let Some(at) = claim.interests.iter().position(|i| i.party == party && i.owed_minor > i.paid_minor) else {
+            return Err(Reject::new("no_interest", "that party has no unpaid interest in this claim"));
+        };
+        let (priority, amount_minor) = (claim.interests[at].priority, claim.interests[at].owed_minor - claim.interests[at].paid_minor);
+        if claim.interests.iter().any(|i| i.priority < priority && i.owed_minor > i.paid_minor) {
+            return Err(Reject::new("interest_priority", "an interest with a higher priority is paid first"));
+        }
+        let profile = self.authority.profile(&actor.staff)?;
+        if !profile.lines.contains(&claim.line()) || amount_minor > profile.max_payment_minor {
+            return Err(Reject::new(
+                "authority",
+                "your authority profile does not cover a payment of this size on this line",
+            ));
+        }
+        if amount_minor > claim.benefit_payable_minor() || claim.in_run.is_some() {
+            return Err(Reject::new("exceeds_payable", "the interest is more than is admitted and unpaid"));
+        }
+        if claim.payments.iter().any(|p| p.payment_ref == payment_ref) {
+            return Err(Reject::new("payment_exists", "that payment reference has been used on this claim"));
+        }
+        let close = claim.payable_minor == amount_minor && claim.status == Status::Admitted;
+        cx.core.execute(Instruction::Pay {
+            claim: id.to_string(),
+            policy: claim.policy.clone(),
+            payment_ref: payment_ref.clone(),
+            amount_minor,
+            payee: party.to_string(),
+            close,
+            interest_minor: 0,
+        })?;
+        claim.payable_minor -= amount_minor;
+        claim.interests[at].paid_minor += amount_minor;
+        claim.payments.push(Payment {
+            payment_ref: payment_ref.clone(),
+            amount_minor,
+            paid_on: cx.today,
+            ex_gratia: false,
+            returned: false,
+            released_by: Some(actor.staff.clone()),
+            run: None,
+            cost_item: None,
+            interest_minor: 0,
+            interested_party: Some(party.to_string()),
+        });
+        Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
+        note(&mut claim, cx, Some(actor), format!("interest_paid:{payment_ref}"));
+        cx.paid(&claim, &payment_ref, amount_minor, amount_minor, party, None, false, 0);
+        if close {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
@@ -474,6 +544,7 @@ impl ClaimsState {
             run: None,
             cost_item: Some(item.to_string()),
             interest_minor: 0,
+            interested_party: None,
         });
         note(&mut claim, cx, Some(actor), format!("cost_paid:{item}"));
         // The payments module's instruction, apart from `claim_paid` so no
@@ -519,6 +590,11 @@ impl ClaimsState {
             came_back = (p.amount_minor + p.interest_minor, p.run.clone());
             kind = (p.ex_gratia, p.interest_minor);
             cost = p.cost_item.as_ref().map_or(0, |_| p.amount_minor);
+            // An interested party's payment that came back is owed to them again.
+            let (party, amount) = (p.interested_party.clone(), p.amount_minor);
+            if let Some(i) = claim.interests.iter_mut().find(|i| Some(&i.party) == party.as_ref()) {
+                i.paid_minor -= amount;
+            }
         }
         claim.cost_payable_minor += cost;
         if let Some(p) = period.and_then(|k| claim.schedule.as_mut()?.periods.get_mut(&k)) {
@@ -786,6 +862,7 @@ impl ClaimsState {
                 run: Some(run.id.clone()),
                 cost_item: None,
                 interest_minor: 0,
+                interested_party: None,
             });
             claim.payable_minor = 0;
             claim.status = Status::Paid;
