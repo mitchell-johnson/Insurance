@@ -28,11 +28,13 @@ pub mod books;
 pub mod chart;
 pub mod close;
 pub mod config;
+pub mod driver;
 pub mod host;
 pub mod mart;
 pub mod period;
 pub mod report;
 pub mod returns;
+pub mod service;
 pub mod tables;
 
 pub use books::{FinApplied, FinCommand, FinEnvelope, FinEvent, FinanceState};

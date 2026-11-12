@@ -239,6 +239,8 @@ impl PaymentsState {
     pub(crate) fn drop_item(&mut self, run_id: &str, item_id: &str) -> Option<NewItem> {
         let run = self.runs.get_mut(run_id)?;
         let item = run.items.remove(item_id)?;
+        // The bank never saw it, so its ID is free to be used again.
+        self.items.remove(item_id);
         if run.status == RunStatus::Checked {
             run.status = RunStatus::Prepared;
         }
@@ -769,6 +771,7 @@ impl PaymentsState {
         let mut total = 0;
         for n in settled {
             total += n.amount_minor;
+            self.waiting.remove(&n.item);
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }

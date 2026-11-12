@@ -13,6 +13,7 @@ ic-log.workspace = true
 ic-core.workspace = true
 ic-product.workspace = true
 ic-raft.workspace = true
+ic-azure.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -20,10 +21,18 @@ sha2.workspace = true
 hex.workspace = true
 thiserror.workspace = true
 starlark.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "ic-finance-close"
+path = "src/bin/ic-finance-close.rs"
 
 [dev-dependencies]
 ic-sim.workspace = true
 proptest.workspace = true
+ic-azure = { workspace = true, features = ["testing"] }
 
 [lints]
 workspace = true

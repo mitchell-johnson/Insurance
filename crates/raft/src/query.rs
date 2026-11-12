@@ -30,6 +30,8 @@ pub enum Query {
     Locate { policy: PolicyId },
     /// What this partition's policies offer as matches for a payment.
     PaymentCandidates { matcher: Matcher, payment: IncomingPayment },
+    /// A question for the claims held on this partition.
+    Claims { question: ic_core::claims_module::report::Question },
 }
 
 /// A policy with what the read side knows about it.
@@ -53,6 +55,8 @@ pub enum Answer {
     Policy(Option<Box<PolicyView>>),
     Located(Option<DirectoryEntry>),
     Candidates(Candidates),
+    /// `None` until the partition's business date is open.
+    Claims(Option<ic_core::claims_module::report::Reply>),
 }
 
 /// Answer a query from a partition's state and read models.
@@ -71,5 +75,6 @@ pub fn answer(core: &CoreState, view: &Projections, query: Query) -> Answer {
         })),
         Query::Locate { policy } => Answer::Located(view.policy(&policy).cloned()),
         Query::PaymentCandidates { matcher, payment } => Answer::Candidates(matcher.candidates(view, &payment)),
+        Query::Claims { question } => Answer::Claims(core.business_date.map(|today| core.claims.answer(&question, today))),
     }
 }

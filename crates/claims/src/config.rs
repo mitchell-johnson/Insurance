@@ -355,11 +355,16 @@ impl Rules {
         let Some(exclusion) = self.exclusions.get(code) else {
             return Match::NeedsAssessor;
         };
-        if exclusion.verbatim || tags.is_empty() || tags.iter().any(|t| !tag_recognised(t)) {
+        if exclusion.verbatim {
             return Match::NeedsAssessor;
         }
+        // An exclusion that is not about this kind of cover cannot bite,
+        // whatever the cause. The underwriting library decides in the same order.
         if !exclusion.applies_to.is_empty() && !exclusion.applies_to.contains(cover_type) {
             return Match::DoesNotApply;
+        }
+        if tags.is_empty() || tags.iter().any(|t| !tag_recognised(t)) {
+            return Match::NeedsAssessor;
         }
         if tags.iter().any(|t| exclusion.cause_tags.iter().any(|x| tag_under(t, x))) {
             Match::Applies

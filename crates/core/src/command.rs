@@ -149,6 +149,13 @@ pub enum Command {
 
     // --- policy lifecycle ---
     IssuePolicy(Box<IssuePolicy>),
+    /// Issue on terms that were quoted: refused if the product version in
+    /// force for the inception date is not the one the quote was priced on,
+    /// so the terms issued are the terms offered or nothing is issued.
+    IssueQuoted {
+        expected_product_hash: String,
+        issue: Box<IssuePolicy>,
+    },
     CancelPolicy {
         policy: PolicyId,
     },
@@ -376,6 +383,7 @@ impl Command {
             // option and ends a scheme that is terminated.
             // The migration load issues policies written on another system.
             Command::IssuePolicy(_) => &["new-business", "group-admin", "migration"],
+            Command::IssueQuoted { .. } => &["new-business"],
             // Underwriting ends interim cover when the proposal it stood in for ends.
             Command::CancelPolicy { .. } => &["policy-servicing", "group-admin", "underwriting"],
             Command::DeclineIndexation { .. } | Command::MergeLayers { .. } => &["policy-servicing"],
@@ -409,6 +417,7 @@ impl Command {
             Command::AdvanceBusinessDate { .. } => "advance_business_date",
             Command::RunEndOfDay { .. } => "run_end_of_day",
             Command::IssuePolicy(_) => "issue_policy",
+            Command::IssueQuoted { .. } => "issue_quoted",
             Command::CancelPolicy { .. } => "cancel_policy",
             Command::Reinstate { .. } => "reinstate",
             Command::DeclineIndexation { .. } => "decline_indexation",

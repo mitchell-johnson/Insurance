@@ -43,7 +43,7 @@ A period moves to closing when its last day has closed on every partition. `conf
 
 ## Reports
 
-All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`.
+All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `work`, `extract`.
 
 ## Regulatory returns and conduct
 
@@ -69,6 +69,33 @@ The shipped return is illustrative. Its lines and account mappings are for finan
 - `Extract::bytes` is the file (CSV), `name` the path it is stored under in immutable storage, and `record` the `ExtractRecord` to register with `RegisterExtract`: content hash, row count, control totals and the Merkle root of its date.
 
 The extracts carry what the core publishes today. Age, sex, smoker status and occupation class are not on the core's events, so the files do not yet carry the rating factors a valuation model needs, and claims that do not end a policy are not in the experience extract.
+
+## The close driver
+
+The mart is part of the ledger's replicated state: it takes each core event as it arrives and needs no chart. `ic_finance::driver::Driver::pass` carries everything between the ledger and the outside, and keeps nothing between runs:
+
+- asks the ledger what the close is waiting for (`{"q": "work"}`);
+- reads each closed date's published Merkle root from immutable storage, verifies it, and records it;
+- for a period past its last day, reads each extract a page at a time (`{"q": "extract", "kind", "period", "offset"}`), checks the pages hash to the whole, writes the file once to immutable storage and registers it. A file already stored with the same content is registered; one with other content is never overwritten or registered;
+- asks each module that owes the close a report and passes it on under that module's caller name. `distribution_sources()` wires the commission sweep and held balances;
+- reports `subledger_reconciliations` green when every module answered and the three extracts are registered, and red with the reasons otherwise;
+- closes a period that is signed off with nothing blocking, oldest first.
+
+Anything that cannot be done yet is listed in `Pass::waiting` and tried on the next pass. Every command carries a key made from what it is about, so a driver stopped anywhere is started again.
+
+### Running it
+
+`ic-finance-close` is the driver as a process: the ledger and the other modules through the cluster client, roots and extracts on Azure Blob Storage with a workload identity. `infra/finance.bicep` creates its identity, the extracts account with time-based retention, and read access to the core's `merkle-roots` container.
+
+| Setting | Meaning |
+| --- | --- |
+| `IC_CLUSTER_NODES` | the ledger nodes, `host:port` separated by commas |
+| `IC_CLUSTER_TOKEN` or `IC_CLUSTER_TOKEN_FILE` | the cluster token |
+| `IC_FINANCE_ROOTS_ENDPOINT`, `IC_FINANCE_ROOTS_CONTAINER` | where the core publishes Merkle roots (container defaults to `merkle-roots`) |
+| `IC_FINANCE_EXTRACTS_ENDPOINT`, `IC_FINANCE_EXTRACTS_CONTAINER` | where extracts are written (container defaults to `finance-extracts`) |
+| `IC_FINANCE_PASS_SECONDS` | seconds between passes, 60 by default |
+
+It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
 
 ## Actuarial tables
 
@@ -106,7 +133,7 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 ## Not built yet
 
 - Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
-- The service that feeds the mart, writes each period's extracts to immutable storage and registers them.
-- The drivers that connect the other modules to the close: the Merkle root publisher, the callers of `ReportCheck` and `ReportAgedItems`, and the close workflow in Temporal.
+- A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
+- Sources for the reports reinsurance, payments, collections and investment owe. The driver takes any module's answer; only commission's questions are wired.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.

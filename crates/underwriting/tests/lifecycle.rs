@@ -456,7 +456,13 @@ fn a_joint_application_is_settled_life_by_life() {
         (command.lives.len(), command.lives[0].id.clone(), command.covers.len()),
         (1, LifeId::from("L1"), 1)
     );
-    let issued = w.ok("issuer", Command::PolicyIssued { proposal: "P1".into() });
+    let issued = w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
     assert_eq!(issued.effects.iter().filter(|e| matches!(e, Effect::RecordRiskFactors { .. })).count(), 1);
 
     // Both offered terms; one accepts, one declines: asked again; then neither wants it.
@@ -577,7 +583,13 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
         matches!(&reissued.effects[0], Effect::IssuePolicy { key, expected_product_hash, .. } if key == "P1/issue/3" && expected_product_hash == "prodhash-2")
     );
     assert_eq!(w.err("new-business", requote(signed("requote", &["P1", "prodhash-2", "9100"]))), "closed");
-    w.ok("issuer", Command::PolicyIssued { proposal: "P1".into() });
+    w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
 
     // A new quote while still open simply rebinds; a failed issue can also be withdrawn.
     w.open("P2", 500_000_00);
@@ -678,7 +690,10 @@ fn applying_is_idempotent_deterministic_and_leaves_no_trace_when_refused() {
         Command::OpenProposal(Box::new(open)),
         Command::Withdraw { proposal: "P1".into() },
         Command::Sweep { after: None, max: 1 },
-        Command::PolicyIssued { proposal: "P1".into() },
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
         Command::TakeCase {
             case: "c".into(),
             underwriter: "amy".into(),

@@ -471,3 +471,62 @@ fn the_cores_death_notice_stops_collection() {
     let other = record(json!({"payment_returned": {"policy": "pol-1", "payment": "i1", "payable": "benefit", "amount_minor": 5, "bank_account": "a"}}));
     assert!(ic_payments::query::react(&other).is_empty());
 }
+
+/// Purpose: the financial close's two questions. Cash is settled as at a
+/// day only when no reconciliation break opened by then is still open and
+/// no run valued by then is still waiting for the bank; unidentified
+/// receipts are listed oldest first with their total, and show whether
+/// anyone owns them.
+/// Why it matters: finance signs the month off on these answers. A green
+/// that ignored a file the bank has not confirmed, or an aged list that hid
+/// an unowned receipt, would close the books on cash nobody can vouch for.
+#[test]
+fn the_financial_close_is_told_what_cash_is_outstanding() {
+    let mut desk = Desk::new();
+    let ask = |desk: &Desk, q: &str, as_at: &str| answer(&desk.state, json!({"q": q, "as_at": as_at})).unwrap();
+    assert_eq!(ask(&desk, "fund_cash_settlement", "2027-11-30")["green"], json!(true));
+    assert_eq!(ask(&desk, "aged_unidentified_receipts", "2027-11-30")["count"], json!(0));
+    assert!(answer(&desk.state, json!({"q": "fund_cash_settlement"})).is_err());
+    assert!(answer(&desk.state, json!({"q": "aged_unidentified_receipts", "as_at": "month end"})).is_err());
+
+    // Two credits nobody recognises, on different days.
+    desk.statement("anz-sf1-collection", d(2027, 11, 15), 10_000_000_00, &[("l1", 5_00, "who")]);
+    desk.at(t(2027, 11, 16, 9, 0));
+    desk.statement("anz-sf1-collection", d(2027, 11, 16), 10_000_005_00, &[("l2", 7_00, "what")]);
+    let aged = ask(&desk, "aged_unidentified_receipts", "2027-11-30");
+    assert_eq!((aged["count"].clone(), aged["total_minor"].clone()), (json!(2), json!(12_00)));
+    assert_eq!(aged["items"][0]["amount_minor"], json!(5_00), "oldest first");
+    assert_eq!(aged["items"][0]["action"], json!(null), "nobody owns it yet");
+    // As at the first day only the first had arrived.
+    assert_eq!(ask(&desk, "aged_unidentified_receipts", "2027-11-15")["count"], json!(1));
+    let first = aged["items"][0]["party"].as_str().unwrap().to_string();
+    desk.ok(
+        &rae(),
+        Command::AssignException {
+            exception: first.clone(),
+            owner: "rae".to_string(),
+        },
+    );
+    assert_eq!(
+        ask(&desk, "aged_unidentified_receipts", "2027-11-30")["items"][0]["action"],
+        json!("assigned to rae")
+    );
+
+    let check = ask(&desk, "fund_cash_settlement", "2027-11-30");
+    assert_eq!((check["green"].clone(), check["count"].clone()), (json!(false), json!(2)));
+    assert_eq!(check["items"][0]["fund"], json!("sf1"));
+
+    // A run the bank has not settled is outstanding from its value date.
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.at(t(2027, 11, 17, 9, 0));
+    desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 18));
+    desk.add("r1", vec![pay("i1", "p1", 100_00)]);
+    let submission = desk.approve("r1");
+    assert_eq!(ask(&desk, "fund_cash_settlement", "2027-11-17")["count"], json!(2));
+    let check = ask(&desk, "fund_cash_settlement", "2027-11-30");
+    assert_eq!(check["count"], json!(3));
+    assert!(check["items"].as_array().unwrap().iter().any(|i| i["submission"] == json!(submission)));
+    desk.at(t(2027, 11, 18, 9, 0));
+    desk.settle(&submission, d(2027, 11, 18));
+    assert_eq!(ask(&desk, "fund_cash_settlement", "2027-11-30")["count"], json!(2));
+}
