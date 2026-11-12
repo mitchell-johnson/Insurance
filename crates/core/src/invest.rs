@@ -383,6 +383,8 @@ pub enum InvestEvent {
     /// under the payout's ID as the payment reference.
     PayoutRaised {
         policy: PolicyId,
+        /// The policy's owner: the only party the payout may be paid to.
+        policyholder: crate::PartyId,
         payout: String,
         amount_minor: i64,
         reason: PayoutReason,
@@ -398,6 +400,7 @@ pub enum InvestEvent {
     /// A returned payout is to be paid again under a new reference.
     PayoutReinstructed {
         policy: PolicyId,
+        policyholder: crate::PartyId,
         payout: String,
         payment: String,
         amount_minor: i64,
@@ -833,6 +836,7 @@ pub(crate) fn raise_payout(
     book.note_waiting(ledger, policy, ctx.date);
     ctx.emit(crate::Event::Investment(InvestEvent::PayoutRaised {
         policy: policy.id.clone(),
+        policyholder: policy.policyholder.clone(),
         payout,
         amount_minor,
         reason,
@@ -862,6 +866,7 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
     }
     ctx.emit(crate::Event::Investment(InvestEvent::PayoutReinstructed {
         policy: policy.id.clone(),
+        policyholder: policy.policyholder.clone(),
         payout: payout.to_string(),
         payment,
         amount_minor,
@@ -870,6 +875,14 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
 }
 
 pub(crate) fn place_order(ledger: &Ledger, book: &mut InvestmentBook, policy: &Policy, ctx: &mut Ctx<'_>, order: NewOrder) -> Result<(), Reject> {
+    place(ledger, book, policy, ctx, order, false)
+}
+
+/// `second_half` is the buy a switch places when its sell executes. The
+/// customer committed to it when the switch was placed, before either
+/// fund's price was known, so it keeps the switch's pricing date even where
+/// that price has since been struck.
+fn place(ledger: &Ledger, book: &mut InvestmentBook, policy: &Policy, ctx: &mut Ctx<'_>, order: NewOrder, second_half: bool) -> Result<(), Reject> {
     let invalid = |m: &str| bad("invalid_order", m);
     if !plain(&order.order_id) || order.order_id.contains('/') {
         return Err(invalid("an order is named by a plain identifier"));
@@ -888,13 +901,13 @@ pub(crate) fn place_order(ledger: &Ledger, book: &mut InvestmentBook, policy: &P
     if fund.currency != policy.currency {
         return Err(invalid("the fund is not in the policy's currency"));
     }
-    if order.pricing_date < ctx.date || (order.pricing_date - ctx.date).num_days() > MAX_PRICING_DAYS_AHEAD {
+    if !second_half && (order.pricing_date < ctx.date || (order.pricing_date - ctx.date).num_days() > MAX_PRICING_DAYS_AHEAD) {
         return Err(invalid("the pricing date is today or later, and within 400 days"));
     }
     if !fund.prices_on(order.pricing_date) {
         return Err(invalid("the fund does not price on that date; the order takes its next pricing date"));
     }
-    if book.price_for(&order.fund, order.pricing_date).is_some() {
+    if !second_half && book.price_for(&order.fund, order.pricing_date).is_some() {
         return Err(bad(
             "price_struck",
             "the price for that date is already active; the order takes the next pricing date",
@@ -993,11 +1006,11 @@ pub(crate) fn cancel_order(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, order_i
     Ok(())
 }
 
-/// The next date from `from` on which the fund prices and has not struck.
-fn next_open_date(book: &InvestmentBook, fund: &FundDefinition, from: NaiveDate) -> NaiveDate {
+/// The first date from `from` on which the fund prices.
+fn next_pricing_date(fund: &FundDefinition, from: NaiveDate) -> NaiveDate {
     let mut date = from;
     for _ in 0..MAX_PRICING_DAYS_AHEAD {
-        if fund.prices_on(date) && book.price_for(&fund.id, date).is_none() {
+        if fund.prices_on(date) {
             break;
         }
         date = date.succ_opt().unwrap_or(date);
@@ -1111,10 +1124,10 @@ fn execute_one(
             direction: Direction::Buy,
             amount: OrderAmount::Cash { minor: cash_minor },
             kind: OrderKind::SwitchIn,
-            pricing_date: next_open_date(book, &target, price.pricing_date.max(ctx.date)),
+            pricing_date: next_pricing_date(&target, price.pricing_date),
             switch_to: None,
         };
-        place_order(ledger, book, policy, ctx, buy)?;
+        place(ledger, book, policy, ctx, buy, true)?;
     }
     Ok(true)
 }
@@ -1387,6 +1400,9 @@ pub struct Executable {
     pub pricing_date: NaiveDate,
     pub price_id: String,
     pub pending: u32,
+    /// The first of them. An order executes once, so a run that names it in
+    /// its idempotency key never sends the same key for different work.
+    pub first: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1407,6 +1423,10 @@ pub struct Replayable {
     pub fund: FundId,
     pub pricing_date: NaiveDate,
     pub orders: u32,
+    /// The fund's approved minimum for compensating one order, from its
+    /// pricing terms (`compensation_minimum_minor`; none means every
+    /// difference is paid). The replay run sends it back as the threshold.
+    pub compensation_minimum_minor: i64,
 }
 
 impl InvestmentBook {
@@ -1447,11 +1467,15 @@ impl InvestmentBook {
             .filter_map(|(id, orders)| {
                 let price = self.prices.get(id)?;
                 let current = self.price_for(&price.fund, price.pricing_date)?;
+                let minimum = self
+                    .fund(&price.fund)
+                    .and_then(|f| f.pricing.get("compensation_minimum_minor")?.parse::<i64>().ok());
                 (current.price_id != price.price_id).then(|| Replayable {
                     superseded: price.price_id.clone(),
                     fund: price.fund.clone(),
                     pricing_date: price.pricing_date,
                     orders,
+                    compensation_minimum_minor: minimum.unwrap_or(0).max(0),
                 })
             })
             .collect()
@@ -1459,21 +1483,23 @@ impl InvestmentBook {
 
     /// Funds and dates with a price in force and orders still pending.
     pub fn executable(&self) -> Vec<Executable> {
-        let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+        // In key order, so the first order seen in a slot is its first.
+        let mut counts: BTreeMap<String, (u32, &str)> = BTreeMap::new();
         for key in &self.pending {
-            if let Some((slot, _)) = key.rsplit_once('/') {
-                *counts.entry(slot.to_string()).or_default() += 1;
+            if let Some((slot, order)) = key.rsplit_once('/') {
+                counts.entry(slot.to_string()).or_insert((0, order)).0 += 1;
             }
         }
         counts
             .into_iter()
-            .filter_map(|(slot, pending)| {
+            .filter_map(|(slot, (pending, first))| {
                 let price = self.prices.get(self.in_force.get(&slot)?)?;
                 Some(Executable {
                     fund: price.fund.clone(),
                     pricing_date: price.pricing_date,
                     price_id: price.price_id.clone(),
                     pending,
+                    first: first.to_string(),
                 })
             })
             .collect()

@@ -33,6 +33,7 @@ fn take(run: &str, payments: &[&str]) -> Command {
     Command::TakeWaiting {
         run: run.to_string(),
         payments: payments.iter().map(|p| p.to_string()).collect(),
+        payees: Default::default(),
     }
 }
 
@@ -118,7 +119,6 @@ fn a_waiting_payment_is_neither_lost_nor_changed() {
     assert_eq!(desk.code(&svc(), offer(released("pay-1", "p1", 900_00))), "payment_conflict");
     assert_eq!(desk.code(&svc(), offer(released("pay-3", "p1", 0))), "invalid_payment");
     assert_eq!(desk.code(&svc(), offer(released("", "p1", 5))), "invalid_payment");
-    assert_eq!(desk.code(&svc(), offer(released("pay-3", "", 5))), "invalid_payment");
     // An event whose amount cannot be read offers nothing.
     let unreadable = claim_paid("3-79", json!({"policy": "pol-1", "payment_ref": "pay-9", "net_minor": "lots", "payee": "p1"}));
     let envelope = react(&unreadable).remove(0);
@@ -205,4 +205,74 @@ fn a_released_provider_cost_waits_like_a_benefit() {
     desk.ok(&mia(), take("r1", &["clm-1-cost-1"]));
     let item = &desk.state.runs["r1"].items["clm-1-cost-1"].new;
     assert_eq!(item.counterparty, ic_payments::model::Counterparty::Payee("prov-1".to_string()));
+}
+
+/// Purpose: a unit-linked payout the core owes waits under the payout's
+/// ID for the policyholder and can go only to a payee of that party; a
+/// release that names nobody needs the maker to name the payee; a payout
+/// sent back by the bank and instructed again waits under its new
+/// reference; a payment released to a named party cannot be redirected to
+/// someone else's payee.
+/// Why it matters: the core settles a payout only under the reference it
+/// issued and for the exact amount. A surrender value paid to a payee who
+/// is not the policyholder is the fraud this binding prevents.
+#[test]
+fn a_unit_linked_payout_waits_for_a_named_payee() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    desk.payee("p2", PayeeKind::Customer, "0207654321");
+    let record = |id: &str, event: serde_json::Value| -> ic_core::EventRecord {
+        serde_json::from_value(json!({"id": id, "partition": 3, "seq": 90, "business_date": "2027-11-15", "log_index": 950, "event": {"investment": event}}))
+            .unwrap()
+    };
+    let raised = record(
+        "3-90",
+        json!({"payout_raised": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}),
+    );
+    let again = record(
+        "3-91",
+        json!({"payout_reinstructed": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "payment": "po-1-r2", "amount_minor": 12_345_00}}),
+    );
+    let returned = record(
+        "3-92",
+        json!({"payout_returned": {"policy": "pol-1", "payout": "po-1", "payment": "po-1", "amount_minor": 12_345_00}}),
+    );
+    assert!(react(&returned).is_empty());
+    for (index, envelope) in react(&raised).into_iter().enumerate() {
+        desk.state.apply(5000 + index as u64, envelope).unwrap();
+    }
+    let held = &desk.state.waiting["po-1"];
+    assert_eq!(
+        (held.source.as_str(), held.payee.as_str(), held.amount_minor),
+        ("payout:pol-1:po-1", "party-p1", 12_345_00)
+    );
+
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    let to = |payment: &str, payee: &str| Command::TakeWaiting {
+        run: "r1".to_string(),
+        payments: [payment.to_string()].into(),
+        payees: [(payment.to_string(), payee.to_string())].into(),
+    };
+    // It is the policyholder's: nobody else's payee can be named for it.
+    assert_eq!(desk.code(&mia(), to("po-1", "nobody")), "unknown_payee");
+    assert_eq!(desk.code(&mia(), to("po-1", "p2")), "payee_mismatch");
+    desk.ok(&mia(), take("r1", &["po-1"]));
+    // A release that names nobody needs the maker to say who is paid.
+    let mut anonymous = released("pay-0", "", 5_00);
+    anonymous.source = "manual:pay-0".to_string();
+    desk.ok(&svc(), offer(anonymous));
+    assert_eq!(desk.code(&mia(), take("r1", &["pay-0"])), "payee_required");
+    let item = &desk.state.runs["r1"].items["po-1"].new;
+    assert_eq!((item.amount_minor, item.payable), (12_345_00, Some(PayableKind::Benefit)));
+
+    // Sent back by the bank and instructed again: a new reference waits.
+    for envelope in react(&again) {
+        desk.state.apply(5010, envelope).unwrap();
+    }
+    assert_eq!(waiting(&desk), vec!["pay-0", "po-1-r2"]);
+
+    // A release that names its party goes to that party's payee only.
+    desk.ok(&svc(), offer(released("pay-1", "party-p1", 100_00)));
+    assert_eq!(desk.code(&mia(), to("pay-1", "p2")), "payee_mismatch");
+    desk.ok(&mia(), to("pay-1", "p1"));
 }

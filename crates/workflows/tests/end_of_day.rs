@@ -22,8 +22,8 @@ use ic_azure::keyvault::DevSigner;
 use ic_azure::merkle::{root_name, verify_published, PublishedRoot};
 use ic_core::machine::ClosedDay;
 use ic_raft::NodeId;
-use ic_workflows::eod::{PartitionCheck, PartitionStep, PublishStep, PublishedSummary, RoundStep};
-use ic_workflows::{run_end_of_day, EndOfDayError, EndOfDayInput, EndOfDayReport, LedgerSteps, StepError, Steps};
+use ic_workflows::eod::{PartitionCheck, PartitionStep, PublishStep, PublishedSummary, RoundStep, UnitPass, UnitStep};
+use ic_workflows::{run_end_of_day, run_unit_orders, EndOfDayError, EndOfDayInput, EndOfDayReport, LedgerSteps, StepError, Steps};
 
 /// Run a day cleanly and insist it reconciles.
 async fn close<S: Steps<Error = StepError>>(steps: &S, input: &EndOfDayInput) -> EndOfDayReport {
@@ -107,6 +107,9 @@ impl<S: Steps<Error = StepError>> Steps for DyingWorker<'_, S> {
     }
     async fn run_round(&self, step: RoundStep) -> Result<u32, StepError> {
         self.step(self.steps.run_round(step)).await
+    }
+    async fn unit_orders(&self, step: UnitStep) -> Result<UnitPass, StepError> {
+        self.step(self.steps.unit_orders(step)).await
     }
     async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, StepError> {
         self.step(self.steps.reconcile(step)).await
@@ -220,6 +223,9 @@ impl Steps for KillsALeader<'_> {
     }
     async fn run_round(&self, step: RoundStep) -> Result<u32, StepError> {
         self.steps.run_round(step).await
+    }
+    async fn unit_orders(&self, step: UnitStep) -> Result<UnitPass, StepError> {
+        self.steps.unit_orders(step).await
     }
     async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, StepError> {
         self.steps.reconcile(step).await
@@ -417,6 +423,9 @@ struct Scripted {
     /// What each partition reports as its in-transit net, and whether a
     /// transfer is in flight.
     in_transit: Vec<(&'static str, bool)>,
+    /// What every pass over the unit orders reports.
+    units: UnitPass,
+    unit_passes: AtomicU32,
     published: AtomicU32,
 }
 
@@ -432,6 +441,11 @@ impl Steps for Scripted {
 
     async fn run_round(&self, _step: RoundStep) -> Result<u32, String> {
         Ok(self.unfinished)
+    }
+
+    async fn unit_orders(&self, _step: UnitStep) -> Result<UnitPass, String> {
+        self.unit_passes.fetch_add(1, Ordering::SeqCst);
+        Ok(self.units.clone())
     }
 
     async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, String> {
@@ -456,7 +470,9 @@ impl Steps for Scripted {
 /// in transit between partitions with no transfer in flight is a break, the same money
 /// with a transfer in flight is not, a partition whose in-transit total cannot be read is
 /// a break, and policy work that never finishes stops the run as stuck before anything is
-/// published. Each day has one workflow ID.
+/// published. Unit orders that a pass cannot move are reported and do not stop the close,
+/// and unit order work that never runs out is cut off after a fixed number of passes.
+/// Each day has one workflow ID.
 /// Why it matters: money in transit with nothing in flight means a transfer debited one
 /// partition and never credited the other: the one imbalance no single partition can see.
 /// This is the only check that would catch it, and a healthy ledger never trips it, so
@@ -469,12 +485,29 @@ async fn money_stranded_between_partitions_is_a_break_and_endless_work_is_stuck(
     let scripted = |unfinished, in_transit| Scripted {
         unfinished,
         in_transit,
+        units: UnitPass { progressed: false, left: 0 },
+        unit_passes: AtomicU32::new(0),
         published: AtomicU32::new(0),
     };
 
     // Balanced: what left one partition arrived on the other.
     let balanced = run_end_of_day(&scripted(0, vec![("-5000", false), ("5000", false)]), &input).await.unwrap();
     assert_eq!(balanced.breaks, vec![]);
+    assert!(balanced.unit_orders_left.is_empty());
+
+    // Unit orders nothing can move (their policy is in flight, say) are reported, one pass
+    // each partition, and the day still closes.
+    let mut held = scripted(0, vec![("0", false), ("0", false)]);
+    held.units = UnitPass { progressed: false, left: 4 };
+    let report = run_end_of_day(&held, &input).await.unwrap();
+    assert_eq!(report.unit_orders_left, [(0, 4), (1, 4)].into());
+    assert_eq!((held.unit_passes.load(Ordering::SeqCst), held.published.load(Ordering::SeqCst)), (2, 1));
+    // Work that keeps changing and never runs out is cut off, reported, and the day closes.
+    let mut churning = scripted(0, vec![("0", false), ("0", false)]);
+    churning.units = UnitPass { progressed: true, left: 7 };
+    let report = run_end_of_day(&churning, &input).await.unwrap();
+    assert_eq!(report.unit_orders_left, [(0, 7), (1, 7)].into());
+    assert_eq!(churning.unit_passes.load(Ordering::SeqCst), 2 * ic_workflows::eod::MAX_UNIT_PASSES);
 
     // Stranded: 50.00 left partition 0 and is nowhere.
     let stranded = run_end_of_day(&scripted(0, vec![("-5000", false), ("0", false)]), &input).await.unwrap();
@@ -504,4 +537,112 @@ async fn money_stranded_between_partitions_is_a_break_and_endless_work_is_stuck(
     );
     assert!(stuck.to_string().contains("still has 3 unfinished policies"));
     assert_eq!(endless.published.load(Ordering::SeqCst), 0);
+}
+
+/// Purpose: on real ledger nodes, unit orders wait while their date has no price, the
+/// order run executes them once a price is active, and the close replays them when the
+/// price is corrected, using the fund's approved minimum to decide which differences are
+/// paid. Running either again changes nothing.
+/// Why it matters: the core only executes and replays when it is told to. This run is the
+/// thing that tells it, so if it missed a fund, sent a wrong threshold or doubled a
+/// command on a retry, customers would hold the wrong number of units with every
+/// reconciliation in the core still clean.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_run_executes_unit_orders_and_replays_a_corrected_price() {
+    use ic_core::invest::{Direction, FundDefinition, InvestCommand, NewOrder, OrderAmount, OrderKind, Question, Reply, UnitPrice};
+    use ic_core::Command;
+    use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
+
+    let ledger = Ledger::start("units", 1, 1).await;
+    let steps = ledger.steps();
+    let policy = common::first_policy();
+    let growth = FundId("growth".to_string());
+    let invest = |command: InvestCommand| Command::Investment(Box::new(command));
+    let fund = FundDefinition {
+        id: growth.clone(),
+        version: 1,
+        content_hash: "hash-growth-1".to_string(),
+        name: "Growth".to_string(),
+        currency: NZD,
+        cut_off: "14:00".to_string(),
+        buy_spread_bps: 0,
+        sell_spread_bps: 0,
+        price_decimals: 4,
+        unit_rounding: RoundingMode::HalfEven,
+        non_pricing_days: Default::default(),
+        open_to_new_money: true,
+        // Differences worth less than NZD 50 on an order are recorded and not paid.
+        pricing: [("compensation_minimum_minor".to_string(), "5000".to_string())].into(),
+    };
+    ledger.run(0, "fund", "config", invest(InvestCommand::ActivateFund(Box::new(fund)))).await;
+    let receipt = Command::ApplyReceipt {
+        policy: policy.clone(),
+        receipt: "r-units".to_string(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    ledger.run(0, "receipt", "cash-matching", receipt).await;
+    let allocate = InvestCommand::AllocateCash {
+        policy: policy.clone(),
+        reference: "alloc-1".to_string(),
+        amount_minor: 1_000_00,
+    };
+    ledger.run(0, "allocate", "policy-servicing", invest(allocate)).await;
+    for (id, minor) in [("buy-1", 900_00), ("buy-2", 100_00)] {
+        let order = NewOrder {
+            order_id: id.to_string(),
+            policy: policy.clone(),
+            fund: growth.clone(),
+            direction: Direction::Buy,
+            amount: OrderAmount::Cash { minor },
+            kind: OrderKind::PremiumAllocation,
+            pricing_date: day(0),
+            switch_to: None,
+        };
+        ledger.run(0, id, "policy-servicing", invest(InvestCommand::PlaceOrder(Box::new(order)))).await;
+    }
+    let units = || async {
+        match ledger.client.investment(0, &Question::Holdings { policy: policy.clone() }).await.unwrap() {
+            Reply::Holdings(Some(h)) => (h.units_micro.get("growth").copied().unwrap_or(0), h.pending_cash_minor),
+            other => panic!("{other:?}"),
+        }
+    };
+    let price = |id: &str, at: &str, version: u32, supersedes: Option<&str>| {
+        invest(InvestCommand::ActivateUnitPrice(Box::new(UnitPrice {
+            price_id: id.to_string(),
+            fund: growth.clone(),
+            pricing_date: day(0),
+            version,
+            buy: DecStr::parse(at).unwrap(),
+            sell: DecStr::parse(at).unwrap(),
+            mid: DecStr::parse(at).unwrap(),
+            inputs_hash: format!("inputs-{id}"),
+            supersedes: supersedes.map(str::to_string),
+        })))
+    };
+
+    // No price yet: the orders wait, through the run and through the close.
+    assert_eq!(run_unit_orders(&steps, 0, day(0)).await.unwrap(), 0);
+    let report = close(&steps, &ledger.input(day(0))).await;
+    assert!(report.unit_orders_left.is_empty());
+    assert_eq!(units().await, (0, 1_000_00));
+
+    // The price for the day is struck the next morning and the run executes both orders.
+    ledger.run(0, "p-1", "unit-pricing", price("p-1", "2.0000", 1, None)).await;
+    assert_eq!(run_unit_orders(&steps, 0, day(1)).await.unwrap(), 0);
+    assert_eq!(units().await, (500_000_000, 0));
+    assert_eq!(run_unit_orders(&steps, 0, day(1)).await.unwrap(), 0);
+    assert_eq!(units().await, (500_000_000, 0));
+
+    // The price should have been 2.5000. The close replays: 900.00 bought 360 units, not
+    // 450, and 90 come back; 100.00 bought 40, not 50, a difference of NZD 25, under the
+    // fund's minimum, so that order is left as it is.
+    ledger.run(0, "p-2", "unit-pricing", price("p-2", "2.5000", 2, Some("p-1"))).await;
+    let first = close(&steps, &ledger.input(day(1))).await;
+    assert!(first.unit_orders_left.is_empty());
+    assert_eq!(units().await, (410_000_000, 0));
+    assert_eq!(ledger.client.investment(0, &Question::ToReplay).await.unwrap(), Reply::ToReplay(vec![]));
+    let again = close(&steps, &ledger.input(day(1))).await;
+    assert_eq!(again, first);
+    assert_eq!(units().await, (410_000_000, 0));
+    ledger.stop().await;
 }

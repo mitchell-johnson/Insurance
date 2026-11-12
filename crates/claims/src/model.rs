@@ -340,6 +340,9 @@ pub struct Payment {
     /// is a cost of handling the claim and not a benefit.
     #[serde(default)]
     pub cost_item: Option<String>,
+    /// Interest for late payment sent with it, on top of the amount.
+    #[serde(default)]
+    pub interest_minor: i64,
 }
 
 /// One paid period of a benefit in payment.

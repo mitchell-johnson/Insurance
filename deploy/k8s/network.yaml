@@ -30,7 +30,7 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: ["ic-node", "ic-api", "ic-portal", "ic-worker", "ic-close", "ic-bootstrap", "ic-reinsurance", "ic-underwriting", "ic-payments-pump", "ic-payments-drill"]
+                values: ["ic-node", "ic-api", "ic-portal", "ic-worker", "ic-close", "ic-unit-orders", "ic-bootstrap", "ic-reinsurance", "ic-underwriting", "ic-payments-pump", "ic-payments-drill"]
       ports:
         - port: 7000
 ---
