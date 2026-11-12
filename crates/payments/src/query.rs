@@ -171,6 +171,7 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             payout,
             payment,
             amount_minor,
+            ..
         }) => payout_waiting(policy, payout, payment, *amount_minor),
         _ => return Vec::new(),
     };

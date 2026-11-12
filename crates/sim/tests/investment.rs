@@ -1126,4 +1126,10 @@ fn a_withdrawal_is_paid_through_benefit_payable() {
         }
     )));
     assert_eq!(seen.iter().filter(|e| matches!(e, InvestEvent::PayoutRaised { .. })).count(), 2);
+    // Each request to pay names the policy's owner, so it can be paid to no one else.
+    let owner = c.state(0).policies[&policy].policyholder.clone();
+    assert!(seen.iter().all(|e| match e {
+        InvestEvent::PayoutRaised { policyholder, .. } | InvestEvent::PayoutReinstructed { policyholder, .. } => *policyholder == owner,
+        _ => true,
+    }));
 }

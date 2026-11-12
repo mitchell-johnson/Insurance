@@ -383,6 +383,8 @@ pub enum InvestEvent {
     /// under the payout's ID as the payment reference.
     PayoutRaised {
         policy: PolicyId,
+        /// The policy's owner: the only party the payout may be paid to.
+        policyholder: crate::PartyId,
         payout: String,
         amount_minor: i64,
         reason: PayoutReason,
@@ -398,6 +400,7 @@ pub enum InvestEvent {
     /// A returned payout is to be paid again under a new reference.
     PayoutReinstructed {
         policy: PolicyId,
+        policyholder: crate::PartyId,
         payout: String,
         payment: String,
         amount_minor: i64,
@@ -833,6 +836,7 @@ pub(crate) fn raise_payout(
     book.note_waiting(ledger, policy, ctx.date);
     ctx.emit(crate::Event::Investment(InvestEvent::PayoutRaised {
         policy: policy.id.clone(),
+        policyholder: policy.policyholder.clone(),
         payout,
         amount_minor,
         reason,
@@ -862,6 +866,7 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
     }
     ctx.emit(crate::Event::Investment(InvestEvent::PayoutReinstructed {
         policy: policy.id.clone(),
+        policyholder: policy.policyholder.clone(),
         payout: payout.to_string(),
         payment,
         amount_minor,

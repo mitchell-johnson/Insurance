@@ -227,11 +227,11 @@ fn a_unit_linked_payout_waits_for_a_named_payee() {
     };
     let raised = record(
         "3-90",
-        json!({"payout_raised": {"policy": "pol-1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}),
+        json!({"payout_raised": {"policy": "pol-1", "policyholder": "party-1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}),
     );
     let again = record(
         "3-91",
-        json!({"payout_reinstructed": {"policy": "pol-1", "payout": "po-1", "payment": "po-1-r2", "amount_minor": 12_345_00}}),
+        json!({"payout_reinstructed": {"policy": "pol-1", "policyholder": "party-1", "payout": "po-1", "payment": "po-1-r2", "amount_minor": 12_345_00}}),
     );
     let returned = record(
         "3-92",
