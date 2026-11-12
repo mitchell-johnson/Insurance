@@ -123,7 +123,7 @@ impl Reinsurance {
     pub fn notice_to_core(&self, seq: u64) -> Option<CoreDelivery> {
         let (claim, notice) = for_claims(self.notice_box.get(&seq)?)?;
         let policy = self.claims.get(claim).map(|book| &book.policy);
-        let retries = self.notice_retries.get(&seq).copied().unwrap_or(0);
+        let retries = self.notice_retries(seq);
         Some(CoreDelivery {
             partition: policy.and_then(|p| self.policies.get(p)).map_or(0, |p| p.partition),
             key: format!("reinsurance:notice:{seq}:{retries}"),

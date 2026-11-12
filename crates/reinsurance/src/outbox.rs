@@ -63,6 +63,11 @@ impl Reinsurance {
             .collect()
     }
 
+    /// How many times a person has sent a refused notice again.
+    pub fn notice_retries(&self, seq: u64) -> u32 {
+        self.notice_retries.get(&seq).copied().unwrap_or(0)
+    }
+
     /// Refused notices that were abandoned, oldest first.
     pub fn notices_abandoned(&self) -> &[AbandonedNotice] {
         &self.notices_abandoned

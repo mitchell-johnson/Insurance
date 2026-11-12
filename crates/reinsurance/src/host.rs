@@ -42,6 +42,10 @@ pub enum Query {
     NoticeDelivery {
         seq: u64,
     },
+    /// How many times a person has sent a refused notice again.
+    NoticeRetries {
+        seq: u64,
+    },
     /// The capacity answer for a reservation as things stand. Null once it
     /// is released or its cover has arrived.
     Capacity {
@@ -123,6 +127,7 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
                 .ok_or_else(|| format!("notice {seq} is not waiting to be handed to claims"))?;
             json((delivery.partition, delivery.key, delivery.caller, delivery.command))
         }
+        Query::NoticeRetries { seq } => json(state.notice_retries(seq)),
         Query::Capacity { reservation_id } => json(state.capacity(&reservation_id)),
         Query::FacultativeTerms { reservation_id } => json(state.facultative_terms(&reservation_id)),
         Query::Cession { key } => json(state.cession_record(&key)),

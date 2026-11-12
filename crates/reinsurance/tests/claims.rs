@@ -820,3 +820,73 @@ fn a_claims_fact_that_cannot_be_taken_is_raised_and_the_feed_goes_on() {
     assert!(b.ri.exceptions().contains_key("claim_fact:C7"));
     b.assert_reconciles();
 }
+
+/// Purpose: each notice for claims becomes the command the claims module publishes for
+/// it, word for word, sent as `reinsurance` to the partition that holds the claim's policy:
+/// the large-claim notification, the consent requirement, a consent, a disputed item, and
+/// its settlement with the claim it belongs to. Notices for anyone else have no such command.
+/// Why it matters: the claims module reads these by name. A field spelled differently is a
+/// notice the core refuses in production, and a settlement sent without its claim cannot be
+/// matched to the disputed item it closes.
+#[test]
+fn notices_for_claims_are_the_commands_claims_reads() {
+    let mut b = Bench::new();
+    b.issue(3, "P1", "anna", vec![layer("life", "life", 1, "L1", 3000 * K, d(2027, 2, 1))]);
+    b.today = d(2027, 6, 10);
+    fact(&mut b, reserved("C1", "P1", "life", 3000 * K));
+    b.ok(
+        "reinsurance-ops",
+        Command::ReinsurerConsent {
+            claim: ClaimId::from("C1"),
+            reinsurer: north(),
+            agreed: true,
+            reference: "email-77".into(),
+        },
+    );
+    fact(&mut b, paid("C1", "PAY-1", 3000 * K, false));
+    fact(
+        &mut b,
+        ClaimFact::AdmissionReversed {
+            claim: ClaimId::from("C1"),
+            decided_on: d(2027, 6, 10),
+            reason_code: "exclusion_missed".into(),
+            cause: None,
+        },
+    );
+    let reference = dispute_reference(&ClaimId::from("C1"), &retail(), &north());
+    b.ok(
+        "finance",
+        Command::ResolveDispute {
+            reference: reference.clone(),
+            repay_minor: 25_00,
+            agreement_ref: "AG-1".into(),
+            prepared_by: "kim".into(),
+            approved_by: "lee".into(),
+        },
+    );
+    let mut sent = Vec::new();
+    let mut others = 0;
+    for (seq, notice) in b.ri.notices(usize::MAX) {
+        match b.ri.notice_to_core(seq) {
+            Some(delivery) => {
+                assert_eq!(notice.audience(), ic_reinsurance::machine::Audience::Claims);
+                assert_eq!((delivery.partition, delivery.caller), (3, "reinsurance"));
+                assert_eq!(delivery.key, format!("reinsurance:notice:{seq}:0"));
+                sent.push(serde_json::to_value(&delivery.command).unwrap()["claims"]["reinsurance"].clone());
+            }
+            None => others += 1,
+        }
+    }
+    assert!(others > 0, "exceptions and documents are not for claims");
+    assert!(b.ri.notice_to_core(9_999).is_none());
+    use serde_json::json;
+    let expected = [
+        json!({"large_claim_notification": {"claim": "C1", "treaty": "retail-life-surplus"}}),
+        json!({"reinsurer_consent_required": {"claim": "C1", "treaty": "retail-life-surplus", "due_by": "2027-06-20"}}),
+        json!({"reinsurer_consent": {"claim": "C1", "reinsurer": "reinsurer-north", "agreed": true, "reference": "email-77", "treaty": null}}),
+        json!({"disputed_item_raised": {"claim": "C1", "reinsurer": "reinsurer-north", "reference": reference}}),
+        json!({"disputed_item_raised": {"claim": "C1", "reinsurer": "reinsurer-south", "reference": "DSP/C1/retail-life-surplus/reinsurer-south"}}),
+        json!({"dispute_resolved": {"claim": "C1", "reference": reference, "repay_minor": 25_00}}),
+    ];
+    assert_eq!(sent, expected);
+}

@@ -712,6 +712,59 @@ async fn a_refusal_the_module_cannot_be_told_of_stops_the_round() {
     assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await, Ok(Round { taken: 0, refused: 2 }));
 }
 
+/// A module that says it has recorded a refusal and has not, as a stale
+/// follower or a broken build might.
+struct Forgetful(LocalModule);
+
+impl Module for Forgetful {
+    async fn propose(&self, envelope: Envelope) -> Result<ic_reinsurance::Applied, DriverError> {
+        if !matches!(envelope.command, Command::NoticeRefused { .. }) {
+            return self.0.propose(envelope).await;
+        }
+        Ok(ic_reinsurance::Applied {
+            index: 0,
+            result: Ok(()),
+            instructions: vec![],
+            notices: vec![],
+            duplicate: true,
+        })
+    }
+
+    async fn ask(&self, query: Query) -> Result<Value, DriverError> {
+        self.0.ask(query).await
+    }
+}
+
+/// Purpose: a notice that is refused, reported to the module, and then offered by the
+/// module again in the same round stops the round with an error naming the notice.
+/// Why it matters: the round reads the waiting notices until none are left. If a refusal
+/// did not take the notice out of that list, as happened when a retried notice was refused
+/// a second time under the key of the first refusal, the driver would offer it for ever
+/// and do nothing else.
+#[tokio::test]
+async fn a_refused_notice_still_on_offer_stops_the_round() {
+    let mut w = World::new();
+    let waiting = with_group_notices(&mut w);
+    let audiences = TestAudiences::default();
+    *audiences.refuse.lock().unwrap() = Some(Reject::new("invalid_amount", "too much"));
+    let driver = Driver {
+        module: Forgetful(w.module.clone()),
+        core: w.core.clone(),
+        batch: 1,
+    };
+    let stopped = driver.hand_on(&audiences, d(2027, 3, 2)).await.unwrap_err();
+    assert!(
+        matches!(&stopped, DriverError::Answer(why) if why.contains(&format!("notice {} was refused", waiting[0]))),
+        "{stopped}"
+    );
+    // With a module that records it, a second refusal after a retry is recorded too.
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await, Ok(Round { taken: 0, refused: 2 }));
+    w.tell("reinsurance-ops", Command::RetryNotice { seq: waiting[0] }).unwrap();
+    assert_eq!(w.ask(Query::NoticeRetries { seq: waiting[0] }), json!(1));
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await, Ok(Round { taken: 0, refused: 1 }));
+    assert!(w.module.state().exceptions().contains_key(&format!("notice:{}", waiting[0])));
+}
+
 /// Purpose: a module's reply to a notice is read as taken only when it says so: both
 /// modules' answer shapes are understood, a refusal comes back as the audience's own code
 /// and message, a command the host could not read is a refusal, and a reply that is neither
@@ -963,4 +1016,249 @@ async fn a_cycle_delivers_then_hands_on_and_waits_for_a_business_date() {
     let (_, round) = w.driver.cycle(&audiences).await;
     assert_eq!(round, Ok(Round { taken: 2, refused: 0 }));
     assert_eq!(audiences.taken.lock().unwrap()[0].2, d(2027, 3, 1));
+}
+
+/// Claims rules and authority for the partitions: enough for a claim to be
+/// notified and worked by one senior assessor.
+mod claims_setup {
+    use ic_core::claims_module as claims;
+
+    use claims::config::{Exclusion, HealthBenefit, Profile, Staff};
+    use claims::{AuthorityBook, ClaimType, DecisionKind, Line, Queue, Role, Rules};
+
+    pub fn rules() -> Rules {
+        let kinds = [
+            DecisionKind::Reserve,
+            DecisionKind::Admit,
+            DecisionKind::Decline,
+            DecisionKind::Withdraw,
+            DecisionKind::ReverseAdmission,
+            DecisionKind::ExGratia,
+            DecisionKind::EndBenefit,
+            DecisionKind::RecoveryStatus,
+            DecisionKind::WriteOff,
+        ];
+        Rules {
+            version: 1,
+            escalation_days: [1, 3, 7],
+            large_claim_minor: i64::MAX,
+            two_signature_admission_minor: i64::MAX,
+            two_signature_ex_gratia_minor: i64::MAX,
+            two_signature_write_off_minor: i64::MAX,
+            sharp_reserve_move_pct: 1_000,
+            reason_codes: [("R-1".to_string(), kinds.into_iter().collect())].into(),
+            straight_through_max_minor: [(ClaimType::Health, 2_000_00)].into(),
+            health_benefits: [(
+                "gp".to_string(),
+                HealthBenefit {
+                    per_event_minor: 60_00,
+                    per_year_minor: 600_00,
+                    lifetime_minor: i64::MAX / 4,
+                    copay_pct: 0,
+                    excess_minor: 0,
+                },
+            )]
+            .into(),
+            cause_codes: [("CC-0001".to_string(), vec!["cancer.skin".to_string()])].into(),
+            exclusions: [("EX-0001".to_string(), Exclusion::default())].into(),
+            medical_review_months: 6,
+            income_declaration_months: 3,
+            review_grace_days: 14,
+            max_offset_pct: 25,
+            late_death_days: 30,
+            estate_simplified_max_minor: i64::MAX,
+            pre_approval_days: 30,
+            recurrence_days: 180,
+            prepared_by: "config-ann".into(),
+            approved_by: vec!["config-bob".into(), "config-cat".into()],
+            ..Rules::default()
+        }
+    }
+
+    pub fn authority() -> AuthorityBook {
+        let lines: std::collections::BTreeSet<Line> = [Line::Health, Line::LumpSum, Line::IncomeProtection].into();
+        let types = [
+            ClaimType::Death,
+            ClaimType::TerminalIllness,
+            ClaimType::Trauma,
+            ClaimType::IncomeProtection,
+            ClaimType::Health,
+        ];
+        let senior = Profile {
+            lines,
+            max_admission_minor: types.into_iter().map(|t| (t, i64::MAX)).collect(),
+            max_payment_minor: i64::MAX,
+            max_reserve_minor: i64::MAX,
+            may_decline: true,
+            max_ex_gratia_minor: i64::MAX,
+            max_write_off_minor: i64::MAX,
+            may_override_exclusion: true,
+            may_reverse_admission: true,
+            may_change_recovery_status: true,
+            senior: true,
+        };
+        let person = |roles: &[Role]| Staff {
+            profile: "senior".to_string(),
+            roles: roles.iter().copied().collect(),
+            queues: [
+                Queue::Health,
+                Queue::Group,
+                Queue::LumpSum,
+                Queue::IncomeProtectionNew,
+                Queue::IncomeProtectionOngoing,
+                Queue::ComplexLarge,
+                Queue::Recoveries,
+            ]
+            .into(),
+            wip_limit: 0,
+            vulnerable_trained: true,
+            related_parties: Default::default(),
+        };
+        AuthorityBook {
+            version: 1,
+            profiles: [("senior".to_string(), senior)].into(),
+            staff: [
+                ("sam".to_string(), person(&[Role::Assessor, Role::QueueLead])),
+                ("sue".to_string(), person(&[Role::Assessor, Role::ClaimsManager])),
+            ]
+            .into(),
+            prepared_by: "config-ann".into(),
+            approved_by: vec!["config-bob".into(), "config-cat".into()],
+        }
+    }
+}
+
+fn claims_command(command: ic_core::claims_module::Command) -> ic_core::Command {
+    ic_core::Command::Claims(Box::new(command))
+}
+
+/// Purpose: a large claim notified on a partition reaches the module as the claims
+/// module's published fact, and the module's answers reach the claim through the driver:
+/// the large-claim notification and the consent requirement are recorded on the claim, a
+/// reinsurer's consent follows them, and a disputed item settled later is told to claims
+/// with the claim it belongs to. A notice the core refuses is set aside for a person, and
+/// sending it again uses a new key so the core looks at it afresh.
+/// Why it matters: claims holds admission of a large claim until the reinsurers have been
+/// told and have consented. If these notices stopped in the module's outbox, as they did
+/// before this, an assessor could admit a three million dollar claim with nothing on the
+/// claim to say consent was needed.
+#[tokio::test]
+async fn claims_hears_what_reinsurance_decides_about_its_claims() {
+    use ic_core::claims_module as claims;
+    let mut w = World::new();
+    {
+        let mut c = w.core.cluster.lock().unwrap();
+        let rules = Box::new(claims_setup::rules());
+        c.activate_everywhere(claims_command(claims::Command::ActivateRules { rules })).unwrap();
+        let book = Box::new(claims_setup::authority());
+        c.activate_everywhere(claims_command(claims::Command::ActivateAuthority { book })).unwrap();
+    }
+    let (p, policy) = w.issue(1, 3_000_000_00);
+    w.driver.deliver().await.unwrap();
+    let notify = claims::Command::Notify(Box::new(claims::command::Notification {
+        claim: "clm-1".into(),
+        policy: policy.0.clone(),
+        cover: "life".into(),
+        life: Some("life-1".into()),
+        claim_type: claims::ClaimType::Death,
+        event_date: d(2027, 3, 1),
+        channel: claims::Channel::App,
+        notifier: claims::Notifier::Policyholder,
+        claimant: Some("party-claimant".into()),
+        claimed_minor: None,
+        flags: claims::Flags::default(),
+        health: None,
+        underwriters: vec![],
+        catastrophe_event: None,
+        cause_code: None,
+    }));
+    w.core.cluster.lock().unwrap().submit(p, "claims", claims_command(notify)).unwrap();
+    w.feed();
+    let claim_id = ic_reinsurance::ClaimId::from("clm-1");
+    let book = w.module.state().claim(&claim_id).cloned().expect("the reserve reached the module as an event");
+    assert_eq!((book.policy.clone(), book.reserve_minor), (policy.clone(), 3_000_000_00));
+    let for_claims = |w: &World| w.module.state().notices_for(Audience::Claims, usize::MAX).len();
+    assert_eq!(for_claims(&w), 2, "a large claim notification and a consent requirement");
+
+    // No audience outside the core is needed for these.
+    let nobody = TestAudiences::default();
+    let on = d(2027, 3, 1);
+    *w.core.down.lock().unwrap() = true;
+    assert!(matches!(w.driver.hand_on(&nobody, on).await, Err(DriverError::Unavailable(_))));
+    assert_eq!(for_claims(&w), 2);
+    *w.core.down.lock().unwrap() = false;
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round { taken: 2, refused: 0 }));
+    assert_eq!(for_claims(&w), 0);
+    let on_claim = |w: &World| w.core.cluster.lock().unwrap().state(p).claims.claims["clm-1"].reinsurance.clone();
+    let seen = on_claim(&w);
+    assert!(seen.large_claim_notified);
+    assert!(seen.consent_required.contains("retail-life-surplus"), "{seen:?}");
+
+    // Each reinsurer consents; claims records each and the requirement is met.
+    for reinsurer in [north(), south()] {
+        let consent = Command::ReinsurerConsent {
+            claim: claim_id.clone(),
+            reinsurer,
+            agreed: true,
+            reference: "email-77".into(),
+        };
+        w.tell("reinsurance-ops", consent).unwrap();
+    }
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round { taken: 2, refused: 0 }));
+    let seen = on_claim(&w);
+    assert!(seen.consent_required.is_empty() && seen.consents.len() == 2, "{seen:?}");
+    // Handing the same notices on again, as after a lost acknowledgement, changes nothing.
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round::default()));
+
+    // A fact about a claim the partition does not hold: the core refuses the notice.
+    let ghost = ic_core::EventRecord {
+        id: format!("{p}-ghost"),
+        partition: p,
+        seq: w.module.state().checkpoint(p) + 1,
+        business_date: on,
+        log_index: 0,
+        traceparent: None,
+        event: ic_core::event::Event::Module {
+            module: "claims".into(),
+            kind: "claim_reserved".into(),
+            subject: "clm-ghost".into(),
+            detail: [
+                ("policy", policy.0.as_str()),
+                ("cover", "life"),
+                ("life", "life-1"),
+                ("event_date", "2027-03-01"),
+                ("gross_reserve_minor", "150000000"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        },
+    };
+    assert_eq!(w.module.apply(react(&ghost)[0].clone()).result, Ok(()));
+    let seq = w.module.state().notices_for(Audience::Claims, 1)[0].0;
+    let key = |w: &World| w.ask(Query::NoticeDelivery { seq })[1].as_str().unwrap().to_string();
+    let first_key = key(&w);
+    assert_eq!(w.ask(Query::NoticeDelivery { seq })[0], json!(p));
+    assert_eq!(w.ask(Query::NoticeDelivery { seq })[2], json!("reinsurance"));
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round { taken: 0, refused: 1 }));
+    let exception = w.module.state().exceptions()[&format!("notice:{seq}")].clone();
+    assert!(exception.detail.contains("Claims"), "{}", exception.detail);
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round::default()), "set aside, not offered again");
+    // Sent again by a person, it goes under a new key: the core would answer the old one
+    // with the refusal it remembers.
+    w.tell("reinsurance-ops", Command::RetryNotice { seq }).unwrap();
+    assert_ne!(key(&w), first_key);
+    assert_eq!(w.driver.hand_on(&nobody, on).await, Ok(Round { taken: 0, refused: 1 }));
+    let abandon = Command::AbandonNotice {
+        seq,
+        reason: "the claim was entered in error and never existed".into(),
+        approved_by: "lee".into(),
+    };
+    w.tell("reinsurance-ops", abandon).unwrap();
+    assert_eq!(for_claims(&w), 0);
+    // Only notices for claims that are still waiting have a command for the core.
+    let gone = answer(&w.module.state(), serde_json::to_value(Query::NoticeDelivery { seq }).unwrap());
+    assert!(gone.unwrap_err().contains("not waiting to be handed to claims"));
+    let staff = w.module.state().notices(1)[0].0;
+    assert!(answer(&w.module.state(), serde_json::to_value(Query::NoticeDelivery { seq: staff }).unwrap()).is_err());
 }
