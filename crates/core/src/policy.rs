@@ -315,6 +315,9 @@ pub struct ClaimLedger {
     /// Overpaid and not yet recovered or written off.
     pub receivable_minor: i64,
     pub payments: BTreeMap<String, ClaimPayment>,
+    /// Premium paid from claims expense under this claim's waiver.
+    #[serde(default)]
+    pub waived_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

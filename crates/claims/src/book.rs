@@ -93,8 +93,81 @@ impl ClaimsState {
         if claim.queue == crate::Queue::IncomeProtectionNew {
             claim.queue = crate::Queue::IncomeProtectionOngoing;
         }
+        if claim.claim_type == crate::ClaimType::PremiumWaiver {
+            // Nothing is paid out, so there is no payment to time. The
+            // waiver itself starts with the day's work.
+            claim.waiver_from = Some(terms.first_period);
+            claim.due.insert((cx.today, Due::Waiver));
+            return;
+        }
         // Time from the end of the waiting period to the first payment.
         self.start_timer(claim, TimerKind::Payment, terms.first_period.max(cx.today));
+    }
+
+    /// Start waiving premiums beside a benefit in payment. The owner says
+    /// from when; it ends when the benefit does.
+    pub(crate) fn start_waiver(&mut self, cx: &mut Cx<'_>, id: &str, from: NaiveDate, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        let running = claim.status == Status::InPayment && claim.schedule.as_ref().is_some_and(|s| s.ended.is_none() && from < s.end);
+        if !running || from < claim.event_date {
+            return Err(Reject::new(
+                "not_in_payment",
+                "premiums are waived beside a benefit in payment, from a date within it",
+            ));
+        }
+        if claim.waiver_from.is_some() {
+            return Err(Reject::new("waiver_exists", "premiums are already being waived on this claim"));
+        }
+        claim.waiver_from = Some(from);
+        self.waive(cx, &claim)?;
+        claim.due.insert((plus_days(cx.today, 1), Due::Waiver));
+        note(&mut claim, cx, Some(actor), format!("waiver_started:{from}"));
+        cx.notify("premium_waiver_started", id, &[("policy", claim.policy.clone()), ("from", from.to_string())]);
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// Ask the core to pay from claims expense whatever premium is owing
+    /// for periods in the waiver's window.
+    fn waive(&self, cx: &mut Cx<'_>, claim: &Claim) -> Result<(), Reject> {
+        let (Some(from), Some(s)) = (claim.waiver_from, claim.schedule.as_ref()) else {
+            return Ok(());
+        };
+        cx.core.execute(Instruction::WaivePremium {
+            claim: claim.id.clone(),
+            policy: claim.policy.clone(),
+            cover: claim.cover.clone(),
+            from,
+            until: s.end,
+        })
+    }
+
+    /// One day of a waiver: waive what has been billed, and look again
+    /// tomorrow while the benefit runs. A claim that is only a waiver has no
+    /// payment run to end it, so it ends here when its last day has passed.
+    pub(crate) fn waiver_day(&self, cx: &mut Cx<'_>, claim: &mut Claim) {
+        if claim.status != Status::InPayment || claim.waiver_from.is_none() {
+            return;
+        }
+        let tomorrow = plus_days(cx.today, 1);
+        // A refusal is tried again tomorrow: the premium stays owing meanwhile.
+        if self.waive(cx, claim).is_err() {
+            note(claim, cx, None, "waiver_refused");
+        }
+        let only_waiver = claim.claim_type == crate::ClaimType::PremiumWaiver;
+        let Some(s) = claim.schedule.as_mut() else { return };
+        if only_waiver {
+            // The days before today are done; the claim ends on the first day outside the waiver.
+            s.next_period = cx.today.min(s.end).max(s.next_period);
+            if s.next_period >= s.end {
+                s.ended.get_or_insert(EndReason::BenefitPeriodEnd);
+                if self.close(cx, claim, Status::Ended, None).is_ok() {
+                    return;
+                }
+            }
+        }
+        claim.due.insert((tomorrow, Due::Waiver));
     }
 
     /// End a benefit. If nothing is left to pay the claim closes, and what
@@ -571,6 +644,9 @@ impl ClaimsState {
                 for c in self.in_payment.iter().filter_map(|id| self.claims.get(id)).filter(|c| c.in_run.is_none()) {
                     cx.core.work(1);
                     let Some(s) = c.schedule.as_ref() else { continue };
+                    if c.claim_type == crate::ClaimType::PremiumWaiver {
+                        continue;
+                    }
                     let Some(payee) = c.payee.as_ref() else {
                         if s.next_period <= benefit_date && s.next_period < s.end {
                             unpayable.push(c.id.clone());

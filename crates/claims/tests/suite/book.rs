@@ -988,3 +988,131 @@ fn a_lump_sum_paid_late_carries_interest() {
     assert_eq!((last.amount_minor, last.interest_minor), (100_000, 200));
     assert_eq!((c.status, c.paid_minor(false), c.payable_minor), (Status::Paid, 200_000, 0));
 }
+
+fn waivers(w: &World) -> Vec<(chrono::NaiveDate, chrono::NaiveDate)> {
+    let asked = w.core.instructions.iter().filter_map(|i| match i {
+        Instruction::WaivePremium { from, until, .. } => Some((*from, *until)),
+        _ => None,
+    });
+    asked.collect()
+}
+
+/// Purpose: the owner of a benefit in payment starts a premium waiver from a date inside it;
+/// the core is asked at once and again every day to pay the billed premium from claims
+/// expense, a day the core refuses is tried again the next, and the waiver's window closes
+/// where the benefit ends.
+/// Why it matters: a disabled customer whose cover includes waiver must not be billed into
+/// arrears and lapse while on claim. Billing dates belong to the core, so the only way claims
+/// can be sure no premium is missed is to ask every day for exactly the benefit's own window.
+#[test]
+fn premiums_are_waived_beside_a_benefit_in_payment() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    admitted(&mut w, "c-1", 1_000);
+    let start = |claim: &str, who: &str, from: chrono::NaiveDate| Command::StartWaiver {
+        claim: claim.into(),
+        from,
+        actor: actor(who),
+    };
+    assert_eq!(w.refused(start("ip-1", "ben", d(2027, 3, 1))), "not_owner");
+    // A lump sum has no benefit to run beside; the date must fall inside the benefit.
+    assert_eq!(w.refused(start("c-1", "ana", d(2027, 3, 1))), "not_in_payment");
+    assert_eq!(w.refused(start("ip-1", "ana", d(2029, 3, 1))), "not_in_payment");
+    assert_eq!(w.refused(start("ip-1", "ana", d(2027, 2, 1))), "not_in_payment");
+    w.core.refuse_next = 1;
+    assert_eq!(w.refused(start("ip-1", "ana", d(2027, 3, 1))), "ledger");
+    assert_eq!(w.claim("ip-1").waiver_from, None);
+    w.ok(start("ip-1", "ana", d(2027, 3, 1)));
+    assert_eq!(waivers(&w), vec![(d(2027, 3, 1), d(2029, 3, 1))]);
+    assert_eq!(w.core.noticed("premium_waiver_started")[0]["from"], "2027-03-01");
+    assert_eq!(w.refused(start("ip-1", "ana", d(2027, 3, 1))), "waiver_exists");
+
+    w.advance(1);
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w).len(), 2);
+    // The core refuses for a day: it is noted and asked again the next.
+    w.advance(1);
+    w.core.refuse_next = 1;
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w).len(), 2);
+    assert!(w.claim("ip-1").history.iter().any(|h| h.action == "waiver_refused"));
+    w.advance(1);
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w).len(), 3);
+
+    // The benefit ends: the window the core is given ends with it.
+    let ends = w.core.today;
+    let end = Request::EndBenefit {
+        end: ends,
+        reason: EndReason::Recovered,
+    };
+    w.decided("ip-1", "ana", end, "R-OK");
+    w.advance(1);
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w).last(), Some(&(d(2027, 3, 1), ends)));
+}
+
+/// Purpose: a claim that is only a premium waiver is admitted with no money benefit, starts
+/// waiving from its first day without anyone asking, is never put in a payment run, and ends
+/// itself when its last day has passed.
+/// Why it matters: a waiver claim pays nobody, so none of the machinery that moves a benefit
+/// claim along (the payment timer, the run, the last payment closing it) applies. Without its
+/// own path it would either pay the premium out as cash or stay open for ever.
+#[test]
+fn a_waiver_only_claim_waives_from_admission_and_ends_itself() {
+    let mut w = World::new();
+    w.ok(Command::Notify(Box::new(World::notification(
+        "w-1",
+        "pol-2",
+        "ip",
+        ic_claims::ClaimType::PremiumWaiver,
+    ))));
+    w.ok(Command::Acknowledge {
+        claim: "w-1".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("w-1", "ana");
+    w.assess("w-1", "CC-0002");
+    let admit = |monthly: i64| Request::Admit {
+        amount_minor: None,
+        periodic: Some(ic_claims::command::Periodic {
+            monthly_minor: monthly,
+            first_period: d(2027, 3, 1),
+            end: d(2029, 3, 1),
+            expected_end: d(2028, 3, 1),
+        }),
+        exclusion_override: None,
+        exclusion_reviewed: false,
+        payer_deceased: false,
+    };
+    assert_eq!(w.undecided("w-1", "ana", admit(3_000), "R-OK"), "invalid_schedule");
+    w.decided("w-1", "ana", admit(0), "R-OK");
+    let c = w.claim("w-1");
+    assert_eq!((c.status, c.waiver_from), (Status::InPayment, Some(d(2027, 3, 1))));
+    assert!(!c.timers.contains_key(&TimerKind::Payment), "nothing is paid, so no payment is timed");
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w), vec![(d(2027, 3, 1), d(2029, 3, 1))]);
+    // No payee, and still nothing for a run to pay or to complain about.
+    let today = w.core.today;
+    assert_eq!(w.refused(prepare("run-1", today)), "nothing_to_pay");
+    assert!(w.claim("w-1").tasks.iter().all(|t| t.kind != TaskKind::PaymentFailure));
+
+    let ends = w.core.today + chrono::Days::new(2);
+    let end = Request::EndBenefit {
+        end: ends,
+        reason: EndReason::Recovered,
+    };
+    w.decided("w-1", "ana", end, "R-OK");
+    w.advance(1);
+    w.ok(Command::DrainDue);
+    assert_eq!(w.claim("w-1").status, Status::InPayment);
+    w.advance(1);
+    w.ok(Command::DrainDue);
+    let c = w.claim("w-1");
+    assert_eq!((c.status, c.closed_on), (Status::Ended, Some(ends)));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Close { .. })));
+    let asked = waivers(&w).len();
+    w.advance(3);
+    w.ok(Command::DrainDue);
+    assert_eq!(waivers(&w).len(), asked, "an ended waiver asks for nothing more");
+}

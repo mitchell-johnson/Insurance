@@ -331,6 +331,14 @@ pub enum Command {
         provider: String,
         actor: Actor,
     },
+    /// Start waiving premiums on the claim's policy while its benefit is in
+    /// payment, where the cover includes waiver of premium.
+    StartWaiver {
+        claim: String,
+        /// Premiums for periods starting on or after this date are waived.
+        from: NaiveDate,
+        actor: Actor,
+    },
     PaymentReturned {
         claim: String,
         payment_ref: String,
@@ -437,6 +445,7 @@ impl Command {
             Command::VerifyPayee { .. } => "verify_payee",
             Command::Pay { .. } => "pay",
             Command::PayCost { .. } => "pay_cost",
+            Command::StartWaiver { .. } => "start_waiver",
             Command::PaymentReturned { .. } => "payment_returned",
             Command::DeclareIncome { .. } => "declare_income",
             Command::PrepareRun { .. } => "prepare_run",
