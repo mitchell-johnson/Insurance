@@ -795,14 +795,16 @@ impl PaymentsState {
                     ),
                     // A settled collection is a receipt, applied the way
                     // every receipt is.
-                    None => (
-                        "cash-matching",
-                        ic_core::Command::ApplyReceipt {
-                            policy,
-                            receipt: n.item.clone(),
-                            amount,
-                        },
-                    ),
+                    None => {
+                        let receipt = n.item.clone();
+                        let command = match self.member_collected_from(&n) {
+                            // A member's own money is set against that
+                            // member's bills and nobody else's.
+                            Some(life) => ic_core::Command::ApplyMemberReceipt { policy, life, receipt, amount },
+                            None => ic_core::Command::ApplyReceipt { policy, receipt, amount },
+                        };
+                        ("cash-matching", command)
+                    }
                 };
                 self.push_outbox(OutboxEntry {
                     key: format!("settle-{}", n.item),

@@ -1186,7 +1186,8 @@ impl GroupState {
             | CoreEvent::PremiumAdjusted { policy, .. }
             | CoreEvent::LoadingAdjusted { policy, .. }
             | CoreEvent::PolicyBalance { policy, .. }
-            | CoreEvent::LayerAdded { policy, .. } => policy,
+            | CoreEvent::LayerAdded { policy, .. }
+            | CoreEvent::MemberCoverLapsed { policy, .. } => policy,
             _ => return Ok(()),
         };
         let Some(scheme) = self.by_policy.get(policy).cloned() else { return Ok(()) };
@@ -1251,6 +1252,28 @@ impl GroupState {
                             st.clear(&s.id, ExceptionKind::PersistentShortPayment, None);
                             st.emit(GroupEvent::JoinersResumed { scheme: s.id.clone() });
                         }
+                    }
+                }
+                // The member stopped paying for cover that was theirs to pay
+                // for, and the core ended it. The case is over; the employer
+                // learns only that the cover is no longer in place.
+                CoreEvent::MemberCoverLapsed { life, layers, .. } => {
+                    let ended: Vec<u64> = s
+                        .cases
+                        .values_mut()
+                        .filter(|c| c.life == life && c.status == CaseStatus::Accepted)
+                        .filter(|c| c.layer.is_some_and(|n| layers.iter().any(|(cover, layer)| *cover == c.cover && *layer == n)))
+                        .map(|c| {
+                            c.status = CaseStatus::Ended;
+                            c.id
+                        })
+                        .collect();
+                    for case in ended {
+                        st.emit(GroupEvent::ExcessCoverEnded {
+                            scheme: s.id.clone(),
+                            case,
+                            life: life.clone(),
+                        });
                     }
                 }
                 CoreEvent::LayerAdded {

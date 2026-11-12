@@ -182,6 +182,23 @@ async fn a_claim_is_read_only_by_claims_staff_and_the_person_it_is_about() {
     let (status, _) = Call::new("GET", "/v1/claims/clm-9").roles("claims").send(&app).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
+    // The working view is for claims staff alone, and carries no clinical field.
+    let (status, work) = Call::new("GET", "/v1/claims/clm-1/work").roles("claims").send(&app).await;
+    assert_eq!(status, StatusCode::OK, "{work}");
+    assert_eq!((work["claim"].as_str(), work["queue"].as_str()), (Some("clm-1"), Some("lump_sum")), "{work}");
+    assert!(
+        work["timers"].is_object() && work["tasks"].is_array() && work["reserve_minor"].is_i64(),
+        "{work}"
+    );
+    assert!(work.get("cause_code").is_none() && work.get("decisions").is_none(), "{work}");
+    let (status, _) = Call::new("GET", "/v1/claims/clm-1/work")
+        .viewer("party-00000001", "policyholder")
+        .send(&app)
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "the person it is about has the claimant's view, not the staff's");
+    let (status, _) = Call::new("GET", "/v1/claims/clm-9/work").roles("claims").send(&app).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
     // Staff views.
     let (status, queue) = Call::new("GET", "/v1/claims/queues/lump_sum").roles("claims").send(&app).await;
     assert_eq!(status, StatusCode::OK, "{queue}");

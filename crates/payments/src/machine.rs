@@ -43,6 +43,9 @@ pub enum Command {
         authority: Id,
         policy: PolicyId,
         party: String,
+        /// Set for a scheme member who pays for their own cover.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        life: Option<ic_core::LifeId>,
         account: AccountDetails,
         sole_name: bool,
     },
@@ -549,9 +552,10 @@ impl PaymentsState {
                 authority,
                 policy,
                 party,
+                life,
                 account,
                 sole_name,
-            } => self.create_authority(tx, authority, policy, party, account, sole_name),
+            } => self.create_authority(tx, authority, policy, party, life, account, sole_name),
             Command::SuspendAuthority { authority, reason } => self.suspend_authority(tx, &authority, reason),
             Command::ReinstateAuthority { authority } => self.reinstate_authority(tx, &authority),
             Command::CancelAuthority { authority, reason } => self.cancel_authority(tx, &authority, reason),
