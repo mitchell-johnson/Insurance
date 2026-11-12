@@ -203,6 +203,9 @@ pub fn policy_accounts(p: &PolicyId, c: Currency) -> Vec<Account> {
 pub fn transferable_accounts(p: &PolicyId, c: Currency) -> Vec<Account> {
     let mut all = policy_accounts(p, c);
     all.push(refund_payable(p, c));
+    // A claim travels with its policy, and so does its money.
+    all.push(claim_reserve(p, c));
+    all.push(claim_recovery_receivable(p, c));
     all
 }
 

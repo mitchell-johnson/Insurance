@@ -379,15 +379,6 @@ fn a_lump_sum_claim_runs_from_notification_to_the_bank() {
     assert_eq!(facts.policy_status, "in_force");
     assert_eq!(facts.life_party.as_deref(), Some(facts.policyholder.as_str()));
 
-    // A policy with an open claim stays on its partition.
-    let transfer = Command::BeginTransfer {
-        policy: id.clone(),
-        transfer_id: "t-1".into(),
-        target_group: GroupId("grp-elsewhere".into()),
-        target_partition: 1,
-    };
-    assert_eq!(code(c.submit(0, "transfer", transfer)), "open_claim");
-
     ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
     assert_eq!(money(&c, &id), (0, 80_000_00, 0));
     // The estimate was 100,000 and the admission 80,000: claims expense shows 80,000.
@@ -1618,4 +1609,135 @@ fn a_lender_recorded_on_the_policy_is_paid_before_the_claimant() {
     let to_bank = module_events(&c, "claim_paid").into_iter().find(|e| e["payment_ref"] == "int-pay-1").unwrap();
     assert_eq!((to_bank["payee"].as_str(), to_bank["account_ref"].as_str()), ("party-bank", ""));
     days(&mut c, 2);
+}
+
+/// Purpose: a policy with a benefit in payment moves to another partition and takes its claim
+/// with it: the claim, its schedule, its timers and its money arrive as they left, nothing can
+/// be done to the claim while it is in flight, a claim sitting in an unapproved run holds the
+/// move back, and the next benefit is paid and settled on the new partition.
+/// Why it matters: an owner changing group must not have to wait for a claim to end, and a
+/// claimant must not miss a payment because the policy moved. The claim record, the core's
+/// claim ledger and the journal live on one partition, so they have to move in one step.
+#[test]
+fn a_policy_moves_partition_with_its_claim_in_payment() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 5);
+    let first = c.business_date().unwrap();
+    open_claim(&mut c, "clm-ip", &id, "trauma", ClaimType::IncomeProtection, first);
+    ok(&mut c, decide("clm-ip", admit(None, Some(benefit(3_000_00, first)), false)));
+    verify_payee(&mut c, "clm-ip");
+    pay_run(&mut c, "run-1", first);
+    c.submit(0, "payments", settle(&id, &format!("run-1/clm-ip/{first}"), 3_000_00)).unwrap();
+    days(&mut c, 31);
+    let second = first.checked_add_months(chrono::Months::new(1)).unwrap();
+
+    let target = (0..).map(|i| GroupId(format!("grp-move-{i}"))).find(|g| c.partition_of(g) == 1).unwrap();
+    let begin = |transfer: &str| Command::BeginTransfer {
+        policy: id.clone(),
+        transfer_id: transfer.into(),
+        target_group: target.clone(),
+        target_partition: 1,
+    };
+    // Prepared and waiting for its approver: the run names the claim, so the claim stays.
+    let prepare = claims::Command::PrepareRun {
+        run: "run-2".into(),
+        kind: RunKind::Benefit,
+        benefit_date: second,
+        actor: actor("sue"),
+    };
+    ok(&mut c, prepare);
+    assert_eq!(code(c.submit(0, "transfer", begin("t-0"))), "claim_in_run");
+    let approve = claims::Command::ApproveRun {
+        run: "run-2".into(),
+        actor: actor("sam"),
+    };
+    ok(&mut c, approve);
+    // Released and not yet settled: the instructed payment travels too.
+    let before = claim(&c, "clm-ip").clone();
+    let (reserve, payable, _) = money(&c, &id);
+    assert_eq!(payable, 3_000_00);
+
+    c.submit(0, "transfer", begin("t-1")).unwrap();
+    // In flight the claim is nowhere to be worked on.
+    let note = claims::Command::RequestEvidence {
+        claim: "clm-ip".into(),
+        evidence: "e-1".into(),
+        kind: "medical_report".into(),
+        from: "treating-doctor".into(),
+        actor: actor("sam"),
+    };
+    assert_eq!(code(run(&mut c, note.clone())), "unknown_claim");
+    assert_eq!(code(c.submit(1, "claims", wrap(note.clone()))), "unknown_claim");
+    while c.messages_in_flight() > 0 {
+        c.relay_messages(|_| ic_sim::Delivery::Deliver);
+    }
+    assert!(c.relay_errors.is_empty(), "{:?}", c.relay_errors);
+    assert_eq!(c.locate(&id), Some(1));
+    clean(&c);
+
+    // Exactly as it left, on the new partition and gone from the old.
+    assert_eq!(c.state(1).claims.claims["clm-ip"], before);
+    assert!(!c.state(0).claims.claims.contains_key("clm-ip") && c.state(0).claims.in_transfer.is_empty());
+    assert!(c.state(1).claims.in_payment.contains("clm-ip"));
+    let on_target = |account: ic_ledger::Account| c.state(1).ledger.natural_balance(&account.id);
+    assert_eq!(on_target(accounts::claim_reserve(&id, NZD)), reserve);
+    assert_eq!(on_target(accounts::benefit_payable(&id, NZD)), payable);
+    assert_eq!(money(&c, &id), (0, 0, 0), "nothing of the claim is left in the old partition's ledger");
+
+    // Life goes on there: the released payment settles, and the next run pays the next period.
+    c.submit(1, "payments", settle(&id, &format!("run-2/clm-ip/{second}"), 3_000_00)).unwrap();
+    c.submit(1, "claims", wrap(note)).unwrap();
+    days(&mut c, 31);
+    let third = second.checked_add_months(chrono::Months::new(1)).unwrap();
+    for command in [
+        claims::Command::PrepareRun {
+            run: "run-3".into(),
+            kind: RunKind::Benefit,
+            benefit_date: third,
+            actor: actor("sue"),
+        },
+        claims::Command::ApproveRun {
+            run: "run-3".into(),
+            actor: actor("sam"),
+        },
+    ] {
+        c.submit(1, "claims", wrap(command)).unwrap();
+    }
+    c.submit(1, "payments", settle(&id, &format!("run-3/clm-ip/{third}"), 3_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(c.state(1).claims.claims["clm-ip"].schedule.as_ref().unwrap().periods.len(), 3);
+}
+
+/// Purpose: a transfer that is called off puts the policy's claims back exactly as they were,
+/// workable again on the partition they never left.
+/// Why it matters: a target can refuse a policy. If the claims had been let go when the move
+/// began and not restored, a refused move would orphan a claim with its reserve still posted.
+#[test]
+fn an_aborted_transfer_puts_the_claims_back() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    let before = c.state(0).claims.clone();
+    let begin = Command::BeginTransfer {
+        policy: id.clone(),
+        transfer_id: "t-1".into(),
+        target_group: (0..).map(|i| GroupId(format!("grp-move-{i}"))).find(|g| c.partition_of(g) == 1).unwrap(),
+        target_partition: 1,
+    };
+    c.submit(0, "transfer", begin).unwrap();
+    assert!(c.state(0).claims.in_transfer.contains_key(&id.to_string()));
+    let abort = Command::AbortTransfer {
+        policy: id.clone(),
+        transfer_id: "t-1".into(),
+    };
+    c.submit(0, "transfer", abort.clone()).unwrap();
+    assert_eq!(c.state(0).claims, before);
+    // Said twice, it changes nothing.
+    c.submit(0, "transfer", abort).unwrap();
+    assert_eq!(c.state(0).claims, before);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    assert_eq!(money(&c, &id), (0, 80_000_00, 0));
 }
