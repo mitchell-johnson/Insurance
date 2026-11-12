@@ -122,7 +122,7 @@ impl ClaimsState {
         decision: u32,
     ) {
         let mut changed = None;
-        if let Some(o) = claim.overpayments.iter_mut().find(|o| o.id == overpayment) {
+        for o in claim.overpayments.iter_mut().filter(|o| o.id == overpayment) {
             o.status = status;
             o.offset_pct = if status == RecoveryStatus::Offset { offset_pct } else { 0 };
             o.instalment_minor = if status == RecoveryStatus::Arrangement { instalment_minor } else { 0 };

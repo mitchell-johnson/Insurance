@@ -323,3 +323,40 @@ fn a_refused_layer_is_loud_and_a_due_ending_survives_either_order() {
     h.salary("f2", "E004", "executive", 180_000_00);
     assert_eq!(status(&h, case), CaseStatus::Ended);
 }
+
+/// Purpose: when the core refuses a cover ceiling that reinsurance asked for, the refusal
+/// is reported against the member as a ceiling, raised as an exception, and the module
+/// does not show a ceiling the core does not hold.
+/// Why it matters: staff clear these from the exception list. A refusal filed under an
+/// empty or wrong subject cannot be found, and reinsurance would go on believing the
+/// member's accumulation had been brought back under the retention.
+#[test]
+fn refused_work_is_reported_by_what_it_was_about() {
+    let (mut h, _) = with_executive(terms());
+    let refused = |h: &Harness, subject: &str, kind: &str| {
+        h.saw(|e| matches!(e, GroupEvent::RowRefused { employee_id, change, code, .. } if employee_id == subject && change == kind && code == "refused_here"))
+    };
+    let cover = h.requests[0].cover.clone();
+
+    h.core_faults.push_back(Some("refused_here".into()));
+    h.send_as(
+        caller::REINSURANCE,
+        "reinsurance",
+        GroupCommand::RequireUnderwrittenExcess {
+            policy: h.policy.clone(),
+            life: life("E003"),
+            cover,
+            excess_minor: 100_000_00,
+            reference: "ri-accum-9".into(),
+        },
+    )
+    .unwrap();
+    h.settle();
+    assert!(refused(&h, "E003", "cover_ceiling"), "{:?}", h.published);
+    assert!(h.g.exceptions.values().any(|e| e.kind == ExceptionKind::RowRefused && e.subject == "E003"));
+    assert_eq!(
+        h.scheme().membership.active("E003").unwrap().auto_cap_minor,
+        None,
+        "no ceiling the core does not hold"
+    );
+}
