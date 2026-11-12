@@ -310,6 +310,11 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         if let Ok(existing) = self.document(&request.document).await {
             return Ok(existing);
         }
+        // The key stands for the request, not only the document: a refusal
+        // is remembered against what was asked, so a request put right is
+        // judged afresh, while the same request again changes nothing.
+        let asked = crate::template::sha256_hex(&serde_json::to_vec(&request).unwrap_or_default());
+        let key = format!("issue:{}:{}", request.document, &asked[..16]);
         let today = nz_date((self.clock)());
         let template_ref = match request.template_version {
             Some(version) => TemplateRef {
@@ -373,7 +378,6 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             components: request.components,
             notice: request.notice,
         };
-        let key = format!("issue:{}", request.document);
         if let Err(e) = self.send(key, &request.caller, Command::IssueDocument(Box::new(issue))).await {
             if matches!(e, DriverError::Refused(_)) {
                 // Nothing refers to the object, and its key was never kept.
