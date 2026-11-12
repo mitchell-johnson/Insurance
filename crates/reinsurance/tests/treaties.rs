@@ -232,3 +232,17 @@ fn a_rate_is_found_by_the_facts_held_and_never_guessed() {
         None
     );
 }
+
+/// Purpose: a statement period starts a month, a quarter or a year before the day after its
+/// end, for each of the three periods a treaty can name.
+/// Why it matters: the period start decides which entries are "this period" and which are
+/// shown as prior-period corrections on the reinsurer's statement. A yearly treaty that
+/// started its period a quarter back would report nine months of premium as corrections.
+#[test]
+fn a_statement_period_starts_where_its_length_says() {
+    let end = d(2027, 12, 31);
+    assert_eq!(StatementPeriod::Monthly.start_for(end), d(2027, 12, 1));
+    assert_eq!(StatementPeriod::Quarterly.start_for(end), d(2027, 10, 1));
+    assert_eq!(StatementPeriod::Yearly.start_for(end), d(2027, 1, 1));
+    assert_eq!(StatementPeriod::Yearly.start_for(d(2028, 2, 29)), d(2027, 3, 1));
+}

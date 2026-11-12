@@ -557,3 +557,58 @@ fn catastrophe_and_stop_loss_respond_to_what_is_kept_across_claims() {
     assert_eq!(b.posted(PostingKind::AggregateRecovery, &north()), 250 * K);
     b.assert_reconciles();
 }
+
+/// Purpose: a claim on cover ceded facultatively recovers the facultative reinsurer's share
+/// as it does a treaty share, and the exposure to that reinsurer shows the sum ceded to it
+/// and the recovery expected while the claim is open.
+/// Why it matters: facultative cover is placed exactly where the amounts are largest. A
+/// recovery that counted treaty shares only would leave the insurer carrying the part of a
+/// claim it paid a reinsurer to take, and the exposure report would understate what one
+/// reinsurer owes if it failed.
+#[test]
+fn a_claim_on_facultative_cover_recovers_the_facultative_share() {
+    let mut b = Bench::new();
+    b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 450 * K, d(2027, 2, 1))]);
+    b.today = d(2027, 3, 1);
+    b.issue_scheme(2, "S1", d(2027, 3, 1), vec![member_cover("M1", 700 * K)]);
+    b.feed(
+        2,
+        vec![ic_core::event::Event::MemberIdentified {
+            policy: PolicyId::from("S1"),
+            life: LifeId::from("M1"),
+            party: ic_core::PartyId::from("anna"),
+        }],
+    );
+    // The scheme cover keeps 50,000 and 650,000 is with north on the standing terms.
+    b.today = d(2027, 6, 10);
+    let on = d(2027, 6, 1);
+    assert_eq!(b.ri.exposure(on)[&north()].ceded_sum_at_risk_minor, 650 * K);
+    fact(
+        &mut b,
+        ClaimFact::Reserved {
+            claim: ClaimId::from("C1"),
+            policy: PolicyId::from("S1"),
+            cover: "group-life".into(),
+            life: LifeId::from("M1"),
+            event_date: on,
+            gross_reserve_minor: 700 * K,
+            periodic: false,
+            catastrophe_event: None,
+        },
+    );
+    assert_eq!(b.posted(PostingKind::Recoverable, &north()), 650 * K);
+    let exposure = b.ri.exposure(on);
+    assert_eq!(exposure[&north()].open_recoverables_minor, 650 * K);
+    assert!(!exposure.contains_key(&south()), "south has no share of either cover");
+    fact(
+        &mut b,
+        ClaimFact::Admitted {
+            claim: ClaimId::from("C1"),
+            admitted_minor: 700 * K,
+        },
+    );
+    fact(&mut b, paid("C1", "PAY-1", 700 * K, false));
+    assert_eq!(b.posted(PostingKind::RecoveryDue, &north()), 650 * K);
+    assert_eq!(b.ri.exposure(on)[&north()].open_recoverables_minor, 0);
+    b.assert_reconciles();
+}
