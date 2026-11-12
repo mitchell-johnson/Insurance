@@ -201,3 +201,34 @@ fn state_and_commands_survive_a_round_trip() {
     let short = r#"{"decide":{"claim":"c-1","request":{"admit":{}},"actor":{"staff":"ana","purpose":"assessing"}}}"#;
     assert!(serde_json::from_str::<Command>(short).is_ok());
 }
+
+/// Purpose: the code a claim type or a status is published under is the same word its JSON
+/// form uses, for every type and status, apart from the two closing outcomes that are named
+/// for what happened (`benefit_ended`, `admission_reversed`).
+/// Why it matters: other modules match on these strings in events while the API carries the
+/// JSON form. If the two drifted apart, a reader would silently stop recognising a claim type.
+#[test]
+fn published_codes_match_the_json_form() {
+    for t in [
+        ClaimType::Death,
+        ClaimType::TerminalIllness,
+        ClaimType::Trauma,
+        ClaimType::TotalPermanentDisability,
+        ClaimType::IncomeProtection,
+        ClaimType::Health,
+        ClaimType::PremiumWaiver,
+    ] {
+        assert_eq!(serde_json::to_value(t).expect("a claim type is data"), t.code());
+    }
+    for s in [
+        Status::Open,
+        Status::Admitted,
+        Status::InPayment,
+        Status::Paid,
+        Status::Declined,
+        Status::Withdrawn,
+    ] {
+        assert_eq!(serde_json::to_value(s).expect("a status is data"), s.code());
+    }
+    assert_eq!((Status::Ended.code(), Status::Reversed.code()), ("benefit_ended", "admission_reversed"));
+}
