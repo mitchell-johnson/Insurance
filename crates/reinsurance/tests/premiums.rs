@@ -234,3 +234,73 @@ fn original_premium_and_facultative_shares_are_charged_on_their_own_terms() {
     );
     b.assert_reconciles();
 }
+
+/// Purpose: a policy that lapses part way through a billed period and is reinstated after
+/// the period has ended is charged for the days before the lapse only; the cover that
+/// resumes later adds nothing to the earlier period.
+/// Why it matters: the cession record then has a stretch that starts after the period being
+/// priced. Counting it, or counting its days as negative, would bill the reinsurer for a
+/// time the policy was out of force or hand premium back that was properly ceded.
+#[test]
+fn cover_that_resumes_after_a_period_adds_nothing_to_it() {
+    let mut b = anna();
+    b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    let status = |from, to| Event::PolicyStatusChanged {
+        policy: PolicyId::from("P1"),
+        from,
+        to,
+    };
+    b.today = d(2027, 2, 10);
+    b.feed(1, vec![status(PolicyStatus::InForce, PolicyStatus::Lapsed)]);
+    b.today = d(2027, 3, 5);
+    let resumed = b.feed(1, vec![status(PolicyStatus::Lapsed, PolicyStatus::InForce)]);
+    assert_eq!(b.ri.cession_record(&key("P1", "life", 1, "L1")).len(), 3);
+    assert_eq!(charged(&b, "P1", d(2027, 2, 1), ChargeKind::Premium, &north()), rated(180 * K, 650_000, 9));
+    assert!(
+        resumed.instructions.iter().all(|i| !matches!(i.body, InstructionBody::Post { .. })),
+        "reinstatement in March moves no money for February"
+    );
+    // March is billed from the day the cover resumed: the stretch that ended in February
+    // is before the period and adds nothing to it either.
+    b.premium_due(1, "P1", 2, d(2027, 3, 1), d(2027, 4, 1), &[]);
+    assert_eq!(charged(&b, "P1", d(2027, 3, 1), ChargeKind::Premium, &north()), rated(180 * K, 650_000, 27));
+    b.assert_reconciles();
+}
+
+/// Purpose: a cover that no treaty takes is kept in full and nothing is ceded or charged for
+/// it when its premium falls due, while the cover beside it on the same policy is charged as
+/// usual.
+/// Why it matters: a policy often mixes covers that are reinsured with covers that are not.
+/// The unreinsured one must neither stop the billing of the other nor be reported as a cover
+/// that could not be priced, which would send people looking for a rate that does not exist.
+#[test]
+fn cover_under_no_treaty_is_charged_nothing() {
+    let mut b = Bench::new();
+    b.issue(
+        1,
+        "P1",
+        "anna",
+        vec![
+            layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1)),
+            layer("tpd", "tpd", 1, "L1", 300 * K, d(2027, 2, 1)),
+        ],
+    );
+    b.factors("P1", "L1", d(1990, 3, 10), false);
+    let tpd = b.ri.cession(&key("P1", "tpd", 1, "L1"), d(2027, 2, 1)).unwrap().clone();
+    assert_eq!((tpd.treaty, tpd.retained_minor), (None, 300 * K));
+    let applied = b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    assert!(b
+        .ri
+        .charged(&PolicyId::from("P1"), d(2027, 2, 1))
+        .unwrap()
+        .keys()
+        .all(|k| k.risk.cover == "life"));
+    assert_eq!(charged(&b, "P1", d(2027, 2, 1), ChargeKind::Premium, &north()), 8_98);
+    assert!(
+        !applied.notices.iter().any(|n| matches!(n, Notice::ExceptionOpened { .. })),
+        "{:?}",
+        applied.notices
+    );
+    assert!(b.ri.exceptions().keys().all(|k| !k.starts_with("unpriced:")));
+    b.assert_reconciles();
+}

@@ -28,22 +28,44 @@ In: commands in an `Envelope` (`key`, `caller`, `at`, `today`, `command`). Calle
 
 Out, on each applied command: events for the audit trail, and `Effect`s, each with a stable key that is its idempotency key at the receiver. Effects are for reinsurance (reserve, release and confirm capacity, record risk factors), the core (issue the policy, issue and end interim cover, apply terms, a non-disclosure remedy), evidence providers (request, chase, cancel), a delegate (send the file) and people (notices).
 
-The reply to a command carries its effects, and the same effects wait, numbered, in a replicated outbox until the driver acknowledges them (`Query::Outbox`, `Command::AcknowledgeEffects` from caller `effects-driver`), so a lost reply loses nothing.
+The reply to a command carries its effects, and the same effects wait, numbered, in a replicated outbox until the driver acknowledges them (`Query::Outbox`, `Command::AcknowledgeEffects` from caller `effects-driver`), so a lost reply loses nothing. An effect that cannot be delivered is parked with its reason (`Command::ParkEffect`, `Query::Parked`) and a person with an authority profile puts it back (`Command::RequeueEffect` from `underwriting-console`).
 
 Queries (`special::Query`, answered by `special::answer`): a proposal, the terms on a policy's cover, the underwriters of a life, a queue with ages, an underwriter's workload, a report over a period, the exclusion library on a date, and the outbox.
 
-For claims: `codes::ExclusionLibrary::matches` decides whether an exclusion applies to a coded cause, and `codes::CAUSE_ROOTS` lists the roots cause codes hang from. Claims owns the coding of a cause; this module owns the wordings and the match.
+For claims: `codes::ExclusionLibrary::matches` decides whether an exclusion applies to a coded cause, and `codes::CAUSE_ROOTS` lists the roots cause codes hang from. Claims owns the coding of a cause; this module owns the wordings and the match. Claims lives inside the core and cannot depend on this crate, so `ExclusionLibrary::for_claims()` produces the same library in the form the claims rules are activated with, and a test holds the two matchers to the same answer for every shipped code.
 
 Hosting: `ic_underwriting::module_spec()` is in `ic_node::modules()`, so every ledger node hosts the module under the name `underwriting`. It starts empty and takes its configuration through the log.
 
+## The driver
+
+`ic-underwriting` (`driver.rs`, `service.rs`, `deploy/k8s/underwriting.yaml`) is the process that carries the outbox. It holds no state and two run at once: every delivery has a key taken from the effect, so each receiver applies a repeat once.
+
+| Effect | Goes to | Answer brought back |
+|---|---|---|
+| Reserve capacity | Reinsurance module, key `uw:{reservation}:reserve`, then its `capacity` question | `CapacityAnswered`, key `cap:{reservation}` |
+| Release and confirm capacity, rating factors | Reinsurance module | none |
+| Issue the policy | Core, `IssueQuoted` from `new-business`, which refuses with `product_changed` when the product version is not the one quoted | `PolicyIssued` with the layers the core wrote, or `IssueRejected` |
+| Issue and end interim cover | Core, `IssuePolicy` and `CancelPolicy` | `InterimIssued` |
+| Terms or an ended proposal for a group excess case | Group module, `record_excess_decision`, key `uw:{effect key}` | none |
+| Notices, evidence requests, delegate file requests | nothing yet | parked with the reason |
+| Revised terms on a policy in force, a non-disclosure remedy | nothing yet | parked with the reason |
+
+A receiver's refusal that means "already done" or "no longer wanted" is counted as stale and acknowledged. Any other refusal parks the effect. Only a receiver that cannot be reached stops a pass, and the next pass starts from the same effect. Group administration's own driver reads the same outbox without acknowledging and sends the same excess decisions under the same key, so either may arrive first.
+
+Once a day the driver sends `Sweep` as caller `timer`, a page at a time, under keys of the day and the page start.
+
+Settings: `IC_NODES` (required), the cluster token as for every worker, `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS` (10000), `IC_UNDERWRITING_BATCH` (100), `IC_UNDERWRITING_SWEEP_PAGE` (200).
+
 ## Known gaps
 
-- **No drivers.** The module produces effects. The processes that carry them to reinsurance, the core and evidence providers, and bring the answers back as commands, are not built. Until they are, nothing here reaches a policy outside the tests.
+- **Notices, evidence and delegate files have no receiver.** The driver parks them with the reason. Correspondence and the evidence providers need a door for them, and then a `Forward` in the driver.
 - **The clinical store is not provisioned.** The store runs on `ic_azure::keywrap::KeyVaultWrapper` and `ic_azure::records::BlobRecords`, tested against the local stand-in for the Azure endpoints. The key-encryption key, the erasable container and the identity that may use them are not in `infra/` yet, and no process is deployed that writes to the store.
-- **Core commands that do not exist yet.** The core has no command to add or replace a layer for revised terms after issue (`Effect::ApplyTerms`) and none to vary or avoid a policy as a non-disclosure remedy. Both are being written. Underwriting may now cancel a policy, which is how interim cover ends, and issue carries a `migrated` flag that only the migration load may set.
+- **Core commands that do not exist yet.** The core has no command to add or replace a layer for revised terms after issue (`Effect::ApplyTerms` for an increase, alteration or reinstatement) and none to vary or avoid a policy as a non-disclosure remedy. The driver parks both.
+- **No interim product is shipped.** Interim cover is off until settings name a product and cover the core has.
+- **Group excess answers do not carry the member's consent to itemising.** On a scheme that itemises loadings, group administration refuses an accepted answer with a loading (`consent_required`) and the effect is parked.
 - **Reserve capacity does not carry risk codes.** Reinsurance accepts optional `risk_codes` on a reservation; the effect does not send them, so a treaty exclusion by risk is found at the facultative step and not before.
 - **The idempotency key set grows without bound.** The last 20,000 results are kept to answer repeats in full; older keys are remembered but never dropped. It needs a horizon agreed with the drivers.
 - **Peer review draws by scanning every proposal**, which is fine for the book the tests build and too slow for a large one.
 - **Staff grants are not modelled.** Whether a decision on a staff member's own policy needs a different approver is a channel rule today and is not checked here.
-- **No Temporal workflow per proposal.** The design describes one; the state machine and the daily sweep do the same work with one fewer moving part. Timers are therefore accurate to the day, not the hour.
+- **No Temporal workflow per proposal.** The design describes one; the state machine, the driver and the daily sweep do the same work with one fewer moving part. Timers are therefore accurate to the day, not the hour.
 - **Proposal progress is not published to the portals.** The channels module can take rows; nothing sends them yet.

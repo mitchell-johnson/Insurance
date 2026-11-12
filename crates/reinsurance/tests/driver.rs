@@ -15,7 +15,7 @@ use ic_ledger::PartitionId;
 use ic_money::Currency::NZD;
 use ic_product::{Frequency, Sex};
 use ic_reinsurance::delivery::CoreDelivery;
-use ic_reinsurance::driver::{group_command, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
+use ic_reinsurance::driver::{group_command, handed, Audiences, Core, Driver, DriverError, Handed, LocalModule, Module, Pass, Round, DRIVER};
 use ic_reinsurance::host::{answer, module_spec, react, Query, MAX_ANSWER, MODULE};
 use ic_reinsurance::loader::{load_rate_table, load_treaty};
 use ic_reinsurance::machine::Audience;
@@ -624,12 +624,14 @@ fn the_driver_process_checks_its_settings() {
 async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
     let mut w = World::new();
     w.issue(1, 800_000_00);
+    with_group_notices(&mut w);
     *w.core.down.lock().unwrap() = true;
     let core = w.core.clone();
     let mut seen = Vec::new();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
     let mut stop = Some(stop);
     let audiences = TestAudiences::default();
+    *audiences.refuse.lock().unwrap() = Some(Reject::new("invalid_amount", "too much"));
     w.driver
         .run(
             &audiences,
@@ -640,10 +642,9 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
             |pass, round| {
                 // Notices cannot be dated while the core is away, and are once it is back.
                 assert_eq!(round.is_ok(), pass.is_ok());
-                seen.push(pass.clone());
+                seen.push((pass.clone(), round.clone()));
                 match seen.len() {
                     1 => *core.down.lock().unwrap() = false,
-                    2 => *core.refuse.lock().unwrap() = Some(Reject::new("busy", "later")),
                     4 => {
                         if let Some(stop) = stop.take() {
                             let _ = stop.send(());
@@ -655,10 +656,85 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
         )
         .await;
     assert_eq!(seen.len(), 4);
-    assert!(matches!(seen[0], Err(DriverError::Unavailable(_))));
-    assert!(matches!(&seen[1], Ok(pass) if pass.clear() && pass.delivered > 0));
-    assert_eq!(seen[2], Ok(Pass::default()), "nothing new to carry");
-    assert!(w.module.state().outbox(usize::MAX).is_empty());
+    assert!(matches!(seen[0], (Err(DriverError::Unavailable(_)), Err(DriverError::Unavailable(_)))));
+    // The policy's instructions are carried. The scheme's are for a partition the core
+    // does not have, so delivery is held there, and its notices are refused. Both are
+    // results like any other: the loop goes on.
+    let held = |pass: &Result<Pass, DriverError>| matches!(pass, Ok(Pass { held: Some((_, refusal)), .. }) if refusal.code == "unknown_partition");
+    assert!(matches!(&seen[1].0, Ok(pass) if pass.delivered > 0) && held(&seen[1].0), "{:?}", seen[1]);
+    assert_eq!(seen[1].1, Ok(Round { taken: 0, refused: 2 }));
+    for later in &seen[2..] {
+        assert!(matches!(&later.0, Ok(pass) if pass.delivered == 0) && held(&later.0), "{later:?}");
+        assert_eq!(later.1, Ok(Round::default()), "refused notices are not offered again");
+    }
+    assert!(!w.module.state().outbox(usize::MAX).is_empty(), "what is held stays in the outbox");
+}
+
+/// A module that answers questions but cannot be told anything, as when the
+/// group's leader is lost between a read and the write that follows it.
+struct Deaf(LocalModule);
+
+impl Module for Deaf {
+    async fn propose(&self, _: Envelope) -> Result<ic_reinsurance::Applied, DriverError> {
+        Err(DriverError::Unavailable("the module lost its leader".into()))
+    }
+
+    async fn ask(&self, query: Query) -> Result<Value, DriverError> {
+        self.0.ask(query).await
+    }
+}
+
+/// Purpose: when an audience refuses a notice and the module then cannot be told so, the
+/// round stops with the module's error, and the notice is still waiting, not set aside and
+/// not lost.
+/// Why it matters: the refusal is only real once it is in the module's replicated state.
+/// A round that carried on, or counted the notice as dealt with, would drop it silently; the
+/// next round must offer it again.
+#[tokio::test]
+async fn a_refusal_the_module_cannot_be_told_of_stops_the_round() {
+    let mut w = World::new();
+    with_group_notices(&mut w);
+    let audiences = TestAudiences::default();
+    *audiences.refuse.lock().unwrap() = Some(Reject::new("invalid_amount", "too much"));
+    let deaf = Driver {
+        module: Deaf(w.module.clone()),
+        core: w.core.clone(),
+        batch: 2,
+    };
+    assert_eq!(
+        deaf.hand_on(&audiences, d(2027, 3, 2)).await,
+        Err(DriverError::Unavailable("the module lost its leader".into()))
+    );
+    let state = w.module.state();
+    assert_eq!(state.notices_for(Audience::Group, usize::MAX).len(), 2);
+    assert!(state.exceptions().keys().all(|k| !k.starts_with("notice:")));
+    // Once the module can be told, the same refusals are recorded.
+    assert_eq!(w.driver.hand_on(&audiences, d(2027, 3, 2)).await, Ok(Round { taken: 0, refused: 2 }));
+}
+
+/// Purpose: a module's reply to a notice is read as taken only when it says so: both
+/// modules' answer shapes are understood, a refusal comes back as the audience's own code
+/// and message, a command the host could not read is a refusal, and a reply that is neither
+/// an acceptance nor a readable refusal is an error.
+/// Why it matters: a notice counted as taken is removed for good. Reading an unexpected
+/// reply as acceptance would lose an underwriting referral or a facultative answer with
+/// nothing to show it had not arrived.
+#[test]
+fn a_reply_to_a_notice_is_taken_only_when_it_says_so() {
+    assert_eq!(handed(Ok(json!({"result": {"Ok": null}, "duplicate": false}))), Ok(Handed::Taken));
+    assert_eq!(handed(Ok(json!({"Ok": {"events": []}}))), Ok(Handed::Taken));
+    let reject = json!({"code": "unknown_policy", "message": "no scheme S9"});
+    let refused = Ok(Handed::Refused(Reject::new("unknown_policy", "no scheme S9")));
+    assert_eq!(handed(Ok(json!({"result": {"Err": reject}}))), refused);
+    assert_eq!(handed(Ok(json!({"Err": reject}))), refused);
+    assert_eq!(
+        handed(Err("unknown variant `x`".into())),
+        Ok(Handed::Refused(Reject::new("unreadable", "unknown variant `x`")))
+    );
+    assert!(matches!(handed(Ok(json!({"Err": "no"}))), Err(DriverError::Answer(why)) if why.contains("cannot be read")));
+    for odd in [json!({"result": {}}), json!({"accepted": true}), json!(null), json!("ok")] {
+        assert!(matches!(handed(Ok(odd)), Err(DriverError::Answer(why)) if why.contains("neither accepted nor refused")));
+    }
 }
 
 /// An audience that records what it is handed, and can refuse or be away.

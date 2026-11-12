@@ -632,6 +632,28 @@ async fn a_module_that_misbehaves_stops_the_pass_with_the_outbox_intact() {
     );
 }
 
+/// Purpose: a sweep the module refuses ends with an error that carries the refusal, and a sweep
+/// whose day was done so long ago that the module no longer keeps its result ends at once with
+/// nothing counted.
+/// Why it matters: a refused sweep means the timer's caller or page size is wrong for this
+/// module, and it must be loud, since nothing lapses until it is fixed. A repeat with no result
+/// kept must not be read as "no more pages after an empty one" and loop.
+#[tokio::test]
+async fn a_refused_sweep_is_an_error_and_a_forgotten_one_is_done() {
+    let script = Scripted::default();
+    let done = driver(&script).sweep(50).await.unwrap();
+    assert_eq!((done.pages, done.lapsed, done.chased, done.escalated), (0, 0, 0, 0));
+    let told = script.with(|s| s.told.clone());
+    assert!(
+        matches!(&told[..], [(key, caller, Command::Sweep { after: None, max: 50 })] if key == "sweep:2027-02-01:" && caller == "timer"),
+        "{told:?}"
+    );
+
+    script.with(|s| s.refuse.insert("sweep:2027-02-01:".into(), ("caller".into(), "not the timer".into())));
+    let refused = driver(&script).sweep(5_000).await.unwrap_err();
+    assert!(matches!(&refused, DriverError::Answer(m) if m.contains("not the timer")), "{refused:?}");
+}
+
 /// Purpose: a group excess proposal's name gives the scheme and the case, with the case taken
 /// after the last colon so that a scheme whose own name has colons still parses. Anything else
 /// (another prefix, no case, a case that is not a number, no scheme) is not one.

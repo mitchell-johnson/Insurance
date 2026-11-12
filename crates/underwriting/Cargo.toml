@@ -29,9 +29,15 @@ rand.workspace = true
 base64.workspace = true
 ed25519-dalek = "2"
 aes-gcm = "0.10"
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[[bin]]
+name = "ic-underwriting"
+path = "src/bin/ic-underwriting.rs"
 
 [dev-dependencies]
-tokio.workspace = true
 ic-sim.workspace = true
 
 [lints]
