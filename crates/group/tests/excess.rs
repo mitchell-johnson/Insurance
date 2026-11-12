@@ -454,6 +454,68 @@ fn too_few_members_for_a_total_means_the_member_pays_the_loading() {
     assert_eq!(payers(&h, "E004"), vec![MemberPays::Loading]);
 }
 
+/// Purpose: when a leaver takes the members with underwritten cover below the scheme's
+/// minimum count while a loading is still in the employer's total, staff are told once,
+/// nobody's payer is changed, the alert names no member, and it clears by itself when
+/// another member's cover brings the number back up.
+/// Why it matters: who pays is settled when terms are accepted, so nothing else notices
+/// that a total which hid two members' loadings now shows one member's health loading
+/// to their employer. Moving the loading to the member without telling them would break
+/// what their offer said, so a person has to decide; this alert is how they find out.
+#[test]
+fn staff_are_told_when_leavers_leave_too_few_members_in_the_total() {
+    use ic_core::policy::MemberPays;
+
+    let mut t = terms();
+    t.excess_loading_min_count = 2;
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E004", attrs("executive", 240_000_00, "wlg")),
+            row(3, "E005", attrs("executive", 240_000_00, "wlg")),
+        ],
+    );
+    let case_of = |h: &Harness, id: &str| h.requests.iter().rev().find(|r| r.life == life(id)).unwrap().case;
+    let alerts = |h: &Harness| h.g.exceptions.values().filter(|e| e.kind == ExceptionKind::LoadingTotalTooSmall).count();
+
+    // The first pays their own loading; the second, with two holders, goes in the total.
+    h.underwriting(case_of(&h, "E004"), accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(alerts(&h), 0, "nothing is in the employer's total yet");
+    h.underwriting(case_of(&h, "E005"), accept(210_000_00, Some("0.25"), false)).unwrap();
+    assert_eq!(alerts(&h), 0, "two holders hide whose loading it is");
+
+    let today = h.today();
+    h.apply(
+        "leave",
+        FileKind::Changes,
+        vec![change(1, "E004", RowChange::Leave, today, attrs("executive", 240_000_00, "wlg"))],
+    );
+    assert_eq!(alerts(&h), 1, "one holder is left and their loading is the whole total");
+    assert!(h.saw(|e| matches!(e, GroupEvent::ExceptionRaised { kind: ExceptionKind::LoadingTotalTooSmall, subject, .. } if subject == "loadings")));
+    assert_eq!(payers(&h, "E005"), vec![MemberPays::Nothing], "what the member was told stands");
+    h.days(2);
+    assert_eq!(alerts(&h), 1, "it is raised once and stays until it is dealt with");
+
+    // Another executive joins and is accepted: two holders again.
+    h.apply(
+        "join",
+        FileKind::Changes,
+        vec![change(1, "E006", RowChange::Join, h.today(), attrs("executive", 240_000_00, "wlg"))],
+    );
+    h.underwriting(case_of(&h, "E006"), accept(210_000_00, None, false)).unwrap();
+    assert_eq!(alerts(&h), 0);
+    assert!(h.saw(|e| matches!(
+        e,
+        GroupEvent::ExceptionCleared {
+            kind: ExceptionKind::LoadingTotalTooSmall,
+            ..
+        }
+    )));
+}
+
 /// Purpose: a member who pays their own loading and stops paying loses that cover when
 /// the core lapses it: the case ends, the employer hears only that the cover is no longer
 /// in place, and the member's automatic cover and the scheme itself carry on.
