@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 use crate::books::ExtractRecord;
 
 /// Version of the extract layouts below. A change to a column is a new version.
-pub const DEFINITION_VERSION: u32 = 2;
+pub const DEFINITION_VERSION: u32 = 3;
 
 pub const IN_FORCE: &str = "in_force";
 pub const MOVEMENT: &str = "movement";
@@ -84,21 +84,33 @@ struct Factors {
     date_of_birth: Option<NaiveDate>,
     sex: Option<Sex>,
     smoker: Option<bool>,
+    #[serde(default)]
+    occupation_class: Option<String>,
 }
 
+/// A life's factors with the business date each version was recorded on, in
+/// order, so that an extract as at an earlier date keeps what was known then.
+type Dated = Vec<(NaiveDate, Factors)>;
+
 impl Factors {
-    fn of(lives: &[LifeInfo]) -> BTreeMap<LifeId, Factors> {
-        lives
-            .iter()
-            .map(|l| {
-                let factors = Factors {
-                    date_of_birth: l.date_of_birth,
-                    sex: l.sex,
-                    smoker: l.smoker,
-                };
-                (l.life.clone(), factors)
-            })
-            .collect()
+    fn from(l: &LifeInfo) -> Self {
+        Factors {
+            date_of_birth: l.date_of_birth,
+            sex: l.sex,
+            smoker: l.smoker,
+            occupation_class: l.occupation_class.clone(),
+        }
+    }
+
+    fn of(lives: &[LifeInfo], date: NaiveDate) -> BTreeMap<LifeId, Dated> {
+        lives.iter().map(|l| (l.life.clone(), vec![(date, Factors::from(l))])).collect()
+    }
+
+    /// The occupation class as a column: letters, digits, `-` and `_` only,
+    /// so that a class typed with a comma cannot shift the columns after it.
+    fn class(&self) -> String {
+        let plain = |c: char| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' };
+        self.occupation_class.as_deref().unwrap_or_default().chars().map(plain).collect()
     }
 
     /// Age last birthday on a date.
@@ -106,9 +118,10 @@ impl Factors {
         self.date_of_birth.and_then(|dob| on.years_since(dob))
     }
 
-    /// The age, sex and smoker status columns, each empty where not known.
+    /// The age, sex, smoker status and occupation class columns, each empty
+    /// where not known.
     fn columns(&self, on: NaiveDate) -> String {
-        format!("{},{},{}", opt(&self.age(on)), sex_name(self.sex), opt(&self.smoker))
+        format!("{},{},{},{}", opt(&self.age(on)), sex_name(self.sex), opt(&self.smoker), self.class())
     }
 }
 
@@ -134,6 +147,7 @@ pub struct RatedCover {
     pub age_at_start: Option<u32>,
     pub sex: Option<Sex>,
     pub smoker: Option<bool>,
+    pub occupation_class: Option<String>,
     pub sum_insured_minor: i64,
 }
 
@@ -153,7 +167,7 @@ struct PolicyRow {
     premiums: BTreeMap<u32, i64>,
     /// The rating factors of each life the core has published them for.
     #[serde(default)]
-    lives: BTreeMap<LifeId, Factors>,
+    lives: BTreeMap<LifeId, Dated>,
 }
 
 /// A policy counts towards the in-force book while cover is being provided.
@@ -164,8 +178,21 @@ fn provides_cover(status: PolicyStatus) -> bool {
 type CoverKey = (String, Option<u32>, LifeId);
 
 impl PolicyRow {
-    fn factors(&self, life: &LifeId) -> Factors {
-        self.lives.get(life).cloned().unwrap_or_default()
+    /// A life's factors as they were recorded by the close of `date`.
+    fn factors(&self, life: &LifeId, date: NaiveDate) -> Factors {
+        let dated = self.lives.get(life).into_iter().flatten();
+        dated.rev().find(|(on, _)| *on <= date).map(|(_, f)| f.clone()).unwrap_or_default()
+    }
+
+    /// Record a life's factors as published on `date`.
+    fn learn(&mut self, date: NaiveDate, info: &Option<LifeInfo>) {
+        if let Some(info) = info {
+            let dated = self.lives.entry(info.life.clone()).or_default();
+            let factors = Factors::from(info);
+            if dated.last().is_none_or(|(_, last)| *last != factors) {
+                dated.push((date, factors));
+            }
+        }
     }
 
     fn status_at(&self, date: NaiveDate) -> Option<PolicyStatus> {
@@ -281,6 +308,8 @@ struct EndingClaim {
     sex: Option<Sex>,
     #[serde(default)]
     smoker: Option<bool>,
+    #[serde(default)]
+    occupation_class: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -511,7 +540,7 @@ impl Mart {
                     statuses: vec![(date, PolicyStatus::InForce)],
                     spans: Vec::new(),
                     premiums: BTreeMap::new(),
-                    lives: Factors::of(lives),
+                    lives: Factors::of(lives, date),
                 };
                 for l in layers {
                     row.open_layer(date, l);
@@ -536,7 +565,7 @@ impl Mart {
                     statuses: vec![(date, *status)],
                     spans: Vec::new(),
                     premiums: BTreeMap::new(),
-                    lives: Factors::of(lives),
+                    lives: Factors::of(lives, date),
                 };
                 for l in layers {
                     row.open_layer(date, l);
@@ -606,8 +635,15 @@ impl Mart {
                     }
                 });
             }
-            Event::MemberJoined { policy, effective, covers, .. } => {
+            Event::MemberJoined {
+                policy,
+                effective,
+                covers,
+                info,
+                ..
+            } => {
                 self.change(partition, policy, date, Some(*effective), "member_joined", |row| {
+                    row.learn(date, info);
                     for m in covers {
                         row.open_member(date, m, *effective);
                     }
@@ -618,9 +654,10 @@ impl Mart {
                 life,
                 effective,
                 covers,
-                ..
+                info,
             } => {
                 self.change(partition, policy, date, Some(*effective), "member_changed", |row| {
+                    row.learn(date, info);
                     row.end(date, |s| s.layer.is_none() && s.life == *life);
                     for m in covers {
                         row.open_member(date, m, *effective);
@@ -671,7 +708,7 @@ impl Mart {
                         let mut on: Vec<&LifeId> = row.spans.iter().filter(|s| s.cover == p.cover).map(|s| &s.life).collect();
                         on.dedup();
                         let f = match on.as_slice() {
-                            [life] => row.factors(life),
+                            [life] => row.factors(life, date),
                             _ => Factors::default(),
                         };
                         self.claims.push(EndingClaim {
@@ -682,6 +719,7 @@ impl Mart {
                             age: f.age(*effective),
                             sex: f.sex,
                             smoker: f.smoker,
+                            occupation_class: f.class(),
                         });
                     }
                 }
@@ -842,7 +880,7 @@ impl Mart {
             let mut spans: Vec<&Span> = row.spans.iter().filter(|s| s.known_at(as_at) && covers.contains(&s.cover)).collect();
             spans.sort_by(|a, b| (&a.cover, a.layer, &a.life).cmp(&(&b.cover, b.layer, &b.life)));
             for s in spans {
-                let factors = row.factors(&s.life);
+                let factors = row.factors(&s.life, as_at);
                 rated.push(RatedCover {
                     partition: *partition,
                     policy: policy.clone(),
@@ -852,6 +890,7 @@ impl Mart {
                     age_at_start: factors.age(s.start),
                     sex: factors.sex,
                     smoker: factors.smoker,
+                    occupation_class: factors.occupation_class,
                     sum_insured_minor: s.sum_insured_minor,
                 });
             }
@@ -862,7 +901,8 @@ impl Mart {
     /// Every cover in force as at the close of `as_at`.
     pub fn in_force(&self, as_at: NaiveDate) -> Result<Extract, MartError> {
         self.closed(as_at)?;
-        let mut lines = vec!["partition,policy,product,inception,status,cover,cover_type,layer,life,age,sex,smoker,start,sum_insured_minor".to_string()];
+        let mut lines =
+            vec!["partition,policy,product,inception,status,cover,cover_type,layer,life,age,sex,smoker,occupation_class,start,sum_insured_minor".to_string()];
         for ((partition, policy), row) in &self.policies {
             let Some(status) = row.status_at(as_at).filter(|s| provides_cover(*s)) else {
                 continue;
@@ -879,7 +919,7 @@ impl Mart {
                     s.cover_type,
                     opt(&s.layer),
                     s.life,
-                    row.factors(&s.life).columns(as_at),
+                    row.factors(&s.life, as_at).columns(as_at),
                     s.start,
                     s.sum_insured_minor
                 ));
@@ -920,7 +960,11 @@ impl Mart {
         let factors = m
             .life
             .as_ref()
-            .and_then(|life| self.policies.get(&(m.partition, m.policy.clone())).map(|row| row.factors(life)))
+            .and_then(|life| {
+                self.policies
+                    .get(&(m.partition, m.policy.clone()))
+                    .map(|row| row.factors(life, m.business_date))
+            })
             .unwrap_or_default();
         factors.columns(m.business_date)
     }
@@ -935,7 +979,7 @@ impl Mart {
         // Stable: movements of one policy on one day keep the order they happened in.
         rows.sort_by(|a, b| (a.business_date, a.partition, &a.policy).cmp(&(b.business_date, b.partition, &b.policy)));
         let mut lines = vec![
-            "business_date,partition,policy,product,kind,effective,cover,cover_type,layer,life,age,sex,smoker,policies,covers,sum_insured_minor,premium_minor"
+            "business_date,partition,policy,product,kind,effective,cover,cover_type,layer,life,age,sex,smoker,occupation_class,policies,covers,sum_insured_minor,premium_minor"
                 .to_string(),
         ];
         let mut premium: i128 = 0;
@@ -991,8 +1035,9 @@ impl Mart {
             claims: i128,
             claim_sum_insured_minor: i128,
         }
-        // Product, cover type, age band at the end of the period, sex, smoker.
-        type CellKey = (String, String, String, &'static str, String);
+        // Product, cover type, age band at the end of the period, sex, smoker,
+        // occupation class.
+        type CellKey = (String, String, String, &'static str, String, String);
         let mut cells: BTreeMap<CellKey, Cell> = BTreeMap::new();
         for row in self.policies.values() {
             let runs = row.in_force_days(from, to);
@@ -1011,13 +1056,14 @@ impl Mart {
                     .filter(|d| *d > 0)
                     .sum();
                 if days > 0 {
-                    let f = row.factors(&span.life);
+                    let f = row.factors(&span.life, to);
                     let key = (
                         row.product_code.clone(),
                         span.cover_type.clone(),
                         age_band(f.age(to)),
                         sex_name(f.sex),
                         opt(&f.smoker),
+                        f.class(),
                     );
                     let cell = cells.entry(key).or_default();
                     cell.cover_days += i128::from(days);
@@ -1032,17 +1078,20 @@ impl Mart {
                 age_band(claim.age),
                 sex_name(claim.sex),
                 opt(&claim.smoker),
+                claim.occupation_class.clone(),
             );
             let cell = cells.entry(key).or_default();
             cell.claims += 1;
             cell.claim_sum_insured_minor += i128::from(claim.sum_insured_minor);
         }
-        let mut lines =
-            vec!["product,cover_type,age_band,sex,smoker,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor".to_string()];
+        let mut lines = vec![
+            "product,cover_type,age_band,sex,smoker,occupation_class,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor"
+                .to_string(),
+        ];
         let mut control: BTreeMap<String, i128> = BTreeMap::new();
-        for ((product, cover_type, band, sex, smoker), c) in &cells {
+        for ((product, cover_type, band, sex, smoker, class), c) in &cells {
             lines.push(format!(
-                "{product},{cover_type},{band},{sex},{smoker},{},{},{},{}",
+                "{product},{cover_type},{band},{sex},{smoker},{class},{},{},{},{}",
                 c.cover_days, c.sum_insured_days_minor, c.claims, c.claim_sum_insured_minor
             ));
             *control.entry("cover_days".to_string()).or_insert(0) += c.cover_days;
