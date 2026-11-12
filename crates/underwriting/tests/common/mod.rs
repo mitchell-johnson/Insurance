@@ -306,6 +306,7 @@ impl World {
             rule_set: prepared.rule_set,
             entered_by_adviser: 0,
             assessments: prepared.assessments,
+            risk_tags: prepared.risk_tags,
         }
     }
 

@@ -879,3 +879,49 @@ fn applying_is_idempotent_deterministic_and_leaves_no_trace_when_refused() {
     assert!(!events.contains("RC-0103"));
     let _ = (AccessEnd::DecisionMade, Stage::Accepted);
 }
+
+/// Purpose: a capacity request tells reinsurance what the answers declared about pursuits,
+/// occupation and travel, and what the decision excluded for, as the question set's risk codes,
+/// and nothing from the health answers; a clean statement sends none; and a disclosure carrying
+/// a code outside those families is refused.
+/// Why it matters: a treaty that will not take a diver automatically must hear of the diving
+/// before capacity is granted, not at a facultative step after the offer. A health answer
+/// turned into a code would carry clinical information to another module.
+#[test]
+fn a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    let diver = with(&[
+        ("hazardous_pursuits", Answer::YesNo(true)),
+        ("pursuit_kind", Answer::Choice("diving".into())),
+        ("heart_condition", Answer::YesNo(true)),
+    ]);
+    let disclosed = w.disclose("P1", "L1", &diver);
+    let codes: Vec<_> = disclosed
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::ReserveCapacity { risk_codes, .. } => Some(risk_codes.clone()),
+            _ => None,
+        })
+        .collect();
+    let assessed: Vec<Vec<String>> = w.p("P1").lives[&LifeId::from("L1")]
+        .disclosures
+        .iter()
+        .map(|d| d.risk_tags.iter().cloned().collect())
+        .collect();
+    assert_eq!(assessed, [vec!["pursuit.diving".to_string(), "pursuit.unspecified".to_string()]]);
+    assert!(codes.iter().all(|c| c.iter().all(|t| t.starts_with("pursuit."))), "{codes:?}");
+
+    w.open("P2", 500_000_00);
+    let clean_one = w.disclose("P2", "L1", &clean());
+    assert!(clean_one
+        .effects
+        .iter()
+        .all(|e| !matches!(e, Effect::ReserveCapacity { risk_codes, .. } if !risk_codes.is_empty())));
+
+    w.open("P3", 500_000_00);
+    let mut bad = w.disclosure("P3", "L1", &clean());
+    bad.risk_tags.insert("cardiovascular.heart".into());
+    assert_eq!(w.err("new-business", Command::SubmitDisclosure(Box::new(bad))), "risk_tags");
+}
