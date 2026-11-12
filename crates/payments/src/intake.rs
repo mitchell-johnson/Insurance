@@ -30,18 +30,23 @@ pub struct Waiting {
     /// to the maker; this module pays the account it verified itself.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub account_ref: String,
-    pub policy: PolicyId,
+    /// The policy whose ledger the money settles on, and the payable it
+    /// discharges there. Both or neither: a payment to a reinsurer or
+    /// another counterparty is not policy money.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyId>,
     pub amount_minor: i64,
-    pub payable: PayableKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payable: Option<PayableKind>,
 }
 
 impl PaymentsState {
     pub(crate) fn offer_payment(&mut self, tx: &mut Tx<'_>, waiting: Waiting) -> Result<(), Reject> {
         tx.need(Role::Service)?;
-        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.amount_minor <= 0 {
+        if waiting.payment.is_empty() || waiting.source.is_empty() || waiting.amount_minor <= 0 || waiting.policy.is_some() != waiting.payable.is_some() {
             return Err(Reject::new(
                 "invalid_payment",
-                "a released payment has a reference, a source and a positive amount",
+                "a released payment has a reference, a source and a positive amount, and names a policy and its payable together or not at all",
             ));
         }
         match self.waiting.get(&waiting.payment) {
@@ -123,8 +128,8 @@ impl PaymentsState {
                 source: waiting.source.clone(),
                 counterparty: Counterparty::Payee(self.payee_for(waiting, payees.get(payment))?),
                 amount_minor: waiting.amount_minor,
-                policy: Some(waiting.policy.clone()),
-                payable: Some(waiting.payable),
+                policy: waiting.policy.clone(),
+                payable: waiting.payable,
                 refund: None,
                 represents: None,
             });

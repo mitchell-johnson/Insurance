@@ -147,9 +147,19 @@ pub struct Layer {
     /// reach the employer only inside one scheme total.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub loading_itemised: bool,
+    /// The date level premium takes the life's age from, when it is not the
+    /// layer's own start. A layer that carries on an earlier layer's cover on
+    /// changed terms keeps that layer's date, so the customer keeps their
+    /// entry age.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rated_from: Option<NaiveDate>,
 }
 
 impl Layer {
+    /// The date level premium takes the life's age from.
+    pub fn rating_start(&self) -> NaiveDate {
+        self.rated_from.unwrap_or(self.start)
+    }
     pub fn in_force_on(&self, on: NaiveDate) -> bool {
         self.start <= on && self.end.is_none_or(|e| e > on)
     }

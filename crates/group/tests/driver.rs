@@ -14,7 +14,7 @@ use common::*;
 use ic_core::{Command, GroupId};
 use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, MatchDecision, Resolution};
 use ic_group::driver::{content_hash, Answers, Core, CustomerMaster, Driver, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use ic_group::event::{ExceptionKind, GroupEvent, ReinsuranceNotice, UnderwritingRequest};
+use ic_group::event::{ExceptionKind, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
 use ic_group::mapping::{Columns, FileKind, FileMapping, SalaryPeriod, SalaryUnit};
 use ic_group::record::MemberIdentity;
 use ic_group::state::{CaseStatus, FileStatus, GroupState, Outcome};
@@ -83,6 +83,7 @@ struct Sink {
     notices: Arc<Mutex<Vec<(String, ReinsuranceNotice)>>>,
     requests: Arc<Mutex<Vec<UnderwritingRequest>>>,
     withdrawals: Arc<Mutex<Vec<String>>>,
+    outcomes: Arc<Mutex<Vec<(String, IssueOutcome)>>>,
     /// Underwriting's outbox: numbered effects, of which some answer us.
     effects: Arc<Mutex<Vec<(u64, Option<ExcessAnswer>)>>>,
     events: Arc<Mutex<Vec<(u64, GroupEvent)>>>,
@@ -104,6 +105,12 @@ impl Peers for Sink {
         self.down.check("underwriting")?;
         self.underwriting_down.check("underwriting")?;
         self.withdrawals.lock().unwrap().push(request_key.to_string());
+        Ok(())
+    }
+    async fn underwriting_outcome(&self, _key: &str, _today: NaiveDate, request_key: &str, outcome: &IssueOutcome) -> Result<(), String> {
+        self.down.check("underwriting")?;
+        self.underwriting_down.check("underwriting")?;
+        self.outcomes.lock().unwrap().push((request_key.to_string(), outcome.clone()));
         Ok(())
     }
     async fn underwriting_answers(&self, after: u64, max: usize) -> Result<Answers, String> {
@@ -648,6 +655,13 @@ async fn underwriting_answers_become_decisions_exactly_once() {
         policy.covers.values().flat_map(|c| c.layers.iter()).filter(underwritten).count()
     };
     assert_eq!(layers(&d), 1);
+    // Underwriting hears which layer the core wrote, under the proposal's name.
+    {
+        let outcomes = d.peers.outcomes.lock().unwrap();
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        assert_eq!(outcomes[0].0, format!("grp-uw:{SCHEME}:{case}"));
+        assert!(matches!(&outcomes[0].1, IssueOutcome::Issued { life: l, cover, .. } if *l == request.life && *cover == request.cover));
+    }
     assert_eq!(d.collect_answers().await.unwrap(), Default::default(), "nothing is read twice by one driver");
 
     // A driver started afresh reads everything again and changes nothing.
@@ -662,6 +676,7 @@ async fn underwriting_answers_become_decisions_exactly_once() {
     assert_eq!(again.collect_answers().await.unwrap().failed, 0);
     settle(&again).await;
     assert_eq!((case_status(&again, case), layers(&again)), (CaseStatus::Accepted, 1));
+    assert_eq!(again.peers.outcomes.lock().unwrap().len(), 1);
 }
 
 /// Purpose: when the cover a request was for is no longer wanted, a request underwriting

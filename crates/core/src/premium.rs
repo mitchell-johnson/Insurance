@@ -88,7 +88,12 @@ pub(crate) fn retail_premium_with(
             let dob = f.date_of_birth.ok_or_else(|| PremiumError::MissingFactor(life.id.clone(), "date_of_birth"))?;
             let age = match def.rating.premium_type {
                 PremiumType::Stepped | PremiumType::GroupUnitRate => age_on(dob, rated_on),
-                PremiumType::Level => age_on(dob, layer.start),
+                // Level until the cover's stated age, then on attained age
+                // like a stepped premium.
+                PremiumType::Level => match (age_on(dob, rated_on), def.rating.level_to_age) {
+                    (attained, Some(to)) if attained >= to => attained,
+                    _ => age_on(dob, layer.rating_start()),
+                },
             };
             let rf = RatingFactors {
                 age,

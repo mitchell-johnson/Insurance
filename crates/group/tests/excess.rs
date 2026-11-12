@@ -277,6 +277,16 @@ fn a_refused_layer_is_loud_and_a_due_ending_survives_either_order() {
         .exceptions
         .values()
         .any(|e| e.kind == ExceptionKind::RowRefused && e.subject == format!("case:{case}")));
+    // Underwriting accepted these terms and is told the core would not write them.
+    assert_eq!(
+        h.outcomes,
+        vec![(
+            format!("grp-uw:{SCHEME}:{case}"),
+            ic_group::event::IssueOutcome::Rejected {
+                code: "exceeds_maximum".into()
+            }
+        )]
+    );
 
     for events_first in [false, true] {
         let (mut h, case) = with_executive(terms());

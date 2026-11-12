@@ -60,7 +60,7 @@ The fail-back controller runs on every node and is tested with three nodes in on
 
 ### Group scheme administration
 
-Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a scheme working end to end today: requests for cover above the automatic amount reach the underwriting module but that module has no driver yet to take a proposal to an answer, no customer master exists to match joiners on named schemes, and the group service's Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
+Its gaps are listed in `docs/group.md` under "Known gaps". The ones that stop a scheme working end to end today: no customer master exists to match joiners on named schemes, and the group service's Azure resources (`infra/group.bicep`) are compiled in CI but not yet referenced by `main.bicep`.
 
 ### Payments are built against a fake bank
 
