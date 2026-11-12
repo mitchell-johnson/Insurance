@@ -617,14 +617,16 @@ impl CoreState {
                 target_group,
                 target_partition,
             } => self.with_policy(&policy, true, |s, p| {
-                claims::may_transfer(p)?;
+                let moved = claims::moving(s, p)?;
                 if s.investment.holds_anything(&s.ledger, p) {
                     return Err(Reject::new(
                         "policy_invested",
                         "a policy with units, pending investment cash or pending unit orders cannot change partition yet",
                     ));
                 }
-                transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition)
+                transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition, moved)?;
+                // From here its claims wait with it: nothing can be done to them on either side.
+                s.claims.detach(&p.id.to_string()).map_err(|e| Reject::new(&e.code, e.message))
             }),
             Command::Claims(command) => claims::apply(self, ctx, *command),
             Command::Investment(command) => self.invest(ctx, *command),
@@ -644,8 +646,20 @@ impl CoreState {
                 }
                 r
             }
-            Command::CompleteTransfer { policy, transfer_id } => self.with_policy(&policy, false, |_, p| transfer::complete(p, ctx, &transfer_id)),
-            Command::AbortTransfer { policy, transfer_id } => self.with_policy(&policy, false, |s, p| transfer::abort(&mut s.ledger, p, ctx, &transfer_id)),
+            Command::CompleteTransfer { policy, transfer_id } => self.with_policy(&policy, false, |s, p| {
+                if p.transfer_out.as_ref().is_some_and(|t| t.transfer_id == transfer_id) {
+                    s.claims.release(&p.id.to_string());
+                }
+                transfer::complete(p, ctx, &transfer_id)
+            }),
+            Command::AbortTransfer { policy, transfer_id } => self.with_policy(&policy, false, |s, p| {
+                let mine = p.transfer_out.as_ref().is_some_and(|t| t.transfer_id == transfer_id);
+                transfer::abort(&mut s.ledger, p, ctx, &transfer_id)?;
+                if mine {
+                    s.claims.reattach(&p.id.to_string());
+                }
+                Ok(())
+            }),
             Command::PostCounterparty(posting) => match posting.policy.clone() {
                 // Commission follows a policy wherever it is, so a policy in
                 // transfer is refused like any other command on it.

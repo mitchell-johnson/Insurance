@@ -40,7 +40,7 @@ pub use command::{Actor, Command, Request};
 pub use config::{AuthorityBook, Line, Profile, Queue, Role, Rules, Staff};
 pub use model::*;
 pub use port::{Core, CoverFacts, Instruction, Reject};
-pub use state::ClaimsState;
+pub use state::{ClaimsState, Moved};
 
 /// Staff are known by an opaque ID from the workforce directory.
 pub type StaffId = String;
