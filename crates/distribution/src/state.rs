@@ -68,6 +68,11 @@ pub enum Command {
         code: String,
         message: String,
     },
+    /// The core applied a posting. It stays unconfirmed until the core's own
+    /// event is read, but it is not carried again.
+    PostingDelivered {
+        reference: String,
+    },
 
     // --- structure ---
     AddParty {
@@ -224,7 +229,7 @@ impl Command {
     /// The modules that may send a command no person sends.
     fn modules(&self) -> &'static [&'static str] {
         match self {
-            Command::Ingest(_) | Command::PostingRefused { .. } => &["event-relay"],
+            Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
             Command::PaymentSettled { .. } | Command::PaymentReturned { .. } => &["payments"],
@@ -591,6 +596,13 @@ pub struct DistributionState {
     /// Every application of premium to a policy, oldest first.
     #[serde(default)]
     pub(crate) premiums: BTreeMap<PolicyId, Vec<crate::model::PremiumRecord>>,
+    /// References still to be carried to the core, in the order they were
+    /// asked. An item leaves when its outcome is heard or the core's own
+    /// event confirms it.
+    #[serde(default)]
+    pub(crate) outbox: BTreeMap<u64, String>,
+    #[serde(default)]
+    pub(crate) outbox_next: u64,
     /// Everything asked of the core, by reference.
     pub requested: BTreeMap<String, Requested>,
     pub movements: Vec<Movement>,
@@ -644,6 +656,8 @@ impl DistributionState {
             allocations_by_date: BTreeMap::new(),
             receipts: BTreeMap::new(),
             premiums: BTreeMap::new(),
+            outbox: BTreeMap::new(),
+            outbox_next: 0,
             requested: BTreeMap::new(),
             movements: vec![],
             positions: BTreeMap::new(),
@@ -733,7 +747,25 @@ impl DistributionState {
                 owner,
             },
         );
+        self.outbox_next += 1;
+        self.outbox.insert(self.outbox_next, posting.reference.clone());
         ctx.postings.push((partition, posting));
+    }
+
+    /// The oldest postings still to be carried to the core.
+    pub fn outbox(&self, limit: usize) -> Vec<(PartitionId, CounterpartyPosting)> {
+        self.outbox
+            .values()
+            .filter_map(|reference| self.requested.get(reference))
+            .take(limit)
+            .map(|r| (r.partition, r.posting.clone()))
+            .collect()
+    }
+
+    /// The posting needs carrying no further: the core has it, refused it,
+    /// or its event has been read.
+    pub(crate) fn carried(&mut self, reference: &str) {
+        self.outbox.retain(|_, r| r != reference);
     }
 
     /// Postings asked of the core and not yet confirmed: what a driver that
@@ -770,7 +802,14 @@ impl DistributionState {
     fn dispatch(&mut self, ctx: &mut Ctx, actor: &Actor, command: Command) -> Result<(), Reject> {
         match command {
             Command::Ingest(record) => self.ingest(ctx, *record),
-            Command::PostingRefused { reference, code, message } => self.posting_refused(ctx, &reference, code, message),
+            Command::PostingRefused { reference, code, message } => {
+                self.carried(&reference);
+                self.posting_refused(ctx, &reference, code, message)
+            }
+            Command::PostingDelivered { reference } => {
+                self.carried(&reference);
+                Ok(())
+            }
 
             Command::AddParty { party, kind } => {
                 structure(self.config.structure.add_party(party.clone(), kind))?;

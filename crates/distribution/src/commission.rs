@@ -963,6 +963,7 @@ impl DistributionState {
         lines: Vec<CounterpartyLine>,
     ) {
         let seq = self.seq;
+        self.carried(&reference);
         let owner = self.requested.get_mut(&reference).and_then(|r| {
             r.state = PostingState::Posted { entry, seq };
             r.owner.clone()
