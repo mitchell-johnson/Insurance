@@ -404,6 +404,11 @@ pub struct Policy {
     /// What is still owed on each refund raised to refund payable, by refund ID.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub refunds_raised: BTreeMap<String, i64>,
+    /// Unit-linked money raised to benefit payable (a withdrawal, a
+    /// surrender, cash owed after a price error), by payout ID, until the
+    /// bank has settled it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payouts: BTreeMap<String, crate::invest::Payout>,
     /// Payments settled from a payable, by payment ID, so a payment the
     /// bank sends back can be reversed exactly.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

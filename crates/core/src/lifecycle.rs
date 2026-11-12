@@ -214,6 +214,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         refund_with_claim: None,
         claims: BTreeMap::new(),
         refunds_raised: BTreeMap::new(),
+        payouts: BTreeMap::new(),
         payments: BTreeMap::new(),
         cessions: BTreeMap::new(),
     };
