@@ -411,6 +411,22 @@ async fn the_environment_is_checked_before_anything_starts() {
     let error = run_from(|k| env.get(k).cloned(), no_file, async {}).await.unwrap_err();
     assert!(error.contains("IC_CLUSTER_AUTH"), "{error}");
 
+    // The webhook key may come from a mounted file instead of the environment.
+    let mut key_file = env.clone();
+    key_file.remove("IC_DOCUMENTS_WEBHOOK_KEY");
+    key_file.insert("IC_DOCUMENTS_WEBHOOK_KEY_FILE", "/mnt/secrets/documents-webhook-key".into());
+    let error = run_from(|k| key_file.get(k).cloned(), no_file, async {}).await.unwrap_err();
+    assert!(error.starts_with("IC_DOCUMENTS_WEBHOOK_KEY_FILE /mnt/secrets/documents-webhook-key"), "{error}");
+    let mounted = |path: &str| match path {
+        "/mnt/secrets/documents-webhook-key" => Ok(format!("{KEY}\n")),
+        other => Err(std::io::Error::new(std::io::ErrorKind::NotFound, other.to_string())),
+    };
+    let error = run_from(|k| key_file.get(k).cloned(), mounted, async {}).await.unwrap_err();
+    assert!(
+        error.contains("IC_CLUSTER_AUTH"),
+        "the key was read from the file, so the next check is reached: {error}"
+    );
+
     let mut token_file = env.clone();
     token_file.insert("IC_CLUSTER_TOKEN_FILE", "/secrets/missing".into());
     let error = run_from(|k| token_file.get(k).cloned(), no_file, async {}).await.unwrap_err();
