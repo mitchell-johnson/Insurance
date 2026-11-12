@@ -22,6 +22,10 @@ use crate::template::{sha256_hex, Part, PartRef, Template, TemplateRef};
 /// does a bounded amount of work, like every command in the core.
 pub const MAX_CHUNK: usize = 200;
 
+/// How long an idempotency key is remembered. A repeat of a command older
+/// than this is judged on its merits, like a new one.
+pub const KEEP_KEYS_DAYS: i64 = 90;
+
 /// The default retention, in days, where no schedule has been activated:
 /// seven years. The periods need legal review; see `docs/documents.md`.
 pub const DEFAULT_RETENTION_DAYS: u32 = 2557;
@@ -116,6 +120,10 @@ pub struct DocumentsState {
     /// Vault objects to delete, by document.
     pub pending_deletes: BTreeMap<String, String>,
     results: BTreeMap<String, StoredResult>,
+    /// The remembered keys, oldest first, with the day each was stored, so
+    /// that the old ones can be forgotten.
+    #[serde(default)]
+    key_log: VecDeque<(NaiveDate, String)>,
 }
 
 /// The local date in New Zealand, which is the date notices and retention
@@ -164,6 +172,8 @@ impl StateMachine for DocumentsState {
         // pass or acknowledging the stream twice changes nothing the second
         // time, so the keys of these frequent commands are not kept.
         let remember = !matches!(env.command, Command::ObserveCoreEvents { .. } | Command::Tick | Command::MarkPublished { .. });
+        let is_tick = matches!(env.command, Command::Tick);
+        let today = ctx.today;
         let result = if !env.command.allowed_callers().contains(&env.caller.as_str()) {
             reject("not_allowed", format!("{} may not send {}", env.caller, env.command.name()))
         } else if env.actor.is_empty() {
@@ -193,6 +203,7 @@ impl StateMachine for DocumentsState {
         };
         self.unpublished.extend(events.iter().cloned());
         if remember {
+            self.key_log.push_back((today, env.key.clone()));
             self.results.insert(
                 env.key,
                 StoredResult {
@@ -200,6 +211,8 @@ impl StateMachine for DocumentsState {
                     error: result.clone().err(),
                 },
             );
+        } else if is_tick {
+            self.forget_old_keys(today);
         }
         Applied {
             index,
@@ -213,6 +226,26 @@ impl StateMachine for DocumentsState {
 impl DocumentsState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A key guards against a command sent twice, which happens within
+    /// minutes. Keys older than [`KEEP_KEYS_DAYS`] are forgotten as time
+    /// passes, a bounded number at a time, so the state does not grow for ever.
+    fn forget_old_keys(&mut self, today: NaiveDate) {
+        for _ in 0..MAX_CHUNK {
+            match self.key_log.front() {
+                Some((stored, _)) if *stored + Duration::days(KEEP_KEYS_DAYS) < today => {}
+                _ => break,
+            }
+            if let Some((_, key)) = self.key_log.pop_front() {
+                self.results.remove(&key);
+            }
+        }
+    }
+
+    /// How many idempotency keys are remembered.
+    pub fn remembered_keys(&self) -> usize {
+        self.results.len()
     }
 
     fn dispatch(&mut self, command: Command, ctx: &mut Ctx) -> Result<(), Reject> {
