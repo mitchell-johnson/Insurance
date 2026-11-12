@@ -83,6 +83,7 @@ fn position(party: &str, held: Vec<HeldLine>, licences: Vec<LicenceRecord>, ceas
         open_cases: vec!["case-9".into()],
         notes: vec![],
         actions_in_progress: vec![],
+        memo: vec![],
     })
     .unwrap()
 }
