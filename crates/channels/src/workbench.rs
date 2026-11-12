@@ -59,6 +59,17 @@ pub enum HoldReason {
     LegalHold,
 }
 
+impl HoldReason {
+    pub fn key(self) -> &'static str {
+        match self {
+            HoldReason::SuspendedLicence => "suspended_licence",
+            HoldReason::Dispute => "dispute",
+            HoldReason::MissingPaymentDetails => "missing_payment_details",
+            HoldReason::LegalHold => "legal_hold",
+        }
+    }
+}
+
 /// One line of a party's position. A positive amount is owed to the party;
 /// a negative amount is owed by them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -548,7 +559,12 @@ impl Workbench {
                 if source.trim().is_empty() {
                     return Err(reject("no_source", "a status change names its source"));
                 }
-                self.positions.entry(party.clone()).or_default().status.push(StatusChange {
+                // The same change told twice, as a forwarder may after a restart, is one change.
+                let known = &mut self.positions.entry(party.clone()).or_default().status;
+                if known.iter().any(|c| c.status == status && c.effective == effective && c.source == source) {
+                    return Ok(vec![]);
+                }
+                known.push(StatusChange {
                     status,
                     effective,
                     source,

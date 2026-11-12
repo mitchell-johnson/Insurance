@@ -16,6 +16,7 @@ resources:
   - portal.yaml
   - worker.yaml
   - payments.yaml
+  - reinsurance.yaml
   - bootstrap.yaml
   - admin.yaml
   - network.yaml

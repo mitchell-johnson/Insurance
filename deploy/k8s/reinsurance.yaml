@@ -1,0 +1,68 @@
+# The reinsurance driver: carries the reinsurance module's instructions from
+# its group on the ledger nodes to the partitions (docs/reinsurance.md). It
+# holds no state. It talks only to the ledger nodes, with the cluster token,
+# so it runs under the workers' identity, which may read that one secret.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-reinsurance
+spec:
+  # Two, so delivery carries on when one dies. Both may run at once: the core
+  # applies each instruction once.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-reinsurance
+  template:
+    metadata:
+      labels:
+        app: ic-reinsurance
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-worker
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: driver
+          image: insurance-core
+          command: ["/usr/local/bin/ic-reinsurance"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-worker-token
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-reinsurance
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-reinsurance
