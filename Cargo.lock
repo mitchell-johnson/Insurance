@@ -2137,6 +2137,7 @@ dependencies = [
  "ic-channels",
  "ic-documents",
  "ic-raft",
+ "ic-reinsurance",
  "ic-underwriting",
  "serde_json",
  "tokio",
@@ -2222,6 +2223,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-sim",
  "proptest",
  "serde",
@@ -2229,6 +2231,9 @@ dependencies = [
  "sha2",
  "starlark",
  "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
