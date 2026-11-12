@@ -499,3 +499,54 @@ fn a_layer_underwriting_rewrote_carries_its_commission_on() {
     let more = w.issue_for(2, PERSON, 500_000_00);
     assert_eq!(matched(&w.write(&more, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap()), None);
 }
+
+/// Purpose: an adviser moves a customer who is still in force: the new policy is written and
+/// paid first, and the old one is cancelled afterwards. When the old cover is given up the
+/// rule looks back to the new layer: the initial commission the new adviser was paid on the
+/// matched amount goes back, the clawback on the old cover is reversed and its exposure
+/// carries on under the new layer, and trail on the new layer follows the original book. New
+/// cover of a different amount from an unrelated adviser is not matched.
+/// Why it matters: this is the usual order of a replacement, because nobody cancels cover
+/// before the new cover is on risk. A rule that only looks back from new business would miss
+/// almost every real replacement.
+#[test]
+fn cover_given_up_after_new_cover_was_written_is_matched_looking_back() {
+    let (mut w, old, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    let (fap_one, fap_three) = (w.payable("fap-one"), w.payable("fap-three"));
+    let new = w.issue_for(2, PERSON, 500_000_00);
+    assert_eq!(matched(&w.write(&new, "life", 1, "eng-c-three", "c-at-fap-three", 1_200_00).unwrap()), None);
+    w.pay(&new, "n1");
+    let paid_three = w.payable("fap-three") - fap_three;
+    assert!(paid_three > 1_200_00, "initial and the first renewal: {paid_three}");
+    w.days(10);
+
+    let before = w.events.len();
+    cancel(&mut w, &old);
+    assert_eq!(matched(&w.events[before..]), Some((500_000_00, MatchReason::AmountsMatch)));
+    assert_eq!(w.payable("fap-three") - fap_three, paid_three - 1_200_00, "the initial commission goes back");
+    assert!(w.payable("fap-one") >= fap_one, "the old cover was replaced, not lost: no clawback");
+    let open: Vec<_> = w.dist.exposures.values().filter(|e| e.open && e.amount_minor > e.clawed_minor).collect();
+    assert!(open.iter().all(|e| e.layer == layer_of(&new) && e.paid_to != party("fap-three")), "{open:?}");
+    assert_eq!(open.iter().map(|e| e.amount_minor - e.clawed_minor).sum::<i64>(), 1_200_00);
+    w.assert_reconciled();
+
+    // Trail on the new layer follows the original book from now on.
+    w.days(25);
+    let before = w.events.len();
+    w.pay(&new, "n2");
+    let lines = paid(&w, &earned(&w, before));
+    assert!(lines.keys().all(|(who, kind)| kind == "Renewal" && who != "fap-three"), "{lines:?}");
+    w.assert_reconciled();
+
+    // A different amount from an unrelated adviser is new business, however it is ordered.
+    let (mut w, old, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    let new = w.issue_for(2, PERSON, 300_000_00);
+    w.write(&new, "life", 1, "eng-c-three", "c-at-fap-three", 720_00).unwrap();
+    w.pay(&new, "n1");
+    let before = w.events.len();
+    cancel(&mut w, &old);
+    assert_eq!(matched(&w.events[before..]), None);
+    assert!(w.dist.layers[&layer_of(&new)].replacement.is_none());
+}

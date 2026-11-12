@@ -925,6 +925,15 @@ impl DistributionState {
                 p.last_clawback = Some(reference);
             }
         }
+        let given_up: Vec<String> = self
+            .layers
+            .iter()
+            .filter(|(_, l)| &l.policy == policy && l.given_up.is_some())
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in given_up {
+            self.match_given_up(ctx, &key, date);
+        }
     }
 
     /// The policy was avoided for non-disclosure and is treated as never
@@ -1027,6 +1036,7 @@ impl DistributionState {
                 self.claw_back(ctx, policy, partition, cause, effective, date, &open, altered_by.as_ref());
                 if let Some(l) = self.layers.get_mut(key).filter(|l| l.terms.is_some()) {
                     l.given_up = Some((effective, l.sum_insured_minor));
+                    self.match_given_up(ctx, key, date);
                 }
             }
         }
@@ -1102,6 +1112,7 @@ impl DistributionState {
                 self.claw_back(ctx, policy, partition, cause, effective, date, &given_up, altered_by.as_ref());
                 if let Some(l) = self.layers.get_mut(from).filter(|l| l.terms.is_some()) {
                     l.given_up = Some((effective, whole - kept));
+                    self.match_given_up(ctx, from, date);
                 }
             }
             Some(original) => {
