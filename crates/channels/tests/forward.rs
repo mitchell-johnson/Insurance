@@ -45,6 +45,10 @@ impl Source for Scripted {
             .unwrap_or_else(|| Err(format!("unscripted: {key}")));
         Box::pin(async move { answer })
     }
+
+    fn tell(&self, envelope: Value) -> Pin<Box<dyn Future<Output = Result<Value, String>> + Send + '_>> {
+        Box::pin(async move { Err(format!("nothing is sent to the commission module in these tests: {envelope}")) })
+    }
 }
 
 fn summary(receivable: i64, advance: i64) -> Summary {

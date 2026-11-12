@@ -1376,6 +1376,7 @@ impl GroupState {
                         loadings: vec![],
                         exclusions: vec![],
                     }],
+                    migrated: false,
                 };
                 if let Some(o) = s.offers.get_mut(&offer) {
                     o.status = OfferStatus::Issuing { policy, group: group.clone() };

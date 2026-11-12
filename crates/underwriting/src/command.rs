@@ -501,14 +501,14 @@ impl Command {
             | ActivateSettings { .. }
             | ActivatePolicies { .. }
             | ActivateDelegatedAuthority { .. } => &["config"],
-            OpenProposal(_) | SubmitDisclosure(_) => &["new-business", "migration"],
-            RecordConsent { .. }
-            | PrefillExistingCover { .. }
-            | RespondToOffer { .. }
-            | Withdraw { .. }
-            | Chaser { .. }
-            | Requote { .. }
-            | ConfirmInterview(_) => &["new-business"],
+            // Group administration opens a proposal only for a member's cover
+            // above the automatic acceptance limit, and may withdraw it.
+            OpenProposal(_) => &["new-business", "migration", "group-admin"],
+            SubmitDisclosure(_) => &["new-business", "migration"],
+            Withdraw { .. } => &["new-business", "group-admin"],
+            RecordConsent { .. } | PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => {
+                &["new-business"]
+            }
             AdviserLookup { .. } => &["adviser-portal"],
             EvidenceAcknowledged { .. } | EvidenceReceived { .. } | EvidenceUnobtainable { .. } => &["evidence", "migration"],
             ScheduleInterview { .. } => &["new-business", "underwriting-console"],
@@ -653,6 +653,17 @@ pub enum Effect {
         policy: PolicyId,
         effective: NaiveDate,
         covers: Vec<ic_core::command::CoverSpec>,
+    },
+    /// A proposal on a policy already in force ended with no terms to
+    /// apply: declined, lapsed or withdrawn. Whoever asked is told, so the
+    /// policy's owner is not left waiting.
+    ProposalEnded {
+        key: String,
+        proposal: ProposalId,
+        entry: Entry,
+        policy: PolicyId,
+        /// `declined`, `lapsed` or `withdrawn`.
+        outcome: String,
     },
     IssueInterim {
         key: String,

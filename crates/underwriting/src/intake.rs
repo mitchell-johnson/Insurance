@@ -33,6 +33,13 @@ impl UnderwritingState {
         if open.legacy_received_on.is_some() != migration {
             return reject("received_on", "only a migrated proposal carries the date it was first received, and it must");
         }
+        let group_excess = matches!(open.entry, crate::model::Entry::GroupExcess { .. });
+        if cx.caller == "group-admin" && !group_excess {
+            return reject(
+                "entry",
+                "group administration opens a proposal only for a member's cover above the automatic acceptance limit",
+            );
+        }
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");
@@ -327,6 +334,9 @@ pub(crate) fn respond(
 }
 
 pub(crate) fn withdraw(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
+    if cx.caller == "group-admin" && !matches!(p.entry, crate::model::Entry::GroupExcess { .. }) {
+        return reject("entry", "group administration withdraws only the proposals it opened");
+    }
     if !matches!(p.status, ProposalStatus::Open | ProposalStatus::IssueFailed { .. }) {
         return reject("closed", format!("proposal {} is {}", p.id, p.status.key()));
     }
