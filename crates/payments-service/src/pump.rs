@@ -82,7 +82,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
     }
 
     async fn ask<T: DeserializeOwned>(&self, question: serde_json::Value) -> Result<T, String> {
-        serde_json::from_value(self.module.query(question).await?).map_err(|e| e.to_string())
+        serde_json::from_value(self.module.query(question).await?).map_err(crate::ports::unreadable)
     }
 
     fn target(&self, config: &Config, channel: &str) -> Result<Target, String> {
@@ -114,7 +114,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         let file = batch.file();
         let signature = self.keys.sign(&key, file.as_bytes()).await.map_err(before)?;
         let manifest = batch.manifest(signature.algorithm, signature.key_id, signature.value);
-        let manifest_bytes = serde_json::to_vec(&manifest).map_err(|e| before(e.to_string()))?;
+        let manifest_bytes = serde_json::json!(manifest).to_string().into_bytes();
         // Evidence first: nothing goes to a bank that the vault does not
         // hold. The same batch written twice is the same evidence.
         for (name, kind, bytes) in [
@@ -413,6 +413,29 @@ pub type DeployedPump = Pump<
     crate::ports::LogNotifier,
 >;
 
+/// Structured logs on standard error, at `info` unless `RUST_LOG` says
+/// otherwise. A second call leaves the first in place.
+pub fn log_to_stderr() {
+    let _ = tracing_subscriber::fmt()
+        .json()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .try_init();
+}
+
+/// Resolves when the process is asked to stop.
+pub async fn interrupted() {
+    let _ = tokio::signal::ctrl_c().await;
+}
+
+/// The whole of the binary: settings and the Azure identity from the
+/// environment `get` reads, then [`Pump::run`].
+pub async fn run_from(args: &[String], get: impl Fn(&str) -> Option<String>, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
+    let settings = crate::settings::PumpSettings::from_lookup(&get)?;
+    let credential = ic_azure::credential::AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
+    DeployedPump::deployed(&settings, credential).run(args, settings.interval, stop).await
+}
+
 impl DeployedPump {
     pub fn deployed(settings: &crate::settings::PumpSettings, credential: ic_azure::credential::AzureCredential) -> Self {
         let client = ic_raft::ClusterClient::new(settings.nodes.clone()).with_auth(settings.auth.clone());
@@ -440,9 +463,6 @@ impl DeployedPump {
 }
 
 impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier> Pump<M, C, B, V, K, S, N> {
-    /// What the binary does with its arguments: nothing for the standing
-    /// pump (until `stop` resolves), `once` for one pass that fails if
-    /// anything was left undone, `drill <id>` for the evacuation drill.
     async fn drill_named(&self, id: &str) -> Result<(), String> {
         match self.drill(id).await? {
             true => Ok(()),
@@ -450,6 +470,9 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         }
     }
 
+    /// What the binary does with its arguments: nothing for the standing
+    /// pump (until `stop` resolves), `once` for one pass that fails if
+    /// anything was left undone, `drill [<id>]` for the evacuation drill.
     pub async fn run(&self, args: &[String], interval: std::time::Duration, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
         match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
             [] => {

@@ -230,7 +230,7 @@ impl FakeBank {
 
     /// The bank's books, to read or to arrange a failure.
     pub fn lock(&self) -> MutexGuard<'_, Inner> {
-        self.inner.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        self.inner.lock().expect("the fake bank's books")
     }
 
     /// Send the acknowledgement file for something the bank holds.

@@ -5,27 +5,15 @@
 //!   submit to the banks.
 //! - `ic-payments-pump once` makes one pass and fails if anything could not
 //!   be done.
-//! - `ic-payments-pump drill <id>` runs the evacuation drill from this
-//!   region and fails if any bank channel could not be reached.
+//! - `ic-payments-pump drill [<id>]` runs the evacuation drill from this
+//!   region and fails if any bank channel could not be reached. Without an
+//!   ID the drill is named for the day and the region.
 //!
 //! See [`ic_payments_service::settings::PumpSettings`] for the environment.
 
-use ic_azure::credential::AzureCredential;
-use ic_payments_service::pump::DeployedPump;
-use ic_payments_service::settings::PumpSettings;
-
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    tracing_subscriber::fmt()
-        .json()
-        .with_writer(std::io::stderr)
-        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-        .init();
+    ic_payments_service::pump::log_to_stderr();
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let settings = PumpSettings::from_lookup(|key| std::env::var(key).ok())?;
-    let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;
-    let stop = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    DeployedPump::deployed(&settings, credential).run(&args, settings.interval, stop).await
+    ic_payments_service::pump::run_from(&args, |key| std::env::var(key).ok(), ic_payments_service::pump::interrupted()).await
 }
