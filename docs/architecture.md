@@ -11,6 +11,37 @@ That one idea gives the properties an insurer's core needs:
 - **Everything is explainable.** The ledger is append-only and hash-chained. Policy state can be rebuilt by replaying the log.
 - **Tampering shows.** Each day's ledger heads are folded into a Merkle root, signed with a Key Vault key and written to immutable storage.
 
+## State of the build and hand-over
+
+This document is shared by every area of the build. The sections above the line "Modules beside the core" describe how the core works. Below it, each area has one section of its own, headed with the area's name, that says what is built and where, what is not, and what a person would need to finish it. An area edits only its own section. `docs/decisions.md` is the list of known gaps and open decisions, one entry per subject, and wins where the two disagree on detail.
+
+| Area | Crates | Its own document | Hand-over section |
+|---|---|---|---|
+| Core (ledger, policy model, billing, nodes, daily close, Azure adapters, CI) | `core`, `ledger`, `log`, `money`, `product`, `raft`, `node`, `api`, `workflows`, `azure`, `readmodel`, `cashmatch`, `sim` | this file, `operations.md`, `modules.md` | "Core: hand-over" below |
+| Claims | `claims` | `claims.md` | its own section |
+| Reinsurance | `reinsurance` | `reinsurance.md` | its own section |
+| Group schemes | `group` | `group.md` | its own section |
+| Adviser commission and held balances | `distribution` | `distribution.md` | its own section |
+| Payments and bank channels | `payments`, `payments-service` | `payments.md` | its own section |
+| Underwriting and new business | `underwriting` | `underwriting.md` | its own section |
+| Documents, complaints | `documents`, `complaints` | `documents.md`, `complaints.md` | its own section |
+| Finance ledger and reporting | `finance` | `finance.md` | its own section |
+| Portal and app services | `channels` | `channels.md` | "Portal and app services" below |
+| Unit pricing | `pricing` | `unit-pricing.md` | its own section |
+| Customer master | `customers` | `customers.md` | its own section |
+
+### Checks every area shares
+
+- **`ci.yml`** on every push to `main`: format, `cargo clippy --workspace --all-targets -D warnings`, `tools/check_test_docs.py` (every test has `Purpose:` and `Why it matters:`), the whole workspace's tests under `cargo llvm-cov` with a real Temporal server and a PostgreSQL container, a 98% line floor by llvm-cov's own table (`tools/coverage_floor.py`), Bicep compile of `infra/*.bicep` and `kubectl kustomize deploy/k8s`. About 15 minutes.
+- **`drill.yml`** on every push: builds the image with the `drill` profile, starts the Compose cluster (three ledger nodes, Temporal, two workers, the API) and runs `deploy/compose/chaos.sh`, which kills a ledger node and a worker during a close and checks the books. 30 to 55 minutes, limit 90.
+- **Reading the results.** Each workflow runs one at a time on `main` and never cancels a run that has started. A run still waiting is replaced by the next push and shows as cancelled, which on a busy day is most of them. Judge `main` by the latest completed run of each workflow. Last read, 12 Nov 2026: `ci.yml` passed in full at `077422a` (18:17 UTC); `drill.yml` last passed at `82497bd`, before the drill profile, and no completed drill run has been read since. Anyone picking this up should read both first.
+- **Before pushing a change to a public type or a core event**, build the whole merged workspace with all targets: other crates' tests construct those types by hand.
+- **In a small container** a workspace test build fills the disk. Test crate by crate, with `IC_SKIP_TEMPORAL_TESTS=1` where no Temporal server is reachable; CI runs everything.
+
+### The integrated cycle on one machine
+
+The whole arrangement runs on one machine with `docker compose -f deploy/compose/docker-compose.yml up --build` and is broken on purpose by `deploy/compose/chaos.sh` (see the README and `operations.md`). CI runs exactly this in `drill.yml`. It has been run by hand on the development Mac for the core alone. **It has not been run by hand since the modules were hosted on the ledger nodes**, so on a real multi-node cluster nobody has yet watched: a module's outbox drain after a leader change, commission posted after a receipt on any partition, each module's `status` question answering on every node, or the unit pricing and group drivers against the cluster. The commission thread asked for exactly those three checks. The Mac ran out of memory once building the test image; build the image with `CARGO_PROFILE=drill` there too.
+
 ## Partitions
 
 Policies are grouped (a household, an employer's scheme), and a group lives on one of 64 partitions, chosen by a hash of the group's ID that never changes. Each partition is its own Raft group with its own log, ledger and business date. Work on one partition never waits for another, and one very large scheme cannot stall the rest: no command may do more than a bounded amount of work, so a 50,000-member scheme is billed in chunks.
@@ -88,6 +119,53 @@ A price is never edited. A correction is a new price that names the one it repla
 Money leaves the investment ledger the way a claim is paid. A sell puts its proceeds in pending investment cash; a payout command raises them to the policy's benefit payable, and the payments module pays from there under the payout's ID, so a withdrawal passes the same payee checks and bank reconciliation as every other payment.
 
 What is and is not built is in [decisions.md](decisions.md).
+
+## Core: hand-over
+
+Owned by the thread "Implement insurance core system". What the core is and how it works is the first half of this document; this section is the state of it on 12 Nov 2026 and what is left.
+
+### What is built, and where
+
+- **Ledger, log, money, products**: `crates/ledger` (double entry, hash chain, account roles), `crates/log` (the state machine trait and idempotent apply), `crates/money`, `crates/product` (Starlark products, rate tables, definitions, funds; `prelude.star` is part of every content hash).
+- **Policy state machine**: `crates/core/src/machine.rs` dispatches every `Command` (`command.rs`; each has `allowed_callers()` and a `name()` equal to its wire tag, checked by `crates/sim/tests/integrity.rs`, which must list every command). By file: `lifecycle.rs` (issue, anniversaries, indexation, merge, cancel, reinstate), `billing.rs`, `cash.rs`, `earning.rs`, `arrears.rs`, `premium.rs`, `group.rs` (scheme membership, chunked scheme billing, underwritten layers), `voluntary.rs` (cover a member pays for), `underwritten.rs` (underwriting's increase and alteration; written by the underwriting thread), `reduce.rs` (owner's reduction), `nondisclosure.rs` (avoid, vary), `interest.rs` (lender's interest and consents), `invest.rs` (unit-linked ledger), `unwind.rs` and `reopen.rs` (late-notified events and defective notices), `transfer.rs` (moving partition), `payments.rs`, `counterparty.rs`, `reinsurance.rs`, `claims.rs` (the port the claims module uses), `recon.rs` (the reconciliation every close runs).
+- **Nodes and close**: `crates/raft` (openraft groups, the module host), `crates/node` (`ic-node`, hosts the partitions and every module), `crates/api` (`ic-api`, `ic-admin`), `crates/workflows` (`ic-worker`: the Temporal end of day, the unit order run), `crates/azure` (Key Vault signing, Blob, Service Bus, Entra ID), `crates/readmodel`, `crates/cashmatch`.
+- **Simulation and tests**: `crates/sim` runs real partitions in memory; `crates/sim/tests/*.rs` are the core's behaviour tests, one file per subject.
+- **Deployment**: `infra/main.bicep` and one Bicep file per module, `deploy/k8s` (kustomize), `deploy/compose` (one machine and the failure drill), `Dockerfile` (`ARG CARGO_PROFILE`).
+
+### Added on 12 Nov 2026, with the area that asked
+
+| What | Where | Tests | For |
+|---|---|---|---|
+| Unit-linked ledger: orders, switches, price correction by replay, payouts, the order run, fund files | `invest.rs`, `crates/workflows/src/eod.rs` and `steps.rs`, `products/funds/` | `sim/tests/investment.rs`, `workflows/tests/end_of_day.rs` | unit pricing, finance |
+| Lender's interest, consent, release | `interest.rs` | `sim/tests/interests.rs` | claims, documents |
+| `Layer.rated_from`; level premium to `level_to_age` | `policy.rs`, `premium.rs` | `sim/tests/edges.rs` | underwriting |
+| `ReduceCover` | `reduce.rs` | `sim/tests/reduce_cover.rs` | commission |
+| Member factors on `MemberJoined` and `MemberChanged`; occupation class as a rating factor | `event.rs`, `group.rs`, `crates/product` | `sim/tests/group_cover.rs`, `edges.rs` | finance |
+| Cover a scheme member pays for: bills, receipts, credit, standing, lapse | `voluntary.rs`, `group.rs`, `billing.rs` | `sim/tests/voluntary_cover.rs` | group schemes, payments |
+| `AvoidPolicy`, `VaryForNonDisclosure` | `nondisclosure.rs` | `sim/tests/nondisclosure.rs` | underwriting |
+
+The last two rows were pushed on the evening of 12 Nov and no completed CI run covering them had been read when this was written. They passed format, clippy on the whole workspace, the test-doc check and the tests of `ic-core`, `ic-sim`, `ic-finance`, `ic-group`, `ic-underwriting` and `ic-workflows` locally. Whether the workspace is still at 98% with them is not known until that run completes.
+
+### Not built: the plan, in the order I would do it
+
+Each item has an entry in `docs/decisions.md` with the detail of what exists.
+
+1. **Tell the other areas about `PolicyStatus::Avoided` and `PolicyAvoided`.** Not yet sent when this was written. Commission must claw back everything on an avoided policy, reinsurance must reverse cessions from inception, finance must map the status and the `avoidance_premium_retained` role (already in `config/finance/chart.star`), documents needs the letter, and underwriting must route its `NonDisclosureRemedy` effect to the two commands. Every other crate compiles because they match statuses with a wildcard, which is exactly why none of them handles it yet.
+2. **Unit-linked product.** The ledger exists but no product uses it. Needed: a product with `investment_account(funds)` (the helper is in `prelude.star`) and contribution rules that send part of a receipt to `AllocateCash`; fees and insurance charges taken as sell orders each month; the servicing commands for a withdrawal and a surrender (sell orders, exit charge, `RaisePayout`, status `Surrendered`); carrying units when a policy moves partition (today refused `policy_invested`); opening loads for migration; an alert when `EndOfDayReport.unit_orders_left` is not zero. Seams: unit pricing (`crates/pricing`, prices and corrections), finance (the close check on pending investment cash), payments (payouts are paid as benefit payables).
+3. **Joint life and linked covers.** Agreed with claims that these are policy facts the core holds. Nothing exists. Needed: a cover on two lives that ends on the first event, covers linked so that a claim on one reduces another, and both published in `claims::cover_facts`.
+4. **Policy loans and change of owner.** `RestrictedAction::Loan` and `ChangeOwner` exist in `interest.rs` with nothing to restrict. A loan needs a surrender value basis, which traditional products do not have here. Change of owner is the transfer protocol with a new policyholder; the account role `policy_loan` exists unused.
+5. **Interests in claims.** `ic_core::interest::ranked(policy, on)` gives the lenders to pay first. The claims thread was to add `CoverFacts.interests` and fill it in `crates/core/src/claims.rs`; check whether that landed.
+6. **Other alterations in the design**: adding a cover that was not on the policy at issue, a product-declared order of reduction, future insurability options, conversion to another product.
+7. **Voluntary cover, the rest**: automatic (formula) cover paid by the member, so dependants paid for by the employee; a proven notice before a member's cover lapses, as a policy's lapse waits for one; reinstating a member's lapsed cover; carrying member credit on a partition transfer (refused `member_credit_held`); an optional life on `PaymentAuthorityCancelled` so payments can end one member's authority (asked by payments).
+8. **Smaller known defects**: cancelling a policy on which nothing was paid can leave one cent in policy suspense; `infra/group.bicep` and the customer master's Bicep file compile in CI but are not referenced from `main.bicep`; finance's rate table checks index cells without occupation class (`crates/finance/src/tables.rs`).
+9. **The integrated cycle** described above, by hand, with the modules hosted.
+
+### Open questions for Mitchell
+
+- **Screens.** Whether adviser, employer, staff and operations screens belong in this repository was answered only with "Continue"; the portal thread took that as yes.
+- **Premium on avoidance.** The core takes refund or retain from the approved case because the design notes ask for legal review and give no rule. If there should be a rule by regime (before and after the Contracts of Insurance Act 2024), it belongs in underwriting's effective-dated rules.
+- **GST on premium kept on avoidance** is left as collected. That is a tax question nobody has answered.
+- **Temporal hosting, encryption inside the cluster and the second region** are the three open decisions at the top of `docs/decisions.md`.
 
 ## Modules beside the core
 
