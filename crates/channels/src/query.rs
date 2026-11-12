@@ -102,6 +102,13 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// What a member of staff may do at the complaints workbench, and the
+    /// same for one other person a command of theirs names.
+    ComplaintsStaff {
+        staff: PartyId,
+        about: Option<PartyId>,
+        at: At,
+    },
     /// What a member of staff may do in the unit pricing console.
     PricingStaff {
         staff: PartyId,
@@ -392,6 +399,10 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "external_source_available": d.staff.external_available,
             })
         }
+        Question::ComplaintsStaff { staff, about, at } => json!({
+            "me": crate::complaints::standing(&d.staff, &staff, at),
+            "other": about.map(|other| crate::complaints::standing(&d.staff, &other, at)),
+        }),
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
         Question::Workbench { staff, party, at } => {
             let record = party.as_ref().map_or_else(|| "counterparty:*".to_string(), |p| format!("counterparty:{p}"));

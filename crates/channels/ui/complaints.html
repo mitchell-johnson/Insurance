@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Complaints and conduct workbench</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Complaints and conduct workbench</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Your seats</h2><p id="seats" class="muted"></p></section>
+<nav class="tabs" role="tablist" aria-label="Sections">
+<button role="tab" data-tab="record" aria-selected="true">Record a complaint</button><button role="tab" data-tab="queue" aria-selected="false">Queue</button><button role="tab" data-tab="register" aria-selected="false">Register and report</button><button role="tab" data-tab="conduct" aria-selected="false">Conduct cases</button></nav>
+
+<div data-panel="record">
+<section><h2>Record a complaint</h2><p class="muted">Record it wherever you hear it, about anything. The complainant's own words go in the document vault; give the document's reference here.</p>
+<form id="intake"><div class="row">
+<div><label for="i-id">Complaint reference</label><input id="i-id" required></div>
+<div><label for="i-channel">Heard by</label><select id="i-channel"><option value="call">Call</option><option value="email">Email</option><option value="letter">Letter</option><option value="app">App</option><option value="portal">Portal</option><option value="social_media">Social media</option><option value="adviser">Adviser</option><option value="in_conversation">In conversation</option><option value="external_scheme">External scheme</option></select></div>
+<div><label for="i-who">Complainant (customer reference)</label><input id="i-who" required></div>
+<div><label for="i-kind">Complainant is the</label><select id="i-kind"><option value="policyholder">Policyholder</option><option value="life_insured">Life insured</option><option value="claimant">Claimant</option><option value="beneficiary">Beneficiary</option><option value="scheme_member">Scheme member</option><option value="employer">Employer</option><option value="adviser">Adviser</option><option value="third_party">Third party</option></select></div>
+<div><label for="i-process">About</label><select id="i-process"><option value="service">Service</option><option value="claims">Claims</option><option value="underwriting">Underwriting</option><option value="billing">Billing</option><option value="sales">Sales</option><option value="privacy">Privacy</option><option value="adviser_conduct">Adviser conduct</option></select></div>
+<div><label for="i-policies">Policies (comma separated)</label><input id="i-policies"></div>
+<div><label for="i-doc">Summary document</label><input id="i-doc" required></div>
+<div><label for="i-vulnerable">Vulnerable?</label><select id="i-vulnerable"><option value="false">No</option><option value="true">Yes</option></select></div>
+<div><label for="i-adjust">Adjustments needed (comma separated)</label><input id="i-adjust"></div>
+<button>Record</button></div></form><div id="intake-msg" aria-live="polite"></div></section></div>
+
+<div data-panel="queue" hidden>
+<section><h2>Open complaints</h2><p class="muted">Vulnerable complainants first, then the nearest deadline.</p><div id="queue"></div></section>
+<section><h2>Open a complaint</h2><form id="open"><div class="row"><div><label for="o-id">Complaint reference</label><input id="o-id" required></div><button>Open</button><button type="button" class="quiet" id="subject">Complainant's own record</button></div></form><div id="open-msg" aria-live="polite"></div>
+<div id="file" hidden><h2 id="file-title"></h2><div id="file-timers"></div><pre id="file-raw"></pre></div></section>
+<section><h2>Act</h2><form id="act"><div class="row"><div><label for="a-seat">Acting as</label><select id="a-seat"></select></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p><p class="muted">A handler's authority and training, and the authority of whoever authorises a remediation, come from the staff records. You cannot type them.</p></form><div id="act-msg" aria-live="polite"></div></section></div>
+
+<div data-panel="register" hidden>
+<section><h2>Register and report</h2><form id="period"><div class="row"><div><label for="p-from">From</label><input id="p-from" type="date" required></div><div><label for="p-to">To</label><input id="p-to" type="date" required></div><button>Show</button></div></form><div id="period-msg" aria-live="polite"></div><div id="register"></div><pre id="report"></pre></section>
+<section><h2>A customer's complaints</h2><form id="of"><div class="row"><div><label for="of-party">Customer reference</label><input id="of-party" required></div><button>Find</button></div></form><div id="of-out"></div></section></div>
+
+<div data-panel="conduct" hidden>
+<section><h2>Open conduct cases</h2><p class="muted">Open to the conduct function and legal only. Act on a case from the Queue tab, as conduct or legal.</p><div id="cases"></div><div id="case-msg" aria-live="polite"></div><div id="case" hidden><h2 id="case-title"></h2><div id="case-summary"></div><pre id="case-raw"></pre></div></section></div>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/complaints/";
+let me = { seats: [] };
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (seat, command) => api(R, "POST", BASE + "commands", { as: seat, command });
+const list = (text) => String(text || "").split(",").map((s) => s.trim()).filter(Boolean);
+const has = (seat) => me.seats.includes(seat);
+
+// Every action a person takes, by the seat it is taken in. A field is [key, label, kind, options]; a dotted key nests.
+const OUTCOMES = ["upheld", "partly_upheld", "not_upheld", "withdrawn", "resolved_by_agreement"];
+const PROCESSES = ["service", "claims", "underwriting", "billing", "sales", "privacy", "adviser_conduct"];
+const C = ["complaint", "Complaint", "text"], K = ["case", "Conduct case", "text"];
+const ACTIONS = {
+  complaints: {
+    assign: [C, ["handler", "Handler (staff reference)", "text"]],
+    record_acknowledgement: [C, ["document", "Acknowledgement document", "text"]],
+    record_update: [C, ["document", "Update document", "text"]],
+    refine_category: [C, ["category.process", "Process", "select", PROCESSES], ["category.product", "Product (optional)", "optional"], ["category.cause", "Cause code (optional)", "optional"]],
+    add_representative: [C, ["representative.party", "Representative (customer reference)", "text"], ["representative.relationship", "Relationship", "text"], ["representative.authority_document", "Authority document", "text"]],
+    set_vulnerability: [C, ["vulnerable", "Vulnerable", "bool"], ["adjustments", "Adjustments (comma separated)", "list"]],
+    ask_complainant: [C], record_complainant_response: [C],
+    grant_access: [C, ["to", "To (staff reference)", "text"], ["classes", "Data classes (personal, financial, insurance_sensitive, clinical)", "list"], ["purpose", "Purpose", "text"]],
+    revoke_access: [C, ["from", "From (staff reference)", "text"]],
+    decide: [C, ["outcome", "Outcome", "select", OUTCOMES], ["reason_codes", "Reason codes (comma separated)", "list"], ["document", "Written outcome document", "optional"]],
+    record_outcome_delivered: [C, ["on", "Delivered on", "date"]],
+    record_remediation: [C, ["kind", "Kind", "select", ["decision_reopened", "refund", "ex_gratia", "record_correction"]], ["reference", "Reference in the owning module", "text"], ["amount_minor", "Amount", "money"], ["authorised_by", "Authorised by (staff reference; blank for you)", "optional"]],
+    complete_remediation: [C, ["reference", "Reference", "text"]],
+    record_systemic_finding: [C, ["remediation_case", "Remediation case", "text"]],
+    declare_deadlock: [C], record_deadlock_notice: [C, ["document", "Deadlock notice document", "text"]],
+    close: [C, ["detail.cause", "Cause code", "text"], ["detail.product_version", "Product version (optional)", "optional"], ["detail.rule_version", "Rule version (optional)", "optional"], ["detail.template_version", "Template version (optional)", "optional"]],
+    record_root_cause_review: [["month", "Month (YYYY-MM)", "text"], ["actions", "Actions, as JSON: [{\"kind\":\"training\",\"cause\":\"delay\",\"reference\":\"T-1\"}]", "json"]],
+    open_conduct_case: [K, ["kind", "Kind", "select", ["systemic_finding", "breach", "incident", "adviser_pattern"]], ["owner", "Owner (staff reference)", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
+  },
+  referral: {
+    refer: [C, ["forum", "Forum", "select", ["scheme", "court", "privacy_regulator"]], ["reference", "Forum's reference", "text"], ["response_due", "Response due", "date"], ["documents_due", "Documents due (optional)", "optdate"]],
+    record_forum_response: [C],
+    release_bundle: [C, ["bundle", "Bundle", "text"], ["documents", "Documents (comma separated)", "list"], ["reviewed_by", "Reviewed by (someone else)", "text"]],
+    record_forum_decision: [C, ["outcome", "Outcome", "select", OUTCOMES], ["binding", "Binding", "bool"], ["remediation_due", "Remediation due (optional)", "optdate"]],
+    complete_forum_remediation: [C],
+  },
+  conduct: {
+    open_conduct_case: [K, ["kind", "Kind", "select", ["breach", "incident", "adviser_pattern", "systemic_finding"]], ["owner", "Owner (staff reference)", "text"], ["summary_document", "Summary document (optional)", "optional"], ["notify_regulator", "Regulator to be notified", "bool"]],
+    record_customer_notified: [K, ["customer", "Customer", "text"], ["document", "Letter", "text"]],
+    exclude_customer: [K, ["customer", "Customer", "text"], ["reason", "Reason", "text"]],
+    draw_sample: [K, ["size", "Files to review", "int"]],
+    record_file_review: [K, ["policy", "Policy", "text"], ["remediation_case", "Remediation case (blank if the file is satisfactory)", "finding"]],
+    record_regulator_notification: [K, ["reference", "Regulator's reference", "text"], ["document", "Notification document", "text"]],
+    record_regulator_request: [K, ["request", "Request", "text"], ["due", "Due", "date"], ["document", "Request document", "text"]],
+    respond_to_regulator: [K, ["request", "Request", "text"], ["document", "Response document", "text"]],
+    link_complaint: [K, ["complaint", "Complaint", "text"]],
+    close_conduct_case: [K, ["findings_document", "Findings document", "text"]],
+  },
+};
+const forSeat = (seat) => seat === "complaints" ? { ...ACTIONS.complaints, ...ACTIONS.referral } : seat === "legal" ? { ...ACTIONS.referral, ...ACTIONS.conduct } : seat === "conduct" ? ACTIONS.conduct : {};
+
+function fields() {
+  const spec = forSeat($("a-seat").value)[$("a-command").value] || [];
+  put($("a-fields"), spec.map(([key, label, kind, options], n) => {
+    const id = "f-" + n;
+    const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
+      : kind === "bool" ? h("select", { id }, h("option", { value: "false" }, "No"), h("option", { value: "true" }, "Yes"))
+      : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" ? "number" : "text", step: kind === "money" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
+          required: !["optional", "optdate", "list", "finding"].includes(kind) });
+    return h("div", {}, h("label", { for: id }, label), input);
+  }));
+}
+function commands() { put($("a-command"), Object.keys(forSeat($("a-seat").value)).map((c) => h("option", { value: c }, words(c)))); fields(); }
+$("a-seat").addEventListener("change", commands); $("a-command").addEventListener("change", fields);
+$("act").addEventListener("submit", run($("act-msg"), async () => {
+  const seat = $("a-seat").value, name = $("a-command").value, body = {};
+  forSeat(seat)[name].forEach(([key, , kind], n) => {
+    const raw = $("f-" + n).value;
+    let value = kind === "bool" ? raw === "true" : kind === "list" ? list(raw) : kind === "int" ? Number(raw) : kind === "money" ? Math.round(Number(raw) * 100)
+      : kind === "json" ? JSON.parse(raw) : kind === "optional" || kind === "optdate" ? (raw.trim() || null) : raw;
+    if (kind === "finding") { key = "finding"; value = raw.trim() ? { remediation_needed: { remediation_case: raw.trim() } } : "satisfactory"; }
+    if (key === "authorised_by" && value === null) return;
+    const path = key.split("."); let at = body;
+    for (const part of path.slice(0, -1)) at = at[part] = at[part] || {};
+    at[path[path.length - 1]] = value;
+  });
+  await send(seat, { [name]: body });
+  if (has("complaints") || has("legal") || has("conduct")) await queue();
+  return `Done: ${words(name)}.`;
+}));
+
+async function open(id) {
+  const [file, timers] = await Promise.all([ask("complaint", { id }), ask("running", { id })]);
+  $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(file.status)}`;
+  put($("file-timers"), table(["Timer", "Due"], (timers || []).map(([timer, due]) => [words(typeof timer === "string" ? timer : JSON.stringify(timer)), due])));
+  $("file-raw").textContent = JSON.stringify(file, null, 2);
+}
+async function queue() {
+  const rows = await ask("queue");
+  put($("queue"), table(["Complaint", "Owner", "About", "Adjustments", "Needs a trained handler", "Authority needed", "Next due", ""], rows.map((q) => [q.complaint, q.owner || "unassigned", words(q.process), (q.adjustments || []).join(", "), q.needs_trained_handler ? "yes" : "", q.authority_needed,
+    q.next_due ? `${words(typeof q.next_due[0] === "string" ? q.next_due[0] : JSON.stringify(q.next_due[0]))} by ${q.next_due[1]}` : "",
+    h("button", { class: "quiet", on: { click: run($("open-msg"), () => open(q.complaint)) } }, "Open")])));
+}
+$("open").addEventListener("submit", run($("open-msg"), () => open($("o-id").value)));
+$("subject").addEventListener("click", run($("open-msg"), async () => { $("file").hidden = false; $("file-title").textContent = "The complainant's own record"; put($("file-timers")); $("file-raw").textContent = JSON.stringify(await ask("subject_record", { id: $("o-id").value }), null, 2); }));
+
+$("intake").addEventListener("submit", run($("intake-msg"), async () => {
+  await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: $("i-who").value, complainant_kind: $("i-kind").value, links: { policies: list($("i-policies").value) },
+    category: { process: $("i-process").value }, summary_document: $("i-doc").value, vulnerable: $("i-vulnerable").value === "true", adjustments: list($("i-adjust").value) } });
+  const id = $("i-id").value; $("intake").reset();
+  return `Recorded ${id}. The complaints team will acknowledge it.`;
+}));
+$("period").addEventListener("submit", run($("period-msg"), async () => {
+  const span = { from: $("p-from").value, to: $("p-to").value }, [rows, report] = await Promise.all([ask("register", span), ask("report", span)]);
+  put($("register"), table(["Complaint", "Received", "Heard by", "About", "Status", "Outcome", "Days to acknowledge", "Days to decide", "Closed"], rows.map((r) => [r.complaint, r.received_on, words(r.channel), words(r.process), words(typeof r.status === "string" ? r.status : Object.keys(r.status)[0]), words(r.outcome), r.days_to_acknowledge, r.days_to_decide, r.closed_on || ""])));
+  $("report").textContent = JSON.stringify(report, null, 2);
+}));
+$("of").addEventListener("submit", run($("period-msg"), async () => { const ids = await ask("complaints_of", { party: $("of-party").value }); put($("of-out"), table(["Complaint"], ids.map((id) => [id]))); }));
+
+async function conduct() {
+  const ids = await ask("open_conduct_cases");
+  put($("cases"), table(["Case", ""], ids.map((id) => [id, h("button", { class: "quiet", on: { click: run($("case-msg"), async () => {
+    const c = await ask("conduct_case", { id }); $("case").hidden = false; $("case-title").textContent = `${c.id}: ${words(typeof c.kind === "string" ? c.kind : Object.keys(c.kind)[0])}`;
+    put($("case-summary"), h("p", {}, `Owner ${c.owner}. Opened ${c.opened_on}. ${Object.keys(c.customers).length} customer(s), ${c.policies.length} policy(ies), population ${c.population_complete ? "complete" : "not complete"}. ${Object.keys(c.sample).length} file(s) sampled.`));
+    $("case-raw").textContent = JSON.stringify(c, null, 2);
+  }) } }, "Open")])));
+}
+
+const loaders = { record: async () => {}, queue: async () => { if (has("complaints") || has("legal") || has("conduct")) await queue(); }, register: async () => {}, conduct: async () => { if (has("conduct") || has("legal")) await conduct(); else say($("case-msg"), "bad", "Conduct cases are open to the conduct function and legal only."); } };
+document.querySelectorAll("[role=tab]").forEach((tab) => tab.addEventListener("click", () => {
+  document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
+  run($("msg"), loaders[tab.dataset.tab])();
+}));
+signIn(R).then(async () => {
+  me = await ask("me");
+  $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;
+  put($("a-seat"), me.seats.filter((s) => s !== "intake").map((s) => h("option", { value: s }, words(s)))); commands();
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

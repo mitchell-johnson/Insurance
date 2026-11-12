@@ -6,7 +6,7 @@ use std::pin::Pin;
 use std::sync::Mutex;
 
 use chrono::{DateTime, NaiveDate};
-use ic_channels::forward::Source;
+use ic_channels::forward::{Source, REFUSED};
 use ic_pricing::PricingState;
 use serde_json::{json, Value};
 
@@ -26,7 +26,7 @@ impl PricingModule {
     }
 
     fn apply(&self, envelope: Value) -> Result<Value, String> {
-        let envelope: ic_pricing::Envelope = serde_json::from_value(envelope).map_err(|e| format!("not a command of this module: {e}"))?;
+        let envelope: ic_pricing::Envelope = serde_json::from_value(envelope).map_err(|e| format!("{REFUSED}not a command of this module: {e}"))?;
         serde_json::to_value(self.0.lock().unwrap().apply_envelope(envelope)).map_err(|e| e.to_string())
     }
 
@@ -89,7 +89,7 @@ pub fn seeded(at: i64) -> PricingModule {
 
 impl Source for PricingModule {
     fn ask(&self, question: Value) -> Asked<'_> {
-        let answer = ic_pricing::host::answer(&self.0.lock().unwrap(), question);
+        let answer = ic_pricing::host::answer(&self.0.lock().unwrap(), question).map_err(|e| format!("{REFUSED}{e}"));
         Box::pin(async move { answer })
     }
 
