@@ -6,7 +6,7 @@ The core owns what a price does: the investment ledger holds funds, prices, orde
 
 ## A price, start to finish
 
-1. **Fund.** `ActivateFund` (caller `config`) takes the core's own `ic_core::invest::FundDefinition`, so both sides read the same definition. The module's terms are in its `pricing` map and are checked when the fund is activated. Unknown keys are refused.
+1. **Fund.** `ActivateFund` (caller `config`) takes the core's own `ic_core::invest::FundDefinition`, so both sides read the same definition; the shipped funds are Starlark files in `products/funds/`, and `ic_pricing::command::activation` builds this module's command for one. The module's terms are in its `pricing` map and are checked when the fund is activated. Unknown keys are refused.
 
    | Term | Meaning |
    | --- | --- |
@@ -23,7 +23,7 @@ The core owns what a price does: the investment ledger holds funds, prices, orde
 2. **Valuation.** The driver reads the administrator's file and proposes `ReceiveValuations`. A file it cannot read is recorded with `RefuseValuationFile` and the reason, and shows in the `work` question. A valuation sent again for the same fund and date is a new revision; a price struck from an earlier revision can no longer be approved.
 
 3. **Prepare.** A preparer (`unit_pricing_preparer`) sends `PreparePrice { fund, pricing_date }`. The module strikes mid, buy (rounded up) and sell (rounded down) at the fund's decimals and spreads, hashes every input, and runs the checks:
-   - **Units on issue** (blocking): the administrator's units must equal the sum of the core's units on every partition once the previous price's orders have all executed. A difference makes the price `Blocked`; nobody can approve it.
+   - **Units on issue** (blocking): the administrator's units must equal the sum of the core's units on every partition once every partition reports the previous price's date as executed through (nothing pending for it or any earlier date, including a switch buy whose sell has not yet run). A difference makes the price `Blocked`; nobody can approve it.
    - **Previous move**, **benchmark**, **stale assets**, **unexplained move**: a failure makes the price `Held`.
 
 4. **Approve.** An approver (`unit_pricing_approver`), never the preparer, sends `ApprovePrice`. A held check must be accepted by name with a reason. Approval is refused if the valuation, the core's units or the previous price have changed since the price was prepared, if another price for the slot is already on its way, if the fund is suspended, if an open price error on the fund is not yet corrected, or if an earlier pricing day has no price and was not suspended. `RejectPrice` ends it.
@@ -105,5 +105,5 @@ All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fu
 
 - **The finance close does not ask yet.** `close_check` is built here, but the close driver has no source for it; the finance thread wires it beside `core_sources()`.
 - **No staff screens.** Prepare, approve, suspend and the price error commands are typed commands under the caller `unit-pricing-console`; the console that sends them with the person's roles belongs to the portal services.
-- **Switch buys after a struck date.** The core places a switch's buy at its own pricing date when the sell executes, so a fund's units for a date can still rise after that date's orders reported executed. The units check would then hold the next price on a difference. Asked of the core: keep `executed_through` below the date while such a buy is pending.
+- **Fund activation on this side.** `ic-admin` activates the shipped funds (`products/funds/`, `ic_sim::config::shipped_funds()`) in the core; it must also send `ic_pricing::command::activation(fund, at)` to this module so both hold the same definitions. A test here checks every shipped fund's terms are accepted.
 - **Not deployed.** `infra/unit-pricing.bicep` is compiled in CI but not referenced by `main.bicep`, and its Defender resource uses a preview API version. `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.
