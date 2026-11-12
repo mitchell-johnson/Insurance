@@ -39,6 +39,7 @@ struct Portal {
     retail: PolicyId,
     scheme: PolicyId,
     pricing: Arc<common::pricing::PricingModule>,
+    claims: Arc<common::claims::ClaimsCore>,
 }
 
 fn healthy() -> RegionReport {
@@ -105,6 +106,9 @@ fn portal() -> Portal {
         ("sub-gl1", "gl-1"),
         ("sub-gl2", "gl-2"),
         ("sub-gllead", "gl-lead"),
+        ("sub-cl1", "cl-1"),
+        ("sub-cllead", "cl-lead"),
+        ("sub-clnew", "cl-new"),
         ("sub-aud", "aud-1"),
     ] {
         w.dir(
@@ -183,6 +187,7 @@ fn portal() -> Portal {
                     &[DataClass::Financial],
                 ),
                 template("ledger-reader", &[ic_channels::finance::actions::VIEW], &[DataClass::Financial]),
+                template("claims", &[ic_channels::claims::actions::WORK], &[DataClass::InsuranceSensitive]),
             ],
             profiles: vec![
                 Profile {
@@ -217,6 +222,10 @@ fn portal() -> Portal {
         ("gl-2", "ledger-approver"),
         ("gl-lead", "ledger-lead"),
         ("aud-1", "ledger-reader"),
+        ("cl-1", "claims"),
+        ("cl-lead", "claims"),
+        // Given the claims action here but not yet in the claims module's authority book.
+        ("cl-new", "claims"),
     ] {
         w.send(
             staff("alice"),
@@ -252,6 +261,7 @@ fn portal() -> Portal {
     let pricing = Arc::new(common::pricing::seeded(w.at));
     let complaints = Arc::new(common::complaints::seeded(w.at));
     let finance = Arc::new(common::finance::seeded());
+    let claims = Arc::new(common::claims::seeded());
     let clock = Arc::new(AtomicI64::new(w.at + 10));
     let local = Arc::new(Local::new(w.ch));
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
@@ -266,6 +276,7 @@ fn portal() -> Portal {
         pricing: pricing.clone(),
         complaints: complaints.clone(),
         finance: finance.clone(),
+        claims: claims.clone(),
     }));
     Portal {
         app,
@@ -277,6 +288,7 @@ fn portal() -> Portal {
         retail,
         scheme,
         pricing,
+        claims,
     }
 }
 
@@ -765,7 +777,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 16);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 19);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1037,7 +1049,18 @@ async fn region_loss_is_shown_to_operators_and_said_plainly_to_customers() {
 #[tokio::test]
 async fn pages_are_served_locked_down() {
     let portal = portal();
-    for path in ["/", "/adviser", "/employer", "/staff", "/pricing", "/complaints", "/finance", "/ops", "/status"] {
+    for path in [
+        "/",
+        "/adviser",
+        "/employer",
+        "/staff",
+        "/pricing",
+        "/complaints",
+        "/finance",
+        "/claims",
+        "/ops",
+        "/status",
+    ] {
         let response = portal
             .app
             .clone()
@@ -1286,6 +1309,7 @@ async fn the_unit_pricing_console() {
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1490,6 +1514,7 @@ async fn the_complaints_and_conduct_workbench() {
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1510,6 +1535,169 @@ async fn the_complaints_and_conduct_workbench() {
         let problem: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
         assert_eq!(problem["title"], "complaints_unavailable");
     }
+}
+
+/// Purpose: a member of claims staff finds work across every partition, reads a claim and acts on it as themselves, with the
+/// purpose they gave, on the partition that holds the claim; anything only other modules send, and any attempt to act as a
+/// colleague, goes no further.
+/// Why it matters: the claims module trusts the caller `claims` to name the person acting. A console that let the page choose
+/// the actor would let one assessor decide under another's authority, and one that sent a claim to the wrong partition would be
+/// refused or, worse, answered from stale records.
+#[tokio::test]
+async fn the_claims_console() {
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/claims/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, purpose: &'static str, command: Value| {
+        let portal = &portal;
+        async move {
+            portal
+                .write("POST", who, "/staff/v1/claims/commands", json!({ "purpose": purpose, "command": command }))
+                .await
+        }
+    };
+
+    // Only people with the claims action get in, and the page learns who it is acting as.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-cl1", "me").await;
+    assert_eq!((status, &me["staff"], &me["partitions"]), (StatusCode::OK, &json!("cl-1"), &json!(2)));
+
+    // A phone notification goes to the partition holding the policy.
+    let notify = json!({ "notify": { "claim": "c-1", "policy": "pol-c1", "cover": "trauma", "life": "life-1", "claim_type": "trauma",
+        "event_date": "2027-02-20", "channel": "phone", "notifier": "policyholder", "claimant": "party-claimant" } });
+    let (status, done) = tell("sub-cllead", "", notify.clone()).await;
+    assert_eq!((status, &done["partition"]), (StatusCode::OK, &json!(1)), "{done}");
+    assert_eq!(portal.claims.instructions(0), 0, "nothing reached the partition without the policy");
+    let mut unknown = notify.clone();
+    unknown["notify"]["policy"] = json!("pol-nowhere");
+    assert_eq!(tell("sub-cllead", "", unknown).await.1["title"], "unknown_policy");
+
+    // The queue gathers every partition's, with where each claim lives.
+    let (status, queue) = ask("sub-cl1", "queue?queue=lump_sum").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (&queue["rows"][0]["claim"], &queue["rows"][0]["partition"]),
+        (&json!("c-1"), &json!(1)),
+        "{queue}"
+    );
+    assert_eq!(ask("sub-cl1", "queue?queue=nowhere").await.0, StatusCode::BAD_REQUEST);
+
+    // The lead assigns the claim. Whatever actor the page sends, the actor is who signed in.
+    let assign = json!({ "assign": { "claim": "c-1", "to": "cl-1", "actor": { "staff": "cl-1", "purpose": "pretending" } } });
+    assert_eq!(tell("sub-cllead", "", assign.clone()).await.1["title"], "bad_request");
+    let (status, done) = tell("sub-cllead", "allocating new lump sum work", assign).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (status, claim) = ask("sub-cl1", "claim?claim=c-1").await;
+    assert_eq!(
+        (status, &claim["partition"], &claim["policy"], &claim["view"]["owner"]),
+        (StatusCode::OK, &json!(1), &json!("pol-c1"), &json!("cl-1")),
+        "{claim}"
+    );
+    // The assessor records the cause as themselves; a colleague who does not own the claim cannot.
+    let cause = json!({ "record_cause": { "claim": "c-1", "cause_code": "CC-0003" } });
+    let (status, problem) = tell("sub-cllead", "assessing", cause.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("not_owner")), "{problem}");
+    assert_eq!(tell("sub-cl1", "assessing the claim", cause).await.0, StatusCode::OK);
+    // Someone the claims module's authority book does not know is refused by it.
+    let (status, problem) = tell("sub-clnew", "assessing", json!({ "record_contact": { "claim": "c-1" } })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("unknown_staff")), "{problem}");
+    assert_eq!(
+        tell("sub-cl1", "x", json!({ "record_contact": { "claim": "c-404" } })).await.1["title"],
+        "unknown_claim"
+    );
+
+    // A repeated key is the first answer.
+    let keyed = [("x-dev-subject", "sub-cl1".to_string()), ("idempotency-key", "contact-1".to_string())];
+    let body = json!({ "purpose": "first contact", "command": { "record_contact": { "claim": "c-1" } } });
+    assert_eq!(
+        portal.send("POST", "/staff/v1/claims/commands", &keyed, Some(body.clone())).await.1["duplicate"],
+        false
+    );
+    assert_eq!(portal.send("POST", "/staff/v1/claims/commands", &keyed, Some(body)).await.1["duplicate"], true);
+
+    // What is not a person's command, or not a command, never leaves the console.
+    for not_theirs in [
+        json!({ "acknowledge": { "claim": "c-1", "delivery_ref": "d-1" } }),
+        json!({ "record_death": { "party": "party-life", "date_of_death": "2027-02-01" } }),
+        json!({ "drain_due": {} }),
+        json!({ "approve_run": { "run": "r-1" } }),
+        json!({ "record_contact": { "claim": "c-1" }, "escalate": { "claim": "c-1" } }),
+        json!({ "record_contact": "c-1" }),
+        json!({ "opened": { "claim": "c-1" } }),
+        json!({ "identify_life": { "party": "p-1" } }),
+    ] {
+        assert_eq!(tell("sub-cl1", "testing", not_theirs.clone()).await.0, StatusCode::BAD_REQUEST, "{not_theirs}");
+    }
+    // A run is on the partition the person names.
+    let run = json!({ "purpose": "monthly run", "partition": 9, "command": { "approve_run": { "run": "r-1" } } });
+    assert_eq!(
+        portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", run).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    let run = json!({ "purpose": "monthly run", "partition": 1, "command": { "approve_run": { "run": "r-1" } } });
+    assert_eq!(
+        portal.write("POST", "sub-cllead", "/staff/v1/claims/commands", run).await.1["title"],
+        "unknown_run"
+    );
+
+    // The book and report come by partition; a remittance is asked of the run's own.
+    let (status, book) = ask("sub-cl1", "book").await;
+    assert_eq!((status, book["partitions"].as_array().map(Vec::len)), (StatusCode::OK, Some(2)), "{book}");
+    assert_eq!(ask("sub-cl1", "report").await.1["partitions"][1]["partition"], 1);
+    assert_eq!(ask("sub-cl1", "remittance?run=r-1").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-cl1", "remittance?run=r-1&partition=1").await, (StatusCode::OK, json!({})));
+    assert_eq!(ask("sub-cl1", "claim").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-cl1", "everything").await.0, StatusCode::BAD_REQUEST);
+
+    // The partitions have no leader.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
+    }));
+    for (method, path, body) in [
+        ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
+        ("GET", "/staff/v1/claims/remittance?run=r-1&partition=0", None),
+        (
+            "POST",
+            "/staff/v1/claims/commands",
+            Some(json!({ "purpose": "p", "command": { "record_contact": { "claim": "c-1" } } })),
+        ),
+        ("POST", "/staff/v1/claims/commands", Some(notify_body())),
+        (
+            "POST",
+            "/staff/v1/claims/commands",
+            Some(json!({ "purpose": "p", "partition": 0, "command": { "approve_run": { "run": "r-1" } } })),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("x-dev-subject", "sub-cl1")
+            .header("idempotency-key", "k");
+        let response = down
+            .clone()
+            .oneshot(request.body(Body::from(body.map(|b| b.to_string()).unwrap_or_default())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
+}
+
+fn notify_body() -> Value {
+    json!({ "purpose": "", "command": { "notify": { "claim": "c-9", "policy": "pol-c0", "cover": "life", "claim_type": "death",
+        "event_date": "2027-02-20", "channel": "phone", "notifier": "executor" } } })
 }
 
 /// Purpose: the finance console end to end against the finance ledger's own code: only staff with a finance action get in and a
@@ -1644,6 +1832,7 @@ async fn the_finance_console() {
         pricing: Arc::new(common::pricing::Down),
         complaints: Arc::new(common::pricing::Down),
         finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),

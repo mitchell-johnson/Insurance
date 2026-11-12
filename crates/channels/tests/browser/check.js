@@ -163,6 +163,27 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
     await p.locator("#tb-out").getByText("6500").first().waitFor();
   } });
+  await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
+    await sees(p, "You act as cl-lead");
+    await p.selectOption("#a-command", "notify");
+    await p.fill("#f-0", "c-b1"); await p.fill("#f-1", "pol-c1"); await p.fill("#f-2", "trauma");
+    await p.selectOption("#f-4", "trauma"); await p.fill("#f-5", "2027-02-20");
+    await p.locator("#act button").click();
+    await sees(p, "Done: notify.");
+    await sees(p, "c-b1: trauma");
+    await p.selectOption("#q-name", "lump_sum"); await p.locator("#queue button").click();
+    await p.locator("#q-rows").getByText("c-b1").waitFor();
+    await p.fill("#a-purpose", "allocating lump sum work");
+    await p.selectOption("#a-command", "assign"); await p.fill("#f-1", "cl-1");
+    await p.locator("#act button").click();
+    await sees(p, "Done: assign.");
+    await p.locator("#c-summary").getByText("cl-1").waitFor();
+    // The lead does not own the claim, so the claims module refuses their cause.
+    await p.selectOption("#a-command", "record_cause"); await p.fill("#f-1", "CC-0003");
+    await p.locator("#act button").click();
+    await p.locator("#act-msg .banner.bad").waitFor();
+  }, expectStatus: [403] });
+  await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/finance", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await browser.close();
   if (failures.length) { console.error(failures.join("\n")); process.exit(1); }
