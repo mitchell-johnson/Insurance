@@ -215,7 +215,7 @@ fn the_hosted_module_takes_events_and_answers_questions() {
         (json!(10), json!(1))
     );
     let checks = ask(module.as_ref(), json!({"q": "checks", "period": "2027-11"})).unwrap();
-    assert_eq!(checks.as_array().unwrap().len(), 16);
+    assert_eq!(checks.as_array().unwrap().len(), 17);
     let all = ask(module.as_ref(), json!({"q": "trial_balance", "period": "2027-11"})).unwrap();
     let life = ask(module.as_ref(), json!({"q": "trial_balance", "period": "2027-11", "fund": "SF1-life"})).unwrap();
     assert_eq!(all, life, "one policy, one fund");
