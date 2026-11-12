@@ -659,3 +659,128 @@ async fn callers_must_prove_who_they_are() {
     let req = axum::http::Request::builder().uri("/readyz").body(axum::body::Body::empty()).unwrap();
     assert_eq!(status(req).await, StatusCode::OK);
 }
+
+/// Purpose: the routing question answers whether a request should go to a person first,
+/// true once staff record a vulnerability marker, without ever showing the marker; callers
+/// the policy does not name are refused.
+/// Why it matters: a vulnerable customer's request must reach a trained person, and the
+/// marker itself is the most sensitive fact the master holds.
+#[tokio::test]
+async fn vulnerable_people_are_routed_to_a_person() {
+    let w = world_or_skip!();
+    let p = w.person("Aroha", "Wiremu", "1940-04-04", &[]).await;
+    let path = format!("/v1/parties/{p}/routing");
+    let (status, out) = w.get(&path, "portal", "servicing").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["route_to_person"], false);
+    let mark = json!({ "command": "record", "facts": [{ "field": "vulnerability", "value": true }] });
+    let (status, _) = w.command(&p, "documents", mark.clone()).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, out) = w.command(&p, "staff", mark).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, out) = w.get(&path, "claims", "claims").await;
+    assert_eq!(out["route_to_person"], true);
+    assert_eq!(out.as_object().unwrap().len(), 2, "only the answer, never the marker: {out}");
+    let (_, r) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert!(r["facts"].get("vulnerability").is_none());
+    let (status, _) = w.get(&path, "commission", "commission").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: when a query fails inside the database, the relationship, review and audit
+/// lists answer 503 rather than an empty list.
+/// Why it matters: an empty answer reads as "no relationships" or "nothing to review", which
+/// a caller would act on; a fault must look like a fault so the caller retries.
+#[tokio::test]
+async fn database_faults_are_not_empty_answers() {
+    let w = world_or_skip!();
+    let p = w.person("Fau", "Lt", "1980-08-08", &[]).await;
+    w.sql("alter table relationships rename to relationships_gone").await.unwrap();
+    let (status, _) = w.get(&format!("/v1/parties/{p}/relationships"), "staff", "servicing").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let (status, _) = w.get("/v1/relationships?target=policy:P1", "staff", "servicing").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    w.sql("alter table reviews rename to reviews_gone").await.unwrap();
+    let (status, _) = w.get("/v1/reviews", "staff", "servicing").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    // Erasing again after a restore: a database fault is an outage, not "nothing to do".
+    let party = ic_customers::model::PartyId(p.clone());
+    w.app.register.record(&[party], chrono::Utc::now()).await.unwrap();
+    w.sql("alter table party_keys rename to party_keys_gone").await.unwrap();
+    let (status, _) = w.post("/v1/admin/reshred", "operations", json!({ "since": "2026-01-01" })).await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    w.sql("alter table audit rename to audit_gone").await.unwrap();
+    let (status, _) = w.get(&format!("/v1/parties/{p}/audit"), "privacy", "audit").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    // A refusal that cannot be logged is an outage too.
+    let (status, _) = w.get("/v1/reviews", "documents", "notices").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: creating a record for someone an IRD number already identifies is refused with
+/// the existing party, and an organisation is created with its registration number indexed.
+/// Why it matters: a second record for a known person splits their policies and consents
+/// across two IDs; the strong identifier is the surest sign.
+#[tokio::test]
+async fn a_confident_match_refuses_a_second_record() {
+    let w = world_or_skip!();
+    let p = w.person("Tama", "Hohepa", "1975-05-05", &[("ird_number", json!("49091850"))]).await;
+    let again = json!({ "kind": "person", "facts": [
+        { "field": "given_name", "value": "Tama" },
+        { "field": "family_name", "value": "Hohepa" },
+        { "field": "date_of_birth", "value": "1975-05-05" },
+        { "field": "ird_number", "value": "49091850" },
+    ] });
+    let (status, out) = w.post("/v1/parties", "staff", again).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{out}");
+    assert_eq!(out["candidates"], json!([p]));
+    let org = json!({ "kind": "organisation", "facts": [
+        { "field": "organisation_name", "value": "Kauri Holdings Limited" },
+        { "field": "registration_number", "value": "nz1234567" },
+    ] });
+    let (status, out) = w.post("/v1/parties", "staff", org).await;
+    assert_eq!(status, StatusCode::CREATED, "{out}");
+}
+
+/// Purpose: a break-glass read is served and its audit line is marked as break-glass.
+/// Why it matters: in an emergency staff must reach a record the policy would otherwise
+/// refuse, and every such read must stand out for review.
+#[tokio::test]
+async fn break_glass_reads_are_marked() {
+    let w = world_or_skip!();
+    let p = w.person("Ara", "Moana", "1960-06-06", &[]).await;
+    let (status, out) = w.get(&format!("/v1/parties/{p}"), "break-glass", "break_glass").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, trail) = w.get(&format!("/v1/parties/{p}/audit"), "privacy", "audit").await;
+    let lines = trail["audit"].as_array().unwrap();
+    assert!(lines.iter().any(|l| l["line"]["break_glass"] == true), "{trail}");
+}
+
+/// Purpose: when Entra ID's signing keys cannot be fetched, calls are answered 503, not 401.
+/// Why it matters: a 401 tells a caller its credentials are wrong and it should stop; an
+/// outage at the identity provider must read as retryable.
+#[tokio::test]
+async fn an_identity_outage_is_retryable() {
+    let w = world_or_skip!();
+    let pool = ic_customers::db::open(w.db.connector.clone(), 1).await.unwrap();
+    let credential = ic_azure::credential::AzureCredential::static_token(ic_azure::testing::TOKEN);
+    let app = std::sync::Arc::new(ic_customers::service::App {
+        store: ic_customers::store::Store::new(
+            pool,
+            ic_customers::keys::KeyRing::new(ic_azure::keywrap::KeyVaultWrapper::new(&w.azure.base, "customers-kek", credential)),
+            ic_customers::crypto::IndexKey::new(common::INDEX_KEY.as_bytes()).unwrap(),
+        ),
+        access: ic_customers::access::Access::shipped(),
+        auth: ic_customers::auth::Entra::new("http://127.0.0.1:9", common::TENANT, common::AUDIENCE),
+        register: ic_customers::retention::Register::new(ic_azure::blob::MemoryWormStore::default()),
+    });
+    let elsewhere = common::World {
+        router: ic_customers::service::router(app.clone()),
+        app,
+        azure: ic_azure::testing::FakeAzure::start().await,
+        authority: w.authority.clone(),
+        db: common::Database::new(common::server().unwrap()).await,
+    };
+    let (status, _) = elsewhere.get("/v1/reviews", "staff", "servicing").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}

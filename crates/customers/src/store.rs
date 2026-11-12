@@ -599,15 +599,10 @@ impl<W: KeyWrapper> Store<W> {
     /// cannot deadlock.
     async fn load_pair(&self, tx: &Transaction<'_>, a: &PartyId, b: &PartyId) -> Result<(Loaded, Loaded)> {
         let missing = |id: &PartyId| StoreError::Refused(reject("not_found", format!("no party {id}")));
-        if a < b {
-            let la = self.load_with(tx, a, true).await?.ok_or_else(|| missing(a))?;
-            let lb = self.load_with(tx, b, true).await?.ok_or_else(|| missing(b))?;
-            Ok((la, lb))
-        } else {
-            let lb = self.load_with(tx, b, true).await?.ok_or_else(|| missing(b))?;
-            let la = self.load_with(tx, a, true).await?.ok_or_else(|| missing(a))?;
-            Ok((la, lb))
-        }
+        let (first, second) = if a < b { (a, b) } else { (b, a) };
+        let l1 = self.load_with(tx, first, true).await?.ok_or_else(|| missing(first))?;
+        let l2 = self.load_with(tx, second, true).await?.ok_or_else(|| missing(second))?;
+        Ok(if a < b { (l1, l2) } else { (l2, l1) })
     }
 
     /// Merge `absorbed` into `survivor`. The absorbed ID resolves to the

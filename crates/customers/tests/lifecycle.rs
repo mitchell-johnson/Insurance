@@ -410,3 +410,88 @@ async fn the_service_starts_and_stops() {
         .unwrap_err();
     assert!(e.contains("cannot listen"));
 }
+
+/// Purpose: the background loop keeps going when publishing or the sweep fails, and stops
+/// when told to; a service configured for an Azure database that does not offer TLS
+/// refuses to start.
+/// Why it matters: an Event Hubs or database blip must not end the loop that relays every
+/// change to the gateways, and a deployment must never fall back to an unencrypted
+/// database connection.
+#[tokio::test]
+async fn background_work_survives_faults() {
+    let w = world_or_skip!();
+    let credential = ic_azure::credential::AzureCredential::static_token(ic_azure::testing::TOKEN);
+    let hubs = Hubs {
+        events: ic_azure::eventhubs::EventHubsSink::new(&w.azure.base, "customer-events", credential.clone()),
+        priority: ic_azure::eventhubs::EventHubsSink::new(&w.azure.base, "customer-priority", credential.clone()),
+        partitions: 2,
+    };
+    w.person("Lo", "Op", "1970-01-01", &[]).await;
+    let pass = |every: u64| {
+        work::run(
+            &w.app,
+            &hubs,
+            Duration::from_secs(every),
+            Duration::ZERO,
+            tokio::time::sleep(Duration::from_millis(300)),
+        )
+    };
+    w.azure.set_down(true);
+    pass(3600).await;
+    assert!(!w.app.store.outbox(10).await.unwrap().is_empty(), "nothing was published");
+    w.sql("alter table parties rename to parties_gone").await.unwrap();
+    pass(3600).await;
+    w.sql("alter table parties_gone rename to parties").await.unwrap();
+    w.azure.set_down(false);
+    pass(3600).await;
+    assert!(w.app.store.outbox(10).await.unwrap().is_empty(), "published once Event Hubs returned");
+    // An Azure database is reached only over TLS.
+    let env = std::collections::BTreeMap::from([
+        ("IC_CUSTOMERS_PG_HOST", "127.0.0.1".to_string()),
+        ("IC_CUSTOMERS_PG_USER", "postgres".to_string()),
+        ("IC_CUSTOMERS_KEY_VAULT", w.azure.base.clone()),
+        ("IC_CUSTOMERS_INDEX_KEY", common::INDEX_KEY.to_string()),
+        ("IC_CUSTOMERS_TENANT", common::TENANT.to_string()),
+        ("IC_CUSTOMERS_AUDIENCE", common::AUDIENCE.to_string()),
+        ("IC_EVENT_HUBS_NAMESPACE", w.azure.base.clone()),
+        ("IC_CUSTOMERS_REGISTER_ENDPOINT", w.azure.base.clone()),
+    ]);
+    let config = ic_customers::config::Config::from_lookup(|k| env.get(k).cloned(), |_| Err(std::io::Error::other("none"))).unwrap();
+    let (_s, stop) = tokio::sync::watch::channel(false);
+    let e = work::start(config, credential, stop).await.unwrap_err();
+    assert!(e.contains("cannot connect to the database"), "{e}");
+}
+
+/// Purpose: two creations with the same idempotency key, reaching the store together, make
+/// one party; the second gets the first's answer.
+/// Why it matters: the HTTP layer checks for a remembered answer first, but two replicas can
+/// pass that check at once; the store must still not create the person twice.
+#[tokio::test]
+async fn a_repeated_creation_makes_one_party() {
+    let w = world_or_skip!();
+    let idem = ic_customers::store::Idempotency {
+        caller: "staff".into(),
+        key: "k-1".into(),
+        request: b"same".to_vec(),
+    };
+    let facts = [FactInput {
+        field: ic_customers::model::Field::FamilyName,
+        value: json!("Twice"),
+        valid_from: None,
+        valid_to: None,
+    }];
+    let now = Utc::now();
+    let first = w
+        .app
+        .store
+        .create(PartyKind::Person, &facts, None, &staff(), Some(&idem), &[], now)
+        .await
+        .unwrap();
+    let second = w
+        .app
+        .store
+        .create(PartyKind::Person, &facts, None, &staff(), Some(&idem), &[], now)
+        .await
+        .unwrap();
+    assert_eq!(first.party, second.party);
+}

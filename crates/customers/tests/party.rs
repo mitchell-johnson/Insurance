@@ -305,7 +305,7 @@ fn due_diligence_and_holds_are_recorded() {
     };
     assert_eq!(run(&mut p, consent(Some("2030-01-01"))).unwrap_err(), "invalid");
     assert_eq!(run(&mut p, consent(None)).unwrap(), vec!["consent_set"]);
-    assert_eq!(p.consents_on(now().date_naive())["marketing"], true);
+    assert!(p.consents_on(now().date_naive())["marketing"]);
     let verify = |at: DateTime<Utc>, provider: &str| Change::RecordVerification {
         method: "document".into(),
         provider: provider.into(),
@@ -378,6 +378,8 @@ fn merges_follow_the_rules() {
     let mut b = person();
     b.id = PartyId("pty_b".into());
     let org = build(PartyKind::Organisation, &[fact(Field::OrganisationName, json!("Acme"))]);
+    let mut org = org;
+    org.id = PartyId("pty_org".into());
     let code = |r: Result<(EventBody, EventBody), party::Reject>| r.unwrap_err().code;
     assert_eq!(code(party::merge(&a, &Party::new(PartyId("none".into())))), "not_found");
     assert_eq!(code(party::merge(&a, &a)), "invalid");

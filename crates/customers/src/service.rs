@@ -61,6 +61,8 @@ pub struct App<W, S> {
 }
 
 type Answer = (StatusCode, Json<Value>);
+/// A handler's answer: refusals travel as `Err`, so `?` ends a handler early.
+type Reply = Result<Answer, Answer>;
 
 fn refused(status: StatusCode, code: &str, message: &str) -> Answer {
     (status, Json(json!({ "error": { "code": code, "message": message } })))
@@ -247,30 +249,16 @@ struct ReadQuery {
     known_at: Option<DateTime<Utc>>,
 }
 
-async fn read<W: KeyWrapper, S: WormStore>(
-    State(app): State<Arc<App<W, S>>>,
-    Path(id): Path<String>,
-    Query(q): Query<ReadQuery>,
-    headers: HeaderMap,
-) -> Answer {
-    let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
-    let (resolved, party) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
-    let ask = match app.ask_about(&ctx, &resolved).await {
-        Ok(a) => a,
-        Err(a) => return a,
-    };
+async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, Query(q): Query<ReadQuery>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, q.purpose.as_deref()).await?;
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
     let now = Utc::now();
     let facts = party.facts(q.as_of.unwrap_or(now.date_naive()), q.known_at.unwrap_or(now));
     let held: Vec<Field> = facts.keys().copied().filter(|f| *f != Field::Vulnerability).collect();
     let released = app.access.readable(&ask, Field::ALL);
     if released.is_empty() {
-        return app.deny(&ctx, Some(&resolved), "read").await;
+        return Err(app.deny(&ctx, Some(&resolved), "read").await);
     }
     let mut out = BTreeMap::new();
     let mut masked = BTreeMap::new();
@@ -289,11 +277,9 @@ async fn read<W: KeyWrapper, S: WormStore>(
         }
     }
     let fields: Vec<String> = out.keys().map(|k| k.to_string()).collect();
-    if let Err(a) = app.audit(&ctx, Some(&resolved), "read", fields, "allow").await {
-        return a;
-    }
+    app.audit(&ctx, Some(&resolved), "read", fields, "allow").await?;
     let consents = party.consents_on(now.date_naive());
-    (
+    Ok((
         StatusCode::OK,
         Json(json!({
             "party": resolved,
@@ -311,7 +297,7 @@ async fn read<W: KeyWrapper, S: WormStore>(
             "legal_hold": !party.holds.is_empty(),
             "declined_corrections": party.declined.iter().filter(|d| released.contains(&d.field)).collect::<Vec<_>>(),
         })),
-    )
+    ))
 }
 
 async fn history<W: KeyWrapper, S: WormStore>(
@@ -319,31 +305,20 @@ async fn history<W: KeyWrapper, S: WormStore>(
     Path(id): Path<String>,
     Query(q): Query<ReadQuery>,
     headers: HeaderMap,
-) -> Answer {
-    let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
-    let (resolved, party) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
-    let ask = match app.ask_about(&ctx, &resolved).await {
-        Ok(a) => a,
-        Err(a) => return a,
-    };
+) -> Reply {
+    let ctx = app.ctx(&headers, q.purpose.as_deref()).await?;
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
     let released = app.access.readable(&ask, Field::ALL);
     if released.is_empty() {
-        return app.deny(&ctx, Some(&resolved), "history").await;
+        return Err(app.deny(&ctx, Some(&resolved), "history").await);
     }
     let statements: Vec<_> = party.assertions.iter().filter(|a| released.contains(&a.field)).collect();
     let mut fields: Vec<String> = statements.iter().map(|a| a.field.as_str().to_string()).collect();
     fields.sort();
     fields.dedup();
-    if let Err(a) = app.audit(&ctx, Some(&resolved), "history", fields, "allow").await {
-        return a;
-    }
-    (StatusCode::OK, Json(json!({ "party": resolved, "statements": statements })))
+    app.audit(&ctx, Some(&resolved), "history", fields, "allow").await?;
+    Ok((StatusCode::OK, Json(json!({ "party": resolved, "statements": statements }))))
 }
 
 #[derive(Debug, Deserialize)]
@@ -362,34 +337,25 @@ async fn contact_points<W: KeyWrapper, S: WormStore>(
     Path(id): Path<String>,
     Query(q): Query<ContactQuery>,
     headers: HeaderMap,
-) -> Answer {
-    let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+) -> Reply {
+    let ctx = app.ctx(&headers, q.purpose.as_deref()).await?;
     let fields: &[Field] = match q.channel.as_str() {
         "email" => &[Field::Email],
         "sms" => &[Field::MobilePhone],
         "post" => &[Field::PostalAddress, Field::ResidentialAddress],
         "in_app" | "push" => &[],
-        _ => return refused(StatusCode::BAD_REQUEST, "invalid", "channel is email, sms, post, in_app or push"),
+        _ => return Err(refused(StatusCode::BAD_REQUEST, "invalid", "channel is email, sms, post, in_app or push")),
     };
     if q.relationship.as_deref().is_some_and(|r| clean(r).is_none()) {
-        return refused(StatusCode::BAD_REQUEST, "invalid", "relationship is not well formed");
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "relationship is not well formed"));
     }
-    let (resolved, party) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
-    let ask = match app.ask_about(&ctx, &resolved).await {
-        Ok(a) => a,
-        Err(a) => return a,
-    };
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
     let names = [Field::PreferredName, Field::GivenName, Field::FamilyName, Field::OrganisationName];
     let wanted: Vec<Field> = names.iter().chain(fields).copied().collect();
     let released = app.access.readable(&ask, &wanted);
     if released.len() != wanted.len() {
-        return app.deny(&ctx, Some(&resolved), "contact_points").await;
+        return Err(app.deny(&ctx, Some(&resolved), "contact_points").await);
     }
     let now = Utc::now();
     let facts = party.facts(now.date_naive(), now);
@@ -412,11 +378,9 @@ async fn contact_points<W: KeyWrapper, S: WormStore>(
     };
     let mut used: Vec<String> = released.iter().filter(|f| facts.contains_key(f)).map(|f| f.as_str().to_string()).collect();
     used.sort();
-    if let Err(a) = app.audit(&ctx, Some(&resolved), "contact_points", used, "allow").await {
-        return a;
-    }
+    app.audit(&ctx, Some(&resolved), "contact_points", used, "allow").await?;
     match (name, destination) {
-        (Some(name), Some(destination)) => (
+        (Some(name), Some(destination)) => Ok((
             StatusCode::OK,
             Json(json!({
                 "name": name,
@@ -425,26 +389,24 @@ async fn contact_points<W: KeyWrapper, S: WormStore>(
                 "format": facts.get(&Field::PresentationFormat).map(|f| f.value.clone()),
                 "deceased": party.lifecycle == Some(crate::model::Lifecycle::Deceased),
             })),
-        ),
-        _ => refused(StatusCode::NOT_FOUND, "no_contact_point", "the party has no contact point on that channel"),
+        )),
+        _ => Err(refused(
+            StatusCode::NOT_FOUND,
+            "no_contact_point",
+            "the party has no contact point on that channel",
+        )),
     }
 }
 
-async fn relationships_of<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
-    let (resolved, _) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
+async fn relationships_of<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, _) = app.find(&id).await?;
     if !app.access.allows(&app.ask(&ctx), "relationships") {
-        return app.deny(&ctx, Some(&resolved), "relationships").await;
+        return Err(app.deny(&ctx, Some(&resolved), "relationships").await);
     }
     match app.store.relationships_of(&resolved).await {
-        Ok(rows) => (StatusCode::OK, Json(json!({ "party": resolved, "relationships": rows }))),
-        Err(e) => failed(e),
+        Ok(rows) => Ok((StatusCode::OK, Json(json!({ "party": resolved, "relationships": rows })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -454,40 +416,29 @@ struct TargetQuery {
     target: String,
 }
 
-async fn relationships_to<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Query(q): Query<TargetQuery>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn relationships_to<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Query(q): Query<TargetQuery>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     let Some(target) = q.target.split_once(':').and_then(|(k, id)| Target::from_parts(k, id)) else {
-        return refused(StatusCode::BAD_REQUEST, "invalid", "target is policy:<id>, scheme:<id> or party:<id>");
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "target is policy:<id>, scheme:<id> or party:<id>"));
     };
     if !app.access.allows(&app.ask(&ctx), "relationships") {
-        return app.deny(&ctx, None, "relationships").await;
+        return Err(app.deny(&ctx, None, "relationships").await);
     }
     match app.store.relationships_to(&target).await {
-        Ok(rows) => (StatusCode::OK, Json(json!({ "target": target, "relationships": rows }))),
-        Err(e) => failed(e),
+        Ok(rows) => Ok((StatusCode::OK, Json(json!({ "target": target, "relationships": rows })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
-async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
-    let (resolved, party) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
+async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, party) = app.find(&id).await?;
     if !app.access.allows(&app.ask(&ctx), "routing") {
-        return app.deny(&ctx, Some(&resolved), "routing").await;
+        return Err(app.deny(&ctx, Some(&resolved), "routing").await);
     }
     let route = party.current(Field::Vulnerability, Utc::now()) == Some(Value::Bool(true));
-    if let Err(a) = app.audit(&ctx, Some(&resolved), "routing", vec![], "allow").await {
-        return a;
-    }
-    (StatusCode::OK, Json(json!({ "party": resolved, "route_to_person": route })))
+    app.audit(&ctx, Some(&resolved), "routing", vec![], "allow").await?;
+    Ok((StatusCode::OK, Json(json!({ "party": resolved, "route_to_person": route }))))
 }
 
 async fn export<W: KeyWrapper, S: WormStore>(
@@ -495,56 +446,38 @@ async fn export<W: KeyWrapper, S: WormStore>(
     Path(id): Path<String>,
     Query(q): Query<ReadQuery>,
     headers: HeaderMap,
-) -> Answer {
-    let ctx = match app.ctx(&headers, q.purpose.as_deref()).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
-    let (resolved, party) = match app.find(&id).await {
-        Ok(p) => p,
-        Err(a) => return a,
-    };
-    let ask = match app.ask_about(&ctx, &resolved).await {
-        Ok(a) => a,
-        Err(a) => return a,
-    };
+) -> Reply {
+    let ctx = app.ctx(&headers, q.purpose.as_deref()).await?;
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
     if !app.access.allows(&ask, "export") {
-        return app.deny(&ctx, Some(&resolved), "export").await;
+        return Err(app.deny(&ctx, Some(&resolved), "export").await);
     }
     let mut streams = BTreeMap::new();
     for p in std::iter::once(&resolved).chain(party.absorbed.iter()) {
-        match app.store.records(p).await {
-            Ok(Some(records)) => {
-                streams.insert(p.0.clone(), records);
-            }
-            Ok(None) => {}
-            Err(e) => return failed(e),
+        if let Some(records) = app.store.records(p).await.map_err(failed)? {
+            streams.insert(p.0.clone(), records);
         }
     }
-    if let Err(a) = app.audit(&ctx, Some(&resolved), "export", vec!["*".into()], "allow").await {
-        return a;
-    }
-    (StatusCode::OK, Json(json!({ "party": resolved, "streams": streams })))
+    app.audit(&ctx, Some(&resolved), "export", vec!["*".into()], "allow").await?;
+    Ok((StatusCode::OK, Json(json!({ "party": resolved, "streams": streams }))))
 }
 
-async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     if !PartyId::plausible(&id) {
-        return refused(StatusCode::NOT_FOUND, "not_found", "no such party");
+        return Err(refused(StatusCode::NOT_FOUND, "not_found", "no such party"));
     }
     let party = PartyId(id);
     if !app.access.allows(&app.ask(&ctx), "audit") {
-        return app.deny(&ctx, Some(&party), "audit").await;
+        return Err(app.deny(&ctx, Some(&party), "audit").await);
     }
     match app.store.audit_of(&party, 1_000).await {
         Ok(lines) => {
             let lines: Vec<Value> = lines.into_iter().map(|(at, l)| json!({ "at": at, "line": l })).collect();
-            (StatusCode::OK, Json(json!({ "party": party, "audit": lines })))
+            Ok((StatusCode::OK, Json(json!({ "party": party, "audit": lines }))))
         }
-        Err(e) => failed(e),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -596,25 +529,22 @@ fn probe_facts(probe: &Probe, n: &matching::Normal) -> Vec<FactInput> {
 
 /// Answer the group service's question. A retry of a request that created
 /// someone returns the same person.
-async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     let request: MatchRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string())),
     };
     let Some(source) = clean(&request.source) else {
-        return refused(StatusCode::BAD_REQUEST, "invalid", "source is not well formed");
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "source is not well formed"));
     };
     let ask = app.ask(&ctx);
     if !app.access.allows(&ask, "match") || (request.create_if_none && !app.access.allows_command(&ask, "create")) {
-        return app.deny(&ctx, None, "match").await;
+        return Err(app.deny(&ctx, None, "match").await);
     }
     let n = match request.probe.normal() {
         Ok(n) => n,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e)),
     };
     // The key is a keyed hash of the request: it identifies a repeat
     // without keeping the identity in the clear.
@@ -626,17 +556,11 @@ async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
         key: format!("match:{}", hex::encode(mac.finalize().into_bytes())),
         request: body.to_vec(),
     };
-    let earlier = match app.store.recall(&idem).await {
-        Ok(e) => e,
-        Err(e) => return failed(e),
-    };
+    let earlier = app.store.recall(&idem).await.map_err(failed)?;
     let resolution = if let Some(outcome) = earlier.and_then(|v| serde_json::from_value::<Outcome>(v).ok()) {
         Resolution::Created { party: outcome.party }
     } else {
-        let scores = match score_all(&app, &n).await {
-            Ok(s) => s,
-            Err(e) => return failed(e),
-        };
+        let scores = score_all(&app, &n).await.map_err(failed)?;
         match matching::conclude(scores) {
             Some(r) => r,
             None if request.create_if_none => {
@@ -644,14 +568,12 @@ async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
                     caller: ctx.who.caller.clone(),
                     actor: source.clone(),
                 };
-                match app
+                let o = app
                     .store
                     .create(PartyKind::Person, &probe_facts(&request.probe, &n), None, &who, Some(&idem), &[], Utc::now())
                     .await
-                {
-                    Ok(o) => Resolution::Created { party: o.party },
-                    Err(e) => return failed(e),
-                }
+                    .map_err(failed)?;
+                Resolution::Created { party: o.party }
             }
             None => Resolution::None,
         }
@@ -666,12 +588,10 @@ async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
         Resolution::Possible { .. } => "possible",
         Resolution::None => "none",
     };
-    if let Err(a) = app.audit(&ctx, party.as_ref(), "match", vec![], outcome).await {
-        return a;
-    }
+    app.audit(&ctx, party.as_ref(), "match", vec![], outcome).await?;
     let mut answer = serde_json::to_value(&resolution).unwrap_or_default();
     answer["ignored"] = json!(n.ignored);
-    (StatusCode::OK, Json(answer))
+    Ok((StatusCode::OK, Json(answer)))
 }
 
 #[derive(Debug, Deserialize)]
@@ -698,19 +618,16 @@ fn probe_from_facts(facts: &[FactInput]) -> Option<Probe> {
     })
 }
 
-async fn create<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn create<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     let request: CreateRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string())),
     };
     let mut ask = app.ask(&ctx);
     ask.classes = classes(&request.facts);
     if !app.access.allows_command(&ask, "create") {
-        return app.deny(&ctx, None, "create").await;
+        return Err(app.deny(&ctx, None, "create").await);
     }
     let idem = header(&headers, "idempotency-key").map(|k| Idempotency {
         caller: ctx.who.caller.clone(),
@@ -718,29 +635,24 @@ async fn create<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, 
         request: body.to_vec(),
     });
     if let Some(idem) = &idem {
-        match app.store.recall(idem).await {
-            Ok(Some(answer)) => return (StatusCode::CREATED, Json(answer)),
-            Ok(None) => {}
-            Err(e) => return failed(e),
+        if let Some(answer) = app.store.recall(idem).await.map_err(failed)? {
+            return Ok((StatusCode::CREATED, Json(answer)));
         }
     }
     let mut review = Vec::new();
     if request.kind == PartyKind::Person {
         if let Some(n) = probe_from_facts(&request.facts).and_then(|p| p.normal().ok()) {
-            let scores = match score_all(&app, &n).await {
-                Ok(s) => s,
-                Err(e) => return failed(e),
-            };
+            let scores = score_all(&app, &n).await.map_err(failed)?;
             let found = match matching::conclude(scores) {
                 Some(Resolution::Linked { party }) => vec![party],
                 Some(Resolution::Possible { candidates }) => candidates,
                 _ => vec![],
             };
             if !found.is_empty() && !request.allow_duplicate {
-                return (
+                return Err((
                     StatusCode::CONFLICT,
                     Json(json!({ "error": { "code": "possible_duplicate", "message": "this person may already be known" }, "candidates": found })),
-                );
+                ));
             }
             review = found;
         }
@@ -751,12 +663,10 @@ async fn create<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, 
         .await
     {
         Ok(o) => {
-            if let Err(a) = app.audit(&ctx, Some(&o.party), "create", ask.classes.clone(), "allow").await {
-                return a;
-            }
-            (StatusCode::CREATED, Json(serde_json::to_value(o).unwrap_or_default()))
+            app.audit(&ctx, Some(&o.party), "create", ask.classes.clone(), "allow").await?;
+            Ok((StatusCode::CREATED, Json(serde_json::to_value(o).unwrap_or_default())))
         }
-        Err(e) => failed(e),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -767,63 +677,49 @@ fn classes(facts: &[FactInput]) -> Vec<String> {
     c
 }
 
-async fn search<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn search<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     if !app.access.allows(&app.ask(&ctx), "search") {
-        return app.deny(&ctx, None, "search").await;
+        return Err(app.deny(&ctx, None, "search").await);
     }
     let probe: Probe = match serde_json::from_slice(&body) {
         Ok(p) => p,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string())),
     };
     let n = match probe.normal() {
         Ok(n) => n,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e)),
     };
-    let mut scores = match score_all(&app, &n).await {
-        Ok(s) => s,
-        Err(e) => return failed(e),
-    };
+    let mut scores = score_all(&app, &n).await.map_err(failed)?;
     scores.retain(|s| s.score > 0);
     scores.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.party.cmp(&b.party)));
-    if let Err(a) = app.audit(&ctx, None, "search", vec![], "allow").await {
-        return a;
-    }
-    (StatusCode::OK, Json(json!({ "results": scores })))
+    app.audit(&ctx, None, "search", vec![], "allow").await?;
+    Ok((StatusCode::OK, Json(json!({ "results": scores }))))
 }
 
 // ---- Changing ------------------------------------------------------------
 
-async fn command<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn command<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     let change: Change = match serde_json::from_slice(&body) {
         Ok(c) => c,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string())),
     };
     let expected = match header(&headers, "if-match").map(|v| v.trim_matches('"').parse::<u64>()) {
         Some(Ok(v)) => Some(v),
-        Some(Err(_)) => return refused(StatusCode::BAD_REQUEST, "invalid", "If-Match is the version number"),
+        Some(Err(_)) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", "If-Match is the version number")),
         None => None,
     };
     if !PartyId::plausible(&id) {
-        return refused(StatusCode::NOT_FOUND, "not_found", "no such party");
+        return Err(refused(StatusCode::NOT_FOUND, "not_found", "no such party"));
     }
     let party = PartyId(id);
-    let mut ask = match app.ask_about(&ctx, &party).await {
-        Ok(a) => a,
-        Err(a) => return a,
-    };
+    let mut ask = app.ask_about(&ctx, &party).await?;
     if let Change::Record { facts, .. } = &change {
         ask.classes = classes(facts);
     }
     if !app.access.allows_command(&ask, change.name()) {
-        return app.deny(&ctx, Some(&party), change.name()).await;
+        return Err(app.deny(&ctx, Some(&party), change.name()).await);
     }
     let idem = header(&headers, "idempotency-key").map(|k| Idempotency {
         caller: ctx.who.caller.clone(),
@@ -832,12 +728,10 @@ async fn command<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
     });
     match app.store.change(&party, &change, expected, &ctx.who, idem.as_ref(), Utc::now()).await {
         Ok(o) => {
-            if let Err(a) = app.audit(&ctx, Some(&party), change.name(), ask.classes.clone(), "allow").await {
-                return a;
-            }
-            (StatusCode::OK, Json(serde_json::to_value(o).unwrap_or_default()))
+            app.audit(&ctx, Some(&party), change.name(), ask.classes.clone(), "allow").await?;
+            Ok((StatusCode::OK, Json(serde_json::to_value(o).unwrap_or_default())))
         }
-        Err(e) => failed(e),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -850,26 +744,23 @@ struct MergeRequest {
     review: Option<String>,
 }
 
-async fn merge<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Answer {
+async fn merge<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
     merging(app, headers, body, true).await
 }
 
-async fn unmerge<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Answer {
+async fn unmerge<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, body: Bytes) -> Reply {
     merging(app, headers, body, false).await
 }
 
-async fn merging<W: KeyWrapper, S: WormStore>(app: Arc<App<W, S>>, headers: HeaderMap, body: Bytes, merge: bool) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn merging<W: KeyWrapper, S: WormStore>(app: Arc<App<W, S>>, headers: HeaderMap, body: Bytes, merge: bool) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     let action = if merge { "merge" } else { "unmerge" };
     let request: MergeRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string()),
+        Err(e) => return Err(refused(StatusCode::BAD_REQUEST, "invalid", &e.to_string())),
     };
     if !app.access.allows(&app.ask(&ctx), action) {
-        return app.deny(&ctx, Some(&request.absorbed), action).await;
+        return Err(app.deny(&ctx, Some(&request.absorbed), action).await);
     }
     let now = Utc::now();
     let result = if merge {
@@ -881,40 +772,32 @@ async fn merging<W: KeyWrapper, S: WormStore>(app: Arc<App<W, S>>, headers: Head
     };
     match result {
         Ok(o) => {
-            if let Err(a) = app.audit(&ctx, Some(&request.absorbed), action, vec![], "allow").await {
-                return a;
-            }
-            (StatusCode::OK, Json(serde_json::to_value(o).unwrap_or_default()))
+            app.audit(&ctx, Some(&request.absorbed), action, vec![], "allow").await?;
+            Ok((StatusCode::OK, Json(serde_json::to_value(o).unwrap_or_default())))
         }
-        Err(e) => failed(e),
+        Err(e) => Err(failed(e)),
     }
 }
 
-async fn reviews<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn reviews<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     if !app.access.allows(&app.ask(&ctx), "reviews") {
-        return app.deny(&ctx, None, "reviews").await;
+        return Err(app.deny(&ctx, None, "reviews").await);
     }
     match app.store.open_reviews(500).await {
-        Ok(r) => (StatusCode::OK, Json(json!({ "reviews": r }))),
-        Err(e) => failed(e),
+        Ok(r) => Ok((StatusCode::OK, Json(json!({ "reviews": r })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
-async fn dismiss<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
-    let ctx = match app.ctx(&headers, None).await {
-        Ok(c) => c,
-        Err(a) => return a,
-    };
+async fn dismiss<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
     if !app.access.allows(&app.ask(&ctx), "reviews") {
-        return app.deny(&ctx, None, "reviews").await;
+        return Err(app.deny(&ctx, None, "reviews").await);
     }
     match app.store.dismiss_review(&id, &ctx.who, Utc::now()).await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "review": id, "status": "dismissed" }))),
-        Err(e) => failed(e),
+        Ok(()) => Ok((StatusCode::OK, Json(json!({ "review": id, "status": "dismissed" })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -929,13 +812,11 @@ async fn operator<W: KeyWrapper, S: WormStore>(app: &App<W, S>, headers: &Header
     Ok(ctx)
 }
 
-async fn verify<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
-    if let Err(a) = operator(&app, &headers, "verify").await {
-        return a;
-    }
+async fn verify<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    operator(&app, &headers, "verify").await?;
     match app.store.verify_chain(&PartyId(id.clone())).await {
-        Ok(n) => (StatusCode::OK, Json(json!({ "party": id, "links": n, "intact": true }))),
-        Err(e) => failed(e),
+        Ok(n) => Ok((StatusCode::OK, Json(json!({ "party": id, "links": n, "intact": true })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -948,13 +829,11 @@ struct RewrapRequest {
     limit: Option<i64>,
 }
 
-async fn rewrap<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<RewrapRequest>) -> Answer {
-    if let Err(a) = operator(&app, &headers, "rewrap").await {
-        return a;
-    }
+async fn rewrap<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<RewrapRequest>) -> Reply {
+    operator(&app, &headers, "rewrap").await?;
     match app.store.rewrap_all(&r.current_key_id, r.limit.unwrap_or(1_000).clamp(1, 10_000)).await {
-        Ok(n) => (StatusCode::OK, Json(json!({ "rewrapped": n }))),
-        Err(e) => failed(e),
+        Ok(n) => Ok((StatusCode::OK, Json(json!({ "rewrapped": n })))),
+        Err(e) => Err(failed(e)),
     }
 }
 
@@ -965,24 +844,22 @@ struct ReshredRequest {
     since: NaiveDate,
 }
 
-async fn reshred<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<ReshredRequest>) -> Answer {
-    if let Err(a) = operator(&app, &headers, "reshred").await {
-        return a;
-    }
+async fn reshred<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<ReshredRequest>) -> Reply {
+    operator(&app, &headers, "reshred").await?;
     match crate::work::reshred(&app, r.since).await {
-        Ok((listed, erased)) => (StatusCode::OK, Json(json!({ "listed": listed, "erased_again": erased }))),
-        Err(e) => refused(StatusCode::SERVICE_UNAVAILABLE, "unavailable", &e),
+        Ok((listed, erased)) => Ok((StatusCode::OK, Json(json!({ "listed": listed, "erased_again": erased })))),
+        Err(e) => Err(refused(StatusCode::SERVICE_UNAVAILABLE, "unavailable", &e)),
     }
 }
 
-async fn healthz() -> Answer {
-    (StatusCode::OK, Json(json!({ "status": "ok" })))
+async fn healthz() -> Reply {
+    Ok((StatusCode::OK, Json(json!({ "status": "ok" }))))
 }
 
-async fn readyz<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>) -> Answer {
+async fn readyz<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>) -> Reply {
     match app.store.ready().await {
-        Ok(()) => (StatusCode::OK, Json(json!({ "status": "ready" }))),
-        Err(e) => failed(e),
+        Ok(()) => Ok((StatusCode::OK, Json(json!({ "status": "ready" })))),
+        Err(e) => Err(failed(e)),
     }
 }
 

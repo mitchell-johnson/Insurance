@@ -235,6 +235,7 @@ mod tests {
         assert_eq!(erasable_from(&p, at, today), None);
         assert_eq!(erasable_from(&Party::default(), at, today), None);
         assert_eq!(plus_years(NaiveDate::MAX, 1), NaiveDate::MAX);
+        assert_eq!(years(FieldClass::Tax), 7);
     }
 
     /// Purpose: register pages are numbered per day without overwriting, and reading from
@@ -253,5 +254,28 @@ mod tests {
         assert_eq!(all, vec![PartyId("a".into()), PartyId("b".into()), PartyId("c".into())]);
         assert_eq!(reg.since(d("2026-03-02"), d("2026-03-05")).await.unwrap(), vec![PartyId("c".into())]);
         assert!(reg.since(NaiveDate::MAX, NaiveDate::MAX).await.unwrap().is_empty());
+    }
+
+    struct Down;
+
+    impl WormStore for Down {
+        async fn put_new(&self, _: &str, _: &str, _: Vec<u8>) -> Result<(), AzureError> {
+            Err(AzureError::Response("storage is down".into()))
+        }
+        async fn get(&self, _: &str) -> Result<Option<Vec<u8>>, AzureError> {
+            Err(AzureError::Response("storage is down".into()))
+        }
+    }
+
+    /// Purpose: when the register's storage fails, recording and reading both fail with a
+    /// reason rather than reporting success or an empty list.
+    /// Why it matters: the sweep destroys nothing until the register holds the batch, and an
+    /// empty list after a restore would leave erased keys alive.
+    #[tokio::test]
+    async fn a_register_outage_is_an_error() {
+        let reg = Register::new(Down);
+        let e = reg.record(&[PartyId("a".into())], Utc::now()).await.unwrap_err();
+        assert!(e.contains("could not be written"), "{e}");
+        assert!(reg.since(d("2026-03-01"), d("2026-03-02")).await.is_err());
     }
 }

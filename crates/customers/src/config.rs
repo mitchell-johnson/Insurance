@@ -177,6 +177,9 @@ mod tests {
         let c = load(&env).unwrap();
         assert_eq!(c.database, Database::Local("host=localhost".into()));
         assert!(format!("{c:?}").contains("local"));
+        assert_eq!(format!("{:?}", c.database), "Local(..)");
+        let azure = load(&base()).unwrap().database;
+        assert_eq!(format!("{azure:?}"), "Azure(pg.postgres.database.azure.com/customers as id-customers)");
     }
 
     /// Purpose: missing settings, a short or unreadable index key and bad numbers stop the
