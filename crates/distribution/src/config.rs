@@ -41,6 +41,18 @@ pub struct AdviserChangeSetting {
     pub mode: AdviserChangeMode,
 }
 
+/// What happens to a release of held money that would leave less held
+/// than another module is actively collecting from the party.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OwedElsewhere {
+    /// It may go ahead with legal's signature as well as the approvers'.
+    #[default]
+    NeedsLegal,
+    /// It is refused until the other module's recovery is settled.
+    Refused,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub structure: Structure,
@@ -51,6 +63,9 @@ pub struct Config {
     /// The records each staff member is assigned: what a colleague covering
     /// for them inherits.
     pub staff_paths: BTreeMap<PartyId, BTreeSet<String>>,
+    /// Changed through a change set, like every other business setting.
+    #[serde(default)]
+    pub release_owed_elsewhere: OwedElsewhere,
 }
 
 impl Default for Config {
@@ -65,6 +80,7 @@ impl Default for Config {
                 mode: AdviserChangeMode::StaysWithPrevious,
             },
             staff_paths: BTreeMap::new(),
+            release_owed_elsewhere: OwedElsewhere::default(),
         }
     }
 }
@@ -127,6 +143,9 @@ pub enum Change {
         on: NaiveDate,
     },
     AdviserChangeSetting(AdviserChangeSetting),
+    /// Whether held money may be released, with legal's signature, to a
+    /// party another module is collecting from, or is refused.
+    ReleaseOwedElsewhere(OwedElsewhere),
     SetStaffPaths {
         staff: PartyId,
         paths: BTreeSet<String>,
@@ -379,6 +398,10 @@ impl Config {
                     return reject("config_conflict", format!("the next setting version is {}", self.adviser_change.version + 1));
                 }
                 self.adviser_change = *s;
+                Ok(())
+            }
+            Change::ReleaseOwedElsewhere(o) => {
+                self.release_owed_elsewhere = *o;
                 Ok(())
             }
             Change::SetStaffPaths { staff, paths } => {

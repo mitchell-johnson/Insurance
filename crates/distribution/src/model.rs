@@ -242,6 +242,8 @@ pub enum EndKind {
     Cancelled,
     /// Ended because a claim was paid: never a clawback.
     Claim,
+    /// Avoided for non-disclosure: treated as never having been in force.
+    Avoided,
     Other,
 }
 
