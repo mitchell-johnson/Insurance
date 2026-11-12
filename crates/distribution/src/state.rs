@@ -160,6 +160,14 @@ pub enum Command {
         policy: PolicyId,
         replaces: PolicyId,
     },
+    /// The engagement submitting an alteration (a reduction, a cover given
+    /// up) to a policy today. Sent before the core is asked to carry the
+    /// alteration out, so that a clawback it sets off can be put on the
+    /// right party where the rule says clawback follows its cause.
+    AttributeAlteration {
+        policy: PolicyId,
+        engagement: EngagementId,
+    },
 
     // --- configuration: proposed, approved twice, then active ---
     ProposeChange {
@@ -240,6 +248,7 @@ impl Command {
         match self {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
+            Command::AttributeAlteration { .. } => &["policy-servicing"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
             Command::PaymentSettled { .. } | Command::PaymentReturned { .. } => &["payments"],
             Command::DescribePosition { .. } => &["claims", "reinsurance", "group-admin", "collections", "payments"],
@@ -270,7 +279,7 @@ impl Command {
                 InstructionKind::Statutory => ("payee.restricted_instruction", party.0.clone()),
                 InstructionKind::Assignment => ("payee.manage", party.0.clone()),
             },
-            Command::WriteLayer(_) | Command::LinkReplacement { .. } => ("policy.assign", any()),
+            Command::WriteLayer(_) | Command::LinkReplacement { .. } | Command::AttributeAlteration { .. } => ("policy.assign", any()),
             Command::ProposeChange { .. } | Command::RejectChange { .. } => ("config.propose", any()),
             Command::CutStatement { payee } => ("statement.cut", payee.0.clone()),
             Command::AttachDocument { party, .. } => ("workbench.document", party.0.clone()),
@@ -1010,6 +1019,19 @@ impl DistributionState {
                     .get_mut(&policy)
                     .ok_or_else(|| Reject::new("unknown_policy", format!("policy {policy} is not known to distribution")))?;
                 p.replaces = Some(replaces);
+                Ok(())
+            }
+
+            Command::AttributeAlteration { policy, engagement } => {
+                let today = self.date()?;
+                if !self.config.structure.engagements.contains_key(&engagement) {
+                    return reject("unknown_engagement", format!("engagement {engagement} is not known"));
+                }
+                let p = self
+                    .policies
+                    .get_mut(&policy)
+                    .ok_or_else(|| Reject::new("unknown_policy", format!("policy {policy} is not known to distribution")))?;
+                p.altered_by = Some((engagement, today));
                 Ok(())
             }
 

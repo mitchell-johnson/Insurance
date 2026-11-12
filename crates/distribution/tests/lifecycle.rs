@@ -3,14 +3,17 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::*;
 use ic_core::event::{Event as CoreEvent, LayerInfo};
 use ic_core::{Command as CoreCommand, EventRecord, LayerOrigin, PolicyId, UnwindCause};
 use ic_distribution::config::Change;
 use ic_distribution::model::Schedule;
-use ic_distribution::rules::WHOLE;
+use ic_distribution::rules::{Share, WHOLE};
 use ic_distribution::state::Settings;
-use ic_distribution::{Command, Event};
+use ic_distribution::structure::PartyKind;
+use ic_distribution::{BookId, Command, EngagementId, Event};
 use ic_sim::Delivery;
 
 const ANNUAL: i64 = 1_200_00;
@@ -826,5 +829,112 @@ fn a_cover_reduced_in_part_is_clawed_back_in_proportion_and_carries_on() {
     );
     assert!(back.0 > 0 && back.1 > 0, "from each payee who received it: {back:?}");
     assert_eq!(initial(&w, &policy), 720_00);
+    w.assert_reconciled();
+}
+
+/// Purpose: with clawback by cause switched on in the rule the commission was paid under, a
+/// clawback set off by an alteration is borne by the payees of the engagement that submitted
+/// it; an alteration by the engagement that wrote the layer, or one attributed on an earlier
+/// day, or with the switch off, falls on the original liable party as before; and the
+/// attribution is refused for a policy or an engagement nobody knows.
+/// Why it matters: a new adviser who cuts cover another adviser wrote sets off a clawback on
+/// that adviser's commission. Where an agency agreement says the one who caused it pays, a
+/// debit on the wrong party is a dispute with a provider every time it happens.
+#[test]
+fn clawback_by_cause_falls_on_the_engagement_that_submitted_the_alteration() {
+    let mut w = worked_example();
+    w.add_party("adviser-b", PartyKind::Adviser);
+    w.engage("eng-b-two", "adviser-b", "fap-two", d(2020, 1, 1));
+    let start = d(START.0, START.1, START.2);
+    let by_cause = |on: bool, version: u32| {
+        let lines = vec![
+            base("a-co", Share::OfRemainder(pct(75.0)), true),
+            base("fap-one", Share::OfRemainder(pct(25.0)), false),
+        ];
+        Change::ActivateRule(ic_distribution::rules::Rule {
+            clawback_by_cause: on,
+            ..rule("a-at-fap-one", version, start, lines, vec![liable("fap-one")])
+        })
+    };
+    w.activate(
+        "by-cause",
+        vec![
+            Change::CreateBook {
+                id: BookId::from("b-at-fap-two"),
+                name: "B at FAP Two".into(),
+                engagement: Some(EngagementId::from("eng-b-two")),
+                owner: Some(party("fap-two")),
+                house: false,
+            },
+            // The new adviser's book names nobody as liable: its payees bear it in their shares.
+            Change::ActivateRule(rule(
+                "b-at-fap-two",
+                1,
+                start,
+                vec![
+                    base("fap-two", Share::OfRemainder(pct(60.0)), true),
+                    base("group-old", Share::OfRemainder(pct(40.0)), false),
+                ],
+                vec![],
+            )),
+            by_cause(true, 2),
+        ],
+    )
+    .unwrap();
+    let (mut w, policy, _) = advised_in(w);
+    w.days(20);
+
+    let attribute = |w: &mut World, policy: &PolicyId, engagement: &str| {
+        let command = Command::AttributeAlteration {
+            policy: policy.clone(),
+            engagement: EngagementId::from(engagement),
+        };
+        w.send(module("policy-servicing"), command)
+    };
+    // Cut 100,000 of the 500,000 and say who bore the 240.00 clawed back.
+    let cut = |w: &mut World, policy: &PolicyId, keep: i64| -> BTreeMap<String, i64> {
+        let p = w.cluster.locate(policy).unwrap();
+        let life = w.cluster.state(p).policies[policy].covers["life"].layers[0].life.clone();
+        let command = CoreCommand::ReduceCover(Box::new(ic_core::command::ReduceCover {
+            policy: policy.clone(),
+            cover: "life".into(),
+            life,
+            sum_insured_minor: keep,
+        }));
+        let before = w.events.len();
+        w.core(policy, "policy-servicing", command).unwrap();
+        let mut bore = BTreeMap::new();
+        for e in &w.events[before..] {
+            if let Event::ClawbackRaised { reference, .. } = e {
+                for l in &w.dist.allocations[reference].lines {
+                    *bore.entry(l.payee.0.clone()).or_insert(0) -= l.amount_minor;
+                }
+            }
+        }
+        bore
+    };
+    let only = |who: &str, amount: i64| BTreeMap::from([(who.to_string(), amount)]);
+
+    assert_eq!(code(attribute(&mut w, &PolicyId("nobody".into()), "eng-b-two")), "unknown_policy");
+    assert_eq!(code(attribute(&mut w, &policy, "eng-nobody")), "unknown_engagement");
+
+    // Attributed yesterday: it says nothing about today's alteration.
+    attribute(&mut w, &policy, "eng-b-two").unwrap();
+    w.days(1);
+    assert_eq!(cut(&mut w, &policy, 400_000_00), only("fap-one", 240_00));
+
+    // The adviser who wrote the cover reduces it: the original liable party, as always.
+    attribute(&mut w, &policy, "eng-a-one").unwrap();
+    assert_eq!(cut(&mut w, &policy, 300_000_00), only("fap-one", 240_00));
+
+    // The new adviser reduces it: the new adviser's payees bear it, 60 to 40.
+    attribute(&mut w, &policy, "eng-b-two").unwrap();
+    let bore = cut(&mut w, &policy, 200_000_00);
+    assert_eq!(bore, BTreeMap::from([("fap-two".to_string(), 144_00), ("group-old".to_string(), 96_00)]));
+    w.assert_reconciled();
+
+    // The switch goes off again: the same alteration falls where it used to.
+    w.activate("by-cause-off", vec![by_cause(false, 3)]).unwrap();
+    assert_eq!(cut(&mut w, &policy, 100_000_00), only("fap-one", 240_00));
     w.assert_reconciled();
 }

@@ -210,6 +210,10 @@ pub struct PolicyRecord {
     pub last_clawback: Option<String>,
     /// The setting version a customer's change of adviser was decided under.
     pub adviser_change_setting: Option<u32>,
+    /// The engagement that submitted an alteration to the policy, and the
+    /// business date it was submitted on. Read by clawback by cause.
+    #[serde(default)]
+    pub altered_by: Option<(EngagementId, NaiveDate)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

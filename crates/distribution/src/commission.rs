@@ -17,7 +17,7 @@ use ic_money::Currency;
 use crate::model::*;
 use crate::rules::{portion, Allocated, CommissionType, Component, HeldReason, WHOLE};
 use crate::state::{reject, Ctx, DistributionState, Event};
-use crate::BookId;
+use crate::{BookId, EngagementId};
 
 /// Split `total` by weights. The pieces sum to `total`; the last takes the odd cent.
 fn split(total: i64, weights: &[i64]) -> Vec<i64> {
@@ -167,6 +167,7 @@ impl DistributionState {
                     replaces: None,
                     last_clawback: None,
                     adviser_change_setting: None,
+                    altered_by: None,
                 });
                 for info in layers {
                     self.add_layer(ctx, &policy, info, LayerOrigin::Original, date);
@@ -806,7 +807,7 @@ impl DistributionState {
             }
             return;
         }
-        if let Some(reference) = self.claw_back(ctx, policy, partition, cause, date, date, &open) {
+        if let Some(reference) = self.claw_back(ctx, policy, partition, cause, date, date, &open, None) {
             if let Some(p) = self.policies.get_mut(policy) {
                 p.last_clawback = Some(reference);
             }
@@ -834,7 +835,8 @@ impl DistributionState {
         match paid {
             Some(reference) if cooling_off => self.reverse_allocation(ctx, &reference, cause, date, Some(key)),
             _ => {
-                self.claw_back(ctx, policy, partition, cause, effective, date, &open);
+                let altered_by = self.altered_by(policy, date);
+                self.claw_back(ctx, policy, partition, cause, effective, date, &open, altered_by.as_ref());
             }
         }
         // The layer is gone: nothing more can be clawed back on it.
@@ -905,7 +907,8 @@ impl DistributionState {
             .cloned();
         match original {
             None => {
-                self.claw_back(ctx, policy, partition, cause, effective, date, &given_up);
+                let altered_by = self.altered_by(policy, date);
+                self.claw_back(ctx, policy, partition, cause, effective, date, &given_up, altered_by.as_ref());
             }
             Some(original) => {
                 let lines: Vec<AllocLine> = original
@@ -950,8 +953,44 @@ impl DistributionState {
         }
     }
 
+    /// The engagement that submitted an alteration to the policy on this
+    /// business date, if servicing said so before the core carried it out.
+    fn altered_by(&self, policy: &PolicyId, date: NaiveDate) -> Option<EngagementId> {
+        let (engagement, on) = self.policies.get(policy)?.altered_by.as_ref()?;
+        (*on == date).then(|| engagement.clone())
+    }
+
+    /// Clawback by cause. Where the rule the commission was paid under has
+    /// the switch on, a clawback set off by an alteration is borne by the
+    /// payees of the engagement that submitted the alteration, not by the
+    /// parties liable when the commission was paid: the parties the altering
+    /// engagement's own book names as liable for the component or, where it
+    /// names nobody, the payees of its base initial commission in their
+    /// shares. An alteration by the engagement that wrote the layer, or by
+    /// one with no book and rule of its own, changes nothing.
+    fn borne_by_cause(&self, e: &Exposure, engagement: &EngagementId, day: NaiveDate) -> Option<Vec<(PartyId, u32, Option<PartyId>)>> {
+        let (rule, _) = self.config.composed(&e.book, day)?;
+        if !rule.clawback_by_cause || self.layers.get(&e.layer)?.writing.iter().any(|(w, _)| w == engagement) {
+            return None;
+        }
+        let book = self.config.books.values().find(|b| b.engagement.as_ref() == Some(engagement) && !b.house)?;
+        let (_, composed) = self.config.composed(&book.id, day)?;
+        let liable = composed.liable(&e.component, day);
+        if !liable.is_empty() {
+            return Some(liable);
+        }
+        let paid = composed.allocate_base(WHOLE as i64, CommissionType::Initial, day).ok()?;
+        Some(
+            paid.into_iter()
+                .filter(|a| a.amount_minor > 0)
+                .map(|a| (a.payee, a.amount_minor as u32, None))
+                .collect(),
+        )
+    }
+
     /// Claw back what is still at risk on these exposure items as at a day,
-    /// from whoever each names as liable. Returns the reference of the
+    /// from whoever each names as liable, or from the altering engagement's
+    /// payees where clawback by cause applies. Returns the reference of the
     /// clawback, if anything was at risk.
     fn claw_back(
         &mut self,
@@ -962,6 +1001,7 @@ impl DistributionState {
         as_at: NaiveDate,
         date: NaiveDate,
         open: &[Exposure],
+        altered_by: Option<&EngagementId>,
     ) -> Option<String> {
         let mut lines = vec![];
         let mut touched = vec![];
@@ -970,8 +1010,10 @@ impl DistributionState {
             if amount <= 0 {
                 continue;
             }
-            let weights: Vec<i64> = e.liable.iter().map(|(_, s, _)| *s as i64).collect();
-            for ((liable, _, _), share) in e.liable.iter().zip(split(amount, &weights)) {
+            let by_cause = altered_by.and_then(|engagement| self.borne_by_cause(e, engagement, as_at));
+            let bearers = by_cause.as_ref().unwrap_or(&e.liable);
+            let weights: Vec<i64> = bearers.iter().map(|(_, s, _)| *s as i64).collect();
+            for ((liable, _, _), share) in bearers.iter().zip(split(amount, &weights)) {
                 if share != 0 {
                     lines.push(AllocLine {
                         payee: liable.clone(),
