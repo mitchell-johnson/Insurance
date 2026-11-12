@@ -121,6 +121,10 @@ pub enum Command {
     TakeWaiting {
         run: Id,
         payments: BTreeSet<Id>,
+        /// The payee for a payment, where the release does not name one or
+        /// the party has several.
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        payees: BTreeMap<Id, Id>,
     },
     RemoveRunItem {
         run: Id,
@@ -571,7 +575,7 @@ impl PaymentsState {
             } => self.prepare_run(tx, run, run_type, fund, currency, value_date, urgent),
             Command::AddRunItems { run, items } => self.add_run_items(tx, &run, items),
             Command::OfferPayment { waiting } => self.offer_payment(tx, *waiting),
-            Command::TakeWaiting { run, payments } => self.take_waiting(tx, &run, payments),
+            Command::TakeWaiting { run, payments, payees } => self.take_waiting(tx, &run, payments, payees),
             Command::RemoveRunItem { run, item } => self.remove_run_item(tx, &run, &item),
             Command::CheckRun { run } => self.check_run(tx, &run),
             Command::ReleaseItem { run, item } => self.release_item(tx, &run, &item),

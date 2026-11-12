@@ -1461,3 +1461,59 @@ fn a_handling_cost_is_expensed_once_and_settled_like_a_benefit() {
     assert_eq!(c.state(0).ledger.balance(&accounts::bank(CLAIMS_BANK, NZD).id), -180_00);
     days(&mut c, 2);
 }
+
+/// Purpose: late payment interest on the real ledger: expensed to its own account by the entry
+/// that releases the payment, owed with the benefit in one payment the bank settles for the
+/// total, and unchanged when the payment is returned and sent again.
+/// Why it matters: the design calls interest on late payment its own posting type. This proves
+/// the interest and the release commit together, that the bank cannot settle the benefit
+/// without the interest, and that the claim's ledger still nets to nothing after a return.
+#[test]
+fn late_payment_interest_is_its_own_posting_and_settles_with_the_benefit() {
+    let mut c = cluster();
+    let mut r = rules();
+    r.version = 2;
+    r.late_interest = Some(claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    c.activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(r) })).unwrap();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    verify_payee(&mut c, "clm-1");
+    days(&mut c, 40);
+
+    // Thirty days past the free days at two basis points a day.
+    ok(&mut c, pay("clm-1", "pay-1", 80_000_00, None));
+    clean(&c);
+    let interest = accounts::claim_interest("term-life", NZD);
+    assert_eq!(c.state(0).ledger.natural_balance(&interest.id), 480_00);
+    assert_eq!(money(&c, &id), (0, 80_480_00, 0));
+    assert!(c.nodes[&0]
+        .journal
+        .iter()
+        .any(|e| e.body.kind == "claim_late_interest" && e.body.detail["interest_minor"] == "48000"));
+    assert_eq!(code(c.submit(0, "payments", settle(&id, "pay-1", 80_000_00))), "payment_not_instructed");
+    c.submit(0, "payments", settle(&id, "pay-1", 80_480_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+
+    let back = Command::ReturnPayment {
+        policy: id.clone(),
+        payment: "pay-1".into(),
+    };
+    c.submit(0, "payments", back).unwrap();
+    assert_eq!(money(&c, &id), (0, 80_480_00, 0));
+    days(&mut c, 5);
+    ok(&mut c, pay("clm-1", "pay-2", 80_480_00, Some("pay-1")));
+    c.submit(0, "payments", settle(&id, "pay-2", 80_480_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&interest.id), 480_00);
+    let record = claim(&c, "clm-1");
+    assert_eq!((record.status, record.paid_minor(false)), (Status::Paid, 80_000_00));
+    days(&mut c, 2);
+}

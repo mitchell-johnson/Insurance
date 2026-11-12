@@ -28,6 +28,7 @@ pub mod role {
     pub const CLAIMS_INCURRED: &str = "claims_incurred";
     pub const EX_GRATIA: &str = "ex_gratia";
     pub const CLAIMS_HANDLING: &str = "claims_handling";
+    pub const CLAIM_INTEREST: &str = "claim_interest";
     pub const CLAIM_RECOVERY_WRITE_OFF: &str = "claim_recovery_write_off";
 
     pub const SETTLEMENT: &str = "settlement";
@@ -171,6 +172,15 @@ pub fn claims_handling(product: &str, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Expense,
         role::CLAIMS_HANDLING,
+    )
+}
+/// Interest paid because a claim was paid late: a cost of delay, not a benefit.
+pub fn claim_interest(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/claim_interest/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Expense,
+        role::CLAIM_INTEREST,
     )
 }
 pub fn claim_recovery_write_off(product: &str, c: Currency) -> Account {

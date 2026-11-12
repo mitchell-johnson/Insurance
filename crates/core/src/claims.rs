@@ -248,8 +248,9 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             amount_minor,
             payee,
             close,
+            interest_minor,
             ..
-        } => pay(&mut s.ledger, p, ctx, &claim, payment_ref, amount_minor, payee, close),
+        } => pay(&mut s.ledger, p, ctx, &claim, payment_ref, amount_minor, payee, close, interest_minor),
         Instruction::PayBenefit {
             claim,
             payment_ref,
@@ -452,10 +453,11 @@ fn pay(
     amount: i64,
     payee: String,
     close: bool,
+    interest: i64,
 ) -> Result<(), Reject> {
     let record = known(policy, claim)?;
     let free = record.payable_minor - record.instructed_minor;
-    if amount <= 0 || amount > free || record.payments.contains_key(&payment_ref) || (close && amount != free) {
+    if interest < 0 || amount <= 0 || amount > free || record.payments.contains_key(&payment_ref) || (close && amount != free) {
         return invalid("a payment is new, positive and within what is admitted and not yet released");
     }
     let c = policy.currency;
@@ -464,20 +466,26 @@ fn pay(
     let mut set = PostingSet::new();
     set.debit(accounts::claim_reserve(&policy.id, c), i128::from(reserve), d.clone());
     set.credit(expense, i128::from(reserve), d);
+    // Interest for late payment is its own expense, owed with the payment
+    // and by value date: the date of this entry.
+    let late = dims(policy, None, "claim_late_interest");
+    set.debit(accounts::claim_interest(&policy.product_code, c), i128::from(interest), late.clone());
+    set.credit(accounts::benefit_payable(&policy.id, c), i128::from(interest), late);
     post(
         ledger,
         policy,
         ctx,
-        "claim_reserve_released",
+        if interest > 0 { "claim_late_interest" } else { "claim_reserve_released" },
         set,
         claim,
-        &[("payment_ref", payment_ref.clone()), ("payee", payee)],
+        &[("payment_ref", payment_ref.clone()), ("payee", payee), ("interest_minor", interest.to_string())],
     )?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= reserve;
+        record.payable_minor += interest;
         record.open = !close;
     }
-    instruct(policy, claim, payment_ref, amount, false);
+    instruct(policy, claim, payment_ref, amount + interest, false);
     Ok(())
 }
 

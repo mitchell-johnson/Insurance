@@ -104,6 +104,9 @@ pub enum Instruction {
         amount_minor: i64,
         payee: String,
         close: bool,
+        /// Interest for late payment, expensed now and paid with it.
+        #[serde(default)]
+        interest_minor: i64,
     },
     /// One period of a benefit in payment: admitted and paid in one entry,
     /// less any agreed offset against an overpayment.

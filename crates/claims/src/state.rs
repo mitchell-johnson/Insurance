@@ -78,7 +78,17 @@ impl Cx<'_> {
     /// The policy is the one whose ledger holds the benefit payable. The
     /// account reference is the verified payee's; it is blank for a
     /// provider, whose account the payments module holds.
-    pub fn paid(&mut self, claim: &Claim, payment_ref: &str, gross_minor: i64, net_minor: i64, payee: &str, period_end: Option<NaiveDate>, ex_gratia: bool) {
+    pub fn paid(
+        &mut self,
+        claim: &Claim,
+        payment_ref: &str,
+        gross_minor: i64,
+        net_minor: i64,
+        payee: &str,
+        period_end: Option<NaiveDate>,
+        ex_gratia: bool,
+        interest_minor: i64,
+    ) {
         let account_ref = claim
             .payee
             .as_ref()
@@ -94,6 +104,7 @@ impl Cx<'_> {
             ("payee", payee.to_string()),
             ("period_end", period_end.map(|d| d.to_string()).unwrap_or_default()),
             ("ex_gratia", ex_gratia.to_string()),
+            ("interest_minor", interest_minor.to_string()),
         ];
         self.notify("claim_paid", &claim.id, &detail);
     }
