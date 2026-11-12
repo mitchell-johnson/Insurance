@@ -33,11 +33,13 @@ pub(crate) fn period_gross(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i6
 /// What was paid for days on or after `end`: the replay of the paid periods
 /// under the corrected end date.
 pub(crate) fn overpaid_after(s: &Schedule, end: NaiveDate) -> i64 {
+    // Arrears paid with a period were owed for earlier ones: never overpaid.
     let after = |start: &NaiveDate, p: &Period| {
+        let benefit = p.gross_minor - p.arrears_minor;
         if *start >= end {
-            p.gross_minor
+            benefit
         } else {
-            p.gross_minor * (p.end - end).num_days() / (p.end - *start).num_days().max(1)
+            benefit * (p.end - end).num_days() / (p.end - *start).num_days().max(1)
         }
     };
     s.periods
@@ -85,6 +87,7 @@ impl ClaimsState {
             case_manager: claim.owner.clone(),
             benefit_end: terms.end,
             ended: None,
+            arrears_minor: 0,
         });
         claim.status = Status::InPayment;
         if claim.queue == crate::Queue::IncomeProtectionNew {
@@ -376,7 +379,18 @@ impl ClaimsState {
             claim.overpayments.push(o);
         }
         if under > 0 {
-            open_task(&mut claim, cx, format!("senior-review/underpaid/{from}"), TaskKind::SeniorReview, None);
+            // What was paid too little is owed. It goes out with the next
+            // benefit, in a run one person prepares and another approves. A
+            // senior looks at it where no further benefit is due, so no run
+            // will carry it, or where the same person also owes an
+            // overpayment, so that paying one while holding the other is a
+            // decision and not an accident.
+            after.arrears_minor += under;
+            let owes = claim.overpayments.iter().any(|o| o.outstanding_minor() > 0);
+            if after.next_period >= after.end || owes {
+                open_task(&mut claim, cx, format!("senior-review/underpaid/{from}"), TaskKind::SeniorReview, None);
+            }
+            cx.notify("underpayment_owed", id, &[("amount_minor", under.to_string())]);
         }
         claim.schedule = Some(after);
         note(&mut claim, cx, Some(actor), format!("income_declared:{from}"));
@@ -429,16 +443,19 @@ impl ClaimsState {
                         continue;
                     };
                     let mut start = s.next_period;
+                    // A shortfall on earlier periods rides the first period paid.
+                    let mut arrears = s.arrears_minor;
                     while start <= benefit_date && start < s.end && items.len() < MAX_RUN_ITEMS {
                         let end = plus_months(start, 1).min(s.end);
-                        let gross = period_gross(s, start, end);
+                        let benefit = period_gross(s, start, end);
+                        let gross = benefit + std::mem::take(&mut arrears);
                         let source = c
                             .life_party
                             .as_ref()
                             .and_then(|p| sources.get_mut(p))
                             .and_then(|v| v.iter_mut().find(|o| o.left_minor > 0));
                         let offset = source.and_then(|o| {
-                            let take = (gross * i64::from(o.pct) / 100).min(o.left_minor);
+                            let take = (benefit * i64::from(o.pct) / 100).min(o.left_minor);
                             o.left_minor -= take;
                             (take > 0).then(|| Offset {
                                 claim: o.claim.clone(),
@@ -596,6 +613,7 @@ impl ClaimsState {
                         payment_ref: payment_ref.clone(),
                         run: run.id.clone(),
                         returned: false,
+                        arrears_minor: std::mem::take(&mut s.arrears_minor).min(item.gross_minor),
                     },
                 );
                 s.next_period = item.period_end;

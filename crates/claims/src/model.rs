@@ -350,6 +350,10 @@ pub struct Period {
     pub payment_ref: String,
     pub run: String,
     pub returned: bool,
+    /// The part of `gross_minor` that made good a shortfall on earlier
+    /// periods. It is not benefit for this period.
+    #[serde(default)]
+    pub arrears_minor: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -381,6 +385,10 @@ pub struct Schedule {
     /// The contractual end of the benefit period, whatever happens before it.
     pub benefit_end: NaiveDate,
     pub ended: Option<EndReason>,
+    /// Owed to the claimant for periods already paid too little. Paid with
+    /// the next benefit, through the same prepared and approved run.
+    #[serde(default)]
+    pub arrears_minor: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
