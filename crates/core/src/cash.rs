@@ -155,6 +155,9 @@ pub(crate) fn reverse_receipt(ledger: &mut Ledger, catalog: &Catalog, policy: &m
     if let Some(r) = policy.receipts.get_mut(receipt) {
         r.reversed = true;
     }
+    if let (Some(life), Some(product)) = (&rec.member, catalog.product(&policy.product_hash)) {
+        crate::voluntary::refresh(product, policy, ctx, life);
+    }
     ctx.emit(match rec.member {
         Some(life) => Event::MemberReceiptReversed {
             policy: policy.id.clone(),
