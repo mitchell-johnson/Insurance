@@ -78,4 +78,4 @@ The core's investment ledger holds funds, unit prices, unit orders and unit hold
 - **Moving partition.** A policy with units, pending cash or pending orders is refused a transfer between groups (`policy_invested`).
 - **Opening loads** for migrated holdings.
 
-Unit pricing itself (valuation intake, checks, maker and checker, suspension) is a separate module, `crates/pricing`.
+Unit pricing itself (valuation intake, checks, maker and checker, suspension, price error correction and the holdings extract) is a separate module, `crates/pricing`, with its own driver `ic-unit-pricing`; its gaps are in `docs/unit-pricing.md`.

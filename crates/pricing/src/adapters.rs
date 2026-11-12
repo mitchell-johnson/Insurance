@@ -2,11 +2,12 @@
 //! core's partitions through [`ClusterClient`], and Azure Blob Storage for
 //! the administrator's inbound and outbound containers.
 //!
-//! The administrator connects with SFTP on the inbound storage account
-//! (Blob Storage's own SFTP endpoint, with a local user who may only write
-//! to `valuations/`) and reads extracts from the outbound one. Microsoft
-//! Defender for Storage scans each inbound blob as it lands and writes its
-//! result as an index tag; nothing is read until the tag says it is clean.
+//! The administrator writes valuation files over HTTPS under its own Entra
+//! identity, allowed only to write under `valuations/` (not SFTP: Blob
+//! Storage's SFTP needs a hierarchical namespace, which has no index tags),
+//! and reads extracts from the outbound account. Microsoft Defender for
+//! Storage scans each inbound blob as it lands and writes its result as an
+//! index tag; nothing is read until the tag says it is clean.
 
 use std::time::Duration;
 

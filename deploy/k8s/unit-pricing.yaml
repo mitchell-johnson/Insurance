@@ -1,0 +1,129 @@
+# The unit pricing driver: reads the fund administrator's valuation files
+# once Defender for Storage has scanned them clean, reports the core's units
+# on issue to the unit pricing module, and writes the unit holdings extract
+# (docs/unit-pricing.md). It holds no state.
+#
+# Set the values marked REPLACE from the outputs of infra/unit-pricing.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-unit-pricing
+  annotations:
+    azure.workload.identity/client-id: REPLACE-unitPricingClientId
+---
+# The cluster token, mounted as a file under the service's identity. It
+# never becomes a Kubernetes Secret.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-unit-pricing-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-unitPricingClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-unit-pricing
+data:
+  IC_UNIT_PRICING_INBOX_ENDPOINT: REPLACE-inboundEndpoint
+  IC_UNIT_PRICING_OUTBOUND_ENDPOINT: REPLACE-outboundEndpoint
+  IC_UNIT_PRICING_CYCLE_MS: "30000"
+  IC_UNIT_PRICING_PATIENCE_MS: "10000"
+  IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-unit-pricing
+spec:
+  # Two, so intake carries on when one dies. Both may run at once: every
+  # proposal is keyed and an extract is written once.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-unit-pricing
+  template:
+    metadata:
+      labels:
+        app: ic-unit-pricing
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-unit-pricing
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: driver
+          image: insurance-core
+          command: ["/usr/local/bin/ic-unit-pricing"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            # After ic-ledger: the token is mounted under this service's identity.
+            - configMapRef:
+                name: ic-unit-pricing
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              # A valuation file (at most 4 MiB) or an extract is held whole.
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-unit-pricing-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-unit-pricing
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-unit-pricing
+---
+# The ledger nodes also hear from the unit pricing driver. Network policies add
+# up: this is beside the ic-node policy in network.yaml, not instead of it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-unit-pricing
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-unit-pricing
+      ports:
+        - port: 7000
