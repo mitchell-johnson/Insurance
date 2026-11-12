@@ -115,7 +115,14 @@ fn facultative_terms_follow_the_proposal_to_the_issued_layer() {
         let mut b = Bench::new();
         reserve(&mut b, "R2", "anna", 5000 * K, d(2027, 3, 2));
         let applied = b.ok("reinsurance-ops", terms(FacTarget::Reservation("R2".into()), "FAC-1", 500 * K));
-        assert_eq!(applied.notices, vec![Notice::FacultativeTermsRecorded { reservation_id: "R2".into() }]);
+        assert_eq!(
+            applied.notices,
+            vec![Notice::FacultativeTermsRecorded {
+                reservation_id: "R2".into(),
+                offered: true,
+                reference: "FAC-1".into()
+            }]
+        );
         assert!(matches!(b.ri.facultative_terms("R2"), Some(FacultativeStatus::Offered { loading: Some(l), .. }) if l == "+50"));
         assert_eq!(
             b.ri.capacity("R2").unwrap().outcome,
@@ -442,4 +449,80 @@ fn evidence_releases_are_logged_with_their_purpose() {
         b.refused("underwriting", release("no-such-treaty", "p", vec!["doc-1".into()])),
         "invalid_release"
     );
+}
+
+/// Purpose: underwriting, which runs in another group, can read a reservation's capacity
+/// answer and where its facultative referral stands through the hosted module's questions,
+/// and is told of an offer and of a decline by a notice it can be sent as its own command.
+/// Why it matters: the reply to a reservation carries only accepted or refused. Without
+/// these questions the underwriter could reserve capacity and never learn whether the
+/// treaty took the cover; without the decline notice a proposal would wait forever for
+/// terms a reinsurer has already refused.
+#[test]
+fn underwriting_can_ask_for_the_answer_and_is_told_of_offers_and_declines() {
+    use ic_reinsurance::driver::underwriting_command;
+    use ic_reinsurance::host::{answer, Query};
+    use ic_reinsurance::machine::Audience;
+    use serde_json::json;
+
+    let mut b = Bench::new();
+    reserve(&mut b, "R1", "anna", 5000 * K, d(2027, 3, 2));
+    reserve(&mut b, "R2", "ben", 5000 * K, d(2027, 3, 2));
+    let ask = |b: &Bench, q: Query| answer(&b.ri, serde_json::to_value(q).unwrap()).unwrap();
+    let capacity = ask(&b, Query::Capacity { reservation_id: "R1".into() });
+    assert_eq!(capacity, serde_json::to_value(b.ri.capacity("R1")).unwrap());
+    assert_eq!(capacity["reservation_id"], "R1");
+    assert_eq!(ask(&b, Query::Capacity { reservation_id: "nope".into() }), json!(null));
+    assert_eq!(ask(&b, Query::FacultativeTerms { reservation_id: "R1".into() }), json!("pending"));
+    assert_eq!(ask(&b, Query::FacultativeTerms { reservation_id: "nope".into() }), json!(null));
+
+    b.ok("reinsurance-ops", terms(FacTarget::Reservation("R1".into()), "FAC-1", 500 * K));
+    let declined = b.ok(
+        "reinsurance-ops",
+        Command::DeclineFacultative {
+            reservation_id: "R2".into(),
+            reference: "D-7".into(),
+        },
+    );
+    let notice = Notice::FacultativeTermsRecorded {
+        reservation_id: "R2".into(),
+        offered: false,
+        reference: "D-7".into(),
+    };
+    assert_eq!(declined.notices, vec![notice.clone()]);
+    assert_eq!(
+        ask(&b, Query::FacultativeTerms { reservation_id: "R1".into() })["offered"]["reference"],
+        "FAC-1"
+    );
+    assert_eq!(
+        ask(&b, Query::FacultativeTerms { reservation_id: "R2".into() }),
+        json!({"declined": {"reference": "D-7"}})
+    );
+
+    let for_underwriting = b.ri.notices_for(Audience::Underwriting, 10);
+    assert_eq!(for_underwriting.len(), 2);
+    assert_eq!(
+        underwriting_command(for_underwriting[0].1, d(2027, 3, 2)).unwrap(),
+        json!({
+            "key": "ri-fac:R1", "caller": "reinsurance", "at": "2027-03-01T12:00:00Z", "today": "2027-03-02",
+            "command": {"facultative_terms_recorded": {"reservation": "R1", "outcome": {"terms": "offered", "reference": "FAC-1"}}},
+        })
+    );
+    let command = underwriting_command(&notice, d(2027, 3, 2)).unwrap();
+    assert_eq!(command["command"]["facultative_terms_recorded"]["outcome"], json!({"terms": "declined"}));
+    assert_eq!(underwriting_command(&Notice::ExceptionClosed { id: "x".into() }, d(2027, 3, 2)), None);
+    // A hold that lapses is for the people watching, not for underwriting.
+    b.ok(
+        "underwriting",
+        Command::ReleaseCapacity {
+            reservation_id: "R2".into(),
+            reason: "withdrawn".into(),
+        },
+    );
+    assert_eq!(b.ri.notices_for(Audience::Underwriting, 10).len(), 2);
+    assert!(b
+        .ri
+        .notices_for(Audience::Staff, 100)
+        .iter()
+        .any(|(_, n)| matches!(n, Notice::CapacityReleased { .. })));
 }

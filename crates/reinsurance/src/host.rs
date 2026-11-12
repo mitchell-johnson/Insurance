@@ -37,6 +37,15 @@ pub enum Query {
         seq: u64,
         on: NaiveDate,
     },
+    /// The capacity answer for a reservation as things stand. Null once it
+    /// is released or its cover has arrived.
+    Capacity {
+        reservation_id: String,
+    },
+    /// Where the facultative referral for a reservation has got to.
+    FacultativeTerms {
+        reservation_id: String,
+    },
     /// The cession record of one cover.
     Cession {
         key: RiskKey,
@@ -98,6 +107,8 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
             let delivery = state.to_core(instruction, on).ok_or("the instruction's treaty is not active")?;
             json((delivery.partition, delivery.key, delivery.caller, delivery.command))
         }
+        Query::Capacity { reservation_id } => json(state.capacity(&reservation_id)),
+        Query::FacultativeTerms { reservation_id } => json(state.facultative_terms(&reservation_id)),
         Query::Cession { key } => json(state.cession_record(&key)),
         Query::Retained { life, on } => json(state.retained_on(&life, on)),
         Query::Balance { treaty, reinsurer } => json(state.balance(&treaty, &reinsurer)),
