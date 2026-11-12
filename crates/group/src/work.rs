@@ -519,6 +519,15 @@ impl GroupState {
                 let Some(m) = s.membership.members.get_mut(&employee_id) else { return };
                 m.party = Some(party.clone());
                 let life = m.life.clone();
+                // A request for this member's excess that has not left yet
+                // was waiting to know who to ask.
+                for out in self.outbox.values_mut() {
+                    if let Outbound::Underwriting { request, .. } = out {
+                        if request.scheme == s.id && request.life == life {
+                            request.party = Some(party.clone());
+                        }
+                    }
+                }
                 self.emit(GroupEvent::MemberLinked {
                     scheme: s.id.clone(),
                     life: life.clone(),
@@ -570,6 +579,27 @@ impl GroupState {
                 self.emit(GroupEvent::SchemeTerminated {
                     scheme: s.id.clone(),
                     effective,
+                });
+            }
+        }
+    }
+
+    /// Underwriting need not answer a request nobody wants any more. One
+    /// that has not left yet is dropped; one that has is withdrawn there.
+    fn withdraw_request(&mut self, scheme: &str, case: u64) {
+        let request_key = format!("grp-uw:{scheme}:{case}");
+        let waiting = self.outbox.iter().find_map(|(n, out)| match out {
+            Outbound::Underwriting { key, .. } if *key == request_key => Some(*n),
+            _ => None,
+        });
+        match waiting {
+            Some(n) => {
+                self.outbox.remove(&n);
+            }
+            None => {
+                self.send(Outbound::WithdrawUnderwriting {
+                    key: format!("{request_key}/withdraw"),
+                    request_key,
                 });
             }
         }
@@ -665,9 +695,13 @@ impl GroupState {
                 s.membership.apply(&change, None);
                 s.absence_leaves.remove(&change.employee_id);
                 let mut ended = Vec::new();
+                let mut unwanted = Vec::new();
                 for c in s.cases.values_mut().filter(|c| c.employee_id == change.employee_id) {
                     match c.status {
-                        CaseStatus::Requested => c.status = CaseStatus::NotProceeded,
+                        CaseStatus::Requested => {
+                            c.status = CaseStatus::NotProceeded;
+                            unwanted.push(c.id);
+                        }
                         CaseStatus::Accepted | CaseStatus::Writing => {
                             // The core ended the layer with the member.
                             c.status = CaseStatus::Ended;
@@ -676,6 +710,9 @@ impl GroupState {
                         }
                         _ => {}
                     }
+                }
+                for case in unwanted {
+                    self.withdraw_request(&s.id, case);
                 }
                 for case in ended {
                     self.emit(GroupEvent::ExcessCoverEnded {
@@ -752,6 +789,7 @@ impl GroupState {
                 held -= c.counts_minor();
                 if c.status == CaseStatus::Requested {
                     c.status = CaseStatus::NotProceeded;
+                    self.withdraw_request(&s.id, id);
                     self.emit(GroupEvent::ExcessCoverDecided {
                         scheme: s.id.clone(),
                         case: id,
@@ -790,7 +828,15 @@ impl GroupState {
                 policy: s.policy.clone(),
                 life: member.life.clone(),
                 party: member.party.clone(),
+                group: s.group.clone(),
+                policyholder: s.employer.clone(),
+                product_code: s.product.code.clone(),
+                product_hash: s.product.content_hash.clone(),
                 cover: amounts.cover.clone(),
+                cover_type: amounts.cover_type.clone(),
+                date_of_birth: member.attrs.date_of_birth,
+                sex: member.attrs.sex,
+                smoker: member.attrs.smoker,
                 excess_minor,
                 effective: effective.max(member.joined),
                 path: s.terms.excess_path,

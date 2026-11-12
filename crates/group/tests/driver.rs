@@ -12,12 +12,12 @@ use std::time::Duration;
 use chrono::NaiveDate;
 use common::*;
 use ic_core::{Command, GroupId};
-use ic_group::command::{caller, Envelope, GroupCommand, Resolution};
-use ic_group::driver::{content_hash, Core, CustomerMaster, Driver, DriverError, FileStore, Module, Peers, Scan};
+use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, MatchDecision, Resolution};
+use ic_group::driver::{content_hash, Answers, Core, CustomerMaster, Driver, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
 use ic_group::event::{ExceptionKind, GroupEvent, ReinsuranceNotice, UnderwritingRequest};
 use ic_group::mapping::{Columns, FileKind, FileMapping, SalaryPeriod, SalaryUnit};
 use ic_group::record::MemberIdentity;
-use ic_group::state::{FileStatus, GroupState, Outcome};
+use ic_group::state::{CaseStatus, FileStatus, GroupState, Outcome};
 use ic_group::Question;
 use ic_sim::Cluster;
 use serde_json::Value;
@@ -82,6 +82,9 @@ struct Sink {
     underwriting_down: Flag,
     notices: Arc<Mutex<Vec<(String, ReinsuranceNotice)>>>,
     requests: Arc<Mutex<Vec<UnderwritingRequest>>>,
+    withdrawals: Arc<Mutex<Vec<String>>>,
+    /// Underwriting's outbox: numbered effects, of which some answer us.
+    effects: Arc<Mutex<Vec<(u64, Option<ExcessAnswer>)>>>,
     events: Arc<Mutex<Vec<(u64, GroupEvent)>>>,
 }
 
@@ -91,11 +94,27 @@ impl Peers for Sink {
         self.notices.lock().unwrap().push((key.to_string(), notice.clone()));
         Ok(())
     }
-    async fn underwriting(&self, _key: &str, request: &UnderwritingRequest) -> Result<(), String> {
+    async fn underwriting(&self, _key: &str, _today: NaiveDate, request: &UnderwritingRequest) -> Result<(), String> {
         self.down.check("underwriting")?;
         self.underwriting_down.check("underwriting")?;
         self.requests.lock().unwrap().push(request.clone());
         Ok(())
+    }
+    async fn withdraw_underwriting(&self, _key: &str, _today: NaiveDate, request_key: &str) -> Result<(), String> {
+        self.down.check("underwriting")?;
+        self.underwriting_down.check("underwriting")?;
+        self.withdrawals.lock().unwrap().push(request_key.to_string());
+        Ok(())
+    }
+    async fn underwriting_answers(&self, after: u64, max: usize) -> Result<Answers, String> {
+        self.down.check("underwriting")?;
+        self.underwriting_down.check("underwriting")?;
+        let page: Vec<_> = self.effects.lock().unwrap().iter().filter(|(n, _)| *n > after).take(max).cloned().collect();
+        Ok(Answers {
+            through: page.last().map_or(after, |(n, _)| *n),
+            more: page.len() >= max,
+            answers: page.into_iter().filter_map(|(_, a)| a).collect(),
+        })
     }
     async fn publish(&self, seq: u64, _date: NaiveDate, event: &GroupEvent) -> Result<(), String> {
         self.down.check("events")?;
@@ -505,6 +524,167 @@ async fn a_stuck_entry_does_not_hold_up_the_rest() {
     settle(&d).await;
     assert!(d.module.state.lock().unwrap().outbox.is_empty());
     assert_eq!(d.peers.requests.lock().unwrap().len(), 2);
+}
+
+async fn through(d: &Rig, name: &str, content: &str) {
+    d.upload(caller::EMPLOYER, "admin-bo", SCHEME, name, content.as_bytes().to_vec()).await.unwrap();
+    d.files.mark(SCHEME, name, Scan::Clean);
+    settle(d).await;
+    approve(d, name).await;
+    settle(d).await;
+    assert_eq!(file_status(d, name), FileStatus::Applied);
+}
+
+fn case_status(d: &Rig, case: u64) -> CaseStatus {
+    d.module.state.lock().unwrap().schemes[SCHEME].cases[&case].status
+}
+
+/// Purpose: a request for the excess of a member the customer master could not identify
+/// is neither sent nor counted as a failure, holds up nothing behind it, and goes with the
+/// person's ID as soon as staff say who the member is.
+/// Why it matters: underwriting asks a person for a health disclosure. Sending it a member
+/// who may be one of two people would put one person's answers on another's record
+/// (addendum entry 2); dropping the request would leave the member under-covered for good.
+#[tokio::test]
+async fn a_request_waits_until_the_member_is_a_known_person() {
+    let d = rig().with_batch(1);
+    // Ngata, whom the customer master cannot place, is the executive here.
+    let file = FILE
+        .replace("E002,Bo,Ngata,02/06/1985,staff,60000", "E002,Bo,Ngata,02/06/1985,executive,240000")
+        .replace("E003,Cy,Patel,03/07/1975,executive,240000", "E003,Cy,Patel,03/07/1975,staff,60000");
+    through(&d, "nov.csv", &file).await;
+    assert!(d.peers.requests.lock().unwrap().is_empty());
+    {
+        let g = d.module.state.lock().unwrap();
+        assert_eq!(g.outbox.len(), 1, "only the request waits: {:?}", g.outbox);
+    }
+    assert_eq!(d.deliver().await.unwrap(), Default::default(), "waiting is not a failure");
+
+    let today = d.core.business_date().await.unwrap().unwrap();
+    let decide = Envelope {
+        key: "match-e002".into(),
+        caller: caller::STAFF.into(),
+        actor: "staff-ana".into(),
+        today,
+        command: GroupCommand::ResolveMatch {
+            scheme: SCHEME.into(),
+            employee_id: "E002".into(),
+            decision: MatchDecision::SamePerson { party: party("party-ngata-1") },
+        },
+    };
+    d.module.propose(decide).await.unwrap().result.unwrap();
+    settle(&d).await;
+    let requests = d.peers.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        (requests[0].party.clone(), requests[0].life.clone(), requests[0].cover_type.as_str()),
+        (Some(party("party-ngata-1")), life("E002"), "group_life")
+    );
+    assert_eq!(
+        (requests[0].date_of_birth, requests[0].policyholder.clone(), requests[0].product_code.as_str()),
+        (
+            NaiveDate::from_ymd_opt(1985, 6, 2),
+            d.module.state.lock().unwrap().schemes[SCHEME].employer.clone(),
+            "group-life"
+        )
+    );
+    assert!(d.module.state.lock().unwrap().outbox.is_empty());
+}
+
+/// Purpose: underwriting's answers are read from its outbox in pages, each becomes a
+/// decision on its case exactly once however often it is read, effects that are not
+/// answers to this module are passed over, an answer for a case already closed is left
+/// alone without stopping the ones behind it, and underwriting being away is a pass that
+/// waits.
+/// Why it matters: the answer is the only way accepted cover reaches the member's policy.
+/// Read twice it must not write two layers; unreadable it must not be skipped; and one
+/// stale answer must not strand every later member's decision behind it.
+#[tokio::test]
+async fn underwriting_answers_become_decisions_exactly_once() {
+    let d = rig().with_batch(1);
+    through(&d, "nov.csv", FILE).await;
+    let request = d.peers.requests.lock().unwrap()[0].clone();
+    let (case, excess) = (request.case, request.excess_minor);
+    let answer = |key: &str, decision: ExcessDecision| {
+        Some(ExcessAnswer {
+            key: key.to_string(),
+            scheme: SCHEME.to_string(),
+            case,
+            decision,
+        })
+    };
+    let accepted = ExcessDecision::Accepted {
+        sum_insured_minor: excess,
+        loadings: vec![],
+        exclusions: vec!["EX-BACK".into()],
+        member_consents_to_itemising: false,
+    };
+    *d.peers.effects.lock().unwrap() = vec![
+        (1, None),
+        (2, answer("grp-uw:harbour:1/terms", accepted)),
+        (3, None),
+        // Too late: the case was decided by the answer before it.
+        (4, answer("grp-uw:harbour:1/ended", ExcessDecision::Declined)),
+    ];
+
+    d.peers.underwriting_down.set(true);
+    let waiting = d.collect_answers().await.unwrap();
+    assert_eq!((waiting.done, waiting.failed), (0, 1));
+    assert_eq!(case_status(&d, case), CaseStatus::Requested);
+    d.peers.underwriting_down.set(false);
+
+    settle(&d).await;
+    assert_eq!(case_status(&d, case), CaseStatus::Accepted);
+    let layers = |d: &Rig| {
+        let c = d.core.cluster.lock().unwrap();
+        let policy = c.state(0).policies.values().next().unwrap();
+        let underwritten = |l: &&ic_core::policy::Layer| l.origin == ic_core::LayerOrigin::UnderwrittenExcess && l.sum_insured_minor == excess;
+        policy.covers.values().flat_map(|c| c.layers.iter()).filter(underwritten).count()
+    };
+    assert_eq!(layers(&d), 1);
+    assert_eq!(d.collect_answers().await.unwrap(), Default::default(), "nothing is read twice by one driver");
+
+    // A driver started afresh reads everything again and changes nothing.
+    let again = Driver::new(
+        d.module.clone(),
+        d.core.clone(),
+        d.peers.clone(),
+        Directory::default(),
+        Store::default(),
+        "test-salt",
+    );
+    assert_eq!(again.collect_answers().await.unwrap().failed, 0);
+    settle(&again).await;
+    assert_eq!((case_status(&again, case), layers(&again)), (CaseStatus::Accepted, 1));
+}
+
+/// Purpose: when the cover a request was for is no longer wanted, a request underwriting
+/// already has is withdrawn there, and one that never left is simply dropped.
+/// Why it matters: an open proposal keeps chasing the member for a health disclosure. A
+/// member whose salary fell back under the automatic amount, or who has left, must not be
+/// asked for medical details for cover that will never be written.
+#[tokio::test]
+async fn a_request_no_longer_wanted_is_withdrawn_or_never_sent() {
+    let lower = FILE.replace("executive,240000", "executive,150000");
+
+    // Sent, then not wanted: withdrawn under the name it was sent by.
+    let d = rig();
+    through(&d, "nov.csv", FILE).await;
+    let case = d.peers.requests.lock().unwrap()[0].case;
+    through(&d, "dec.csv", &lower).await;
+    assert_eq!(case_status(&d, case), CaseStatus::NotProceeded);
+    assert_eq!(*d.peers.withdrawals.lock().unwrap(), vec![format!("grp-uw:{SCHEME}:{case}")]);
+    assert!(d.module.state.lock().unwrap().outbox.is_empty());
+
+    // Never sent: nothing goes to underwriting at all.
+    let d = rig();
+    d.peers.underwriting_down.set(true);
+    through(&d, "nov.csv", FILE).await;
+    through(&d, "dec.csv", &lower).await;
+    d.peers.underwriting_down.set(false);
+    settle(&d).await;
+    assert!(d.peers.requests.lock().unwrap().is_empty() && d.peers.withdrawals.lock().unwrap().is_empty());
+    assert!(d.module.state.lock().unwrap().outbox.is_empty());
 }
 
 const KEY: &str = "service-key-0123456789abcdef0123456789";
