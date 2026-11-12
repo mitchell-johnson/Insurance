@@ -158,3 +158,58 @@ The one place the insurer knows who a person or organisation is. The core and ev
 - Group schemes sends no mobile phone (its file mapping has no column), so matching on mobile is unused for joiners.
 - Open for Mitchell: the retention periods in `retention.rs` (7 years for most classes, 5 for verification evidence, 2 for prospects) are this thread's reading of the Tax Administration Act and the Privacy Act, not a confirmed schedule.
 - Known check status: `ci.yml` on main passed at `ea9de28` with the PostgreSQL step, the customer master's tests, the coverage floor and `customers.bicep` compiled. The death relay (`relay.rs`, migration `002_death_relay.sql`) landed after that run.
+
+## Area: adviser commission and held balances (`ic-distribution`)
+
+State as at 12 November 2026. The full description is [distribution.md](distribution.md); this section is the handover: what is built and where, what is not, and what somebody finishing it needs to know.
+
+### What is built and where
+
+Everything is in `crates/distribution`, hosted on the ledger node as the module `distribution` (`host.rs`, `module_spec()`, listed in `crates/node/src/lib.rs`). Staff policy is `config/cedar/distribution.cedar`.
+
+| File | What it holds |
+| --- | --- |
+| `state.rs` | The state machine: `Envelope` (key, actor, command), every `Command` and `Event`, `Settings`, tasks and cases, which module or staff action may send each command. |
+| `structure.rs` | Parties, dated relations and engagements, licence records and how a licence problem cascades. |
+| `rules.rs`, `model.rs`, `config.rs` | Distribution rules and fragments, schedules, books, layer and exposure records; change sets (propose, approve twice, dry run); writing a layer (`write_layer`); change of adviser; book moves and merges. |
+| `commission.rs` | Reading the core's events (`ingest`): earning, clawback, reversals, premium handed back, waived premium, layers ended, reduced or rewritten, claims overpayment memo lines, backdated rules, licence events moving paid money to held. |
+| `replacement.rs` | The rule for replacements nobody declared, the adviser's dispute and its decision. |
+| `statement.rs` | Statements, payment instructions, sweeps, payment settled and returned. |
+| `workbench.rs` | The held balance workbench: positions, proof of debt, typed actions with signatures, the daily aged control, month-end blocks. |
+| `authority.rs` | Roles, grants, limits and the Cedar check, with every decision recorded. |
+| `host.rs` | Hosting, the questions other areas ask (`Question`), and the outbox that carries postings to the core (`OUTBOX`). |
+
+Tests are in `crates/distribution/tests/` (`commission`, `config`, `edges`, `host`, `lifecycle`, `replacement`, `statements`, `units`, `workbench`), all against the real core in the simulated cluster (`tests/common/mod.rs`, `World`). Module line coverage was 98.7% when last measured. CI and the failure drill were green on main at `ea9de28`, which includes everything described here.
+
+### Seams with other areas
+
+- **Core.** The module reads events and moves money only through `PostCounterparty`, building balances only from `CounterpartyPosted`. Core additions made for it, all additive: `Command::PostCounterparty`, `Event::CounterpartyPosted`, `net_by_cover_type` on `ReceiptApplied` and `SuspenseApplied`, `Event::PremiumUnapplied` (from `unwind.rs` and from `billing.rs` `settle_credits`), `Event::LayerReduced` (from `reduce.rs`), and `net:<cover_type>` keys on the `premium_waived` detail (`claims.rs`). It also reads `LayerAdded.continues`, which the core thread added.
+- **Portal** (`crates/channels/src/forward.rs`) publishes the workbench and adviser directory from the questions and replays approved workbench actions one signature at a time.
+- **Finance** (`crates/finance/src/driver.rs`, `distribution_sources()`) reports `sweep_check` and `aged_held` to month-end.
+- **Complaints** (`crates/documents/src/complaints_relay.rs`) opens the conduct case from `conduct_cases`.
+- **Claims** publishes overpayment facts as module events; the workbench shows them as memo lines and they stay in the claim ledger.
+- None of these readers depends on the crate, so the shape of an answer must be agreed with its reader before it changes. Adding a field to a public type breaks other crates' tests, so run `cargo clippy --workspace --all-targets --locked --exclude ic-workflows -- -D warnings` before pushing such a change.
+
+### Not finished, with what is needed to finish it
+
+1. **Nothing sends `AttributeAlteration`.** Clawback by cause (rule switch `clawback_by_cause`) only applies when the channel that submits a reduction or a cover given up on an adviser's behalf first tells the module which engagement it is, as `policy-servicing`, on the same business date and before the core command. The portal thread has been told. Until it does, clawback falls on the original liable party, which is the design's default.
+2. **Nothing in the portal uses the replacement rule's answers yet.** `WriteLayer` can answer with `ReplacementMatched`; `DisputeReplacement`, `DecideReplacement` and the question `replacement_matches` exist. The adviser's notice at submission, the dispute button and the oversight page are portal work. The portal thread has been told.
+3. **Limits of the replacement rule** (`replacement.rs`). It runs only when a layer is written, so cover given up after its replacement was written is not matched: to close this, run the same match from `layer_ended` and `policy_ended` in `commission.rs` against layers written in the window, and take back initial commission already paid. Where only part of a layer given up is matched, or cover was reduced and not removed, the clawback already raised stands; only a whole layer matched in full has its clawback reversed (`continue_exposure`). Trail already paid before a match is overturned is not moved. A policy reinstated after its cover was matched raises the task `reinstated_after_replacement` and is not reversed automatically. Scheme members are not matched: the module reads the person behind a life from `PolicyIssued.lives` only, not from `MemberIdentified`.
+4. **Not run on a real multi-node cluster.** Hosting and the outbox are tested through the functions the host calls, in the simulated cluster. The core thread has been asked to include the module in its integrated Docker run on the Mac and to confirm three things: commission is posted after a receipt on any partition, the outbox drains after a leader change, and `status` answers on every node. No result yet.
+5. **A release does not net against the claim ledger.** A release that would leave less held than claims is collecting needs legal's signature (`short_of_owed_elsewhere` in `workbench.rs`), but the offset itself is done in claims. Reinsurance recoveries and scheme arrears appear on a position only if their owners post them with `PostCounterparty` and describe them with `DescribePosition`; neither does yet.
+6. **Commission is its own entry**, posted after the premium event and idempotent on it, not lines in the premium entry. Making the two atomic would mean the core calling out during a receipt, which the module contract in [modules.md](modules.md) does not allow.
+7. **Rules and schedules are data, not Starlark.** They are versioned and go through the change set but ship no worked scenarios that run at load, as products and treaties do.
+8. **One currency** (New Zealand dollars), and **nothing is pruned**: allocations, movements and statements are kept for the life of the state, so the snapshot grows with the book. Pruning needs a decision on how long statement detail must stay answerable from the module.
+9. **No screens of its own.** Staff commands go through the generic module command route; pages are the portal's.
+
+Volume-based overrides are not built on purpose: the design notes leave them out.
+
+### Open questions for Mitchell
+
+- The replacement rule's settings are my defaults and the design notes say to confirm them with compliance: a window of 12 months (`replacement_window_months`), an amount tolerance of 5% where the advisers are unrelated (`replacement_amount_tolerance_ppm`), and "related" meaning the same provider or any provider under the same group (`Structure::related`).
+- Who decides a disputed replacement match. It is whoever holds `case.manage`: the conduct officer or compliance.
+- Whether paying held money to a party claims is pursuing should be refused outright. It currently needs legal's signature.
+
+### Known failing checks
+
+None. Things that catch people out: local builds need `--exclude ic-workflows` (no `protoc`) and `IC_SKIP_TEMPORAL_TESTS=1`; a posting reference may hold only letters, digits and `- _ . :`, so a layer key (which has `/`) never goes in one unchanged; the core's life IDs are per policy, so lives are matched by the party behind them; and a test that injects a core event by hand must do it last, or on a partition of its own, because injected events use up sequence numbers.
