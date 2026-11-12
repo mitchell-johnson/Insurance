@@ -11,6 +11,11 @@
 // - A managed identity for the driver, federated to its Kubernetes service
 //   account, that may write to that container, send to that hub and read
 //   the cluster token. Nothing else.
+// - Two log alerts on the workspace main.bicep created, which holds the
+//   driver's log through the cluster's monitoring add-on: one for every
+//   exception the module opens, one for delivery that has stopped. They go
+//   to an action group that mails `alertEmails`; with no addresses the
+//   alerts still fire and show in Azure Monitor, but tell nobody.
 //
 // The reinsurance module itself is hosted by the ledger nodes and needs
 // nothing here.
@@ -18,7 +23,8 @@
 // Deployed on its own into the same resource group as main.bicep:
 //   az deployment group create -g <rg> -f infra/reinsurance.bicep \
 //     -p name=<name> storageAccountName=<account> keyVaultName=<vault> \
-//        eventHubsNamespaceName=<namespace> aksOidcIssuer=<url>
+//        eventHubsNamespaceName=<namespace> aksOidcIssuer=<url> \
+//        alertEmails='["reinsurance-oncall@example.com"]'
 
 @description('Azure region.')
 param location string = resourceGroup().location
@@ -49,6 +55,12 @@ param workloadNamespace string = 'insurance-core'
 @description('Days a filed record cannot be changed or deleted. The default is eight years, as in main.bicep.')
 @minValue(1)
 param retentionDays int = 2920
+
+@description('The Log Analytics workspace main.bicep created, which receives the cluster\'s container logs.')
+param logAnalyticsWorkspaceName string = '${name}-logs'
+
+@description('Who is told when reinsurance needs a person: the operations on-call addresses.')
+param alertEmails array = []
 
 var tags = {
   system: 'insurance-core'
@@ -162,6 +174,100 @@ resource driverToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+// --- alerts ---------------------------------------------------------------------------
+
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: logAnalyticsWorkspaceName
+}
+
+resource onCall 'Microsoft.Insights/actionGroups@2023-01-01' = if (!empty(alertEmails)) {
+  name: '${name}-reinsurance-oncall'
+  location: 'global'
+  tags: tags
+  properties: {
+    groupShortName: 'ri-oncall'
+    enabled: true
+    emailReceivers: [for (address, i) in alertEmails: {
+      name: 'oncall-${i}'
+      emailAddress: address
+      useCommonAlertSchema: true
+    }]
+  }
+}
+
+var actionGroups = empty(alertEmails) ? [] : [resourceId('Microsoft.Insights/actionGroups', '${name}-reinsurance-oncall')]
+
+// The driver's log, whichever container log table the cluster writes. The
+// driver logs JSON lines; a notice for staff has the target
+// `reinsurance.notice` and names its kind (docs/reinsurance.md, Staff).
+var driverLog = '''
+union isfuzzy=true
+  (ContainerLogV2 | project TimeGenerated, Line = tostring(LogMessage)),
+  (ContainerLog | project TimeGenerated, Line = LogEntry)
+'''
+
+resource exceptionOpened 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: '${name}-reinsurance-exception-opened'
+  location: location
+  tags: tags
+  dependsOn: [onCall]
+  properties: {
+    displayName: 'Reinsurance exception opened'
+    description: 'The reinsurance module opened an exception for a person. Open the reinsurance console in the staff portal; the alert lists each exception id and code.'
+    severity: 2
+    enabled: true
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          query: '${driverLog}| where Line has "reinsurance.notice" and Line has "exception_opened"\n| extend Id = extract(@\'"id":"([^"]+)"\', 1, Line), Code = extract(@\'"code":"([^"]+)"\', 1, Line)\n| project TimeGenerated, Id, Code'
+          timeAggregation: 'Count'
+          dimensions: [
+            { name: 'Code', operator: 'Include', values: ['*'] }
+          ]
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: false
+    actions: { actionGroups: actionGroups }
+  }
+}
+
+// One failed pass is a blip; three in fifteen minutes is delivery stopped.
+resource deliveryStopped 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: '${name}-reinsurance-delivery-stopped'
+  location: location
+  tags: tags
+  dependsOn: [onCall]
+  properties: {
+    displayName: 'Reinsurance delivery stopped'
+    description: 'The reinsurance driver has not delivered to the core or handed on notices for fifteen minutes. See docs/reinsurance.md, Hosting and the driver.'
+    severity: 1
+    enabled: true
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          query: '${driverLog}| where Line has "reinsurance delivery is stopped" or Line has "a reinsurance delivery pass could not finish" or Line has "reinsurance notices could not all be handed on"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 3
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: actionGroups }
   }
 }
 
