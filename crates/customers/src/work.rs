@@ -79,9 +79,13 @@ pub async fn sweep<W: KeyWrapper, S: WormStore>(app: &App<W, S>, batch: i64) -> 
         .map_err(|e| e.to_string())?;
     let due_on = |p: &crate::party::Party| p.last_recorded.and_then(|at| erasable_from(p, at, today)).is_some_and(|d| d <= today);
     let mut due = Vec::new();
+    // The register lists everyone erased, those merged in included.
+    let mut listed = Vec::new();
     for id in candidates {
         if let Some(p) = app.store.load(&id).await.map_err(|e| e.to_string())? {
             if due_on(&p) {
+                listed.push(id.clone());
+                listed.extend(p.absorbed.iter().cloned());
                 due.push(id);
             }
         }
@@ -89,7 +93,7 @@ pub async fn sweep<W: KeyWrapper, S: WormStore>(app: &App<W, S>, batch: i64) -> 
     if due.is_empty() {
         return Ok(0);
     }
-    app.register.record(&due, now).await?;
+    app.register.record(&listed, now).await?;
     let mut erased = 0;
     for id in &due {
         if app.store.shred(id, due_on, Utc::now()).await.map_err(|e| e.to_string())? {
@@ -173,4 +177,29 @@ pub async fn start(
     let web = tokio::spawn(crate::service::serve(listener, crate::service::router(app.clone()), stopped(stop.clone())));
     run(&app, &hubs, config.cycle_every, config.sweep_every, stopped(stop)).await;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
+}
+
+/// The process: logging, signals, settings from the environment, then
+/// [`start`]. The binary is only this call.
+pub async fn main() -> Result<(), String> {
+    tracing_subscriber::fmt()
+        .json()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .try_init()
+        .ok();
+    // The handlers are installed before anything else, so a signal during
+    // start-up is kept.
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| e.to_string())?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).map_err(|e| e.to_string())?;
+    let (stopping, stop) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+        let _ = stopping.send(true);
+    });
+    let config = crate::config::Config::from_lookup(|k| std::env::var(k).ok(), |p| std::fs::read_to_string(p))?;
+    let credential = ic_azure::credential::AzureCredential::from_env().map_err(|e| e.to_string())?;
+    start(config, credential, stop).await
 }

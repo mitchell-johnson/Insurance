@@ -894,70 +894,92 @@ impl<W: KeyWrapper> Store<W> {
     pub async fn shred(&self, id: &PartyId, still_due: impl Fn(&Party) -> bool, now: DateTime<Utc>) -> Result<bool> {
         let mut client = self.client().await?;
         let tx = client.transaction().await.map_err(db)?;
-        let Some(mut loaded) = self.load_with(&tx, id, true).await? else {
+        let Some(loaded) = self.load_with(&tx, id, true).await? else {
             return Ok(false);
         };
         if loaded.party.shredded || !loaded.party.holds.is_empty() || loaded.party.merged_into.is_some() || !still_due(&loaded.party) {
             return Ok(false);
         }
-        let mut erase = vec![id.clone()];
-        erase.extend(loaded.party.absorbed.iter().cloned());
-        let who = Who {
-            caller: "customer-master".into(),
-            actor: "retention".into(),
-        };
-        for (n, party) in erase.iter().enumerate() {
-            let mut l = if n == 0 {
-                std::mem::replace(
-                    &mut loaded,
-                    Loaded {
-                        party: Party::default(),
-                        head: vec![],
-                        key: None,
-                    },
-                )
-            } else {
-                match self.load_with(&tx, party, true).await? {
-                    Some(l) => l,
-                    None => continue,
-                }
-            };
-            if l.party.shredded {
-                continue;
+        let absorbed: Vec<PartyId> = loaded.party.absorbed.iter().cloned().collect();
+        self.erase(&tx, loaded, now).await?;
+        for other in absorbed {
+            if let Some(l) = self.bare(&tx, &other).await? {
+                self.erase(&tx, l, now).await?;
             }
-            l.key = None;
-            self.append(&tx, &mut l, vec![EventBody::Shredded], &who, now).await?;
-            for sql in [
-                "delete from party_keys where party_id = $1",
-                "delete from blind_index where party_id = $1",
-                "delete from relationships where party_id = $1",
-                "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
-                "update parties set shredded_at = $2 where id = $1",
-            ] {
-                let params: Vec<&(dyn ToSql + Sync)> = if sql.contains("$2") { vec![&party.0, &now] } else { vec![&party.0] };
-                tx.execute(sql, &params).await.map_err(db)?;
-            }
-            self.keys.forget(party);
         }
         tx.commit().await.map_err(db)?;
         Ok(true)
     }
 
+    /// Lock a party's row without opening its key: enough to append a
+    /// tombstone.
+    async fn bare(&self, tx: &Transaction<'_>, id: &PartyId) -> Result<Option<Loaded>> {
+        let row = tx
+            .query_opt(
+                "select version, head_hash, shredded_at is not null from parties where id = $1 for update",
+                &[&id.0],
+            )
+            .await
+            .map_err(db)?;
+        Ok(row.map(|r| {
+            let mut party = Party::new(id.clone());
+            party.version = u64::try_from(r.get::<_, i64>(0)).unwrap_or(0);
+            party.shredded = r.get(2);
+            Loaded {
+                party,
+                head: r.get(1),
+                key: None,
+            }
+        }))
+    }
+
+    /// Destroy a locked party's key, purge its lookup rows, blank its
+    /// payloads and write the tombstone.
+    async fn erase(&self, tx: &Transaction<'_>, mut l: Loaded, now: DateTime<Utc>) -> Result<()> {
+        if l.party.shredded {
+            return Ok(());
+        }
+        let id = l.party.id.clone();
+        let who = Who {
+            caller: "customer-master".into(),
+            actor: "retention".into(),
+        };
+        l.key = None;
+        self.append(tx, &mut l, vec![EventBody::Shredded], &who, now).await?;
+        for sql in [
+            "delete from party_keys where party_id = $1",
+            "delete from blind_index where party_id = $1",
+            "delete from relationships where party_id = $1",
+            "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
+            "update parties set shredded_at = $2 where id = $1",
+        ] {
+            let params: Vec<&(dyn ToSql + Sync)> = if sql.contains("$2") { vec![&id.0, &now] } else { vec![&id.0] };
+            tx.execute(sql, &params).await.map_err(db)?;
+        }
+        self.keys.forget(&id);
+        Ok(())
+    }
+
     /// After a database restore: erase again every party the register says
-    /// was erased but whose key has come back.
+    /// was erased but whose key has come back. The key is not opened.
     pub async fn reshred(&self, parties: &[PartyId], now: DateTime<Utc>) -> Result<usize> {
         let mut n = 0;
         for p in parties {
-            let client = self.client().await?;
-            let has_key = client
+            let mut client = self.client().await?;
+            let tx = client.transaction().await.map_err(db)?;
+            let has_key = tx
                 .query_opt("select 1 from party_keys where party_id = $1", &[&p.0])
                 .await
                 .map_err(db)?
                 .is_some();
-            drop(client);
-            if has_key && self.shred(p, |_| true, now).await? {
+            if let (true, Some(mut l)) = (has_key, self.bare(&tx, p).await?) {
+                // The row says erased only if the restore kept that; either
+                // way the key must go.
+                l.party.shredded = false;
+                self.erase(&tx, l, now).await?;
                 n += 1;
             }
+            tx.commit().await.map_err(db)?;
         }
         Ok(n)
     }
