@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::delivery::CoreDelivery;
 use crate::host::{self, Query};
-use crate::machine::{Applied, Command, Envelope, Instruction, InstructionBody, Reinsurance};
+use crate::machine::{Applied, Audience, Command, Envelope, Instruction, InstructionBody, Notice, Reinsurance};
 
 /// The name the driver sends its own commands to the module under.
 pub const DRIVER: &str = "driver";
@@ -47,6 +47,101 @@ pub trait Core: Send + Sync {
     fn business_date(&self, partition: PartitionId) -> impl Future<Output = Result<Option<NaiveDate>, DriverError>> + Send;
     /// Send one command. The inner result is the core's own answer.
     fn send(&self, delivery: &CoreDelivery) -> impl Future<Output = Result<Result<(), Reject>, DriverError>> + Send;
+}
+
+/// What became of a notice offered to its audience.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Handed {
+    /// Taken, now or on an earlier try.
+    Taken,
+    /// The audience refused it, with its own code and message.
+    Refused(Reject),
+}
+
+/// Whoever the module's notices are for.
+pub trait Audiences: Send + Sync {
+    /// The audiences this carrier can reach. Notices for any other wait in
+    /// the module's outbox.
+    fn reached(&self) -> Vec<Audience>;
+    /// Hand one notice on. `seq` is its number in the outbox, for the
+    /// idempotency key; `on` is the business date.
+    fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> impl Future<Output = Result<Handed, DriverError>> + Send;
+}
+
+/// The name of the group administration module's replicated group.
+pub const GROUP_MODULE: &str = "group";
+
+/// The audiences that are other modules on the cluster.
+#[derive(Clone)]
+pub struct ClusterAudiences {
+    client: ClusterClient,
+    patience: Duration,
+}
+
+impl ClusterAudiences {
+    pub fn new(client: ClusterClient, patience: Duration) -> Self {
+        Self { client, patience }
+    }
+}
+
+/// A notice for group administration as that module's command, in its own
+/// wire format. `None` for a notice that is not for it.
+pub fn group_command(seq: u64, notice: &Notice, on: NaiveDate) -> Option<Value> {
+    let Notice::RequireUnderwrittenExcess {
+        policy,
+        life,
+        cover,
+        excess_minor,
+        reference,
+    } = notice
+    else {
+        return None;
+    };
+    Some(serde_json::json!({
+        "key": format!("ri-notice:{seq}"),
+        "caller": crate::delivery::CALLER,
+        "actor": "reinsurance-driver",
+        "today": on,
+        "command": {"require_underwritten_excess": {
+            "policy": policy,
+            "life": life,
+            "cover": cover,
+            "excess_minor": excess_minor,
+            "reference": reference,
+        }},
+    }))
+}
+
+impl Audiences for ClusterAudiences {
+    fn reached(&self) -> Vec<Audience> {
+        vec![Audience::Group]
+    }
+
+    async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
+        let command = group_command(seq, notice, on).ok_or_else(|| DriverError::Answer(format!("notice {seq} is not for a module this carrier reaches")))?;
+        let reply = self
+            .client
+            .propose_module_until(GROUP_MODULE, &command, self.patience)
+            .await
+            .map_err(|e| DriverError::Unavailable(e.to_string()))?;
+        // The host refuses what the module cannot read; the module refuses
+        // in its own answer.
+        let outcome = match reply.result {
+            Ok(outcome) => outcome,
+            Err(unreadable) => return Ok(Handed::Refused(Reject::new("unreadable", unreadable))),
+        };
+        let result: Result<(), Reject> =
+            serde_json::from_value(outcome.get("result").cloned().unwrap_or(Value::Null)).map_err(|e| DriverError::Answer(e.to_string()))?;
+        Ok(result.map_or_else(Handed::Refused, |()| Handed::Taken))
+    }
+}
+
+/// What one round of handing notices on did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Round {
+    pub taken: u32,
+    /// Set aside in the module with an exception for a person.
+    pub refused: u32,
 }
 
 /// The module in its replicated group on the cluster.
@@ -295,17 +390,91 @@ impl<M: Module, C: Core> Driver<M, C> {
         Ok(Some(on))
     }
 
-    /// Run passes until `stop` resolves. `seen` is shown each pass's result.
-    pub async fn run(&self, every: Duration, stop: impl Future<Output = ()>, mut seen: impl FnMut(&Result<Pass, DriverError>)) {
+    /// Hand on the notices for every audience `audiences` reaches. A notice
+    /// that is refused is set aside in the module, with an exception, and
+    /// the ones behind it carry on.
+    pub async fn hand_on<A: Audiences>(&self, audiences: &A, on: NaiveDate) -> Result<Round, DriverError> {
+        let mut round = Round::default();
+        for audience in audiences.reached() {
+            loop {
+                let query = Query::Notices {
+                    audience: Some(audience),
+                    limit: self.batch.max(1),
+                };
+                let waiting: Vec<(u64, Notice)> = serde_json::from_value(self.module.ask(query).await?).map_err(|e| DriverError::Answer(e.to_string()))?;
+                if waiting.is_empty() {
+                    break;
+                }
+                let mut taken = Vec::new();
+                let mut stopped = None;
+                for (seq, notice) in &waiting {
+                    match audiences.hand_on(*seq, notice, on).await {
+                        Ok(Handed::Taken) => taken.push(*seq),
+                        Ok(Handed::Refused(refusal)) => {
+                            let told = Command::NoticeRefused {
+                                seq: *seq,
+                                code: refusal.code.clone(),
+                                message: refusal.message.clone(),
+                            };
+                            if let Err(e) = self.tell(format!("notice-refused:{seq}:{}", refusal.code), on, told).await {
+                                stopped = Some(e);
+                                break;
+                            }
+                            round.refused += 1;
+                        }
+                        Err(e) => {
+                            stopped = Some(e);
+                            break;
+                        }
+                    }
+                }
+                if let Some(last) = taken.last() {
+                    round.taken += taken.len() as u32;
+                    self.tell(format!("notices:{last}"), on, Command::AcknowledgeNotices { seqs: taken }).await?;
+                }
+                if let Some(e) = stopped {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(round)
+    }
+
+    /// One cycle: carry instructions to the core, then hand notices on,
+    /// dated by the first partition's business date. Notices wait while
+    /// that partition has no date.
+    pub async fn cycle<A: Audiences>(&self, audiences: &A) -> (Result<Pass, DriverError>, Result<Round, DriverError>) {
+        let pass = self.deliver().await;
+        let round = match self.core.business_date(0).await {
+            Ok(Some(on)) => self.hand_on(audiences, on).await,
+            Ok(None) => Ok(Round::default()),
+            Err(e) => Err(e),
+        };
+        (pass, round)
+    }
+
+    /// Run cycles until `stop` resolves. `seen` is shown each cycle's results.
+    pub async fn run<A: Audiences>(
+        &self,
+        audiences: &A,
+        every: Duration,
+        stop: impl Future<Output = ()>,
+        mut seen: impl FnMut(&Result<Pass, DriverError>, &Result<Round, DriverError>),
+    ) {
         tokio::pin!(stop);
         loop {
-            let pass = self.deliver().await;
+            let (pass, round) = self.cycle(audiences).await;
             match &pass {
                 Ok(p) if p.clear() => tracing::debug!(delivered = p.delivered, dropped = p.dropped, "reinsurance delivery pass"),
                 Ok(p) => tracing::warn!(held = ?p.held, waiting_on = ?p.waiting_on, "reinsurance delivery is stopped"),
                 Err(e) => tracing::warn!(error = %e, "a reinsurance delivery pass could not finish"),
             }
-            seen(&pass);
+            match &round {
+                Ok(r) if r.refused == 0 => tracing::debug!(taken = r.taken, "reinsurance notices handed on"),
+                Ok(r) => tracing::warn!(taken = r.taken, refused = r.refused, "reinsurance notices were refused"),
+                Err(e) => tracing::warn!(error = %e, "reinsurance notices could not all be handed on"),
+            }
+            seen(&pass, &round);
             tokio::select! {
                 () = &mut stop => return,
                 () = tokio::time::sleep(every) => {}

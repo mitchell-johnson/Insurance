@@ -15,10 +15,12 @@ resources:
   - api.yaml
   - portal.yaml
   - worker.yaml
+  - payments.yaml
   - reinsurance.yaml
   - bootstrap.yaml
   - admin.yaml
   - network.yaml
+  - group.yaml
 images:
   - name: insurance-core
     newName: REPLACE-registry.azurecr.io/insurance-core

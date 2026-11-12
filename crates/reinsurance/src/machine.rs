@@ -253,9 +253,25 @@ pub enum Command {
         reason: String,
         approved_by: String,
     },
-    /// Every notice up to and including this one has been handed on.
+    /// These notices have been handed on to whoever they are for.
     AcknowledgeNotices {
-        through: u64,
+        seqs: Vec<u64>,
+    },
+    /// Whoever a notice is for refused it. It is set aside, with an
+    /// exception, so the notices behind it are not held up.
+    NoticeRefused {
+        seq: u64,
+        code: String,
+        message: String,
+    },
+    /// A person's decision on a refused notice: send it again, or not at all.
+    RetryNotice {
+        seq: u64,
+    },
+    AbandonNotice {
+        seq: u64,
+        reason: String,
+        approved_by: String,
     },
 }
 
@@ -283,8 +299,11 @@ impl Command {
             | Command::IssueSupplementaryListing { .. }
             | Command::ReviewProfitCommission { .. } => &["reinsurance-ops", "finance", "month-end"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
-            Command::AcknowledgeInstructions { .. } | Command::InstructionRefused { .. } | Command::AcknowledgeNotices { .. } => &["driver"],
-            Command::AbandonInstruction { .. } => &["reinsurance-ops"],
+            Command::AcknowledgeInstructions { .. }
+            | Command::InstructionRefused { .. }
+            | Command::AcknowledgeNotices { .. }
+            | Command::NoticeRefused { .. } => &["driver"],
+            Command::AbandonInstruction { .. } | Command::RetryNotice { .. } | Command::AbandonNotice { .. } => &["reinsurance-ops"],
         }
     }
 
@@ -323,6 +342,9 @@ impl Command {
             Command::InstructionRefused { .. } => "instruction_refused",
             Command::AbandonInstruction { .. } => "abandon_instruction",
             Command::AcknowledgeNotices { .. } => "acknowledge_notices",
+            Command::NoticeRefused { .. } => "notice_refused",
+            Command::RetryNotice { .. } => "retry_notice",
+            Command::AbandonNotice { .. } => "abandon_notice",
         }
     }
 }
@@ -386,6 +408,21 @@ pub enum InstructionBody {
         cut_seq: u64,
         amount_minor: i64,
     },
+}
+
+/// Who a notice is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Audience {
+    /// Group scheme administration.
+    Group,
+    Claims,
+    Underwriting,
+    Payments,
+    /// Documents to file in write-once storage and send.
+    Records,
+    /// The people who run reinsurance: exceptions and work that is due.
+    Staff,
 }
 
 /// Something another module, or a person, needs to know.
@@ -476,6 +513,23 @@ pub struct Applied {
     pub instructions: Vec<Instruction>,
     pub notices: Vec<Notice>,
     pub duplicate: bool,
+}
+
+impl Notice {
+    pub fn audience(&self) -> Audience {
+        match self {
+            Notice::RequireUnderwrittenExcess { .. } => Audience::Group,
+            Notice::FacultativeTermsRecorded { .. } | Notice::CapacityReleased { .. } => Audience::Underwriting,
+            Notice::LargeClaimNotification { .. }
+            | Notice::ReinsurerConsentRequired { .. }
+            | Notice::ReinsurerConsent { .. }
+            | Notice::DisputedItemRaised { .. }
+            | Notice::DisputeResolved { .. } => Audience::Claims,
+            Notice::SettlementDue { .. } => Audience::Payments,
+            Notice::Document { .. } | Notice::ReleaseLogged { .. } => Audience::Records,
+            Notice::ExceptionOpened { .. } | Notice::ExceptionClosed { .. } | Notice::SupplementaryListingDue { .. } => Audience::Staff,
+        }
+    }
 }
 
 /// An open item for a person to resolve.
@@ -585,6 +639,9 @@ pub struct Reinsurance {
     /// Notices not yet handed on, and the number raised so far.
     pub(crate) notice_box: BTreeMap<u64, Notice>,
     pub(crate) noticed: u64,
+    /// Notices their audience refused, set aside for a person.
+    pub(crate) notices_refused: BTreeSet<u64>,
+    pub(crate) notices_abandoned: Vec<crate::outbox::AbandonedNotice>,
 
     /// Refused instructions a person decided not to send, kept for audit.
     pub(crate) abandoned: Vec<crate::outbox::Abandoned>,
@@ -988,7 +1045,10 @@ impl Reinsurance {
             Command::AcknowledgeInstructions { through } => self.acknowledge_instructions(ctx, through),
             Command::InstructionRefused { seq, code, message } => self.instruction_refused(ctx, seq, &code, &message),
             Command::AbandonInstruction { seq, reason, approved_by } => self.abandon_instruction(ctx, seq, reason, approved_by),
-            Command::AcknowledgeNotices { through } => self.acknowledge_notices(through),
+            Command::AcknowledgeNotices { seqs } => self.acknowledge_notices(&seqs),
+            Command::NoticeRefused { seq, code, message } => self.notice_refused(ctx, seq, &code, &message),
+            Command::RetryNotice { seq } => self.retry_notice(ctx, seq),
+            Command::AbandonNotice { seq, reason, approved_by } => self.abandon_notice(ctx, seq, reason, approved_by),
             Command::LoadMigratedCession { key, cession } => {
                 if !cession.balanced() {
                     return Err(Reject::new("unbalanced_cession", "the parts of the cession do not add up to its sum at risk"));

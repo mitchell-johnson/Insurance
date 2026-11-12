@@ -1,0 +1,200 @@
+# Group scheme administration: the driver around the group module and the
+# routes the portals use (docs/group.md). Stateless; the module's state is
+# in its replicated group on the ledger nodes.
+#
+# Set the values marked REPLACE from the outputs of infra/group.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-group
+  annotations:
+    azure.workload.identity/client-id: REPLACE-groupIdentityClientId
+---
+# The cluster token and the service's own two secrets, mounted as files
+# under the service's identity. They never become Kubernetes Secrets.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-group-secrets
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-groupIdentityClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+        - |
+          objectName: group-fingerprint-salt
+          objectType: secret
+        - |
+          objectName: group-api-key
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-group
+data:
+  IC_GROUP_QUARANTINE_ENDPOINT: REPLACE-quarantineEndpoint
+  IC_GROUP_EVENT_HUBS_NAMESPACE: REPLACE-eventHubsEndpoint
+  IC_GROUP_CUSTOMER_MASTER: REPLACE-customer-master-url
+  IC_GROUP_CUSTOMER_MASTER_SCOPE: REPLACE-customer-master-scope
+  IC_GROUP_FINGERPRINT_SALT_FILE: /mnt/secrets/group-fingerprint-salt
+  IC_GROUP_API_KEY_FILE: /mnt/secrets/group-api-key
+  IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-group
+spec:
+  selector:
+    app: ic-group
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-group
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-group
+  template:
+    metadata:
+      labels:
+        app: ic-group
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-group
+      terminationGracePeriodSeconds: 45
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ic-group
+      containers:
+        - name: group
+          image: insurance-core
+          command: ["/usr/local/bin/ic-group"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            # After ic-ledger: the token is mounted beside the service's own secrets.
+            - configMapRef:
+                name: ic-group
+          env:
+            - name: IC_GROUP_LISTEN
+              value: 0.0.0.0:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: secrets
+              mountPath: /mnt/secrets
+              readOnly: true
+      volumes:
+        - name: secrets
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-group-secrets
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-group
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-group
+---
+# The group service hears from the portal service and the API, which have
+# established who the person is, and from nobody else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-group
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-group
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: ["ic-portal", "ic-api"]
+      ports:
+        - port: 8080
+---
+# The ledger nodes also hear from the group service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-group
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-group
+      ports:
+        - port: 7000

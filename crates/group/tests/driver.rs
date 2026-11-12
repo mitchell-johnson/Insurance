@@ -781,7 +781,15 @@ fn the_service_configuration_is_checked_at_start() {
         ("IC_GROUP_API_KEY", KEY),
     ]
     .into();
-    let read = |vars: &BTreeMap<&str, &str>| Config::from_lookup(|k| vars.get(k).map(|v| v.to_string()));
+    let read = |vars: &BTreeMap<&str, &str>| {
+        Config::from_lookup(
+            |k| vars.get(k).map(|v| v.to_string()),
+            |path| match path {
+                "/mnt/secrets/salt" => Ok("salt-from-key-vault-0123456789abcdef\n".to_string()),
+                _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file")),
+            },
+        )
+    };
     let config = read(&full).unwrap();
     assert_eq!(
         (
@@ -820,4 +828,17 @@ fn the_service_configuration_is_checked_at_start() {
         (config.cycle_every, config.listen.as_str(), config.reinsurance_module.as_str()),
         (Duration::from_secs(30), "127.0.0.1:9000", "ri")
     );
+    // Secrets mounted from Key Vault arrive as files, and the node list
+    // may come from the name the other services use.
+    let mut vars = full.clone();
+    vars.remove("IC_GROUP_FINGERPRINT_SALT");
+    vars.remove("IC_CLUSTER_NODES");
+    vars.extend([("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/salt"), ("IC_NODES", "node-9:7000")]);
+    let config = read(&vars).unwrap();
+    assert_eq!(
+        (config.fingerprint_salt.as_str(), config.cluster.as_str()),
+        ("salt-from-key-vault-0123456789abcdef", "node-9:7000")
+    );
+    vars.insert("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/absent");
+    assert!(read(&vars).unwrap_err().contains("IC_GROUP_FINGERPRINT_SALT_FILE cannot be read"));
 }
