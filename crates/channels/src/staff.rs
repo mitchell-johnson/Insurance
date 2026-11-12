@@ -281,6 +281,9 @@ pub enum Denial {
     Stale,
     /// Refused by policy for a reason the facts above do not name.
     Policy,
+    /// The record is the person's own, or belongs to someone they have a
+    /// declared personal connection with.
+    Personal,
 }
 
 impl Denial {
@@ -297,6 +300,9 @@ impl Denial {
             Denial::MakerChecker => "You prepared this, so someone else must approve it.",
             Denial::Stale => "Your entitlements could not be confirmed as current. Try again shortly.",
             Denial::Policy => "Policy refuses this action.",
+            Denial::Personal => {
+                "This record is your own or belongs to someone you have a personal connection with. Use the customer app for your own policies; a colleague must handle this one."
+            }
         }
     }
 }
@@ -339,6 +345,11 @@ pub struct AccessRecord {
     pub record: Option<String>,
     pub purpose: Option<Purpose>,
     pub decision: Decision,
+    /// Why this line is outside the normal pattern, if it is: `no_path` for
+    /// an attempt on a record the person had no path to, `personal` for
+    /// their own record or a connected person's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flag: Option<String>,
 }
 
 /// What an external entitlement maps to.
@@ -409,6 +420,16 @@ pub enum StaffCommand {
     DeclareConflict {
         conflict: Conflict,
         approved_by: PartyId,
+    },
+    /// A member of staff declares a personal connection: a relative, a
+    /// friend, anyone whose records they must not handle.
+    DeclareConnection {
+        party: PartyId,
+    },
+    /// A staff administrator removes a connection that no longer holds.
+    EndConnection {
+        staff: PartyId,
+        party: PartyId,
     },
     ChangeSettings {
         settings: Settings,
@@ -533,6 +554,13 @@ pub enum StaffEvent {
     ExternalSource {
         available: bool,
     },
+    /// An attempt outside the normal pattern, for the people who watch for misuse.
+    AccessFlagged {
+        staff: PartyId,
+        action: String,
+        record: Option<String>,
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -555,6 +583,9 @@ pub struct StaffState {
     pub external_available: bool,
     #[serde(default)]
     pub unmapped: BTreeSet<String>,
+    /// Staff member -> the people they have a personal connection with.
+    #[serde(default)]
+    pub connections: BTreeMap<PartyId, BTreeSet<PartyId>>,
 }
 
 fn yes() -> bool {
@@ -798,6 +829,7 @@ impl StaffState {
             "grants": self.grants.values().filter(|g| &g.holder == party && (g.active(at) || g.state == GrantState::Requested)).collect::<Vec<_>>(),
             "recertification_due": member.map(|m| m.recertified + self.settings.recertify_every),
             "recent": self.recent.get(party).map(|r| r.iter().rev().collect::<Vec<_>>()).unwrap_or_default(),
+            "connections": self.connections.get(party).cloned().unwrap_or_default(),
         })
     }
 
@@ -970,6 +1002,24 @@ impl StaffState {
             StaffCommand::DeclareConflict { conflict, approved_by } => {
                 self.require_config_approval(actor, &approved_by, at)?;
                 self.conflicts.insert(conflict);
+            }
+            StaffCommand::DeclareConnection { party } => {
+                if self.current(actor, at).is_none() {
+                    return Err(reject("forbidden", "only current staff declare a connection"));
+                }
+                self.connections.entry(actor.clone()).or_default().insert(party);
+            }
+            StaffCommand::EndConnection { staff, party } => {
+                // Declaring is the person's own act; undoing it is not, or the declaration would mean nothing.
+                if &staff == actor || !self.holds_action(actor, actions::MANAGE_STAFF, at) {
+                    return Err(reject(
+                        "forbidden",
+                        "a connection is removed by a staff administrator, never by the person it concerns",
+                    ));
+                }
+                if !self.connections.get_mut(&staff).is_some_and(|c| c.remove(&party)) {
+                    return Err(reject("unknown_connection", "no such connection is declared"));
+                }
             }
             StaffCommand::ChangeSettings { settings, approved_by } => {
                 self.require_config_approval(actor, &approved_by, at)?;
@@ -1303,6 +1353,19 @@ impl StaffState {
                             .insert(request.staff.clone());
                     }
                 }
+                let flag = match decision.denied {
+                    Some(Denial::Whose) => Some("no_path"),
+                    Some(Denial::Personal) => Some("personal"),
+                    _ => None,
+                };
+                if let Some(reason) = flag {
+                    events.push(StaffEvent::AccessFlagged {
+                        staff: request.staff.clone(),
+                        action: request.action.clone(),
+                        record: request.record.clone(),
+                        reason: reason.to_string(),
+                    });
+                }
                 let recent = self.recent.entry(request.staff.clone()).or_default();
                 recent.push_back(AccessRecord {
                     at,
@@ -1312,6 +1375,7 @@ impl StaffState {
                     record: request.record,
                     purpose: request.purpose,
                     decision,
+                    flag: flag.map(str::to_string),
                 });
                 while recent.len() > ACCESS_VIEW_LEN {
                     recent.pop_front();

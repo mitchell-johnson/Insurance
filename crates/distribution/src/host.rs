@@ -2,17 +2,19 @@
 //! how one of the core's events becomes a command, the questions the module
 //! answers, and the two envelopes its driver sends.
 //!
-//! The driver is small and stateless. It asks `unconfirmed`, sends each
-//! posting to the core with [`posting_envelope`], and reports a refusal back
-//! with [`refusal`]. Everything it needs to carry on after a crash is in the
-//! module's replicated state.
+//! The node's outbox carrier is the driver ([`OUTBOX`]). It asks `outbox`,
+//! sends each posting to the core with [`posting_envelope`], and reports
+//! what became of it: delivered, or refused with [`refusal`]. Everything it
+//! needs to carry on after a crash is in the module's replicated state.
 
 use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ic_core::counterparty::{CounterpartyPosting, PartyLedger};
 use ic_core::{EventRecord, PartyId, PolicyId, Reject};
-use ic_raft::{hosted_reading, ModuleSpec, ModuleState};
+use ic_ledger::PartitionId;
+use ic_raft::client::fresh_salt;
+use ic_raft::{hosted_reading, CoreOutcome, CorePosting, ModuleSpec, ModuleState, Outbox, Route};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -81,6 +83,23 @@ pub enum Question {
     },
     OpenTasks,
     Status,
+    /// The oldest postings still to be carried to the core: what the host's
+    /// outbox carrier asks.
+    Outbox {
+        limit: usize,
+    },
+    /// Parties that changed after a module sequence, with the sequence to
+    /// ask from next time. A publisher keeps the sequence as its cursor.
+    ChangedParties {
+        since: u64,
+    },
+    /// Engagements, all of them or one adviser's, each with the licence
+    /// problem that stops it being used on the day, if there is one.
+    Engagements {
+        #[serde(default)]
+        adviser: Option<PartyId>,
+        as_at: NaiveDate,
+    },
 }
 
 /// Answer one question. An `Err` is a question that could not be understood.
@@ -128,6 +147,31 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
         Question::Action { id } => value(&state.actions.get(&id)),
         Question::Case { id } => value(&state.cases.get(&id)),
         Question::OpenTasks => value(&state.tasks.values().filter(|t| t.done.is_none()).collect::<Vec<_>>()),
+        Question::Outbox { limit } => value(&state.outbox(limit)),
+        Question::ChangedParties { since } => {
+            let parties: Vec<&PartyId> = state.changed.iter().filter(|(_, at)| **at > since).map(|(p, _)| p).collect();
+            Ok(json!({ "seq": state.seq, "parties": parties }))
+        }
+        Question::Engagements { adviser, as_at } => {
+            let structure = &state.config.structure;
+            let rows: Vec<Value> = structure
+                .engagements
+                .iter()
+                .filter(|(_, e)| adviser.as_ref().is_none_or(|a| &e.adviser == a))
+                .map(|(id, e)| {
+                    json!({
+                        "id": id,
+                        "adviser": e.adviser,
+                        "with": e.with,
+                        "from": e.from,
+                        "to": e.to,
+                        "accreditations": e.accreditations,
+                        "impairment": structure.engagement_impairment(id, as_at),
+                    })
+                })
+                .collect();
+            Ok(json!({ "as_at": as_at, "engagements": rows }))
+        }
         Question::Status => Ok(json!({
             "today": state.today,
             "seq": state.seq,
@@ -206,11 +250,47 @@ pub fn refusal(reference: &str, reject: &Reject) -> Envelope {
     }
 }
 
+fn outbox_pending(limit: usize) -> Value {
+    json!({ "outbox": { "limit": limit } })
+}
+
+fn outbox_read(answer: Value) -> Result<Vec<CorePosting>, String> {
+    let items: Vec<(PartitionId, CounterpartyPosting)> = serde_json::from_value(answer).map_err(|e| format!("not an outbox answer: {e}"))?;
+    Ok(items
+        .into_iter()
+        .map(|(partition, posting)| CorePosting {
+            id: posting.reference.clone(),
+            route: Route::Partition(partition),
+            envelope: posting_envelope(posting, fresh_salt()),
+        })
+        .collect())
+}
+
+fn outbox_outcome(posting: &CorePosting, outcome: &CoreOutcome) -> Value {
+    let envelope = match outcome {
+        CoreOutcome::Applied { .. } => Envelope {
+            key: format!("delivered:{}", posting.id),
+            actor: Actor::Module(EVENT_RELAY.to_string()),
+            command: Command::PostingDelivered { reference: posting.id.clone() },
+        },
+        CoreOutcome::Refused(reject) => refusal(&posting.id, reject),
+        CoreOutcome::Unroutable(why) => refusal(&posting.id, &Reject::new("unroutable", why.clone())),
+    };
+    serde_json::to_value(envelope).unwrap_or(Value::Null)
+}
+
+/// How the host carries the module's postings to the core.
+pub const OUTBOX: Outbox = Outbox {
+    pending: outbox_pending,
+    read: outbox_read,
+    outcome: outbox_outcome,
+};
+
 fn make() -> Box<dyn ModuleState> {
     hosted_reading(DistributionState::default(), answer, react)
 }
 
 /// The distribution module, for a ledger node to host.
 pub fn module_spec() -> Result<ModuleSpec, String> {
-    Ok(ModuleSpec::new(MODULE, make)?.reading_events())
+    Ok(ModuleSpec::new(MODULE, make)?.reading_events().posting_to_core(OUTBOX))
 }

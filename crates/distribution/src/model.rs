@@ -317,6 +317,18 @@ pub struct Allocation {
     pub reversed_by: Option<String>,
 }
 
+/// One application of premium to a policy and the commission it earned, so
+/// that premium later handed back can take the commission back with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PremiumRecord {
+    /// The allocation the premium earned, where it earned any.
+    pub reference: Option<String>,
+    /// The premium that paid for cover, by cover type.
+    pub net: BTreeMap<String, i64>,
+    /// How much of it has since gone back to the policyholder.
+    pub back: BTreeMap<String, i64>,
+}
+
 /// Something asked of the core.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Requested {

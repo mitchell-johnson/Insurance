@@ -13,6 +13,7 @@ ic-distribution = { path = "../distribution" }
 ic-documents = { path = "../documents" }
 ic-group = { path = "../group" }
 ic-underwriting = { path = "../underwriting" }
+ic-payments-service = { path = "../payments-service" }
 tokio.workspace = true
 
 [dev-dependencies]

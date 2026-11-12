@@ -68,6 +68,11 @@ pub enum Command {
         code: String,
         message: String,
     },
+    /// The core applied a posting. It stays unconfirmed until the core's own
+    /// event is read, but it is not carried again.
+    PostingDelivered {
+        reference: String,
+    },
 
     // --- structure ---
     AddParty {
@@ -224,7 +229,7 @@ impl Command {
     /// The modules that may send a command no person sends.
     fn modules(&self) -> &'static [&'static str] {
         match self {
-            Command::Ingest(_) | Command::PostingRefused { .. } => &["event-relay"],
+            Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
             Command::PaymentSettled { .. } | Command::PaymentReturned { .. } => &["payments"],
@@ -588,6 +593,16 @@ pub struct DistributionState {
     pub(crate) allocations_by_date: BTreeMap<NaiveDate, Vec<String>>,
     /// `policy/receipt` to the allocation it earned.
     pub(crate) receipts: BTreeMap<String, String>,
+    /// Every application of premium to a policy, oldest first.
+    #[serde(default)]
+    pub(crate) premiums: BTreeMap<PolicyId, Vec<crate::model::PremiumRecord>>,
+    /// References still to be carried to the core, in the order they were
+    /// asked. An item leaves when its outcome is heard or the core's own
+    /// event confirms it.
+    #[serde(default)]
+    pub(crate) outbox: BTreeMap<u64, String>,
+    #[serde(default)]
+    pub(crate) outbox_next: u64,
     /// Everything asked of the core, by reference.
     pub requested: BTreeMap<String, Requested>,
     pub movements: Vec<Movement>,
@@ -606,6 +621,11 @@ pub struct DistributionState {
     pub tasks: BTreeMap<String, Task>,
     /// The last event sequence taken from each partition.
     pub checkpoints: BTreeMap<PartitionId, u64>,
+    /// The module sequence at which each party last changed: its position,
+    /// its actions, its documents, its licence or its payee record. What a
+    /// publisher reads to send on only what moved.
+    #[serde(default)]
+    pub changed: BTreeMap<PartyId, u64>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -635,6 +655,9 @@ impl DistributionState {
             allocations: BTreeMap::new(),
             allocations_by_date: BTreeMap::new(),
             receipts: BTreeMap::new(),
+            premiums: BTreeMap::new(),
+            outbox: BTreeMap::new(),
+            outbox_next: 0,
             requested: BTreeMap::new(),
             movements: vec![],
             positions: BTreeMap::new(),
@@ -649,6 +672,7 @@ impl DistributionState {
             cases: BTreeMap::new(),
             tasks: BTreeMap::new(),
             checkpoints: BTreeMap::new(),
+            changed: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -723,7 +747,25 @@ impl DistributionState {
                 owner,
             },
         );
+        self.outbox_next += 1;
+        self.outbox.insert(self.outbox_next, posting.reference.clone());
         ctx.postings.push((partition, posting));
+    }
+
+    /// The oldest postings still to be carried to the core.
+    pub fn outbox(&self, limit: usize) -> Vec<(PartitionId, CounterpartyPosting)> {
+        self.outbox
+            .values()
+            .filter_map(|reference| self.requested.get(reference))
+            .take(limit)
+            .map(|r| (r.partition, r.posting.clone()))
+            .collect()
+    }
+
+    /// The posting needs carrying no further: the core has it, refused it,
+    /// or its event has been read.
+    pub(crate) fn carried(&mut self, reference: &str) {
+        self.outbox.retain(|_, r| r != reference);
     }
 
     /// Postings asked of the core and not yet confirmed: what a driver that
@@ -760,7 +802,14 @@ impl DistributionState {
     fn dispatch(&mut self, ctx: &mut Ctx, actor: &Actor, command: Command) -> Result<(), Reject> {
         match command {
             Command::Ingest(record) => self.ingest(ctx, *record),
-            Command::PostingRefused { reference, code, message } => self.posting_refused(ctx, &reference, code, message),
+            Command::PostingRefused { reference, code, message } => {
+                self.carried(&reference);
+                self.posting_refused(ctx, &reference, code, message)
+            }
+            Command::PostingDelivered { reference } => {
+                self.carried(&reference);
+                Ok(())
+            }
 
             Command::AddParty { party, kind } => {
                 structure(self.config.structure.add_party(party.clone(), kind))?;
@@ -1115,6 +1164,46 @@ impl DistributionState {
         Ok(())
     }
 
+    /// The parties an event is about, for the change cursor.
+    fn parties_of(&self, event: &Event) -> Vec<PartyId> {
+        let of_action = |id: &String| self.actions.get(id).map(|a| a.party.clone()).into_iter().collect();
+        match event {
+            Event::PartyAdded { party, .. }
+            | Event::PartyCeased { party, .. }
+            | Event::PayeeChanged { party, .. }
+            | Event::AmountHeld { party, .. }
+            | Event::AmountReleased { party, .. }
+            | Event::PaymentRequested { party, .. }
+            | Event::ActionProposed { party, .. }
+            | Event::DocumentAttached { party, .. } => vec![party.clone()],
+            Event::StatementIssued { payee, .. } => vec![payee.clone()],
+            Event::CaseOpened { subject, .. } => vec![subject.clone()],
+            Event::StructureChanged { child, parent } => vec![child.clone(), parent.clone()],
+            Event::EngagementStarted { adviser, with, .. } => vec![adviser.clone(), with.clone()],
+            Event::EngagementEnded { id, .. } => self
+                .config
+                .structure
+                .engagements
+                .get(id)
+                .map(|e| vec![e.adviser.clone(), e.with.clone()])
+                .unwrap_or_default(),
+            Event::AuthorisationChanged {
+                party,
+                engagements,
+                suspended_payees,
+                ..
+            } => {
+                let advisers = engagements
+                    .iter()
+                    .filter_map(|id| self.config.structure.engagements.get(id))
+                    .map(|e| e.adviser.clone());
+                std::iter::once(party.clone()).chain(suspended_payees.iter().cloned()).chain(advisers).collect()
+            }
+            Event::ActionApproved { id, .. } | Event::ActionRejected { id } | Event::ActionCompleted { id } => of_action(id),
+            _ => vec![],
+        }
+    }
+
     /// Apply one logged command.
     pub fn apply_envelope(&mut self, index: u64, env: Envelope) -> Output {
         if let Some(stored) = self.idempotency.get(&env.key) {
@@ -1139,6 +1228,10 @@ impl DistributionState {
         if result.is_err() {
             ctx.events.clear();
             ctx.postings.clear();
+        }
+        let touched: Vec<PartyId> = ctx.events.iter().flat_map(|e| self.parties_of(e)).collect();
+        for party in touched {
+            self.changed.insert(party, self.seq);
         }
         self.idempotency.insert(
             env.key,
