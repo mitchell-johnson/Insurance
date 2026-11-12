@@ -64,6 +64,8 @@ To run a close by hand: `kubectl -n insurance-core create job close-now --from=c
 
 **If a close fails with reconciliation breaks**, the day stays open and the next day is not started. The job log lists each break (the check, the partition, the amounts). Business continues on the open date. Do not force the date forward: find the cause, and once the books reconcile, run the close again.
 
+**Unit orders** execute from the `ic-unit-orders` CronJob every fifteen minutes, once the unit pricing module has activated the price for their date, and the same job replays orders standing on a corrected price. The close does the same work as one of its steps, so a missed run is caught up at midnight. The job's log prints how many orders it could not move on each partition (`left`), and the close's report carries the same figure as `unit_orders_left`; anything other than zero there is for a person to look at. To run it now: `kubectl -n insurance-core create job unit-orders-now --from=cronjob/ic-unit-orders`.
+
 **Reconciliation at any time:** `GET /v1/admin/reconciliation` (role `operations`).
 
 ## Upgrades

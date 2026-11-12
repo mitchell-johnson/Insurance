@@ -88,8 +88,10 @@ reconciles() {
   fail "the books do not reconcile: $out"
 }
 
+# A close that has not finished in fifteen minutes will not: fail here, with
+# the cluster's logs, instead of waiting for the job's own time limit.
 close_day() {
-  "${COMPOSE[@]}" run --rm -T close close "$DATE" "$PARTITIONS"
+  timeout 900 "${COMPOSE[@]}" run --rm -T close close "$DATE" "$PARTITIONS"
 }
 
 root_of() {

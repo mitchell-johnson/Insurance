@@ -19,5 +19,5 @@ pub mod steps;
 pub mod store;
 pub mod temporal;
 
-pub use eod::{run_end_of_day, EndOfDayError, EndOfDayInput, EndOfDayReport, Steps};
+pub use eod::{run_end_of_day, run_unit_orders, EndOfDayError, EndOfDayInput, EndOfDayReport, Steps};
 pub use steps::{LedgerSteps, StepError};

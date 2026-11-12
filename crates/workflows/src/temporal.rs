@@ -15,7 +15,8 @@ use temporalio_sdk::activities::{ActivityContext, ActivityError};
 use temporalio_sdk::{ActivityExecutionError, ActivityOptions, ApplicationFailure, Runtime, Worker, WorkerOptions, WorkflowContext, WorkflowResult};
 
 use crate::eod::{
-    run_end_of_day, EndOfDayError, EndOfDayInput, EndOfDayReport, PartitionCheck, PartitionStep, PublishStep, PublishedSummary, RoundStep, Steps,
+    run_end_of_day, EndOfDayError, EndOfDayInput, EndOfDayReport, PartitionCheck, PartitionStep, PublishStep, PublishedSummary, RoundStep, Steps, UnitPass,
+    UnitStep,
 };
 use crate::steps::{LedgerSteps, StepError};
 use crate::store::{Signer, Store};
@@ -51,6 +52,11 @@ impl EndOfDayActivities {
     }
 
     #[activity]
+    pub async fn unit_orders(self: Arc<Self>, _ctx: ActivityContext, step: UnitStep) -> Result<UnitPass, ActivityError> {
+        self.steps.unit_orders(step).await.map_err(failure)
+    }
+
+    #[activity]
     pub async fn reconcile(self: Arc<Self>, _ctx: ActivityContext, step: PartitionStep) -> Result<PartitionCheck, ActivityError> {
         self.steps.reconcile(step).await.map_err(failure)
     }
@@ -82,6 +88,10 @@ impl Steps for ViaActivities {
 
     async fn run_round(&self, step: RoundStep) -> Result<u32, ActivityExecutionError> {
         self.ctx.execute_activity(EndOfDayActivities::run_round, step, self.options()).await
+    }
+
+    async fn unit_orders(&self, step: UnitStep) -> Result<UnitPass, ActivityExecutionError> {
+        self.ctx.execute_activity(EndOfDayActivities::unit_orders, step, self.options()).await
     }
 
     async fn reconcile(&self, step: PartitionStep) -> Result<PartitionCheck, ActivityExecutionError> {
