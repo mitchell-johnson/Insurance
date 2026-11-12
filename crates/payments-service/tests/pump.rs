@@ -745,11 +745,12 @@ async fn two_pumps_never_send_the_same_submission() {
     let endpoint = &config.channels["anz-file"].endpoints["akl"];
     let to = Target {
         kind: config.channels["anz-file"].kind,
+        format: Default::default(),
         url: endpoint.url.trim_end_matches('/').to_string(),
         token: "token-akl".to_string(),
     };
     let batch = world.state().batch(&s2).unwrap();
-    let manifest = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string());
+    let manifest = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
     HttpBank::default().submit(&to, &batch, &manifest).await.unwrap();
     let pass = stray.pass().await;
     assert_eq!(pass.sent, 1, "{:?}", pass.problems);
@@ -769,9 +770,10 @@ async fn the_fake_bank_checks_what_a_bank_checks() {
     world.payee("p1", PayeeKind::Customer);
     let s = world.run("r1", RunType::BenefitPayments, false, vec![pay("i1", "p1", 300_00)]);
     let batch = world.state().batch(&s).unwrap();
-    let good = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string());
+    let good = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
     let file = |token: &str| Target {
         kind: ic_payments::config::ChannelKind::File,
+        format: Default::default(),
         url: world.bank.url.clone(),
         token: token.to_string(),
     };
@@ -789,11 +791,11 @@ async fn the_fake_bank_checks_what_a_bank_checks() {
     let first = bank.submit(&file("token-akl"), &batch, &good).await.unwrap();
     let again = bank.submit(&file("token-akl"), &batch, &good).await.unwrap();
     assert_eq!(first, again);
-    assert_eq!(bank.holds(&file("token-akl"), "r1-1").await.unwrap(), Some(batch.content_hash()));
+    assert_eq!(bank.holds(&file("token-akl"), "r1-1").await.unwrap(), Some(batch.content_hash().unwrap()));
     assert_eq!(bank.holds(&api, "r9-9").await.unwrap(), None);
     let mut other = batch.clone();
     other.items[0].amount_minor = 999_00;
-    let manifest = other.manifest("test".to_string(), "k".to_string(), "sig".to_string());
+    let manifest = other.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
     assert!(matches!(bank.submit(&file("token-akl"), &other, &manifest).await, Err(ChannelError::Refused(r)) if r.starts_with("409")));
     // The same goes for the API: the same request twice is one batch.
     let mut by_api = batch.clone();
@@ -1103,6 +1105,7 @@ async fn the_services_small_parts_do_what_they_say() {
     });
     let to = Target {
         kind: ic_payments::config::ChannelKind::File,
+        format: Default::default(),
         url,
         token: "t".to_string(),
     };
@@ -1264,4 +1267,85 @@ async fn a_restarted_pump_carries_on_where_the_last_one_stopped() {
     assert!(third.problems.iter().any(|p| p.contains("message 2")), "{:?}", third.problems);
     assert_eq!(third.messages, 1, "the later statement is offered again and answered as before");
     assert_eq!(world.state().exceptions.len(), exceptions, "and recorded once");
+}
+
+/// Purpose: with the first bank's channels switched to ISO 20022, a run
+/// goes as a `pain.001` file and an urgent run as an ISO 20022 request; the
+/// bank checks each, the evidence vault holds the XML, and the hash the
+/// module records is the hash of the XML the bank holds; the test bank
+/// refuses a request whose message ID is not its idempotency key or whose
+/// control sum does not match; and a drill under an ID too long for the
+/// format fails its probe, saying so, with nothing sent.
+/// Why it matters: switching a bank's format is a configuration change on
+/// a live system. Nothing about exactly-once sending, evidence or the
+/// drill may depend on which format a channel speaks.
+#[tokio::test]
+async fn a_bank_that_speaks_iso_20022_is_sent_iso_20022() {
+    let mut world = World::new().await;
+    let mut config: ic_payments::Config = serde_json::from_value(world.module.query(serde_json::json!({"q": "config"})).await.unwrap()).unwrap();
+    let iso = common::iso_config();
+    for (id, channel) in &mut config.channels {
+        channel.format = iso.channels[id].format;
+    }
+    for (code, account) in &mut config.accounts {
+        account.at_bank = iso.accounts[code].at_bank.clone();
+    }
+    world.ok(
+        &cal(),
+        Command::ActivateConfig {
+            version: 2,
+            config: Box::new(config),
+        },
+    );
+    world.bank.lock().iso = true;
+    world.api.lock().iso = true;
+    world.payee("p1", PayeeKind::Beneficiary);
+    let pump = world.pump("akl", "a");
+
+    let s = world.run("r1", RunType::BenefitPayments, false, vec![pay("i1", "p1", 300_00)]);
+    let u = world.run("u1", RunType::LumpSumClaims, true, vec![pay("i2", "p1", 9_000_00)]);
+    let pass = pump.pass().await;
+    assert_eq!((pass.sent, pass.problems.len()), (2, 0), "{:?}", pass.problems);
+    let state = world.state();
+    assert_eq!(state.submissions[&u].status, SubmissionStatus::Acknowledged);
+    let xml = world
+        .vault
+        .get(&format!("payments/{s}/file.xml"))
+        .await
+        .unwrap()
+        .expect("the XML is the evidence");
+    let xml = String::from_utf8(xml).unwrap();
+    assert!(xml.contains("<EndToEndId>i1</EndToEndId>"));
+    let held = world.bank.lock().held[&s].clone();
+    assert_eq!(held.items, vec![("i1".to_string(), 300_00)]);
+    assert_eq!(state.submissions[&s].content_hash.as_deref(), Some(held.sha256.as_str()));
+    assert_eq!(world.api.lock().held[&u].items, vec![("i2".to_string(), 9_000_00)]);
+
+    // The test bank checks what a bank checks.
+    let batch = state.batch(&u).unwrap();
+    let post = |key: &str, body: String| {
+        reqwest::Client::new()
+            .post(format!("{}/batches", world.api.url))
+            .bearer_auth("token-akl")
+            .header("idempotency-key", key.to_string())
+            .header("content-type", "application/xml")
+            .body(body)
+            .send()
+    };
+    let wrong_key = post("u1-9", batch.wire().unwrap()).await.unwrap();
+    assert_eq!(wrong_key.status(), 422);
+    assert!(wrong_key.text().await.unwrap().contains("message ID"));
+    let wrong_sum = batch.wire().unwrap().replacen("<CtrlSum>9000.00</CtrlSum>", "<CtrlSum>9.00</CtrlSum>", 1);
+    let refused = post(&u, wrong_sum).await.unwrap();
+    assert!(refused.text().await.unwrap().contains("control sum"));
+
+    // A drill whose ID the format cannot carry sends nothing and says why.
+    let long = "d".repeat(30);
+    assert!(!pump.drill(&long).await.unwrap());
+    let probes = world.state().drills[&long].probes.clone();
+    let file = &probes["anz-file"];
+    assert!(!file.ok && file.detail.contains("ISO 20022 identifier"), "{file:?}");
+    assert!(file.evidence_hash.starts_with("unwritten: "));
+    assert!(probes["bnz-file"].ok, "the other bank still speaks the system's own format");
+    assert_eq!(world.bank.lock().held.len(), 1);
 }

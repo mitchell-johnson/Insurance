@@ -44,6 +44,29 @@ pub struct Channel {
     /// The last moment of a business day the bank accepts work for that day.
     pub cutoff: NaiveTime,
     pub endpoints: BTreeMap<String, Endpoint>,
+    /// What the channel's files and requests are written in. A channel
+    /// configured before formats existed speaks this system's own.
+    #[serde(default, skip_serializing_if = "WireFormat::is_own")]
+    pub format: WireFormat,
+}
+
+/// The layout a bank receives batches in and sends its answers in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireFormat {
+    /// This system's own pipe-separated file and JSON messages, spoken by
+    /// the fake bank and by nothing else.
+    #[default]
+    Own,
+    /// ISO 20022: `pain.001` and `pain.008` out, `pain.002` and `camt.053`
+    /// back.
+    Iso20022,
+}
+
+impl WireFormat {
+    pub fn is_own(&self) -> bool {
+        *self == WireFormat::Own
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +75,11 @@ pub struct BankAccount {
     pub fund: String,
     pub purpose: Purpose,
     pub currency: Currency,
+    /// The account as its bank knows it: holder, number and BIC. Required
+    /// for every account at a bank whose channels speak ISO 20022, which
+    /// names the insurer's own account in every message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_bank: Option<crate::iso20022::OrderingAccount>,
 }
 
 /// How one type of run reaches a bank, and the controls on it.
@@ -117,6 +145,14 @@ fn valid_code(code: &str) -> bool {
 }
 
 impl Config {
+    /// The format a channel speaks and, where that format names it, the
+    /// insurer's account as the bank knows it.
+    pub fn wire(&self, channel: &str, account: &str) -> (WireFormat, Option<crate::iso20022::OrderingAccount>) {
+        let format = self.channels.get(channel).map(|c| c.format).unwrap_or_default();
+        let ordering = self.accounts.get(account).and_then(|a| a.at_bank.clone());
+        (format, ordering.filter(|_| !format.is_own()))
+    }
+
     pub fn is_business_day(&self, date: NaiveDate) -> bool {
         !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) && !self.rules.holidays.contains(&date)
     }
@@ -164,6 +200,16 @@ impl Config {
             }
         }
         for (code, account) in &self.accounts {
+            let iso = self.channels.values().any(|c| c.bank == account.bank && c.format == WireFormat::Iso20022);
+            let named = account
+                .at_bank
+                .as_ref()
+                .is_some_and(|a| !a.name.trim().is_empty() && !a.number.trim().is_empty());
+            if iso && !named {
+                return Err(bad(format!(
+                    "account {code} is at a bank spoken to in ISO 20022 and needs its holder and number"
+                )));
+            }
             if !valid_code(code) {
                 return Err(bad(format!("account code {code:?} is not 1 to 64 letters, digits, hyphens or underscores")));
             }

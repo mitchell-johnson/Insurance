@@ -13,8 +13,12 @@
 //!
 //! New Zealand account numbers are not IBANs, so accounts are written as
 //! `Othr/Id`. The bank is identified by BIC where one is configured.
+//!
+//! Item IDs travel as the end-to-end reference, so every item ID is held to
+//! what ISO 20022 can carry when the item is added to a run, whatever the
+//! channel: a run can be moved to another bank after it is built.
 
-use ic_payments::file::{Batch, Direction};
+use crate::file::{Batch, Direction};
 
 /// The insurer's own account a batch pays from or collects into, as the
 /// bank knows it. Held with the channel's settings, not in the module: the
@@ -58,9 +62,14 @@ fn name(value: &str) -> String {
     text(&value.chars().take(MAX_NAME).collect::<String>())
 }
 
+/// Whether a value can be an ISO 20022 identifier as it is: 1 to 35
+/// printable ASCII characters with no spaces.
+pub fn fits_identifier(value: &str) -> bool {
+    !value.is_empty() && value.chars().count() <= MAX_ID && value.chars().all(|c| c.is_ascii_graphic())
+}
+
 fn id(what: &str, value: &str) -> Result<String, String> {
-    let fits = !value.is_empty() && value.chars().count() <= MAX_ID && value.chars().all(|c| c.is_ascii_graphic());
-    if fits {
+    if fits_identifier(value) {
         Ok(text(value))
     } else {
         Err(format!(
@@ -140,5 +149,81 @@ pub fn document(batch: &Batch, ordering: &OrderingAccount) -> Result<String, Str
              <Cdtr><Nm>{own}</Nm></Cdtr><CdtrAcct>{own_account}</CdtrAcct><CdtrAgt>{own_agent}</CdtrAgt>{transactions}</PmtInf>\
              </CstmrDrctDbtInitn></Document>\n"
         ),
+    })
+}
+
+/// What a bank reads from a payment or collection initiation: enough to
+/// check it before acting on any line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Initiation {
+    pub message: String,
+    pub direction: Direction,
+    /// The count and control sum the header declares.
+    pub declared: (usize, i64),
+    /// Each transaction's end-to-end reference and amount in minor units.
+    pub items: Vec<(String, i64)>,
+}
+
+fn named<'a, 'i>(node: roxmltree::Node<'a, 'i>, name: &str) -> Option<roxmltree::Node<'a, 'i>> {
+    node.children().find(|c| c.tag_name().name() == name)
+}
+
+fn at<'a, 'i>(node: roxmltree::Node<'a, 'i>, path: &[&str]) -> Option<roxmltree::Node<'a, 'i>> {
+    path.iter().try_fold(node, |n, name| named(n, name))
+}
+
+fn text_at(node: roxmltree::Node<'_, '_>, path: &[&str]) -> Option<String> {
+    at(node, path).and_then(|n| n.text()).map(|t| t.trim().to_string())
+}
+
+/// An ISO 20022 amount in minor units. Exactly two decimal places, or none.
+pub fn minor(amount: &str) -> Option<i64> {
+    let (units, cents) = amount.split_once('.').unwrap_or((amount, "00"));
+    if units.is_empty() || cents.len() != 2 || !units.bytes().chain(cents.bytes()).all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    units.parse::<i64>().ok()?.checked_mul(100)?.checked_add(cents.parse::<i64>().ok()?)
+}
+
+fn parse(xml: &str) -> Result<roxmltree::Document<'_>, String> {
+    roxmltree::Document::parse(xml).map_err(|e| format!("not well-formed XML: {e}"))
+}
+
+/// Read a `pain.001` or `pain.008` initiation as a bank would. Refused with
+/// the reason if it is not one or a required element is missing.
+pub fn read_initiation(xml: &str) -> Result<Initiation, String> {
+    let doc = parse(xml)?;
+    let root = doc.root_element();
+    let (body, direction, tx) = if let Some(b) = named(root, "CstmrCdtTrfInitn") {
+        (b, Direction::Credit, "CdtTrfTxInf")
+    } else if let Some(b) = named(root, "CstmrDrctDbtInitn") {
+        (b, Direction::Debit, "DrctDbtTxInf")
+    } else {
+        return Err("not a payment or collection initiation".to_string());
+    };
+    let missing = |what: &str| format!("the initiation has no readable {what}");
+    let message = text_at(body, &["GrpHdr", "MsgId"]).ok_or_else(|| missing("message ID"))?;
+    let count = text_at(body, &["GrpHdr", "NbOfTxs"])
+        .and_then(|c| c.parse().ok())
+        .ok_or_else(|| missing("count"))?;
+    let total = text_at(body, &["GrpHdr", "CtrlSum"])
+        .and_then(|c| minor(&c))
+        .ok_or_else(|| missing("control sum"))?;
+    let mut items = Vec::new();
+    for info in body.children().filter(|c| c.tag_name().name() == "PmtInf") {
+        for t in info.children().filter(|c| c.tag_name().name() == tx) {
+            let id = text_at(t, &["PmtId", "EndToEndId"]).ok_or_else(|| missing("end-to-end reference"))?;
+            let amount = text_at(t, &["Amt", "InstdAmt"])
+                .or_else(|| text_at(t, &["InstdAmt"]))
+                .and_then(|a| minor(&a))
+                .ok_or_else(|| missing("amount"))?;
+            items.push((id, amount));
+        }
+    }
+    Ok(Initiation {
+        message,
+        direction,
+        declared: (count, total),
+        items,
     })
 }

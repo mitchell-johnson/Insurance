@@ -9,7 +9,7 @@
 use std::future::Future;
 
 use base64::Engine;
-use ic_payments::config::ChannelKind;
+use ic_payments::config::{ChannelKind, WireFormat};
 use ic_payments::file::{BankMessage, Batch, Manifest};
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub kind: ChannelKind,
+    pub format: WireFormat,
     pub url: String,
     pub token: String,
 }
@@ -117,15 +118,28 @@ impl HttpBank {
 
 impl Bank for HttpBank {
     async fn submit(&self, to: &Target, batch: &Batch, manifest: &Manifest) -> Result<Receipt, ChannelError> {
-        let request = match to.kind {
-            ChannelKind::File => {
+        // A batch the format cannot carry never leaves.
+        let wire = batch.wire().map_err(ChannelError::NotSent)?;
+        let content_type = match to.format {
+            WireFormat::Own => "text/plain",
+            WireFormat::Iso20022 => "application/xml",
+        };
+        let request = match (to.kind, to.format) {
+            (ChannelKind::File, _) => {
                 let manifest = serde_json::json!(manifest).to_string();
                 self.http
                     .put(format!("{}/files/{}", to.url, batch.id))
                     .header("x-manifest", base64::engine::general_purpose::STANDARD.encode(manifest))
-                    .body(batch.file())
+                    .header("content-type", content_type)
+                    .body(wire)
             }
-            ChannelKind::Api => self.http.post(format!("{}/batches", to.url)).header("idempotency-key", &batch.id).json(batch),
+            (ChannelKind::Api, WireFormat::Own) => self.http.post(format!("{}/batches", to.url)).header("idempotency-key", &batch.id).json(batch),
+            (ChannelKind::Api, WireFormat::Iso20022) => self
+                .http
+                .post(format!("{}/batches", to.url))
+                .header("idempotency-key", &batch.id)
+                .header("content-type", content_type)
+                .body(wire),
         };
         let response = request.bearer_auth(&to.token).send().await.map_err(transport)?;
         body(checked(response).await?).await

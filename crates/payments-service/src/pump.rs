@@ -13,7 +13,7 @@ use ic_azure::blob::WormStore;
 use ic_azure::AzureError;
 use ic_cashmatch::IncomingPayment;
 use ic_money::Money;
-use ic_payments::config::Config;
+use ic_payments::config::{Config, WireFormat};
 use ic_payments::file::{BankMessage, Batch, BatchItem, Direction};
 use ic_payments::model::{Instruction, OutboxEntry, Probe, Purpose, Role, Submission};
 use ic_payments::{Actor, Command, Envelope, Reject};
@@ -97,6 +97,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             .ok_or_else(|| format!("the credential {} is not available", endpoint.credential))?;
         Ok(Target {
             kind: ch.kind,
+            format: ch.format,
             url: endpoint.url.trim_end_matches('/').to_string(),
             token,
         })
@@ -111,14 +112,18 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             .and_then(|c| c.endpoints.get(&self.region))
             .map(|e| e.signing_key.clone())
             .unwrap_or_default();
-        let file = batch.file();
+        let file = batch.wire().map_err(before)?;
         let signature = self.keys.sign(&key, file.as_bytes()).await.map_err(before)?;
-        let manifest = batch.manifest(signature.algorithm, signature.key_id, signature.value);
+        let manifest = batch.manifest(signature.algorithm, signature.key_id, signature.value).map_err(before)?;
         let manifest_bytes = serde_json::json!(manifest).to_string().into_bytes();
         // Evidence first: nothing goes to a bank that the vault does not
         // hold. The same batch written twice is the same evidence.
+        let (file_name, file_kind) = match batch.format {
+            WireFormat::Own => ("file.txt", "text/plain"),
+            WireFormat::Iso20022 => ("file.xml", "application/xml"),
+        };
         for (name, kind, bytes) in [
-            (format!("payments/{}/file.txt", batch.id), "text/plain", file.into_bytes()),
+            (format!("payments/{}/{file_name}", batch.id), file_kind, file.into_bytes()),
             (format!("payments/{}/manifest.json", batch.id), "application/json", manifest_bytes),
         ] {
             match self.vault.put_new(&name, kind, bytes).await {
@@ -205,7 +210,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         match self.dispatch(config, &to, &batch).await {
             Ok(receipt) => {
                 pass.sent += 1;
-                self.tell(format!("sent-{id}"), sent(batch.content_hash(), Some(receipt.reference))).await?;
+                self.tell(format!("sent-{id}"), sent(manifest_hash(&batch), Some(receipt.reference))).await?;
                 if let Some(acknowledgement) = receipt.acknowledgement {
                     self.tell(format!("ack-{id}"), acknowledgement.command()).await?;
                 }
@@ -377,7 +382,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         self.tell(format!("drill-{id}-start"), start).await?;
         let mut reached = true;
         for (channel, ch) in &config.channels {
-            let batch = Batch {
+            let mut batch = Batch {
                 id: format!("drill-{id}-{channel}"),
                 channel: channel.clone(),
                 account: config
@@ -389,6 +394,8 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                 direction: Direction::Credit,
                 value_date: (self.clock)().date(),
                 currency: ic_money::Currency::NZD,
+                format: ch.format,
+                ordering: None,
                 items: vec![BatchItem {
                     item: format!("drill-{id}-{channel}-1"),
                     name: config.rules.drill_account.name.clone(),
@@ -396,13 +403,14 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     amount_minor: config.rules.drill_amount_minor,
                 }],
             };
+            batch.ordering = config.wire(channel, &batch.account).1;
             let outcome = match self.target(&config, channel) {
                 Ok(to) => self.dispatch(&config, &to, &batch).await.map_err(|e| e.to_string()),
                 Err(e) => Err(e),
             };
             let probe = Probe {
                 ok: outcome.is_ok(),
-                evidence_hash: batch.content_hash(),
+                evidence_hash: manifest_hash(&batch),
                 detail: match outcome {
                     Ok(receipt) => format!("the bank took {} as {}", batch.id, receipt.reference),
                     Err(e) => e,
@@ -529,5 +537,14 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             ["drill", id] => self.drill_named(id).await,
             _ => Err("usage: ic-payments-pump [once | drill [<id>]]".to_string()),
         }
+    }
+}
+
+/// The hash of what was, or would have been, sent. A batch its format
+/// cannot carry was never sent, and says so in place of a hash.
+fn manifest_hash(batch: &Batch) -> String {
+    match batch.content_hash() {
+        Ok(hash) => hash,
+        Err(e) => format!("unwritten: {e}"),
     }
 }

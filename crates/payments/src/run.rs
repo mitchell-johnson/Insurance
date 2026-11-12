@@ -67,6 +67,11 @@ impl PaymentsState {
         urgent: bool,
     ) -> Result<(), Reject> {
         tx.need(Role::Maker)?;
+        // A submission's ID is the run's with a number after it, and it is
+        // the bank's message ID: room is left for up to 999 submissions.
+        if !crate::iso20022::fits_identifier(&format!("{id}-999")) {
+            return Err(Reject::new("invalid_run", "a run ID is 1 to 31 printable characters with no spaces"));
+        }
         if self.runs.contains_key(&id) {
             return Err(Reject::new("duplicate_run", format!("run {id} already exists")));
         }
@@ -101,6 +106,11 @@ impl PaymentsState {
         let bad = |message: &str| Err(Reject::new("invalid_item", format!("item {}: {message}", n.item)));
         if n.item.is_empty() || n.source.is_empty() || n.amount_minor <= 0 {
             return bad("an item has an ID, a source and a positive amount");
+        }
+        // The item ID is the bank's end-to-end reference, and it must reach
+        // any bank the run could be sent to unshortened.
+        if !crate::iso20022::fits_identifier(&n.item) {
+            return bad("an item ID is the bank's reference: 1 to 35 printable characters with no spaces");
         }
         if self.items.contains_key(&n.item) {
             return Err(Reject::new("duplicate_item", format!("item {} has been used before", n.item)));

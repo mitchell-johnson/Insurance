@@ -16,6 +16,7 @@ pub mod config;
 mod drill;
 pub mod file;
 pub mod intake;
+pub mod iso20022;
 pub mod machine;
 pub mod model;
 mod payee;
