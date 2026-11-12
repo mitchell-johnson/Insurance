@@ -443,6 +443,13 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
     /// What the binary does with its arguments: nothing for the standing
     /// pump (until `stop` resolves), `once` for one pass that fails if
     /// anything was left undone, `drill <id>` for the evacuation drill.
+    async fn drill_named(&self, id: &str) -> Result<(), String> {
+        match self.drill(id).await? {
+            true => Ok(()),
+            false => Err(format!("drill {id} from {}: a bank channel could not be reached", self.region)),
+        }
+    }
+
     pub async fn run(&self, args: &[String], interval: std::time::Duration, stop: impl std::future::Future<Output = ()>) -> Result<(), String> {
         match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
             [] => {
@@ -473,11 +480,11 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     Err(pass.problems.join("; "))
                 }
             }
-            ["drill", id] => match self.drill(id).await? {
-                true => Ok(()),
-                false => Err(format!("drill {id} from {}: a bank channel could not be reached", self.region)),
-            },
-            _ => Err("usage: ic-payments-pump [once | drill <id>]".to_string()),
+            // The scheduled drill names itself from the day and the region,
+            // so a job that is retried the same day records one drill.
+            ["drill"] => self.drill_named(&format!("{}-{}", (self.clock)().date(), self.region)).await,
+            ["drill", id] => self.drill_named(id).await,
+            _ => Err("usage: ic-payments-pump [once | drill [<id>]]".to_string()),
         }
     }
 }

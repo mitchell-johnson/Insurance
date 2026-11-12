@@ -7,6 +7,7 @@ mod common;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use chrono::NaiveDate;
 use common::*;
@@ -504,4 +505,340 @@ async fn a_stuck_entry_does_not_hold_up_the_rest() {
     settle(&d).await;
     assert!(d.module.state.lock().unwrap().outbox.is_empty());
     assert_eq!(d.peers.requests.lock().unwrap().len(), 2);
+}
+
+const KEY: &str = "service-key-0123456789abcdef0123456789";
+
+async fn served(d: Arc<Rig>) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(ic_group::service::serve(listener, ic_group::service::router(d, KEY), std::future::pending()));
+    base
+}
+
+/// Purpose: the service's routes take an upload, a command and a question only with the
+/// service key; an upload is stored and quarantined under the uploader's name; a command
+/// is applied on the core's business date under a key that cannot collide with the
+/// driver's; refusals come back with the module's own code; and nobody outside can send
+/// the driver's commands, read the outbox, or announce a file without uploading it.
+/// Why it matters: these routes are how the employer portal, staff screens and the other
+/// services reach the module. The driver's commands (scan results, core answers) are what
+/// make the module trust a file, so they must not be reachable from a portal.
+#[tokio::test]
+async fn the_service_routes_admit_only_what_a_portal_may_do() {
+    let d = Arc::new(rig());
+    let base = served(d.clone()).await;
+    let http = reqwest::Client::new();
+    let post = |path: &str, key: Option<&str>, headers: &[(&str, &str)], body: Vec<u8>| {
+        let mut r = http.post(format!("{base}{path}")).body(body);
+        if let Some(key) = key {
+            r = r.bearer_auth(key);
+        }
+        for (k, v) in headers {
+            r = r.header(*k, *v);
+        }
+        async move {
+            let resp = r.send().await.unwrap();
+            let status = resp.status().as_u16();
+            (status, resp.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let who = [("x-ic-caller", "employer-portal"), ("x-ic-actor", "admin-bo")];
+    let upload = "/v1/schemes/harbour/files/nov.csv";
+    assert_eq!(http.get(format!("{base}/healthz")).send().await.unwrap().text().await.unwrap(), "ok");
+
+    // The key.
+    for key in [None, Some("wrong-key"), Some("")] {
+        assert_eq!(post(upload, key, &who, FILE.into()).await.0, 401);
+        assert_eq!(post("/v1/commands", key, &[], b"{}".to_vec()).await.0, 401);
+        assert_eq!(post("/v1/questions", key, &[], b"{}".to_vec()).await.0, 401);
+    }
+    // Uploads.
+    assert_eq!(post(upload, Some(KEY), &[], FILE.into()).await.1["error"]["code"], "missing_identity");
+    let member = [("x-ic-caller", "member-portal"), ("x-ic-actor", "party-9")];
+    assert_eq!(post(upload, Some(KEY), &member, FILE.into()).await.0, 403);
+    assert_eq!(post(upload, Some(KEY), &who, vec![]).await.1["error"]["code"], "empty_file");
+    assert_eq!(
+        post("/v1/schemes/nowhere/files/a.csv", Some(KEY), &who, FILE.into()).await,
+        (
+            422,
+            serde_json::json!({"error": {"code": "unknown_scheme", "message": "scheme nowhere is not registered"}})
+        )
+    );
+    let (status, body) = post(upload, Some(KEY), &who, FILE.into()).await;
+    assert_eq!((status, body["status"].as_str()), (202, Some("quarantined")));
+    assert_eq!(d.module.state.lock().unwrap().schemes[SCHEME].files["nov.csv"].uploaded_by, "admin-bo");
+    d.files.down.set(true);
+    assert_eq!(post("/v1/schemes/harbour/files/dec.csv", Some(KEY), &who, FILE.into()).await.0, 503);
+    d.files.down.set(false);
+
+    // Commands.
+    let command = |caller: &str, key: &str, command: Value| {
+        serde_json::to_vec(&serde_json::json!({"key": key, "caller": caller, "actor": "staff-ana", "command": command})).unwrap()
+    };
+    let freeze = serde_json::json!({"freeze": {"scheme": SCHEME, "reason": "review"}});
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], b"not json".to_vec()).await.1["error"]["code"],
+        "invalid_command"
+    );
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("group-driver", "k1", serde_json::json!("tick")))
+            .await
+            .0,
+        403
+    );
+    let scan = serde_json::json!({"record_scan": {"scheme": SCHEME, "file": "nov.csv", "clean": true}});
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("group-admin", "k1", scan)).await.1["error"]["code"],
+        "caller_not_allowed"
+    );
+    let receive = serde_json::json!({"receive_file": {"scheme": SCHEME, "file": "x.csv", "content_hash": "h"}});
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("employer-portal", "k1", receive)).await.1["error"]["code"],
+        "use_upload"
+    );
+    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "", freeze.clone())).await.0, 403);
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("group-admin", "k2", freeze.clone())).await,
+        (200, serde_json::json!({"applied": true, "duplicate": false}))
+    );
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("group-admin", "k2", freeze)).await.1["duplicate"],
+        true
+    );
+    let unfreeze = serde_json::json!({"unfreeze": {"scheme": "nowhere"}});
+    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k3", unfreeze)).await.0, 422);
+    d.core.down.set(true);
+    let again = serde_json::json!({"unfreeze": {"scheme": SCHEME}});
+    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again.clone())).await.0, 503);
+    d.core.down.set(false);
+    d.module.down.set(true);
+    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again.clone())).await.0, 503);
+    assert_eq!(post("/v1/questions", Some(KEY), &[], br#"{"ask":"files_to_read"}"#.to_vec()).await.0, 503);
+    d.module.down.set(false);
+    assert_eq!(
+        post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again)).await.0,
+        200,
+        "the same key after a 503 is safe"
+    );
+
+    // Questions.
+    let (status, scheme) = post("/v1/questions", Some(KEY), &[], br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()).await;
+    assert_eq!((status, scheme["open_file"].as_str(), scheme["frozen"].as_str()), (200, Some("nov.csv"), None));
+    assert_eq!(
+        post("/v1/questions", Some(KEY), &[], br#"{"ask":"scheme","scheme":"nowhere"}"#.to_vec())
+            .await
+            .0,
+        404
+    );
+    assert_eq!(post("/v1/questions", Some(KEY), &[], br#"{"ask":"outbox","limit":10}"#.to_vec()).await.0, 403);
+    assert_eq!(
+        post("/v1/questions", Some(KEY), &[], br#"{"ask":"weather"}"#.to_vec()).await.1["error"]["code"],
+        "invalid_question"
+    );
+}
+
+/// Purpose: the service loop keeps running passes until told to stop, whatever a pass
+/// meets: work to do, nothing to do, or the module away.
+/// Why it matters: the loop is the only thing that moves a file forward in production. If
+/// one failed pass ended it, a brief outage of any dependency would stop all schemes
+/// until someone restarted the service.
+#[tokio::test]
+async fn the_service_loop_survives_failed_passes() {
+    let d = Arc::new(rig());
+    d.upload(caller::EMPLOYER, "admin-bo", SCHEME, "nov.csv", FILE.as_bytes().to_vec())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "nov.csv", Scan::Clean);
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let (log, down) = (seen.clone(), d.module.down.clone());
+    let running = tokio::spawn(ic_group::service::run_passes(
+        d.clone(),
+        Duration::from_millis(5),
+        async {
+            let _ = stop_rx.await;
+        },
+        move |pass| {
+            let mut log = log.lock().unwrap();
+            log.push(pass.as_ref().map(|p| p.done).map_err(|e| e.to_string()));
+            // The module goes away for the third and fourth passes.
+            down.set(matches!(log.len(), 2 | 3));
+        },
+    ));
+    for _ in 0..400 {
+        if file_status(&d, "nov.csv") == FileStatus::AwaitingApproval && seen.lock().unwrap().len() > 6 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    stop_tx.send(()).unwrap();
+    running.await.unwrap();
+    let seen = seen.lock().unwrap();
+    assert!(seen.iter().any(|p| p.is_err()), "{seen:?}");
+    assert!(seen.iter().any(|p| matches!(p, Ok(n) if *n > 0)));
+    assert!(matches!(seen.last(), Some(Ok(0))), "idle at the end: {seen:?}");
+    assert_eq!(file_status(&d, "nov.csv"), FileStatus::AwaitingApproval);
+}
+
+/// Purpose: the customer master client sends a joiner's identity with an Entra ID token
+/// and reads the three answers, and treats an error status, an unreadable answer, a
+/// "possible" with no candidates, and no connection as "not answered" without repeating
+/// the person's details in the error.
+/// Why it matters: this is the one call that carries names out of the module. Its errors
+/// are logged, so they must not carry the names with them; and a wrong reading of the
+/// answer is a wrong link between two people.
+#[tokio::test]
+async fn the_customer_master_client_reads_every_answer() {
+    use axum::http::HeaderMap;
+    use axum::routing::post;
+    use ic_group::service::HttpCustomerMaster;
+    let seen: Arc<Mutex<Vec<Value>>> = Arc::default();
+    let log = seen.clone();
+    let app = axum::Router::new().route(
+        "/v1/parties/match",
+        post(move |headers: HeaderMap, axum::Json(body): axum::Json<Value>| {
+            let log = log.clone();
+            async move {
+                assert_eq!(headers["authorization"], "Bearer tok-1");
+                log.lock().unwrap().push(body.clone());
+                match body["family_name"].as_str().unwrap() {
+                    "Linked" => (axum::http::StatusCode::OK, r#"{"outcome":"linked","party":"p-1"}"#),
+                    "Created" => (axum::http::StatusCode::CREATED, r#"{"outcome":"created","party":"p-2"}"#),
+                    "Possible" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":["p-3","p-4"]}"#),
+                    "Nobody" => (axum::http::StatusCode::OK, r#"{"outcome":"possible","candidates":[]}"#),
+                    "Garbled" => (axum::http::StatusCode::OK, "<html>"),
+                    _ => (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "boom"),
+                }
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let identity = |family: &str| MemberIdentity {
+        row: 1,
+        employee_id: "E002".into(),
+        given_name: "Bo".into(),
+        family_name: family.into(),
+        date_of_birth: Some(d(1985, 6, 2)),
+        email: Some("bo@example.test".into()),
+        national_id: None,
+    };
+    let cm = HttpCustomerMaster::new(
+        &base,
+        "api://customer-master/.default",
+        ic_azure::credential::AzureCredential::static_token("tok-1"),
+    );
+    assert_eq!(
+        cm.resolve(SCHEME, &identity("Linked")).await.unwrap(),
+        Resolution::Linked { party: party("p-1") }
+    );
+    assert_eq!(
+        cm.resolve(SCHEME, &identity("Created")).await.unwrap(),
+        Resolution::Created { party: party("p-2") }
+    );
+    assert_eq!(
+        cm.resolve(SCHEME, &identity("Possible")).await.unwrap(),
+        Resolution::Possible {
+            candidates: vec![party("p-3"), party("p-4")]
+        }
+    );
+    {
+        let sent = seen.lock().unwrap();
+        assert_eq!(
+            (
+                sent[0]["source"].as_str(),
+                sent[0]["date_of_birth"].as_str(),
+                sent[0]["create_if_none"].as_bool()
+            ),
+            (Some("group-scheme:harbour"), Some("1985-06-02"), Some(true))
+        );
+    }
+    let gone = HttpCustomerMaster::new("http://127.0.0.1:1", "scope", ic_azure::credential::AzureCredential::static_token("tok-1"));
+    for (client, family) in [(&cm, "Nobody"), (&cm, "Garbled"), (&cm, "Failing"), (&gone, "Unreachable")] {
+        let error = client.resolve(SCHEME, &identity(family)).await.unwrap_err();
+        assert!(!error.contains(family) && !error.contains("Bo") && !error.contains("example.test"), "{error}");
+    }
+}
+
+/// Purpose: the service refuses to start without its storage, event stream, customer
+/// master, or with a short salt or key, says which setting is wrong, takes the documented
+/// defaults for the rest, and never prints a secret.
+/// Why it matters: a service that started half-configured would accept uploads it cannot
+/// process. And the fingerprint salt and service key end up in logs if the configuration's
+/// debug form includes them.
+#[test]
+fn the_service_configuration_is_checked_at_start() {
+    use ic_group::service::Config;
+    let full: BTreeMap<&str, &str> = [
+        ("IC_CLUSTER_NODES", "node-1:7000,node-2:7000"),
+        ("IC_GROUP_QUARANTINE_ENDPOINT", "https://stgroup.blob.core.windows.net"),
+        ("IC_GROUP_EVENT_HUBS_NAMESPACE", "https://evh.servicebus.windows.net"),
+        ("IC_GROUP_CUSTOMER_MASTER", "https://customers.internal"),
+        ("IC_GROUP_CUSTOMER_MASTER_SCOPE", "api://customers/.default"),
+        ("IC_GROUP_FINGERPRINT_SALT", "salt-0123456789abcdef0123456789abcdef"),
+        ("IC_GROUP_API_KEY", KEY),
+    ]
+    .into();
+    let read = |vars: &BTreeMap<&str, &str>| {
+        Config::from_lookup(
+            |k| vars.get(k).map(|v| v.to_string()),
+            |path| match path {
+                "/mnt/secrets/salt" => Ok("salt-from-key-vault-0123456789abcdef\n".to_string()),
+                _ => Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such file")),
+            },
+        )
+    };
+    let config = read(&full).unwrap();
+    assert_eq!(
+        (
+            config.quarantine_container.as_str(),
+            config.event_hub.as_str(),
+            config.reinsurance_module.as_str()
+        ),
+        ("group-quarantine", "group-events", "reinsurance")
+    );
+    assert_eq!((config.listen.as_str(), config.cycle_every), ("0.0.0.0:8080", Duration::from_secs(5)));
+    let shown = format!("{config:?}");
+    assert!(shown.contains("node-1:7000") && !shown.contains("salt-0123") && !shown.contains(KEY), "{shown}");
+    for missing in full.keys() {
+        let mut vars = full.clone();
+        vars.insert(missing, "  ");
+        assert!(read(&vars).unwrap_err().contains(missing), "{missing}");
+    }
+    for (key, value, says) in [
+        ("IC_GROUP_FINGERPRINT_SALT", "short", "at least 32"),
+        ("IC_GROUP_API_KEY", "short", "at least 32"),
+        ("IC_GROUP_CYCLE_SECONDS", "0", "above zero"),
+        ("IC_GROUP_CYCLE_SECONDS", "soon", "above zero"),
+    ] {
+        let mut vars = full.clone();
+        vars.insert(key, value);
+        assert!(read(&vars).unwrap_err().contains(says), "{key}");
+    }
+    let mut vars = full.clone();
+    vars.extend([
+        ("IC_GROUP_CYCLE_SECONDS", "30"),
+        ("IC_GROUP_LISTEN", "127.0.0.1:9000"),
+        ("IC_GROUP_REINSURANCE_MODULE", "ri"),
+    ]);
+    let config = read(&vars).unwrap();
+    assert_eq!(
+        (config.cycle_every, config.listen.as_str(), config.reinsurance_module.as_str()),
+        (Duration::from_secs(30), "127.0.0.1:9000", "ri")
+    );
+    // Secrets mounted from Key Vault arrive as files, and the node list
+    // may come from the name the other services use.
+    let mut vars = full.clone();
+    vars.remove("IC_GROUP_FINGERPRINT_SALT");
+    vars.remove("IC_CLUSTER_NODES");
+    vars.extend([("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/salt"), ("IC_NODES", "node-9:7000")]);
+    let config = read(&vars).unwrap();
+    assert_eq!(
+        (config.fingerprint_salt.as_str(), config.cluster.as_str()),
+        ("salt-from-key-vault-0123456789abcdef", "node-9:7000")
+    );
+    vars.insert("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/absent");
+    assert!(read(&vars).unwrap_err().contains("IC_GROUP_FINGERPRINT_SALT_FILE cannot be read"));
 }

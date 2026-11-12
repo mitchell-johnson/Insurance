@@ -1,0 +1,221 @@
+# Payments and bank channels: the pump that carries approved submissions to
+# the banks and brings their answers back, and the weekly evacuation drill.
+# The payments module itself runs inside the ledger nodes (node.yaml); the
+# pump is the only process that speaks to a bank.
+#
+# One copy of this file runs in each voter region, with IC_REGION set to
+# that region's name as the payments configuration names it. A region uses
+# its own bank endpoints, credentials, signing keys and egress address, so
+# losing a region does not lose the ability to pay (docs/payments.md).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-payments
+  annotations:
+    azure.workload.identity/client-id: REPLACE-paymentsClientId
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-payments
+data:
+  IC_REGION: REPLACE-region
+  # The payments vault, not the core's: the bank signing keys and the bank
+  # credentials live apart from everything else, and only the pump's
+  # identity can use them. Outputs of infra/main.bicep.
+  IC_KEY_VAULT_URL: REPLACE-paymentsKeyVaultUrl
+  IC_BLOB_ENDPOINT: REPLACE-blobEndpoint
+  IC_PAYMENTS_CONTAINER: payments-evidence
+  IC_BANK_SECRETS_DIR: /mnt/bank-credentials
+---
+# The cluster token from the core's vault and the bank credentials from the
+# payments vault, mounted as files under the pump's identity. Neither
+# becomes a Kubernetes Secret. List one object per bank credential the
+# payments configuration names for this region.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-payments-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-paymentsClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-payments-bank-credentials
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-paymentsClientId
+    keyvaultName: REPLACE-paymentsKeyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: REPLACE-channel-region-credential
+          objectType: secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-payments-pump
+spec:
+  # Two, so a file is still sent when one dies. They cannot send the same
+  # submission twice: each claims a submission in the module before sending,
+  # and the bank takes a batch ID once.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ic-payments-pump
+  template:
+    metadata:
+      labels:
+        app: ic-payments-pump
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-payments
+      # Long enough to finish the send in hand; a send that is cut off is
+      # asked about, never repeated.
+      terminationGracePeriodSeconds: 90
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pump
+          image: insurance-core
+          command: ["/usr/local/bin/ic-payments-pump"]
+          envFrom:
+            - configMapRef:
+                name: ic-ledger
+            - configMapRef:
+                name: ic-payments
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+            - name: bank-credentials
+              mountPath: /mnt/bank-credentials
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-payments-token
+        - name: bank-credentials
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-payments-bank-credentials
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-payments-pump
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-payments-pump
+---
+# The evacuation drill: every Tuesday morning, a token payment from this
+# region through every bank channel, signed and sent exactly as a real one
+# is. The job fails if any channel could not be reached, and the module's
+# readiness answer goes stale if the drill stops running, so a region that
+# could not pay is found on a quiet Tuesday and not on the day it is needed.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ic-payments-drill
+spec:
+  schedule: "30 9 * * 2"
+  timeZone: Pacific/Auckland
+  concurrencyPolicy: Forbid
+  startingDeadlineSeconds: 21600
+  successfulJobsHistoryLimit: 8
+  failedJobsHistoryLimit: 8
+  jobTemplate:
+    spec:
+      # A retry the same day records the same drill; the bank takes each
+      # token batch once.
+      backoffLimit: 2
+      activeDeadlineSeconds: 1800
+      template:
+        metadata:
+          labels:
+            app: ic-payments-drill
+            azure.workload.identity/use: "true"
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: ic-payments
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: drill
+              image: insurance-core
+              command: ["/usr/local/bin/ic-payments-pump", "drill"]
+              envFrom:
+                - configMapRef:
+                    name: ic-ledger
+                - configMapRef:
+                    name: ic-payments
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 64Mi
+                limits:
+                  memory: 256Mi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: cluster-token
+                  mountPath: /mnt/cluster-token
+                  readOnly: true
+                - name: bank-credentials
+                  mountPath: /mnt/bank-credentials
+                  readOnly: true
+          volumes:
+            - name: cluster-token
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-payments-token
+            - name: bank-credentials
+              csi:
+                driver: secrets-store.csi.k8s.io
+                readOnly: true
+                volumeAttributes:
+                  secretProviderClass: ic-payments-bank-credentials

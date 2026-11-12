@@ -1994,6 +1994,7 @@ dependencies = [
  "http-body-util",
  "ic-api",
  "ic-core",
+ "ic-distribution",
  "ic-ledger",
  "ic-log",
  "ic-money",
@@ -2011,6 +2012,21 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ic-complaints"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-core",
+ "ic-log",
+ "ic-raft",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -2087,6 +2103,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-sim",
  "proptest",
  "serde",
@@ -2100,6 +2117,7 @@ dependencies = [
 name = "ic-group"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "hex",
  "ic-azure",
@@ -2113,11 +2131,14 @@ dependencies = [
  "ic-reinsurance",
  "ic-sim",
  "proptest",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha2",
  "thiserror",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2159,12 +2180,17 @@ dependencies = [
 name = "ic-node"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "ic-channels",
+ "ic-complaints",
+ "ic-core",
  "ic-distribution",
  "ic-documents",
+ "ic-finance",
  "ic-group",
  "ic-payments-service",
  "ic-raft",
+ "ic-reinsurance",
  "ic-underwriting",
  "serde_json",
  "tokio",
@@ -2280,6 +2306,7 @@ dependencies = [
  "ic-log",
  "ic-money",
  "ic-product",
+ "ic-raft",
  "ic-sim",
  "proptest",
  "serde",
@@ -2287,6 +2314,9 @@ dependencies = [
  "sha2",
  "starlark",
  "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -2320,6 +2350,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek",
  "hex",
+ "ic-azure",
  "ic-core",
  "ic-ledger",
  "ic-log",

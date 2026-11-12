@@ -1001,6 +1001,11 @@ async fn the_binarys_modes_report_failure_as_failure() {
     let sydney = world.pump("syd", "s");
     sydney.run(&args(&["once"]), quick, never()).await.unwrap();
     sydney.run(&args(&["drill", "d1"]), quick, never()).await.unwrap();
+    // The scheduled drill names itself, so a retry the same day is the same drill.
+    sydney.run(&args(&["drill"]), quick, never()).await.unwrap();
+    sydney.run(&args(&["drill"]), quick, never()).await.unwrap();
+    let named = world.module.state.lock().unwrap().0.drills.keys().filter(|id| id.ends_with("-syd")).count();
+    assert_eq!(named, 1);
     let melbourne = world.pump("mel", "m");
     assert!(melbourne
         .run(&args(&["drill", "d2"]), quick, never())

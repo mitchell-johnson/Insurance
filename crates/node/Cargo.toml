@@ -9,14 +9,19 @@ publish.workspace = true
 [dependencies]
 ic-raft.workspace = true
 ic-channels = { path = "../channels" }
+ic-complaints = { path = "../complaints" }
 ic-distribution = { path = "../distribution" }
 ic-documents = { path = "../documents" }
+ic-finance = { path = "../finance" }
 ic-group = { path = "../group" }
+ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
 ic-payments-service = { path = "../payments-service" }
 tokio.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
+ic-core.workspace = true
 serde_json.workspace = true
 
 [lints]

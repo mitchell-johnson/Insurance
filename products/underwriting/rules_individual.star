@@ -50,6 +50,6 @@ RULES = rule_set(
     version = 1,
     effective_from = "2026-01-01",
     question_set = "personal-statement",
-    products = ["term-life", "health-plan"],
+    products = ["term-life", "health-plan", "group-life"],
     rules = _rules(),
 )

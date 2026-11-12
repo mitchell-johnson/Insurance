@@ -113,6 +113,7 @@ pub fn term_life(
         frequency,
         lives: vec![named_life("life-1", &format!("party-{n:08}"), dob, sex, smoker)],
         covers,
+        migrated: false,
     }
 }
 
@@ -143,6 +144,7 @@ pub fn health_family(n: u64, inception: NaiveDate, dobs: &[NaiveDate], frequency
         frequency,
         lives,
         covers,
+        migrated: false,
     }
 }
 
@@ -164,6 +166,7 @@ pub fn group_scheme(n: u64, inception: NaiveDate, first_members: Vec<LifeSpec>) 
             loadings: vec![],
             exclusions: vec![],
         }],
+        migrated: false,
     }
 }
 
