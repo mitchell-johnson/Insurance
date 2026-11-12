@@ -30,7 +30,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::directory::{Actor, DirectoryCommand};
+use crate::directory::{Actor, DelegateAccess, DirectoryCommand};
 use crate::identity::{action_hash, Enrolment, IdentityCommand, MAX_CHALLENGE_SECS};
 use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
@@ -617,6 +617,23 @@ async fn remove_adviser(State(s): State<Shared>, headers: HeaderMap, method: Met
 }
 
 #[derive(Deserialize)]
+struct Delegate {
+    access: Option<DelegateAccess>,
+}
+
+/// Let someone look at the policy, change what they may see, or stop it (`access: null`).
+async fn delegate(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((policy, party)): Path<(String, String)>, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let d: Delegate = parse(&body)?;
+    let command = DirectoryCommand::SetDelegate {
+        policy: PolicyId::from(policy.as_str()),
+        party: PartyId::from(party.as_str()),
+        access: d.access,
+    };
+    directory(&s, &headers, session, command).await
+}
+
+#[derive(Deserialize)]
 struct Consent {
     consent: bool,
 }
@@ -974,6 +991,7 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))
         .route("/app/v1/policies/{policy}/advisers/{adviser}", delete(remove_adviser))
         .route("/app/v1/policies/{policy}/consent", put(family_consent))
+        .route("/app/v1/policies/{policy}/delegates/{party}", put(delegate))
         .route("/app/v1/requests", get(requests).post(submit_request))
         .route("/app/v1/requests/{id}", delete(cancel_request))
         .route("/app/v1/requests/{id}/approve", post(approve_request))

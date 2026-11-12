@@ -556,6 +556,9 @@ impl ChannelState {
                     }
                     // An adviser prepares; the customer approves in the app.
                     RequestStatus::AwaitingApproval { from: Approver::Customer }
+                } else if relationships.contains(&Relationship::SupportPerson) {
+                    // A support person helps prepare; the step is the customer's own, signed on their device.
+                    RequestStatus::AwaitingApproval { from: Approver::Customer }
                 } else if relationships.iter().any(|r| matches!(r, Relationship::LifeInsured | Relationship::Member)) {
                     // A person insured acts on their own matters: a claim, a consent.
                     RequestStatus::Pending
