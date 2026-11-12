@@ -425,6 +425,18 @@ pub enum Command {
     AcknowledgeEffects {
         through: u64,
     },
+    /// An effect cannot be delivered: nothing takes it yet, or the receiver
+    /// refused it. It is set aside with the reason, where a person can see
+    /// it, so that it does not hold up the effects behind it.
+    ParkEffect {
+        effect: u64,
+        reason: String,
+    },
+    /// Put a parked effect back in the outbox, at the end, to be tried again.
+    RequeueEffect {
+        effect: u64,
+        by: String,
+    },
 
     // --- adviser licensing ---
     LicenceChanged {
@@ -531,7 +543,8 @@ impl Command {
             CapacityAnswered { .. } | FacultativeTermsRecorded { .. } => &["reinsurance"],
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
-            AcknowledgeEffects { .. } => &["effects-driver"],
+            AcknowledgeEffects { .. } | ParkEffect { .. } => &["effects-driver"],
+            RequeueEffect { .. } => &["underwriting-console"],
             LicenceChanged { .. } => &["adviser-licensing"],
             OpenFileForClaim { .. } | OpenNonDisclosureReview { .. } => &["claims"],
             DelegatedDecision(_) | DelegateFileReceived { .. } => &["delegate-api"],
