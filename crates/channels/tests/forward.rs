@@ -13,10 +13,10 @@ use ic_channels::forward::{commands_for, conduct_by_party, pass, structure_for, 
 use ic_channels::http::{Channel, Local};
 use ic_channels::query::Question;
 use ic_channels::state::Command;
-use ic_channels::workbench::{PartyStatus, WorkbenchCommand};
+use ic_channels::workbench::{ItemKind, PartyStatus, WorkbenchCommand};
 use ic_distribution::rules::HeldReason;
 use ic_distribution::structure::{CeasedReason, LicenceRecord, LicenceState, Relation, RelationKind};
-use ic_distribution::workbench::{DocumentRecord, HeldLine, Position, Summary};
+use ic_distribution::workbench::{DocumentRecord, HeldLine, MemoLine, Position, Summary};
 use ic_distribution::{BookId, DistributionState};
 use serde_json::{json, Value};
 
@@ -83,8 +83,30 @@ fn position(party: &str, held: Vec<HeldLine>, licences: Vec<LicenceRecord>, ceas
         open_cases: vec!["case-9".into()],
         notes: vec![],
         actions_in_progress: vec![],
+        memo: vec![
+            memo("clm-1/overpayment/1", 75_00),
+            // One already settled is not a debt.
+            memo("clm-1/overpayment/2", 0),
+        ],
     })
     .unwrap()
+}
+
+/// A claim overpayment as the commission module shows it beside its own money.
+fn memo(reference: &str, outstanding: i64) -> MemoLine {
+    MemoLine {
+        owner: "claims".into(),
+        reference: reference.into(),
+        party: p("adv-1"),
+        case_ref: "clm-1".into(),
+        policy: None,
+        outstanding_minor: outstanding,
+        status: "open".into(),
+        cause: "duplicate".into(),
+        insurer_error: false,
+        good_faith: true,
+        as_at: d(2027, 11, 20),
+    }
 }
 
 fn held(period: &str, book: Option<&str>, reason: Option<HeldReason>, amount: i64) -> HeldLine {
@@ -316,7 +338,14 @@ async fn a_pass_carries_engagements_licences_and_held_money() {
         let position = &s.data.workbench.positions[&p("adv-1")];
         assert_eq!(position.held()["NZD"], 950_00);
         // What the party owes is carried as a debt, whichever sign the commission module gave it.
-        assert_eq!(position.net()["NZD"], 950_00 - 300_00 - 120_00);
+        // A claim overpayment kept in the claims ledger counts against them too, once, and a settled one not at all.
+        assert_eq!(position.net()["NZD"], 950_00 - 300_00 - 120_00 - 75_00);
+        let overpaid = &position.items["commission"]["memo/claims/clm-1/overpayment/1"];
+        assert_eq!(
+            (overpaid.kind, overpaid.amount_minor, overpaid.since),
+            (ItemKind::Overpayment, -75_00, d(2027, 11, 20))
+        );
+        assert!(!position.items["commission"].contains_key("memo/claims/clm-1/overpayment/2"));
         assert_eq!((position.documents.len(), position.cases.len()), (1, 1));
         assert_eq!(s.data.workbench.positions[&p("fap-1")].current_status(), PartyStatus::LicenceSuspended);
     });

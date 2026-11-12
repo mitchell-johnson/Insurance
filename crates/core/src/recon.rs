@@ -50,6 +50,9 @@ pub fn reconcile(state: &CoreState) -> Vec<Break> {
             });
         }
     }
+    for (check, detail) in state.investment.breaks(&state.ledger, &state.policies) {
+        breaks.push(Break { check, detail });
+    }
     let mut receivable_total: i128 = 0;
     let mut unearned_total: i128 = 0;
     for p in state.policies.values() {

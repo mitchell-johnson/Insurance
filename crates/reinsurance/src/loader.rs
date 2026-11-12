@@ -69,10 +69,6 @@ fn invalid(file: &str, error: String) -> LoadError {
     LoadError::Invalid { file: file.to_string(), error }
 }
 
-fn yes() -> bool {
-    true
-}
-
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScenarioCover {
@@ -102,8 +98,7 @@ struct Expected {
 #[serde(deny_unknown_fields)]
 struct Scenario {
     name: String,
-    /// Whether the life is linked to a party.
-    #[serde(default = "yes")]
+    /// Whether the life is linked to a party. `scenario()` always says.
     matched: bool,
     /// The covers on one life.
     covers: Vec<ScenarioCover>,

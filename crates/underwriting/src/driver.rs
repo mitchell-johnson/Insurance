@@ -16,6 +16,7 @@
 //! the same effect.
 
 use std::future::Future;
+use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use ic_core::event::Event as CoreEvent;
@@ -26,7 +27,7 @@ use ic_reinsurance::capacity::{CapacityRequest, Outcome};
 use ic_reinsurance::treaty::RiskFactors;
 use serde_json::Value;
 
-use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject};
+use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, Reject, View};
 use crate::model::{Entry, Proposal, ProposalId};
 use crate::special::Query;
 
@@ -34,6 +35,7 @@ use crate::special::Query;
 pub const DRIVER: &str = "effects-driver";
 const AS_REINSURANCE: &str = "reinsurance";
 const AS_ISSUER: &str = "issuer";
+const AS_TIMER: &str = "timer";
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum DriverError {
@@ -128,6 +130,15 @@ pub struct Pass {
     pub parked: Vec<(u64, String)>,
 }
 
+/// What a day's sweep did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Swept {
+    pub pages: u32,
+    pub lapsed: u32,
+    pub chased: u32,
+    pub escalated: u32,
+}
+
 enum Step {
     Delivered,
     Stale,
@@ -168,6 +179,18 @@ fn issued_layers(events: &[CoreEvent]) -> Vec<IssuedLayer> {
             layer: l.layer,
         })
         .collect()
+}
+
+/// The layers added to a policy in force, from the core's reply.
+fn added_layers(events: &[CoreEvent]) -> impl Iterator<Item = IssuedLayer> + '_ {
+    events.iter().filter_map(|e| match e {
+        CoreEvent::LayerAdded { layer, .. } => Some(IssuedLayer {
+            life: layer.life.clone(),
+            cover: layer.cover.clone(),
+            layer: layer.layer,
+        }),
+        _ => None,
+    })
 }
 
 pub struct Driver<U, R, C, S, F> {
@@ -279,6 +302,98 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
             }
             if let Some(e) = stopped {
                 return Err(e);
+            }
+        }
+    }
+
+    /// The day's sweep: lapse what has expired, chase evidence, escalate
+    /// what nobody has touched, a page at a time until the open proposals
+    /// are done. Each page has a key of the day and where it starts, so a
+    /// sweep repeated on the same day, by this driver or another, does the
+    /// day's work once.
+    pub async fn sweep(&self, page: u32) -> Result<Swept, DriverError> {
+        let today = self.today();
+        let mut total = Swept::default();
+        let mut after: Option<ProposalId> = None;
+        loop {
+            let key = format!("sweep:{today}:{}", after.as_ref().map(ToString::to_string).unwrap_or_default());
+            let command = Command::Sweep {
+                after: after.clone(),
+                max: page.clamp(1, 1000),
+            };
+            let applied = self
+                .tell(key, AS_TIMER, command)
+                .await?
+                .map_err(|e| DriverError::Answer(format!("the module refused the sweep: {}: {}", e.code, e.message)))?;
+            let Some(View::Sweep {
+                next,
+                lapsed,
+                chased,
+                escalated,
+            }) = applied.view
+            else {
+                // A repeat older than the results the module keeps: that day's sweep was done long ago.
+                return Ok(total);
+            };
+            total.pages += 1;
+            total.lapsed += lapsed;
+            total.chased += chased;
+            total.escalated += escalated;
+            match next {
+                Some(next) => after = Some(next),
+                None => return Ok(total),
+            }
+        }
+    }
+
+    /// Carry the outbox, and sweep once on each new day. `swept` is the
+    /// last day this driver swept on.
+    pub async fn cycle(&self, swept: &mut Option<NaiveDate>, page: u32) -> (Result<Pass, DriverError>, Option<Result<Swept, DriverError>>) {
+        let today = self.today();
+        let sweep = if *swept == Some(today) {
+            None
+        } else {
+            let done = self.sweep(page).await;
+            if done.is_ok() {
+                *swept = Some(today);
+            }
+            Some(done)
+        };
+        (self.deliver().await, sweep)
+    }
+
+    /// Run cycles until `stop` resolves. `seen` is shown each cycle's results.
+    pub async fn run(
+        &self,
+        every: Duration,
+        page: u32,
+        stop: impl Future<Output = ()>,
+        mut seen: impl FnMut(&Result<Pass, DriverError>, &Option<Result<Swept, DriverError>>),
+    ) {
+        tokio::pin!(stop);
+        let mut swept = None;
+        loop {
+            let (pass, sweep) = self.cycle(&mut swept, page).await;
+            match &pass {
+                Ok(p) if p.parked.is_empty() => tracing::debug!(delivered = p.delivered, stale = p.stale, "underwriting delivery pass"),
+                Ok(p) => tracing::warn!(delivered = p.delivered, parked = ?p.parked, "underwriting effects were parked"),
+                Err(e) => tracing::warn!(error = %e, "an underwriting delivery pass could not finish"),
+            }
+            match &sweep {
+                None => {}
+                Some(Ok(s)) => tracing::info!(
+                    pages = s.pages,
+                    lapsed = s.lapsed,
+                    chased = s.chased,
+                    escalated = s.escalated,
+                    "underwriting daily sweep"
+                ),
+                Some(Err(e)) => tracing::warn!(error = %e, "the underwriting daily sweep could not finish"),
+            }
+            seen(&pass, &sweep);
+            tokio::select! {
+                () = &mut stop => return,
+                () = tokio::time::sleep(every) => {}
             }
         }
     }
@@ -421,27 +536,52 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                     issue: command.clone(),
                 };
                 let answer = self.core.send(home_partition(&command.group), key, "new-business", issue).await?;
-                let (suffix, back) = match answer.refused {
-                    None => (
-                        "issued",
-                        Command::PolicyIssued {
-                            proposal: proposal.clone(),
-                            layers: issued_layers(&answer.events),
-                        },
-                    ),
-                    Some(r) => (
-                        "rejected",
-                        Command::IssueRejected {
-                            proposal: proposal.clone(),
-                            code: r.code,
-                        },
-                    ),
+                let outcome = match answer.refused {
+                    None => Ok(issued_layers(&answer.events)),
+                    Some(r) => Err(r.code),
                 };
-                match self.tell(format!("{key}/{suffix}"), AS_ISSUER, back).await? {
-                    Ok(_) => Step::Delivered,
-                    Err(e) if e.code == "not_issuing" => Step::Stale,
-                    Err(e) => Step::Park(format!("the module refused the core's answer: {}: {}", e.code, e.message)),
+                self.issue_answer(key, proposal, outcome).await?
+            }
+            Effect::ApplyTerms {
+                key,
+                proposal,
+                entry: Entry::Increase { .. },
+                policy,
+                covers,
+                ..
+            } => {
+                let Some(group) = self.group_of(proposal).await? else {
+                    return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
+                };
+                let mut layers = Vec::new();
+                let mut refused = None;
+                for cover in covers {
+                    let Some(life) = &cover.life else {
+                        return Ok(Step::Park(format!("the increase on {} names no life", cover.code)));
+                    };
+                    // Keyed by the proposal and cover, not the attempt: a cover the core has
+                    // written is not written again when the rest is tried again.
+                    let layer = ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+                        policy: policy.clone(),
+                        cover: cover.code.clone(),
+                        life: life.clone(),
+                        sum_insured_minor: cover.sum_insured_minor,
+                        loadings: cover.loadings.clone(),
+                        exclusions: cover.exclusions.clone(),
+                        reference: key.clone(),
+                    }));
+                    let sent = format!("{proposal}/increase/{life}/{}", cover.code);
+                    let answer = self.core.send(home_partition(&group), &sent, "underwriting", layer).await?;
+                    match answer.refused {
+                        None => layers.extend(added_layers(&answer.events)),
+                        Some(r) => {
+                            refused = Some(r.code);
+                            break;
+                        }
+                    }
                 }
+                let outcome = refused.map_or(Ok(layers), Err);
+                self.issue_answer(key, proposal, outcome).await?
             }
             Effect::IssueInterim { key, proposal, command } => {
                 let answer = self
@@ -522,13 +662,39 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
-            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for revised terms on a policy in force".to_string()),
+            Effect::ApplyTerms { .. } => Step::Park("the core has no command yet for an alteration or a reinstatement on underwriting's terms".to_string()),
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy { .. } => Step::Park("the core has no command yet to vary or avoid a policy".to_string()),
             other => match self.forward.forward(other).await? {
                 None => Step::Delivered,
                 Some(reason) => Step::Park(reason),
             },
+        })
+    }
+
+    /// Bring the core's answer to an issue back: the layers it wrote, or
+    /// the code it refused with, which the module keeps for a retry.
+    async fn issue_answer(&self, key: &str, proposal: &ProposalId, outcome: Result<Vec<IssuedLayer>, String>) -> Result<Step, DriverError> {
+        let (suffix, back) = match outcome {
+            Ok(layers) => (
+                "issued",
+                Command::PolicyIssued {
+                    proposal: proposal.clone(),
+                    layers,
+                },
+            ),
+            Err(code) => (
+                "rejected",
+                Command::IssueRejected {
+                    proposal: proposal.clone(),
+                    code,
+                },
+            ),
+        };
+        Ok(match self.tell(format!("{key}/{suffix}"), AS_ISSUER, back).await? {
+            Ok(_) => Step::Delivered,
+            Err(e) if e.code == "not_issuing" => Step::Stale,
+            Err(e) => Step::Park(format!("the module refused the core's answer: {}: {}", e.code, e.message)),
         })
     }
 

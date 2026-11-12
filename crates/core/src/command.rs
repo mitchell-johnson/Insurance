@@ -112,6 +112,23 @@ pub struct ExcessLayer {
     pub reference: String,
 }
 
+/// More cover on a retail policy in force, accepted by underwriting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnderwrittenLayer {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// The cover added, on top of what the life already has.
+    pub sum_insured_minor: i64,
+    /// Underwriting terms. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The underwriting decision this layer comes from.
+    pub reference: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged: internally tagged enums cannot carry 128-bit integers in JSON.
 #[serde(rename_all = "snake_case")]
@@ -245,6 +262,10 @@ pub enum Command {
     /// Write a member's accepted cover above the automatic amount as its own
     /// layer on the scheme's cover, billed with the scheme from its start.
     AddExcessLayer(Box<ExcessLayer>),
+    /// Add cover to a retail policy in force as a new layer from today, on
+    /// the terms underwriting decided. The rest of a period already billed
+    /// is billed as an adjustment, due today.
+    AddUnderwrittenLayer(Box<UnderwrittenLayer>),
     /// End an underwritten layer from a date (a reduction, or the member
     /// giving the extra cover up). A leaver's layers end with the leave.
     EndExcessLayer {
@@ -283,6 +304,10 @@ pub enum Command {
     /// the core in the same step, so the claim and the ledger commit or fail
     /// together.
     Claims(Box<ic_claims::Command>),
+    // --- investment ---
+    /// A command for the investment ledger: funds, unit prices, unit orders
+    /// and their execution.
+    Investment(Box<crate::invest::InvestCommand>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -395,8 +420,10 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
+            Command::AddUnderwrittenLayer(_) => &["underwriting"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
+            Command::Investment(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -432,10 +459,12 @@ impl Command {
             Command::IdentifyMember { .. } => "identify_member",
             Command::AddExcessLayer(_) => "add_excess_layer",
             Command::EndExcessLayer { .. } => "end_excess_layer",
+            Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
             Command::Claims(_) => "claims",
+            Command::Investment(_) => "investment",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",

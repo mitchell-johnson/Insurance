@@ -176,10 +176,14 @@ impl Reinsurance {
             info.out_of_force_from = (!in_force).then_some(on);
             for key in self.policy_risks(policy) {
                 let Some(risk) = self.risk_mut(ctx, &key) else { continue };
-                match risk.suspensions.last_mut() {
-                    Some((_, until @ None)) if in_force => *until = Some(on.max(risk.start)),
-                    _ if !in_force => risk.suspensions.push((on.max(risk.start), None)),
-                    _ => {}
+                let at = on.max(risk.start);
+                if in_force {
+                    // A cover of a policy out of force carries one open suspension.
+                    for (_, until) in risk.suspensions.iter_mut().filter(|(_, until)| until.is_none()) {
+                        *until = Some(at);
+                    }
+                } else {
+                    risk.suspensions.push((at, None));
                 }
             }
         }
@@ -303,7 +307,7 @@ impl Reinsurance {
                 covers,
                 party,
             } => {
-                self.set_lives(ctx, &policy, &[LifeInfo { life: life.clone(), party }]);
+                self.set_lives(ctx, &policy, &[LifeInfo::new(life.clone(), party)]);
                 self.set_member(ctx, &policy, partition, &life, effective, &covers);
             }
             Event::MemberChanged {
@@ -315,7 +319,7 @@ impl Reinsurance {
             } => self.set_member(ctx, &policy, partition, &life, effective, &covers),
             Event::MemberLeft { policy, life, effective } => self.set_member(ctx, &policy, partition, &life, effective, &[]),
             Event::MemberIdentified { policy, life, party } => {
-                self.set_lives(ctx, &policy, &[LifeInfo { life, party: Some(party) }]);
+                self.set_lives(ctx, &policy, &[LifeInfo::new(life, Some(party))]);
             }
             Event::PremiumDue {
                 policy,

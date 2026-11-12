@@ -26,13 +26,19 @@ pub(crate) fn life_infos(policy: &Policy) -> Vec<LifeInfo> {
     policy
         .lives
         .values()
-        .map(|l| LifeInfo {
-            life: l.id.clone(),
-            party: match &l.kind {
-                LifeKind::Named { party } => Some(party.clone()),
-                LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
-                LifeKind::Pool { .. } => None,
-            },
+        .map(|l| {
+            let factors = l.factors.as_of(NaiveDate::MAX);
+            LifeInfo {
+                life: l.id.clone(),
+                party: match &l.kind {
+                    LifeKind::Named { party } => Some(party.clone()),
+                    LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+                    LifeKind::Pool { .. } => None,
+                },
+                date_of_birth: factors.and_then(|f| f.date_of_birth),
+                sex: factors.and_then(|f| f.sex),
+                smoker: factors.and_then(|f| f.smoker),
+            }
         })
         .collect()
 }
@@ -265,6 +271,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
     });
     // Premium is in advance: the first period is due at issue.
     let r = billing::bill_due_periods(&mut state.ledger, &state.catalog, &product, &mut policy, ctx);
+    policy.stamp_settled(ctx.date);
     state.policies.insert(policy.id.clone(), policy);
     r.map(|_| ())
 }

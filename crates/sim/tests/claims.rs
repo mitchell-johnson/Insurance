@@ -1301,3 +1301,91 @@ fn a_second_death_claim_cannot_end_a_policy_twice() {
     assert_eq!((c.state(0).ledger.head(), money(&c, &id)), before);
     assert_eq!(claim(&c, "clm-2").status, Status::Open);
 }
+
+/// Purpose: a premium paid after the event for a period that was due before it does not make
+/// the policy read as paid on the event date. The cover check still answers in grace or
+/// suspended for that day and reports how much has been paid since; an event after the payment
+/// reads as paid; a bounced payment makes the premium owing again; and a lapse, which writes
+/// the arrears off, records the day they stopped being owed.
+/// Why it matters: cover is decided as at the event. If paying the arrears after an accident
+/// turned a suspended policy into a paid one for that day, anyone could buy cover for an event
+/// that had already happened.
+#[test]
+fn a_premium_paid_after_the_event_does_not_rewrite_the_event_date() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, false);
+    let mut checked = 0;
+    let mut facts_on = |c: &mut Cluster, event: NaiveDate| {
+        checked += 1;
+        let claim_id = format!("clm-{checked}");
+        ok(c, notification(&claim_id, &id, "trauma", ClaimType::Trauma, event));
+        let assign = claims::Command::Assign {
+            claim: claim_id.clone(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        };
+        ok(c, assign);
+        let check = claims::Command::CoverCheck {
+            claim: claim_id.clone(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        };
+        ok(c, check);
+        claim(c, &claim_id).cover_check.clone().unwrap().facts
+    };
+    let settled = |c: &Cluster| -> Vec<Option<NaiveDate>> { c.state(0).policies[&id].receivables.iter().map(|r| r.settled_on).collect() };
+    let day_10 = start().checked_add_days(chrono::Days::new(10)).unwrap();
+
+    days(&mut c, 45);
+    let day_45 = c.business_date().unwrap();
+    assert!(settled(&c).iter().all(Option::is_none), "nothing has been paid");
+    let before = facts_on(&mut c, day_45);
+    assert_eq!(
+        (before.standing.as_deref(), before.in_force, before.premium_paid_since_event_minor),
+        (Some("suspended"), false, 0)
+    );
+
+    // The arrears are paid the next day.
+    days(&mut c, 1);
+    let paid_on = c.business_date().unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "late".into(),
+        amount: Money::new(2_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    assert!(settled(&c).iter().all(|s| *s == Some(paid_on)), "{:?}", settled(&c));
+
+    let f = facts_on(&mut c, day_45);
+    assert_eq!(
+        (f.standing.as_deref(), f.in_force),
+        (Some("suspended"), false),
+        "paid since, but suspended that day"
+    );
+    assert!(f.premium_paid_since_event_minor > 0 && f.outstanding_premium_minor == 0);
+    let f = facts_on(&mut c, day_10);
+    assert_eq!((f.standing.as_deref(), f.in_force), (Some("in_grace"), true));
+    let f = facts_on(&mut c, paid_on);
+    assert_eq!(
+        (f.standing.as_deref(), f.in_force, f.premium_paid_since_event_minor),
+        (Some("paid"), true, 0),
+        "an event on or after the day it was paid is on a paid policy"
+    );
+
+    // The payment bounces: the premium is owing again and no longer counts as settled.
+    let bounce = Command::ReverseReceipt {
+        policy: id.clone(),
+        receipt: "late".into(),
+    };
+    c.submit(0, "cash-matching", bounce).unwrap();
+    assert!(settled(&c).iter().all(Option::is_none));
+    let f = facts_on(&mut c, paid_on);
+    assert_eq!((f.standing.as_deref(), f.premium_paid_since_event_minor), (Some("suspended"), 0));
+    assert!(f.outstanding_premium_minor > 0);
+
+    // Left unpaid it lapses. The arrears are written off, and that day is recorded on them.
+    days(&mut c, 60);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::Lapsed);
+    assert!(settled(&c).iter().all(Option::is_some));
+    clean(&c);
+}

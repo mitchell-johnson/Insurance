@@ -69,6 +69,11 @@ pub enum Query {
         period_start: NaiveDate,
         period_end: NaiveDate,
     },
+    /// The close check finance reports as `reinsurance_sweep` for a period
+    /// ending on the date: `{"green": bool, "items": [...]}`.
+    SweepCheck {
+        period_end: NaiveDate,
+    },
     /// Ceded sums and open recoverables by reinsurer.
     Exposure {
         on: NaiveDate,
@@ -128,6 +133,10 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
         Query::Exposure { on } => json(state.exposure(on)),
         Query::SchemeConcentration { on } => json(state.scheme_concentration(on)),
         Query::ConsentStatus { claim } => json(state.consent_status(&claim)),
+        Query::SweepCheck { period_end } => {
+            let items = state.sweep_check(period_end);
+            json(serde_json::json!({"green": items.is_empty(), "items": items}))
+        }
         Query::Exceptions => json(state.exceptions()),
         Query::Abandoned => json(state.abandoned()),
         Query::AbandonedNotices => json(state.notices_abandoned()),

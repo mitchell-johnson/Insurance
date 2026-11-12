@@ -208,6 +208,13 @@ pub struct Receivable {
     /// reverses. Absent on receivables raised before this was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<EntryId>,
+    /// The business date on which nothing was left owing on it, however that
+    /// came about: a payment, suspense applied, a credit, a write-off. Absent
+    /// while anything is outstanding, and cleared when a reversal reopens it.
+    /// The claims cover check reads it to know whether a premium was unpaid
+    /// on an event date that has since been paid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settled_on: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -483,6 +490,18 @@ impl Policy {
     /// Due date of the oldest receivable with money still owed on it.
     pub fn oldest_unpaid_due(&self) -> Option<NaiveDate> {
         self.receivables.iter().filter(|r| r.outstanding_minor > 0).map(|r| r.due).min()
+    }
+    /// Record when each receivable stopped being owed, and forget it for
+    /// one that is owed again. Run after every command that touches the
+    /// policy, so no path that settles or reopens a receivable is missed.
+    pub fn stamp_settled(&mut self, today: NaiveDate) {
+        for r in &mut self.receivables {
+            if r.outstanding_minor != 0 {
+                r.settled_on = None;
+            } else {
+                r.settled_on.get_or_insert(today);
+            }
+        }
     }
     /// Receivables that are fully settled and fully earned carry no further
     /// information the state machine needs: their history is in the log. This

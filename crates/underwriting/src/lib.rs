@@ -26,6 +26,7 @@ pub mod machine;
 pub mod model;
 pub mod questions;
 pub mod rules;
+pub mod service;
 pub mod shipped;
 pub mod signing;
 pub mod special;

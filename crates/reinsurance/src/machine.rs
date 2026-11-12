@@ -818,11 +818,10 @@ impl Reinsurance {
     /// Move a member's covers to the life they have been linked to.
     pub(crate) fn relink(&mut self, ctx: &mut Ctx, policy: &PolicyId, life: &LifeId) {
         let to = self.life_of(policy, life);
-        let keys: Vec<RiskKey> = self.policy_risks(policy).into_iter().filter(|k| &k.life == life).collect();
+        let moving = |k: &RiskKey| &k.life == life && self.risk_life.get(k) != Some(&to);
+        let keys: Vec<RiskKey> = self.policy_risks(policy).into_iter().filter(moving).collect();
         for key in keys {
-            let Some(from) = self.risk_life.get(&key).cloned().filter(|f| f != &to) else {
-                continue;
-            };
+            let Some(from) = self.risk_life.get(&key).cloned() else { continue };
             let Some(book) = self.lives.get_mut(&from) else { continue };
             let risk = book.risks.remove(&key);
             let recorded = book.recorded.remove(&key);
@@ -947,10 +946,10 @@ impl Reinsurance {
             }
         }
         for key in keys {
-            if let Some(risk) = self.risk_mut(ctx, key) {
-                risk.treaties.retain(|(d, _)| *d < effective);
-                risk.treaties.push((effective, to.cloned()));
-            }
+            // Every key was checked above.
+            let Some(risk) = self.risk_mut(ctx, key) else { continue };
+            risk.treaties.retain(|(d, _)| *d < effective);
+            risk.treaties.push((effective, to.cloned()));
         }
         Ok(())
     }

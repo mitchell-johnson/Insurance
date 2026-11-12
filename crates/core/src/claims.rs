@@ -141,7 +141,14 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         Some(l) => l.receivables_before.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
         None => p.receivables.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
     };
-    let oldest = unpaid.iter().map(|r| r.due).min();
+    // Premium paid since the event for a period that was due by it: owed on
+    // the event date, though nothing is owed on it now.
+    let settled_since: Vec<&crate::policy::Receivable> = p
+        .receivables
+        .iter()
+        .filter(|r| !r.closed && r.outstanding_minor == 0 && r.total_minor > 0 && r.due <= on && r.settled_on.is_some_and(|s| s > on))
+        .collect();
+    let oldest = unpaid.iter().chain(&settled_since).map(|r| r.due).min();
     let standing = product.and_then(|pr| pr.arrears()).map(|rules| {
         let age = oldest.map_or(0, |due| (on - due).num_days());
         if lapsed.is_some_and(|l| l.lapsed_on <= on) || age > i64::from(rules.lapse_days) {
@@ -163,6 +170,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         policy_status: status_code(p.status),
         standing: standing.map(str::to_string),
         outstanding_premium_minor: unpaid.iter().filter(|r| r.due <= on).map(|r| r.outstanding_minor).sum(),
+        premium_paid_since_event_minor: settled_since.iter().map(|r| r.total_minor).sum(),
         life_on_policy,
         life_party,
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),

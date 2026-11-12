@@ -411,6 +411,11 @@ impl ClusterClient {
         self.ask(partition, &Query::Claims { question: question.clone() }).await
     }
 
+    /// A question for the investment ledger on a partition.
+    pub async fn investment(&self, partition: PartitionId, question: &ic_core::invest::Question) -> Result<ic_core::invest::Reply, ClientError> {
+        self.ask(partition, &Query::Investment { question: question.clone() }).await
+    }
+
     /// What this partition's policies offer as matches for a payment.
     pub async fn payment_candidates(&self, partition: PartitionId, matcher: &Matcher, payment: &IncomingPayment) -> Result<Candidates, ClientError> {
         let query = Query::PaymentCandidates {

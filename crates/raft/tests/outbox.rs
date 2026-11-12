@@ -237,7 +237,7 @@ impl Cluster {
 /// as a repeat. Items queued while the node carrying them is lost are still carried, by
 /// the module's next leader, and each outcome is recorded once. An outcome the module
 /// cannot read holds back the items behind it, and an outbox the host cannot read is
-/// retried without harm.
+/// retried without harm. A question for the investment ledger is answered by the partition.
 /// Why it matters: commission, reinsurance and group billing change the ledger only
 /// through this path. An item dropped when a node dies is commission earned and never
 /// posted; an item posted twice is money counted twice; an item the core refuses and
@@ -285,6 +285,10 @@ async fn a_modules_core_commands_are_carried_and_their_outcomes_reported() {
             _ => None,
         })
         .expect("the issue produced a PolicyIssued event");
+
+    // The investment ledger answers through the same door as every other question.
+    let nothing = cluster.client.investment(0, &ic_core::invest::Question::Executable).await.unwrap();
+    assert_eq!(nothing, ic_core::invest::Reply::Executable(vec![]));
 
     // Refused by the core, unroutable, routed by policy, and a repeat of an earlier command.
     let mut refused = Cluster::envelope("unknown-caller", open());
