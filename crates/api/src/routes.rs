@@ -45,6 +45,7 @@ pub fn router(state: Shared) -> Router {
         .route("/v1/payments", post(payment))
         .route("/v1/commands", post(command))
         .route("/v1/claims/{claim}", get(claim))
+        .route("/v1/claims/{claim}/work", get(claims_work))
         .route("/v1/claims/queues/{queue}", get(claims_queue))
         .route("/v1/claims/book", get(claims_book))
         .route("/v1/claims/report", get(claims_report))
@@ -389,10 +390,24 @@ async fn claims_staff(s: &Shared, headers: &HeaderMap, question: Question) -> Ap
             Reply::Book(b) => json!(b),
             Reply::Report(r) => json!(r),
             Reply::Remittance(r) => json!(r),
-            Reply::Claim(_) | Reply::Queue(_) => Value::Null,
+            Reply::Claim(_) | Reply::Queue(_) | Reply::Work(_) => Value::Null,
         })
         .collect();
     Ok(Json(json!({ "partitions": partitions })).into_response())
+}
+
+/// One claim as the people working it need it: owner, tasks, evidence, the
+/// decision waiting for a signature and the money. Claims staff only. The
+/// clinical file is not in it; that is read by opening the file.
+async fn claims_work(State(s): State<Shared>, headers: HeaderMap, Path(claim): Path<String>) -> ApiResult {
+    let caller = s.auth.authenticate(&headers).await?;
+    require(&caller, CLAIMS)?;
+    let replies = s.backend.claims(&Question::Work { claim }).await?;
+    let view = replies.into_iter().find_map(|r| match r {
+        Reply::Work(Some(view)) => Some(view),
+        _ => None,
+    });
+    Ok(Json(json!(view.ok_or_else(Problem::not_found)?)).into_response())
 }
 
 /// The claims in payment, by partition. Carries cause analysis.

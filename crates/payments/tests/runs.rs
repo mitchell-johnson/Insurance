@@ -1020,3 +1020,63 @@ fn pruning_forgets_only_what_is_finished() {
     assert!(desk.state.items.contains_key("i2"));
     assert_eq!(desk.state.answered.len(), 1, "only the prune itself is remembered");
 }
+
+/// Purpose: a collection under a scheme member's own authority reaches the
+/// core as that member's receipt, beside an employer's collection on the
+/// same scheme policy that stays an ordinary receipt; a dishonour reverses
+/// the member's receipt like any other; and an authority recorded before
+/// members could pay still reads as the policy's own.
+/// Why it matters: a member's premium can include an underwriting loading.
+/// Applied as the policy's money it would pay down the employer's bill and
+/// show on the employer's statement, which is both the wrong debt settled
+/// and a disclosure of the member's health to their employer.
+#[test]
+fn a_members_own_collection_is_applied_to_that_member_alone() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.ok(
+        &pam(),
+        Command::CreateAuthority {
+            authority: "a2".to_string(),
+            policy: policy("pol-1"),
+            party: "party-member".to_string(),
+            life: Some(ic_core::LifeId::from("life-7")),
+            account: account("Mere Member", "0201234567"),
+            sole_name: true,
+        },
+    );
+    desk.prepare("dd", RunType::Collection, d(2027, 11, 15));
+    desk.add("dd", vec![collect("c1", "a1", "pol-1", 900_00), collect("c2", "a2", "pol-1", 41_50)]);
+    let s = desk.approve("dd");
+    desk.settle(&s, d(2027, 11, 16));
+    let sent = |desk: &Desk, key: &str| {
+        let entry = desk.state.outbox.values().find(|e| e.key == key).expect("an instruction under that key");
+        let Instruction::Core { caller, command } = &entry.instruction else {
+            panic!("a core instruction")
+        };
+        assert_eq!(caller, "cash-matching");
+        serde_json::to_value(command).unwrap()
+    };
+    assert_eq!(
+        sent(&desk, "settle-c1"),
+        json!({"apply_receipt": {"policy": "pol-1", "receipt": "c1", "amount": {"minor": 900_00, "currency": "NZD"}}})
+    );
+    assert_eq!(
+        sent(&desk, "settle-c2"),
+        json!({"apply_member_receipt": {"policy": "pol-1", "life": "life-7", "receipt": "c2", "amount": {"minor": 41_50, "currency": "NZD"}}})
+    );
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "c2".to_string(),
+            reason: ReturnReason::InsufficientFunds,
+            returned_on: d(2027, 11, 17),
+        },
+    );
+    assert_eq!(sent(&desk, "return-c2"), json!({"reverse_receipt": {"policy": "pol-1", "receipt": "c2"}}));
+
+    let stored = serde_json::to_value(&desk.state.authorities["a1"]).unwrap();
+    assert!(stored.get("life").is_none(), "an authority without a member is stored as it always was");
+    let old: ic_payments::model::Authority = serde_json::from_value(stored).unwrap();
+    assert_eq!(old.life, None);
+}

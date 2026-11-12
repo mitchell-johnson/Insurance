@@ -121,6 +121,80 @@ pub enum Question {
     Remittance {
         run: String,
     },
+    /// One claim as the people working it need it, without the clinical file.
+    Work {
+        claim: ClaimId,
+    },
+}
+
+/// One claim for the staff working it: who has it, what is waiting and
+/// what is owed. No cause, reason code, exclusion outcome or vault
+/// reference is in it; those are read by opening the file, which is logged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkView {
+    pub claim: ClaimId,
+    pub policy: String,
+    pub cover: String,
+    pub claim_type: ClaimType,
+    pub status: Status,
+    pub queue: Queue,
+    pub owner: Option<StaffId>,
+    pub event_date: NaiveDate,
+    pub notified_on: NaiveDate,
+    pub closed_on: Option<NaiveDate>,
+    pub reserve_minor: i64,
+    pub admitted_minor: i64,
+    /// Admitted and not yet released, the claimant's part and any handling cost that came back.
+    pub payable_minor: i64,
+    pub paid_minor: i64,
+    pub in_run: Option<String>,
+    pub tasks: Vec<WorkTask>,
+    /// Evidence asked for: its ID, what it is, who from, when due and when received.
+    pub evidence: Vec<(String, String, String, NaiveDate, Option<NaiveDate>)>,
+    pub waiting: Option<WorkDecision>,
+    /// The verified payee: the party and what kind of payee they are.
+    pub payee: Option<(String, crate::PayeeKind)>,
+    /// Interested parties and what each is still owed before the claimant.
+    pub interests: Vec<(String, i64)>,
+    /// Payments: reference, amount, date, returned.
+    pub payments: Vec<(String, i64, NaiveDate, bool)>,
+    pub benefit: Option<WorkBenefit>,
+    /// Overpayments: ID, outstanding and recovery status.
+    pub overpayments: Vec<(String, i64, RecoveryStatus)>,
+    /// Service timers: due, met and how far escalated.
+    pub timers: BTreeMap<TimerKind, (NaiveDate, Option<NaiveDate>, u8)>,
+    pub waiver_from: Option<NaiveDate>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkTask {
+    pub id: String,
+    pub kind: TaskKind,
+    pub due: Option<NaiveDate>,
+    pub completed_on: Option<NaiveDate>,
+    pub overdue: bool,
+}
+
+/// A decision proposed and waiting for its signatures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkDecision {
+    pub kind: DecisionKind,
+    pub proposer: StaffId,
+    pub proposed_on: NaiveDate,
+    pub signed: Vec<StaffId>,
+    /// How many more signatures it needs.
+    pub still_needed: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkBenefit {
+    pub monthly_minor: i64,
+    pub next_period: NaiveDate,
+    pub end: NaiveDate,
+    pub reviews: BTreeMap<TaskKind, NaiveDate>,
+    pub reviews_overdue: u32,
+    pub arrears_minor: i64,
+    pub held_for_proof_of_life: bool,
 }
 
 /// A claim for someone outside the module, with what the caller needs to
@@ -142,6 +216,7 @@ pub enum Reply {
     Book(Box<Book>),
     Report(Box<Report>),
     Remittance(BTreeMap<String, (u32, i64)>),
+    Work(Option<Box<WorkView>>),
 }
 
 impl ClaimsState {
@@ -159,7 +234,65 @@ impl ClaimsState {
             Question::Book => Reply::Book(Box::new(self.book(today))),
             Question::Report => Reply::Report(Box::new(self.report())),
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
+            Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
         }
+    }
+
+    pub fn work_view(&self, claim: &str) -> Option<WorkView> {
+        let c = self.claims.get(claim)?;
+        let task = |t: &crate::model::Task| WorkTask {
+            id: t.id.clone(),
+            kind: t.kind,
+            due: t.due,
+            completed_on: t.completed_on,
+            overdue: t.overdue,
+        };
+        let evidence = |e: &crate::model::Evidence| (e.id.clone(), e.kind.clone(), e.from.clone(), e.due, e.received_on);
+        Some(WorkView {
+            claim: c.id.clone(),
+            policy: c.policy.clone(),
+            cover: c.cover.clone(),
+            claim_type: c.claim_type,
+            status: c.status,
+            queue: c.queue,
+            owner: c.owner.clone(),
+            event_date: c.event_date,
+            notified_on: c.notified_on,
+            closed_on: c.closed_on,
+            reserve_minor: c.reserve_minor,
+            admitted_minor: c.admitted_minor,
+            payable_minor: c.payable_minor,
+            paid_minor: c.paid_minor(false),
+            in_run: c.in_run.clone(),
+            tasks: c.tasks.iter().map(task).collect(),
+            evidence: c.evidence.iter().map(evidence).collect(),
+            waiting: c.pending.as_ref().map(|p| WorkDecision {
+                kind: p.request.kind(),
+                proposer: p.proposer.clone(),
+                proposed_on: p.proposed_on,
+                signed: p.signed.clone(),
+                still_needed: p.needs.len(),
+            }),
+            payee: c.payee.as_ref().map(|p| (p.party.clone(), p.kind)),
+            interests: c.interests.iter().map(|i| (i.party.clone(), i.owed_minor - i.paid_minor)).collect(),
+            payments: c
+                .payments
+                .iter()
+                .map(|p| (p.payment_ref.clone(), p.amount_minor + p.interest_minor, p.paid_on, p.returned))
+                .collect(),
+            benefit: c.schedule.as_ref().map(|s| WorkBenefit {
+                monthly_minor: s.monthly_minor,
+                next_period: s.next_period,
+                end: s.end,
+                reviews: s.reviews.clone(),
+                reviews_overdue: s.reviews_overdue,
+                arrears_minor: s.arrears_minor,
+                held_for_proof_of_life: c.held_for_proof_of_life(),
+            }),
+            overpayments: c.overpayments.iter().map(|o| (o.id.clone(), o.outstanding_minor(), o.status)).collect(),
+            timers: c.timers.iter().map(|(k, t)| (*k, (t.due, t.met_on, t.escalated))).collect(),
+            waiver_from: c.waiver_from,
+        })
     }
 
     pub fn status_view(&self, claim: &str) -> Option<StatusView> {
