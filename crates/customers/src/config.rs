@@ -45,6 +45,15 @@ pub struct Config {
     pub listen: String,
     pub cycle_every: Duration,
     pub sweep_every: Duration,
+    /// The ledger cluster, for telling claims of deaths.
+    pub cluster: Option<Cluster>,
+}
+
+/// Where the core's partitions are, and how to sign in to them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cluster {
+    pub nodes: String,
+    pub auth: ic_raft::ClusterAuth,
 }
 
 impl std::fmt::Debug for Config {
@@ -95,6 +104,13 @@ impl Config {
             },
         };
         let partitions = number("IC_CUSTOMERS_HUB_PARTITIONS", 8)?;
+        let cluster = match get("IC_CLUSTER_NODES") {
+            Some(nodes) => Some(Cluster {
+                nodes,
+                auth: ic_raft::ClusterAuth::from_lookup(|k| get(k), &read)?,
+            }),
+            None => None,
+        };
         Ok(Self {
             database,
             pool_size: usize::try_from(number("IC_CUSTOMERS_POOL_SIZE", 16)?).unwrap_or(16),
@@ -113,6 +129,7 @@ impl Config {
             listen: get("IC_CUSTOMERS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(number("IC_CUSTOMERS_CYCLE_SECONDS", 2)?),
             sweep_every: Duration::from_secs(60 * number("IC_CUSTOMERS_SWEEP_MINUTES", 60)?),
+            cluster,
         })
     }
 }
@@ -180,6 +197,22 @@ mod tests {
         assert_eq!(format!("{:?}", c.database), "Local(..)");
         let azure = load(&base()).unwrap().database;
         assert_eq!(format!("{azure:?}"), "Azure(pg.postgres.database.azure.com/customers as id-customers)");
+    }
+
+    /// Purpose: the ledger cluster is optional; when named, its sign-in must be configured
+    /// too, from a mounted token file or explicitly open for a local cluster.
+    /// Why it matters: deaths reach claims only through the cluster, and a cluster named
+    /// without its token would fail every relay at the first death instead of at start.
+    #[test]
+    fn the_cluster_is_optional_but_complete() {
+        assert_eq!(load(&base()).unwrap().cluster, None);
+        let mut env = base();
+        env.insert("IC_CLUSTER_NODES", "ic-node-1.ic-node:7000".into());
+        assert!(load(&env).unwrap_err().contains("IC_CLUSTER_TOKEN_FILE"));
+        env.insert("IC_CLUSTER_AUTH", "open".into());
+        let cluster = load(&env).unwrap().cluster.unwrap();
+        assert_eq!(cluster.nodes, "ic-node-1.ic-node:7000");
+        assert!(cluster.auth.is_open());
     }
 
     /// Purpose: missing settings, a short or unreadable index key and bad numbers stop the

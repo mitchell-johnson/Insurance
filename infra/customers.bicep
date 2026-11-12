@@ -218,6 +218,22 @@ resource readIndexSecret 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   }
 }
 
+// Deaths are told to claims through the ledger cluster.
+resource clusterToken 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token'
+}
+
+resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: clusterToken
+  name: guid(clusterToken.id, identity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
 // --- the erasure register ---------------------------------------------------------------
 
 resource account 'Microsoft.Storage/storageAccounts@2023-05-01' = {

@@ -61,7 +61,7 @@ async fn the_pool_migrates_once_and_recycles() {
     b.unwrap();
     let client = pool.get().await.unwrap();
     let n: i64 = client.query_one("select count(*) from cm_migrations", &[]).await.unwrap().get(0);
-    assert_eq!(n, 1);
+    assert_eq!(n, i64::try_from(db::MIGRATIONS.len()).unwrap());
     drop(client);
     db::open(database.connector.clone(), 2).await.unwrap();
     let manager = Manager(database.connector.clone());
