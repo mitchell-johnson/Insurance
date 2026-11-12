@@ -15,12 +15,16 @@ pub mod capacity;
 pub mod cession;
 pub mod claims;
 pub mod delivery;
+pub mod driver;
 mod feed;
+pub mod host;
 mod ids;
 pub mod loader;
 pub mod machine;
 pub mod math;
+pub mod outbox;
 pub mod premium;
+pub mod service;
 pub mod treaty;
 pub mod views;
 

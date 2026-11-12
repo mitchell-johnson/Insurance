@@ -43,6 +43,8 @@
 
 8. **Set up the portal service** (`ic-portal`: the app's API, the portals, the consoles and the status page). Its app registrations, the values in `deploy/k8s/portal.yaml` and its public host are described in `docs/channels.md`, "Running it".
 
+9. **Set up payments** (`ic-payments-pump`: the bank channels and the evacuation drill). The payments vault, the bank keys and credentials, and the values in `deploy/k8s/payments.yaml` are described in `docs/payments.md`, "Running it".
+
 ## Day to day
 
 **Is it healthy?** `GET /readyz` on the API answers 200 with the business date when every partition has a leader. For detail:
