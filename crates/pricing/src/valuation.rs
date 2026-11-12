@@ -205,6 +205,7 @@ mod tests {
         V,growth,2026-11-12,2010000.00,1000000.5,1000.00,500.00,0.0012,N\n\
         V,cash,2026-11-12,500000.00,500000,0,0,,Y\n\
         A,growth,2026-11-12,NZ-BOND-7,2026-11-09\n\
+        \n\
         T,2,1\n";
 
     /// Purpose: a well-formed file is read into one valuation per fund, with
@@ -213,7 +214,7 @@ mod tests {
     /// every figure a price is struck from passes through here.
     #[test]
     fn reads_a_good_file() {
-        let file = parse(GOOD.as_bytes()).unwrap_or_else(|e| panic!("{e}"));
+        let file = parse(GOOD.as_bytes()).unwrap();
         assert_eq!(file.administrator, "acme-admin");
         assert_eq!(file.file_id, "VAL-20261112-01");
         assert_eq!(file.valuations.len(), 2);

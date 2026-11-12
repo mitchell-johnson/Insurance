@@ -146,7 +146,8 @@ fn held_and_blocked_prices() {
 }
 
 /// Purpose: a price prepared before a newer valuation or a change in the
-/// core's units is refused at approval, and preparing again replaces the old draft.
+/// core's units is refused at approval, preparing again replaces the old
+/// draft, and no second price for a date is approved while one is on its way.
 /// Why it matters: the approver must approve exactly the figures the price
 /// will carry; approving a price struck from superseded inputs would publish
 /// a number nobody checked.
@@ -164,6 +165,12 @@ fn stale_drafts_are_refused() {
     assert!(matches!(h.approve(&second, BTreeMap::new()), Output::Refused { ref code, .. } if code == "stale"));
     h.core_units(None, UNITS / 2);
     assert_eq!(h.approve(&second, BTreeMap::new()), Output::Done);
+    // A draft prepared while that price is on its way cannot be approved,
+    // during or after its activation.
+    let third = h.prepared_id(day(2));
+    assert!(matches!(h.approve(&third, BTreeMap::new()), Output::Refused { ref code, .. } if code == "in_flight"));
+    h.deliver_all();
+    assert!(matches!(h.approve(&third, BTreeMap::new()), Output::Refused { ref code, .. } if code == "stale"));
 }
 
 /// Purpose: prices go in date order. A date after a gap is refused until the

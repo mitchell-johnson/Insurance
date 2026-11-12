@@ -59,6 +59,11 @@ pub struct PricingTerms {
     pub pricing_lag_days: u32,
     /// `time_zone`: the IANA zone the cut-off is read in. Optional.
     pub time_zone: String,
+    /// `compensation_minimum_minor`: in a material error, a policy's
+    /// difference smaller than this (in minor units, valued at the corrected
+    /// price) is recorded and not paid. The core's replay reads it from the
+    /// same definition. Optional; absent is 0, which pays every difference.
+    pub compensation_minimum_minor: i64,
 }
 
 fn fraction(map: &BTreeMap<String, String>, key: &str, max: i64) -> Result<DecStr, String> {
@@ -82,7 +87,7 @@ impl PricingTerms {
     /// Read the terms from a definition's `pricing` map. Unknown keys are
     /// refused, so a misspelt tolerance is not silently ignored.
     pub fn from_map(map: &BTreeMap<String, String>) -> Result<Self, String> {
-        const KEYS: [&str; 8] = [
+        const KEYS: [&str; 9] = [
             "previous_move",
             "benchmark_gap",
             "stale_asset_days",
@@ -91,6 +96,7 @@ impl PricingTerms {
             "launch_price",
             "pricing_lag_days",
             "time_zone",
+            "compensation_minimum_minor",
         ];
         if let Some(unknown) = map.keys().find(|k| !KEYS.contains(&k.as_str())) {
             return Err(format!("pricing.{unknown} is not a term of the unit pricing module"));
@@ -108,6 +114,10 @@ impl PricingTerms {
             launch_price: fraction(map, "launch_price", 1_000_000)?,
             pricing_lag_days: whole(map, "pricing_lag_days", 1..=30)?,
             time_zone,
+            compensation_minimum_minor: match map.contains_key("compensation_minimum_minor") {
+                true => whole(map, "compensation_minimum_minor", 0..=100_000)? as i64,
+                false => 0,
+            },
         };
         if terms.launch_price.get() <= Dec::ZERO {
             return Err("pricing.launch_price must be above zero".to_string());
@@ -309,11 +319,15 @@ mod tests {
     /// before it decides whether a price may be approved.
     #[test]
     fn pricing_terms_are_read_and_checked() {
-        let terms = sample("growth").terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = sample("growth").terms().unwrap();
         assert_eq!(terms.previous_move.as_str(), "0.05");
         assert_eq!(terms.stale_asset_days, 3);
         assert_eq!(terms.pricing_lag_days, 1);
         assert_eq!(terms.time_zone, DEFAULT_TIME_ZONE);
+        assert_eq!(terms.compensation_minimum_minor, 0);
+        let mut minimum = sample("growth");
+        minimum.pricing.insert("compensation_minimum_minor".into(), "500".into());
+        assert_eq!(minimum.terms().map(|t| t.compensation_minimum_minor), Ok(500));
         let mut no_benchmark = sample("growth");
         no_benchmark.pricing.remove("benchmark_gap");
         assert_eq!(no_benchmark.terms().map(|t| t.benchmark_gap), Ok(None));
@@ -328,6 +342,7 @@ mod tests {
             ("pricing_lag_days", None, "missing"),
             ("launch_price", Some("0"), "above zero"),
             ("time_zone", Some("Mars/Base"), "time zone"),
+            ("compensation_minimum_minor", Some("-1"), "whole number"),
             ("spread", Some("1"), "not a term"),
         ];
         for (key, value, expect) in cases {

@@ -150,9 +150,14 @@ pub struct Correction {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Remediation {
     pub policies: BTreeSet<String>,
+    /// Orders replayed, compensated or not.
     pub movements: u64,
+    /// Orders whose difference was under the compensation minimum.
+    pub uncompensated: u64,
     pub units_micro: i64,
     pub cash_minor: i64,
+    /// What the insurer paid the fund to make it whole.
+    pub borne_minor: i64,
 }
 
 /// A price error and its correction.
@@ -272,17 +277,9 @@ impl PricingState {
         let today = envelope.at.date_naive();
         let output = match self.authorise(&envelope) {
             Err(refusal) => refusal,
-            Ok(()) => {
-                // Work on a copy so a refusal leaves no trace.
-                let mut next = self.clone();
-                match next.execute(&envelope) {
-                    Ok(output) => {
-                        *self = next;
-                        output
-                    }
-                    Err(refusal) => refusal,
-                }
-            }
+            // Every command checks everything before it writes, so a
+            // refusal leaves no trace (the tests check this for each one).
+            Ok(()) => self.execute(&envelope).unwrap_or_else(|refusal| refusal),
         };
         if let Some(cutoff) = today.checked_sub_days(Days::new(KEY_RETENTION_DAYS)) {
             self.applied.retain(|_, (day, _)| *day >= cutoff);
@@ -409,7 +406,7 @@ impl PricingState {
 
     fn activate_fund(&mut self, def: &FundDefinition, today: NaiveDate) -> Step {
         def.terms().map_err(|m| refuse("invalid_definition", m))?;
-        let versions = self.funds.entry(def.id.clone()).or_default();
+        let versions = self.funds.get(&def.id).map(Vec::as_slice).unwrap_or_default();
         if let Some(same) = versions.iter().find(|v| v.version == def.version) {
             return if same == def {
                 Ok(Output::Done)
@@ -425,7 +422,7 @@ impl PricingState {
             None if def.version != 1 => return Err(refuse("invalid_definition", "a fund's first version is 1")),
             None => {}
         }
-        versions.push(def.clone());
+        self.funds.entry(def.id.clone()).or_default().push(def.clone());
         self.fund_activated.entry(def.id.clone()).or_insert(today);
         Ok(Output::Done)
     }
@@ -460,14 +457,14 @@ impl PricingState {
         if reason.trim().is_empty() {
             return Err(refuse("reason_required", "a suspension needs a reason"));
         }
-        let list = self.suspensions.entry(fund.clone()).or_default();
+        let list = self.suspensions.get(fund).map(Vec::as_slice).unwrap_or_default();
         if list.iter().any(|s| s.to.is_none()) {
             return Err(refuse("suspended", format!("{} is already suspended", fund.0)));
         }
         if list.iter().any(|s| s.to.is_some_and(|to| from < to)) {
             return Err(refuse("overlap", "a suspension cannot start inside an earlier one"));
         }
-        list.push(Suspension {
+        self.suspensions.entry(fund.clone()).or_default().push(Suspension {
             from,
             to: None,
             reason: reason.to_string(),
@@ -694,6 +691,9 @@ impl PricingState {
             return Err(refuse("reason_required", "each accepted check needs a reason"));
         }
         let key = slot(&p.fund, p.pricing_date);
+        if let Some(other) = self.prices.values().find(|x| x.status == PriceStatus::Activating && x.fund == p.fund && x.pricing_date == p.pricing_date) {
+            return Err(refuse("in_flight", format!("{} is being activated for this date", other.id)));
+        }
         if self.valuations.get(&key).map_or(0, |v| v.len() as u32) != p.valuation_revision {
             return Err(refuse("stale", "a newer valuation has arrived; prepare the price again"));
         }
@@ -866,21 +866,23 @@ impl PricingState {
 
     /// A correction is in force: mark the error corrected when all its prices are.
     fn settle_error(&mut self, at: DateTime<Utc>, correction: &str) {
-        let Some(error) = self.prices.get(correction).and_then(|p| p.corrects.clone()) else {
-            return;
-        };
+        // Only a price with an error to correct reaches here.
+        let error = self.prices.get(correction).and_then(|p| p.corrects.clone()).unwrap_or_default();
         let prices = &self.prices;
-        let Some(err) = self.errors.get_mut(&error) else {
-            return;
-        };
-        let done = err.prices.values().all(|c| {
+        let in_force = |c: &Option<Correction>| {
             c.as_ref()
                 .and_then(|c| prices.get(&c.price))
                 .is_some_and(|p| matches!(p.status, PriceStatus::Active | PriceStatus::Immaterial))
-        });
-        if done && err.corrected_at.is_none() {
-            err.corrected_at = Some(at);
-            let material = err.prices.values().flatten().any(|c| c.material);
+        };
+        let settled = self
+            .errors
+            .get_mut(&error)
+            .filter(|err| err.corrected_at.is_none() && err.prices.values().all(in_force))
+            .map(|err| {
+                err.corrected_at = Some(at);
+                err.prices.values().flatten().any(|c| c.material)
+            });
+        if let Some(material) = settled {
             self.publish(at, Event::PriceErrorCorrected { error, material });
         }
     }
@@ -944,6 +946,25 @@ impl PricingState {
             return Ok(Output::Done);
         }
         self.movement_ids.insert(m.id.clone(), m.pricing_date);
+        if m.kind == MovementKind::Correction {
+            let error = m.price_id.as_ref().and_then(|p| self.prices.get(p)).and_then(|p| p.corrects.clone());
+            if let Some(err) = error.and_then(|id| self.errors.get_mut(&id)) {
+                let r = &mut err.remediation;
+                r.policies.insert(m.policy.clone());
+                r.movements += 1;
+                r.borne_minor = r.borne_minor.saturating_add(m.borne_minor);
+                if m.uncompensated {
+                    r.uncompensated += 1;
+                } else {
+                    r.units_micro = r.units_micro.saturating_add(m.units_micro);
+                    r.cash_minor = r.cash_minor.saturating_add(m.cash_minor);
+                }
+            }
+            if m.uncompensated {
+                // Nothing was posted: holdings are as they were.
+                return Ok(Output::Done);
+            }
+        }
         let holdings = self.holdings.entry(m.fund.clone()).or_default();
         let units = holdings.entry(m.policy.clone()).or_insert(0);
         *units = units.saturating_add(m.units_micro);
@@ -960,20 +981,10 @@ impl PricingState {
                 }
                 flow.orders += 1;
             }
-            MovementKind::Correction => {
-                let error = m.price_id.as_ref().and_then(|p| self.prices.get(p)).and_then(|p| p.corrects.clone());
-                if let Some(err) = error.and_then(|id| self.errors.get_mut(&id)) {
-                    err.remediation.policies.insert(m.policy.clone());
-                    err.remediation.movements += 1;
-                    err.remediation.units_micro = err.remediation.units_micro.saturating_add(m.units_micro);
-                    err.remediation.cash_minor = err.remediation.cash_minor.saturating_add(m.cash_minor);
-                }
-            }
-            MovementKind::Opening => {}
+            MovementKind::Correction | MovementKind::Opening => {}
         }
         Ok(Output::Done)
     }
-
     /// A partition has executed every order of a fund through `through`:
     /// mark each priced date up to then that has no extract yet.
     fn record_executed_through(&mut self, fund: &FundId, partition: PartitionId, through: NaiveDate) -> Result<(), Output> {
@@ -1032,10 +1043,7 @@ impl PricingState {
             at,
             event,
         });
-        if self.events.len() > EVENT_RETENTION {
-            let excess = self.events.len() - EVENT_RETENTION;
-            self.events.drain(..excess);
-        }
+        trim(&mut self.events, EVENT_RETENTION);
     }
 
     // --- questions ---
@@ -1080,15 +1088,13 @@ impl PricingState {
             };
             let Ok(mut d) = start else { continue };
             d = d.max(def.next_pricing_day(floor).unwrap_or(d));
-            while d <= as_at {
+            let mut next = Some(d).filter(|d| *d <= as_at);
+            while let Some(d) = next {
                 let due = def.price_due_by(d, terms.pricing_lag_days).unwrap_or(d);
                 if due < as_at && self.suspended_on(fund, d).is_none() && !self.active.contains_key(&slot(fund, d)) {
                     late.push((fund.clone(), d));
                 }
-                match def.following_pricing_day(d) {
-                    Ok(next) => d = next,
-                    Err(_) => break,
-                }
+                next = def.following_pricing_day(d).ok().filter(|d| *d <= as_at);
             }
         }
         late
@@ -1100,5 +1106,29 @@ impl PricingState {
         due.sort_by_key(|x| (x.pricing_date, x.fund.clone()));
         due.truncate(limit);
         due
+    }
+}
+
+/// Keep the newest `limit` items of a list kept oldest first.
+fn trim<T>(items: &mut Vec<T>, limit: usize) {
+    let excess = items.len().saturating_sub(limit);
+    items.drain(..excess);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Purpose: trimming keeps the newest items up to the limit, and leaves a
+    /// shorter list alone.
+    /// Why it matters: the published event stream is bounded by this; an
+    /// off-by-one would drop an event a reader has not yet taken.
+    #[test]
+    fn trim_keeps_the_newest() {
+        let mut v: Vec<u32> = (1..=10).collect();
+        trim(&mut v, 3);
+        assert_eq!(v, vec![8, 9, 10]);
+        trim(&mut v, 5);
+        assert_eq!(v, vec![8, 9, 10]);
     }
 }

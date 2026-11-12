@@ -174,28 +174,67 @@ pub fn ask(state: &PricingState, question: Question) -> Result<Value, String> {
     }
 }
 
-/// One of the core's events as the module's own command. Only executed
-/// unit orders matter here; the key is the event's ID, so an event offered
-/// twice is taken in once. Time is the event's business date, so every
-/// member makes the same command.
+/// One of the core's events as the module's own command: an executed unit
+/// order, or an order replayed at a corrected price. Anything else is
+/// ignored. The key is the event's ID, so an event offered twice is taken
+/// in once; time is the event's business date, so every member makes the
+/// same command.
 pub fn react(record: &EventRecord) -> Vec<Envelope> {
-    let CoreEvent::Investment(InvestEvent::UnitOrderExecuted {
-        order_id,
-        policy,
-        fund,
-        direction,
-        cash_minor,
-        units_micro,
-        price_id,
-        pricing_date,
-        ..
-    }) = &record.event
-    else {
-        return Vec::new();
-    };
-    let (kind, sign) = match direction {
-        Direction::Buy => (MovementKind::Buy, 1),
-        Direction::Sell => (MovementKind::Sell, -1),
+    let movement = match &record.event {
+        CoreEvent::Investment(InvestEvent::UnitOrderExecuted {
+            order_id,
+            policy,
+            fund,
+            direction,
+            cash_minor,
+            units_micro,
+            price_id,
+            pricing_date,
+            ..
+        }) => {
+            let (kind, sign) = match direction {
+                Direction::Buy => (MovementKind::Buy, 1),
+                Direction::Sell => (MovementKind::Sell, -1),
+            };
+            UnitMovement {
+                id: order_id.clone(),
+                partition: record.partition,
+                policy: policy.0.clone(),
+                fund: fund.clone(),
+                kind,
+                units_micro: sign * units_micro.abs(),
+                cash_minor: sign * cash_minor.abs(),
+                price_id: Some(price_id.clone()),
+                pricing_date: *pricing_date,
+                borne_minor: 0,
+                uncompensated: false,
+            }
+        }
+        CoreEvent::Investment(InvestEvent::UnitOrderReplayed {
+            order_id,
+            policy,
+            fund,
+            pricing_date,
+            to_price,
+            units_delta_micro,
+            cash_delta_minor,
+            borne_minor,
+            compensated,
+            ..
+        }) => UnitMovement {
+            id: format!("{order_id}/replay/{to_price}"),
+            partition: record.partition,
+            policy: policy.0.clone(),
+            fund: fund.clone(),
+            kind: MovementKind::Correction,
+            units_micro: *units_delta_micro,
+            cash_minor: *cash_delta_minor,
+            price_id: Some(to_price.clone()),
+            pricing_date: *pricing_date,
+            borne_minor: *borne_minor,
+            uncompensated: !compensated,
+        },
+        _ => return Vec::new(),
     };
     let at: DateTime<Utc> = record.business_date.and_time(chrono::NaiveTime::MIN).and_utc();
     vec![Envelope {
@@ -204,17 +243,7 @@ pub fn react(record: &EventRecord) -> Vec<Envelope> {
         actor: CALLER_EVENTS.to_string(),
         roles: Vec::new(),
         at,
-        command: Command::RecordMovement(Box::new(UnitMovement {
-            id: order_id.clone(),
-            partition: record.partition,
-            policy: policy.0.clone(),
-            fund: fund.clone(),
-            kind,
-            units_micro: sign * units_micro.abs(),
-            cash_minor: sign * cash_minor.abs(),
-            price_id: Some(price_id.clone()),
-            pricing_date: *pricing_date,
-        })),
+        command: Command::RecordMovement(Box::new(movement)),
     }]
 }
 

@@ -115,7 +115,8 @@ fn hosted_module_applies_answers_and_snapshots() {
 }
 
 /// Purpose: an executed unit order from the core becomes one movement with
-/// the sign of its direction, keyed by the event's ID; any other event is ignored.
+/// the sign of its direction, a replayed order becomes a correction keyed by
+/// the order and the corrected price, and any other event is ignored.
 /// Why it matters: holdings, the net flow and the remediation record are
 /// built only from these; a sell counted as a buy would put the
 /// administrator's register out by twice the order.
@@ -167,6 +168,26 @@ fn core_events_become_movements() {
         pricing_date: day(3),
     });
     assert!(matches!(&react(&buy)[0].command, Command::RecordMovement(m) if m.units_micro == 497_265 && m.kind == MovementKind::Buy));
+    let replayed = record(InvestEvent::UnitOrderReplayed {
+        order_id: "O-10".into(),
+        policy: "POL-1".into(),
+        fund: fund_id("growth"),
+        pricing_date: day(3),
+        from_price: "growth@2026-11-03.1".into(),
+        to_price: "growth@2026-11-03.2".into(),
+        units_delta_micro: -2_450,
+        cash_delta_minor: 0,
+        borne_minor: 5_00,
+        compensated: false,
+    });
+    match &react(&replayed)[0].command {
+        Command::RecordMovement(m) => {
+            assert_eq!(m.id, "O-10/replay/growth@2026-11-03.2");
+            assert_eq!((m.kind, m.units_micro, m.borne_minor, m.uncompensated), (MovementKind::Correction, -2_450, 5_00, true));
+            assert_eq!(m.price_id.as_deref(), Some("growth@2026-11-03.2"));
+        }
+        other => panic!("{other:?}"),
+    }
     let other = record(InvestEvent::FundActivated {
         fund: fund_id("growth"),
         version: 1,

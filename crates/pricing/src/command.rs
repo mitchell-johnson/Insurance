@@ -73,6 +73,14 @@ pub struct UnitMovement {
     pub price_id: Option<String>,
     /// The pricing date the movement counts on in holdings.
     pub pricing_date: NaiveDate,
+    /// For a correction: what the insurer paid the fund through the pricing
+    /// error account.
+    #[serde(default)]
+    pub borne_minor: i64,
+    /// For a correction: the difference was under the compensation minimum
+    /// and nothing was posted.
+    #[serde(default)]
+    pub uncompensated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -310,4 +318,98 @@ pub struct EventRecord {
     pub seq: u64,
     pub at: DateTime<Utc>,
     pub event: Event,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    /// Purpose: every command has a distinct name, at least one caller, and
+    /// a role exactly when a person sends it.
+    /// Why it matters: the name is what a refusal reports and what audit
+    /// reads; a command a person sends with no role check would let any
+    /// console user approve a price.
+    #[test]
+    fn every_command_has_a_name_callers_and_roles() {
+        let d = NaiveDate::from_ymd_opt(2026, 11, 2).unwrap_or_default();
+        let f = FundId("growth".into());
+        let all = vec![
+            Command::ActivateFund(Box::new(crate::fund::sample("growth"))),
+            Command::RecordPartitions { count: 1 },
+            Command::ReceiveValuations {
+                administrator: "a".into(),
+                file_id: "f".into(),
+                valuations: vec![],
+            },
+            Command::RefuseValuationFile {
+                file_id: "f".into(),
+                reason: "r".into(),
+            },
+            Command::RecordCoreUnits {
+                fund: f.clone(),
+                partition: 0,
+                executed_through: None,
+                units_micro: 0,
+            },
+            Command::PreparePrice { fund: f.clone(), pricing_date: d },
+            Command::ApprovePrice {
+                price: "p".into(),
+                accepted: BTreeMap::new(),
+            },
+            Command::RejectPrice {
+                price: "p".into(),
+                reason: "r".into(),
+            },
+            Command::SuspendFund {
+                fund: f.clone(),
+                from: d,
+                reason: "r".into(),
+            },
+            Command::ResumeFund {
+                fund: f.clone(),
+                from: d,
+                reason: "r".into(),
+            },
+            Command::RaisePriceError {
+                error: "e".into(),
+                prices: vec![],
+                cause: "c".into(),
+                detected_on: d,
+            },
+            Command::CloseError {
+                error: "e".into(),
+                summary: "s".into(),
+            },
+            Command::Republish { price: "p".into() },
+            Command::RecordDelivery {
+                publication: "p".into(),
+                delivery: Delivery::Applied,
+            },
+            Command::RecordMovement(Box::new(UnitMovement {
+                id: "m".into(),
+                partition: 0,
+                policy: "P".into(),
+                fund: f,
+                kind: MovementKind::Buy,
+                units_micro: 0,
+                cash_minor: 0,
+                price_id: None,
+                pricing_date: d,
+                borne_minor: 0,
+                uncompensated: false,
+            })),
+            Command::RecordExtractWritten {
+                extract: "x".into(),
+                name: "n".into(),
+                sha256: "h".into(),
+            },
+        ];
+        let names: std::collections::BTreeSet<&str> = all.iter().map(Command::name).collect();
+        assert_eq!(names.len(), all.len());
+        for c in &all {
+            assert!(!c.allowed_callers().is_empty());
+            assert_eq!(c.role().is_some(), c.allowed_callers() == [CALLER_CONSOLE], "{}", c.name());
+        }
+    }
 }

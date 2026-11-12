@@ -296,7 +296,7 @@ mod tests {
     use ic_money::FundId;
 
     fn d(s: &str) -> DecStr {
-        DecStr::parse(s).unwrap_or_else(|e| panic!("{e}"))
+        DecStr::parse(s).unwrap()
     }
 
     fn day(n: u32) -> NaiveDate {
@@ -327,7 +327,7 @@ mod tests {
     }
 
     fn check(s: &Struck, kind: CheckKind) -> &Check {
-        s.checks.iter().find(|c| c.kind == kind).unwrap_or_else(|| panic!("{kind:?} not run"))
+        s.checks.iter().find(|c| c.kind == kind).expect("the check ran")
     }
 
     /// Purpose: the worked example of the design (net assets over units, a
@@ -338,11 +338,17 @@ mod tests {
     #[test]
     fn strikes_mid_buy_and_sell() {
         let def = sample("growth");
-        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap();
         // 2,010,000 / 1,000,000 units = 2.01; buy 2.015025 -> 2.0151; sell 2.004975 -> 2.0049.
-        let v = valuation("2010000", 1_000_000_000_000);
-        let s = strike(&def, &terms, &v, Some(&previous("1.9900", "1990000")), Some(1_000_000_000_000)).unwrap_or_else(|e| panic!("{e}"));
+        let mut v = valuation("2010000", 1_000_000_000_000);
+        // An asset priced two days ago is within the three days allowed.
+        v.stale_assets = vec![AssetPrice {
+            asset: "NZ-BOND-7".into(),
+            priced_on: day(10),
+        }];
+        let s = strike(&def, &terms, &v, Some(&previous("1.9900", "1990000")), Some(1_000_000_000_000)).unwrap();
         assert_eq!((s.mid.as_str(), s.buy.as_str(), s.sell.as_str()), ("2.0100", "2.0151", "2.0049"));
+        assert!(check(&s, CheckKind::StaleAssets).detail.contains("2026-11-10"));
         assert!(s.checks.iter().all(|c| c.passed), "{:?}", s.checks);
         assert!(!s.blocked());
         assert!(s.held().is_empty());
@@ -357,14 +363,14 @@ mod tests {
     #[test]
     fn units_on_issue_difference_blocks() {
         let def = sample("growth");
-        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap();
         let v = valuation("2010000", 1_000_000_000_000);
         let p = previous("1.9900", "1990000");
-        let off = strike(&def, &terms, &v, Some(&p), Some(999_999_000_000)).unwrap_or_else(|e| panic!("{e}"));
+        let off = strike(&def, &terms, &v, Some(&p), Some(999_999_000_000)).unwrap();
         assert!(off.blocked());
         assert!(check(&off, CheckKind::UnitsOnIssue).detail.contains("difference 1000000"));
         assert!(off.held().is_empty(), "a blocking check is not one an approver accepts");
-        let missing = strike(&def, &terms, &v, Some(&p), None).unwrap_or_else(|e| panic!("{e}"));
+        let missing = strike(&def, &terms, &v, Some(&p), None).unwrap();
         assert!(missing.blocked());
         assert!(check(&missing, CheckKind::UnitsOnIssue).detail.contains("every partition"));
     }
@@ -377,7 +383,7 @@ mod tests {
     #[test]
     fn failed_checks_hold_the_price() {
         let def = sample("growth");
-        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap();
         // 10% up against a 5% tolerance and a 1% benchmark.
         let mut v = valuation("2189000", 1_000_000_000_000);
         v.stale_assets = vec![
@@ -392,7 +398,7 @@ mod tests {
         ];
         // The administrator reports applications the units do not reflect.
         v.applications = d("50000");
-        let s = strike(&def, &terms, &v, Some(&previous("1.9900", "1990000")), Some(1_000_000_000_000)).unwrap_or_else(|e| panic!("{e}"));
+        let s = strike(&def, &terms, &v, Some(&previous("1.9900", "1990000")), Some(1_000_000_000_000)).unwrap();
         assert!(!s.blocked());
         assert_eq!(
             s.held(),
@@ -416,23 +422,23 @@ mod tests {
     #[test]
     fn first_price_and_empty_fund() {
         let def = sample("growth");
-        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap();
         let mut v = valuation("0", 0);
-        let s = strike(&def, &terms, &v, None, Some(0)).unwrap_or_else(|e| panic!("{e}"));
+        let s = strike(&def, &terms, &v, None, Some(0)).unwrap();
         assert_eq!(s.mid.as_str(), "1.0000");
         assert!(s.checks.iter().all(|c| c.passed));
         v.benchmark_return = None;
-        let s = strike(&def, &terms, &v, None, Some(0)).unwrap_or_else(|e| panic!("{e}"));
+        let s = strike(&def, &terms, &v, None, Some(0)).unwrap();
         assert_eq!(s.held(), vec![CheckKind::Benchmark]);
         // Empty after having units: last price, and no assets to grow.
-        let s = strike(&def, &terms, &valuation("0", 0), Some(&previous("1.5000", "0")), Some(0)).unwrap_or_else(|e| panic!("{e}"));
+        let s = strike(&def, &terms, &valuation("0", 0), Some(&previous("1.5000", "0")), Some(0)).unwrap();
         assert_eq!(s.mid.as_str(), "1.5000");
         assert!(check(&s, CheckKind::UnexplainedMove).detail.contains("no assets"));
         // A fund without a benchmark does not run the check.
         let mut plain = sample("growth");
         plain.pricing.remove("benchmark_gap");
-        let pt = plain.terms().unwrap_or_else(|e| panic!("{e}"));
-        let s = strike(&plain, &pt, &valuation("100", 100_000_000), None, Some(100_000_000)).unwrap_or_else(|e| panic!("{e}"));
+        let pt = plain.terms().unwrap();
+        let s = strike(&plain, &pt, &valuation("100", 100_000_000), None, Some(100_000_000)).unwrap();
         assert!(s.checks.iter().all(|c| c.kind != CheckKind::Benchmark));
     }
 
@@ -442,7 +448,7 @@ mod tests {
     #[test]
     fn refuses_impossible_prices() {
         let def = sample("cash");
-        let terms = def.terms().unwrap_or_else(|e| panic!("{e}"));
+        let terms = def.terms().unwrap();
         assert!(strike(&def, &terms, &valuation("1", 1), None, None).unwrap_err().contains("not cash"));
         let def = sample("growth");
         assert!(strike(&def, &terms, &valuation("0", 1_000_000), None, None).unwrap_err().contains("zero"));

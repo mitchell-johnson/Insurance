@@ -90,11 +90,16 @@ fn material_error_is_corrected_by_a_new_version() {
     let fix = h.prepared_id(day(3));
     assert_eq!(h.state.prices[&fix].corrects.as_deref(), Some("E1"));
     assert_eq!(h.approve(&fix, BTreeMap::new()), Output::Done);
+    // A second correction prepared while the first is on its way.
+    let second = h.prepared_id(day(3));
+    assert_eq!(code(h.approve(&second, BTreeMap::new())), "in_flight");
     let out = h.state.outbox(10)[0].clone();
     assert_eq!((out.version, out.supersedes.as_deref()), (2, Some(d3.as_str())));
     h.deliver_all();
     assert_eq!(h.state.prices[&fix].status, PriceStatus::Active);
     assert_eq!(h.state.prices[&d3].status, PriceStatus::Superseded);
+    // Once the first is in force the date is no longer held by the error.
+    assert_eq!(code(h.approve(&second, BTreeMap::new())), "not_held");
     assert_eq!(h.state.active[&slot(&fund_id("growth"), day(3))], vec![d3.clone(), fix.clone()]);
     let err = &h.state.errors["E1"];
     assert!(err.corrected());
@@ -112,8 +117,13 @@ fn material_error_is_corrected_by_a_new_version() {
     let d4b = h.prepared_id(day(4));
     assert_eq!(h.state.prices[&d4b].previous.as_ref().map(|p| p.price_id.clone()), Some(fix.clone()));
 
-    // The core replays two orders at the corrected price.
-    for (id, policy, units) in [("R1", "P1", -4_926), ("R2", "P2", -9_852)] {
+    // The core replays three orders at the corrected price; the third's
+    // difference is under the compensation minimum.
+    for (id, policy, units, borne, uncompensated) in [
+        ("R1", "P1", -4_926, 10_00, false),
+        ("R2", "P2", -9_852, 20_00, false),
+        ("R3", "P3", -1, 0, true),
+    ] {
         h.ok(
             CALLER_EVENTS,
             "relay",
@@ -128,11 +138,15 @@ fn material_error_is_corrected_by_a_new_version() {
                 cash_minor: 0,
                 price_id: Some(fix.clone()),
                 pricing_date: day(3),
+                borne_minor: borne,
+                uncompensated,
             })),
         );
     }
     let r = &h.state.errors["E1"].remediation;
-    assert_eq!((r.policies.len(), r.movements, r.units_micro), (2, 2, -14_778));
+    assert_eq!((r.policies.len(), r.movements, r.uncompensated), (3, 3, 1));
+    assert_eq!((r.units_micro, r.borne_minor), (-14_778, 30_00));
+    assert_eq!(h.state.holdings[&fund_id("growth")].get("P3"), None, "nothing was posted for P3");
 
     let close = |s: &str| Command::CloseError {
         error: "E1".into(),
@@ -260,6 +274,8 @@ fn movements_build_holdings_and_extracts() {
             cash_minor: cash,
             price_id: Some(d3.clone()),
             pricing_date: day(3),
+            borne_minor: 0,
+            uncompensated: false,
         }))
     };
     h.ok(CALLER_EVENTS, "relay", &[], mv("O1", 0, "P1", MovementKind::Opening, 5_000_000, 0));
