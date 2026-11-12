@@ -25,7 +25,7 @@ CLOSE = close_config(
     ],
     aged = [
         aged("unidentified_receipts", "Bank receipts nobody has identified, aged with an owner", "treasury", 2, by = "payments", max_age_days = 30, max_amount_minor = 5000000),
-        aged("policy_suspense", "Policy suspense aged with an owner", "collections", 2, by = "collections", max_age_days = 30, max_amount_minor = 5000000),
+        aged("policy_suspense", "Policy suspense aged with an owner", "collections", 2, by = "close-workflow", max_age_days = 30, max_amount_minor = 5000000),
         aged("pending_investment_cash", "Pending investment cash beyond pricing lag", "investment_operations", 2, by = "investment", max_age_days = 5, max_amount_minor = 5000000),
         aged("held_balance", "Held balances aged by party", "counterparty_finance", 2, by = "commission", max_age_days = 90, max_amount_minor = 10000000),
     ],
