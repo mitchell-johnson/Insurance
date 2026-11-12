@@ -456,12 +456,12 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             .contact(&send.party, delivery.recipient.relationship.as_deref(), send.channel)
             .await
         {
-            Ok(Some(contact)) => contact,
-            Ok(None) if send.channel == crate::model::Channel::InApp => crate::channels::Contact {
-                name: String::new(),
-                destination: String::new(),
-            },
-            Ok(None) => {
+            Ok(Some(contact)) if !contact.deceased => contact,
+            Ok(None) if send.channel == crate::model::Channel::InApp => crate::channels::Contact::default(),
+            // No contact point, or the person has died: nothing is sent to
+            // them, and the document shows as undelivered for someone to
+            // send it to whoever now acts for them.
+            Ok(_) => {
                 sends.no_contact_point += 1;
                 return self.outcome(send, attempt, AttemptOutcome::NoContactPoint).await;
             }
