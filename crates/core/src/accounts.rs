@@ -5,7 +5,7 @@ use ic_ledger::{Account, AccountClass, AccountId, AccountUnit, Dimensions};
 use ic_money::{Currency, FundId};
 
 use crate::policy::Policy;
-use crate::PolicyId;
+use crate::{LifeId, PolicyId};
 
 /// Roles of the accounts each policy has in its policyholder's group.
 pub mod role {
@@ -86,6 +86,17 @@ pub fn unearned_premium(p: &PolicyId, c: Currency) -> Account {
 pub fn policy_suspense(p: &PolicyId, c: Currency) -> Account {
     acct(
         format!("pol/{p}/policy_suspense"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::POLICY_SUSPENSE,
+    )
+}
+/// Money a scheme member has paid, or been credited, beyond what the member
+/// owes for cover they pay for themselves. Opened on first use. It is the
+/// member's money and never the scheme's.
+pub fn member_suspense(p: &PolicyId, life: &LifeId, c: Currency) -> Account {
+    acct(
+        format!("pol/{p}/member/{life}/suspense"),
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::POLICY_SUSPENSE,

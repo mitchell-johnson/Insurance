@@ -14,7 +14,9 @@ use crate::event::{Event, EventRecord, OutboundMessage, PostedLine, RoleTotal};
 use crate::interest::{self, RestrictedAction};
 use crate::policy::{Policy, PolicyStatus};
 use crate::premium::PremiumError;
-use crate::{arrears, billing, cash, claims, earning, group, lifecycle, payments, reduce, reinsurance, reopen, transfer, underwritten, unwind, PolicyId};
+use crate::{
+    arrears, billing, cash, claims, earning, group, lifecycle, payments, reduce, reinsurance, reopen, transfer, underwritten, unwind, voluntary, PolicyId,
+};
 
 /// The apply budget: no single command may do more than this many units of
 /// work in the state machine, because a partition applies commands one at a
@@ -386,7 +388,7 @@ impl CoreState {
                 if let Some(p) = self.policies.get(&id).filter(|_| r.is_ok()) {
                     ctx.emit(Event::PolicyBalance {
                         policy: id,
-                        outstanding_minor: p.outstanding_minor(),
+                        outstanding_minor: p.policyholder_outstanding_minor(),
                         oldest_unpaid_due: p.oldest_unpaid_due(),
                     });
                 }
@@ -486,6 +488,12 @@ impl CoreState {
             Command::ReverseReceipt { policy, receipt } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 cash::reverse_receipt(&mut s.ledger, &s.catalog, p, ctx, &receipt)
             }),
+            Command::ApplyMemberReceipt { policy, life, receipt, amount } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                voluntary::apply_receipt(&mut s.ledger, p, ctx, life, receipt, amount)
+            }),
+            Command::RefundMemberCredit { policy, life, amount } => {
+                self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
+            }
             Command::RefundSuspense { policy, amount, with_claim } => {
                 self.with_policy(&policy, true, |s, p| cash::refund_suspense(&mut s.ledger, p, ctx, amount, with_claim))
             }
@@ -628,6 +636,12 @@ impl CoreState {
                         "a policy with units, pending investment cash or pending unit orders cannot change partition yet",
                     ));
                 }
+                if voluntary::holds_credit(&s.ledger, p) {
+                    return Err(Reject::new(
+                        "member_credit_held",
+                        "a scheme holding a member's own money cannot change partition until it is applied or refunded",
+                    ));
+                }
                 transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition, moved)?;
                 // From here its claims wait with it: nothing can be done to them on either side.
                 s.claims.detach(&p.id.to_string()).map_err(|e| Reject::new(&e.code, e.message))
@@ -644,7 +658,7 @@ impl CoreState {
                 if let Some(p) = self.policies.get(&id).filter(|p| r.is_ok() && p.status != PolicyStatus::Transferred) {
                     ctx.emit(Event::PolicyBalance {
                         policy: id,
-                        outstanding_minor: p.outstanding_minor(),
+                        outstanding_minor: p.policyholder_outstanding_minor(),
                         oldest_unpaid_due: p.oldest_unpaid_due(),
                     });
                 }
@@ -775,7 +789,7 @@ impl CoreState {
         let before = self.policies.get(id).map(|p| (p.outstanding_minor(), p.oldest_unpaid_due()));
         let r = self.with_policy(id, refuse_if_frozen, |s, p| f(s, ctx, p));
         if let Some(p) = self.policies.get(id) {
-            let after = (p.outstanding_minor(), p.oldest_unpaid_due());
+            let after = (p.policyholder_outstanding_minor(), p.oldest_unpaid_due());
             if before != Some(after) && p.status != PolicyStatus::Transferred {
                 ctx.emit(Event::PolicyBalance {
                     policy: id.clone(),

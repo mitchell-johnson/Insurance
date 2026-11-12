@@ -172,6 +172,7 @@ impl Reinsurance {
             excluded: treaty.is_some_and(|t| t.exclusions.iter().any(|x| request.risk_codes.contains(x))),
             excess_path: None,
             migrated: None,
+            continues: None,
         };
         self.put_risk_on(ctx, LifeKey::Party(request.party.clone()), risk);
         self.held_until.insert((request.proposal_expires, request.reservation_key.clone()));

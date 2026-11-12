@@ -36,7 +36,7 @@ pub fn rating_date(policy: &Policy, period_start: NaiveDate) -> Result<NaiveDate
     anniversary(policy.inception, policy_year(policy.inception, period_start)).ok_or(PremiumError::Date)
 }
 
-fn factors_on(life: &LifeRecord, on: NaiveDate) -> Result<&LifeFactors, PremiumError> {
+pub(crate) fn factors_on(life: &LifeRecord, on: NaiveDate) -> Result<&LifeFactors, PremiumError> {
     // A life's first factors are valid from the day it joined; a period that
     // starts earlier (a retrospective joiner) rates on the joining facts.
     life.factors
