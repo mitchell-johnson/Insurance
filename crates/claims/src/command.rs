@@ -195,6 +195,11 @@ pub enum Command {
     ActivateRules {
         rules: Box<Rules>,
     },
+    /// The actuary's reserves for claims in payment, one part of a
+    /// valuation. Sent to every partition; each applies the claims it holds.
+    ApplyValuation {
+        valuation: Box<crate::config::Valuation>,
+    },
 
     // --- intake ---
     Notify(Box<Notification>),
@@ -426,7 +431,7 @@ impl Command {
     /// The modules allowed to send each command.
     pub fn allowed_callers(&self) -> &'static [&'static str] {
         match self {
-            Command::ActivateAuthority { .. } | Command::ActivateRules { .. } => &["config"],
+            Command::ActivateAuthority { .. } | Command::ActivateRules { .. } | Command::ApplyValuation { .. } => &["config"],
             Command::PaymentReturned { .. } | Command::ConfirmRun { .. } | Command::RecordRepayment { .. } => &["payments", "claims"],
             Command::Decide { .. } | Command::Approve { .. } | Command::Refuse { .. } => &["claims", "held-balances"],
             Command::Reinsurance(_) => &["reinsurance"],
@@ -442,6 +447,7 @@ impl Command {
         match self {
             Command::ActivateAuthority { .. } => "activate_authority",
             Command::ActivateRules { .. } => "activate_rules",
+            Command::ApplyValuation { .. } => "apply_valuation",
             Command::Notify(_) => "notify",
             Command::Acknowledge { .. } => "acknowledge",
             Command::Assign { .. } => "assign",

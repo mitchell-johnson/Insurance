@@ -1790,3 +1790,48 @@ fn a_migrated_claim_opens_against_the_migration_control_account() {
     assert_eq!(claim(&c, "clm-ip").schedule.as_ref().unwrap().periods.len(), 2);
     days(&mut c, 2);
 }
+
+/// Purpose: an actuarial valuation applied on the real ledger moves the claim reserve of a claim
+/// in payment to the actuary's figure with the difference to claims expense, is accepted only
+/// from configuration, and leaves the next benefit run paying from the new reserve with the
+/// ledger, the core's claim record and the claims module agreeing.
+/// Why it matters: the reserve for claims in payment is one of the largest liabilities on the
+/// balance sheet. Its movement must post through the same entry as any reserve change, so the
+/// finance ledger and reinsurance see it, and nobody but the approved valuation may set it.
+#[test]
+fn a_valuation_sets_the_reserve_of_a_claim_in_payment_on_the_ledger() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 5);
+    let first = c.business_date().unwrap();
+    open_claim(&mut c, "clm-ip", &id, "trauma", ClaimType::IncomeProtection, first);
+    ok(&mut c, decide("clm-ip", admit(None, Some(benefit(3_000_00, first)), false)));
+    verify_payee(&mut c, "clm-ip");
+    let expense = accounts::claims_incurred("term-life", "trauma", NZD);
+    let before = c.state(0).ledger.natural_balance(&expense.id);
+    let reserve = claim(&c, "clm-ip").reserve_minor;
+    let valuation = claims::config::Valuation {
+        version: 1,
+        part: 1,
+        as_at: first,
+        basis: "dlr-2027".into(),
+        reserves: [("clm-ip".to_string(), 60_000_00)].into(),
+        prepared_by: "actuary-1".into(),
+        approved_by: vec!["actuary-2".into(), "cfo".into()],
+    };
+    let apply = wrap(claims::Command::ApplyValuation {
+        valuation: Box::new(valuation),
+    });
+    assert_eq!(code(c.submit(0, "claims", apply.clone())), "caller_not_allowed");
+    c.submit(0, "config", apply).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (60_000_00, 0, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id) - before, i128::from(60_000_00 - reserve));
+    assert_eq!(c.state(0).policies[&id].claims["clm-ip"].reserve_minor, 60_000_00);
+
+    pay_run(&mut c, "run-1", first);
+    c.submit(0, "payments", settle(&id, &format!("run-1/clm-ip/{first}"), 3_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (57_000_00, 0, 0), "the period is drawn from the actuary's reserve");
+    days(&mut c, 2);
+}

@@ -265,6 +265,7 @@ impl ClaimsState {
         match command {
             Command::ActivateAuthority { book } => self.activate_authority(cx, *book),
             Command::ActivateRules { rules } => self.activate_rules(cx, *rules),
+            Command::ApplyValuation { valuation } => self.apply_valuation(cx, *valuation),
             Command::Notify(n) => self.notify(cx, *n),
             Command::LoadMigrated { claim, health_used } => self.load_migrated(cx, *claim, health_used),
             Command::Acknowledge { claim, delivery_ref } => self.acknowledge(cx, &claim, &delivery_ref),
@@ -416,6 +417,80 @@ impl ClaimsState {
             on: cx.today,
         });
         self.rules = rules;
+        Ok(())
+    }
+
+    /// Set each claim in payment held here to the actuary's reserve. A part
+    /// seen before is not applied again; a claim not held here belongs to
+    /// another partition; a claim that is not in payment keeps its case
+    /// reserve and is named back so the actuary can see what was skipped.
+    fn apply_valuation(&mut self, cx: &mut Cx<'_>, valuation: crate::config::Valuation) -> Result<(), Reject> {
+        valuation.validate()?;
+        self.configured()?;
+        let what = format!("valuation/{}/{}", valuation.version, valuation.part);
+        let hash = valuation.content_hash();
+        if let Some(seen) = self.activations.iter().find(|a| a.what == what) {
+            if seen.content_hash == hash {
+                return Ok(());
+            }
+            return Err(Reject::new("config_conflict", format!("{what} was applied with other figures")));
+        }
+        let latest = self
+            .activations
+            .iter()
+            .filter(|a| a.what.starts_with("valuation/"))
+            .map(|a| a.version)
+            .max()
+            .unwrap_or(0);
+        if valuation.version < latest {
+            return Err(Reject::new(
+                "config_conflict",
+                format!("valuation {} is older than {latest}", valuation.version),
+            ));
+        }
+        let (mut applied, mut skipped) = (0u32, Vec::new());
+        for (id, reserve) in &valuation.reserves {
+            let Some(claim) = self.claims.get(id) else { continue };
+            cx.core.work(1);
+            if claim.status != Status::InPayment {
+                skipped.push(id.clone());
+                continue;
+            }
+            let mut claim = claim.clone();
+            cx.core.execute(crate::Instruction::SetReserve {
+                claim: claim.id.clone(),
+                policy: claim.policy.clone(),
+                cover: claim.cover.clone(),
+                amount_minor: *reserve,
+                reason: format!("valuation:{}:{}", valuation.version, valuation.basis),
+            })?;
+            claim.reserve_minor = *reserve;
+            note(&mut claim, cx, None, format!("valuation:{}", valuation.version));
+            cx.notify(
+                "claim_reserve_changed",
+                id,
+                &[("gross_reserve_minor", reserve.to_string()), ("valuation", valuation.version.to_string())],
+            );
+            self.commit(claim);
+            applied += 1;
+        }
+        self.activations.push(Activation {
+            what,
+            version: valuation.version,
+            content_hash: hash,
+            on: cx.today,
+        });
+        cx.notify(
+            "valuation_applied",
+            "",
+            &[
+                ("version", valuation.version.to_string()),
+                ("part", valuation.part.to_string()),
+                ("as_at", valuation.as_at.to_string()),
+                ("applied", applied.to_string()),
+                ("not_in_payment", skipped.join(",")),
+            ],
+        );
         Ok(())
     }
 

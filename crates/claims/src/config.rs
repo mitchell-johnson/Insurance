@@ -295,6 +295,45 @@ fn dual_approval(what: &str, prepared_by: &str, approved_by: &[StaffId]) -> Resu
     Ok(())
 }
 
+/// The appointed actuary's reserves for claims in payment: the expected
+/// remaining payments on each claim, as at a date. A valuation is large, so
+/// it arrives in parts; each part is approved like configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Valuation {
+    pub version: u32,
+    pub part: u32,
+    pub as_at: chrono::NaiveDate,
+    /// The basis the actuary used, named so the figure can be traced.
+    pub basis: String,
+    pub reserves: BTreeMap<String, i64>,
+    pub prepared_by: StaffId,
+    pub approved_by: Vec<StaffId>,
+}
+
+/// At most this many claims in one part, so one command stays inside the
+/// partition's apply budget.
+pub const MAX_VALUATION_PART: usize = 500;
+
+impl Valuation {
+    pub fn content_hash(&self) -> String {
+        hash_of("ic.claims.valuation.v1", self)
+    }
+
+    pub fn validate(&self) -> Result<(), Reject> {
+        dual_approval("an actuarial valuation", &self.prepared_by, &self.approved_by)?;
+        if self.version == 0 || self.basis.trim().is_empty() || self.reserves.is_empty() || self.reserves.len() > MAX_VALUATION_PART {
+            return Err(Reject::new(
+                "invalid_valuation",
+                format!("a valuation part has a version, a basis and between 1 and {MAX_VALUATION_PART} claims"),
+            ));
+        }
+        if self.reserves.values().any(|r| *r < 0) {
+            return Err(Reject::new("invalid_valuation", "a reserve is never negative"));
+        }
+        Ok(())
+    }
+}
+
 impl AuthorityBook {
     pub fn content_hash(&self) -> String {
         hash_of("ic.claims.authority.v1", self)
