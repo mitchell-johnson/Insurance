@@ -213,3 +213,69 @@ Volume-based overrides are not built on purpose: the design notes leave them out
 ### Known failing checks
 
 None. Things that catch people out: local builds need `--exclude ic-workflows` (no `protoc`) and `IC_SKIP_TEMPORAL_TESTS=1`; a posting reference may hold only letters, digits and `- _ . :`, so a layer key (which has `/`) never goes in one unchanged; the core's life IDs are per policy, so lives are matched by the party behind them; and a test that injects a core event by hand must do it last, or on a partition of its own, because injected events use up sequence numbers.
+
+## Area: reinsurance (`ic-reinsurance`)
+
+Written 12 November 2026 so the area can be finished without the thread that built it. The detail of how each part behaves is in [reinsurance.md](reinsurance.md); this section is the map, the seams and what is left.
+
+### What is built, and where
+
+Everything below is on `main` and passed CI at `ea9de28` (run 192, 12 November). The crate is `crates/reinsurance`; treaties and reinsurer rate tables are Starlark files in `treaties/`.
+
+| Part | File | What it does |
+|---|---|---|
+| State machine | `src/machine.rs` | `Reinsurance`: every command (`Command`), who may send each (`allowed_callers`), idempotency by envelope key, exceptions (`set_exception`), the notice types and which audience each is for (`Notice::audience`). |
+| Treaties as code | `src/treaty.rs`, `src/loader.rs`, `src/treaty.star` | Typed treaty terms, aggregate treaties (catastrophe, stop loss) and rate tables loaded from Starlark. Each treaty file carries scenarios that are checked when it is loaded. |
+| Event feed | `src/feed.rs` | Reads every partition's core events (issue, layers, membership, status, transfer, unwind, billing, claims facts), de-duplicated by sequence, refusing a gap. `continue_layer` carries a cession across a change of underwriting terms. |
+| Cession calculation | `src/cession.rs`, `src/math.rs` | A pure function of the covers on one life: retention filled in a fixed order, surplus and quota share, facultative shares, unplaced cover. Produces a timeline per cover. |
+| Capacity step | `src/capacity.rs` | Reservations for proposals, the answer underwriting reads before offering terms, facultative referrals and their terms. |
+| Ceded premium | `src/premium.rs` | Per billing period from the timeline, posted as differences and reversed with the billing it followed. |
+| Recoveries | `src/claims.rs` | Claims facts read from the core's claims events (`fact_from_event`), expected and actual recoveries, consent and large-claim notices, disputed items, aggregate treaties. |
+| Reinsurer accounts | `src/account.rs` | Statements, listings, supplementary listings, agreement, hold, settlement instruction (maker and checker), settlement recorded or returned, profit commission, migrated cessions and opening balances. |
+| Views | `src/views.rs` | Exposure, scheme concentration, reconciliation of the module against itself, treaty comparison, and `sweep_check` for the finance close. |
+| Outbox | `src/outbox.rs` | Numbered instructions for the core and notices for everyone else, kept in replicated state until acknowledged; refused ones set aside with an exception; retry and abandon with a reason and an approver. |
+| Host | `src/host.rs` | The module as `reinsurance` on the ledger nodes (registered in `ic_node::modules()`), its questions (`Query`) and how core events become commands (`react`). |
+| To the core | `src/delivery.rs` | Instructions as the core commands `record_cession` and `post_reinsurance` (`crates/core/src/reinsurance.rs`), and notices for claims as `Command::Claims(Reinsurance(..))`. |
+| Driver | `src/driver.rs`, `src/carriers.rs`, `src/service.rs`, `src/bin/ic-reinsurance.rs` | The stateless process `ic-reinsurance`: carries instructions to the partitions and each notice to its audience. `ClusterAudiences` reaches the group, underwriting and payments modules; `Carriers` adds write-once Blob Storage for records and the event hub for staff. |
+| Azure and deployment | `infra/reinsurance.bicep`, `deploy/k8s/reinsurance.yaml` | The driver's own managed identity, the write-once container `reinsurance-records`, the event hub `reinsurance-events`, and the deployment with its service account and cluster token. |
+
+Tests are in `crates/reinsurance/tests/` (one file per part, `common/mod.rs` holds the `Bench`), with the module against the real core in `tests/core.rs`, against a real node and the shipped binary in `tests/cluster.rs`, and the wire formats against the other real modules in `crates/node/tests/between_modules.rs`. The core's side of the two commands is tested in `crates/sim/tests/reinsurance.rs`. The crate had no uncovered lines by `cargo llvm-cov -p ic-reinsurance -p ic-node --show-missing-lines` on 12 November.
+
+### Seams with other areas
+
+Each is JSON in the other module's wire format with no crate dependency, unless said.
+
+- **Core.** In: the event feed. Out: `record_cession` and `post_reinsurance` from caller `reinsurance`. The core keeps a refusal against the idempotency key, so a refused instruction is never retried under the same key; the module re-sends a cover's whole record after a transfer. `Event::LayerAdded.continues` (added by underwriting) names the layer a rewritten one replaces.
+- **Claims** (in the core). In: `Event::Module { module: "claims" }` kinds listed in `reinsurance.md`. Out: `ReinsuranceNotice` commands (large claim, consent required, consent, disputed item raised and resolved). An unreadable fact opens `claim_fact:<claim>`.
+- **Underwriting.** It reserves capacity, confirms it at issue and reads the answer (`Query::Capacity`, `Query::FacultativeTerms`); the driver sends it `facultative_terms_recorded`. Agreed 12 November: an alteration or a reinstatement reserves no capacity, because a lapse suspends a cession and does not release it.
+- **Group administration.** The driver sends `require_underwritten_excess`; group sends scheme terms (`SetSchemeTerms`).
+- **Payments.** The driver offers a net due to a reinsurer as `offer_payment` (payment `ri-stmt-<n>`, source `reinsurance:statement:<n>`, payee the reinsurer's ID). The payments pump sends back `record_settlement` and `settlement_returned` as caller `payments`. Pinned on their side in `crates/payments/tests/intake.rs`.
+- **Finance.** Its driver asks `{"sweep_check": {"period_end": ..}}` for the close check `reinsurance_sweep`. The reinsurance account roles are mapped in `config/finance/chart.star`.
+- **Portal.** The staff console `/reinsurance` in `ic-portal` (`crates/channels/src/reinsurance.rs`) reads `exceptions`, staff notices, `abandoned`, `abandoned_notices` and `sweep_check`, and sends `retry_notice`, `record_settlement`, `facultative_reinsurer_told`, and the two abandon commands after a second person signs. Its tests run against this crate as a dev-dependency.
+
+### Not finished, with what is needed to finish it
+
+None of these is started unless it says so. They are ordered by how much they matter in production.
+
+1. **Nobody is alerted when an exception opens.** Staff see exceptions when they open the portal console. The notices are already on the event hub `reinsurance-events` (body `{"seq","on","notice"}`, properties `event-id` and `kind`) and in the driver's log at warning level under the target `reinsurance.notice`. To finish: an Azure Monitor scheduled-query alert on that log target, or a consumer of the hub, routed to the reinsurance operations on-call. It belongs in `infra/reinsurance.bicep`; it needs the Log Analytics workspace `main.bicep` creates and an action group, which does not exist yet for any area.
+2. **`infra/reinsurance.bicep` has never been deployed, and could not be compiled where it was written.** The cloud container may not run the bicep CLI, so CI is the only compile check; it passed in run 192. To finish: deploy it into the resource group (parameters are in the file's header), put `reinsuranceIdentityClientId` into `deploy/k8s/reinsurance.yaml`, and in production lock the retention policy on `reinsurance-records` by hand.
+3. **One refused instruction stops all delivery to the core** (`driver.rs`, `Driver::deliver` and `one`). It is deliberate while refusals are defects. If it proves too blunt, set the instruction aside per cover the way notices are (`set_aside`), keeping order within one cover's cession record: `record_cession` for a cover must still arrive in order.
+4. **A module added to a running cluster misses earlier events** and raises `events_not_seen`. Hosted from the cluster's first start, as now, it misses nothing. To finish it needs the host (`ic_raft::module`, the core thread's) to replay from the cold tier or Event Hubs; nothing in this crate changes except removing the exception.
+5. **Money due from a reinsurer is not requested.** A statement with a negative net produces no payment request; the receipt arrives on the bank statement, payments' reconciler identifies it, and a person sends `record_settlement`. To automate: payments would tell the module when it identifies a receipt whose reference is `ri-stmt-<n>`, in the same shape it already uses for settlements.
+6. **The settlement clearing account is not cleared against the bank by this module.** `InstructSettlement` moves the net to `int/reinsurance_settlement_clearing` on each partition holding part of it (`InstructionBody::Sweep`). The entry from clearing to bank on settlement is not posted. Open question below.
+7. **A returned settlement is not offered again.** `settlement_returned` reopens the statement and opens an exception. Re-presenting is left to a person in payments, because the payment reference must never be reused; a second offer would need a new reference (`ri-stmt-<n>-<try>`) agreed with payments.
+8. **A reversed admission that claims later reopens stays reversed.** `ClaimFact::Reopened` only moves a closed claim to open (`claims.rs`). To finish: on `claim_reopened` after `admission_reversed`, work the expected recovery out again and close the disputed items that no longer apply.
+9. **Statements are filed, not sent.** The filed document is the record; sending it to the reinsurer is done by people. A sender would be a new audience on the `Document` notice, most likely through the documents module.
+10. **Listings are built in one command.** `cut_statement` walks the whole ceded book. A very large book needs the listing cut per partition and the `Document` notice split, since a notice is held in replicated state.
+11. **Original premium before discounts.** The core's billing event carries premium after discounts only, so a treaty priced on original premium uses the discounted figure (`premium.rs`). Needs the core to send both.
+12. **Not built because the core has nothing to cede:** joint-life cover (the design counts it in full against each life) and longevity reinsurance for annuities.
+
+### Open questions for Mitchell
+
+- Who posts the entry that clears `int/reinsurance_settlement_clearing` against the bank when a settlement settles: reinsurance (on `record_settlement`), payments, or finance at the close? Payments' docs say such entries belong to the requesting module; nothing posts it today.
+- Should a change of underwriting terms on facultatively placed cover hold the change until the reinsurer answers? Today the cession carries on and an exception asks a person to tell the reinsurer.
+- Who is on call for reinsurance exceptions, and by what channel, so the alert in item 1 has somewhere to go?
+
+### Known failing checks
+
+None known. CI run 192 at `ea9de28` passed with all of this area's commits in it. Locally the crate is checked with `--exclude ic-workflows` and `IC_SKIP_TEMPORAL_TESTS=1`, because the cloud container has no `protoc`; CI runs the whole workspace.
