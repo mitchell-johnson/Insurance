@@ -517,3 +517,62 @@ fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
     );
     assert_eq!(ended(&declined), Some(("grp-uw:S1:4/ended".into(), true, "declined".into())));
 }
+
+/// Purpose: a scheme member's agreement that their employer may see a loaded premium is a
+/// consent of its own, given by the member's signed step and only on a proposal for scheme
+/// excess cover. Given, the accepted terms that go to group administration say so; not given,
+/// or given and then withdrawn before the decision, they do not.
+/// Why it matters: a loading on an itemised invoice tells an employer that an employee has a
+/// health condition. The design allows itemised billing only with the member's consent, so the
+/// consent has to be the member's own act, tied to this application, and its absence must
+/// always read as "no".
+#[test]
+fn an_employer_sees_a_loading_only_with_the_members_signed_consent() {
+    use ic_underwriting::model::{ConsentKind, Entry};
+
+    let mut w = World::new();
+    let consent = |id: &str, granted: bool, sign: Option<&str>| Command::RecordConsent {
+        proposal: id.into(),
+        life: "L1".into(),
+        kind: ConsentKind::EmployerSeesLoading,
+        granted,
+        signed: sign.map(|step| signed("consent", &[id, "L1", step])),
+    };
+    let excess = |w: &mut World, id: &str| {
+        let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
+        open.product_code = "group-life".into();
+        open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+        w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+    };
+    let told_employer = |w: &mut World, id: &str| {
+        let disclosed = w.disclose(id, "L1", &clean());
+        let applied = w.automatic(&disclosed);
+        applied
+            .effects
+            .iter()
+            .find_map(|e| match e {
+                Effect::ApplyTerms { employer_may_see_loading, .. } => Some(*employer_may_see_loading),
+                _ => None,
+            })
+            .unwrap()
+    };
+
+    // Not on an ordinary application, and not without the member's own signature for this step.
+    w.open("P1", 300_000_00);
+    assert_eq!(w.err("new-business", consent("P1", true, Some("employer_sees_loading"))), "entry");
+    excess(&mut w, "grp-uw:S1:1");
+    assert_eq!(w.err("new-business", consent("grp-uw:S1:1", true, None)), "signature");
+    assert_eq!(w.err("new-business", consent("grp-uw:S1:1", true, Some("adviser_access"))), "signature");
+
+    // Given: the terms say the employer may see it.
+    w.ok("new-business", consent("grp-uw:S1:1", true, Some("employer_sees_loading")));
+    assert!(told_employer(&mut w, "grp-uw:S1:1"));
+
+    // Never given, and given then withdrawn: they do not.
+    excess(&mut w, "grp-uw:S1:2");
+    assert!(!told_employer(&mut w, "grp-uw:S1:2"));
+    excess(&mut w, "grp-uw:S1:3");
+    w.ok("new-business", consent("grp-uw:S1:3", true, Some("employer_sees_loading")));
+    w.ok("new-business", consent("grp-uw:S1:3", false, None));
+    assert!(!told_employer(&mut w, "grp-uw:S1:3"));
+}
