@@ -21,6 +21,9 @@ use crate::MODULE;
 pub trait Module: Send + Sync {
     fn propose(&self, envelope: Envelope) -> impl Future<Output = Result<Output, String>> + Send;
     fn query(&self, question: Value) -> impl Future<Output = Result<Value, String>> + Send;
+    /// Give another hosted module a command in its own form. `Ok` is that
+    /// module's answer, whatever it is; `Err` means it could not be asked.
+    fn tell(&self, module: &str, command: Value) -> impl Future<Output = Result<Value, String>> + Send;
 }
 
 /// The core. `Ok(None)` is done, `Ok(Some(code))` is the core's refusal,
@@ -67,6 +70,10 @@ impl Module for ClusterClient {
     async fn query(&self, question: Value) -> Result<Value, String> {
         self.query_module(MODULE, &question).await.map_err(lost)?
     }
+
+    async fn tell(&self, module: &str, command: Value) -> Result<Value, String> {
+        self.propose_module_until(module, &command, Duration::from_secs(20)).await.map_err(lost)?.result
+    }
 }
 
 /// The cluster could not be reached or did not answer.
@@ -77,6 +84,13 @@ fn lost(e: ic_raft::client::ClientError) -> String {
 /// An answer that is not in the form expected.
 pub(crate) fn unreadable(e: serde_json::Error) -> String {
     format!("unreadable answer: {e}")
+}
+
+/// The code another module refused a command with, if it refused. Modules
+/// answer `{"Err": {"code": ..}}`, alone or under `result`.
+pub fn refusal(answer: &Value) -> Option<String> {
+    let refused = answer.pointer("/result/Err").or_else(|| answer.pointer("/Err"))?;
+    Some(refused.get("code").and_then(Value::as_str).unwrap_or("refused").to_string())
 }
 
 /// The policy a command of ours is about.
