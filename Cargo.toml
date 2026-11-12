@@ -60,6 +60,16 @@ too_many_arguments = "allow"
 lto = "thin"
 codegen-units = 1
 
+# The failure drill in CI. Optimised like a release, without link-time
+# optimisation across crates: that step runs once per binary and had taken
+# the image build to fifty minutes. The drill tests what the cluster does
+# when parts of it die, which does not depend on it. The shipped image and
+# the drill run by hand are built with the release profile.
+[profile.drill]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 # Small, fast debug builds. The workspace has many test executables and each
 # one links every dependency, so debug information is left out altogether:
 # with it a full test build needs tens of gigabytes of disk. Backtraces still

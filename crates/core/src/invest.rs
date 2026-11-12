@@ -379,6 +379,11 @@ pub enum InvestEvent {
         fund: FundId,
         version: u32,
         content_hash: String,
+        /// The definition itself, so a module that keeps funds (unit
+        /// pricing) can follow the core from the event feed and never holds
+        /// a version the core does not.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        definition: Option<Box<FundDefinition>>,
     },
     UnitPriceActivated {
         price_id: String,
@@ -391,11 +396,7 @@ pub enum InvestEvent {
     },
     /// Cash moved between the policy's suspense and its pending investment
     /// cash. Negative when it was moved back.
-    CashAllocated {
-        policy: PolicyId,
-        reference: String,
-        amount_minor: i64,
-    },
+    CashAllocated { policy: PolicyId, reference: String, amount_minor: i64 },
     /// Pending investment cash was raised to benefit payable, to be paid
     /// under the payout's ID as the payment reference.
     PayoutRaised {
@@ -629,6 +630,7 @@ pub(crate) fn activate_fund(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, fund: 
         fund: fund.id.clone(),
         version: fund.version,
         content_hash: fund.content_hash.clone(),
+        definition: Some(Box::new(fund.clone())),
     }));
     versions.insert(fund.version, fund);
     Ok(())
