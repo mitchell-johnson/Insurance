@@ -202,11 +202,7 @@ fn the_letter_that_a_policy_ended_is_copied_and_routine_letters_are_not() {
                     to: PolicyStatus::Lapsed,
                 },
             ),
-            core(
-                3,
-                today,
-                CoreEvent::PolicyReinstated { policy: policy("pol-1") },
-            ),
+            core(3, today, CoreEvent::PolicyReinstated { policy: policy("pol-1") }),
         ],
     );
     assert_eq!(kit.state.triggers["7-2:GeneralCorrespondence"].copy_to, vec![party("lender")]);
