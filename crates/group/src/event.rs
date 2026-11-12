@@ -79,6 +79,9 @@ pub enum ExceptionKind {
     PersistentShortPayment,
     /// Renewal terms not agreed by the renewal date.
     RenewalNotAgreed,
+    /// Fewer members than the scheme's minimum are left in the employer's
+    /// one total of loadings, so the total may show whose loading it is.
+    LoadingTotalTooSmall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
