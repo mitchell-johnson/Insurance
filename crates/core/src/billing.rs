@@ -144,6 +144,26 @@ fn settle_credits(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>) -
     let owed: i64 = policy.receivables.iter().filter(|r| r.outstanding_minor > 0).map(|r| r.outstanding_minor).sum();
     let to_suspense = (credit - owed).max(0);
     if to_suspense > 0 {
+        // Premium already paid is the policyholder's money again. Say how
+        // much of it had paid for cover, so commission earned on it goes back.
+        let credits: BTreeMap<u32, i64> = policy
+            .receivables
+            .iter()
+            .filter(|r| r.outstanding_minor < 0)
+            .map(|r| (r.id, r.outstanding_minor))
+            .collect();
+        let net: BTreeMap<String, i64> = crate::counterparty::net_by_cover_type(&policy.receivables, &credits)
+            .into_iter()
+            .map(|(cover_type, amount)| (cover_type, (-(amount as i128) * to_suspense as i128 / credit as i128) as i64))
+            .filter(|(_, amount)| *amount > 0)
+            .collect();
+        if !net.is_empty() {
+            ctx.emit(Event::PremiumUnapplied {
+                policy: policy.id.clone(),
+                reference: "premium_credit".to_string(),
+                net_by_cover_type: net,
+            });
+        }
         let c = policy.currency;
         let mut set = PostingSet::new();
         set.debit(accounts::premium_receivable(&policy.id, c), to_suspense as i128, Dimensions::default());
