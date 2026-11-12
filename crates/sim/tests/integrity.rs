@@ -518,6 +518,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             }],
             detail: Default::default(),
         })),
+        Command::Investment(Box::new(ic_core::invest::InvestCommand::CancelOrder { order_id: "o-1".into() })),
     ]);
     let mut names = std::collections::BTreeSet::new();
     for command in &all {
@@ -531,7 +532,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 32, "{names:?}");
+    assert_eq!(names.len(), 33, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

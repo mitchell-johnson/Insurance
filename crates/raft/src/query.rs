@@ -32,6 +32,8 @@ pub enum Query {
     PaymentCandidates { matcher: Matcher, payment: IncomingPayment },
     /// A question for the claims held on this partition.
     Claims { question: ic_core::claims_module::report::Question },
+    /// A question for the investment ledger on this partition.
+    Investment { question: ic_core::invest::Question },
 }
 
 /// A policy with what the read side knows about it.
@@ -57,6 +59,7 @@ pub enum Answer {
     Candidates(Candidates),
     /// `None` until the partition's business date is open.
     Claims(Option<ic_core::claims_module::report::Reply>),
+    Investment(ic_core::invest::Reply),
 }
 
 /// Answer a query from a partition's state and read models.
@@ -76,5 +79,6 @@ pub fn answer(core: &CoreState, view: &Projections, query: Query) -> Answer {
         Query::Locate { policy } => Answer::Located(view.policy(&policy).cloned()),
         Query::PaymentCandidates { matcher, payment } => Answer::Candidates(matcher.candidates(view, &payment)),
         Query::Claims { question } => Answer::Claims(core.business_date.map(|today| core.claims.answer(&question, today))),
+        Query::Investment { question } => Answer::Investment(core.investment.answer(&core.ledger, &core.policies, &question)),
     }
 }
