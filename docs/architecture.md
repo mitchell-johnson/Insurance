@@ -280,3 +280,62 @@ Owned by the thread "Build underwriting and new business". The full module descr
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.
 
 **Checks.** At the last run on main (2026-11-12) fmt, clippy, the test-doc check and all `ic-underwriting`, `ic-core` and `ic-sim` tests passed; crate line coverage was last measured at 98.38% before the alteration and reinstatement work and has not been re-measured since.
+
+## Payments and bank channels
+
+This section is the handover for money in and money out: what exists, where it is, and everything that is unfinished, written so the work can be finished without the thread that built it. The fuller description and runbook are in [payments.md](payments.md). State as of 12 November 2026.
+
+### What is built and where
+
+- **`crates/payments` (`ic-payments`), module name `payments`.** A deterministic state machine hosted on the ledger nodes as its own Raft group (`ic_node::modules()`, `ic_payments_service::module_spec()`). Commands arrive as `Envelope { key, actor { id, roles }, at, command }`; commands are internally tagged (`"type"`, snake case). Files:
+  - `machine.rs`: the command and event enums, the state (`PaymentsState`), roles and dispatch.
+  - `config.rs`: banks, channels (file or API, cutoff, an endpoint per region with credential name, signing key name, certificate expiry and egress address), accounts by purpose and statutory fund, routes and limits. A configuration that leaves a voter region without a working endpoint is refused (`region_not_provisioned`, addendum entry 6).
+  - `authority.rs`: direct debit authorities, with an optional scheme member (`life`). A payer's death cancels the authority and blocks a sole-name account (addendum entry 1).
+  - `payee.rs`: payee accounts with verification, cooling-off, screening and legal sign-off for estates and liquidators.
+  - `run.rs`: runs of twelve types from prepare to close: checks, maker and approver separation, submission exactly once, fallback and redirection, acknowledgement, settlement, returns, re-presentment.
+  - `intake.rs`: waiting payments released by other areas (`offer_payment`, `take_waiting`) and the reports back to them.
+  - `refund.rs`: refunds to source, and the deceased-payer exception that holds a refund for the claim.
+  - `recon.rs`: statements, expected against actual, exceptions, and the two financial close questions.
+  - `drill.rs`: the evacuation drill's record of readiness per region.
+  - `file.rs`: the batch, its text form, hash and signed manifest, and the bank's messages.
+  - `query.rs`: the questions the module answers, and `react`, which turns core events into module commands (key `core-{event id}`, actor `core-events`).
+  - `model.rs`: shared types, including the outbox `Instruction` variants `Core`, `CoreAt`, `Module`, `Match` and `Notify`.
+- **`crates/payments-service` (`ic-payments-service`).** The drivers. `pump.rs` (`Pump`, `DeployedPump`, `run_from`) works submissions and the outbox in order; `bank.rs` holds the `Bank` trait and `HttpBank`; `fake.rs` is the fake bank used by every test; `ports.rs` holds the `Module` and `Core` traits; `settings.rs` reads the environment; `iso20022.rs` writes ISO 20022 files; `bin/ic-payments-pump.rs` is the binary, with modes loop, `once` and `drill [<id>]`.
+- **Deployment.** `deploy/k8s/payments.yaml` (service account `ic-payments`, config, two secret provider classes, a two-replica pump Deployment, a disruption budget, the weekly drill CronJob), with entries in `kustomization.yaml` and `network.yaml`. `infra/main.bicep` has the payments identity, its own Key Vault and the immutable `payments-evidence` container. The Bicep was not compiled locally, because the build container has no `az`; CI validates it.
+- **Tests.** `crates/payments/tests/` (`runs.rs`, `controls.rs`, `intake.rs`, `recon.rs`, `refunds.rs` and others, sharing `common/mod.rs`) and `crates/payments-service/tests/` (`pump.rs`, `cluster.rs`, `iso20022.rs`). `crates/node/tests/between_modules.rs` proves the reinsurance seam on real nodes. Line coverage of both crates was about 98.7% when last measured.
+
+### Seams with other areas
+
+- **Core.** Settlement sends `SettlePayable` (caller `payments`) or `ApplyReceipt` (caller `cash-matching`); a member's collection sends `ApplyMemberReceipt`; a return sends the reversal. The item ID is the bank's end-to-end reference and the core's payment or receipt ID. The module reads `PaymentAuthorityCancelled`, `PayoutRaised` and `PayoutReinstructed`.
+- **Claims.** The claims events `claim_paid` and `claim_cost_paid` become waiting payments under the claims payment reference (sources `claim:{claim}:{ref}` and `claim-cost:{claim}:{ref}`). Claims is told `PaymentReturned` when the bank refuses or returns a payment before settlement, and `ConfirmRun { run, settled_minor }` when every payment seen for a claims run has settled or failed. Both go through the claim's policy as `Instruction::CoreAt`.
+- **Reinsurance.** Its driver offers a net settlement (source `reinsurance:statement:{n}`). The pump tells the reinsurance module `record_settlement` or `settlement_returned` with keys `payments:settled:{item}` and `payments:returned:{item}:{date}`.
+- **Finance.** The close driver asks `{"q":"fund_cash_settlement","as_at"}` and `{"q":"aged_unidentified_receipts","as_at"}`.
+- **Anyone else.** `prepare_run` then `add_run_items`, or `request_refund`. Results come back as `item_settled` and `item_returned` events carrying the caller's `source`.
+
+### Open question for Mitchell
+
+**Which bank file format do the channels speak?** The design notes ("Money in and money out: payment runs and bank connectivity") settle a file channel with a signed manifest, an API channel, two banks, idempotency and cutoffs, but name no bank and no format. The question was put in the payments thread on 12 November 2026 with three options: ISO 20022 XML (recommended), a named bank's own format, or wait until a bank is chosen. It was unanswered when this was written. The standing rule is that nothing is ever sent to a real bank endpoint; channels are tested against the fake bank only.
+
+### Unfinished, in the order I would do it
+
+1. **Bank formats and transport (waits on the question above).**
+   - Done: `iso20022::document(batch, ordering)` writes `pain.001.001.09` (payments) and `pain.008.001.08` (collections) deterministically, refuses identifiers over 35 characters, and is tested.
+   - To do: an `OrderingAccount` (name, number, optional BIC) per bank account in the channel settings; a format setting per channel in `settings.rs` so `HttpBank` or a new file bank sends `document(...)` instead of `Batch::text()`; the hash and manifest must then be taken over the ISO bytes, which means `Batch::content_hash` in `crates/payments/src/file.rs` has to hash what is actually sent.
+   - To do: reading the bank's answers, `pain.002` (acknowledgement and rejection per item) and `camt.053` or `camt.054` (statement, settlement and returns), into the existing `BankMessage` values. The workspace has no XML parser; one must be added to `Cargo.toml` (for example `roxmltree`) and `Cargo.lock` updated.
+   - To do: SFTP for the file channel and mutual TLS for both. The certificate expiry is configured and checked but no client certificate is presented. The secrets belong in the payments Key Vault.
+   - If a New Zealand domestic direct credit format is chosen instead, it is a second writer beside `iso20022.rs` with the same signature.
+2. **Durable message cursors.** `Pump` keeps how far it has read each bank's messages in memory (`pump.rs`). Move the cursor into the module's state with a small command, so a restart does not re-read a bank's whole history. Replays are harmless today because every message is recorded under an idempotent key.
+3. **Unit-linked payout refused before settlement.** `failed_before_settlement` in `intake.rs` tells claims but not the core's investment ledger. The core needs a command for it (ask the core owner); until then servicing must re-instruct, and the reference is spent.
+4. **Scheme members.** `PaymentAuthorityCancelled { policy, claim }` names no life, so `payer_deceased` in `authority.rs` ends every authority on a scheme policy, the employer's included. The core owner was asked for an optional `life` on the event; when it exists, filter on it. A credit a member pays in themselves is not matched to the member, because no per-member payment reference is issued. `RefundMemberCredit` is settled by the core and is not paid through a run.
+5. **Claims.** `RecordRepayment` is never sent: an inbound credit is not tied to an overpayment. The `account_ref` claims verified is carried on the waiting payment but not compared with the payee's account. `ConfirmRun` assumes a run's `claim_paid` events arrive together; if some arrived after the earlier ones had all settled, the confirmation would be early (claims was told and has not objected).
+6. **Reinsurance.** A statement whose net is owed to the insurer has no command; only payments to a reinsurer are handled.
+7. **Receipt matching.** A `Match` instruction hands an inbound credit to the core's cash matching with the bank reference. Resolving the payer from an authority first is not done.
+8. **Drill payments.** A drill's token payments appear on the statement as unexpected lines and are cleared as exceptions by a person. They are not posted.
+9. **Account details at rest.** Payee and authority account details are in the module's state in clear. They are not sealed per person, so retention shredding in the customer master does not reach them.
+10. **Notices.** `Notify` instructions are written to the structured log (`payments.notice`) with a role. Delivery to a work queue or a person is not wired to the channels or documents modules.
+11. **Egress addresses.** Recorded per region and checked in configuration, not enforced on the network.
+12. **Screens.** The portal has no payments operations screens (run preparation, approval, exceptions). The commands and queries they would call exist.
+
+### Checks
+
+Nothing in this area is known to fail. Before a push: `cargo fmt --all`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `python3 tools/check_test_docs.py`; `IC_SKIP_TEMPORAL_TESTS=1 cargo test --workspace --locked`. Chain them with `&&`, so a failure stops the push. Most CI runs on main are superseded by the next push before they finish, so judge main by the latest completed run. The coverage table counts a closure that never ran as a missed line: use a named helper that one test exercises. The build container's disk fills from `target/`; delete `target/debug` and build with `CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0`.
