@@ -10,6 +10,18 @@ use crate::machine::{Event, PaymentsState, Tx};
 use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
 
 impl PaymentsState {
+    /// The place only moves forward: a slower driver reporting an older
+    /// place changes nothing.
+    pub(crate) fn note_messages_read(&mut self, tx: &mut Tx<'_>, channel: Id, through: u64) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        if !self.cfg()?.channels.contains_key(&channel) {
+            return Err(Reject::new("unknown_channel", format!("there is no channel {channel}")));
+        }
+        let place = self.messages_read.entry(channel).or_default();
+        *place = (*place).max(through);
+        Ok(())
+    }
+
     pub(crate) fn open_exception(&mut self, tx: &mut Tx<'_>, id: Id, exception: Exception) {
         tx.emit(Event::ExceptionOpened {
             exception: id.clone(),

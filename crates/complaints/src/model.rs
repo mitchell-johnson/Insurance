@@ -498,3 +498,34 @@ pub struct RootCauseReview {
     pub by: String,
     pub actions: Vec<Action>,
 }
+
+/// A letter the register says is owed and nobody has yet issued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LetterKind {
+    /// The acknowledgement of a complaint.
+    Acknowledgement,
+    /// The notice that a complaint is deadlocked, with the right to take
+    /// it to the scheme.
+    DeadlockNotice,
+    /// The letter to a customer affected by a licence event.
+    LicenceNotice,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LetterDue {
+    pub kind: LetterKind,
+    /// The complaint, or the conduct case.
+    pub subject: String,
+    /// Who the letter is for.
+    pub party: PartyId,
+    /// The people who act for them, who are sent it too.
+    pub representatives: Vec<PartyId>,
+    /// When the complaint was received, the deadlock reached or the case opened.
+    pub since: NaiveDate,
+    /// The date the letter is due by, where a timer sets one.
+    pub due: Option<NaiveDate>,
+    /// A licence event's status and effective date. Never anything about
+    /// the person.
+    pub detail: BTreeMap<String, String>,
+}

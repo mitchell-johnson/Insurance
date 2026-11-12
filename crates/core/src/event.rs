@@ -10,7 +10,7 @@ use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LayerOrigin, PolicyStatus, ReopenedChoice, Standing, UnwindCause};
+use crate::policy::{LayerOrigin, PolicyStatus, PremiumOnAvoidance, ReopenedChoice, Standing, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -337,6 +337,26 @@ pub enum Event {
         period_end: NaiveDate,
         total_minor: i64,
         adjustment: bool,
+    },
+    /// The policy was avoided for non-disclosure: it is treated as never
+    /// having been in force, and every layer ends on the day it started.
+    /// Commission paid on it and reinsurance ceded on it follow.
+    PolicyAvoided {
+        policy: PolicyId,
+        /// The non-disclosure case that decided it.
+        case: String,
+        premium: PremiumOnAvoidance,
+        /// What went back to policy suspense for the policyholder.
+        refunded_minor: i64,
+    },
+    /// A non-disclosure case varied the terms of layers, which now read as
+    /// written on those terms from their start. The terms themselves are
+    /// sensitive and are not here.
+    TermsVaried {
+        policy: PolicyId,
+        case: String,
+        /// Cover, life and layer number of each layer varied.
+        layers: Vec<(String, LifeId, u32)>,
     },
     /// The standing of a scheme member on cover the member pays for
     /// themselves. It says nothing about the scheme's own standing.

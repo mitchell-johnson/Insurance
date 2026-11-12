@@ -8,7 +8,7 @@ use ic_product::{Definition, Frequency, ProductDefinition, RateTable};
 use serde::{Deserialize, Serialize};
 
 use crate::payments::PayableKind;
-use crate::policy::{LifeFactors, LifeKind, MemberPays, ReopenedChoice, UnwindCause};
+use crate::policy::{LayerTerms, LifeFactors, LifeKind, MemberPays, PremiumOnAvoidance, ReopenedChoice, UnwindCause};
 use crate::transfer::TransferRecord;
 use crate::{GroupId, LifeId, PartyId, PolicyId};
 
@@ -318,6 +318,21 @@ pub enum Command {
     /// it once the lapse has run longer than the product's evidence-free
     /// days, and applies its terms from the day of reinstatement.
     ApproveReinstatement(Box<ReinstatementTerms>),
+    /// Avoid a retail policy for non-disclosure, on an approved case. The
+    /// case decides whether the premiums paid are refunded or kept.
+    AvoidPolicy {
+        policy: PolicyId,
+        case: String,
+        premium: PremiumOnAvoidance,
+    },
+    /// Vary a retail policy's terms for non-disclosure, on an approved case:
+    /// the layers read as written on these terms from their start. Nothing
+    /// already billed is billed again.
+    VaryForNonDisclosure {
+        policy: PolicyId,
+        case: String,
+        terms: Vec<LayerTerms>,
+    },
     /// Reduce or give up one life's cover on a retail policy from today,
     /// newest layer first, with the billed premium for the days left
     /// credited back.
@@ -494,7 +509,11 @@ impl Command {
             Command::ApplyMembership { .. } => &["group-admin"],
             Command::IdentifyMember { .. } => &["group-admin", "claims"],
             Command::AddExcessLayer(_) | Command::EndExcessLayer { .. } => &["group-admin", "underwriting"],
-            Command::AddUnderwrittenLayer(_) | Command::AlterUnderwrittenTerms(_) | Command::ApproveReinstatement(_) => &["underwriting"],
+            Command::AddUnderwrittenLayer(_)
+            | Command::AlterUnderwrittenTerms(_)
+            | Command::ApproveReinstatement(_)
+            | Command::AvoidPolicy { .. }
+            | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -540,6 +559,8 @@ impl Command {
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
+            Command::AvoidPolicy { .. } => "avoid_policy",
+            Command::VaryForNonDisclosure { .. } => "vary_for_non_disclosure",
             Command::ReduceCover(_) => "reduce_cover",
             Command::ApplyReceipt { .. } => "apply_receipt",
             Command::ReverseReceipt { .. } => "reverse_receipt",

@@ -451,6 +451,16 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             life: LifeId("l".into()),
             sum_insured_minor: 0,
         })),
+        Command::AvoidPolicy {
+            policy: p.clone(),
+            case: "nd".into(),
+            premium: ic_core::PremiumOnAvoidance::Refund,
+        },
+        Command::VaryForNonDisclosure {
+            policy: p.clone(),
+            case: "nd".into(),
+            terms: vec![],
+        },
         Command::ApplyMemberReceipt {
             policy: p.clone(),
             life: LifeId("l".into()),
@@ -570,7 +580,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 39, "{names:?}");
+    assert_eq!(names.len(), 41, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

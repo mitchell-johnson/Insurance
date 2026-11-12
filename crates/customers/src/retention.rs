@@ -20,6 +20,7 @@ use crate::model::{FieldClass, Lifecycle, PartyId};
 use crate::party::Party;
 
 /// The version of the schedule below. Recorded with every erasure.
+/// Periods confirmed by the business on 2026-11-13.
 pub const SCHEDULE_VERSION: &str = "2026-11-12";
 
 /// Years each class is kept after the last relationship ends.

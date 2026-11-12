@@ -81,6 +81,11 @@ pub enum Query {
     PendingEvents {
         limit: usize,
     },
+    /// The letters owed that nobody has issued, for the documents service.
+    /// Names parties and dates, never what a complaint is about.
+    LettersDue {
+        limit: usize,
+    },
     StateHash,
 }
 
@@ -102,6 +107,7 @@ pub fn answer(state: &ComplaintsState, question: Value) -> Result<Value, String>
         Query::SubjectRecord { id } => json(state.subject_record(&id)),
         Query::AdviserView { engagement } => json(state.adviser_view(&engagement)),
         Query::Queue { limit } => json(state.queue(limit.min(MAX_ANSWER))),
+        Query::LettersDue { limit } => json(state.letters_due(limit.min(MAX_ANSWER))),
         Query::Running { id } => json(state.complaints.get(&id).map(|c| state.running(c))),
         Query::ComplaintsOf { party } => json(state.complaints_of(&party)),
         Query::Register { from, to } => json(state.register(from, to)),

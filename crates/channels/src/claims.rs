@@ -125,6 +125,7 @@ pub fn question(name: &str, field: impl Fn(&str) -> Option<String>) -> Result<Qu
             queue: serde_json::from_value(json!(needs("queue")?)).map_err(|_| "there is no such queue".to_string())?,
         },
         "claim" => Question::Claim { claim: needs("claim")? },
+        "work" => Question::Work { claim: needs("claim")? },
         "book" => Question::Book,
         "report" => Question::Report,
         "remittance" => Question::Remittance { run: needs("run")? },

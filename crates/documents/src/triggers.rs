@@ -41,6 +41,9 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
             to: PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured,
             ..
         } => vec![trigger(record, policy, DocumentKind::GeneralCorrespondence, None)],
+        // The decision itself, not the change of status that goes with it,
+        // so a policy avoided is written to once, with the avoidance letter.
+        Event::PolicyAvoided { policy, .. } => vec![trigger(record, policy, DocumentKind::AvoidanceNotice, None)],
         Event::ReceiptApplied { policy, .. } => vec![trigger(record, policy, DocumentKind::PremiumReceipt, None)],
         _ => vec![],
     }

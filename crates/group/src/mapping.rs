@@ -88,6 +88,24 @@ pub struct Columns {
     pub email: Option<String>,
     #[serde(default)]
     pub national_id: Option<String>,
+    /// Left out of the stored form when unset, so a mapping sealed before
+    /// this column existed keeps its hash.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mobile_phone: Option<String>,
+}
+
+/// A phone number as the customer master matches on it: international form.
+/// Employers' files mostly carry New Zealand numbers written for dialling
+/// at home (`021 123 4567`), which become `+64 21 123 4567` without the
+/// spacing. A number already international keeps its digits. Anything else
+/// is passed as written, and the customer master leaves out of matching
+/// what it cannot read.
+fn international(text: &str) -> String {
+    let dialled: String = text.chars().filter(|c| !matches!(c, ' ' | '-' | '(' | ')' | '.')).collect();
+    match dialled.strip_prefix('0') {
+        Some(national) if !national.starts_with('0') && national.chars().all(|c| c.is_ascii_digit()) => format!("+64{national}"),
+        _ => dialled,
+    }
 }
 
 fn comma() -> char {
@@ -274,8 +292,10 @@ impl FileMapping {
             find(&c.previous_employee_id)?,
             find(&c.email)?,
             find(&c.national_id)?,
+            find(&c.mobile_phone)?,
         ];
-        let [given, family, dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous, email, national_id] = cols;
+        let [given, family, dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous, email, national_id, mobile_phone] =
+            cols;
 
         let mut out = Mapped::default();
         for (n, cells) in table.iter().enumerate().skip(1) {
@@ -315,6 +335,7 @@ impl FileMapping {
                             date_of_birth: member.attrs.date_of_birth,
                             email: cell(email).map(str::to_string),
                             national_id: cell(national_id).map(str::to_string),
+                            mobile_phone: cell(mobile_phone).map(international),
                         });
                     }
                     out.rows.push(member);
@@ -421,6 +442,7 @@ pub(crate) mod tests {
                 previous_employee_id: Some("Old Emp No".to_string()),
                 email: Some("Email".to_string()),
                 national_id: None,
+                mobile_phone: None,
             },
             date_format: "%d/%m/%Y".to_string(),
             salary_unit: SalaryUnit::Major,
@@ -454,6 +476,7 @@ pub(crate) mod tests {
                 change: Some("event".to_string()),
                 effective: Some("from".to_string()),
                 national_id: Some("ird".to_string()),
+                mobile_phone: Some("mobile".to_string()),
                 ..Columns::default()
             },
             date_format: "%Y-%m-%d".to_string(),
@@ -531,12 +554,12 @@ E003,Mele,Tupou,30/09/1992,female,staff,62000.5,20,01/10/2027,TRUE,akl,X9,
     #[test]
     fn the_sample_change_file_maps_each_event() {
         let m = change_mapping();
-        let text = "id;given;family;born;smoker;category;pay;event;from;ird\n\
-                    E010;Wiremu;Kereama;1988-03-04;N;staff;700000;new;2027-12-01;123\n\
-                    E001;;;;;;;TERM;2027-12-15;\n\
-                    E002;;;;1;executive;1800000;upd;2027-12-01;\n\
-                    E003;;;;;;;LOA;2027-12-10;\n\
-                    E003;;;;;;;rtw;2028-01-10;\n";
+        let text = "id;given;family;born;smoker;category;pay;event;from;ird;mobile\n\
+                    E010;Wiremu;Kereama;1988-03-04;N;staff;700000;new;2027-12-01;123;021 123-4567\n\
+                    E001;;;;;;;TERM;2027-12-15;;\n\
+                    E002;;;;1;executive;1800000;upd;2027-12-01;;\n\
+                    E003;;;;;;;LOA;2027-12-10;;\n\
+                    E003;;;;;;;rtw;2028-01-10;;\n";
         let mapped = m.map(&csv::parse(text.as_bytes(), m.delimiter).unwrap(), "salt").unwrap();
         assert!(mapped.rejected.is_empty(), "{:?}", mapped.rejected);
         let changes: Vec<_> = mapped.rows.iter().map(|r| (r.employee_id.as_str(), r.change, r.effective)).collect();
@@ -555,6 +578,35 @@ E003,Mele,Tupou,30/09/1992,female,staff,62000.5,20,01/10/2027,TRUE,akl,X9,
         assert_eq!(mapped.rows[2].attrs.smoker, Some(true));
         assert_eq!(mapped.identities.len(), 1);
         assert_eq!(mapped.identities[0].national_id.as_deref(), Some("123"));
+        assert_eq!(mapped.identities[0].mobile_phone.as_deref(), Some("+64211234567"));
+    }
+
+    /// Purpose: a mobile number is handed on in international form however the employer wrote
+    /// it: a New Zealand number written for dialling at home gains the country code, one already
+    /// international keeps its digits, and anything unreadable is passed on untouched.
+    /// Why it matters: the customer master links two records on a mobile only when the numbers
+    /// are the same text. A payroll file's `021 ...` would never equal the `+64 21 ...` a person
+    /// registered with, and the member would be created a second time instead of linked.
+    #[test]
+    fn mobile_numbers_are_put_in_international_form() {
+        assert_eq!(international("021 123 4567"), "+64211234567");
+        assert_eq!(international("(027) 555-0101"), "+64275550101");
+        assert_eq!(international("+61 412 345 678"), "+61412345678");
+        assert_eq!(international("0061412345678"), "0061412345678");
+        assert_eq!(international("ext 12"), "ext12");
+    }
+
+    /// Purpose: a mapping that names no mobile column is stored, and so hashed, exactly as it was
+    /// before that column existed.
+    /// Why it matters: a mapping is identified by its content hash and files are recorded against
+    /// it. If adding an optional column changed the hash of every sealed mapping, each scheme's
+    /// mapping would look like a different one after an upgrade.
+    #[test]
+    fn a_mapping_without_a_mobile_column_keeps_its_stored_form() {
+        let stored = serde_json::to_value(full_mapping()).unwrap();
+        assert!(stored["columns"].get("mobile_phone").is_none(), "{stored}");
+        let with = serde_json::to_value(change_mapping()).unwrap();
+        assert_eq!(with["columns"]["mobile_phone"], "mobile");
     }
 
     /// Purpose: each kind of unreadable cell rejects its own row with a code and the field's name,
@@ -601,7 +653,7 @@ E9,A,B,01/05/1980,F,Staff,85000,40,01/02/2020,N,akl,,
 
         // A change file row with no event, or an event the mapping does not know.
         let c = change_mapping();
-        let text = "id;given;family;born;smoker;category;pay;event;from;ird\nE1;;;;;;;;2027-12-01;\nE2;;;;;;;HIRE;2027-12-01;\nE3;;;;;;12x;UPD;2027-12-01;\nE4;;;;;;;UPD;1 Dec;\nE5;;;;perhaps;;;UPD;2027-12-01;\n";
+        let text = "id;given;family;born;smoker;category;pay;event;from;ird;mobile\nE1;;;;;;;;2027-12-01;\nE2;;;;;;;HIRE;2027-12-01;\nE3;;;;;;12x;UPD;2027-12-01;\nE4;;;;;;;UPD;1 Dec;\nE5;;;;perhaps;;;UPD;2027-12-01;\n";
         let mapped = c.map(&csv::parse(text.as_bytes(), ';').unwrap(), "salt").unwrap();
         let rejects: Vec<_> = mapped.rejected.iter().map(|r| (r.code.as_str(), r.field.as_deref().unwrap())).collect();
         assert_eq!(
