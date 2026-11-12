@@ -46,6 +46,27 @@ when
 permit (principal, action == Action::"view", resource)
 when { context.relationships.contains("assignee") && resource.kind == "policy" };
 
+// Someone the policyholder lets look, and a support person the policyholder
+// has named, see the policy but never a sensitive row: another person's
+// health is not the policyholder's to share, and their own stays with them.
+permit (principal, action == Action::"view", resource)
+when
+{
+  (context.relationships.contains("viewer") ||
+   context.relationships.contains("support_person")) &&
+  !resource.sensitive
+};
+
+// An accountant sees the money side of a policy and its documents, and
+// nothing about who or what is covered.
+permit (principal, action == Action::"view", resource)
+when
+{
+  context.relationships.contains("financial_viewer") &&
+  !resource.sensitive &&
+  ["policy", "billing", "notice", "document"].contains(resource.kind)
+};
+
 // Stale relationship data is never good enough for sensitive rows.
 forbid (principal, action == Action::"view", resource)
 when { resource.sensitive && !context.fresh };

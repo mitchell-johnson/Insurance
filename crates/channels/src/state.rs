@@ -157,6 +157,14 @@ pub enum Effect {
         partition: PartitionId,
         expected: u64,
     },
+    /// A child insured under a policy now controls their own health
+    /// information: the policyholder no longer sees it. Tell the child, who
+    /// may now enrol a device of their own, and the policyholder.
+    ControlPassed {
+        policy: PolicyId,
+        party: PartyId,
+        policyholder: Option<PartyId>,
+    },
     /// A request is ready for its owning module.
     RequestReady {
         id: String,
@@ -399,8 +407,7 @@ impl ChannelState {
             return (relationships, vec![]);
         }
         let narrow = relationships.iter().all(|r| matches!(r, Relationship::LifeInsured | Relationship::Member));
-        let none = BTreeSet::new();
-        let consented = self.data.directory.family_consent.get(policy).unwrap_or(&none);
+        let consented = &self.data.directory.consenting(policy, on);
         let rows = self
             .rows(policy, on, narrow.then_some(viewer))
             .into_values()
@@ -549,6 +556,9 @@ impl ChannelState {
                     }
                     // An adviser prepares; the customer approves in the app.
                     RequestStatus::AwaitingApproval { from: Approver::Customer }
+                } else if relationships.contains(&Relationship::SupportPerson) {
+                    // A support person helps prepare; the step is the customer's own, signed on their device.
+                    RequestStatus::AwaitingApproval { from: Approver::Customer }
                 } else if relationships.iter().any(|r| matches!(r, Relationship::LifeInsured | Relationship::Member)) {
                     // A person insured acts on their own matters: a claim, a consent.
                     RequestStatus::Pending
@@ -571,6 +581,7 @@ impl ChannelState {
                     return Err(reject("forbidden", "only the event relay delivers core events"));
                 }
                 let mut touched = BTreeMap::new();
+                let was = self.data.today;
                 for record in &records {
                     if let Err(ProjectionError::Gap { partition, expected, .. }) = self.follow(record, at, &mut touched) {
                         effects.push(Effect::Gap { partition, expected });
@@ -578,6 +589,17 @@ impl ChannelState {
                     }
                 }
                 let on = self.today(at);
+                // A new business date: children who reached the age of control leave their parents' view.
+                if let Some(was) = was.filter(|was| *was < on) {
+                    for (policy, party) in self.data.directory.came_of_age(was, on) {
+                        effects.push(Effect::ControlPassed {
+                            policyholder: self.data.directory.policyholders.get(&policy).cloned(),
+                            policy: policy.clone(),
+                            party,
+                        });
+                        touched.insert(policy, None);
+                    }
+                }
                 for (policy, only) in touched {
                     match only {
                         None => self.refresh(&policy, on, None, &mut effects),

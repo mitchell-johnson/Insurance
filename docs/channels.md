@@ -41,12 +41,17 @@ Every write needs an `Idempotency-Key` header. The same key from the same person
 | `GET /app/v1/sync?have=<n>` | What the device needs since position `n`: changed rows, deleted rows, or `purge` when access was lost. Without `have`, a full snapshot. |
 | `GET /app/v1/policies/{policy}` | The policy as you may see it. |
 | `POST`, `DELETE /app/v1/policies/{policy}/advisers` | Appoint or remove an adviser. Removal takes effect at once. |
+| `PUT /app/v1/policies/{policy}/delegates/{party}` | Let someone look (`viewer`, `financial` or `support`), change it, or end it with `null`. |
 | `PUT /app/v1/policies/{policy}/consent` | An adult on a family policy lets the policyholder see their sensitive rows, or stops it. |
 | `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. |
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
+
+**People the policyholder lets in.** A policyholder can let a relative look at a policy (`viewer`), let an accountant see its money side and documents (`financial`), or name a support person (`support`). Each has their own sign-in; nobody shares one. None of them ever sees a row that implies anything about health, and none can change anything. A support person can prepare a request, which then waits for the policyholder's own signature on their own device. The policyholder ends the access at any time and the other person's device is purged; it also ends if the policy changes hands.
+
+**Children.** The customer master records each child insured under a policy with the date they reach the age the product sets for controlling their own health information (`RecordDependant`). Until that date the policyholder sees the child's claims and other health-implying rows as a parent does. From the first business date on or after it, those rows are purged from the policyholder's devices, a `control_passed` effect goes out so both are told, and the young person can enrol a device of their own and, if they wish, consent to the parent seeing them again.
 
 **When the data may be stale.** The module knows when it last heard from the event stream. If that is more than two minutes ago, answers carry `fresh: false`, the audience policy is given that fact and withholds what it only allows on current relationship data, and the app shows "as at" rather than presenting old data as current.
 
@@ -112,7 +117,7 @@ Modules call `/internal/v1/commands` with a token from the workforce tenant. The
 | Who | Sends |
 | --- | --- |
 | Identity service | `BindSubject`, `UnbindSubject`, device enrolment after verification. |
-| Customer master, group administration, distribution | Ownership, assignments, employer administrators, engagements and licence status. |
+| Customer master, group administration, distribution | Ownership, assignments, children and their age of control, employer administrators, engagements and licence status. |
 | Any module with rows to show | Rows for a policy, with a kind, a subject and whether they are sensitive. |
 | Commission, finance, reinsurance, group administration, claims | Workbench positions, and the outcome of an approved action. |
 | The module a request is for | `GET /internal/v1/pending` for requests accepted and waiting, then the outcome of each. |
@@ -121,6 +126,8 @@ Modules call `/internal/v1/commands` with a token from the workforce tenant. The
 The core's own events (issue, billing, lapse, cancellation, cover changes) arrive through the module host and need nobody to send them.
 
 **The commission module is carried across by the portal service** (`forward.rs`). Every 15 seconds `ic-portal` asks the `distribution` module on the nodes which parties changed, reads each one's position and engagements, and records the engagements, licence history, workbench status, held lines, debts, documents and cases in the channels. The two modules share no code: the forwarder reads that module's answers as JSON, and `tests/forward.rs` checks the questions and answers against that module's own types. Everything it sends is safe to send twice, so a restart republishes once and two copies of the service do no harm.
+
+**Approved actions on commission money go back the same way.** The commission module moves the money and checks authority itself, so an action approved on the workbench is replayed there as each person's own act: the maker's proposal, then each approver's signature, each sent as that person with the roles and limits they hold here. What that module makes of it (posted, refused, rejected, failed) is recorded as the action's outcome on the workbench.
 
 ## Running it
 
@@ -160,6 +167,6 @@ node crates/channels/tests/browser/check.js
 - **The browser check is not run by CI.** CI has no browser. Run it before changing anything under `ui/`.
 - **Freshness depends on a heartbeat.** The gateway tells the module the stream is current every 15 seconds once it has confirmed the module is caught up. The heartbeat is a command, so it needs a majority; without one, answers go stale after two minutes and say so, which is the truth.
 - **Only commission is carried across automatically.** Finance, reinsurance, group administration and claims must send their own workbench positions through `/internal/v1/commands`; until they do, the workbench shows none of their money.
-- **Approved workbench actions on commission money are not yet carried to the commission module.** That module checks maker and checker itself and wants each person's act as its own command. Until that is wired, an action approved in the staff console waits as approved.
+- **Two sets of thresholds.** The workbench here and the commission module each decide how many signatures an action needs, from their own settings. They ship alike. If the commission module's are made stricter, an action approved here comes back as `needs_more_approval` and stays open there for the people it names.
 - **Licence loss above the provider.** The forwarder records each party's own licence and each adviser's provider. A group above the provider is not yet carried across, so its licence loss reaches advisers only through the provider's own record.
 - **Commission balances are taken to be in one currency** (`IC_PORTAL_CURRENCY`, default NZD), because that module's answers carry none.

@@ -12,14 +12,15 @@ use ic_reinsurance::machine::Audience;
 use ic_reinsurance::Notice;
 
 /// Purpose: the reinsurance driver's underwritten-excess notice is read by the group
-/// administration module hosted on the same node, which answers in its own words: here it
-/// refuses, because no such scheme is registered, and a repeat gets the same refusal.
+/// administration module hosted on the same node, and its facultative answer by the
+/// underwriting module, each of which answers in its own words: here they refuse, because
+/// no such scheme or reservation exists, and a repeat gets the same refusal.
 /// Why it matters: the two modules are built apart and share only JSON. If a field were
 /// named differently the group module could not read the command at all, and every excess
 /// over the retention on a scheme would wait for underwriting that never starts. A refusal
 /// that names the policy proves the command was read and understood.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn group_administration_reads_the_reinsurance_notice() {
+async fn group_administration_and_underwriting_read_reinsurance_notices() {
     let dir = std::env::temp_dir().join(format!("ic-node-between-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
@@ -42,7 +43,7 @@ async fn group_administration_reads_the_reinsurance_notice() {
     let node = server::start_with(settings, ic_node::modules().unwrap()).await.unwrap();
     let client = ClusterClient::new(vec![addr]).with_auth(auth);
     let audiences = ClusterAudiences::new(client.clone(), Duration::from_secs(20));
-    assert_eq!(audiences.reached(), vec![Audience::Group]);
+    assert_eq!(audiences.reached(), vec![Audience::Group, Audience::Underwriting]);
 
     let on = NaiveDate::from_ymd_opt(2027, 3, 1).unwrap();
     let notice = Notice::RequireUnderwrittenExcess {
@@ -61,7 +62,19 @@ async fn group_administration_reads_the_reinsurance_notice() {
             Handed::Taken => panic!("no scheme is registered, so the notice cannot have been taken"),
         }
     }
-    // A notice for someone else is never sent to group administration.
+    // Underwriting reads the facultative answer the same way, offered or declined.
+    for offered in [true, false] {
+        let terms = Notice::FacultativeTermsRecorded {
+            reservation_id: format!("P-9/life-1/life/{}", u8::from(offered)),
+            offered,
+            reference: "FAC-1".into(),
+        };
+        match audiences.hand_on(9, &terms, on).await.unwrap() {
+            Handed::Refused(refusal) => assert_eq!(refusal.code, "unknown_reservation", "{}", refusal.message),
+            Handed::Taken => panic!("underwriting holds no such reservation"),
+        }
+    }
+    // A notice for someone else is never sent to either.
     let other = Notice::ExceptionClosed { id: "x".into() };
     assert!(matches!(audiences.hand_on(8, &other, on).await, Err(DriverError::Answer(_))));
 

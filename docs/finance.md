@@ -53,6 +53,23 @@ All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps b
 
 The shipped return is illustrative. Its lines and account mappings are for finance and compliance to replace with the regulator's template.
 
+## The data mart and extracts
+
+`ic_finance::mart::Mart` is the book of policies and covers as the core's events describe it. It is a read model: it holds nothing the events do not carry, knows a policy and a life only by opaque ID, and is rebuilt from the first event of each partition. Events may arrive in any order between partitions; within a partition a gap is refused.
+
+| Extract | Rows | Control totals |
+| --- | --- | --- |
+| `in_force(as_at)` | every cover in force at the close of the date | policies, covers, sum insured |
+| `movement(from, to)` | every change to the book and every premium billed, with the business date it was recorded on and the date it took effect | opening and closing policies, covers and sum insured, premium |
+| `experience(from, to)` | days of exposure and the claims that ended a policy, by product and cover type | cover days, sum insured days, ending claims |
+
+- An extract is cut only as at a date every partition has closed.
+- Something recorded after a date closed never changes that date's extract. A backdated change is a movement of the period it was recorded in, with its own effective date. The same extract cut a month later is the same file to the byte.
+- The movement rows are the difference each event makes to its policy; the in-force rows come from the dates each cover was known between. An extract is `reconciled` when the two agree: opening plus movements equals closing.
+- `Extract::bytes` is the file (CSV), `name` the path it is stored under in immutable storage, and `record` the `ExtractRecord` to register with `RegisterExtract`: content hash, row count, control totals and the Merkle root of its date.
+
+The extracts carry what the core publishes today. Age, sex, smoker status and occupation class are not on the core's events, so the files do not yet carry the rating factors a valuation model needs, and claims that do not end a policy are not in the experience extract.
+
 ## Actuarial tables
 
 `ic_finance::tables::validate` is the gate a rate table passes before activation, against the schema declared for it in `config/finance/tables.star`:
@@ -88,7 +105,8 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 ## Not built yet
 
-- The data mart and the valuation and experience extracts. The ledger registers extracts (immutable, tied to the Merkle root of their date) and the close requires the in-force and movement extracts, but nothing cuts them yet. They need de-identified rating facts on the core's events, which the core thread has noted.
+- Rating factors on the extracts (age, sex, smoker status, occupation class) and claims that do not end a policy. They need de-identified rating facts on the core's events, which the core thread has noted.
+- The service that feeds the mart, writes each period's extracts to immutable storage and registers them.
 - The drivers that connect the other modules to the close: the Merkle root publisher, the callers of `ReportCheck` and `ReportAgedItems`, and the close workflow in Temporal.
 - The dry-run compare tool for a new table against the in-force book.
 - Public holidays in step due dates. Weekends are skipped.

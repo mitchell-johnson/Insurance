@@ -131,10 +131,26 @@ pub enum DirectoryCommand {
         party: PartyId,
         active: bool,
     },
+    /// The policyholder lets someone look at the policy, or stops it. That
+    /// person can read what their kind of access is for and can change nothing.
+    SetDelegate {
+        policy: PolicyId,
+        party: PartyId,
+        /// `None` ends the access.
+        access: Option<DelegateAccess>,
+    },
     /// An adult on a policy lets the policyholder see their own sensitive rows, or stops it.
     SetFamilyConsent {
         policy: PolicyId,
         consent: bool,
+    },
+    /// A child insured under a policy, and the date from which their health
+    /// information is theirs to control: the day they reach the age the
+    /// product sets. Until then the policyholder sees it as a parent does.
+    RecordDependant {
+        policy: PolicyId,
+        party: PartyId,
+        controls_from: NaiveDate,
     },
     RecordEngagement {
         engagement: Engagement,
@@ -149,6 +165,28 @@ pub enum DirectoryCommand {
         effective: NaiveDate,
         source: String,
     },
+}
+
+/// What someone the policyholder lets in may see.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegateAccess {
+    /// A relative or friend: the policy, without anything that implies health.
+    Viewer,
+    /// An accountant: the policy, its billing and its documents.
+    Financial,
+    /// A support person, who helps the policyholder use the service.
+    Support,
+}
+
+impl DelegateAccess {
+    fn relationship(self) -> Relationship {
+        match self {
+            DelegateAccess::Viewer => Relationship::Viewer,
+            DelegateAccess::Financial => Relationship::FinancialViewer,
+            DelegateAccess::Support => Relationship::SupportPerson,
+        }
+    }
 }
 
 /// Who a directory command comes from.
@@ -195,6 +233,13 @@ pub struct Directory {
     pub assignees: BTreeMap<PolicyId, BTreeSet<PartyId>>,
     /// Adults who let the policyholder see their sensitive rows.
     pub family_consent: BTreeMap<PolicyId, BTreeSet<PartyId>>,
+    /// Children insured under a policy, each with the date they take
+    /// control of their own health information.
+    #[serde(default)]
+    pub dependants: BTreeMap<PolicyId, BTreeMap<PartyId, NaiveDate>>,
+    /// People the policyholder lets look at a policy.
+    #[serde(default)]
+    pub delegates: BTreeMap<PolicyId, BTreeMap<PartyId, DelegateAccess>>,
     pub engagements: BTreeMap<String, Engagement>,
     pub structure: BTreeMap<PartyId, Vec<StructureLink>>,
     pub licences: BTreeMap<PartyId, Vec<LicenceChange>>,
@@ -344,6 +389,9 @@ impl Directory {
         if self.assignees.get(policy).is_some_and(|a| a.contains(party)) {
             out.push(Relationship::Assignee);
         }
+        if let Some(access) = self.delegates.get(policy).and_then(|d| d.get(party)) {
+            out.push(access.relationship());
+        }
         out
     }
 
@@ -356,7 +404,38 @@ impl Directory {
             out.extend(view.party_of(policy, &row.life).cloned());
         }
         out.extend(self.assignees.get(policy).into_iter().flatten().cloned());
+        out.extend(self.delegates.get(policy).into_iter().flat_map(|d| d.keys()).cloned());
         out
+    }
+
+    /// The people on a policy whose sensitive rows the policyholder may see
+    /// on a date: adults who consent, and children who do not yet control
+    /// their own health information.
+    pub fn consenting(&self, policy: &PolicyId, on: NaiveDate) -> BTreeSet<PartyId> {
+        let mut out = self.family_consent.get(policy).cloned().unwrap_or_default();
+        out.extend(
+            self.dependants
+                .get(policy)
+                .into_iter()
+                .flatten()
+                .filter(|(_, from)| on < **from)
+                .map(|(party, _)| party.clone()),
+        );
+        out
+    }
+
+    /// The children who took control of their own health information after
+    /// `after` and on or before `on`, with their policy.
+    pub fn came_of_age(&self, after: NaiveDate, on: NaiveDate) -> Vec<(PolicyId, PartyId)> {
+        self.dependants
+            .iter()
+            .flat_map(|(policy, children)| {
+                children
+                    .iter()
+                    .filter(move |(_, from)| after < **from && **from <= on)
+                    .map(move |(c, _)| (policy.clone(), c.clone()))
+            })
+            .collect()
     }
 
     /// Follow one core event.
@@ -426,6 +505,8 @@ impl Directory {
                 if let Some(old) = self.policyholders.insert(policy.clone(), policyholder) {
                     touched.revoked.insert(old);
                 }
+                // So was anyone they let look.
+                touched.revoked.extend(self.delegates.remove(&policy).unwrap_or_default().into_keys());
                 // An authority was the previous owner's to give.
                 for adviser in self.authorities.remove(&policy).unwrap_or_default().into_keys() {
                     if let Some(p) = self.adviser_policies.get_mut(&adviser) {
@@ -507,6 +588,25 @@ impl Directory {
                 }
                 touched.policies.insert(policy);
             }
+            DirectoryCommand::SetDelegate { policy, party, access } => {
+                let owner = self.require_policyholder(actor, &policy)?;
+                if owner == party {
+                    return Err(reject("policyholder", "the policyholder already sees their own policy"));
+                }
+                let on_policy = self.delegates.entry(policy.clone()).or_default();
+                match access {
+                    Some(access) => {
+                        on_policy.insert(party, access);
+                    }
+                    None => {
+                        if on_policy.remove(&party).is_none() {
+                            return Err(reject("not_authorised", "that person has no access to this policy"));
+                        }
+                        touched.revoked.insert(party);
+                    }
+                }
+                touched.policies.insert(policy);
+            }
             DirectoryCommand::SetFamilyConsent { policy, consent } => {
                 let Actor::Party(party) = actor else {
                     return Err(reject("forbidden", "consent is given by the person themselves"));
@@ -520,6 +620,17 @@ impl Directory {
                 } else {
                     set.remove(party);
                 }
+                touched.policies.insert(policy);
+            }
+            DirectoryCommand::RecordDependant { policy, party, controls_from } => {
+                Self::require_module(actor, &["customer-master"])?;
+                if !view.layers_on_policy(&policy).iter().any(|r| view.party_of(&policy, &r.life) == Some(&party)) {
+                    return Err(reject("not_insured", "a dependant is a person insured under the policy"));
+                }
+                if self.policyholders.get(&policy) == Some(&party) {
+                    return Err(reject("policyholder", "the policyholder is not their own dependant"));
+                }
+                self.dependants.entry(policy.clone()).or_default().insert(party, controls_from);
                 touched.policies.insert(policy);
             }
             DirectoryCommand::RecordEngagement { engagement } => {

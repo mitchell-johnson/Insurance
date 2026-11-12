@@ -540,6 +540,52 @@ async fn devices_are_managed_by_their_owner() {
     assert_eq!(portal.send("GET", "/app/v1/sync", &fresh, None).await.0, StatusCode::OK);
 }
 
+/// Purpose: over HTTP the policyholder lets a relative look and ends it; the relative reads the policy and can neither let anyone else in nor ask for a change.
+/// Why it matters: this is the route the app's "share with family" screen calls. A relative who could extend their own access or submit a cancellation would be a second policyholder nobody agreed to.
+#[tokio::test]
+async fn a_relative_is_let_in_to_look_and_no_more() {
+    let portal = portal();
+    let policy = &portal.retail;
+    for (subject, who) in [("sub-daughter", "daughter")] {
+        let bind = json!({ "directory": { "bind_subject": { "subject": subject, "party": who } } });
+        let identity = [
+            ("x-dev-subject", "svc".to_string()),
+            ("x-dev-roles", "identity".to_string()),
+            ("x-module", "identity".to_string()),
+            ("idempotency-key", format!("bind-{who}")),
+        ];
+        assert_eq!(portal.send("POST", "/internal/v1/commands", &identity, Some(bind)).await.0, StatusCode::OK);
+    }
+    let path = format!("/app/v1/policies/{policy}/delegates/daughter");
+    assert_eq!(portal.get("sub-daughter", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        portal.write("PUT", "sub-daughter", &path, json!({ "access": "viewer" })).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        portal.write("PUT", "sub-kiri", &path, json!({ "access": "owner" })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.write("PUT", "sub-kiri", &path, json!({ "access": "viewer" })).await.0, StatusCode::OK);
+
+    let (status, view) = portal.get("sub-daughter", &format!("/app/v1/policies/{policy}")).await;
+    assert_eq!((status, &view["relationships"]), (StatusCode::OK, &json!(["viewer"])));
+    assert_eq!(
+        portal.get("sub-daughter", "/app/v1/me").await.1["policies"][0]["relationships"],
+        json!(["viewer"])
+    );
+    let request = json!({ "id": "r-d", "policy": policy, "kind": "cancel_policy", "module": "policy-servicing" });
+    assert_eq!(portal.write("POST", "sub-daughter", "/app/v1/requests", request).await.0, StatusCode::FORBIDDEN);
+    let friend = format!("/app/v1/policies/{policy}/delegates/friend");
+    assert_eq!(
+        portal.write("PUT", "sub-daughter", &friend, json!({ "access": "viewer" })).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    assert_eq!(portal.write("PUT", "sub-kiri", &path, json!({ "access": null })).await.0, StatusCode::OK);
+    assert_eq!(portal.get("sub-daughter", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::NOT_FOUND);
+}
+
 /// Purpose: an employer administrator sees their schemes and manages the scheme's administrators and its second-administrator rule; nobody else can.
 /// Why it matters: the employer portal is run by the employer's own staff; a member or an outsider changing who administers a scheme could alter everyone's cover.
 #[tokio::test]

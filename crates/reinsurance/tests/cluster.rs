@@ -180,6 +180,56 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
     let unknown = client.query_module("reinsurance", &json!({"everything": {}})).await.unwrap();
     assert!(unknown.unwrap_err().starts_with("not a question of this module"));
 
+    // The deployed process does the same from its settings alone: a second policy on the
+    // same life is ceded in full by the binary, which then stops cleanly when told to.
+    let mut issue = term_life(2, today, dob, Sex::Female, false, 100_000_00, None, Frequency::Monthly, None);
+    issue.policyholder = PartyId("party-kiri".into());
+    issue.lives = vec![named_life("life-1", "party-kiri", dob, Sex::Female, false)];
+    let (p2, id2, number2) = (home_partition(&issue.group) % 2, issue.policy.clone(), issue.number.clone());
+    let factors = Command::RecordRiskFactors {
+        policy: id2,
+        life: "life-1".into(),
+        factors: RiskFactors {
+            date_of_birth: Some(dob),
+            sex: Some(Sex::Female),
+            smoker: Some(false),
+        },
+    };
+    assert_eq!(driver.module.propose(tell("factors-2", "new-business", factors)).await.unwrap().result, Ok(()));
+    let reply = client
+        .propose_until(p2, &core_envelope("issue-2", "new-business", issue_command(issue)), patience)
+        .await
+        .unwrap();
+    assert_eq!(reply.rejected, None);
+    let mut process = Process::new(env!("CARGO_BIN_EXE_ic-reinsurance"))
+        .env_clear()
+        .envs([
+            ("IC_NODES", addr.as_str()),
+            ("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef"),
+            ("IC_REINSURANCE_CYCLE_MS", "50"),
+        ])
+        .envs(std::env::vars().filter(|(k, _)| k.starts_with("LLVM_") || k.starts_with("CARGO_LLVM_COV")))
+        .stdout(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut second = None;
+    for _ in 0..200 {
+        let view = client
+            .policy_by_number(p2, &number2)
+            .await
+            .unwrap()
+            .expect("the second policy is on its partition");
+        second = cession_on(&view.policy, "life", 1, &"life-1".into(), today).cloned();
+        if second.is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let second = second.expect("the driver process carried the cession");
+    assert_eq!((second.retained_minor, second.ceded.iter().map(|(_, a)| a).sum::<i64>()), (0, 100_000_00));
+    assert!(Process::new("kill").args(["-TERM", &process.id().to_string()]).status().unwrap().success());
+    assert!(process.wait().unwrap().success(), "the driver stops cleanly on SIGTERM");
+
     node.stop().await.unwrap();
     // With the node gone the driver reports the cluster as unavailable, and nothing else.
     let gone = Driver {

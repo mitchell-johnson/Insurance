@@ -638,7 +638,8 @@ async fn the_loop_keeps_going_through_failures_and_stops_when_told() {
                 let _ = stopped.await;
             },
             |pass, round| {
-                assert!(round.is_ok());
+                // Notices cannot be dated while the core is away, and are once it is back.
+                assert_eq!(round.is_ok(), pass.is_ok());
                 seen.push(pass.clone());
                 match seen.len() {
                     1 => *core.down.lock().unwrap() = false,

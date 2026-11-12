@@ -7,7 +7,7 @@ mod common;
 use std::collections::BTreeSet;
 
 use common::*;
-use ic_channels::directory::{AdviserStanding, DirectoryCommand, LicenceStatus, StructureLink};
+use ic_channels::directory::{AdviserStanding, DelegateAccess, DirectoryCommand, LicenceStatus, StructureLink};
 use ic_channels::feed::{Op, Row, Sync};
 use ic_channels::state::{Approver, RequestStatus, EVENT_RELAY, GATEWAY};
 use ic_channels::{Command, Effect};
@@ -266,6 +266,182 @@ fn family_privacy_and_consent() {
     .unwrap();
     assert_eq!(w.last_op(partner, &claim), Some(Op::Delete));
     assert!(!w.ch.data.published.contains_key(&pol));
+}
+
+/// Purpose: a parent sees their child's health-implying rows until the child reaches the age the product sets; from the next
+/// business date those rows are purged from the parent's device and the handover is announced; an adult child can still consent.
+/// Why it matters: a parent has to manage a young child's claims, and a seventeen-year-old's are their own. Getting the date wrong
+/// in either direction is a privacy breach or a parent locked out of their child's care.
+#[test]
+fn a_childs_health_information_becomes_their_own() {
+    let mut w = World::new();
+    let pol = w.issue(health_family(2, open(), &[d(1985, 1, 1), d(1986, 2, 2), d(2011, 11, 16)], Frequency::Monthly));
+    let (holder, partner, child) = ("party-00000002-1", "party-00000002-2", "party-00000002-3");
+    let claim = format!("{pol}/claims/c9");
+    let row = Row {
+        key: claim.clone(),
+        policy: pol.clone(),
+        kind: "claim".into(),
+        subject: Some(p(child)),
+        sensitive: true,
+        body: json!({ "state": "received" }),
+    };
+    w.send(
+        module("claims"),
+        Command::PublishRows {
+            rows: vec![row],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    // Until the customer master says who is a child, nobody's health information is shown to anyone else.
+    assert!(!w.held(holder).contains(&claim));
+
+    let birthday = open().succ_opt().unwrap();
+    let dependant = |who: &str, from| DirectoryCommand::RecordDependant {
+        policy: pol.clone(),
+        party: p(who),
+        controls_from: from,
+    };
+    assert_eq!(code(w.dir(party(holder), dependant(child, birthday))), "forbidden");
+    assert_eq!(code(w.dir(module("customer-master"), dependant("stranger", birthday))), "not_insured");
+    assert_eq!(code(w.dir(module("customer-master"), dependant(holder, birthday))), "policyholder");
+    let effects = w.dir(module("customer-master"), dependant(child, birthday)).unwrap();
+    assert!(moved(&effects).contains(holder));
+    assert_eq!(w.row(holder, &claim).unwrap()["state"], "received");
+    // The other parent is insured, not the policyholder: the child's claim is not theirs to see.
+    assert!(!w.held(partner).contains(&claim));
+
+    // The day closes and the next opens: the child is of age.
+    w.cluster.end_of_day().unwrap();
+    let effects = w.relay();
+    assert_eq!(w.ch.today(0), birthday);
+    assert!(effects.contains(&Effect::ControlPassed {
+        policy: pol.clone(),
+        party: p(child),
+        policyholder: Some(p(holder)),
+    }));
+    assert_eq!(w.last_op(holder, &claim), Some(Op::Purge));
+    assert!(w.held(child).contains(&claim), "it is still theirs");
+    // The handover is announced once, not on every later day.
+    w.cluster.end_of_day().unwrap();
+    assert!(!w.relay().iter().any(|e| matches!(e, Effect::ControlPassed { .. })));
+
+    // Now an adult for this purpose, they may let the parent see it again.
+    w.dir(
+        party(child),
+        DirectoryCommand::SetFamilyConsent {
+            policy: pol.clone(),
+            consent: true,
+        },
+    )
+    .unwrap();
+    assert!(w.held(holder).contains(&claim));
+}
+
+/// Purpose: the policyholder lets a relative look, an accountant see the money side, and a support person help; each sees what that
+/// access is for, none can change anything, a support person's prepared request waits for the policyholder's own signature, and the
+/// access ends when the policyholder says so or the policy changes hands.
+/// Why it matters: people share sign-ins when there is no proper way to let someone help. This is the proper way, and it must not
+/// become a way round the policyholder: no health information, no commands, no approving on their behalf.
+#[test]
+fn people_the_policyholder_lets_in() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let let_in = |who: &str, access| DirectoryCommand::SetDelegate {
+        policy: pol.clone(),
+        party: p(who),
+        access,
+    };
+    assert_eq!(code(w.dir(party("daughter"), let_in("daughter", Some(DelegateAccess::Viewer)))), "forbidden");
+    assert_eq!(
+        code(w.dir(module("customer-master"), let_in("daughter", Some(DelegateAccess::Viewer)))),
+        "forbidden"
+    );
+    assert_eq!(code(w.dir(party(KIRI), let_in(KIRI, Some(DelegateAccess::Viewer)))), "policyholder");
+    assert_eq!(code(w.dir(party(KIRI), let_in("daughter", None))), "not_authorised");
+
+    // A sensitive row about Kiri, to show nobody let in sees it.
+    let loading = format!("{pol}/underwriting/terms");
+    w.send(
+        module("underwriting"),
+        Command::PublishRows {
+            rows: vec![Row {
+                key: loading.clone(),
+                policy: pol.clone(),
+                kind: "underwriting_terms".into(),
+                subject: Some(p(KIRI)),
+                sensitive: true,
+                body: json!({ "loading": 50 }),
+            }],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    let all = w.sees(KIRI, &pol);
+    assert!(all.contains(&loading));
+
+    let effects = w.dir(party(KIRI), let_in("daughter", Some(DelegateAccess::Viewer))).unwrap();
+    assert!(moved(&effects).contains("daughter"), "her device receives the policy");
+    w.dir(party(KIRI), let_in("accountant", Some(DelegateAccess::Financial))).unwrap();
+    w.dir(party(KIRI), let_in("moko", Some(DelegateAccess::Support))).unwrap();
+    let on = w.ch.today(w.at);
+    let relationship = |w: &World, who: &str| w.ch.data.directory.relationships(&w.ch.data.view, &p(who), &pol, on);
+    assert_eq!(relationship(&w, "daughter"), [Relationship::Viewer]);
+    assert_eq!(relationship(&w, "accountant"), [Relationship::FinancialViewer]);
+    assert_eq!(relationship(&w, "moko"), [Relationship::SupportPerson]);
+
+    // A viewer and a support person see everything but the sensitive row; the accountant sees the policy and the money only.
+    let expected: Vec<String> = all.iter().filter(|k| **k != loading).cloned().collect();
+    assert_eq!(w.sees("daughter", &pol), expected);
+    assert_eq!(w.sees("moko", &pol), expected);
+    assert_eq!(w.held("daughter"), expected);
+    let (_, rows) = w.ch.visible_rows(&p("accountant"), &pol, on, true);
+    let kinds: BTreeSet<&str> = rows.iter().map(|r| r.kind.as_str()).collect();
+    assert!(
+        !kinds.is_empty() && kinds.iter().all(|k| ["policy", "billing", "notice", "document"].contains(k)),
+        "{kinds:?}"
+    );
+
+    // None of them can change anything.
+    for who in ["daughter", "accountant"] {
+        assert_eq!(
+            code(w.send(party(who), submit("r-x", Some(&pol), "cancel_policy", "policy-servicing"))),
+            "forbidden"
+        );
+    }
+    assert_eq!(code(w.dir(party("moko"), let_in("friend", Some(DelegateAccess::Viewer)))), "forbidden");
+    // The support person prepares; the step waits for Kiri's own signature and nobody else's.
+    w.send(party("moko"), submit("r-help", Some(&pol), "change_frequency", "policy-servicing"))
+        .unwrap();
+    assert_eq!(
+        w.ch.data.requests["r-help"].status,
+        RequestStatus::AwaitingApproval { from: Approver::Customer }
+    );
+    let approve = |signed| Command::ApproveRequest { id: "r-help".into(), signed };
+    assert_eq!(code(w.send(party("moko"), approve(true))), "not_found");
+    assert_eq!(code(w.send(party(KIRI), approve(false))), "step_up_required");
+    w.send(party(KIRI), approve(true)).unwrap();
+
+    // Access is changed and ended by the policyholder: the device is told to purge.
+    w.dir(party(KIRI), let_in("daughter", Some(DelegateAccess::Financial))).unwrap();
+    assert_eq!(relationship(&w, "daughter"), [Relationship::FinancialViewer]);
+    let effects = w.dir(party(KIRI), let_in("daughter", None)).unwrap();
+    assert_eq!(revoked(&effects), ["daughter".to_string()].into());
+    assert!(w.held("daughter").is_empty() && w.sees("daughter", &pol).is_empty());
+
+    // The policy changes hands: everyone the old owner let in is out.
+    let effects = w
+        .dir(
+            module("customer-master"),
+            DirectoryCommand::RecordOwnership {
+                policy: pol.clone(),
+                policyholder: p("new-owner"),
+            },
+        )
+        .unwrap();
+    assert!(revoked(&effects).contains("moko") && revoked(&effects).contains("accountant"));
+    assert!(w.sees("moko", &pol).is_empty() && w.held("accountant").is_empty());
 }
 
 /// Purpose: a module publishes rows only under its own name, and only modules publish.
