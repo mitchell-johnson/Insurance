@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::bank::Numbered;
+use crate::bank::{Document, Numbered};
 
 /// What the bank holds under one ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +51,13 @@ pub struct Inner {
     pub arrivals: u64,
     /// The bank speaks ISO 20022 instead of this system's own format.
     pub iso: bool,
+    /// The account number the bank writes for each of the module's account
+    /// codes, in an ISO 20022 statement.
+    pub account_numbers: BTreeMap<String, String>,
+    /// Documents sent as they are, by their place in the sequence, in place
+    /// of the message there: what a bank writes that the module's own
+    /// messages cannot say.
+    pub documents: BTreeMap<u64, String>,
 }
 
 #[derive(Clone)]
@@ -229,15 +236,22 @@ async fn get_messages(State(bank): State<FakeBank>, Query(q): Query<After>, head
     if let Err(no) = admit(&inner, &headers) {
         return no;
     }
-    let messages: Vec<Numbered> = inner
-        .messages
-        .iter()
-        .enumerate()
-        .map(|(i, m)| Numbered {
-            seq: i as u64 + 1,
+    let numbered = inner.messages.iter().zip(1..).filter(|(_, seq)| *seq > q.after);
+    if inner.iso {
+        let documents: Vec<Document> = numbered
+            .map(|(m, seq)| Document {
+                seq,
+                document: inner.documents.get(&seq).cloned().unwrap_or_else(|| iso_document(m, &inner.account_numbers)),
+            })
+            .collect();
+        return say(StatusCode::OK, json!(documents));
+    }
+    let messages: Vec<Numbered> = numbered
+        .map(|(m, seq)| Numbered {
+            seq,
+            part: 0,
             message: m.clone(),
         })
-        .filter(|n| n.seq > q.after)
         .collect();
     say(StatusCode::OK, json!(messages))
 }
@@ -288,5 +302,105 @@ impl FakeBank {
 
     pub fn push(&self, message: BankMessage) {
         self.lock().messages.push(message);
+    }
+
+    /// Send an ISO 20022 document exactly as written.
+    pub fn push_document(&self, document: &str) {
+        let mut inner = self.lock();
+        inner.messages.push(BankMessage::Settlement {
+            id: String::new(),
+            settled_on: NaiveDate::MIN,
+        });
+        let seq = inner.messages.len() as u64;
+        inner.documents.insert(seq, document.to_string());
+    }
+}
+
+fn iso_amount(minor: i64) -> String {
+    let indicator = if minor < 0 { "DBIT" } else { "CRDT" };
+    let minor = minor.abs();
+    format!("<Amt Ccy=\"NZD\">{}.{:02}</Amt><CdtDbtInd>{indicator}</CdtDbtInd>", minor / 100, minor % 100)
+}
+
+fn iso_wrap(kind: &str, body: String) -> String {
+    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:{kind}\">{body}</Document>\n")
+}
+
+/// A message as a bank that speaks ISO 20022 would send it: an
+/// acknowledgement as a `pain.002`, a settlement or a return as a
+/// `camt.054` notification on the account it touched, a statement as a
+/// `camt.053`. Settlements and returns name the account `settlement`, which
+/// a test maps to an account code.
+pub fn iso_document(message: &BankMessage, numbers: &BTreeMap<String, String>) -> String {
+    let number = |code: &str| numbers.get(code).cloned().unwrap_or_else(|| code.to_string());
+    let notification = |entry: String| {
+        iso_wrap(
+            "camt.054.001.08",
+            format!(
+                "<BkToCstmrDbtCdtNtfctn><GrpHdr><MsgId>N</MsgId></GrpHdr><Ntfctn><Acct><Id><Othr><Id>{}</Id></Othr></Id></Acct>{entry}</Ntfctn></BkToCstmrDbtCdtNtfctn>",
+                number("settlement")
+            ),
+        )
+    };
+    match message {
+        BankMessage::Acknowledgement { id, refused, rejected } => {
+            let group = match refused {
+                Some(reason) => format!("<GrpSts>RJCT</GrpSts><StsRsnInf><Rsn><Cd>NARR</Cd></Rsn><AddtlInf>{reason}</AddtlInf></StsRsnInf>"),
+                None => "<GrpSts>ACCP</GrpSts>".to_string(),
+            };
+            let txs: String = rejected
+                .iter()
+                .map(|(item, reason)| {
+                    format!("<TxInfAndSts><OrgnlEndToEndId>{item}</OrgnlEndToEndId><TxSts>RJCT</TxSts><StsRsnInf><Rsn><Cd>{reason}</Cd></Rsn></StsRsnInf></TxInfAndSts>")
+                })
+                .collect();
+            iso_wrap(
+                "pain.002.001.10",
+                format!("<CstmrPmtStsRpt><OrgnlGrpInfAndSts><OrgnlMsgId>{id}</OrgnlMsgId>{group}</OrgnlGrpInfAndSts><OrgnlPmtInfAndSts>{txs}</OrgnlPmtInfAndSts></CstmrPmtStsRpt>"),
+            )
+        }
+        BankMessage::Settlement { id, settled_on } => notification(format!(
+            "<Ntry>{}<BookgDt><Dt>{settled_on}</Dt></BookgDt><NtryDtls><Btch><PmtInfId>{id}</PmtInfId></Btch></NtryDtls></Ntry>",
+            iso_amount(0)
+        )),
+        BankMessage::Return { item, reason, returned_on } => notification(format!(
+            "<Ntry>{}<BookgDt><Dt>{returned_on}</Dt></BookgDt><NtryDtls><TxDtls><Refs><EndToEndId>{item}</EndToEndId></Refs><RtrInf><Rsn><Cd>{}</Cd></Rsn></RtrInf></TxDtls></NtryDtls></Ntry>",
+            iso_amount(0),
+            iso20022::reason_code(reason)
+        )),
+        BankMessage::Statement {
+            account,
+            date,
+            opening_minor,
+            closing_minor,
+            lines,
+        } => {
+            let balance = |code: &str, minor: i64| format!("<Bal><Tp><CdOrPrtry><Cd>{code}</Cd></CdOrPrtry></Tp>{}<Dt><Dt>{date}</Dt></Dt></Bal>", iso_amount(minor));
+            let entries: String = lines
+                .iter()
+                .map(|l| {
+                    let payer = l
+                        .payer_account
+                        .as_ref()
+                        .map(|p| format!("<RltdPties><DbtrAcct><Id><Othr><Id>{p}</Id></Othr></Id></DbtrAcct></RltdPties>"))
+                        .unwrap_or_default();
+                    format!(
+                        "<Ntry><NtryRef>{}</NtryRef>{}<BookgDt><Dt>{date}</Dt></BookgDt><NtryDtls><TxDtls>{payer}<RmtInf><Ustrd>{}</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry>",
+                        l.id,
+                        iso_amount(l.amount_minor),
+                        l.reference
+                    )
+                })
+                .collect();
+            iso_wrap(
+                "camt.053.001.08",
+                format!(
+                    "<BkToCstmrStmt><GrpHdr><MsgId>S</MsgId></GrpHdr><Stmt><Acct><Id><Othr><Id>{}</Id></Othr></Id></Acct>{}{}{entries}</Stmt></BkToCstmrStmt>",
+                    number(account),
+                    balance("OPBD", *opening_minor),
+                    balance("CLBD", *closing_minor)
+                ),
+            )
+        }
     }
 }

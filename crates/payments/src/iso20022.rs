@@ -227,3 +227,150 @@ pub fn read_initiation(xml: &str) -> Result<Initiation, String> {
         items,
     })
 }
+
+/// The return reason an ISO 20022 reason code stands for.
+pub fn return_reason(code: &str) -> crate::model::ReturnReason {
+    use crate::model::ReturnReason;
+    match code {
+        "AM04" => ReturnReason::InsufficientFunds,
+        "AC04" => ReturnReason::AccountClosed,
+        "MD01" | "MD07" => ReturnReason::AuthorityCancelled,
+        "AC01" | "AC03" => ReturnReason::InvalidAccount,
+        other => ReturnReason::Other(other.to_string()),
+    }
+}
+
+/// The ISO 20022 reason code for a return reason: what a bank writes.
+pub fn reason_code(reason: &crate::model::ReturnReason) -> String {
+    use crate::model::ReturnReason;
+    match reason {
+        ReturnReason::InsufficientFunds => "AM04".to_string(),
+        ReturnReason::AccountClosed => "AC04".to_string(),
+        ReturnReason::AuthorityCancelled => "MD01".to_string(),
+        ReturnReason::InvalidAccount => "AC01".to_string(),
+        ReturnReason::Other(code) => code.clone(),
+    }
+}
+
+/// A status reason: its code, and the bank's words after it where given.
+fn status_reason(node: roxmltree::Node<'_, '_>) -> String {
+    let code = text_at(node, &["StsRsnInf", "Rsn", "Cd"]).unwrap_or_else(|| "NARR".to_string());
+    match text_at(node, &["StsRsnInf", "AddtlInf"]) {
+        Some(words) => format!("{code}: {words}"),
+        None => code,
+    }
+}
+
+fn date_at(node: roxmltree::Node<'_, '_>, path: &[&str]) -> Option<chrono::NaiveDate> {
+    text_at(node, path).and_then(|d| d.get(..10)?.parse().ok())
+}
+
+/// A signed amount: a debit is money out of the insurer's account.
+fn signed(node: roxmltree::Node<'_, '_>) -> Option<i64> {
+    let amount = text_at(node, &["Amt"]).and_then(|a| minor(&a))?;
+    match text_at(node, &["CdtDbtInd"]).as_deref() {
+        Some("CRDT") => Some(amount),
+        Some("DBIT") => Some(-amount),
+        _ => None,
+    }
+}
+
+/// What a bank sends back, as the messages the module records: a
+/// `pain.002` status report becomes an acknowledgement; a `camt.054`
+/// notification becomes the settlements and returns it reports; a
+/// `camt.053` statement becomes those and then the statement itself, with a
+/// batch booked under its payment information ID and a return under the
+/// item's end-to-end reference, as the module expects to see them.
+/// `accounts` gives the module's account code for each account number the
+/// bank names. Refused whole, with the reason, if anything in it cannot be
+/// read: a statement half read is a statement that does not balance.
+pub fn read_messages(xml: &str, accounts: &std::collections::BTreeMap<String, String>) -> Result<Vec<crate::file::BankMessage>, String> {
+    use crate::file::BankMessage;
+    let doc = parse(xml)?;
+    let root = doc.root_element();
+    if let Some(report) = named(root, "CstmrPmtStsRpt") {
+        let group = named(report, "OrgnlGrpInfAndSts").ok_or("a status report names the message it reports on")?;
+        let id = text_at(group, &["OrgnlMsgId"]).ok_or("a status report names the message it reports on")?;
+        let refused = (text_at(group, &["GrpSts"]).as_deref() == Some("RJCT")).then(|| status_reason(group));
+        let mut rejected = std::collections::BTreeMap::new();
+        for info in report.children().filter(|c| c.tag_name().name() == "OrgnlPmtInfAndSts") {
+            for tx in info.children().filter(|c| c.tag_name().name() == "TxInfAndSts") {
+                if text_at(tx, &["TxSts"]).as_deref() == Some("RJCT") {
+                    let item = text_at(tx, &["OrgnlEndToEndId"]).ok_or("a rejected transaction names its end-to-end reference")?;
+                    rejected.insert(item, status_reason(tx));
+                }
+            }
+        }
+        return Ok(vec![BankMessage::Acknowledgement { id, refused, rejected }]);
+    }
+    let (body, part, statement) = if let Some(b) = named(root, "BkToCstmrStmt") {
+        (b, "Stmt", true)
+    } else if let Some(b) = named(root, "BkToCstmrDbtCdtNtfctn") {
+        (b, "Ntfctn", false)
+    } else {
+        return Err("not a status report, statement or notification".to_string());
+    };
+    let mut out = Vec::new();
+    for report in body.children().filter(|c| c.tag_name().name() == part) {
+        let number = text_at(report, &["Acct", "Id", "Othr", "Id"]).ok_or("a report names its account")?;
+        let account = accounts.get(&number).cloned().ok_or_else(|| format!("account {number} is not one of ours"))?;
+        let mut lines = Vec::new();
+        for (n, entry) in report.children().filter(|c| c.tag_name().name() == "Ntry").enumerate() {
+            let unreadable = || format!("entry {} on account {number} cannot be read", n + 1);
+            let amount = signed(entry).ok_or_else(unreadable)?;
+            let booked = date_at(entry, &["BookgDt", "Dt"]).ok_or_else(unreadable)?;
+            let line_id = text_at(entry, &["NtryRef"])
+                .or_else(|| text_at(entry, &["AcctSvcrRef"]))
+                .unwrap_or_else(|| format!("{number}-{booked}-{}", n + 1));
+            let tx = at(entry, &["NtryDtls", "TxDtls"]);
+            let end_to_end = tx.and_then(|t| text_at(t, &["Refs", "EndToEndId"]));
+            let reference = if let Some(batch) = text_at(entry, &["NtryDtls", "Btch", "PmtInfId"]) {
+                out.push(BankMessage::Settlement {
+                    id: batch.clone(),
+                    settled_on: booked,
+                });
+                batch
+            } else if let Some(returned) = tx.and_then(|t| named(t, "RtrInf")) {
+                let item = end_to_end.clone().ok_or_else(unreadable)?;
+                let code = text_at(returned, &["Rsn", "Cd"]).ok_or_else(unreadable)?;
+                out.push(BankMessage::Return {
+                    item: item.clone(),
+                    reason: return_reason(&code),
+                    returned_on: booked,
+                });
+                item
+            } else {
+                tx.and_then(|t| text_at(t, &["RmtInf", "Ustrd"])).or(end_to_end).unwrap_or_default()
+            };
+            lines.push(crate::model::StatementLine {
+                id: line_id,
+                amount_minor: amount,
+                reference,
+                payer_account: tx.and_then(|t| text_at(t, &["RltdPties", "DbtrAcct", "Id", "Othr", "Id"])),
+            });
+        }
+        if statement {
+            let balance = |code: &str| {
+                report
+                    .children()
+                    .filter(|c| c.tag_name().name() == "Bal")
+                    .find(|b| text_at(*b, &["Tp", "CdOrPrtry", "Cd"]).as_deref() == Some(code))
+            };
+            let (opening, closing) = match (balance("OPBD"), balance("CLBD")) {
+                (Some(o), Some(c)) => (o, c),
+                _ => return Err(format!("the statement for account {number} has no opening or no closing balance")),
+            };
+            let (Some(opening_minor), Some(closing_minor), Some(date)) = (signed(opening), signed(closing), date_at(closing, &["Dt", "Dt"])) else {
+                return Err(format!("the balances on the statement for account {number} cannot be read"));
+            };
+            out.push(BankMessage::Statement {
+                account,
+                date,
+                opening_minor,
+                closing_minor,
+                lines,
+            });
+        }
+    }
+    Ok(out)
+}

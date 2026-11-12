@@ -4,8 +4,10 @@
 use chrono::NaiveDate;
 use ic_money::Currency;
 use ic_payments::config::WireFormat;
+use ic_payments::file::BankMessage;
 use ic_payments::file::{Batch, BatchItem, Direction};
-use ic_payments::iso20022::{document, minor, read_initiation, OrderingAccount};
+use ic_payments::iso20022::{document, minor, read_initiation, read_messages, reason_code, return_reason, OrderingAccount};
+use ic_payments::model::{ReturnReason, StatementLine};
 
 fn item(id: &str, name: &str, number: &str, amount_minor: i64) -> BatchItem {
     BatchItem {
@@ -187,4 +189,155 @@ fn amounts_are_read_exactly_or_not_at_all() {
     for bad in ["12.5", "12.345", "-1.00", ".50", "1e3", "", "99999999999999999999.00"] {
         assert_eq!(minor(bad), None, "{bad}");
     }
+}
+
+fn accounts() -> std::collections::BTreeMap<String, String> {
+    [("01-0100-0000001-000".to_string(), "anz-sf1-claims".to_string())].into()
+}
+
+fn doc(kind: &str, body: &str) -> String {
+    format!("<?xml version=\"1.0\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:{kind}\">{body}</Document>")
+}
+
+const STATEMENT: &str = concat!(
+    "<BkToCstmrStmt><Stmt><Acct><Id><Othr><Id>01-0100-0000001-000</Id></Othr></Id></Acct>",
+    "<Bal><Tp><CdOrPrtry><Cd>OPBD</Cd></CdOrPrtry></Tp><Amt Ccy=\"NZD\">1000.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2027-11-15</Dt></Dt></Bal>",
+    "<Bal><Tp><CdOrPrtry><Cd>CLBD</Cd></CdOrPrtry></Tp><Amt Ccy=\"NZD\">735.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><Dt><Dt>2027-11-16</Dt></Dt></Bal>",
+    "<Ntry><NtryRef>E1</NtryRef><Amt Ccy=\"NZD\">300.00</Amt><CdtDbtInd>DBIT</CdtDbtInd><BookgDt><Dt>2027-11-16</Dt></BookgDt>",
+    "<NtryDtls><Btch><PmtInfId>r1-1</PmtInfId></Btch></NtryDtls></Ntry>",
+    "<Ntry><AcctSvcrRef>E2</AcctSvcrRef><Amt Ccy=\"NZD\">40.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><BookgDt><Dt>2027-11-16T09:00:00</Dt></BookgDt>",
+    "<NtryDtls><TxDtls><Refs><EndToEndId>i9</EndToEndId></Refs><RtrInf><Rsn><Cd>AC04</Cd></Rsn></RtrInf></TxDtls></NtryDtls></Ntry>",
+    "<Ntry><Amt Ccy=\"NZD\">-</Amt></Ntry>",
+    "</Stmt></BkToCstmrStmt>",
+);
+
+/// Purpose: a `pain.002` becomes the acknowledgement it reports: accepted
+/// with some items rejected and their reason codes, or refused whole with
+/// the bank's words; a status with no reason given still says so.
+/// Why it matters: an item the bank rejected and the module thought taken
+/// is a payee left unpaid while the books say paid.
+#[test]
+fn a_status_report_becomes_an_acknowledgement() {
+    let report = |group: &str, txs: &str| {
+        let body = format!("<CstmrPmtStsRpt><OrgnlGrpInfAndSts><OrgnlMsgId>r1-1</OrgnlMsgId>{group}</OrgnlGrpInfAndSts><OrgnlPmtInfAndSts>{txs}</OrgnlPmtInfAndSts></CstmrPmtStsRpt>");
+        read_messages(&doc("pain.002.001.10", &body), &accounts())
+    };
+    let tx =
+        |id: &str, status: &str, reason: &str| format!("<TxInfAndSts><OrgnlEndToEndId>{id}</OrgnlEndToEndId><TxSts>{status}</TxSts>{reason}</TxInfAndSts>");
+    let partly = report(
+        "<GrpSts>PART</GrpSts>",
+        &(tx("i1", "ACCP", "") + &tx("i2", "RJCT", "<StsRsnInf><Rsn><Cd>AC01</Cd></Rsn></StsRsnInf>") + &tx("i3", "RJCT", "")),
+    )
+    .unwrap();
+    assert_eq!(
+        partly,
+        vec![BankMessage::Acknowledgement {
+            id: "r1-1".to_string(),
+            refused: None,
+            rejected: [("i2".to_string(), "AC01".to_string()), ("i3".to_string(), "NARR".to_string())].into(),
+        }]
+    );
+    let whole = report(
+        "<GrpSts>RJCT</GrpSts><StsRsnInf><Rsn><Cd>FF01</Cd></Rsn><AddtlInf>bad file</AddtlInf></StsRsnInf>",
+        "",
+    )
+    .unwrap();
+    assert!(matches!(&whole[0], BankMessage::Acknowledgement { refused: Some(r), .. } if r == "FF01: bad file"));
+    assert!(report("", &tx("", "RJCT", "").replace("<OrgnlEndToEndId></OrgnlEndToEndId>", "")).is_err());
+    let unnamed = doc("pain.002.001.10", "<CstmrPmtStsRpt><OrgnlGrpInfAndSts/></CstmrPmtStsRpt>");
+    assert!(read_messages(&unnamed, &accounts()).unwrap_err().contains("names the message"));
+    let headless = doc("pain.002.001.10", "<CstmrPmtStsRpt/>");
+    assert!(read_messages(&headless, &accounts()).unwrap_err().contains("names the message"));
+}
+
+/// Purpose: a `camt.053` becomes the settlement of each batch booked on it,
+/// the return of each item sent back, and then the statement, with the
+/// batch's line under its payment information ID and the return's under
+/// the item's reference, debits negative; a `camt.054` gives the
+/// settlements and returns alone; anything unreadable refuses the whole
+/// document with the reason.
+/// Why it matters: the module reconciles a statement against what it
+/// expects under exactly these references. A statement accepted with a
+/// line missing would not balance, and a person would chase money that
+/// was never missing.
+#[test]
+fn a_statement_becomes_settlements_returns_and_the_statement() {
+    let full = STATEMENT.replace("<Ntry><Amt Ccy=\"NZD\">-</Amt></Ntry>", concat!(
+        "<Ntry><Amt Ccy=\"NZD\">35.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><BookgDt><Dt>2027-11-16</Dt></BookgDt><NtryDtls><TxDtls>",
+        "<RltdPties><DbtrAcct><Id><Othr><Id>02-0200-0000002-00</Id></Othr></Id></DbtrAcct></RltdPties><RmtInf><Ustrd>POLICY 7</Ustrd></RmtInf></TxDtls></NtryDtls></Ntry>",
+        "<Ntry><Amt Ccy=\"NZD\">5.00</Amt><CdtDbtInd>CRDT</CdtDbtInd><BookgDt><Dt>2027-11-16</Dt></BookgDt></Ntry>",
+    ));
+    let read = read_messages(&doc("camt.053.001.08", &full), &accounts()).unwrap();
+    let line = |id: &str, amount_minor: i64, reference: &str, payer: Option<&str>| StatementLine {
+        id: id.to_string(),
+        amount_minor,
+        reference: reference.to_string(),
+        payer_account: payer.map(str::to_string),
+    };
+    assert_eq!(
+        read,
+        vec![
+            BankMessage::Settlement {
+                id: "r1-1".to_string(),
+                settled_on: NaiveDate::from_ymd_opt(2027, 11, 16).unwrap()
+            },
+            BankMessage::Return {
+                item: "i9".to_string(),
+                reason: ReturnReason::AccountClosed,
+                returned_on: NaiveDate::from_ymd_opt(2027, 11, 16).unwrap()
+            },
+            BankMessage::Statement {
+                account: "anz-sf1-claims".to_string(),
+                date: NaiveDate::from_ymd_opt(2027, 11, 16).unwrap(),
+                opening_minor: 1_000_00,
+                closing_minor: 735_00,
+                lines: vec![
+                    line("E1", -300_00, "r1-1", None),
+                    line("E2", 40_00, "i9", None),
+                    line("01-0100-0000001-000-2027-11-16-3", 35_00, "POLICY 7", Some("02-0200-0000002-00")),
+                    line("01-0100-0000001-000-2027-11-16-4", 5_00, "", None),
+                ],
+            },
+        ]
+    );
+    let notified = full.replace("BkToCstmrStmt", "BkToCstmrDbtCdtNtfctn").replace("Stmt>", "Ntfctn>");
+    let read = read_messages(&doc("camt.054.001.08", &notified), &accounts()).unwrap();
+    assert_eq!(read.len(), 2, "a notification has no statement: {read:?}");
+
+    let refused = |from: &str, to: &str| read_messages(&doc("camt.053.001.08", &full.replacen(from, to, 1)), &accounts()).unwrap_err();
+    assert!(refused("01-0100-0000001-000", "99").contains("not one of ours"));
+    assert!(refused("<Acct><Id><Othr><Id>01-0100-0000001-000</Id></Othr></Id></Acct>", "").contains("names its account"));
+    assert!(refused("<CdtDbtInd>DBIT</CdtDbtInd><BookgDt>", "<BookgDt>").contains("entry 1"));
+    assert!(refused("<BookgDt><Dt>2027-11-16</Dt></BookgDt><NtryDtls><Btch>", "<NtryDtls><Btch>").contains("entry 1"));
+    assert!(refused("<Refs><EndToEndId>i9</EndToEndId></Refs>", "").contains("entry 2"));
+    assert!(refused("<Rsn><Cd>AC04</Cd></Rsn>", "").contains("entry 2"));
+    assert!(refused("<Cd>OPBD</Cd>", "<Cd>XXXX</Cd>").contains("no opening or no closing"));
+    assert!(refused("<Dt><Dt>2027-11-16</Dt></Dt>", "").contains("balances"));
+    let unread = read_messages(&doc("camt.053.001.08", STATEMENT), &accounts()).unwrap_err();
+    assert!(unread.contains("entry 3"), "{unread}");
+    assert!(read_messages(&doc("camt.052.001.08", "<BkToCstmrAcctRpt/>"), &accounts())
+        .unwrap_err()
+        .contains("not a status report"));
+    assert!(read_messages("<", &accounts()).is_err());
+}
+
+/// Purpose: each return reason the module knows has one ISO 20022 code that
+/// reads back as the same reason; codes the module has no name for are
+/// kept as they are.
+/// Why it matters: an insufficient-funds dishonour may be presented again;
+/// a closed account may not. Mixing the two up either costs the customer
+/// fees or stops a collection that would have succeeded.
+#[test]
+fn return_reasons_travel_as_iso_codes() {
+    for reason in [
+        ReturnReason::InsufficientFunds,
+        ReturnReason::AccountClosed,
+        ReturnReason::AuthorityCancelled,
+        ReturnReason::InvalidAccount,
+        ReturnReason::Other("MS03".to_string()),
+    ] {
+        assert_eq!(return_reason(&reason_code(&reason)), reason);
+    }
+    assert_eq!(return_reason("MD07"), ReturnReason::AuthorityCancelled);
+    assert_eq!(return_reason("AC03"), ReturnReason::InvalidAccount);
 }
