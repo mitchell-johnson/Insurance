@@ -194,7 +194,7 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | --- | --- |
 | `notice:<seq>` | Send the notice to claims again (`retry_notice`), or abandon it (`abandon_notice`, two people). |
 | `delivery:<seq>` | Abandon the instruction (`abandon_instruction`, two people). The page warns that the core's ledger and the reinsurance ledger then stay apart by its amount. |
-| `settlement_mismatch:<n>`, `settlement_returned:<n>` | Record the settlement with its payment reference and the statement's net (`record_settlement`). |
+| `settlement_mismatch:<n>`, `settlement_returned:<n>` | Record the settlement with its payment reference and the statement's net (`record_settlement`). A returned settlement can instead be offered to payments again under a new reference, with a note of where the decision is filed (`reoffer_settlement`). |
 | `facultative_terms_altered:<policy>/<cover>/<layer>/<life>` | Record that the reinsurer was told, and where its answer is filed (`facultative_reinsurer_told`). |
 | `reopened_after_reversal:<claim>` | Resume recoveries with a note (`resume_recoveries`) once every disputed item on the claim is resolved; the module refuses it before then (`disputes_open`). |
 | `claim_fact:...`, `possible_match:...` | Shown; they close when the facts arrive. |

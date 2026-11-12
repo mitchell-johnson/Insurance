@@ -1694,6 +1694,13 @@ async fn the_reinsurance_exceptions_console() {
     // Resuming recoveries on a claim reopened after a reversed admission is one person's to do; the module checks the claim.
     let (status, problem) = tell("sub-ri1", json!({ "resume_recoveries": { "claim": "C1", "reference": "reviewed" } })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("not_reopened")), "{problem}");
+    // Offering a returned settlement again is one person's to do; the module checks the statement.
+    let (status, problem) = tell("sub-ri1", json!({ "reoffer_settlement": { "number": 999, "reference": "file 12" } })).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::CONFLICT, Some("unknown_statement")),
+        "{problem}"
+    );
 
     // The other questions.
     assert_eq!(ask("sub-riview", "notices").await.0, StatusCode::OK);

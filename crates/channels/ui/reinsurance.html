@@ -39,7 +39,10 @@ function actionsFor(id) {
     case "settlement_mismatch": case "settlement_returned": return [
       ["Record the settlement", "record_settlement", [["payment_ref", "Payment reference", "text"], ["amount", "Amount, the statement's net", "money"]],
         (f) => ({ record_settlement: { number: seq, payment_ref: f.payment_ref, amount_minor: Math.round(Number(f.amount) * 100) } })],
-    ];
+    ].concat(kind === "settlement_returned" ? [
+      ["Offer the payment again", "reoffer_settlement", [["reference", "Where the decision is filed", "text"]],
+        (f) => ({ reoffer_settlement: { number: seq, reference: f.reference } }), "Payments is asked to pay it again under a new reference."],
+    ] : []);
     case "facultative_terms_altered": {
       const [policy, cover, layer, life] = subject.split("/");
       return [["Record that the reinsurer was told", "facultative_reinsurer_told", [["reference", "Where the reinsurer's answer is filed", "text"]],
