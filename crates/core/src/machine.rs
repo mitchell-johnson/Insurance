@@ -428,7 +428,7 @@ impl CoreState {
                 });
                 Ok(())
             }),
-            Command::MergeLayers { policy, cover } => self.with_policy(&policy, true, |_, p| lifecycle::merge_layers(p, &cover, ctx)),
+            Command::MergeLayers { policy, cover } => self.with_policy(&policy, true, |s, p| lifecycle::merge_layers(&s.catalog, p, &cover, ctx)),
             Command::ApplyMembership { policy, changes } => {
                 if changes.len() > MAX_MEMBERSHIP_CHUNK {
                     return Err(Reject::new(

@@ -15,8 +15,8 @@ use ic_azure::AzureError;
 use ic_core::Reject;
 use ic_finance::close::{Capacity, CheckStatus, Outcome, PeriodStatus};
 use ic_finance::driver::{
-    self, core_sources, distribution_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver, DriverError, Pass, Reports, Source,
-    SUBLEDGER_CHECK,
+    self, core_sources, distribution_sources, finance_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver, DriverError, Pass, Reports,
+    Source, SUBLEDGER_CHECK,
 };
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
@@ -58,7 +58,7 @@ impl driver::Books for Ledger {
 }
 
 /// The other modules: one that answers like the commission module, and
-/// payments and `ops`, which answers for collections and investment.
+/// payments and the ledger itself, which answers for policy suspense.
 #[derive(Default)]
 struct Others {
     down: Mutex<BTreeSet<String>>,
@@ -114,12 +114,7 @@ fn sources() -> Vec<Source> {
     all.extend(reinsurance_sources());
     all.extend(core_sources());
     all.extend(unit_pricing_sources());
-    all.push(Source {
-        caller: "collections".to_string(),
-        module: "ops".to_string(),
-        reports: Reports::Aged("policy_suspense".to_string()),
-        question: |as_at| json!({ "aged": true, "as_at": as_at }),
-    });
+    all.extend(finance_sources());
     all
 }
 

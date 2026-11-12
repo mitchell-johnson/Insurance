@@ -241,6 +241,71 @@ fn old_identical_layers_merge_without_changing_the_cover() {
     days(&mut c, 45);
 }
 
+/// A copy of the shipped term life product whose life cover is on a level
+/// premium to the given age.
+fn level_policy(c: &mut Cluster, n: u64, to_age: u32) -> PolicyId {
+    let code = format!("term-life-level-{to_age}");
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", &format!("code = \"{code}\""))
+        .replace("stepped(\"life-base\")", &format!("level(\"life-base\", {to_age})"));
+    let product = load_product("term_life_level.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let mut issue = term_life(n, start(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+    issue.product_code = code;
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    id
+}
+
+/// The total of the latest bill raised on a policy.
+fn latest_bill(c: &Cluster, id: &PolicyId) -> i64 {
+    c.state(0).policies[id].receivables.iter().max_by_key(|r| r.period_start).unwrap().total_minor
+}
+
+/// Purpose: a level premium prices each layer on the life's age when that layer was first
+/// rated, until the cover's stated age, from which it is priced on attained age like a
+/// stepped premium; and layers on a level cover that were rated on different dates do not
+/// merge.
+/// Why it matters: the customer on a level premium paid more at the start so that the
+/// price would not climb with age. Pricing a layer on today's age, or merging a later
+/// indexation layer into the first one and so repricing it at the entry age, would charge
+/// an amount the contract does not allow, in one direction or the other.
+#[test]
+fn a_level_premium_keeps_each_layers_rating_age_and_such_layers_do_not_merge() {
+    let mut c = cluster(1);
+    let stepped = standard(&mut c, 1);
+    let level = level_policy(&mut c, 2, 65);
+    let short = level_policy(&mut c, 3, 39);
+    for id in [&stepped, &level, &short] {
+        pay(&mut c, id, "ahead", 80 * MONTHLY);
+    }
+    // At issue the life is 37 on all three, so they are billed alike.
+    assert_eq!(latest_bill(&c, &level), latest_bill(&c, &stepped));
+
+    days(&mut c, 400); // one anniversary: the life is 38, in the next rate band
+    let (s1, l1) = (latest_bill(&c, &stepped), latest_bill(&c, &level));
+    assert!(l1 < s1, "the first layer stays at the age 37 rate: {l1} against {s1}");
+    assert_eq!(latest_bill(&c, &short), l1, "still under the age the level premium runs to");
+
+    days(&mut c, 400); // two anniversaries: the life is 39
+    let s2 = latest_bill(&c, &stepped);
+    assert!(latest_bill(&c, &level) < s2);
+    assert_eq!(latest_bill(&c, &short), s2, "from 39 this cover is priced on attained age");
+
+    // Three layers, each rated on its own date: nothing merges and the bill is unchanged.
+    let merge = |id: &PolicyId| Command::MergeLayers {
+        policy: id.clone(),
+        cover: "life".to_string(),
+    };
+    let before = latest_bill(&c, &level);
+    assert_eq!(c.state(0).policies[&level].covers["life"].layers.len(), 3);
+    assert_eq!(code(c.submit(0, "policy-servicing", merge(&level))), "nothing_to_merge");
+    c.submit(0, "policy-servicing", merge(&stepped)).unwrap();
+    days(&mut c, 45);
+    assert_eq!(latest_bill(&c, &level), before);
+    assert_eq!(c.state(0).policies[&level].covers["life"].layers.len(), 3);
+}
+
 /// Purpose: cancellation and reinstatement refuse a policy in the wrong state, and every
 /// policy command refuses a policy that is not on the partition.
 /// Why it matters: cancelling twice would refund twice. Reinstating a policy that never

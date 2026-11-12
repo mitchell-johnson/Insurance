@@ -87,6 +87,12 @@ pub enum Query {
     Triggers {
         limit: usize,
     },
+    /// The parties with an interest in a policy standing on a date, who
+    /// are owed a copy of its arrears, suspension and lapse notices.
+    InterestedParties {
+        policy: PolicyId,
+        on: NaiveDate,
+    },
     Defect {
         id: String,
     },
@@ -132,6 +138,7 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::CoreOutbox { limit } => json(state.core_outbox.iter().take(cap(limit)).collect::<Vec<_>>()),
         Query::PendingDeletes { limit } => json(state.pending_deletes.iter().take(cap(limit)).collect::<Vec<_>>()),
         Query::Triggers { limit } => json(state.triggers.values().take(cap(limit)).collect::<Vec<_>>()),
+        Query::InterestedParties { policy, on } => json(state.interested_parties(&policy, on)),
         Query::Defect { id } => json(state.defects.get(&id)),
         Query::NoticesByTemplate { template, from, to } => json(state.notices_by_template(&template, from, to)),
         Query::Report { from, to } => json(state.report(from, to)),
