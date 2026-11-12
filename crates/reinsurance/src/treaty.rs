@@ -502,11 +502,12 @@ impl ReinsurerRateTable {
 /// A risk code, or a family of them: lower-case words joined by dots, with
 /// `*` allowed only as the whole of the last part.
 fn exclusion_well_formed(code: &str) -> bool {
-    let parts: Vec<&str> = code.split('.').collect();
     let word = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
-    match parts.split_last() {
-        Some((&"*", rest)) => !rest.is_empty() && rest.iter().all(|p| word(p)),
-        Some((last, rest)) => word(last) && rest.iter().all(|p| word(p)),
-        None => false,
+    let (rest, last) = code.rsplit_once('.').unwrap_or(("", code));
+    let rest_ok = rest.is_empty() || rest.split('.').all(word);
+    if last == "*" {
+        !rest.is_empty() && rest_ok
+    } else {
+        word(last) && rest_ok
     }
 }
