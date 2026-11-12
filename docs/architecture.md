@@ -358,7 +358,7 @@ The one place the insurer knows who a person or organisation is. The core and ev
 - Changing the blind-index key: needs a command that decrypts every party's facts and rebuilds `blind_index`. `Store::reindex` exists for one party; a batch over all parties under the new key, then swapping the key, is the missing part.
 - Locking the erasure register's immutability policy in prod: a deliberate, irreversible step for a person once the retention period (default 10 years) is agreed.
 - Group schemes sends no mobile phone (its file mapping has no column), so matching on mobile is unused for joiners.
-- Open for Mitchell: the retention periods in `retention.rs` (7 years for most classes, 5 for verification evidence, 2 for prospects) are this thread's reading of the Tax Administration Act and the Privacy Act, not a confirmed schedule.
+- Retention periods in `retention.rs` (7 years for most classes, 5 for verification evidence, 2 for prospects) were confirmed by Mitchell on 13 Nov 2026.
 - Known check status: `ci.yml` on main passed at `ea9de28` with the PostgreSQL step, the customer master's tests, the coverage floor and `customers.bicep` compiled. The death relay (`relay.rs`, migration `002_death_relay.sql`) landed after that run.
 
 ## Area: adviser commission and held balances (`ic-distribution`)

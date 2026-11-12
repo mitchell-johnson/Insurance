@@ -165,7 +165,7 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/claims/me` | Your staff ID and how many partitions the ledger has (`IC_PARTITIONS`). |
-| `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=`, `book`, `report`, `remittance?run=&partition=`. |
+| `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=` (the claimant's view), `work?claim=` (the staff view: tasks, evidence, the decision waiting for a signature, payee, payments, benefit, overpayments, timers), `book`, `report`, `remittance?run=&partition=`. |
 | `POST /staff/v1/claims/commands` | `{ "purpose", "partition"?, "command" }`, the command in the claims module's own JSON, with an `Idempotency-Key`. |
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
@@ -283,7 +283,7 @@ node crates/channels/tests/browser/check.js
 
 ## Known gaps
 
-- **Claims staff see the claimant's view of a claim.** The claims module is adding a staff view of a claim's work (tasks, evidence, the decision waiting for a signature, payees, schedule, overpayments, timers); until it lands the console shows the claimant's view and the queues. Clinical detail is shown only after the person opens the file, which that module logs with its purpose.
+- **No clinical view in the claims console.** Staff work from the claims module's staff view (`work`), which carries nothing clinical. The cause, reason codes and evidence documents stay in that module until it offers a question for them after `open_file`.
 - **The native customer app is not here.** The API and sync protocol are complete and tested; the app itself belongs with the bank's app.
 - **New business is not in the adviser portal.** Quotes and proposals are underwriting's API. The portal shows the book, standing, held money and servicing requests.
 - **A scheme member sees their cover only once they are a known person.** A member who joins from a membership file without being named gets their feed when group administration or claims identifies them (`IdentifyMember`).
