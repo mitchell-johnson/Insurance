@@ -36,6 +36,8 @@ pub struct Pass {
     pub instructions: usize,
     /// Answers about customers' own holds recorded.
     pub holds: usize,
+    /// Payer relationships the customer master was asked about.
+    pub relationships: usize,
     /// What could not be done this time. The next pass tries again.
     pub problems: Vec<String>,
 }
@@ -408,6 +410,9 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         if let Err(e) = self.check_holds(&config, &mut pass).await {
             pass.problems.push(e);
         }
+        if let Err(e) = self.check_relationships(&mut pass).await {
+            pass.problems.push(e);
+        }
         if let Err(e) = self.propose_sweep().await {
             pass.problems.push(e);
         }
@@ -451,6 +456,37 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     }
                 }
                 Err(e) => pass.problems.push(format!("hold for {party}: {e}")),
+            }
+        }
+        Ok(())
+    }
+
+    /// Ask the customer master about each relationship compliance named to
+    /// clear a payer case (FIN-016), and record whether it links the payer
+    /// and the owner. One the master cannot answer for is asked again next
+    /// pass.
+    async fn check_relationships(&self, pass: &mut Pass) -> Result<(), String> {
+        let Some(master) = &self.holds else { return Ok(()) };
+        let wanted: Vec<(String, String, String, String)> = self.ask(json!({"q": "payer_relationships_to_check"})).await?;
+        let now = (self.clock)();
+        for (case, owner, payer, reference) in wanted {
+            let found = match master.relationship(&reference).await {
+                Ok(found) => found,
+                Err(e) => {
+                    pass.problems.push(format!("relationship {reference}: {e}"));
+                    continue;
+                }
+            };
+            let verdict = crate::ports::relationship_links(found.as_ref(), &owner, &payer);
+            let command = Command::ConfirmRelationship {
+                case: case.clone(),
+                confirmed: verdict.is_ok(),
+                reason: verdict.err().unwrap_or_default(),
+            };
+            let key = format!("relationship:{case}:{reference}:{}", now.format("%Y%m%dT%H%M%S"));
+            match self.tell(key, command).await {
+                Ok(()) => pass.relationships += 1,
+                Err(e) => pass.problems.push(format!("relationship {reference}: {e}")),
             }
         }
         Ok(())

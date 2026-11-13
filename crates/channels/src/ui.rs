@@ -20,6 +20,7 @@ pub const OPS: &str = include_str!("../ui/ops.html");
 pub const PRICING: &str = include_str!("../ui/pricing.html");
 pub const REINSURANCE: &str = include_str!("../ui/reinsurance.html");
 pub const PAYMENTS: &str = include_str!("../ui/payments.html");
+pub const GROUP: &str = include_str!("../ui/group.html");
 pub const UNDERWRITING: &str = include_str!("../ui/underwriting.html");
 pub const REPLACEMENTS: &str = include_str!("../ui/replacements.html");
 pub const COMMISSION: &str = include_str!("../ui/commission.html");

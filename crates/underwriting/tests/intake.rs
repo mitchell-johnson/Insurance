@@ -374,8 +374,9 @@ async fn an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logg
 /// Purpose: an evidence provider's adapter, and only one holding the app role `evidence`,
 /// reports an order acknowledged, sends the report, which is sealed under the person's own name
 /// before the module is told where it is, and may send it again without filing it twice; a
-/// request nobody made, and a report that is not a document, are refused before anything is
-/// stored. A delegate's file is taken only with the role `delegate-api`, sealed the same way, and
+/// request nobody made, a report that is not a document or is empty, and a cost below zero are
+/// refused before anything is stored; an order the provider cannot fill is reported with nothing
+/// sealed. A delegate's file is taken only with the role `delegate-api`, sealed the same way, and
 /// passed to the module with its hash.
 /// Why it matters: these are the only ways a medical report or a delegate's file enters the
 /// system. A report the module heard of before it was sealed could point at nothing; one sealed
@@ -407,6 +408,10 @@ async fn evidence_and_delegate_files_are_sealed_before_the_module_hears_of_them(
     assert_eq!(call(&app, "/v1/evidence", Some(&provider), &unknown).await.0, StatusCode::NOT_FOUND);
     let garbled = json!({"outcome": "received", "request": request, "report": "%%%", "cost_minor": 12_000});
     assert_eq!(call(&app, "/v1/evidence", Some(&provider), &garbled).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    let empty = json!({"outcome": "received", "request": request, "report": "", "cost_minor": 12_000});
+    assert_eq!(call(&app, "/v1/evidence", Some(&provider), &empty).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    let negative = json!({"outcome": "received", "request": request, "report": report, "cost_minor": -1});
+    assert_eq!(call(&app, "/v1/evidence", Some(&provider), &negative).await.0, StatusCode::UNPROCESSABLE_ENTITY);
     assert!(records.names().iter().all(|n| !n.contains("evidence")), "nothing stored for a refusal");
 
     let received = json!({"outcome": "received", "request": request, "report": report, "cost_minor": 12_000});
@@ -432,12 +437,27 @@ async fn evidence_and_delegate_files_are_sealed_before_the_module_hears_of_them(
     let mut nobody = file.clone();
     nobody["proposal"] = json!("P9");
     assert_eq!(call(&app, "/v1/delegate-files", Some(&delegate), &nobody).await.0, StatusCode::NOT_FOUND);
+    let mut no_life = file.clone();
+    no_life["life"] = json!("L9");
+    assert_eq!(call(&app, "/v1/delegate-files", Some(&delegate), &no_life).await.0, StatusCode::NOT_FOUND);
     let (status, answered) = call(&app, "/v1/delegate-files", Some(&delegate), &file).await;
     // No delegate decided this life: the module refuses it, after sealing.
     assert_eq!(status, StatusCode::CONFLICT, "{answered}");
     let sent = module.0.lock().unwrap().log.last().unwrap().clone();
     assert_eq!(sent.caller, "delegate-api");
     assert!(matches!(sent.command, Command::DelegateFileReceived { ref vault_ref, .. } if vault_ref.starts_with("clinical://PTY-L1/delegate_file/")));
+
+    // A provider that cannot get a second order says so; nothing is sealed for it.
+    let second = {
+        let mut w = module.0.lock().unwrap();
+        w.open("P2", 500_000_00);
+        w.consent("P2", "L1", ConsentKind::ObtainRecords);
+        w.disclose("P2", "L1", &yes("diabetes"));
+        w.p("P2").lives[&"L1".into()].evidence[0].id.clone()
+    };
+    let gone = json!({"outcome": "unobtainable", "request": second});
+    let (status, filed) = call(&app, "/v1/evidence", Some(&provider), &gone).await;
+    assert_eq!((status, &filed["vault_ref"]), (StatusCode::OK, &json!(null)));
 }
 
 /// Purpose: a quality sample of a delegate's decision from end to end. The delegate decides a

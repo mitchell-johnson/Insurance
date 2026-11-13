@@ -297,6 +297,7 @@ pub(crate) fn alter_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut P
     let change = Change::Terms {
         loadings: spec.loadings,
         exclusions: spec.exclusions,
+        occupation_class: spec.occupation_class,
     };
     alter(ledger, catalog, &mut draft, ctx, &spec.cover, &spec.life, change)?;
     *policy = draft;
@@ -314,7 +315,11 @@ pub(crate) fn change_excess(ledger: &mut Ledger, catalog: &Catalog, policy: &mut
 
 /// What a change of terms changes on the layers it replaces.
 enum Change {
-    Terms { loadings: Vec<ic_money::DecStr>, exclusions: Vec<String> },
+    Terms {
+        loadings: Vec<ic_money::DecStr>,
+        exclusions: Vec<String>,
+        occupation_class: Option<String>,
+    },
     Excess(String),
 }
 
@@ -358,12 +363,23 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             }
         }
     }
+    // A new occupation class is a change even where the terms stay as they were.
+    let held = policy.lives.get(spec.life).and_then(|l| l.factors.as_of(effective));
+    let reclassed = match &change {
+        Change::Terms {
+            occupation_class: Some(class), ..
+        } if held.is_some_and(|f| f.occupation_class.as_ref() != Some(class)) => held.map(|f| crate::policy::LifeFactors {
+            occupation_class: Some(class.clone()),
+            ..f.clone()
+        }),
+        _ => None,
+    };
     let altered: Vec<Layer> = cover
         .layers
         .iter()
         .filter(|l| &l.life == spec.life && l.in_force_on(effective))
         .filter(|l| match &change {
-            Change::Terms { loadings, exclusions } => &l.loadings != loadings || &l.exclusions != exclusions,
+            Change::Terms { loadings, exclusions, .. } => reclassed.is_some() || &l.loadings != loadings || &l.exclusions != exclusions,
             Change::Excess(option) => l.excess_option.as_ref() != Some(option),
         })
         .cloned()
@@ -382,6 +398,9 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
 
     let cover_type = cover.cover_type.clone();
     let first = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+    if let (Some(factors), Some(life)) = (reclassed, policy.lives.get_mut(spec.life)) {
+        life.factors.record(effective, ctx.date, ctx.index, factors);
+    }
     for (id, old) in (first..).zip(altered) {
         if let Some(cover) = policy.covers.get_mut(spec.cover) {
             if let Some(l) = cover.layers.iter_mut().find(|l| l.id == old.id) {
@@ -494,6 +513,7 @@ pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, ctx:
 /// Cover already on them is left alone.
 pub(crate) fn reinstated_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, terms: LayerTerms) -> Result<(), Reject> {
     let spec = AlteredTerms {
+        occupation_class: None,
         policy: policy.id.clone(),
         cover: terms.cover,
         life: terms.life,

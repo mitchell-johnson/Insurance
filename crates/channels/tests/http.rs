@@ -82,6 +82,11 @@ fn template(id: &str, actions: &[&str], classes: &[DataClass]) -> Template {
 /// administrator, and staff: an administrator, a service agent and two
 /// finance officers.
 fn portal() -> Portal {
+    portal_with(|employer| employer)
+}
+
+/// The portal, calling the group service `group_service` makes from the employer's double.
+fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Arc<dyn ic_channels::group::Group>) -> Portal {
     let mut w = World::new();
     let retail = w.issue(term_life(
         1,
@@ -136,6 +141,9 @@ fn portal() -> Portal {
         ("sub-paypm", "pay-pm"),
         ("sub-paybad", "pay-bad"),
         ("sub-payview", "pay-view"),
+        ("sub-paycmp", "pay-cmp"),
+        ("sub-grp1", "grp-1"),
+        ("sub-grpview", "grp-view"),
     ] {
         w.dir(
             module("identity"),
@@ -243,6 +251,9 @@ fn portal() -> Portal {
                     &[DataClass::Financial],
                 ),
                 template("payments-reader", &[ic_channels::payments::actions::VIEW], &[DataClass::Financial]),
+                template("payments-compliance", &[ic_channels::payments::actions::COMPLIANCE], &[DataClass::Financial]),
+                template("group-admin", &[ic_channels::group::actions::ADMIN], &[DataClass::Ordinary]),
+                template("group-reader", &[ic_channels::group::actions::VIEW], &[DataClass::Ordinary]),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(
                     "conduct-officer",
@@ -303,6 +314,9 @@ fn portal() -> Portal {
         ("pay-pm", "payee-maintainer"),
         ("pay-bad", "payments-conflicted"),
         ("pay-view", "payments-reader"),
+        ("pay-cmp", "payments-compliance"),
+        ("grp-1", "group-admin"),
+        ("grp-view", "group-reader"),
     ] {
         w.send(
             staff("alice"),
@@ -373,7 +387,7 @@ fn portal() -> Portal {
         master: Some(master.clone()),
         intake: Some(intake.clone()),
         documents: Some(documents.clone()),
-        group: Some(group.clone()),
+        group: Some(group_service(group.clone())),
     }));
     Portal {
         app,
@@ -925,7 +939,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 35);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 38);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -2091,7 +2105,7 @@ async fn the_finance_console() {
     ] {
         assert_eq!(ask("sub-aud", fine).await.0, StatusCode::OK, "{fine}");
     }
-    // One policy's accounting group: the partition is a number, and a policy in no group is 404.
+    // One policy's accounting group: the partition is a number.
     // A policy not yet placed has no group: the ledger answers nothing rather than a guess.
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=1").await, (StatusCode::OK, Value::Null));
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=one").await.0, StatusCode::BAD_REQUEST);
@@ -2216,7 +2230,9 @@ async fn the_finance_console() {
 async fn serve_for_a_browser() {
     let addr = std::env::var("IC_BROWSER_ADDR").unwrap_or_else(|_| "127.0.0.1:8099".into());
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap();
-    let portal = portal();
+    // Staff's group console works against the group module itself, beside the employer's double.
+    let staff = Arc::new(common::group_module::seeded());
+    let portal = portal_with(|employer| Arc::new(common::group_module::Beside { employer, staff }));
     // Kiri appoints the adviser, so the adviser's book has a policy in it.
     let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
     let (status, _) = portal
@@ -3524,4 +3540,125 @@ async fn the_life_gives_their_own_consents() {
     let message = ic_underwriting::signing::message("consent", &["P3", "L1", "replacement_disclosure"]);
     let (status, problem) = send("replacement_disclosure", json!({ "granted": true, "signature": portal.phone.sign(&message) })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("replacement")), "{problem}");
+}
+
+/// Purpose: group administration staff work a scheme from the group console against the group module's own state machine:
+/// they see the queue of exceptions, decide a possible match so it leaves the queue, freeze and unfreeze a scheme, try a
+/// mapping against a sample without storing it, and every command reaches the module under the caller `group-admin` as the
+/// person signed in. A reader reads but cannot act; the employer's and the driver's own commands are not sent from here; a
+/// module refusal comes back as 409 with its code.
+/// Why it matters: the group service trusts the portal's caller name for staff. If the console let a reader act, let a page
+/// send the driver's commands (results from the core, scans, the customer master's answers), or hid the module's refusal,
+/// staff could change membership nobody had the right to change, or think a change was made that was not.
+#[tokio::test]
+async fn the_group_console() {
+    let module = Arc::new(common::group_module::seeded());
+    let portal = portal_with(|_| module.clone());
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/group/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/group/commands", command).await }
+    };
+
+    // Who gets in, and who may act.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(ask("sub-grpview", "me").await.1["admin"], json!(false));
+    assert_eq!(ask("sub-grp1", "me").await.1["admin"], json!(true));
+
+    // The queue: the possible match on E002, for the whole book and for the scheme; a bad scheme name is refused here.
+    let (status, open) = ask("sub-grpview", "exceptions").await;
+    assert_eq!(status, StatusCode::OK, "{open}");
+    let kinds: Vec<&Value> = open["exceptions"].as_array().unwrap().iter().map(|e| &e["kind"]).collect();
+    assert!(kinds.contains(&&json!("possible_match")), "{open}");
+    assert_eq!(ask("sub-grpview", "exceptions?scheme=harbour").await.1, open);
+    assert_eq!(ask("sub-grpview", "exceptions?scheme=a/b").await.0, StatusCode::BAD_REQUEST);
+
+    // The scheme, found from its policy; one file; a member; the mapping. An unknown scheme is 404, an unknown question 400.
+    let policy = module.0.lock().unwrap().policy.0.clone();
+    let (status, found) = ask("sub-grpview", &format!("scheme_of?policy={policy}")).await;
+    assert_eq!((status, &found["schemes"]), (StatusCode::OK, &json!(["harbour"])));
+    let (status, scheme) = ask("sub-grpview", "scheme?scheme=harbour").await;
+    assert_eq!((status, scheme["possible_matches"].as_u64()), (StatusCode::OK, Some(1)), "{scheme}");
+    assert_eq!(ask("sub-grpview", "file?scheme=harbour&file=f1").await.1["file"], "f1");
+    assert_eq!(ask("sub-grpview", "member?scheme=harbour&employee=E001").await.1["employee"], "E001");
+    assert_eq!(ask("sub-grpview", "mapping?scheme=harbour").await.1["mapping"]["version"], 1);
+    let (status, problem) = ask("sub-grpview", "scheme?scheme=nope").await;
+    assert_eq!((status, &problem["title"]), (StatusCode::NOT_FOUND, &json!("not_found")), "{problem}");
+    assert_eq!(ask("sub-grpview", "outbox").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-grpview", "file?scheme=harbour").await.0, StatusCode::BAD_REQUEST);
+
+    // A reader cannot act; nor can anyone send the driver's or a member's commands, or something that is not a command.
+    let freeze = json!({ "freeze": { "scheme": "harbour", "reason": "wrong salaries in f1" } });
+    assert_eq!(tell("sub-grpview", freeze.clone()).await.0, StatusCode::FORBIDDEN);
+    for not_ours in [
+        json!({ "record_scan": { "scheme": "harbour", "file": "f1", "clean": true } }),
+        json!({ "self_register": { "scheme": "harbour" } }),
+        json!({ "receive_file": { "scheme": "harbour", "file": "f9", "content_hash": "h" } }),
+        json!(["freeze"]),
+    ] {
+        assert_eq!(tell("sub-grp1", not_ours.clone()).await.0, StatusCode::BAD_REQUEST, "{not_ours}");
+    }
+
+    // Staff decide the possible match: it leaves the queue, and the module heard it from grp-1 as group-admin.
+    let decide = json!({ "resolve_match": { "scheme": "harbour", "employee_id": "E002", "decision": { "decision": "same_person", "party": "party-x" } } });
+    let (status, done) = tell("sub-grp1", decide.clone()).await;
+    assert_eq!((status, &done["applied"]), (StatusCode::OK, &json!(true)), "{done}");
+    assert!(!ask("sub-grp1", "exceptions").await.1["exceptions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|e| e["kind"] == "possible_match"));
+    // Deciding it again is the module's refusal, as 409 with its code.
+    let (status, problem) = tell("sub-grp1", decide).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert!(problem["title"].as_str().is_some_and(|c| !c.is_empty()), "{problem}");
+
+    // Freeze and unfreeze.
+    assert_eq!(tell("sub-grp1", freeze).await.0, StatusCode::OK);
+    assert_eq!(ask("sub-grp1", "scheme?scheme=harbour").await.1["frozen"], "wrong salaries in f1");
+    assert_eq!(tell("sub-grp1", json!({ "unfreeze": { "scheme": "harbour" } })).await.0, StatusCode::OK);
+    assert!(ask("sub-grp1", "scheme?scheme=harbour").await.1["frozen"].is_null());
+
+    // A mapping trial, by anyone who may read: the answer says what the file would do, and nothing is stored.
+    let next = serde_json::to_value(common::group_module::harness::mapping(2)).unwrap();
+    let trial = json!({ "mapping": next, "sample": "Emp No\nE001\nE002\nE003\n" });
+    let (status, tried) = portal
+        .write("POST", "sub-grpview", "/staff/v1/group/schemes/harbour/mappings/try", trial.clone())
+        .await;
+    assert_eq!((status, &tried["mapping"]["version"]), (StatusCode::OK, &json!(2)), "{tried}");
+    assert_eq!(ask("sub-grp1", "mapping?scheme=harbour").await.1["mapping"]["version"], 1);
+    let path = |scheme: &str| format!("/staff/v1/group/schemes/{scheme}/mappings/try");
+    assert_eq!(
+        portal.write("POST", "sub-grpview", &path("a.."), trial.clone()).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        portal.write("POST", "sub-grpview", &path("harbour"), json!({ "sample": "x" })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.write("POST", "sub-gl1", &path("harbour"), trial).await.0, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: a refusal of the portal itself by the group service (its token lacks the `group-admin` role) is the portal's
+/// fault, 502, not the person's; any other answer passes with the service's status; and a service that cannot be reached is
+/// 503.
+/// Why it matters: a 403 there would tell staff they lack a right they hold, and send them to the wrong people to fix it.
+#[tokio::test]
+async fn the_group_console_says_whose_fault_a_refusal_is() {
+    let portal = portal();
+    let double = portal.group.clone();
+    let (status, problem) = portal
+        .write("POST", "sub-grp1", "/staff/v1/group/commands", json!({ "unfreeze": { "scheme": "harbour" } }))
+        .await;
+    assert_eq!((status, &problem["title"]), (StatusCode::BAD_GATEWAY, &json!("role_not_held")), "{problem}");
+    assert_eq!(portal.get("sub-grp1", "/staff/v1/group/invoices?scheme=harbour").await.0, StatusCode::OK);
+    double.down.store(true, Ordering::SeqCst);
+    assert_eq!(
+        portal.get("sub-grp1", "/staff/v1/group/scheme?scheme=harbour").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
 }

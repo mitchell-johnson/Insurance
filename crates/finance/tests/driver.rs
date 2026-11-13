@@ -76,6 +76,9 @@ impl driver::Modules for Others {
             self.sweep.lock().unwrap().clone().unwrap_or(json!({ "green": true, "items": [] }))
         } else if let Some(held) = question.get("aged_held").or(question.get("waiting_cash")) {
             aged(&held["as_at"])
+        } else if let Some(range) = question.get("conduct_facts") {
+            // One replacement on the first day asked, the same whenever asked.
+            json!([{ "id": format!("layer-1/replacement:{}", range["from"].as_str().unwrap()), "measure": "replacement_written", "date": range["from"], "product": "term-life" }])
         } else if question.get("aged").is_some() || question["q"].as_str().is_some_and(|q| q.starts_with("aged_")) {
             aged(&question["as_at"])
         } else {
@@ -317,7 +320,8 @@ fn nothing_is_anchored_to_a_root_that_is_missing_or_does_not_verify() {
 /// both checks green.
 /// Why it matters: month-end runs while other modules are being failed over or patched.
 /// One module being away must not stop the roots, the extracts or the other reports, and
-/// it must never be read as a clean report.
+/// it must never be read as a clean report. Distribution's replacement conduct facts,
+/// which are passed on at every pass, are counted once however often they are sent.
 #[test]
 fn a_module_that_does_not_answer_is_reported_and_asked_again() {
     let driver = driver_after(d(2027, 12, 3), |_| true);
@@ -336,8 +340,9 @@ fn a_module_that_does_not_answer_is_reported_and_asked_again() {
             SUBLEDGER_CHECK
         ]
     );
-    assert_eq!(first.waiting.len(), 2);
+    assert_eq!(first.waiting.len(), 3);
     assert!(first.waiting[0].starts_with("2027-11: distribution did not answer for commission_sweep: unavailable"));
+    assert!(first.waiting[2].contains("did not answer for conduct:replacements"), "{:?}", first.waiting);
     let CheckStatus::Red { items } = status(&driver, nov(), SUBLEDGER_CHECK) else {
         panic!("the driver's own check is not red");
     };
@@ -364,6 +369,10 @@ fn a_module_that_does_not_answer_is_reported_and_asked_again() {
     assert_eq!(status(&driver, nov(), "commission_sweep"), CheckStatus::Green);
     // Nothing is closed without the sign-off, however green it is.
     assert!(third.closed.is_empty());
+    // The replacement distribution reports was passed on by every pass that reached it,
+    // and counted once.
+    let replacements = driver.books.books.lock().unwrap().state.conduct_report(nov(), None).replacements;
+    assert_eq!(replacements, 1);
 }
 
 /// Purpose: the driver is stopped at each point of storing an extract. A file written by a

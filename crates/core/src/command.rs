@@ -208,6 +208,11 @@ pub struct AlteredTerms {
     pub exclusions: Vec<String>,
     /// The underwriting decision the terms come from.
     pub reference: String,
+    /// The life's occupation class from today, where the alteration is a
+    /// change of occupation. The life is rated on it from the new layers'
+    /// start, on every cover that rates by class.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
 }
 
 /// Underwriting's decision that a lapsed policy may be reinstated.

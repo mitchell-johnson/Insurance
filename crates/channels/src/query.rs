@@ -150,6 +150,11 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// Whether a member of staff may open the group console, and act there.
+    GroupStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// Whether a member of staff may open the underwriting console, as a
     /// senior or not, with the non-disclosure remedies waiting for a second
     /// senior.
@@ -530,6 +535,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             standing
         }
         Question::PaymentsStaff { staff, at } => crate::payments::standing(&d.staff, &staff, at),
+        Question::GroupStaff { staff, at } => crate::group::standing(&d.staff, &staff, at),
         Question::UnderwritingStaff { staff, at } => {
             let mut standing = crate::underwriting::standing(&d.staff, &staff, at);
             if standing["view"] == true {

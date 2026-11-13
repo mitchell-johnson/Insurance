@@ -148,8 +148,9 @@ fn a_payer_who_is_not_the_owner_is_raised_once() {
 }
 
 /// Purpose: a business account paying the owner's personal premium opens a
-/// case; once compliance records the payer relationship the customer master
-/// holds, later payments from that account, in later months and to the
+/// case; a clearance naming the customer master's relationship takes effect
+/// only once the master confirms it (an unconfirmed one leaves the case open
+/// and tells compliance); once it does, later payments from that account, in later months and to the
 /// owner's other policies, raise nothing.
 /// Why it matters: a director's company paying their cover is ordinary and
 /// is explained once. If the rule kept firing every month after the
@@ -169,20 +170,40 @@ fn a_recorded_relationship_stops_the_rule() {
         note: "employer".into(),
     };
     assert_eq!(desk.code(&carla(), blank), "invalid_clearance");
-    desk.ok(
-        &carla(),
-        Command::ClearPayer {
-            case: case.into(),
-            relationship: Some("rel-77".into()),
-            note: "the owner's company; relationship recorded in the customer master".into(),
+    let propose = |relationship: &str| Command::ClearPayer {
+        case: case.into(),
+        relationship: Some(relationship.into()),
+        note: "the owner's company; relationship recorded in the customer master".into(),
+    };
+    assert_eq!(desk.code(&carla(), propose("rel-77")), "invalid_clearance", "the reference is party/id");
+    let confirm = |confirmed: bool| Command::ConfirmRelationship {
+        case: case.into(),
+        confirmed,
+        reason: if confirmed {
+            String::new()
+        } else {
+            "the relationship links other parties".into()
         },
-    );
+    };
+    assert_eq!(desk.code(&carla(), confirm(true)), "not_permitted");
+    assert!(desk.ok(&svc(), confirm(true)).is_empty(), "nothing proposed yet");
+
+    // Not cleared until the customer master confirms the relationship.
+    assert!(desk.ok(&carla(), propose("party-biz/rel-1")).is_empty());
+    let to_check = answer(&desk.state, json!({"q": "payer_relationships_to_check"})).unwrap();
+    assert_eq!(to_check, json!([[case, "party-own", "account:020500001234500", "party-biz/rel-1"]]));
+    desk.ok(&svc(), confirm(false));
+    assert_eq!(compliance_notices(&desk), 2, "told the relationship was not confirmed");
+    assert_eq!(answer(&desk.state, json!({"q": "payer_cases"})).unwrap().as_array().unwrap().len(), 1);
+
+    desk.ok(&carla(), propose("party-biz/rel-77"));
+    assert_eq!(desk.ok(&svc(), confirm(true)), [Event::PayerCaseCleared { case: case.into() }]);
     let detail = answer(&desk.state, json!({"q": "payer_case", "case": case})).unwrap();
-    assert_eq!(detail["cleared"]["relationship"], "rel-77");
+    assert_eq!(detail["cleared"]["relationship"], "party-biz/rel-77");
 
     let receipt = direct_credit(&mut desk, "l2", d(2028, 1, 15), business);
     assert!(applied(&mut desk, "pol-2", &receipt).is_empty());
-    assert_eq!(compliance_notices(&desk), 1);
+    assert_eq!(compliance_notices(&desk), 2);
     assert_eq!(desk.state.payer_checks.cases[case].policies, ["pol-1", "pol-2"]);
     assert!(answer(&desk.state, json!({"q": "payer_cases"})).unwrap().as_array().unwrap().is_empty());
 }
