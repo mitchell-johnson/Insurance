@@ -658,6 +658,7 @@ impl ClaimsState {
                     );
                 } else {
                     cx.core.execute(Instruction::Admit {
+                        life: None,
                         claim: id.clone(),
                         policy,
                         cover,
@@ -715,6 +716,7 @@ impl ClaimsState {
                     reason: "funeral_advance".into(),
                 })?;
                 cx.core.execute(Instruction::Admit {
+                    life: None,
                     claim: id.clone(),
                     policy,
                     cover,

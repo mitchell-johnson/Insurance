@@ -461,6 +461,22 @@ pub struct ClaimLedger {
     /// a waiver can be billed back period by period.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub waived: BTreeMap<u32, i64>,
+    /// Cover this claim's lump sums took off the policy, layer by layer,
+    /// until the admission is reversed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cuts: Vec<ClaimCut>,
+}
+
+/// Cover a claim's lump sum took off one layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCut {
+    pub cover: String,
+    pub life: LifeId,
+    /// The layer that was ended or reduced.
+    pub layer: u32,
+    pub amount_minor: i64,
+    /// The business date the cover came off.
+    pub on: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

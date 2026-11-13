@@ -129,6 +129,16 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 format!("cover {}: a shared counter is named and shared with another cover", c.code),
             ));
         }
+        let lump_sum = |code: &str| p.covers.iter().any(|o| o.code == code && matches!(o.benefit, Benefit::LumpSum { .. }));
+        if (c.joint_first_event || !c.reduces.is_empty()) && !lump_sum(&c.code) {
+            return Err(invalid(file, format!("cover {}: only a lump sum cover is joint or reduces another", c.code)));
+        }
+        if c.reduces.iter().any(|other| other == &c.code || !lump_sum(other)) {
+            return Err(invalid(
+                file,
+                format!("cover {}: a cover reduces other lump sum covers of the same product", c.code),
+            ));
+        }
         let mut options = BTreeSet::new();
         for o in &c.excess_options {
             if o.code.is_empty() || !options.insert(o.code.as_str()) {

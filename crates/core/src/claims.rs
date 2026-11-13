@@ -251,6 +251,29 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
             .filter(|l| l.origin == LayerOrigin::Indexation && l.start > on && l.end.is_none_or(|e| e > l.start));
         sum_insured += later.map(|l| l.sum_insured_minor).sum::<i64>();
     }
+    // Cover an earlier claim took off by the event date is still counted:
+    // the owner of the claim takes earlier admissions off itself.
+    sum_insured += p
+        .claims
+        .values()
+        .flat_map(|k| &k.cuts)
+        .filter(|x| x.cover == cover && x.on <= on && life_id.as_ref().is_none_or(|id| &x.life == id))
+        .map(|x| x.amount_minor)
+        .sum::<i64>();
+    if let Some(pr) = product {
+        if pr.cover(cover).is_some_and(|d| d.joint_first_event) {
+            let mut lives: Vec<String> = c.layers.iter().map(|l| l.life.to_string()).collect();
+            lives.sort();
+            lives.dedup();
+            facts.joint_lives = lives;
+        }
+        facts.reduced_by = pr
+            .covers
+            .iter()
+            .filter(|d| d.reduces.iter().any(|r| r == cover))
+            .map(|d| d.code.clone())
+            .collect();
+    }
     let mut covered = !at_event.is_empty();
     if c.formula_driven {
         // Scheme cover moves with the member's details as they were on the date.
@@ -314,8 +337,20 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             release_reserve,
             deduct_premium_minor,
             terminate,
+            life,
             ..
-        } => admit(s, p, ctx, &claim, cover, amount_minor, release_reserve, deduct_premium_minor, terminate),
+        } => {
+            let ends = terminate.is_some();
+            admit(s, p, ctx, &claim, cover.clone(), amount_minor, release_reserve, deduct_premium_minor, terminate)?;
+            // A policy the claim ended has no cover left to reduce.
+            match life.filter(|_| !ends) {
+                Some(life) => {
+                    let total = p.claims.get(&claim).map_or(0, |c| c.admitted_minor);
+                    crate::reduce::for_claim(&mut s.ledger, &s.catalog, p, ctx, &claim, &cover, &LifeId(life), total)
+                }
+                None => Ok(()),
+            }
+        }
         Instruction::Pay {
             claim,
             payment_ref,
@@ -402,7 +437,14 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
         Instruction::UnwaivePremium { claim, cover, from, .. } => unwaive(s, p, ctx, &claim, &cover, from),
         Instruction::Close {
             claim, outcome, overpayment, ..
-        } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
+        } => {
+            let reversed = outcome == "admission_reversed";
+            close(&mut s.ledger, p, ctx, &claim, outcome, overpayment)?;
+            if reversed {
+                crate::reduce::restore_for_claim(&mut s.ledger, &s.catalog, p, ctx, &claim)?;
+            }
+            Ok(())
+        }
         Instruction::Reopen { claim, reserve_minor, .. } => reopen(&mut s.ledger, p, ctx, &claim, reserve_minor),
         Instruction::RaiseOverpayment {
             claim,
@@ -1209,6 +1251,12 @@ mod tests {
     /// A partition with the shipped term life product and one policy on it,
     /// open on 15 November 2027.
     fn book() -> (CoreState, NaiveDate) {
+        book_of(include_str!("../../../products/term_life.star"), &[("life", "life-1", 400_000_00)])
+    }
+
+    /// The same, on a product source of the test's own, with the covers given
+    /// as (cover, life, sum insured).
+    fn book_of(source: &str, covers: &[(&str, &str, i64)]) -> (CoreState, NaiveDate) {
         use crate::command::{CoverSpec, Envelope, IssuePolicy, LifeSpec};
         let today = NaiveDate::from_ymd_opt(2027, 11, 15).unwrap();
         let mut state = CoreState::new(0);
@@ -1217,8 +1265,9 @@ mod tests {
             include_str!("../../../products/rates/life_base.star"),
             include_str!("../../../products/rates/trauma_base.star"),
         ];
-        let product = ic_product::load_product("term_life.star", include_str!("../../../products/term_life.star")).unwrap();
-        let life = LifeId("life-1".to_string());
+        let product = ic_product::load_product("term_life.star", source).unwrap();
+        let mut lives: Vec<&str> = covers.iter().map(|c| c.1).collect();
+        lives.dedup();
         let issue = IssuePolicy {
             policy: PolicyId("pol-1".to_string()),
             number: "KTL1".to_string(),
@@ -1227,26 +1276,32 @@ mod tests {
             product_code: "term-life".to_string(),
             inception: today,
             frequency: ic_product::Frequency::Monthly,
-            lives: vec![LifeSpec {
-                id: life.clone(),
-                kind: LifeKind::Named {
-                    party: crate::PartyId("party-1".to_string()),
-                },
-                factors: crate::LifeFactors {
-                    date_of_birth: NaiveDate::from_ymd_opt(1988, 6, 2),
-                    sex: Some(ic_product::Sex::Female),
-                    smoker: Some(false),
-                    ..Default::default()
-                },
-            }],
-            covers: vec![CoverSpec {
-                code: "life".to_string(),
-                life: Some(life),
-                sum_insured_minor: 400_000_00,
-                loadings: vec![],
-                exclusions: vec![],
-                excess_option: None,
-            }],
+            lives: lives
+                .iter()
+                .map(|id| LifeSpec {
+                    id: LifeId(id.to_string()),
+                    kind: LifeKind::Named {
+                        party: crate::PartyId(id.replace("life", "party")),
+                    },
+                    factors: crate::LifeFactors {
+                        date_of_birth: NaiveDate::from_ymd_opt(1988, 6, 2),
+                        sex: Some(ic_product::Sex::Female),
+                        smoker: Some(false),
+                        ..Default::default()
+                    },
+                })
+                .collect(),
+            covers: covers
+                .iter()
+                .map(|(code, life, sum)| CoverSpec {
+                    code: code.to_string(),
+                    life: Some(LifeId(life.to_string())),
+                    sum_insured_minor: *sum,
+                    loadings: vec![],
+                    exclusions: vec![],
+                    excess_option: None,
+                })
+                .collect(),
             migrated: false,
             continuation_of: None,
         };
@@ -1290,6 +1345,7 @@ mod tests {
         let run = |state: &mut CoreState, ctx: &mut Ctx<'_>, instruction| execute(state, ctx, instruction);
         let pol = PolicyId("pol-1".to_string());
         let admit = Instruction::Admit {
+            life: None,
             claim: "clm-1".into(),
             policy: "pol-1".into(),
             cover: "life".into(),
@@ -1369,6 +1425,7 @@ mod tests {
         let owed = state.policies[&pol].outstanding_minor();
         assert!(owed > 0, "the first premium is billed and unpaid");
         let admit = Instruction::Admit {
+            life: None,
             claim: "clm-1".into(),
             policy: "pol-1".into(),
             cover: "life".into(),
@@ -1456,5 +1513,111 @@ mod tests {
         let refused = send(&state, &mut ctx, 1, ic_claims::Command::DrainDue).unwrap_err();
         assert_eq!(refused.code, "same_partition");
         assert!(ctx.messages.is_empty());
+    }
+    fn lump_sum(claim: &str, cover: &str, life: Option<&str>, amount_minor: i64) -> Instruction {
+        Instruction::Admit {
+            claim: claim.into(),
+            policy: "pol-1".into(),
+            cover: cover.into(),
+            amount_minor,
+            release_reserve: false,
+            deduct_premium_minor: 0,
+            terminate: None,
+            repay_loan_minor: 0,
+            life: life.map(str::to_string),
+        }
+    }
+
+    fn held(state: &CoreState, cover: &str, life: &str, on: NaiveDate) -> i64 {
+        let layers = &state.policies[&PolicyId("pol-1".to_string())].covers[cover].layers;
+        layers
+            .iter()
+            .filter(|l| l.life.0 == life && l.in_force_on(on))
+            .map(|l| l.sum_insured_minor)
+            .sum()
+    }
+
+    /// Purpose: on a product whose trauma cover is declared to reduce the life cover, a trauma
+    /// lump sum admitted for a life takes the amount off both covers from the business date
+    /// and hands back the premium billed for the days ahead; a second admission on the claim
+    /// takes only its own amount; the cover check still reports the sum insured before the
+    /// claim and names the cover that reduces it; and reversing the admission writes both
+    /// covers back and bills the premium again, to the cent.
+    /// Why it matters: accelerated trauma is sold as an advance of the life cover. If the life
+    /// cover stayed whole the insurer would pay the same sum twice and bill premium for cover
+    /// already paid out; if the cover check reported the reduced amount, claims, which takes
+    /// earlier admissions off itself, would deduct the first payment twice.
+    #[test]
+    fn a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed() {
+        let source = include_str!("../../../products/term_life.star").replace("code = \"trauma\",", "code = \"trauma\",\n            reduces = [\"life\"],");
+        let (mut state, today) = book_of(&source, &[("life", "life-1", 400_000_00), ("trauma", "life-1", 100_000_00)]);
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let pol = PolicyId("pol-1".to_string());
+        let owed = state.policies[&pol].outstanding_minor();
+
+        execute(&mut state, &mut ctx, lump_sum("clm-1", "trauma", Some("life-1"), 60_000_00)).unwrap();
+        assert_eq!(
+            (held(&state, "trauma", "life-1", today), held(&state, "life", "life-1", today)),
+            (40_000_00, 340_000_00)
+        );
+        let after_first = state.policies[&pol].outstanding_minor();
+        assert!(after_first < owed, "premium billed for cover no longer held is handed back");
+        execute(&mut state, &mut ctx, lump_sum("clm-1", "trauma", Some("life-1"), 40_000_00)).unwrap();
+        assert_eq!(
+            (held(&state, "trauma", "life-1", today), held(&state, "life", "life-1", today)),
+            (0, 300_000_00)
+        );
+
+        let trauma = cover_facts(&state, "pol-1", "trauma", Some("life-1"), today).unwrap();
+        let life = cover_facts(&state, "pol-1", "life", Some("life-1"), today).unwrap();
+        assert_eq!((trauma.sum_insured_minor, life.sum_insured_minor), (100_000_00, 400_000_00));
+        assert_eq!((life.reduced_by, trauma.reduced_by), (vec!["trauma".to_string()], vec![]));
+        assert!(life.joint_lives.is_empty());
+
+        let close = Instruction::Close {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "trauma".into(),
+            outcome: "admission_reversed".into(),
+            overpayment: None,
+        };
+        execute(&mut state, &mut ctx, close).unwrap();
+        assert_eq!(
+            (held(&state, "trauma", "life-1", today), held(&state, "life", "life-1", today)),
+            (100_000_00, 400_000_00)
+        );
+        assert_eq!(state.policies[&pol].outstanding_minor(), owed);
+        assert!(state.policies[&pol].claims["clm-1"].cuts.is_empty());
+        let life = cover_facts(&state, "pol-1", "life", Some("life-1"), today).unwrap();
+        assert_eq!(life.sum_insured_minor, 400_000_00, "a restored cover is not counted twice");
+    }
+
+    /// Purpose: on a joint first-event cover a lump sum admitted for one life ends the cover
+    /// for every life on it, and the cover check names them all; an advance admitted without
+    /// a life leaves the cover alone until the admission that names the life, which then takes
+    /// the whole of what the claim admitted; and a cover that is not joint is reduced for the
+    /// claimant's life only.
+    /// Why it matters: a joint cover carries one sum insured, paid once. Left in force for the
+    /// survivor it would be paid a second time. A funeral advance on a claim later declined
+    /// must not cost the family their cover, and a couple with a cover each must not lose the
+    /// partner's when one of them claims.
+    #[test]
+    fn a_joint_cover_ends_for_every_life_on_the_first_event() {
+        let covers = [("life", "life-1", 400_000_00), ("life", "life-2", 400_000_00)];
+        let joint = include_str!("../../../products/term_life.star").replace("code = \"life\",", "code = \"life\",\n            joint_first_event = True,");
+        let (mut state, today) = book_of(&joint, &covers);
+        let mut ctx = Ctx { date: today, ..ctx() };
+        execute(&mut state, &mut ctx, lump_sum("clm-1", "life", None, 10_000_00)).unwrap();
+        assert_eq!(held(&state, "life", "life-1", today), 400_000_00, "an advance leaves the cover as it is");
+        execute(&mut state, &mut ctx, lump_sum("clm-1", "life", Some("life-1"), 390_000_00)).unwrap();
+        assert_eq!((held(&state, "life", "life-1", today), held(&state, "life", "life-2", today)), (0, 0));
+        let facts = cover_facts(&state, "pol-1", "life", Some("life-2"), today).unwrap();
+        assert_eq!(facts.joint_lives, vec!["life-1".to_string(), "life-2".to_string()]);
+        assert_eq!(facts.sum_insured_minor, 400_000_00);
+
+        let (mut state, today) = book_of(include_str!("../../../products/term_life.star"), &covers);
+        let mut ctx = Ctx { date: today, ..self::ctx() };
+        execute(&mut state, &mut ctx, lump_sum("clm-1", "life", Some("life-1"), 400_000_00)).unwrap();
+        assert_eq!((held(&state, "life", "life-1", today), held(&state, "life", "life-2", today)), (0, 400_000_00));
     }
 }
