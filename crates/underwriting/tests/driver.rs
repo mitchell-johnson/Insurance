@@ -807,6 +807,47 @@ async fn an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force() {
     assert!(ri.reservation("P2/L1/life/1").is_none() && ri.reservation("P3/L1/life/1").is_none());
 }
 
+/// Purpose: a change of occupation after issue goes through underwriting as an alteration. Once
+/// the new terms are accepted, the core is sent the life's new occupation class with them: the
+/// old layer ends and a new one starts on the decided terms, and the life is rated on the new
+/// class from that day while the old class stands for the days before (UW-020).
+/// Why it matters: a riskier occupation priced on the old class is cover sold below its cost,
+/// and a class changed back to the start of the policy would rewrite premiums already paid.
+#[tokio::test]
+async fn a_change_of_occupation_reaches_the_core_with_the_new_class() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    let hash = b.product_hash.clone();
+    b.module.with(|w| {
+        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 500_000_00)], false);
+        open.quote.product_hash = hash;
+        open.entry = Entry::Alteration { policy: policy.clone() };
+        open.policy = policy.clone();
+        open.policy_number = number.clone();
+        open.group = group.clone();
+        open.lives[0].factors.occupation_class = Some("heavy".into());
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.disclose("P2", "L1", &yes("smoked_last_12_months"));
+    });
+    b.pass().await;
+    b.module.with(|w| w.respond("P2", "L1", ic_underwriting::command::OfferResponse::Accept));
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("P2"), ProposalStatus::Issued { .. }), "{:?}", b.status("P2"));
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let held = &cluster.state(0).policies[&policy];
+    let factors = &held.lives[&ic_core::LifeId::from("L1")].factors;
+    assert_eq!(factors.as_of(start()).unwrap().occupation_class.as_deref(), Some("heavy"));
+    let layers = &held.covers["life"].layers;
+    assert_eq!((layers.len(), layers[1].loadings[0].as_str()), (2, "0.50"));
+    assert!(cluster.reconcile().is_empty());
+}
+
 /// Purpose: a lapsed policy goes through underwriting for reinstatement, opened by collections
 /// with the proposal built from the policy as the core holds it (its lives, the cover held the
 /// day before the lapse, its product version; nothing for a policy that is not lapsed), and the decision

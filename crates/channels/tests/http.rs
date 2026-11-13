@@ -3470,6 +3470,33 @@ async fn the_payments_console() {
     }
 }
 
+/// Purpose: compliance works cases of premium paid by someone other than the owner from the payments console: only someone
+/// holding the compliance role is told of the cases or may clear one, and the payments module (its real state machine) hears
+/// the clearance from them as compliance.
+/// Why it matters: who pays whose premium is an anti-money-laundering matter; a maker or reader who could read the cases would
+/// see who funds whom, and one who could clear a case would close an alert they have no standing to judge.
+#[tokio::test]
+async fn compliance_works_third_party_payer_cases() {
+    let portal = portal();
+    assert_eq!(portal.get("sub-paycmp", "/staff/v1/payments/me").await.1["roles"], json!(["compliance"]));
+    let (status, cases) = portal.get("sub-paycmp", "/staff/v1/payments/payer_cases").await;
+    assert_eq!((status, cases), (StatusCode::OK, json!([])));
+    assert_eq!(portal.get("sub-paymk", "/staff/v1/payments/payer_cases").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal.get("sub-payview", "/staff/v1/payments/payer_case?case=c1").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.get("sub-paycmp", "/staff/v1/payments/payer_case?case=c1").await.0, StatusCode::NOT_FOUND);
+
+    let clear = json!({ "type": "clear_payer", "case": "c1", "relationship": "party-a1/rel-1", "note": "a parent pays a child's premium" });
+    let (status, problem) = portal.write("POST", "sub-paymk", "/staff/v1/payments/commands", clear.clone()).await;
+    assert_eq!((status, &problem["title"]), (StatusCode::FORBIDDEN, &json!("not_permitted")), "{problem}");
+    let (status, problem) = portal.write("POST", "sub-paycmp", "/staff/v1/payments/commands", clear).await;
+    assert_eq!((status, &problem["title"]), (StatusCode::CONFLICT, &json!("unknown_case")), "{problem}");
+    let sent = portal.payments.received().last().cloned().unwrap();
+    assert_eq!(sent.actor.id.as_str(), "pay-cmp");
+}
+
 /// Purpose: the life on a proposal gives and withdraws their own consents from the app: what to sign is the underwriting
 /// module's exact message, a consent that needs the life's signed step goes only with the enrolled device's signature over it,
 /// the module (its real state machine) records it from the caller `customer-app` and checks the signature again, and anyone

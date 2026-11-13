@@ -33,12 +33,8 @@ jobs:
     name: format, lints, test documentation
     # The runner image (tools/ci/runner/Dockerfile) has clang, protoc and
     # the well-known .proto files the build needs.
-    # Long on purpose, 13 Nov 2026: each Mac mini runner keeps its own build
-    # output, and a runner's first build from nothing took over an hour
-    # (several seconds a crate). Once each runner has built once, bring this
-    # back to about three times a warm run.
     runs-on: [self-hosted, insurance-ci]
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: /data/target/checks
     steps:
@@ -59,12 +55,8 @@ jobs:
 
   test:
     name: tests and coverage
-    # Long on purpose, 13 Nov 2026: each Mac mini runner keeps its own build
-    # output, and a runner's first build from nothing took over an hour
-    # (several seconds a crate). Once each runner has built once, bring this
-    # back to about three times a warm run.
     runs-on: [self-hosted, insurance-ci]
-    timeout-minutes: 240
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: /data/target/test
       # The Mac's Docker machine has 20 GB for every job at once (the other

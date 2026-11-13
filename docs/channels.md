@@ -221,6 +221,9 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
 
+- **One owner.** The claim view names the owner; where the claims module marks a claimant for communication support it says so in a banner, because a change of owner then needs a handover note and a call.
+- **Proof of life is not sent from the app.** Claims takes `ConfirmAlive` from the caller `channels`, but the portal does not send it: it cannot check a liveness result the app reports, so the evidence would be the device's word. A liveness check the app runs is recorded by the identity provider in the customer master, which relays `ConfirmAlive` to every partition (`docs/customers.md`, "Proof of life"). Questions other services ask the claims module (the documents service's repayment letters) are answered 404 here.
+
 ## The reinsurance exceptions console
 
 `/reinsurance` shows the reinsurance module's open exceptions (`docs/reinsurance.md`) and what a person can do about each. That module is the source of truth: an exception closes itself once its cause is cured, so there is nothing to acknowledge. The portal reads the module itself, not the event hub the exceptions are also sent to.
@@ -264,13 +267,14 @@ Commands go under the caller `reinsurance-ops` on the latest business date any p
 | `payments.payees` | `payee_maintainer`: authorities and payee accounts. |
 | `payments.connectivity` | `connectivity_admin`: configuration and redirecting a route to the second bank; the only one who reads the configuration. |
 | `payments.legal`, `.reconciler`, `.treasury`, `.collections` | `legal`, `reconciler`, `treasury`, `collections` |
+| `payments.compliance` | `compliance`: cases of premium paid by someone other than the owner, and `clear_payer` |
 
 Only people's commands pass (`src/payments.rs`, `COMMANDS`); the banks' answers, screening, the customer's hold as the pump records it, the drill, the core's events, the outbox and pruning are the module's drivers' and are refused here. A held item reads as the customer's own hold (`customer_hold`, or `hold_unconfirmed`, which clears when the maker checks the run again).
 
 | Route | |
 |---|---|
 | `GET /staff/v1/payments/me` | Your roles there. |
-| `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`. A null answer is 404. |
+| `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`, and `payer_cases` and `payer_case?case=` (compliance only). A null answer is 404. |
 | `POST /staff/v1/payments/commands` | One command in that module's JSON (`{"type": ...}`), with an `Idempotency-Key`. Its events come back; a refusal is 403 (`not_permitted`, `role_conflict`, `same_person`, ...) or 409 with the module's code. |
 
 ## The underwriting console
