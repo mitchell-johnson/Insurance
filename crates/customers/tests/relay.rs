@@ -16,6 +16,8 @@ use ic_raft::ClusterAuth;
 /// `customer-master` and is accepted on each, even where the person has no claim, and the
 /// same death again is accepted without effect, and so is its retraction; a cluster that cannot be reached is an
 /// error, not a silent success.
+/// The channels directory module on the same node takes the customer master's directory
+/// commands.
 /// Why it matters: claims' agreed contract is that every partition accepts the command and
 /// finds its own claims; if the core refused this caller or this shape, no death recorded
 /// outside claims would ever stop a benefit.
@@ -26,20 +28,23 @@ async fn a_death_is_accepted_on_every_partition_of_a_real_node() {
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let addr = format!("127.0.0.1:{port}");
     let auth = ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
-    let node = server::start(Settings {
-        id: 1,
-        listen: addr.parse().unwrap(),
-        data_dir: dir.join("node-1"),
-        partitions: 2,
-        peers: BTreeMap::from([(1, addr.clone())]),
-        bootstrap: true,
-        heartbeat_ms: 50,
-        auth: auth.clone(),
-        cold: ColdTarget::Dir(dir.join("cold")),
-        events: EventTarget::Discard,
-        segment_entries: 1000,
-        snapshot_every: 1000,
-    })
+    let node = server::start_with(
+        Settings {
+            id: 1,
+            listen: addr.parse().unwrap(),
+            data_dir: dir.join("node-1"),
+            partitions: 2,
+            peers: BTreeMap::from([(1, addr.clone())]),
+            bootstrap: true,
+            heartbeat_ms: 50,
+            auth: auth.clone(),
+            cold: ColdTarget::Dir(dir.join("cold")),
+            events: EventTarget::Discard,
+            segment_entries: 1000,
+            snapshot_every: 1000,
+        },
+        vec![ic_channels::query::module_spec().unwrap()],
+    )
     .await
     .unwrap();
     let core = ClusterCore::new(&addr, auth.clone(), Duration::from_secs(20)).unwrap();
@@ -77,6 +82,20 @@ async fn a_death_is_accepted_on_every_partition_of_a_real_node() {
         .await
         .unwrap();
     assert_eq!(again, None, "a repeat is accepted");
+    // The channels directory takes the customer master's commands: a policy it has not
+    // yet seen is refused by the directory itself, not as an unknown sender.
+    let ownership = ic_channels::directory::DirectoryCommand::RecordOwnership {
+        policy: ic_core::PolicyId("P1".into()),
+        policyholder: ic_core::PartyId("pty_relay".into()),
+    };
+    let refused = relay::Directory::direct(&core, "directory:1:0", &ownership).await.unwrap();
+    assert!(refused.as_deref().is_some_and(|r| r.contains("unknown_policy")), "{refused:?}");
+    let assignment = ic_channels::directory::DirectoryCommand::RecordAssignment {
+        policy: ic_core::PolicyId("P1".into()),
+        party: ic_core::PartyId("pty_relay".into()),
+        active: true,
+    };
+    assert_eq!(relay::Directory::direct(&core, "directory:2:0", &assignment).await.unwrap(), None);
     // Withdrawn: the retraction is accepted everywhere, and again.
     relay::send(&core, 2, &notice(true, 0)).await.unwrap();
     relay::send(&core, 2, &notice(true, 1)).await.unwrap();
@@ -85,5 +104,6 @@ async fn a_death_is_accepted_on_every_partition_of_a_real_node() {
 
     let nowhere = ClusterCore::new("127.0.0.1:9", auth, Duration::from_millis(300)).unwrap();
     assert!(nowhere.partitions().await.is_err());
+    assert!(relay::Directory::direct(&nowhere, "k", &assignment).await.is_err());
     assert!(matches!(relay::send(&nowhere, 1, &notice(false, 0)).await, Err(relay::Failure::Unreached(_))));
 }

@@ -44,6 +44,7 @@ struct Portal {
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
+    documents: Arc<common::documents::DocumentsDouble>,
 }
 
 fn healthy() -> RegionReport {
@@ -95,6 +96,7 @@ fn portal() -> Portal {
         ("sub-kiri", KIRI),
         ("sub-adv", "adv-1"),
         ("sub-hr", "hr-1"),
+        ("sub-hr2", "hr-2"),
         ("sub-alice", "alice"),
         ("sub-sue", "sue"),
         ("sub-fin1", "fin-1"),
@@ -118,6 +120,7 @@ fn portal() -> Portal {
         ("sub-riview", "ri-view"),
         ("sub-aud", "aud-1"),
         ("sub-wbcon", "wb-con"),
+        ("sub-rec", "rec-1"),
     ] {
         w.dir(
             module("identity"),
@@ -203,6 +206,7 @@ fn portal() -> Portal {
                     &[DataClass::Financial],
                 ),
                 template("ri-reader", &[ic_channels::reinsurance::actions::VIEW], &[DataClass::Financial]),
+                template("records", &[ic_channels::documents::actions::DOWNLOAD], &[DataClass::Ordinary]),
                 template(
                     "conduct-officer",
                     &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
@@ -250,6 +254,7 @@ fn portal() -> Portal {
         ("ri-2", "ri-lead"),
         ("ri-view", "ri-reader"),
         ("wb-con", "conduct-officer"),
+        ("rec-1", "records"),
     ] {
         w.send(
             staff("alice"),
@@ -290,6 +295,7 @@ fn portal() -> Portal {
     let reinsurance = Arc::new(common::reinsurance::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
+    let documents = Arc::new(common::documents::DocumentsDouble::default());
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
         json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
@@ -313,6 +319,7 @@ fn portal() -> Portal {
         reinsurance: reinsurance.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
+        documents: Some(documents.clone()),
     }));
     Portal {
         app,
@@ -329,6 +336,7 @@ fn portal() -> Portal {
         master,
         commission,
         intake,
+        documents,
     }
 }
 
@@ -817,7 +825,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 23);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 24);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1356,6 +1364,7 @@ async fn the_unit_pricing_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1565,6 +1574,7 @@ async fn the_complaints_and_conduct_workbench() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1660,6 +1670,7 @@ async fn the_reinsurance_exceptions_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (path, body) in [
         ("/staff/v1/reinsurance/exceptions", None),
@@ -1869,6 +1880,7 @@ async fn the_claims_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -2041,6 +2053,7 @@ async fn the_finance_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),
@@ -2180,6 +2193,7 @@ async fn a_person_keeps_their_own_customer_record() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     let request = Request::builder()
         .uri("/app/v1/profile")
@@ -2234,6 +2248,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, body) in [
         ("GET", None),
@@ -2497,6 +2512,7 @@ async fn the_person_insured_signs_their_disclosure() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     let request = Request::builder()
         .method("POST")
@@ -2506,4 +2522,166 @@ async fn the_person_insured_signs_their_disclosure() {
         .body(Body::from(answers.to_string()))
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: a customer downloads their own document as a PDF and gets 404 for anyone else's or for an ID that could not be one; a
+/// member of staff with `documents.download` downloads with a purpose, which is passed on, and is refused a clinical document; staff
+/// without the action or without a purpose get nothing; a destroyed document is 410; and a documents module that is down or not
+/// configured is 503.
+/// Why it matters: the documents module decides by the party or the staff member and purpose the portal names, so the portal must
+/// name only the person signed in, and must not hand back anything but the file it was given, with no caching.
+#[tokio::test]
+async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
+    let portal = portal();
+    let response = portal
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app/v1/documents/doc-1/pdf")
+                .header("x-dev-subject", "sub-kiri")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "application/pdf");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(response.headers()["content-disposition"], "attachment; filename=\"doc-1.pdf\"");
+    assert_eq!(response.into_body().collect().await.unwrap().to_bytes().as_ref(), b"%PDF-1.7 schedule");
+    assert_eq!(
+        portal.documents.asked.lock().unwrap()[0],
+        ("doc-1".to_string(), ic_channels::documents::Asker::Party(KIRI.to_string()))
+    );
+    for (who, path) in [("sub-adv", "doc-1"), ("sub-kiri", "doc-2"), ("sub-kiri", "..%2Fsecret"), ("sub-kiri", "a%20b")] {
+        assert_eq!(
+            portal.get(who, &format!("/app/v1/documents/{path}/pdf")).await.0,
+            StatusCode::NOT_FOUND,
+            "{who} {path}"
+        );
+    }
+    assert_eq!(portal.get("sub-kiri", "/app/v1/documents/doc-gone/pdf").await.0, StatusCode::GONE);
+    assert_eq!(portal.get("sub-kiri", "/app/v1/documents/doc-odd/pdf").await.0, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        portal.get("sub-kiri", "/app/v1/documents/doc-busy/pdf").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    let (status, _) = portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf?purpose=complaint%20C-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        portal.documents.asked.lock().unwrap().last().unwrap().1,
+        ic_channels::documents::Asker::Staff {
+            actor: "rec-1".into(),
+            purpose: "complaint C-1".into()
+        }
+    );
+    assert_eq!(
+        portal.get("sub-rec", "/staff/v1/documents/doc-clinical/pdf?purpose=x").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf?purpose=%20").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.get("sub-sue", "/staff/v1/documents/doc-1/pdf?purpose=x").await.0, StatusCode::FORBIDDEN);
+
+    let now = portal.now();
+    let bare = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: portal.commission.clone(),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+        intake: None,
+        documents: None,
+    }));
+    let request = Request::builder()
+        .uri("/app/v1/documents/doc-1/pdf")
+        .header("x-dev-subject", "sub-kiri")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: at handover between scheme administrators, the joiner is added by the leaver and sees the scheme at once; the joiner then
+/// removes the leaver, who loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
+/// before then is refused; and the last administrator cannot be removed by the scheme's own administrators.
+/// Why it matters: an administrator who has left must not keep seeing member data or make changes through a session still open, and
+/// the scheme must never be left with nobody to run it.
+#[tokio::test]
+async fn an_employer_administrator_hands_over_at_noon() {
+    let portal = portal();
+    let scheme = portal.scheme.clone();
+    let admin = |who: &'static str, party: &'static str, on: bool| {
+        let path = format!("/employer/v1/schemes/{scheme}/admins/{party}");
+        let portal = &portal;
+        async move { portal.write("PUT", who, &path, json!({ "admin": on })).await }
+    };
+    assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1, json!([]));
+    assert_eq!(admin("sub-hr", "hr-2", true).await.0, StatusCode::OK);
+    assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1.as_array().unwrap().len(), 1);
+    assert_eq!(admin("sub-hr2", "hr-1", false).await.0, StatusCode::OK);
+    assert_eq!(portal.get("sub-hr", "/employer/v1/schemes").await.1, json!([]));
+    assert_eq!(portal.get("sub-hr", &format!("/app/v1/policies/{scheme}")).await.0, StatusCode::NOT_FOUND);
+    // The leaver can no longer act on the scheme, and the joiner cannot leave it with nobody.
+    assert_eq!(admin("sub-hr", "hr-1", true).await.0, StatusCode::FORBIDDEN);
+    let (status, problem) = admin("sub-hr2", "hr-2", false).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("last_admin")));
+
+    // The priority revocation: the leaver's sessions are closed, and an earlier token is refused.
+    let now = portal.now();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_001,
+            ic_channels::Envelope {
+                key: "revoke-hr-1".into(),
+                at: now,
+                actor: module("identity"),
+                command: Command::Identity(IdentityCommand::RevokeSessions { party: p("hr-1") }),
+            },
+        );
+        assert!(output.result.is_ok());
+    });
+    let old = [("x-dev-subject", "sub-hr".to_string()), ("x-dev-issued", (now - 5).to_string())];
+    let (status, problem) = portal.send("GET", "/employer/v1/schemes", &old, None).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("session_revoked")));
+}
+
+/// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module
+/// picks up, with nothing about why; anyone else's is not; and when the master cannot answer, the request is marked too.
+/// Why it matters: a vulnerable customer's request must reach someone trained before anything happens, and an outage of the master
+/// must not quietly send such a request down the automated path.
+#[tokio::test]
+async fn a_vulnerable_customers_request_goes_to_a_person() {
+    let portal = portal();
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
+    let ask =
+        |id: &str| json!({ "id": id, "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing", "payload": { "declined": true } });
+    assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", ask("r-v1")).await.0, StatusCode::ACCEPTED);
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    assert_eq!(mine[0]["route_to_person"], true);
+    assert!(mine[0].get("kind_of_marker").is_none() && mine[0].get("adjustments").is_none());
+    assert!(portal.master.calls.lock().unwrap().iter().any(|c| c.what == "routing" && c.party == KIRI));
+
+    let other = json!({ "id": "r-h1", "policy": portal.scheme, "kind": "remove_member", "module": "group-admin" });
+    assert_eq!(portal.write("POST", "sub-hr", "/app/v1/requests", other).await.0, StatusCode::ACCEPTED);
+    assert!(portal.get("sub-hr", "/app/v1/requests").await.1[0].get("route_to_person").is_none());
+
+    portal.master.down.store(true, Ordering::SeqCst);
+    portal.master.vulnerable.lock().unwrap().clear();
+    assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", ask("r-v2")).await.0, StatusCode::ACCEPTED);
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    assert!(mine.as_array().unwrap().iter().all(|r| r["route_to_person"] == true), "{mine}");
 }

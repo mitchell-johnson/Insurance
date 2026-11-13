@@ -95,6 +95,7 @@ impl UnderwritingState {
             interim: None,
             migrated: migration,
             issue_attempts: 0,
+            reoffers: vec![],
         };
         cx.event(Event::ProposalReceived {
             proposal: p.id.clone(),
@@ -306,6 +307,9 @@ pub(crate) fn respond(
     response: OfferResponse,
     signed: &SignedStep,
 ) -> Result<(), Reject> {
+    if crate::reoffer::is_reoffer(p, offer) {
+        return crate::reoffer::respond(p, cx, life, offer, response, signed);
+    }
     open_only(p)?;
     let proposal = p.id.clone();
     let f = life_mut(p, life)?;

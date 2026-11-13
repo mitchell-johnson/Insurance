@@ -258,6 +258,21 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     let key = "grp-uw:harbour:north:7";
     assert_eq!(underwriting_envelope(key, at, today, &excess_request(None)), None);
 
+    // Takeover terms and reinsurance's reference go on the entry only where there are any,
+    // and underwriting still reads the proposal with them there.
+    let mut taken_over = excess_request(Some("party-9"));
+    let plain = underwriting_envelope(key, at, today, &taken_over).unwrap();
+    taken_over.honour_without_evidence_minor = Some(150_000_00);
+    taken_over.reference = Some("ri-cap-77".into());
+    let with_both = underwriting_envelope(key, at, today, &taken_over).unwrap();
+    let entry = &with_both["command"]["open_proposal"]["entry"];
+    assert_eq!(
+        (entry["takeover_accepted_minor"].as_i64(), entry["reinsurance_reference"].as_str()),
+        (Some(150_000_00), Some("ri-cap-77"))
+    );
+    serde_json::from_value::<ic_underwriting::command::Envelope>(with_both).unwrap();
+    assert_eq!(plain["command"]["open_proposal"]["entry"].as_object().unwrap().len(), 2);
+
     let value = underwriting_envelope(key, at, today, &excess_request(Some("party-9"))).unwrap();
     let text = value.to_string();
     assert!(!text.contains("salary") && !text.contains("category"), "{text}");
@@ -353,6 +368,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         policy: policy.clone(),
         effective: d(2027, 11, 1),
         employer_may_see_loading: false,
+        member_pays_loading: false,
         covers: vec![ic_core::command::CoverSpec {
             code: "group-life".into(),
             life: Some(life("E003")),
@@ -382,6 +398,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
             loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
             exclusions: vec!["EX-BACK".into()],
             member_consents_to_itemising: false,
+            member_pays_loading: false,
         }
     );
     // Consent is what underwriting recorded from the member's signed step, and absent means no.
@@ -394,6 +411,13 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
             ..
         }
     ));
+    // A reissue with the member paying says so on the effect; absent means no.
+    consented["apply_terms"]["member_pays_loading"] = serde_json::json!(true);
+    assert!(matches!(
+        excess_answer(&consented).unwrap().decision,
+        ExcessDecision::Accepted { member_pays_loading: true, .. }
+    ));
+    consented["apply_terms"].as_object_mut().unwrap().remove("member_pays_loading");
     consented["apply_terms"].as_object_mut().unwrap().remove("employer_may_see_loading");
     assert!(matches!(
         excess_answer(&consented).unwrap().decision,

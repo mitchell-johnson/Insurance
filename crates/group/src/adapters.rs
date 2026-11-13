@@ -158,9 +158,18 @@ pub fn reinsurance_envelope(key: &str, on: NaiveDate, notice: &ReinsuranceNotice
 /// The policy number is the policy's ID, which is all this module holds.
 pub fn underwriting_envelope(key: &str, at: DateTime<Utc>, today: NaiveDate, request: &UnderwritingRequest) -> Option<Value> {
     let party = request.party.as_ref()?;
+    // What a previous insurer had accepted (takeover terms) and reinsurance's
+    // own reference for a member it capped, each only where there is one.
+    let mut entry = json!({ "entry": "group_excess", "policy": request.policy });
+    if let Some(minor) = request.honour_without_evidence_minor {
+        entry["takeover_accepted_minor"] = json!(minor);
+    }
+    if let Some(reference) = &request.reference {
+        entry["reinsurance_reference"] = json!(reference);
+    }
     let proposal = json!({
         "proposal": key,
-        "entry": { "entry": "group_excess", "policy": request.policy },
+        "entry": entry,
         "policy": request.policy,
         "policy_number": request.policy.to_string(),
         "group": request.group,
@@ -229,6 +238,7 @@ pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
             loadings: serde_json::from_value(cover["loadings"].clone()).ok()?,
             exclusions: serde_json::from_value(cover["exclusions"].clone()).ok()?,
             member_consents_to_itemising: body["employer_may_see_loading"].as_bool().unwrap_or(false),
+            member_pays_loading: body["member_pays_loading"].as_bool().unwrap_or(false),
         };
         (body, decision)
     } else {

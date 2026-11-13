@@ -4,6 +4,7 @@ mod book;
 mod controls;
 mod decisions;
 mod intake;
+mod investigate;
 mod reversal;
 mod views;
 mod world;

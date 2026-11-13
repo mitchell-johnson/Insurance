@@ -41,6 +41,7 @@ fn accept(minor: i64, loading: Option<&str>, consent: bool) -> ExcessDecision {
         loadings: loading.map(|l| DecStr::parse(l).unwrap()).into_iter().collect(),
         exclusions: vec![],
         member_consents_to_itemising: consent,
+        member_pays_loading: false,
     }
 }
 
@@ -594,4 +595,97 @@ fn a_member_who_pays_their_loading_keeps_the_cover() {
     assert_eq!(status(&h, case), CaseStatus::Accepted);
     assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
     assert!(h.g.exceptions.is_empty(), "{:?}", h.g.exceptions);
+}
+
+/// Purpose: when staff have underwriting offer a member their loading to pay, because too
+/// few members are left for the employer's total to hide it, and the member agrees, the
+/// reissued terms replace the layer: a new layer with the same cover and the member
+/// paying the loading starts today, the old one ends the same day and only once the new
+/// one is in the core, the alert clears, and underwriting is told of the new layer under
+/// the original request. If the member declines, nothing changes and that is published.
+/// Reissued terms for more cover, without a loading, or twice, are refused.
+/// Why it matters: this is the only way a loading leaves the employer's invoice after the
+/// fact. Ending the old layer before the new one is written would leave the member without
+/// cover if the core refused it; leaving both would bill for double the cover.
+#[test]
+fn reissued_terms_move_a_loading_to_the_member_without_a_gap_in_cover() {
+    use ic_core::policy::MemberPays;
+
+    let mut t = terms();
+    t.excess_loading_min_count = 2;
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E004", attrs("executive", 240_000_00, "wlg")),
+            row(3, "E005", attrs("executive", 240_000_00, "wlg")),
+        ],
+    );
+    let case_of = |h: &Harness, id: &str| h.requests.iter().find(|r| r.life == life(id)).unwrap().case;
+    let alerts = |h: &Harness| h.g.exceptions.values().filter(|e| e.kind == ExceptionKind::LoadingTotalTooSmall).count();
+    let reissue = |minor: i64, loading: Option<&str>| match accept(minor, loading, false) {
+        ExcessDecision::Accepted {
+            sum_insured_minor,
+            loadings,
+            exclusions,
+            ..
+        } => ExcessDecision::Accepted {
+            sum_insured_minor,
+            loadings,
+            exclusions,
+            member_consents_to_itemising: false,
+            member_pays_loading: true,
+        },
+        other => other,
+    };
+    let (first, second) = (case_of(&h, "E004"), case_of(&h, "E005"));
+    // Nothing is in place to reoffer yet.
+    assert_eq!(code(h.underwriting(second, ExcessDecision::ReofferDeclined)), "case_closed");
+    h.underwriting(first, accept(210_000_00, Some("0.5"), false)).unwrap();
+    h.underwriting(second, accept(210_000_00, Some("0.25"), false)).unwrap();
+    h.days(3);
+    let left = h.today();
+    h.apply(
+        "leave",
+        FileKind::Changes,
+        vec![change(1, "E004", RowChange::Leave, left, attrs("executive", 240_000_00, "wlg"))],
+    );
+    assert_eq!(alerts(&h), 1);
+    h.days(2);
+
+    // The member says no: the terms in place stand.
+    h.underwriting(second, ExcessDecision::ReofferDeclined).unwrap();
+    assert!(h.saw(|e| matches!(e, GroupEvent::LoadingMoveDeclined { case, .. } if *case == second)));
+    assert_eq!((payers(&h, "E005"), alerts(&h)), (vec![MemberPays::Nothing], 1));
+
+    // Terms that are not a reissue of this cover.
+    assert_eq!(code(h.underwriting(second, reissue(250_000_00, Some("0.25")))), "invalid_amount");
+    assert_eq!(code(h.underwriting(second, reissue(210_000_00, None))), "no_loading");
+    assert_eq!(h.excess_layers("E005"), vec![(210_000_00, None)], "refusals changed nothing");
+
+    // The member agrees.
+    let moved = h.today();
+    let outcomes_before = h.outcomes.len();
+    h.underwriting(second, reissue(210_000_00, Some("0.25"))).unwrap();
+    assert_eq!(h.excess_layers("E005"), vec![(210_000_00, Some(moved)), (210_000_00, None)]);
+    assert_eq!(payers(&h, "E005"), vec![MemberPays::Nothing, MemberPays::Loading]);
+    assert_eq!(status(&h, second), CaseStatus::Ended);
+    let new_case = h.scheme().cases.values().find(|c| c.replaces == Some(second)).unwrap();
+    assert_eq!((new_case.status, new_case.effective), (CaseStatus::Accepted, moved));
+    assert_eq!(alerts(&h), 0, "nothing of a member's is left in the employer's total");
+    // Underwriting hears of the new layer under the request it knows.
+    let (request, outcome) = &h.outcomes[outcomes_before];
+    assert_eq!(request, &format!("grp-uw:{SCHEME}:{second}"));
+    assert!(matches!(outcome, ic_group::event::IssueOutcome::Issued { .. }));
+    // The same reissue again finds nothing in place to replace.
+    assert_eq!(code(h.underwriting(second, reissue(210_000_00, Some("0.25")))), "case_closed");
+
+    // From the next billing the loading is the member's and the employer's balance is its own.
+    let debt = |h: &Harness, id: &str| h.c.state(h.p).policies[&h.policy].member_outstanding_minor(&life(id));
+    h.days(31);
+    assert!(debt(&h, "E005") > 0);
+    // What is owed is the employer's balance and each member's own, the leaver's included.
+    assert_eq!(h.owed(), h.scheme().outstanding_minor + debt(&h, "E005") + debt(&h, "E004"));
 }

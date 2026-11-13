@@ -158,6 +158,9 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::comm
         proposal: p.id.clone(),
         policy: p.policy.clone(),
     });
+    if crate::reoffer::written(p) {
+        return Ok(());
+    }
     for f in p.lives.values().filter(|f| f.stage == Stage::Accepted) {
         for (cover, r) in &f.capacity {
             cx.effect(Effect::ConfirmCapacity {
@@ -260,6 +263,10 @@ fn sweep_one(cfg: &Config, p: &mut Proposal, cx: &mut Cx, n: &mut Swept) -> Resu
             life: None,
             reasons: vec![],
         });
+        return Ok(());
+    }
+    if matches!(p.status, ProposalStatus::Issued { .. }) {
+        crate::reoffer::expire(p, cx);
         return Ok(());
     }
     if p.status != ProposalStatus::Open {

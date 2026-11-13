@@ -49,6 +49,8 @@ pub enum Role {
     QualityReviewer,
     ConductOfficer,
     Legal,
+    /// Works restricted investigations, which nobody else sees.
+    Investigator,
 }
 
 /// How much a person may decide.

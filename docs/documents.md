@@ -25,6 +25,8 @@ A version becomes active only after:
 
 Nobody approves their own template. `DisableTemplate` stops a version being used at once when it is found to be wrong.
 
+
+**Where a clause is used.** `Query::PartUsage { part }` (`DocumentsState::part_usage`) lists every template version that is not disabled and uses a shared part, the product versions their documents serve, and `behind`: the products whose newest template still uses an older version of the part than the newest registered. A change to a clause is one `RegisterPart`; the register then shows every product it has still to reach.
 ## Issuing
 
 A caller asks the driver to issue a document with a stable document id and the data to render from. The driver renders from the active template version, encrypts the text and the data snapshot together, writes the object, and then proposes `IssueDocument` with the hashes, the object name and the wrapped key. The same request again returns the same document. A request the module refuses leaves no object behind.
@@ -126,7 +128,7 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | underwriting | adviser_unavailable | uw-adviser-unavailable | personal | yes |
 | reinsurance | reinsurance_statement | ri-reinsurance-statement | personal | yes |
 
-A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Other refusals: `unknown_letter_kind`, `no_request`, `request_conflict` (same id, other content; an identical resend is accepted). The service issues each waiting request as document `letter:<request>` to the recipient as addressee, with `name`, `reference` (the subject), `policy`, `life`, `reasons`, `date` and the `detail` entries as data, and the issue marks the request issued. A request whose template has no wording, or whose person has no contact point or has died, waits and is reported every pass; `CancelLetterRequest` (the asking module or servicing, with a reason) drops one. `Query::LetterRequest` says where one stands; settled requests are forgotten after 90 days. An adviser is addressed by their party id in the customer master. Reinsurance listings (personal data) are not attached to email; how they reach a reinsurer is a question for Mitchell.
+A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Other refusals: `unknown_letter_kind`, `no_request`, `request_conflict` (same id, other content; an identical resend is accepted). The service issues each waiting request as document `letter:<request>` to the recipient as addressee, with `name`, `reference` (the subject), `policy`, `life`, `reasons`, `date` and the `detail` entries as data, and the issue marks the request issued. A request whose template has no wording, or whose person has no contact point or has died, waits and is reported every pass; `CancelLetterRequest` (the asking module or servicing, with a reason) drops one. `Query::LetterRequest` says where one stands; settled requests are forgotten after 90 days. An adviser is addressed by their party id in the customer master. Reinsurance listings (personal data) never go by email: Mitchell decided they reach reinsurers by SFTP and by an API the reinsurers call, both run by the reinsurance service. The statement letter carries totals only.
 
 **Issuing twice.** `Driver::issue` keys the command on the document id and a digest of the request. The same request again changes nothing; a request that was refused and then put right is judged afresh.
 

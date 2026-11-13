@@ -808,17 +808,27 @@ fn a_rule_activates_only_when_its_worked_examples_come_out_right() {
     let mut w = worked_example();
     w.dist.settings.rule_examples_required = true;
     let on = w.today();
+    // FAP One also takes an override of 2% of premium on top of base.
     let lines = vec![
         base("a-co", Share::OfRemainder(pct(80.0)), true),
         base("fap-one", Share::OfRemainder(pct(20.0)), false),
+        Line {
+            component: Component::Override("group".into()),
+            share: Share::RateOnPremium(pct(2.0)),
+            ..base("fap-one", Share::OfRemainder(1), false)
+        },
     ];
     let example = |name: &str, on, a_co: i64, fap_one: i64| RuleExample {
         name: name.into(),
         on,
         commission_type: CommissionType::Initial,
         gross_minor: 1_000_00,
-        premium_minor: 0,
-        expect: vec![(party("a-co"), Component::Base, a_co), (party("fap-one"), Component::Base, fap_one)],
+        premium_minor: 10_000_00,
+        expect: vec![
+            (party("a-co"), Component::Base, a_co),
+            (party("fap-one"), Component::Base, fap_one),
+            (party("fap-one"), Component::Override("group".into()), 200_00),
+        ],
     };
     let with = |examples: Vec<RuleExample>| {
         let mut r = rule("a-at-fap-one", 2, on, lines.clone(), vec![liable("fap-one")]);

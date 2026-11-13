@@ -327,7 +327,8 @@ impl UnderwritingState {
     pub(crate) fn store(&mut self, p: Proposal) {
         let id = p.id.clone();
         self.touched.insert(id.clone());
-        let open = p.status.is_open();
+        // An issued proposal is swept while an offer to move its loading is open.
+        let open = p.status.is_open() || p.open_reoffer().is_some();
         if open {
             self.open.insert(id.clone());
         } else {
@@ -483,6 +484,7 @@ impl UnderwritingState {
                 response,
                 signed,
             } => self.with(&proposal, cx, |st, p, cx| crate::intake::respond(st, p, cx, &life, &offer, response, &signed)),
+            ReofferExcessTerms { proposal, reason } => self.with(&proposal, cx, |st, p, cx| crate::reoffer::make(&st.config, p, cx, &reason)),
             Withdraw { proposal } => self.with(&proposal, cx, |_, p, cx| crate::intake::withdraw(p, cx)),
             Chaser { proposal, life, from } => self.with(&proposal, cx, |_, p, cx| crate::intake::chaser(p, cx, &life, from)),
             Requote { proposal, quote, signed } => self.with(&proposal, cx, |st, p, cx| crate::intake::requote(st, p, cx, quote, &signed)),

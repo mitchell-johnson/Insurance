@@ -107,6 +107,8 @@ fn the_report_counts_decisions_and_service() {
         provider: None,
         pre_approval_request: false,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     w.ok(Command::Notify(Box::new(n)));
     w.open_claim("c-1");

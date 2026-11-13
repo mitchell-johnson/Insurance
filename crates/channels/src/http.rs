@@ -151,6 +151,9 @@ pub struct AppState {
     /// The underwriting intake, for signing disclosures. `None` where it is
     /// not configured: those routes answer 503.
     pub intake: Option<Arc<dyn crate::disclosures::Intake>>,
+    /// The documents module, for downloading a PDF. `None` where it is not
+    /// configured: those routes answer 503.
+    pub documents: Option<Arc<dyn crate::documents::Documents>>,
     /// The commission module, for replacement matches.
     pub commission: Arc<dyn crate::forward::Source>,
 }
@@ -506,6 +509,90 @@ async fn disclosure_submit(
     intake_answer(s.intake()?.submit(request).await)
 }
 
+/// A document's PDF as the documents module gave it: the file on 200,
+/// that module's refusal otherwise (404 for one that is not the asker's,
+/// 403 for a clinical one to staff, 410 for one destroyed).
+async fn fetched(s: &AppState, raw: &str, asker: crate::documents::Asker) -> Answer {
+    let id = crate::documents::id(raw).ok_or_else(Problem::not_found)?;
+    let documents = s.documents.as_ref().ok_or_else(|| {
+        Problem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "documents_unavailable",
+            "the documents module is not configured here",
+        )
+    })?;
+    let got = documents
+        .pdf(id, asker)
+        .await
+        .map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "documents_unavailable", e))?;
+    match got.status {
+        200 => Ok((
+            StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "application/pdf".to_string()),
+                (axum::http::header::CACHE_CONTROL, "no-store".to_string()),
+                (axum::http::header::CONTENT_DISPOSITION, format!("attachment; filename=\"{id}.pdf\"")),
+            ],
+            got.body,
+        )
+            .into_response()),
+        404 => Err(Problem::not_found()),
+        403 => Err(Problem::forbidden("that document stays with the team that holds it")),
+        410 => Err(Problem::new(
+            StatusCode::GONE,
+            "destroyed",
+            "that document has been destroyed under its retention rule",
+        )),
+        other => Err(Problem::new(
+            StatusCode::BAD_GATEWAY,
+            "documents_refused",
+            format!("the documents module answered {other}"),
+        )),
+    }
+}
+
+/// One of your own documents, as a PDF.
+async fn own_document(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    fetched(&s, &id, crate::documents::Asker::Party(session.party.0)).await
+}
+
+/// A document for a member of staff who holds `documents.download`, with
+/// the purpose they gave. Clinical documents are not served to staff.
+async fn staff_document(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(id): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let standing = s
+        .ask(Question::DocumentsStaff {
+            staff: session.party.clone(),
+            at: session.at,
+        })
+        .await?;
+    if standing != true {
+        return Err(Problem::forbidden("your roles do not include downloading documents"));
+    }
+    let purpose = fields
+        .get("purpose")
+        .map(|p| p.trim())
+        .filter(|p| !p.is_empty() && p.len() <= 200)
+        .ok_or_else(|| Problem::bad_request("say why you need it: the purpose is logged with the download"))?;
+    fetched(
+        &s,
+        &id,
+        crate::documents::Asker::Staff {
+            actor: session.party.0,
+            purpose: purpose.to_string(),
+        },
+    )
+    .await
+}
+
 /// Change your contact details or consents, from an enrolled device.
 async fn profile_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
@@ -616,6 +703,11 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
     }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
     let signed = redeem(&s, &headers, &session, &action, new.signed).await?;
+    let routing = match &s.master {
+        Some(master) => Some(master.routing(&session.party).await),
+        None => None,
+    };
+    let route_to_person = crate::customers::route_to_person(routing);
     let result = s
         .propose(
             key(&headers, &session.party.0)?,
@@ -627,6 +719,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
                 module: new.module,
                 payload: new.payload,
                 signed,
+                route_to_person,
             },
         )
         .await?;
@@ -895,6 +988,7 @@ async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Me
             module: crate::replacements::DISPUTE_MODULE.to_string(),
             payload: payload.clone(),
             signed: false,
+            route_to_person: false,
         },
     )
     .await?;
@@ -1477,6 +1571,20 @@ async fn claims_question(
             let (partition, view) = found.ok_or_else(Problem::not_found)?;
             ok(json!({ "partition": partition, "view": view }))
         }
+        Q::Cases { .. } => {
+            // Restricted: the claims module answers investigators only, and
+            // the person is whoever signed in.
+            let question = Q::Cases {
+                staff: session.party.to_string(),
+            };
+            let mut rows: Vec<Value> = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::Cases(found) = reply {
+                    rows.extend(found.into_iter().map(|r| json!({ "partition": p, "case": r })));
+                }
+            }
+            ok(json!({ "rows": rows }))
+        }
         Q::PolicyStatus { .. } => {
             // A policy is on one partition, except for a moment while it moves.
             let mut rows: Vec<Value> = Vec::new();
@@ -1739,6 +1847,7 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
         module: new.module,
         payload: new.payload,
         signed: false,
+        route_to_person: false,
     };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
 }
@@ -1889,6 +1998,8 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/profile", get(profile))
         .route("/app/v1/profile/commands", post(profile_command))
         .route("/app/v1/profile/export", get(profile_export))
+        .route("/app/v1/documents/{id}/pdf", get(own_document))
+        .route("/staff/v1/documents/{id}/pdf", get(staff_document))
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", post(disclosure_to_sign))
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures", post(disclosure_submit))
         .route("/app/v1/sync", get(sync))

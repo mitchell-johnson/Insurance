@@ -29,6 +29,7 @@ mod cash;
 mod claims;
 mod earning;
 mod group;
+pub mod hardship;
 mod lifecycle;
 mod nondisclosure;
 mod postings;

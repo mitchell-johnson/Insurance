@@ -51,6 +51,7 @@ Hosting: `ic_underwriting::module_spec()` is in `ic_node::modules()`, so every l
 | Terms for an increase on a policy in force | Core, `AddUnderwrittenLayer` from `underwriting`, one a cover, key `{proposal}/increase/{life}/{cover}`: a new layer from the business date, with the days left of a billed period billed as an adjustment | `PolicyIssued` with the layers, or `IssueRejected` |
 | Issue and end interim cover | Core, `IssuePolicy` and `CancelPolicy` | `InterimIssued` |
 | Terms or an ended proposal for a group excess case | Group module, `record_excess_decision`, key `uw:{effect key}` | none |
+| A scheme member's loading moved to them, or the offer to move it ended | Group module, `record_excess_decision`: the terms again with `member_pays_loading` under the new issue key, or `reoffer_declined` under `uw:{proposal}/reoffer/{n}/ended` | none |
 | Notices for an underwriter, a queue lead or the underwriting manager | The `underwriting-notices` event hub (`notices.rs`), ID `underwriting-notice:{outbox number}`, properties `event-id` and `kind`; the body names the notice, who it is for, the proposal and the life, never the reasons | none |
 | Letters to a customer or an adviser | Documents module, `request_letter`, request and key `uw:{outbox number}` | delivered, or parked with documents' refusal |
 | Evidence requests, delegate file requests | nothing yet | parked with the reason |
@@ -65,6 +66,10 @@ A receiver's refusal that means "already done" or "no longer wanted" is counted 
 Once a day the driver sends `Sweep` as caller `timer`, a page at a time, under keys of the day and the page start.
 
 Settings: `IC_NODES` and `IC_EVENT_HUBS_ENDPOINT` (required), the cluster token as for every worker, the workers' Azure identity, `IC_UNDERWRITING_EVENT_HUB` (`underwriting-notices`), `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS` (10000), `IC_UNDERWRITING_BATCH` (100), `IC_UNDERWRITING_SWEEP_PAGE` (200).
+
+## Moving a loading to a scheme member
+
+A scheme's terms can bill a member's loading to the employer in one total only while enough members hold underwritten cover (`docs/group.md`). When the count falls below that, staff can ask for the loading to move: `reoffer_excess_terms {proposal, reason}` from caller `group-admin`, on an issued `group_excess` proposal whose terms carry a loading. The member was told the employer pays, so nothing moves until they agree. The member is sent an offer letter with no reasons, and answers through `respond_to_offer` with the offer `{proposal}/reoffer/{n}`, signed on their device like any offer; they can accept or decline but not counter. Accepted, the same terms are applied again under `{proposal}/issue/{n}` with `member_pays_loading`, and every later issue of the proposal says so. When the core has written the replacement layer, the proposal is issued again with no new capacity confirmation, risk factors or issue letter, because the cover itself did not change. Declined, or not answered within the offer days, the terms in place stand and group administration is told (`reoffer_declined`); staff may ask again. The sweep reaches an issued proposal only while such an offer is open (`src/reoffer.rs`, `tests/reoffer.rs`).
 
 ## The disclosure intake
 

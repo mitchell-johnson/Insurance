@@ -69,7 +69,7 @@ Four more are assumptions made here that the design should confirm:
 
 Read the "Built so far" section of `coverage.md`. On 13 Nov 2026 the built suite carried out 199 of the 577 tests in full and 119 in part; 166 priority 1 tests were not yet fully built. Most of the unbuilt ones are features not yet written rather than tests missing for features that exist: composable health and discounts (HLT, DSC), joint lives and ownership changes (JNT), vulnerable customers and representatives (VUL), surrender, maturity and loans (SVC), annuities (ANN), most of the dunning sequence (COL), the incident runbooks (INC) and migration cohorts (MIG). `coverage.md` lists them by area.
 
-**When you write a test that carries out a matrix row, add a line for it to `traceability.md`.** A row marked full is a claim that the built tests check everything the matrix row expects; mark it part when they check some of it.
+**When you write a test that carries out a matrix row, add a line for it to `traceability.md`**, then run `python3 tools/persona_matrix.py`. If `coverage.md` or `test-matrix.csv` conflict when you merge, take either side and run the tool again: both are rebuilt from the sources. A row marked full is a claim that the built tests check everything the matrix row expects; mark it part when they check some of it.
 
 ## Limits of this pack
 

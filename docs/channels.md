@@ -51,12 +51,15 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
 | `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
 | `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
+| `GET /app/v1/documents/{id}/pdf` | One of your own documents (one you own or were sent a copy of), as a PDF. Anyone else's is 404, the same as one that does not exist. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign` | For the person insured on that proposal: what to sign for their answers (`{step, answers, adviser_entered}`, `step` being `disclosure` or `interview`). The underwriting intake checks the answers and keeps nothing. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures` | From an enrolled device: the same answers with `message` (as `to-sign` gave it) and `signature` (the device key's, over those bytes). |
 
 **Your record.** The profile routes call the customer master (`docs/customers.md`) with the portal's own Entra token (`IC_CUSTOMERS_URL`, `IC_CUSTOMERS_SCOPE`; both or neither, https unless on localhost). The portal sends only the signed-in party, as both party and actor, with purpose `self_service` or `subject_access`; the master's Cedar policy decides what that shows and allows, and its answer, including a 412 for a stale version, comes back as it is. The portal adds two checks of its own: a change or an export needs a device that proved its key, and only `record` and `set_consent` are sent. The idempotency key is scoped to the person. A portal deployed without the master, or a master that is down or answers 503, gives 503 `customer_master_unavailable`.
 
 **Signing a disclosure.** The portal relays to the underwriting intake (`docs/underwriting.md`, "The disclosure intake") with its own Entra token (`IC_UNDERWRITING_INTAKE_URL`, `IC_UNDERWRITING_INTAKE_SCOPE`; the portal's identity holds the intake's app role `new-business`). It checks two things the intake cannot: that the person signed in is the life on the proposal, from the `proposal_life` row underwriting publishes with that person as its subject (anyone else gets 404); and that the signature is the proven device's own over the message, which it checks before anything is sent (400 `bad_signature`). It passes the device's enrolled P-256 key as `{key_id, public_key, signature, alg: "ecdsa-p256"}`, and the intake and the module check it again. The intake's answers (422 with the problems, 404, 409 with the module's code) come back as they are; an intake not configured or unreachable is 503 `underwriting_intake_unavailable`. Answers pass through and are never kept or logged here.
+
+**Requests that go to a person first.** When the customer master is configured, each request a person submits asks the master's routing (`GET /v1/parties/{id}/routing`). Where it says `route_to_person`, the request carries `route_to_person: true`, so the module that owns it sends it to a trained person before anything automated happens. Nothing about why is carried. If the master cannot answer, the request is marked too. The routing is asked for whoever submits: for a change an adviser or support person prepares, it is theirs, not the customer's, which is a gap below.
 
 **Sync.** Each party has a feed of rows with a position that only goes up. A device keeps its position and asks for what is newer. A row that no longer exists comes as a delete; a party who lost access to a policy gets a purge for it, so nothing lingers on a phone. A device too far behind gets a snapshot instead. Rows carrying health or claim details about another adult are left out unless that adult consented.
 
@@ -123,6 +126,10 @@ One place to see and resolve money held from an adviser, a provider or any other
 | --- | --- |
 | `GET /staff/v1/replacements` | Every match, and whether you may decide. |
 | `POST /staff/v1/replacements/decide` | Decide a disputed match: `replacement: true` takes the held commission back; `false` makes the layer new business from now. |
+
+### Documents
+
+`GET /staff/v1/documents/{id}/pdf?purpose=...` downloads a document for staff holding `documents.download`, with the purpose logged by the documents module. Clinical documents are refused (403) and stay with the claims team's tools. Customers use `GET /app/v1/documents/{id}/pdf`. Both call the documents service (`docs/documents.md`, "Downloading") with the portal's Entra token (`IC_DOCUMENTS_URL`, `IC_DOCUMENTS_SCOPE`; app roles `portal` and `staff`), naming the party, or the staff member and purpose. The PDF is passed back with `Cache-Control: no-store` and never kept. A destroyed document is 410; the service not configured or unreachable is 503.
 
 ## The complaints and conduct workbench
 
@@ -317,4 +324,5 @@ node crates/channels/tests/browser/check.js
 - **Only commission is carried across automatically.** Finance, reinsurance, group administration and claims must send their own workbench positions through `/internal/v1/commands`; until they do, the workbench shows none of their money.
 - **Two sets of thresholds.** The workbench here and the commission module each decide how many signatures an action needs, from their own settings. They ship alike. If the commission module's are made stricter, an action approved here comes back as `needs_more_approval` and stays open there for the people it names.
 - **The conduct officer here and there.** The workbench asks for the conduct officer whenever a conduct case is open on the party; the commission module asks by its own rules. The signature is replayed as `conduct_officer`, and where that module did not need it the action carries on with its other signatures.
+- **Routing follows the submitter.** A request an adviser or support person prepares is routed by their marker, not the customer's who approves it. Asking the master again for the customer at approval would close it.
 - **Commission balances are taken to be in one currency** (`IC_PORTAL_CURRENCY`, default NZD), because that module's answers carry none.

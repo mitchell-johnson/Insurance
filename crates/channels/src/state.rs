@@ -92,6 +92,10 @@ pub struct Request {
     pub status: RequestStatus,
     /// Who approved it, where it needed approval.
     pub approved_by: Option<PartyId>,
+    /// The customer master says this person's requests go to a person
+    /// first (a vulnerability marker). The marker itself is never here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub route_to_person: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +127,9 @@ pub enum Command {
         module: String,
         payload: Value,
         signed: bool,
+        /// Set by the gateway from the customer master's routing answer.
+        #[serde(default)]
+        route_to_person: bool,
     },
     ApproveRequest {
         id: String,
@@ -740,6 +747,7 @@ impl ChannelState {
                 module,
                 payload,
                 signed,
+                route_to_person,
             } => {
                 let party = actor.party().cloned().ok_or_else(|| reject("forbidden", "requests come from people"))?;
                 let request = self.submit(
@@ -757,6 +765,7 @@ impl ChannelState {
                         submitted: at,
                         status: RequestStatus::Pending,
                         approved_by: None,
+                        route_to_person,
                     },
                 )?;
                 if request.status == RequestStatus::Pending {
