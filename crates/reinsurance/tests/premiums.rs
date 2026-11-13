@@ -404,7 +404,9 @@ fn each_reinsurers_money_on_a_partition_is_its_own_delivery_lane() {
 /// Purpose: the premium a treaty on original premium is ceded from is the customer's premium
 /// before discounts: each discount on the bill is given back to the cover types in proportion
 /// to what each was billed, to the cent, with the remainder on the largest; a bill with no
-/// discount, or nothing billed to share a discount by, is left as billed.
+/// discount, or nothing billed to share a discount by, is left as billed; a later adjustment
+/// to premium already billed adds its own change, with its discounts, to the period it falls
+/// in.
 /// Why it matters: a reinsurer on original terms is paid its share of the premium the risk
 /// costs, not of the price after a discount the insurer chose to give. Ceding on the
 /// discounted figure would underpay every reinsurer on every discounted policy.
@@ -450,4 +452,34 @@ fn original_premium_is_the_premium_before_discounts() {
         }],
     );
     assert_eq!(charged(&b, "S1", d(2027, 2, 1), ChargeKind::Premium, &north()), 300_00);
+
+    // A member joins part way: 90.00 more is billed after 10.00 more discount, so the
+    // period's original premium is 1,100.00. A credit handing discount back takes it down
+    // again. An adjustment outside any billed period changes nothing.
+    let adjusted = |b: &mut Bench, effective, total_minor, discount_minor| {
+        b.feed(
+            2,
+            vec![Event::PremiumAdjusted {
+                policy: PolicyId::from("S1"),
+                receivable: 1,
+                life: LifeId::from("M2"),
+                effective,
+                total_minor,
+                discounts: vec![ic_core::event::DiscountGiven {
+                    code: "multi".into(),
+                    name: "Multi-cover".into(),
+                    posting_type: "discount".into(),
+                    amount_minor: discount_minor,
+                }],
+            }],
+        )
+    };
+    adjusted(&mut b, d(2027, 2, 15), 90_00, 10_00);
+    assert_eq!(charged(&b, "S1", d(2027, 2, 1), ChargeKind::Premium, &north()), 330_00);
+    adjusted(&mut b, d(2027, 2, 20), -45_00, -5_00);
+    assert_eq!(charged(&b, "S1", d(2027, 2, 1), ChargeKind::Premium, &north()), 315_00);
+    adjusted(&mut b, d(2027, 5, 1), 90_00, 10_00);
+    adjusted(&mut b, d(2027, 1, 1), 90_00, 10_00);
+    assert_eq!(charged(&b, "S1", d(2027, 2, 1), ChargeKind::Premium, &north()), 315_00);
+    b.assert_reconciles();
 }

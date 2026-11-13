@@ -374,6 +374,33 @@ impl Reinsurance {
             Event::MemberIdentified { policy, life, party } => {
                 self.set_lives(ctx, &policy, &[LifeInfo::new(life, Some(party))]);
             }
+            // A change to premium already billed, with the change to each
+            // discount on it: the gross change is added to the billed period
+            // the change takes effect in, shared across its cover types, so a
+            // treaty on original premium cedes from it.
+            Event::PremiumAdjusted {
+                policy,
+                effective,
+                total_minor,
+                discounts,
+                ..
+            } => {
+                let gross = total_minor + discounts.iter().map(|d| d.amount_minor).sum::<i64>();
+                let start = self
+                    .periods
+                    .range((policy.clone(), NaiveDate::MIN)..=(policy.clone(), effective))
+                    .next_back()
+                    .filter(|(_, p)| effective < p.end && !p.reversed)
+                    .map(|((_, start), _)| *start);
+                if let Some(start) = start {
+                    if let Some(period) = self.periods.get_mut(&(policy.clone(), start)) {
+                        for (cover_type, share) in crate::premium::spread(&period.by_cover_type, gross) {
+                            *period.by_cover_type.entry(cover_type).or_default() += share;
+                        }
+                    }
+                    self.reprice(ctx, &policy, start);
+                }
+            }
             Event::PremiumDue {
                 policy,
                 receivable,

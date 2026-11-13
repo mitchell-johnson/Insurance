@@ -77,27 +77,34 @@ pub struct Period {
 /// every cover, the only kind shipped. With nothing billed to share it by,
 /// the premium is left as billed.
 pub fn before_discounts(by_cover_type: BTreeMap<String, i64>, discounts_minor: i64) -> BTreeMap<String, i64> {
-    let billed: i64 = by_cover_type.values().sum();
-    if discounts_minor == 0 || billed <= 0 {
-        return by_cover_type;
-    }
-    let mut given = 0;
-    let mut gross: BTreeMap<String, i64> = by_cover_type
-        .iter()
-        .map(|(k, v)| {
-            let share = (discounts_minor as i128 * *v as i128).div_euclid(billed as i128) as i64;
-            given += share;
-            (k.clone(), v + share)
-        })
-        .collect();
-    if let Some(largest) = by_cover_type
-        .iter()
-        .max_by_key(|(k, v)| (**v, std::cmp::Reverse((*k).clone())))
-        .map(|(k, _)| k.clone())
-    {
-        *gross.entry(largest).or_default() += discounts_minor - given;
+    let mut gross = by_cover_type.clone();
+    for (k, v) in spread(&by_cover_type, discounts_minor) {
+        *gross.entry(k).or_default() += v;
     }
     gross
+}
+
+/// `amount` shared across the cover types in proportion to `by`, to the
+/// cent, the remainder to the largest. Empty when there is nothing to share
+/// by or nothing to share.
+pub fn spread(by: &BTreeMap<String, i64>, amount: i64) -> BTreeMap<String, i64> {
+    let total: i64 = by.values().sum();
+    if amount == 0 || total <= 0 {
+        return BTreeMap::new();
+    }
+    let mut given = 0;
+    let mut out: BTreeMap<String, i64> = by
+        .iter()
+        .map(|(k, v)| {
+            let share = (amount as i128 * *v as i128).div_euclid(total as i128) as i64;
+            given += share;
+            (k.clone(), share)
+        })
+        .collect();
+    if let Some(largest) = by.iter().max_by_key(|(k, v)| (**v, std::cmp::Reverse((*k).clone()))).map(|(k, _)| k.clone()) {
+        *out.entry(largest).or_default() += amount - given;
+    }
+    out
 }
 
 /// An annual rate per thousand, in millionths, applied to an amount for a
