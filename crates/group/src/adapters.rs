@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::command::{Envelope, ExcessDecision};
 use crate::driver::{Answers, Core, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, ContinuationExcess, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{Question, MODULE};
 use crate::state::Outcome;
 
@@ -295,6 +295,53 @@ fn underwriting_command(key: &str, at: DateTime<Utc>, today: NaiveDate, command:
     json!({ "key": key, "caller": crate::command::caller::STAFF, "at": at, "today": today, "command": command })
 }
 
+/// A leaver's underwritten cover as underwriting's `group_continuation`
+/// proposal (agreed with the underwriting thread, 13 Nov 2026): one life,
+/// one cover of the amount above the automatic part, on the continuation
+/// policy group issued. Underwriting applies the terms it accepted on the
+/// earlier proposals, with no disclosure, and writes them as a layer from
+/// `inception`.
+pub fn continuation_envelope(at: DateTime<Utc>, today: NaiveDate, request: &ContinuationExcess) -> Value {
+    let proposal = json!({
+        "proposal": request.key,
+        "entry": {
+            "entry": "group_continuation",
+            "policy": request.policy,
+            "scheme_policy": request.scheme_policy,
+            "scheme_life": request.scheme_life,
+            "inception": request.inception,
+            "earlier": request.earlier,
+        },
+        "policy": request.policy,
+        "policy_number": request.policy.to_string(),
+        "group": request.group,
+        "policyholder": request.party,
+        "product_code": request.product_code,
+        "frequency": "monthly",
+        "channel": "group-continuation",
+        "quote": { "product_hash": "", "rate_tables": [], "premium_minor": 0, "quoted_on": today },
+        "lives": [{
+            "life": "L1",
+            "party": request.party,
+            "factors": { "date_of_birth": request.date_of_birth, "sex": request.sex, "smoker": request.smoker },
+        }],
+        "covers": [{
+            "code": request.cover,
+            "life": "L1",
+            "sum_insured_minor": request.amount_minor,
+        }],
+    });
+    underwriting_command(&request.key, at, today, json!({ "open_proposal": proposal }))
+}
+
+/// Underwriting's outcome for a continued underwritten cover, from its
+/// outbox: `(effect key, scheme, offer, outcome)`.
+pub fn continuation_answer(effect: &Value) -> Option<(String, String, u64, String)> {
+    let body = effect.get("proposal_ended").filter(|b| b["entry"]["entry"] == "group_continuation")?;
+    let (scheme, offer) = crate::driver::continuation_of_key(body["proposal"].as_str()?)?;
+    Some((body["key"].as_str()?.to_string(), scheme, offer, body["outcome"].as_str()?.to_string()))
+}
+
 /// The scheme and case a proposal named `grp-uw:{scheme}:{case}` answers.
 fn case_of(proposal: &str) -> Option<(String, u64)> {
     let (scheme, case) = proposal.strip_prefix("grp-uw:")?.rsplit_once(':')?;
@@ -447,6 +494,22 @@ impl Peers for ClusterPeers {
         self.to_underwriting(command, &["duplicate_proposal"]).await
     }
 
+    async fn continue_excess(&self, today: NaiveDate, request: &ContinuationExcess) -> Result<Option<String>, String> {
+        let command = continuation_envelope(Utc::now(), today, request);
+        let reply = self
+            .client
+            .propose_module_until(&self.underwriting, &command, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        let answer = reply.result.map_err(|e| format!("underwriting could not read the command: {e}"))?;
+        match answer["Err"]["code"].as_str() {
+            None | Some("duplicate_proposal") => Ok(None),
+            // The earlier terms do not cover this: a decision, not a fault.
+            Some(code @ "continuation") => Ok(Some(code.to_string())),
+            Some(code) => Err(format!("underwriting refused: {code}")),
+        }
+    }
+
     async fn withdraw_underwriting(&self, key: &str, today: NaiveDate, request_key: &str) -> Result<(), String> {
         // Answered, ended or never opened: there is nothing left to withdraw.
         self.to_underwriting(underwriting_withdrawal(key, Utc::now(), today, request_key), &["closed", "unknown_proposal"])
@@ -470,6 +533,7 @@ impl Peers for ClusterPeers {
             through: effects.last().map_or(after, |(n, _)| *n),
             more: effects.len() >= max,
             answers: effects.iter().filter_map(|(_, effect)| excess_answer(effect)).collect(),
+            continued: effects.iter().filter_map(|(_, effect)| continuation_answer(effect)).collect(),
         })
     }
 

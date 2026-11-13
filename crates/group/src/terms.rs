@@ -91,6 +91,11 @@ pub struct ContinuationTerms {
     /// No offer is made to a leaver at or above this age.
     #[serde(default)]
     pub max_age: Option<u32>,
+    /// A leaver may also continue the cover underwriting accepted above the
+    /// automatic limit, on the terms it was accepted on and without new
+    /// evidence. Off unless the scheme agreed it (Mitchell, 14 Nov 2026).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underwritten_excess: bool,
 }
 
 /// Continuity of cover for members transferring from a previous insurer.
@@ -297,6 +302,7 @@ pub(crate) mod tests {
                 take_up_days: 60,
                 products: vec!["term-life".to_string()],
                 max_age: Some(65),
+                underwritten_excess: false,
             },
             leave_of_absence_days: 90,
             takeover: None,
