@@ -279,7 +279,11 @@ impl World {
 
     fn pump(&self, region: &str, instance: &str) -> TestPump {
         let now = self.now.clone();
-        let secrets = REGIONS.iter().map(|r| (format!("bank-{r}"), format!("token-{r}"))).collect();
+        let mut secrets: BTreeMap<String, String> = REGIONS.iter().map(|r| (format!("bank-{r}"), format!("token-{r}"))).collect();
+        for r in REGIONS {
+            secrets.insert(format!("cert-{r}"), format!("{CLIENT_CERT}{CLIENT_KEY}"));
+        }
+        secrets.insert("bank-ca".to_string(), TEST_CA.to_string());
         Pump {
             module: self.module.clone(),
             core: self.core.clone(),
@@ -749,6 +753,8 @@ async fn two_pumps_never_send_the_same_submission() {
         url: endpoint.url.trim_end_matches('/').to_string(),
         token: "token-akl".to_string(),
         accounts: Default::default(),
+        identity: None,
+        authority: None,
     };
     let batch = world.state().batch(&s2).unwrap();
     let manifest = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
@@ -778,6 +784,8 @@ async fn the_fake_bank_checks_what_a_bank_checks() {
         url: world.bank.url.clone(),
         token: token.to_string(),
         accounts: Default::default(),
+        identity: None,
+        authority: None,
     };
     let api = Target {
         kind: ic_payments::config::ChannelKind::Api,
@@ -1111,6 +1119,8 @@ async fn the_services_small_parts_do_what_they_say() {
         url,
         token: "t".to_string(),
         accounts: Default::default(),
+        identity: None,
+        authority: None,
     };
     assert!(matches!(HttpBank::default().messages(&to, 0).await, Err(ChannelError::Unknown(_))));
 }
@@ -1336,14 +1346,38 @@ async fn a_bank_that_speaks_iso_20022_is_sent_iso_20022() {
     assert_eq!(world.bank.lock().held.len(), 1);
 }
 
+const TEST_CA: &str = include_str!("tls/ca.pem");
+const CLIENT_CERT: &str = include_str!("tls/client.pem");
+const CLIENT_KEY: &str = include_str!("tls/client.key");
+
+/// A fake bank that takes only callers with a client certificate from the
+/// test authority, over HTTPS.
+async fn tls_bank() -> FakeBank {
+    let tls = ic_payments_service::fake::BankTls {
+        certificate: include_str!("tls/server.pem"),
+        key: include_str!("tls/server.key"),
+        client_authority: TEST_CA,
+    };
+    FakeBank::start_tls(&["token-akl", "token-syd"], tls).await.unwrap()
+}
+
 /// The test world with the first bank's channels switched to ISO 20022, and
-/// that bank's fakes speaking it, numbering each account as configured.
+/// that bank's fakes speaking it, numbering each account as configured. Its
+/// file channel is reached over mutual TLS, as a real bank's would be.
 async fn iso_world() -> World {
     let mut world = World::new().await;
+    world.bank = tls_bank().await;
     let mut config: ic_payments::Config = serde_json::from_value(world.module.query(serde_json::json!({"q": "config"})).await.unwrap()).unwrap();
     let iso = common::iso_config();
     for (id, channel) in &mut config.channels {
         channel.format = iso.channels[id].format;
+        for (region, endpoint) in &mut channel.endpoints {
+            endpoint.client_certificate = iso.channels[id].endpoints[region].client_certificate.clone();
+            endpoint.bank_authority = iso.channels[id].endpoints[region].bank_authority.clone();
+            if id == "anz-file" {
+                endpoint.url = format!("{}/", world.bank.url);
+            }
+        }
     }
     for (code, account) in &mut config.accounts {
         account.at_bank = iso.accounts[code].at_bank.clone();
@@ -1484,4 +1518,145 @@ async fn a_bank_that_speaks_iso_20022_is_understood() {
     let accounts = BTreeMap::from([("settlement".to_string(), "anz-sf1-claims".to_string())]);
     let read = ic_payments_service::bank::read_documents(documents, &accounts).unwrap();
     assert_eq!(read.iter().map(|n| (n.seq, n.part)).collect::<Vec<_>>(), vec![(1, 0)]);
+}
+
+/// Purpose: a bank that requires mutual TLS takes a caller presenting the
+/// client certificate its authority issued and trusting the bank's private
+/// authority; it turns away a caller with no certificate, with one it never
+/// issued, or one that does not trust the bank, and in each case the pump
+/// knows nothing was sent; a certificate or authority that is not valid PEM
+/// is reported as such; a pump whose region has no certificate in its vault
+/// says so and sends nothing.
+/// Why it matters: a bank's host-to-host service identifies the insurer by
+/// its certificate. Knowing for certain that a refused handshake sent
+/// nothing is what lets the same file go again safely, and a missing
+/// certificate must stop the channel loudly, not fall back to sending
+/// without one.
+#[tokio::test]
+async fn a_bank_that_requires_mutual_tls_takes_only_its_own_certificates() {
+    let mut world = iso_world().await;
+    world.payee("p1", PayeeKind::Beneficiary);
+    let s = world.run("r1", RunType::BenefitPayments, false, vec![pay("i1", "p1", 300_00)]);
+    let batch = world.state().batch(&s).unwrap();
+    let manifest = batch.manifest("test".to_string(), "k".to_string(), "sig".to_string()).unwrap();
+    let ours = Target {
+        kind: ic_payments::config::ChannelKind::File,
+        format: ic_payments::config::WireFormat::Iso20022,
+        url: world.bank.url.clone(),
+        token: "token-akl".to_string(),
+        accounts: Default::default(),
+        identity: Some(format!("{CLIENT_CERT}{CLIENT_KEY}")),
+        authority: Some(TEST_CA.to_string()),
+    };
+    let bank = HttpBank::default();
+    let stranger = format!("{}{}", include_str!("tls/stranger.pem"), include_str!("tls/stranger.key"));
+    // Not trusting the bank is found before anything is sent. A bank that
+    // turns our certificate away does so, under TLS 1.3, after the request
+    // may have left; the caller cannot know, and says so. The pump asks the
+    // bank what it holds before it takes a submission, so with a refused
+    // certificate it never takes one.
+    let distrust = bank
+        .submit(
+            &Target {
+                authority: None,
+                ..ours.clone()
+            },
+            &batch,
+            &manifest,
+        )
+        .await;
+    assert!(matches!(distrust, Err(ChannelError::NotSent(_))), "{distrust:?}");
+    for (who, to) in [
+        (
+            "no certificate",
+            Target {
+                identity: None,
+                ..ours.clone()
+            },
+        ),
+        (
+            "a certificate the bank never issued",
+            Target {
+                identity: Some(stranger.clone()),
+                ..ours.clone()
+            },
+        ),
+    ] {
+        let sent = bank.submit(&to, &batch, &manifest).await;
+        assert!(matches!(sent, Err(ChannelError::NotSent(_) | ChannelError::Unknown(_))), "{who}: {sent:?}");
+        assert!(bank.holds(&to, &s).await.is_err(), "{who}");
+    }
+    let mut impostor = world.pump("akl", "i");
+    impostor.secrets.insert("cert-akl".to_string(), stranger);
+    let pass = impostor.pass().await;
+    assert_eq!(pass.sent, 0, "{:?}", pass.problems);
+    assert_eq!(
+        world.state().submissions[&s].status,
+        SubmissionStatus::Queued,
+        "a refused certificate takes nothing"
+    );
+    assert!(world.bank.lock().held.is_empty());
+    let receipt = bank.submit(&ours, &batch, &manifest).await.unwrap();
+    assert!(receipt.reference.starts_with("BANK-"));
+    assert_eq!(bank.holds(&ours, &s).await.unwrap(), batch.content_hash().ok());
+    assert_eq!(bank.messages(&ours, 0).await.unwrap(), vec![]);
+
+    let garbled = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n";
+    for (to, what) in [
+        (
+            Target {
+                identity: Some("not a certificate".to_string()),
+                ..ours.clone()
+            },
+            "client certificate cannot be used",
+        ),
+        (
+            Target {
+                authority: Some("not a certificate".to_string()),
+                ..ours.clone()
+            },
+            "certificate authority cannot be used",
+        ),
+        (
+            Target {
+                identity: Some(garbled.to_string()),
+                ..ours.clone()
+            },
+            "certificates cannot be used",
+        ),
+        (
+            Target {
+                authority: Some(garbled.to_string()),
+                ..ours.clone()
+            },
+            "certificates cannot be used",
+        ),
+    ] {
+        let refused = bank.holds(&to, &s).await.unwrap_err();
+        assert!(matches!(&refused, ChannelError::NotSent(e) if e.contains(what)), "{what}: {refused:?}");
+    }
+
+    // A pump whose region's vault lacks the certificate cannot reach the
+    // bank, and says which secret is missing.
+    let s2 = world.run("r2", RunType::BenefitPayments, false, vec![pay("i2", "p1", 400_00)]);
+    let mut uncertified = world.pump("akl", "u");
+    uncertified.secrets.remove("cert-akl");
+    let pass = uncertified.pass().await;
+    assert!(
+        pass.problems.iter().any(|p| p.contains("client certificate cert-akl is not available")),
+        "{:?}",
+        pass.problems
+    );
+    let mut untrusting = world.pump("akl", "v");
+    untrusting.secrets.remove("bank-ca");
+    let pass = untrusting.pass().await;
+    assert!(
+        pass.problems.iter().any(|p| p.contains("authority bank-ca is not available")),
+        "{:?}",
+        pass.problems
+    );
+    assert_eq!(world.state().submissions[&s2].status, SubmissionStatus::Queued);
+    // With it, the pump sends over mutual TLS.
+    let pass = world.pump("akl", "w").pass().await;
+    assert_eq!((pass.sent, pass.problems.len()), (2, 0), "{:?}", pass.problems);
 }

@@ -63,6 +63,18 @@ spec:
         - |
           objectName: REPLACE-channel-region-credential
           objectType: secret
+        # The region's client certificate for the bank's mutual TLS: a Key
+        # Vault certificate imported as PEM, fetched as a secret so the file
+        # holds the certificate and its private key. Named by the endpoint's
+        # client_certificate.
+        - |
+          objectName: REPLACE-channel-region-client-certificate
+          objectType: secret
+        # The bank's private certificate authority, where it has one. Named
+        # by the endpoint's bank_authority.
+        - |
+          objectName: REPLACE-bank-authority
+          objectType: secret
 ---
 apiVersion: apps/v1
 kind: Deployment
