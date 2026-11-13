@@ -52,7 +52,7 @@ impl Access {
     }
 
     pub fn shipped() -> Self {
-        Self::new(POLICY).unwrap_or_else(|e| unreachable!("the shipped policy is checked by its tests: {e}"))
+        Self::new(POLICY).expect("the shipped policy is checked by its tests")
     }
 
     /// The version of the policy, for the audit trail.

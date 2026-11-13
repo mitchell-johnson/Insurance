@@ -39,7 +39,7 @@ pub fn partition_of(party: &PartyId, partitions: u16) -> u16 {
 pub async fn publish<W: KeyWrapper, S: WormStore>(app: &App<W, S>, hubs: &Hubs) -> Result<usize, String> {
     let mut total = 0;
     loop {
-        let batch = app.store.outbox(500).await.map_err(|e| e.to_string())?;
+        let batch = app.store.outbox(500).await.map_err(crate::text)?;
         if batch.is_empty() {
             return Ok(total);
         }
@@ -58,7 +58,7 @@ pub async fn publish<W: KeyWrapper, S: WormStore>(app: &App<W, S>, hubs: &Hubs) 
             let hub = if priority { &hubs.priority } else { &hubs.events };
             hub.send_json(partition, &messages).await.map_err(|e| format!("Event Hubs: {e}"))?;
             let ids: Vec<i64> = events.iter().map(|(id, _)| *id).collect();
-            app.store.published(&ids, Utc::now()).await.map_err(|e| e.to_string())?;
+            app.store.published(&ids, Utc::now()).await.map_err(crate::text)?;
             total += ids.len();
         }
     }
@@ -76,13 +76,13 @@ pub async fn sweep<W: KeyWrapper, S: WormStore>(app: &App<W, S>, batch: i64) -> 
         .store
         .sweep_candidates(today, now - chrono::Duration::days(QUIET_DAYS), batch)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::text)?;
     let due_on = |p: &crate::party::Party| p.last_recorded.and_then(|at| erasable_from(p, at, today)).is_some_and(|d| d <= today);
     let mut due = Vec::new();
     // The register lists everyone erased, those merged in included.
     let mut listed = Vec::new();
     for id in candidates {
-        if let Some(p) = app.store.load(&id).await.map_err(|e| e.to_string())? {
+        if let Some(p) = app.store.load(&id).await.map_err(crate::text)? {
             if due_on(&p) {
                 listed.push(id.clone());
                 listed.extend(p.absorbed.iter().cloned());
@@ -96,7 +96,7 @@ pub async fn sweep<W: KeyWrapper, S: WormStore>(app: &App<W, S>, batch: i64) -> 
     app.register.record(&listed, now).await?;
     let mut erased = 0;
     for id in &due {
-        if app.store.shred(id, due_on, Utc::now()).await.map_err(|e| e.to_string())? {
+        if app.store.shred(id, due_on, Utc::now()).await.map_err(crate::text)? {
             tracing::info!(party = %id, "party erased under the retention schedule");
             erased += 1;
         }
@@ -108,7 +108,7 @@ pub async fn sweep<W: KeyWrapper, S: WormStore>(app: &App<W, S>, batch: i64) -> 
 /// since `since`. Returns the number listed and the number erased again.
 pub async fn reshred<W: KeyWrapper, S: WormStore>(app: &App<W, S>, since: NaiveDate) -> Result<(usize, usize), String> {
     let listed = app.register.since(since, Utc::now().date_naive()).await?;
-    let erased = app.store.reshred(&listed, Utc::now()).await.map_err(|e| e.to_string())?;
+    let erased = app.store.reshred(&listed, Utc::now()).await.map_err(crate::text)?;
     Ok((listed.len(), erased))
 }
 
@@ -117,7 +117,7 @@ pub async fn reshred<W: KeyWrapper, S: WormStore>(app: &App<W, S>, since: NaiveD
 /// Returns the number told.
 pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(app: &App<W, S>, core: &C) -> Result<usize, String> {
     use crate::relay::Failure;
-    let waiting = app.store.deaths_to_relay(100).await.map_err(|e| e.to_string())?;
+    let waiting = app.store.deaths_to_relay(100).await.map_err(crate::text)?;
     if waiting.is_empty() {
         return Ok(0);
     }
@@ -127,7 +127,7 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
         let party = &notice.party;
         let failure = match crate::relay::send(core, partitions, &notice).await {
             Ok(()) => {
-                app.store.death_relayed(&notice).await.map_err(|e| e.to_string())?;
+                app.store.death_relayed(&notice).await.map_err(crate::text)?;
                 tracing::info!(party = %party, retract = notice.retract, "death told to claims");
                 told += 1;
                 continue;
@@ -136,7 +136,7 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
         };
         let (Failure::Refused(e) | Failure::Unreached(e)) = &failure;
         tracing::warn!(party = %party, error = %e, "claims not yet told of a death; will retry");
-        app.store.death_failed(&notice, e).await.map_err(|e| e.to_string())?;
+        app.store.death_failed(&notice, e).await.map_err(crate::text)?;
         if matches!(failure, Failure::Unreached(_)) {
             break;
         }
@@ -152,17 +152,17 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
 pub async fn relay_directory<W: KeyWrapper, S: WormStore, D: crate::relay::Directory>(app: &App<W, S>, directory: &D) -> Result<usize, String> {
     let mut told = 0;
     let mut held = std::collections::BTreeSet::new();
-    for (row, party, command, attempts) in app.store.directory_to_relay(100).await.map_err(|e| e.to_string())? {
+    for (row, party, command, attempts) in app.store.directory_to_relay(100).await.map_err(crate::text)? {
         if held.contains(&party) {
             continue;
         }
-        let command: ic_channels::directory::DirectoryCommand = serde_json::from_value(command).map_err(|e| e.to_string())?;
+        let command: ic_channels::directory::DirectoryCommand = serde_json::from_value(command).map_err(crate::text)?;
         let failed = match directory.direct(&format!("directory:{row}:{attempts}"), &command).await {
             Ok(None) => None,
             Ok(Some(why)) => Some(format!("refused: {why}")),
             Err(e) => Some(e),
         };
-        app.store.directory_done(row, failed.as_deref()).await.map_err(|e| e.to_string())?;
+        app.store.directory_done(row, failed.as_deref()).await.map_err(crate::text)?;
         match failed {
             None => told += 1,
             Some(e) => {
@@ -265,7 +265,7 @@ pub async fn start(
     };
     let web = tokio::spawn(crate::service::serve(listener, crate::service::router(app.clone()), stopped(stop.clone())));
     run(&app, &hubs, core.as_ref(), config.cycle_every, config.sweep_every, stopped(stop)).await;
-    web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
+    web.await.map_err(crate::text)?.map_err(crate::text)
 }
 
 /// The process: logging, signals, settings from the environment, then
@@ -278,8 +278,8 @@ pub async fn main() -> Result<(), String> {
         .ok();
     // The handlers are installed before anything else, so a signal during
     // start-up is kept.
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(|e| e.to_string())?;
-    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).map_err(|e| e.to_string())?;
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map_err(crate::text)?;
+    let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).map_err(crate::text)?;
     let (stopping, stop) = tokio::sync::watch::channel(false);
     tokio::spawn(async move {
         tokio::select! {
@@ -289,6 +289,6 @@ pub async fn main() -> Result<(), String> {
         let _ = stopping.send(true);
     });
     let config = crate::config::Config::from_lookup(|k| std::env::var(k).ok(), |p| std::fs::read_to_string(p))?;
-    let credential = ic_azure::credential::AzureCredential::from_env().map_err(|e| e.to_string())?;
+    let credential = ic_azure::credential::AzureCredential::from_env().map_err(crate::text)?;
     start(config, credential, stop).await
 }
