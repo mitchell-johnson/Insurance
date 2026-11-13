@@ -129,3 +129,13 @@ The underwriting module decides the remedy on an approved case; the core carries
 - **Selling is never held to the menu**, so a fund taken off a later product version can still be left. A fee rebate may go back into the fund the fee came from, on the menu or not.
 - **A full surrender is two steps**, because units are sold at a price that does not exist yet. The first sells everything and shuts the policy to new money; the second, once every sell has executed and no units are left, raises all the cash to benefit payable in one payout and closes the policy as surrendered. A sell that was cancelled or failed is placed again before the second step is accepted. Interested parties consent once, to the first step. No surrender charge is taken: the product language does not yet declare one.
 - **The menu is the product version the policy is on.** A new version with a different menu applies to a policy when the policy moves to that version, like any other product term.
+
+## Arrangements to clear overdue premium (13 Nov 2026)
+
+- **Collections agrees an arrangement; the core keeps and watches it.** `MakeArrangement` (caller `collections`) records instalments that add up exactly to the premium overdue that day. The dunning sequence, the conversation and the decision are the collections module's.
+- **While it is kept, standing is held where it stood and the policy does not lapse.** No new standing was added: a policy that was suspended when the arrangement was made stays suspended, so cover for new events comes back when the overdue premium is cleared and not when the promise is made. This is a choice, and the one to revisit if the business wants cover restored on the first instalment.
+- **Kept means** every instalment whose day has closed has been paid, and premium billed since the arrangement was made is not past the product's grace period. Money is set against the oldest premium first, so what counts is the net: being ahead on the old premium offsets being behind on the new by the same amount.
+- **Complete** when the premium the arrangement was for is cleared, early or on time. Standing is then derived in the ordinary way.
+- **Broken** on the day after a missed instalment, or the day collections ends it (`EndArrangement`). The lapse clock then reads today less the days the arrangement ran, for as long as premium from before it is unpaid. A second broken arrangement adds its days to the first.
+- **Not handled**: an arrangement left open on a policy that is then cancelled stays recorded as active and is never looked at again.
+- **`ReceiptApplied` carries the statutory fund** the receipt's postings were stamped with, so payments can add receipts up by fund and move cash between the funds' bank accounts.

@@ -319,6 +319,11 @@ pub enum Event {
         /// fee, GST and levies. Commission is earned on it.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         net_by_cover_type: BTreeMap<String, i64>,
+        /// The statutory fund the money belongs to: the one stamped on the
+        /// entry's postings. Payments adds receipts up by fund to move cash
+        /// between the funds' bank accounts. Absent on older events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        fund: Option<String>,
     },
     ReceiptReversed {
         policy: PolicyId,
@@ -366,6 +371,28 @@ pub enum Event {
         from: Option<Standing>,
         to: Option<Standing>,
         oldest_unpaid_due: Option<NaiveDate>,
+    },
+    /// An arrangement to clear overdue premium by instalments was made.
+    /// While it is kept, standing is held and the policy does not lapse.
+    ArrangementMade {
+        policy: PolicyId,
+        arrangement: String,
+        arrears_minor: i64,
+        instalments: Vec<crate::arrangement::Instalment>,
+    },
+    /// The overdue premium the arrangement was for has been cleared.
+    ArrangementCompleted {
+        policy: PolicyId,
+        arrangement: String,
+    },
+    /// An instalment was missed, premium billed since went past its grace,
+    /// or collections ended it. The lapse clock carries on from where it
+    /// stood when the arrangement was made.
+    ArrangementBroken {
+        policy: PolicyId,
+        arrangement: String,
+        /// What is still owed of the premium the arrangement was for.
+        outstanding_minor: i64,
     },
     /// A member's own cover ended because the member did not pay for it.
     /// Each layer also has its `LayerEnded`. The cover the employer pays

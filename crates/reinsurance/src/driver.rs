@@ -142,6 +142,58 @@ pub fn underwriting_command(notice: &Notice, on: NaiveDate) -> Option<Value> {
     }))
 }
 
+/// The name of the documents module's replicated group.
+pub const DOCUMENTS_MODULE: &str = "documents";
+
+/// A statement's covering letter as the documents module's `request_letter`
+/// command. The request ID is the statement's, so however often it is told
+/// it is one letter. The letter carries totals and the payment reference;
+/// the listing is collected by the reinsurer and never goes by email.
+pub fn documents_command(notice: &Notice, on: NaiveDate) -> Option<Value> {
+    let Notice::StatementLetterDue {
+        statement,
+        party,
+        treaty,
+        reinsurer,
+        period_start,
+        period_end,
+        currency,
+        net_minor,
+        record,
+        record_sha256,
+    } = notice
+    else {
+        return None;
+    };
+    let request = format!("ri:{statement}");
+    Some(serde_json::json!({
+        "key": format!("ri-letter:{statement}"),
+        "caller": crate::delivery::CALLER,
+        "actor": "reinsurance-driver",
+        "at": on.and_time(chrono::NaiveTime::MIN).and_utc() - chrono::Duration::hours(12),
+        "command": {"request_letter": {
+            "request": request,
+            "kind": "reinsurance_statement",
+            "recipient": {"party": {"party": party}},
+            "policy": null,
+            "subject": statement.to_string(),
+            "life": null,
+            "reasons": [],
+            "detail": {
+                "treaty": treaty,
+                "reinsurer": reinsurer,
+                "period": format!("{period_start} to {period_end}"),
+                "currency": currency.to_string(),
+                "net_owed_to_reinsurer_minor": net_minor.to_string(),
+                "payment_reference": format!("ri-stmt-{statement}"),
+                "record": record,
+                "record_sha256": record_sha256,
+            },
+            "business_date": on,
+        }},
+    }))
+}
+
 /// The name of the payments module's replicated group.
 pub const PAYMENTS_MODULE: &str = "payments";
 
@@ -210,7 +262,7 @@ pub fn handed(reply: Result<Value, String>) -> Result<Handed, DriverError> {
 
 impl Audiences for ClusterAudiences {
     fn reached(&self) -> Vec<Audience> {
-        vec![Audience::Group, Audience::Underwriting, Audience::Payments]
+        vec![Audience::Group, Audience::Underwriting, Audience::Payments, Audience::Documents]
     }
 
     async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
@@ -220,6 +272,7 @@ impl Audiences for ClusterAudiences {
             // Nothing to pay is nothing to say.
             Audience::Payments if matches!(notice, Notice::SettlementDue { net_minor, .. } if *net_minor <= 0) => return Ok(Handed::Taken),
             Audience::Payments => (PAYMENTS_MODULE, payments_command(notice)),
+            Audience::Documents => (DOCUMENTS_MODULE, documents_command(notice, on)),
             _ => ("", None),
         };
         let command = command.ok_or_else(|| DriverError::Answer(format!("notice {seq} is not for a module this carrier reaches")))?;

@@ -109,6 +109,7 @@ pub(crate) fn apply_receipt(
         allocated_minor: allocated,
         to_suspense_minor: to_suspense,
         net_by_cover_type,
+        fund: Some(policy.statutory_fund.clone()),
     });
     refresh_standing(catalog, policy, ctx);
     Ok(())
