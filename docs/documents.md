@@ -132,7 +132,7 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | group | absence_started, absence_limit_reached | grp-absence-started, grp-absence-limit-reached | personal | yes |
 | claims | overpayment_repayment | cl-overpayment-repayment | personal | yes |
 
-The overpayment letter must carry `detail.repayment_reference` (from module payments, `{"q":"repayment_reference","overpayment":…}`, "OP" and six digits) and `detail.amount`; without either it is refused with `missing_detail`. A credit quoting that reference is matched to the overpayment, so the template must print it.
+Claims lives inside the partitions and cannot send a request, so the service pulls (`repayment_letters.rs`, agreed with the claims and payments threads): each pass asks every partition the claims question `repayment_letters`, asks payments for each overpayment's reference, records the letter as a request from claims (the request id is claims' own, `cl-op:<overpayment>:<n>`; one recorded earlier for a different amount stands), and sends the partition `RecordRepaymentLetter` as caller documents so it leaves the list. An overpayment payments says nothing is owed on is skipped; claims drops it itself. The overpayment letter must carry `detail.repayment_reference` (from module payments, `{"q":"repayment_reference","overpayment":…}`, "OP" and six digits) and `detail.amount`; without either it is refused with `missing_detail`. A credit quoting that reference is matched to the overpayment, so the template must print it.
 
 Group sends the leave-of-absence letters to the member (the party on the scheme policy's life), with `policy` the scheme policy, `life` the life, and `detail` `since` and `cover_ends` (persona GRP-038).
 

@@ -25,6 +25,7 @@ pub mod model;
 pub mod module;
 pub mod pdf;
 pub mod render;
+pub mod repayment_letters;
 pub mod report;
 pub mod requested_letters;
 pub mod service;

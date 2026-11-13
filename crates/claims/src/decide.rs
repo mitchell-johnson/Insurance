@@ -746,6 +746,16 @@ impl ClaimsState {
                     OverpaymentCause::InsurerError
                 };
                 let overpayment = Self::overpayment(claim, cx, plan.overpaid_minor, cause, !false_declaration);
+                if let (true, Some(from)) = (*false_declaration, claim.waiver_from) {
+                    // Premium waived on a false declaration is owed again.
+                    cx.core.execute(Instruction::UnwaivePremium {
+                        claim: id.clone(),
+                        policy: claim.policy.clone(),
+                        cover: claim.cover.clone(),
+                        from,
+                    })?;
+                    note(claim, cx, None, "waiver_billed_back");
+                }
                 self.close(cx, claim, Status::Reversed, overpayment)?;
                 if let Some(s) = claim.schedule.as_mut() {
                     // The benefit stops from the decision date, never before it.
