@@ -41,6 +41,26 @@ pub struct ClaimantView {
     /// Only what is actually being asked for. A held overpayment asks
     /// nothing of the claimant, so it is not shown as owing.
     pub repayment_asked_minor: i64,
+    /// Each benefit period paid, with every figure that made it up.
+    pub benefit_lines: Vec<BenefitLine>,
+}
+
+/// One benefit period as the claimant's statement shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenefitLine {
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+    /// The benefit before other income.
+    pub benefit_minor: i64,
+    /// Other income declared for the period, taken off the benefit.
+    pub other_income_minor: i64,
+    /// A shortfall on earlier periods paid with this one.
+    pub arrears_minor: i64,
+    /// Taken back against an overpayment.
+    pub overpayment_offset_minor: i64,
+    /// What was paid.
+    pub paid_minor: i64,
+    pub returned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -391,6 +411,21 @@ impl ClaimsState {
                 .filter(|s| c.status == Status::InPayment && s.next_period < s.end)
                 .map(|s| s.next_period),
             repayment_asked_minor: c.overpayments.iter().filter(asked).map(|o| o.outstanding_minor()).sum(),
+            benefit_lines: c
+                .schedule
+                .iter()
+                .flat_map(|s| s.periods.iter())
+                .map(|(start, p)| BenefitLine {
+                    start: *start,
+                    end: p.end,
+                    benefit_minor: p.gross_minor - p.arrears_minor + p.other_income_minor,
+                    other_income_minor: p.other_income_minor,
+                    arrears_minor: p.arrears_minor,
+                    overpayment_offset_minor: p.offset_minor,
+                    paid_minor: p.gross_minor - p.offset_minor,
+                    returned: p.returned,
+                })
+                .collect(),
         })
     }
 

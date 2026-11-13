@@ -30,6 +30,18 @@ pub(crate) fn period_gross(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i6
     }
 }
 
+/// The other income taken off one period's benefit: the full benefit for
+/// the period less what is paid for it.
+pub(crate) fn period_income(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i64 {
+    let full = plus_months(start, 1);
+    let whole = if end >= full {
+        s.monthly_minor
+    } else {
+        s.monthly_minor * (end - start).num_days() / (full - start).num_days().max(1)
+    };
+    (whole - period_gross(s, start, end)).max(0)
+}
+
 /// What was paid for days on or after `end`: the replay of the paid periods
 /// under the corrected end date.
 pub(crate) fn overpaid_after(s: &Schedule, end: NaiveDate) -> i64 {
@@ -995,9 +1007,11 @@ impl ClaimsState {
                 self.take_offset(claim, o);
             }
             if let Some(s) = claim.schedule.as_mut() {
+                let other_income_minor = period_income(s, item.period_start, item.period_end);
                 s.periods.insert(
                     item.period_start,
                     Period {
+                        other_income_minor,
                         end: item.period_end,
                         gross_minor: item.gross_minor,
                         offset_minor: item.offset.as_ref().map_or(0, |o| o.amount_minor),

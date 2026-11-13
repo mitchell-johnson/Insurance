@@ -383,6 +383,10 @@ pub struct Period {
     /// periods. It is not benefit for this period.
     #[serde(default)]
     pub arrears_minor: i64,
+    /// Other income declared for the period (accident compensation, a
+    /// part-time wage) that reduced the benefit, as known when it was paid.
+    #[serde(default)]
+    pub other_income_minor: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

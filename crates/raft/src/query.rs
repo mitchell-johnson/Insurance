@@ -34,6 +34,15 @@ pub enum Query {
     Claims { question: ic_core::claims_module::report::Question },
     /// A question for the investment ledger on this partition.
     Investment { question: ic_core::invest::Question },
+    /// Underwriting loadings, a page of policies at a time. Sensitive: the
+    /// caller is finance, and access is decided where the question enters.
+    Loadings {
+        #[serde(default)]
+        after: Option<PolicyId>,
+        limit: u32,
+        #[serde(default)]
+        as_at: Option<NaiveDate>,
+    },
 }
 
 /// A policy with what the read side knows about it.
@@ -60,6 +69,7 @@ pub enum Answer {
     /// `None` until the partition's business date is open.
     Claims(Option<ic_core::claims_module::report::Reply>),
     Investment(ic_core::invest::Reply),
+    Loadings(ic_core::loadings::LoadingsPage),
 }
 
 /// Answer a query from a partition's state and read models.
@@ -80,5 +90,6 @@ pub fn answer(core: &CoreState, view: &Projections, query: Query) -> Answer {
         Query::PaymentCandidates { matcher, payment } => Answer::Candidates(matcher.candidates(view, &payment)),
         Query::Claims { question } => Answer::Claims(core.business_date.map(|today| core.claims.answer(&question, today))),
         Query::Investment { question } => Answer::Investment(core.investment.answer(&core.ledger, &core.policies, &question)),
+        Query::Loadings { after, limit, as_at } => Answer::Loadings(ic_core::loadings::page(&core.policies, after.as_ref(), limit, as_at)),
     }
 }

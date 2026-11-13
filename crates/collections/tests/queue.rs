@@ -176,6 +176,11 @@ fn the_core_events_it_follows_become_its_commands() {
             arrangement: "a1".into(),
             outstanding_minor: 5,
         },
+        CoreEvent::PolicyBalance {
+            policy: "p1".into(),
+            outstanding_minor: 10,
+            oldest_unpaid_due: Some(d(2027, 3, 1)),
+        },
         CoreEvent::BusinessDateAdvanced {
             from: Some(d(2027, 3, 3)),
             to: d(2027, 3, 4),

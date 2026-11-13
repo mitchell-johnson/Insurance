@@ -198,7 +198,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-012 | part | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits` |
 | CLM-015 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-016 | part | `claims/tests/suite/book.rs::a_benefit_run_is_prepared_by_one_person_and_approved_by_another`<br>`claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
-| CLM-017 | part | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
+| CLM-017 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/book.rs::other_income_shows_as_its_own_figure_on_each_benefit_line` |
 | CLM-018 | full | `claims/tests/suite/book.rs::a_late_income_declaration_does_not_stop_the_benefit` |
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | part | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
@@ -442,6 +442,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PAY-007 | full | `payments/tests/runs.rs::run_and_day_limits_cap_what_can_be_released`<br>`payments/tests/runs.rs::a_run_is_not_released_without_the_funds_to_cover_it` |
 | PAY-008 | full | `payments/tests/runs.rs::an_urgent_run_needs_two_on_call_approvers` |
 | PAY-009 | full | `payments/tests/recon.rs::settled_and_returned_money_matches_the_statement`<br>`payments/tests/recon.rs::what_the_statement_cannot_explain_becomes_an_owned_exception` |
+| PAY-010 | full | `payments/tests/sweep.rs::money_applied_to_another_fund_is_moved_to_its_account`<br>`payments/tests/sweep.rs::a_reversal_or_a_returned_sweep_is_owed_the_right_way`<br>`payments/tests/sweep.rs::a_matched_direct_credit_is_followed_too` |
 | PAY-011 | full | `payments/tests/runs.rs::a_collection_run_draws_on_active_authorities`<br>`payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | PAY-012 | full | `payments/tests/refunds.rs::a_refund_goes_back_to_the_account_it_came_from` |
 | PAY-014 | part | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected` |
