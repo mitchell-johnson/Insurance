@@ -283,6 +283,8 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     delegated.delegated_authority = Some("auth-harbour-broker".into());
     let entry = &underwriting_envelope(key, at, today, &delegated).unwrap()["command"]["open_proposal"]["entry"];
     assert_eq!(entry["delegated_authority"], "auth-harbour-broker");
+    let read: Entry = serde_json::from_value(entry.clone()).unwrap();
+    assert!(matches!(read, Entry::GroupExcess { delegated_authority: Some(a), .. } if a == "auth-harbour-broker"));
 
     let value = underwriting_envelope(key, at, today, &excess_request(Some("party-9"))).unwrap();
     let text = value.to_string();
@@ -298,6 +300,7 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
             policy: open.policy.clone(),
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         }
     );
     assert_eq!(
@@ -382,6 +385,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         policy: policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     let terms = |entry: Entry, proposal: &str| Effect::ApplyTerms {
         key: format!("{proposal}/terms"),

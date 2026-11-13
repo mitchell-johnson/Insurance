@@ -145,6 +145,19 @@ impl<S: StaffFeed, L: Letters> Forward for Notices<S, L> {
                 let body = json!({"proposal": proposal, "life": life, "delegate_ref": delegate_ref});
                 return publish(&self.delegates, "delegates", "request", &order_id(seq), "delegate_file_request", body).await;
             }
+            Effect::RequestDelegatedDecision {
+                proposal,
+                life,
+                party,
+                cover,
+                cover_type,
+                sum_insured_minor,
+                authority,
+            } => {
+                let body = json!({"proposal": proposal, "life": life, "party": party, "cover": cover, "cover_type": cover_type,
+                    "sum_insured_minor": sum_insured_minor, "authority": authority});
+                return publish(&self.delegates, "delegates", "request", &order_id(seq), "delegated_decision_request", body).await;
+            }
             _ => (String::new(), Value::Null),
         };
         if !kind.is_empty() {

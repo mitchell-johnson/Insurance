@@ -723,6 +723,16 @@ pub enum Effect {
         life: LifeId,
         delegate_ref: String,
     },
+    /// A scheme member's excess for the scheme's delegate to decide.
+    RequestDelegatedDecision {
+        proposal: ProposalId,
+        life: LifeId,
+        party: PartyId,
+        cover: String,
+        cover_type: String,
+        sum_insured_minor: i64,
+        authority: String,
+    },
     /// One command to the core for the policy. The driver first checks the
     /// core still has the product version the quote was bound to.
     IssuePolicy {

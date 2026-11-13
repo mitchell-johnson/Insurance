@@ -14,6 +14,7 @@ fn excess(w: &World, id: &str, takeover: Option<i64>, reference: Option<&str>) -
         policy: open.policy.clone(),
         takeover_accepted_minor: takeover,
         reinsurance_reference: reference.map(Into::into),
+        delegated_authority: None,
     };
     Command::OpenProposal(Box::new(open))
 }
