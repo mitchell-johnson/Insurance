@@ -19,11 +19,18 @@ concurrency:
 jobs:
   resilience:
     name: image and failure drill
-    runs-on: ubuntu-latest
+    # Its own runner: the cluster's Compose project name and ports are fixed,
+    # so only one drill can run on the Mac at a time.
+    runs-on: [self-hosted, insurance-drill]
     timeout-minutes: 90
     env:
       # See [profile.drill] in Cargo.toml.
       CARGO_PROFILE: drill
+      # Other services on the Mac hold 8080; these ports are free there.
+      IC_COMPOSE_API_PORT: "18080"
+      IC_COMPOSE_PORTAL_PORT: "18090"
+      IC_COMPOSE_TEMPORAL_PORT: "17233"
+      IC_COMPOSE_TEMPORAL_UI_PORT: "18233"
     steps:
       - uses: actions/checkout@v4
       # Builds the shipped image, starts three ledger nodes, Temporal, two
@@ -34,3 +41,8 @@ jobs:
       - name: Logs
         if: failure()
         run: docker compose -f deploy/compose/docker-compose.yml logs --no-color --tail 200
+      # The drill builds its image on the Mac's Docker each run; keep only
+      # the newest so old ones do not pile up.
+      - name: Remove superseded drill images
+        if: always()
+        run: docker image prune -f --filter "label=com.docker.compose.project=insurance-core"

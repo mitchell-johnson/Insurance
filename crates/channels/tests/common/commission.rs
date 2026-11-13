@@ -70,6 +70,10 @@ impl Source for CommissionModule {
     }
 
     fn tell(&self, envelope: Value) -> Asked<'_> {
+        // With scripted matches, a decision on one is accepted, as the module does once the dispute is open.
+        if self.1.lock().unwrap().is_some() && envelope["command"].get("decide_replacement").is_some() {
+            return Box::pin(async move { Ok(serde_json::json!({ "result": { "Ok": null }, "duplicate": false })) });
+        }
         // With scripted matches, a dispute is answered as the module would: accepted once per layer, then refused.
         if self.1.lock().unwrap().is_some() && envelope["command"].get("dispute_replacement").is_some() {
             let mut sent = self.2.lock().unwrap();

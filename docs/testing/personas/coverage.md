@@ -52,7 +52,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
-| COL Collection, cash matching, standing and dunning | 10 | 6 | 12 | 10 |
+| COL Collection, cash matching, standing and dunning | 13 | 7 | 8 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
@@ -63,7 +63,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | GRP Group scheme administration | 19 | 10 | 11 | 4 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
-| HLT Composable health product | 0 | 0 | 11 | 4 |
+| HLT Composable health product | 2 | 1 | 8 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 4 | 18 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
@@ -77,19 +77,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **226** | **128** | **223** | **147** |
+| **Total** | **231** | **130** | **216** | **143** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 83 | 23 | 36 |
-| C | 112 | 72 | 162 |
+| B | 85 | 24 | 33 |
+| C | 115 | 73 | 158 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
 
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (5): COL-005, COL-012, COL-019, COL-023, COL-024
+- **COL** (3): COL-005, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030
@@ -97,7 +97,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **GRP** (1): GRP-017
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
-- **HLT** (4): HLT-001, HLT-002, HLT-004, HLT-009
+- **HLT** (2): HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (3): ANV-001, ANV-006, ANV-014

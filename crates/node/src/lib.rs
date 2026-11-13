@@ -13,6 +13,7 @@ pub fn modules() -> Result<Vec<ModuleSpec>, String> {
     // One module to a line, so two threads adding a module do not collide.
     Ok(vec![
         ic_channels::query::module_spec()?,    //
+        ic_collections::module_spec()?,        //
         ic_complaints::module_spec()?,         //
         ic_distribution::host::module_spec()?, //
         ic_documents::module_spec()?,          //
