@@ -206,6 +206,31 @@ resource driverSends 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
+// Orders for medical evidence, read by the provider's adapter, and requests
+// for a delegate's file, read by the delegate's. Each names a request and an
+// opaque party or proposal, never a reason or an answer.
+resource orderHubs 'Microsoft.EventHub/namespaces/eventhubs@2024-01-01' = [for hub in ['underwriting-evidence', 'underwriting-delegates']: {
+  parent: eventHubs
+  name: hub
+  properties: {
+    partitionCount: 1
+    retentionDescription: {
+      cleanupPolicy: 'Delete'
+      retentionTimeInHours: 168
+    }
+  }
+}]
+
+resource driverSendsOrders 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for (hub, i) in ['underwriting-evidence', 'underwriting-delegates']: {
+  scope: orderHubs[i]
+  name: guid(orderHubs[i].id, workerIdentity.id, roles.eventHubsDataSender)
+  properties: {
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.eventHubsDataSender)
+  }
+}]
+
 output noticesHub string = notices.name
 output clinicalIdentityClientId string = identity.properties.clientId
 output clinicalBlobEndpoint string = clinical.properties.primaryEndpoints.blob

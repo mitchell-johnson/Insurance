@@ -25,7 +25,7 @@
 //! | `POST /parties/search` | Fuzzy search by name and date of birth. |
 //! | `POST /merges`, `POST /unmerges` | Merge a duplicate, or undo it. |
 //! | `GET /reviews`, `POST /reviews/{id}/dismiss` | Possible duplicates for a person. |
-//! | `POST /admin/verify/{id}`, `POST /admin/rewrap`, `POST /admin/reshred` | Operations. |
+//! | `POST /admin/verify/{id}`, `POST /admin/rewrap`, `POST /admin/reshred`, `GET /admin/index` | Operations. |
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -489,21 +489,24 @@ async fn authority<W: KeyWrapper, S: WormStore>(
     if !PartyId::plausible(&q.actor) {
         return Err(refused(StatusCode::BAD_REQUEST, "invalid", "actor is a party ID"));
     }
-    let (resolved, _) = app.find(&id).await?;
+    let (resolved, party) = app.find(&id).await?;
     if !app.access.allows(&app.ask(&ctx), "authority") {
         return Err(app.deny(&ctx, Some(&resolved), "authority").await);
     }
     let on = q.on.unwrap_or_else(|| Utc::now().date_naive());
     let target = Target::Party(resolved.clone());
-    let held: Vec<_> = app
+    // Every representative relationship the actor has to the party that has
+    // not ended, including one not yet activated.
+    let named: Vec<_> = app
         .store
         .relationships_of(&PartyId(q.actor.clone()))
         .await
         .map_err(failed)?
         .into_iter()
         .map(|r| r.relationship)
-        .filter(|r| r.kind.represents() && r.target == target && r.in_force(on))
+        .filter(|r| r.kind.represents() && r.target == target && r.valid_to.is_none_or(|to| to > on))
         .collect();
+    let held: Vec<_> = named.iter().filter(|r| r.in_force(on)).cloned().collect();
     let covers = |r: &&crate::model::Relationship| {
         r.attributes
             .get("scope")
@@ -511,6 +514,9 @@ async fn authority<W: KeyWrapper, S: WormStore>(
             .is_some_and(|s| s.iter().any(|v| v == q.act.as_str() || v == "all"))
     };
     let (decision, reason, by) = match held.iter().find(covers) {
+        // While capacity is in question no representative acts; the
+        // question goes to a person (legal), whatever the authority says.
+        _ if party.capacity_in_question && !named.is_empty() => ("route", "capacity_in_question", named.iter().find(covers).or(named.first())),
         Some(r) if q.benefits_actor && crate::model::SELF_BENEFIT_ACTS.contains(&q.act.as_str()) => ("route", "benefits_representative", Some(r)),
         Some(r) => ("allow", "within_scope", Some(r)),
         None if held.is_empty() => ("refuse", "no_authority", None),
@@ -578,6 +584,24 @@ async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
         }
         Err(e) => Err(failed(e)),
     }
+}
+
+/// Every action one person took, or was asked about, with dates: what a
+/// guardian or attorney asks for to show what they did under their
+/// authority. Read by privacy, like a party's own trail.
+async fn actions_by<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(actor): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    if !PartyId::plausible(&actor) {
+        return Err(refused(StatusCode::NOT_FOUND, "not_found", "no such party"));
+    }
+    let actor = PartyId(actor);
+    if !app.access.allows(&app.ask(&ctx), "audit") {
+        return Err(app.deny(&ctx, Some(&actor), "actions").await);
+    }
+    app.audit(&ctx, Some(&actor), "actions", vec![], "allow").await?;
+    let lines = app.store.audit_by(&actor, 5_000).await.map_err(failed)?;
+    let lines: Vec<Value> = lines.into_iter().map(|(at, l)| json!({ "at": at, "line": l })).collect();
+    Ok((StatusCode::OK, Json(json!({ "actor": actor, "actions": lines }))))
 }
 
 // ---- Matching, creating and searching ------------------------------------
@@ -943,6 +967,14 @@ struct ReshredRequest {
     since: NaiveDate,
 }
 
+/// Where a change of blind index key stands, so an operator knows when the
+/// next key may be promoted.
+async fn index_status<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap) -> Reply {
+    operator(&app, &headers, "index").await?;
+    let status = app.store.index_status().await.map_err(failed)?;
+    Ok((StatusCode::OK, Json(json!(status))))
+}
+
 async fn reshred<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<ReshredRequest>) -> Reply {
     operator(&app, &headers, "reshred").await?;
     match crate::work::reshred(&app, r.since).await {
@@ -979,6 +1011,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/authority", get(authority::<W, S>))
         .route("/v1/parties/{id}/export", get(export::<W, S>))
         .route("/v1/parties/{id}/audit", get(audit_trail::<W, S>))
+        .route("/v1/actors/{actor}/actions", get(actions_by::<W, S>))
         .route("/v1/relationships", get(relationships_to::<W, S>))
         .route("/v1/merges", post(merge::<W, S>))
         .route("/v1/unmerges", post(unmerge::<W, S>))
@@ -987,6 +1020,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/admin/verify/{id}", post(verify::<W, S>))
         .route("/v1/admin/rewrap", post(rewrap::<W, S>))
         .route("/v1/admin/reshred", post(reshred::<W, S>))
+        .route("/v1/admin/index", get(index_status::<W, S>))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .with_state(app)
 }

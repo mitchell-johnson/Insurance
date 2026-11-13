@@ -25,6 +25,11 @@ fn statement_number(source: &str) -> Option<u32> {
 pub struct ClaimsRun {
     pub outstanding: BTreeSet<Id>,
     pub settled_minor: i64,
+    /// What claims sent out in the run, when it says: the run is confirmed
+    /// only once that much has settled, so payments released late or
+    /// released again after a return are waited for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_minor: Option<i64>,
 }
 
 /// One released payment that has not yet been settled.
@@ -58,6 +63,9 @@ pub struct Waiting {
     /// claims is told the run's settled total once all of it has settled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
+    /// The claims run's whole amount, when claims says it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_total_minor: Option<i64>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -92,7 +100,9 @@ impl PaymentsState {
             amount_minor: waiting.amount_minor,
         });
         if let Some(run) = &waiting.run {
-            self.claims_runs.entry(run.clone()).or_default().outstanding.insert(waiting.payment.clone());
+            let known = self.claims_runs.entry(run.clone()).or_default();
+            known.outstanding.insert(waiting.payment.clone());
+            known.total_minor = known.total_minor.or(waiting.run_total_minor);
         }
         self.waiting.insert(waiting.payment.clone(), waiting);
         Ok(())
@@ -139,6 +149,22 @@ impl PaymentsState {
         }
     }
 
+    /// The account the releasing module verified must be the account this
+    /// module pays. `account_ref` is either the payee's ID here or the
+    /// account number; spaces and dashes in a number do not count.
+    fn same_account(&self, waiting: &Waiting, payee: &Id) -> Result<(), Reject> {
+        let digits = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).collect::<String>();
+        let number = self.payees.get(payee).map(|p| digits(&p.account.number)).unwrap_or_default();
+        let named = waiting.account_ref.is_empty() || waiting.account_ref == *payee || digits(&waiting.account_ref) == number;
+        if named {
+            return Ok(());
+        }
+        Err(Reject::new(
+            "account_mismatch",
+            format!("payment {} was verified to another account than payee {payee} holds", waiting.payment),
+        ))
+    }
+
     /// Put waiting payments into a run, as the items they were released as.
     pub(crate) fn take_waiting(&mut self, tx: &mut Tx<'_>, run: &str, payments: BTreeSet<Id>, payees: BTreeMap<Id, Id>) -> Result<(), Reject> {
         tx.need(Role::Maker)?;
@@ -149,10 +175,12 @@ impl PaymentsState {
                 .get(payment)
                 .filter(|_| !self.items.contains_key(payment))
                 .ok_or_else(|| Reject::new("not_waiting", format!("payment {payment} is not waiting to be paid")))?;
+            let payee = self.payee_for(waiting, payees.get(payment))?;
+            self.same_account(waiting, &payee)?;
             items.push(NewItem {
                 item: waiting.payment.clone(),
                 source: waiting.source.clone(),
-                counterparty: Counterparty::Payee(self.payee_for(waiting, payees.get(payment))?),
+                counterparty: Counterparty::Payee(payee),
                 amount_minor: waiting.amount_minor,
                 policy: waiting.policy.clone(),
                 payable: waiting.payable,
@@ -197,7 +225,8 @@ impl PaymentsState {
         let Some(known) = self.claims_runs.get_mut(run) else { return };
         known.outstanding.remove(&waiting.payment);
         known.settled_minor += settled_minor;
-        if !known.outstanding.is_empty() {
+        let short = known.total_minor.is_some_and(|total| known.settled_minor < total);
+        if !known.outstanding.is_empty() || short {
             return;
         }
         let total = known.settled_minor;

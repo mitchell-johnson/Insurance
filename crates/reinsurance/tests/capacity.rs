@@ -20,6 +20,7 @@ fn request(id: &str, party: &str, sum: i64, commencement: chrono::NaiveDate) -> 
         commencement,
         proposal_expires: d(2027, 3, 31),
         risk_codes: vec![],
+        excess_reference: None,
     }
 }
 
@@ -557,4 +558,35 @@ fn exclusions_match_underwriting_tags_and_their_families() {
         let err = load(bad).unwrap_err().to_string();
         assert!(err.contains("is not a risk code"), "{bad}: {err}");
     }
+}
+
+/// Purpose: a reservation made for an excess over a scheme's retention carries the reference
+/// of the module's notice asking for it to be underwritten, and the question
+/// `excess_underwriting` finds that reservation and where it has got to; a reference no
+/// reservation carries finds nothing. A request without a reference is read as before.
+/// Why it matters: operations see an open `over_retention` item with the notice's reference.
+/// Without this they cannot tell whether underwriting has the case in hand or it was lost
+/// between the group and underwriting modules.
+#[test]
+fn a_reservation_for_an_excess_names_the_notice_that_asked_for_it() {
+    let mut b = Bench::new();
+    let mut r = request("R1", "anna", 400 * K, d(2027, 3, 1));
+    r.excess_reference = Some("UWX/S1/group-life/0/M1/20000000".into());
+    b.ok("underwriting", Command::ReserveCapacity(Box::new(r)));
+    reserve(&mut b, "R2", "bella", 400 * K, d(2027, 3, 1));
+    assert_eq!(
+        b.ri.excess_underwriting("UWX/S1/group-life/0/M1/20000000"),
+        vec![("R1".to_string(), ReservationStatus::Held)]
+    );
+    assert!(b.ri.excess_underwriting("UWX/other").is_empty());
+    let asked = ic_reinsurance::host::answer(
+        &b.ri,
+        serde_json::json!({"excess_underwriting": {"reference": "UWX/S1/group-life/0/M1/20000000"}}),
+    )
+    .unwrap();
+    assert_eq!(asked, serde_json::json!([["R1", "held"]]));
+    // The wire form leaves the field out when there is none, and reads it back absent.
+    let plain = serde_json::to_value(request("R3", "cara", 1, d(2027, 3, 1))).unwrap();
+    assert!(plain.get("excess_reference").is_none());
+    assert_eq!(serde_json::from_value::<CapacityRequest>(plain).unwrap().excess_reference, None);
 }

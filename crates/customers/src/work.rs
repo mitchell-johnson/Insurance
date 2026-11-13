@@ -176,6 +176,19 @@ pub async fn relay_directory<W: KeyWrapper, S: WormStore, D: crate::relay::Direc
 
 /// Run the outbox every `every`, and the sweep every `sweep_every`, until
 /// `stop` completes. A failed pass is logged and tried again next time.
+/// Keep the blind index under every key in use: name older entries, index
+/// whoever a key has not covered, and remove entries under retired keys.
+/// Returns (parties indexed, entries removed).
+pub async fn maintain_index<W: KeyWrapper, S: WormStore>(app: &App<W, S>) -> Result<(usize, u64), String> {
+    app.store.adopt_index().await.map_err(crate::text)?;
+    let indexed = app.store.rebuild_index(200).await.map_err(crate::text)?;
+    let removed = app.store.retire_index(5000).await.map_err(crate::text)?;
+    if indexed > 0 || removed > 0 {
+        tracing::info!(indexed, removed, "blind index maintained");
+    }
+    Ok((indexed, removed))
+}
+
 pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::relay::Directory>(
     app: &App<W, S>,
     hubs: &Hubs,
@@ -197,6 +210,9 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::rel
             if let Err(e) = relay_directory(app, core).await {
                 tracing::warn!(error = %e, "relaying to the channels directory failed; will retry");
             }
+        }
+        if let Err(e) = maintain_index(app).await {
+            tracing::warn!(error = %e, "maintaining the blind index failed; will retry");
         }
         if last_sweep.is_none_or(|t| t.elapsed() >= sweep_every) {
             last_sweep = Some(std::time::Instant::now());
@@ -234,8 +250,9 @@ pub async fn start(
     let pool = crate::db::open(connector, config.pool_size).await?;
     let keys = crate::keys::KeyRing::new(ic_azure::keywrap::KeyVaultWrapper::new(&config.key_vault, &config.kek, credential.clone()));
     let index = crate::crypto::IndexKey::new(config.index_key.as_bytes())?;
+    let next = config.next_index_key.as_ref().map(|k| crate::crypto::IndexKey::new(k.as_bytes())).transpose()?;
     let app = std::sync::Arc::new(App {
-        store: crate::store::Store::new(pool, keys, index),
+        store: crate::store::Store::new(pool, keys, index).with_next_index(next)?,
         access: crate::access::Access::shipped(),
         auth: crate::auth::Entra::new(&config.authority, &config.tenant, &config.audience),
         register: crate::retention::Register::new(ic_azure::blob::BlobContainer::new(

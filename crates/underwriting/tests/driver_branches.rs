@@ -169,6 +169,7 @@ fn reserve() -> Effect {
         commencement: d(2027, 2, 1),
         proposal_expires: d(2027, 5, 1),
         risk_codes: vec!["pursuit.diving".into()],
+        excess_reference: Some("UWX/k/1".into()),
     }
 }
 
