@@ -188,6 +188,10 @@ pub enum Query {
     },
     /// Effects set aside as undeliverable, with the reason for each.
     Parked,
+    /// Proposals whose progress rows are waiting to be published.
+    Progress {
+        max: usize,
+    },
 }
 
 /// Answer a query from the state. The function the module host calls.
@@ -203,6 +207,7 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
         Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
         Query::Parked => json(serde_json::to_value(state.parked())),
+        Query::Progress { max } => json(serde_json::to_value(state.progress_pending(max))),
     }
 }
 

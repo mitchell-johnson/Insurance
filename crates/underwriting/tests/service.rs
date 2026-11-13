@@ -1,5 +1,5 @@
 //! The driver as it is deployed: its settings, its connections to a real
-//! node hosting the underwriting, reinsurance and group modules and the
+//! node hosting the underwriting, reinsurance, group and channel modules and the
 //! core, and the shipped binary.
 
 mod common;
@@ -83,11 +83,12 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
     }
 }
 
-/// Purpose: on a real node hosting the core and the underwriting, reinsurance and group
+/// Purpose: on a real node hosting the core and the underwriting, reinsurance, group and channel
 /// modules, the driver built from its settings carries a clean application to a policy in the
 /// ledger: commands as JSON through Raft, the reinsurance module's capacity question, the
 /// core's reply with the layers it wrote. A group excess answer for a case group administration
-/// does not know is refused by that module and parked with its reason. The daily sweep runs
+/// does not know is refused by that module and parked with its reason. The channel module
+/// takes the proposal's progress rows under this module's name. The daily sweep runs
 /// once for the day. With no node to reach the pass stops as unavailable. The process itself
 /// refuses to start without its settings, runs its cycles and stops when told; and the shipped
 /// binary does the same from its environment and exits cleanly on SIGTERM.
@@ -120,6 +121,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         ic_underwriting::module_spec().unwrap(),
         ic_reinsurance::host::module_spec().unwrap(),
         ic_group::module_spec().unwrap(),
+        ic_channels::query::module_spec().unwrap(),
     ];
     let node = server::start_with(settings, modules).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);
@@ -230,13 +232,16 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         .filter(|(_, why)| why.starts_with("group administration refused the decision"))
         .collect();
     assert_eq!(refused.len(), 1, "{pass:?}");
+    // The hosted channel module took the proposals' progress rows under this module's name.
+    assert!(pass.published >= 1 && pass.progress_refused == 0, "{pass:?}");
     // Letters to the customer and adviser have no receiver yet.
     assert!(pass.parked.iter().any(|(_, why)| why == "correspondence is not connected to underwriting"));
 
     // The same day again: no sweep, nothing to carry.
     let (pass, sweep) = carrier.cycle(&mut swept, config.sweep_page).await;
     assert!(sweep.is_none());
-    assert_eq!((pass.as_ref().unwrap().delivered, pass.unwrap().parked.len()), (0, 0));
+    let pass = pass.unwrap();
+    assert_eq!((pass.delivered, pass.parked.len(), pass.published), (0, 0, 0));
 
     // Nobody there: the driver does not start, and one already running stops each pass and
     // each sweep as unavailable without marking the day swept.

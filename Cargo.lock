@@ -2587,6 +2587,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "ic-azure",
+ "ic-channels",
  "ic-core",
  "ic-group",
  "ic-ledger",

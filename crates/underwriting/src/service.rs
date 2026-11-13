@@ -19,8 +19,9 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::command::{Applied, Envelope, Reject};
-use crate::driver::{Core, CoreAnswer, Driver, DriverError, Forward, Refusal, Reinsurer, Schemes, Underwriting};
+use crate::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, Refusal, Reinsurer, Schemes, Underwriting};
 use crate::notices::StaffNotices;
+use crate::progress::ProgressRow;
 use crate::special::Query;
 
 /// Settings of the driver process.
@@ -85,6 +86,24 @@ pub struct Cluster {
 #[derive(serde::Deserialize)]
 struct Answered<R> {
     result: Result<(), R>,
+}
+
+/// As [`Answered`], for a module whose `result` carries something this
+/// driver does not read.
+#[derive(serde::Deserialize)]
+struct AnsweredWith<R> {
+    result: Result<serde::de::IgnoredAny, R>,
+}
+
+/// A command to the channel module, as it reads one: rows published by this
+/// module under its own name.
+pub fn channels_envelope(key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> Value {
+    serde_json::json!({
+        "key": key,
+        "at": at.timestamp(),
+        "actor": {"kind": "module", "id": crate::progress::MODULE},
+        "command": {"publish_rows": {"rows": rows, "remove": []}},
+    })
 }
 
 impl Cluster {
@@ -170,6 +189,13 @@ impl Core for Cluster {
     }
 }
 
+impl Channels for Cluster {
+    async fn publish(&self, key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> Result<Result<(), Refusal>, DriverError> {
+        let answered: AnsweredWith<Reject> = self.to_module("channels", &channels_envelope(key, at, rows)).await?;
+        Ok(answered.result.map(|_| ()).map_err(|r| Refusal::new(&r.code, r.message)))
+    }
+}
+
 impl Schemes for Cluster {
     async fn propose(&self, envelope: ic_group::command::Envelope) -> Result<Result<(), Refusal>, DriverError> {
         let answered: Answered<Reject> = self.to_module(ic_group::host::MODULE, &envelope).await?;
@@ -184,14 +210,15 @@ pub async fn connect<F: Forward>(
     config: &Config,
     clock: fn() -> DateTime<Utc>,
     forward: F,
-) -> Result<Driver<Cluster, Cluster, Cluster, Cluster, F>, String> {
+) -> Result<Driver<Cluster, Cluster, Cluster, Cluster, F, Cluster>, String> {
     let partitions = client.partitions(config.patience).await?;
     let cluster = Cluster::new(client, partitions, config.patience);
     Ok(Driver {
         underwriting: cluster.clone(),
         reinsurer: cluster.clone(),
         core: cluster.clone(),
-        schemes: cluster,
+        schemes: cluster.clone(),
+        channels: cluster,
         forward,
         batch: config.batch,
         clock,

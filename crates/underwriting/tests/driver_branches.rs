@@ -15,9 +15,12 @@ use ic_group::command::{ExcessDecision, GroupCommand};
 use ic_ledger::PartitionId;
 use ic_reinsurance::capacity::Outcome;
 use ic_underwriting::command::{Applied, CapacityAnswer, Command, Effect, Envelope, NonDisclosureOutcome, NoticeKind, PremiumOnAvoidance, Recipient, Reject};
-use ic_underwriting::driver::{excess_case, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Refusal, Reinsurer, Schemes, Underwriting};
+use ic_underwriting::driver::{
+    excess_case, Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Refusal, Reinsurer, Schemes, Underwriting,
+};
 use ic_underwriting::evidence::EvidenceKind;
 use ic_underwriting::model::Entry;
+use ic_underwriting::progress::{Pending, ProgressRow};
 use ic_underwriting::special::Query;
 use serde_json::Value;
 
@@ -37,6 +40,12 @@ struct Script {
     reinsurance: Vec<(String, String)>,
     core: Vec<(String, String, ic_core::Command)>,
     group: Vec<ic_group::command::Envelope>,
+    /// Proposals whose progress is waiting, as the module answers.
+    progress: Vec<Pending>,
+    /// What was published to the channel module, by key.
+    published: Vec<String>,
+    /// The channel module cannot be reached.
+    channels_down: bool,
 }
 
 /// Every receiver at once, doing what the script says.
@@ -76,6 +85,7 @@ impl Underwriting for Scripted {
         Ok(self.with(|s| match query {
             Query::Outbox { .. } if s.garbled => Value::String("not an outbox".into()),
             Query::Outbox { after, max } => serde_json::to_value(s.outbox.range(after + 1..).take(max).collect::<Vec<_>>()).unwrap(),
+            Query::Progress { .. } => serde_json::to_value(&s.progress).unwrap(),
             _ => s.proposal.clone(),
         }))
     }
@@ -104,6 +114,19 @@ impl Core for Scripted {
     }
 }
 
+impl Channels for Scripted {
+    async fn publish(&self, key: &str, _at: DateTime<Utc>, _rows: &[ProgressRow]) -> Result<Result<(), Refusal>, DriverError> {
+        if self.with(|s| s.channels_down) {
+            return Err(DriverError::Unavailable("channels".into()));
+        }
+        self.with(|s| s.published.push(key.to_string()));
+        Ok(match self.refusal(key) {
+            Some((code, message)) => Err(Refusal::new(&code, message)),
+            None => Ok(()),
+        })
+    }
+}
+
 impl Schemes for Scripted {
     async fn propose(&self, envelope: ic_group::command::Envelope) -> Result<Result<(), Refusal>, DriverError> {
         self.with(|s| s.group.push(envelope));
@@ -115,12 +138,13 @@ fn clock() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2027-02-01T09:00:00Z").unwrap().with_timezone(&Utc)
 }
 
-fn driver(script: &Scripted) -> Driver<Scripted, Scripted, Scripted, Scripted, NothingConnected> {
+fn driver(script: &Scripted) -> Driver<Scripted, Scripted, Scripted, Scripted, NothingConnected, Scripted> {
     Driver {
         underwriting: script.clone(),
         reinsurer: script.clone(),
         core: script.clone(),
         schemes: script.clone(),
+        channels: script.clone(),
         forward: NothingConnected,
         batch: 2,
         clock,
@@ -943,4 +967,59 @@ async fn nothing_connected_says_which_receiver_is_missing() {
         let (pass, _) = carry(effect, None, Value::Null, &[]).await;
         assert_eq!(pass.parked, vec![(7, reason.to_string())]);
     }
+}
+
+/// Purpose: once the outbox is empty, each proposal whose progress is waiting is published to
+/// the channel module under a key of the proposal and version, and the module is told which
+/// version went. A refusal is counted and the version still let go; a channel module that
+/// cannot be reached stops the pass with nothing acknowledged.
+/// Why it matters: the portals show applicants and advisers where a proposal stands. A refusal
+/// that held its version would publish the same refused rows on every pass for ever; one that
+/// was told as published while the channel module was down would leave the portal showing a
+/// stage the proposal has left.
+#[tokio::test]
+async fn progress_is_published_and_each_version_let_go_once_it_is_answered() {
+    let script = Scripted::default();
+    let pending = |proposal: &str, version| Pending {
+        proposal: proposal.into(),
+        version,
+        rows: vec![],
+    };
+    script.with(|s| {
+        s.progress = vec![pending("P1", 4), pending("P2", 9)];
+        s.refuse.insert("P2/progress/9".into(), ("bad_key".into(), "not yours".into()));
+    });
+    let pass = driver(&script).deliver().await.unwrap();
+    assert_eq!((pass.published, pass.progress_refused), (1, 1));
+    let told: Vec<_> = script.with(|s| s.told.iter().map(|(key, caller, c)| (key.clone(), caller.clone(), c.clone())).collect());
+    assert_eq!(
+        told,
+        vec![
+            (
+                "published:P1/progress/4".to_string(),
+                "effects-driver".to_string(),
+                Command::ProgressPublished {
+                    proposal: "P1".into(),
+                    version: 4
+                }
+            ),
+            (
+                "published:P2/progress/9".to_string(),
+                "effects-driver".to_string(),
+                Command::ProgressPublished {
+                    proposal: "P2".into(),
+                    version: 9
+                }
+            ),
+        ]
+    );
+    assert_eq!(script.with(|s| s.published.clone()), ["P1/progress/4", "P2/progress/9"]);
+
+    let down = Scripted::default();
+    down.with(|s| {
+        s.progress = vec![pending("P1", 4)];
+        s.channels_down = true;
+    });
+    assert!(matches!(driver(&down).deliver().await, Err(DriverError::Unavailable(_))));
+    assert!(down.with(|s| s.told.is_empty()));
 }
