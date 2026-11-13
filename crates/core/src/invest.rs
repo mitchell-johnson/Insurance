@@ -431,6 +431,25 @@ pub enum InvestEvent {
         payment: String,
         amount_minor: i64,
     },
+    /// Money was raised to benefit payable while an insolvency interest
+    /// stands. Nobody is paid until a legal direction says to whom.
+    PayoutHeld {
+        policy: PolicyId,
+        payout: String,
+        amount_minor: i64,
+        reason: PayoutReason,
+        /// The insolvency interest that holds it.
+        interest: String,
+    },
+    /// A legal direction said to whom a held payout is paid. It is owed to
+    /// that party under this payment reference.
+    PayoutDirected {
+        policy: PolicyId,
+        payee: crate::PartyId,
+        payout: String,
+        payment: String,
+        amount_minor: i64,
+    },
     /// A returned payout is to be paid again under a new reference.
     PayoutReinstructed {
         policy: PolicyId,
@@ -519,6 +538,17 @@ pub enum InvestCommand {
         payout: String,
         payment: String,
     },
+    /// Record the legal direction that says to whom a held payout is paid:
+    /// the Official Assignee, the owner, or whoever a court names. The
+    /// direction is a vault reference. A payout the bank sent back while
+    /// the insolvency interest stands is directed the same way.
+    DirectPayout {
+        policy: PolicyId,
+        payout: String,
+        payee: crate::PartyId,
+        payment: String,
+        direction: String,
+    },
     /// Begin a full surrender: sell everything the policy holds in every
     /// fund, each at the pricing date given for that fund, and stop new
     /// money going in. Nothing may be pending when it is asked for.
@@ -561,7 +591,7 @@ impl InvestCommand {
             InvestCommand::AllocateCash { .. } => &["policy-servicing", "cash-matching"],
             InvestCommand::PlaceOrder(_) | InvestCommand::CancelOrder { .. } => &["policy-servicing", "claims", "fees"],
             InvestCommand::RaisePayout { .. } | InvestCommand::ReinstructPayout { .. } => &["policy-servicing", "claims"],
-            InvestCommand::Surrender { .. } | InvestCommand::CompleteSurrender { .. } => &["policy-servicing"],
+            InvestCommand::Surrender { .. } | InvestCommand::CompleteSurrender { .. } | InvestCommand::DirectPayout { .. } => &["policy-servicing"],
             InvestCommand::ExecuteOrders { .. } | InvestCommand::ReplayOrders { .. } => &["unit-orders"],
         }
     }
@@ -575,6 +605,7 @@ impl InvestCommand {
             InvestCommand::CancelOrder { .. } => "cancel_unit_order",
             InvestCommand::RaisePayout { .. } => "raise_investment_payout",
             InvestCommand::ReinstructPayout { .. } => "reinstruct_investment_payout",
+            InvestCommand::DirectPayout { .. } => "direct_investment_payout",
             InvestCommand::Surrender { .. } => "surrender_units",
             InvestCommand::CompleteSurrender { .. } => "complete_surrender",
             InvestCommand::ExecuteOrders { .. } => "execute_unit_orders",
@@ -588,6 +619,7 @@ impl InvestCommand {
             InvestCommand::AllocateCash { policy, .. }
             | InvestCommand::RaisePayout { policy, .. }
             | InvestCommand::ReinstructPayout { policy, .. }
+            | InvestCommand::DirectPayout { policy, .. }
             | InvestCommand::Surrender { policy, .. }
             | InvestCommand::CompleteSurrender { policy, .. } => Some(policy),
             InvestCommand::PlaceOrder(order) => Some(&order.policy),
@@ -854,6 +886,9 @@ pub enum PayoutState {
     /// Sent back by the bank: in benefit payable again, with no payment
     /// reference it can be paid under until it is reinstructed.
     Returned,
+    /// In benefit payable while an insolvency interest stands: paid to
+    /// nobody until a legal direction says to whom.
+    Held,
 }
 
 /// Unit-linked money raised to benefit payable.
@@ -865,6 +900,17 @@ pub struct Payout {
     pub payment: String,
     pub state: PayoutState,
     pub raised_on: NaiveDate,
+    /// Who a legal direction said it is paid to and the vault reference of
+    /// the direction, where it was held. Absent: the policy's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub directed: Option<Directed>,
+}
+
+/// A legal direction on a held payout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Directed {
+    pub payee: crate::PartyId,
+    pub direction: String,
 }
 
 /// What the policy's benefit payable holds for payouts not yet settled.
@@ -936,6 +982,8 @@ pub(crate) fn raise_payout(
     if policy.payments.contains_key(&payout) || policy.payouts.values().any(|p| p.payment == payout) {
         return Err(bad("duplicate_payout", format!("{payout} is already a payment reference on this policy")));
     }
+    // While the owner is bankrupt the money is raised and held.
+    let held = crate::interest::insolvency(policy, ctx.date).cloned();
     let c = policy.currency;
     let pending = accounts::pending_investment_cash(&policy.id, c);
     if -ledger.balance(&pending.id) - committed_cash(book, &policy.id) < amount_minor as i128 {
@@ -954,17 +1002,27 @@ pub(crate) fn raise_payout(
             amount_minor,
             reason,
             payment: payout.clone(),
-            state: PayoutState::Owed,
+            state: if held.is_some() { PayoutState::Held } else { PayoutState::Owed },
             raised_on: ctx.date,
+            directed: None,
         },
     );
     book.note_waiting(ledger, policy, ctx.date);
-    ctx.emit(crate::Event::Investment(InvestEvent::PayoutRaised {
-        policy: policy.id.clone(),
-        policyholder: policy.policyholder.clone(),
-        payout,
-        amount_minor,
-        reason,
+    ctx.emit(crate::Event::Investment(match held {
+        Some(interest) => InvestEvent::PayoutHeld {
+            policy: policy.id.clone(),
+            payout,
+            amount_minor,
+            reason,
+            interest,
+        },
+        None => InvestEvent::PayoutRaised {
+            policy: policy.id.clone(),
+            policyholder: policy.policyholder.clone(),
+            payout,
+            amount_minor,
+            reason,
+        },
     }));
     Ok(())
 }
@@ -1087,6 +1145,9 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
     if record.state != PayoutState::Returned {
         return Err(bad("payout_not_returned", format!("{payout} has not been sent back by the bank")));
     }
+    if crate::interest::insolvency(policy, ctx.date).is_some() {
+        return Err(bad("payout_held", "an insolvency interest stands; a legal direction says to whom this is paid"));
+    }
     if !plain(&payment) || policy.payments.contains_key(&payment) || policy.payouts.values().any(|p| p.payment == payment) {
         return Err(bad("duplicate_payment", format!("{payment} is not a free payment reference on this policy")));
     }
@@ -1098,6 +1159,55 @@ pub(crate) fn reinstruct_payout(policy: &mut Policy, ctx: &mut Ctx<'_>, payout: 
     ctx.emit(crate::Event::Investment(InvestEvent::PayoutReinstructed {
         policy: policy.id.clone(),
         policyholder: policy.policyholder.clone(),
+        payout: payout.to_string(),
+        payment,
+        amount_minor,
+    }));
+    Ok(())
+}
+
+/// A legal direction says to whom a held payout is paid. Also the way a
+/// payout the bank sent back is paid again while the owner is bankrupt.
+pub(crate) fn direct_payout(
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    payout: &str,
+    payee: crate::PartyId,
+    payment: String,
+    direction: String,
+) -> Result<(), Reject> {
+    let insolvent = crate::interest::insolvency(policy, ctx.date).is_some();
+    let Some(record) = policy.payouts.get(payout) else {
+        return Err(bad("unknown_payout", format!("{payout} is not a payout on this policy")));
+    };
+    let directed = Directed { payee, direction };
+    if record.state == PayoutState::Owed && record.payment == payment && record.directed.as_ref() == Some(&directed) {
+        return Ok(());
+    }
+    if !(record.state == PayoutState::Held || record.state == PayoutState::Returned && insolvent) {
+        return Err(bad("payout_not_held", format!("{payout} is not held for a legal direction")));
+    }
+    if !crate::interest::plain(&directed.direction) || directed.payee.0.is_empty() {
+        return Err(bad(
+            "invalid_payout",
+            "a direction names the party to pay and the vault reference of the direction",
+        ));
+    }
+    // A held payout was never sent under its own reference, so it may keep it.
+    let own = record.state == PayoutState::Held && record.payment == payment;
+    if !plain(&payment) || policy.payments.contains_key(&payment) || (!own && policy.payouts.values().any(|p| p.payment == payment)) {
+        return Err(bad("duplicate_payment", format!("{payment} is not a free payment reference on this policy")));
+    }
+    let amount_minor = record.amount_minor;
+    let payee = directed.payee.clone();
+    if let Some(record) = policy.payouts.get_mut(payout) {
+        record.payment = payment.clone();
+        record.state = PayoutState::Owed;
+        record.directed = Some(directed);
+    }
+    ctx.emit(crate::Event::Investment(InvestEvent::PayoutDirected {
+        policy: policy.id.clone(),
+        payee,
         payout: payout.to_string(),
         payment,
         amount_minor,

@@ -588,3 +588,35 @@ fn a_payment_goes_only_to_the_account_that_was_verified() {
     assert_eq!(desk.code(&mia(), take("r1", &["pay-x"])), "account_mismatch");
     desk.ok(&mia(), take("r1", &["pay-y"]));
 }
+
+/// Purpose: a payout held while the owner is bankrupt asks payments for nothing, and once a
+/// legal direction names the payee it waits under the direction's reference for that
+/// party, not for the policyholder.
+/// Why it matters: decision 4 in `docs/decisions.md` (JNT-029). Money paid to a bankrupt
+/// owner before legal decides who it belongs to may have to be paid again to the Official
+/// Assignee; the binding to the directed party is what stops it.
+#[test]
+fn a_held_payout_waits_only_once_directed_and_for_the_directed_party() {
+    let mut desk = Desk::new();
+    let record = |id: &str, event: serde_json::Value| -> ic_core::EventRecord {
+        serde_json::from_value(json!({"id": id, "partition": 3, "seq": 95, "business_date": "2027-11-15", "log_index": 960, "event": {"investment": event}}))
+            .unwrap()
+    };
+    let held = record(
+        "3-95",
+        json!({"payout_held": {"policy": "pol-1", "payout": "po-9", "amount_minor": 500_00, "reason": "withdrawal", "interest": "oa-1"}}),
+    );
+    assert!(react(&held).is_empty());
+    let directed = record(
+        "3-96",
+        json!({"payout_directed": {"policy": "pol-1", "payee": "party-oa", "payout": "po-9", "payment": "po-9", "amount_minor": 500_00}}),
+    );
+    for envelope in react(&directed) {
+        desk.state.apply(5100, envelope).unwrap();
+    }
+    let waiting = &desk.state.waiting["po-9"];
+    assert_eq!(
+        (waiting.source.as_str(), waiting.payee.as_str(), waiting.amount_minor),
+        ("payout:pol-1:po-9", "party-oa", 500_00)
+    );
+}

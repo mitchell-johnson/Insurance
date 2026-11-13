@@ -268,6 +268,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         party: i.party.to_string(),
         extent_minor: i.extent_minor,
         priority: i.priority,
+        insolvency: i.kind == crate::interest::InterestKind::Insolvency,
     });
     facts.interests = standing_interests.collect();
     // Then whoever was nominated on the event date, as the record knows it now.

@@ -218,6 +218,15 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             payment,
             amount_minor,
         }) => payout_waiting(policy, policyholder, payout, payment, *amount_minor),
+        // A payout held while the owner is bankrupt is owed to whoever the
+        // legal direction named, a payee verified and screened like any other.
+        ic_core::Event::Investment(ic_core::invest::InvestEvent::PayoutDirected {
+            policy,
+            payee,
+            payout,
+            payment,
+            amount_minor,
+        }) => payout_waiting(policy, payee, payout, payment, *amount_minor),
         _ => return Vec::new(),
     };
     vec![crate::Envelope {
