@@ -431,7 +431,11 @@ fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
     let excess = |w: &World, id: &str| {
         let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
         open.product_code = "group-life".into();
-        open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+        open.entry = Entry::GroupExcess {
+            policy: open.policy.clone(),
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+        };
         open
     };
     let ended = |applied: &ic_underwriting::command::Applied| {
@@ -461,9 +465,11 @@ fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     let disclosed = w.disclose("grp-uw:S1:1", "L1", &clean());
     let applied = w.automatic(&disclosed);
-    assert!(
-        matches!(&applied.effects[0], Effect::ApplyTerms { entry: Entry::GroupExcess { policy: p }, covers, .. } if p == &policy && covers[0].sum_insured_minor == 300_000_00)
-    );
+    assert!(matches!(&applied.effects[0], Effect::ApplyTerms { entry: Entry::GroupExcess {
+            policy: p,
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+        }, covers, .. } if p == &policy && covers[0].sum_insured_minor == 300_000_00));
     assert_eq!(ended(&applied), None);
 
     // Not proceeded with: group administration withdraws its own proposal.
@@ -541,7 +547,11 @@ fn an_employer_sees_a_loading_only_with_the_members_signed_consent() {
     let excess = |w: &mut World, id: &str| {
         let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
         open.product_code = "group-life".into();
-        open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+        open.entry = Entry::GroupExcess {
+            policy: open.policy.clone(),
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+        };
         w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     };
     let told_employer = |w: &mut World, id: &str| {

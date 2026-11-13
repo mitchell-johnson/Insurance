@@ -7,7 +7,6 @@
 //! same way as `RetractDeath`, for the date that was recorded.
 
 use std::future::Future;
-use std::sync::Mutex;
 use std::time::Duration;
 
 use chrono::NaiveDate;
@@ -131,7 +130,8 @@ pub async fn send<C: Core>(core: &C, partitions: u16, notice: &DeathNotice) -> R
 pub struct ClusterCore {
     client: ClusterClient,
     patience: Duration,
-    partitions: Mutex<Option<u16>>,
+    /// The partition count once known; 0 until then (a cluster has at least one).
+    partitions: std::sync::atomic::AtomicU16,
 }
 
 impl ClusterCore {
@@ -141,7 +141,7 @@ impl ClusterCore {
         Ok(Self {
             client: ClusterClient::from_list(nodes)?.with_auth(auth),
             patience,
-            partitions: Mutex::new(None),
+            partitions: std::sync::atomic::AtomicU16::new(0),
         })
     }
 }
@@ -154,12 +154,12 @@ impl Directory for ClusterCore {
             actor: ic_channels::Actor::Module(CALLER.to_string()),
             command: ic_channels::Command::Directory(command.clone()),
         };
-        let command = serde_json::to_value(&envelope).map_err(|e| e.to_string())?;
+        let command = serde_json::to_value(&envelope).map_err(crate::text)?;
         let reply = self
             .client
             .propose_module_until(ic_channels::query::MODULE, &command, self.patience)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(crate::text)?;
         // The module answers with its own verdict inside: a refusal there
         // is the directory saying no, not the cluster.
         let output: ic_channels::state::Output = match reply.result {
@@ -172,12 +172,12 @@ impl Directory for ClusterCore {
 
 impl Core for ClusterCore {
     async fn partitions(&self) -> Result<u16, String> {
-        let known = *self.partitions.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(n) = known {
-            return Ok(n);
+        let known = self.partitions.load(std::sync::atomic::Ordering::Relaxed);
+        if known > 0 {
+            return Ok(known);
         }
         let n = self.client.partitions(self.patience).await?;
-        *self.partitions.lock().unwrap_or_else(|e| e.into_inner()) = Some(n);
+        self.partitions.store(n, std::sync::atomic::Ordering::Relaxed);
         Ok(n)
     }
 
@@ -189,11 +189,7 @@ impl Core for ClusterCore {
             traceparent: None,
             command: command.clone(),
         };
-        let reply = self
-            .client
-            .propose_until(partition, &envelope, self.patience)
-            .await
-            .map_err(|e| e.to_string())?;
+        let reply = self.client.propose_until(partition, &envelope, self.patience).await.map_err(crate::text)?;
         Ok(reply.rejected.map(|r| r.code))
     }
 }

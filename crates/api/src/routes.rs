@@ -365,7 +365,10 @@ async fn claims_queue(State(s): State<Shared>, headers: HeaderMap, Path(queue): 
     let queue = serde_json::from_value(Value::String(queue)).map_err(|_| Problem::not_found())?;
     let mut rows: Vec<_> = s
         .backend
-        .claims(&Question::Queue { queue })
+        .claims(&Question::Queue {
+            queue,
+            staff: Some(caller.subject.clone()),
+        })
         .await?
         .into_iter()
         .flat_map(|r| match r {
@@ -402,7 +405,13 @@ async fn claims_staff(s: &Shared, headers: &HeaderMap, question: Question) -> Ap
 async fn claims_work(State(s): State<Shared>, headers: HeaderMap, Path(claim): Path<String>) -> ApiResult {
     let caller = s.auth.authenticate(&headers).await?;
     require(&caller, CLAIMS)?;
-    let replies = s.backend.claims(&Question::Work { claim }).await?;
+    let replies = s
+        .backend
+        .claims(&Question::Work {
+            claim,
+            staff: Some(caller.subject.clone()),
+        })
+        .await?;
     let view = replies.into_iter().find_map(|r| match r {
         Reply::Work(Some(view)) => Some(view),
         _ => None,

@@ -1546,3 +1546,24 @@ fn a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death() {
     let refused = w.decide("c-3", "ana", World::admit_lump(Some(300_000)), "R-OK").expect_err("refused");
     assert_eq!(refused.code, "invalid_nomination");
 }
+
+/// Purpose: a benefit reduced by other income, such as accident compensation, shows on the
+/// claimant's statement line by line: the benefit, the other income taken off it, any arrears and
+/// any overpayment offset, and what was paid, each as its own figure.
+/// Why it matters: persona test CLM-017. Someone receiving compensation and a reduced benefit
+/// needs to see why the amount is lower; a single net figure looks like an underpayment and turns
+/// into a complaint.
+#[test]
+fn other_income_shows_as_its_own_figure_on_each_benefit_line() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.ok(income("ip-1", d(2027, 3, 1), 1_200));
+    w.pay_run("run-3", d(2027, 3, 1));
+    w.on(d(2027, 4, 1));
+    w.pay_run("run-4", d(2027, 4, 1));
+    let lines = w.state.claimant_view("ip-1").expect("a view").benefit_lines;
+    let figures: Vec<_> = lines.iter().map(|l| (l.start, l.benefit_minor, l.other_income_minor, l.paid_minor)).collect();
+    assert_eq!(figures, vec![(d(2027, 3, 1), 3_000, 1_200, 1_800), (d(2027, 4, 1), 3_000, 1_200, 1_800)]);
+    assert!(lines.iter().all(|l| l.arrears_minor == 0 && l.overpayment_offset_minor == 0 && !l.returned));
+    assert!(w.state.claimant_view("c-none").is_none());
+}

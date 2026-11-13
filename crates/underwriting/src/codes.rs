@@ -333,6 +333,7 @@ pub mod reason {
     pub const MIGRATED: &str = "RC-0960";
     pub const MIGRATED_UNKNOWN_TERMS: &str = "RC-0961";
     pub const DELEGATED: &str = "RC-0970";
+    pub const TAKEOVER: &str = "RC-0975";
     pub const DELEGATED_REJECTED: &str = "RC-0971";
     pub const NON_DISCLOSURE_REVIEW: &str = "RC-0980";
     pub const QUOTE_SUPERSEDED: &str = "RC-0990";
@@ -355,6 +356,7 @@ pub mod reason {
         MIGRATED,
         MIGRATED_UNKNOWN_TERMS,
         DELEGATED,
+        TAKEOVER,
         DELEGATED_REJECTED,
         NON_DISCLOSURE_REVIEW,
         QUOTE_SUPERSEDED,

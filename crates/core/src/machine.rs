@@ -728,6 +728,10 @@ impl CoreState {
                 let id = command.policy().clone();
                 self.with_policy(&id, true, |_, p| interest::apply(p, ctx, *command))
             }
+            Command::Nominate(command) => {
+                let id = command.policy.clone();
+                self.with_policy(&id, true, |_, p| crate::nomination::apply(p, ctx, *command))
+            }
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);

@@ -201,6 +201,7 @@ fn factors() -> Effect {
 
 fn issue_command() -> Box<IssuePolicy> {
     Box::new(IssuePolicy {
+        continuation_of: None,
         policy: "POL-1".into(),
         number: "N-1".into(),
         group: GroupId::from("grp-1"),
@@ -274,7 +275,11 @@ fn ended(proposal: &str, entry: Entry, outcome: &str) -> Effect {
 }
 
 fn excess() -> Entry {
-    Entry::GroupExcess { policy: "POL-1".into() }
+    Entry::GroupExcess {
+        policy: "POL-1".into(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    }
 }
 
 fn alteration() -> Entry {

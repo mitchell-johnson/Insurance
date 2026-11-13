@@ -1422,3 +1422,28 @@ fn a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy() {
     };
     assert_eq!(servicing(&mut c, not_linked), "not_invested");
 }
+
+/// Purpose: a policy that still holds units or cash waiting to be invested cannot be avoided
+/// and cannot be moved to another partition, and both refusals leave it untouched.
+/// Why it matters: avoiding or moving a policy closes or carries its money by the policy's
+/// own accounts. Units and pending cash sit in the investment ledger beside them, so either
+/// action would strand a customer's investment on a policy that no longer exists here.
+#[test]
+fn an_invested_policy_cannot_be_avoided_or_moved() {
+    let (mut c, policy) = invested();
+    let before = (c.state(0).ledger.head(), c.state(0).policies[&policy].clone());
+    let avoid = Command::AvoidPolicy {
+        policy: policy.clone(),
+        case: "nd-1".into(),
+        premium: ic_core::PremiumOnAvoidance::Refund,
+    };
+    assert_eq!(code(c.submit(0, "underwriting", avoid)), "policy_invested");
+    let transfer = Command::BeginTransfer {
+        policy: policy.clone(),
+        transfer_id: "t-1".into(),
+        target_group: ic_core::GroupId::from("grp-elsewhere"),
+        target_partition: 1,
+    };
+    assert_eq!(code(c.submit(0, "transfer", transfer)), "policy_invested");
+    assert_eq!((c.state(0).ledger.head(), c.state(0).policies[&policy].clone()), before);
+}

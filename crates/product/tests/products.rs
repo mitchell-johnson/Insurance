@@ -11,6 +11,13 @@ const HEALTH: &str = include_str!("../../../products/health_plan.star");
 const GROUP: &str = include_str!("../../../products/group_life.star");
 const INVEST: &str = include_str!("../../../products/invest_plan.star");
 const NO_PREMIUM: &str = include_str!("../../../products/rates/no_premium.star");
+const FLEX: &str = include_str!("../../../products/health_flex.star");
+const FLEX_RATES: [&str; 4] = [
+    include_str!("../../../products/rates/flex_hospital.star"),
+    include_str!("../../../products/rates/flex_specialist.star"),
+    include_str!("../../../products/rates/flex_dental.star"),
+    include_str!("../../../products/rates/flex_optical.star"),
+];
 const LIFE_RATES: &str = include_str!("../../../products/rates/life_base.star");
 const TRAUMA_RATES: &str = include_str!("../../../products/rates/trauma_base.star");
 const HEALTH_RATES: &str = include_str!("../../../products/rates/health_base.star");
@@ -28,6 +35,7 @@ fn all_shipped_configuration_loads() {
         ("health_plan.star", HEALTH),
         ("group_life.star", GROUP),
         ("invest_plan.star", INVEST),
+        ("health_flex.star", FLEX),
     ] {
         let p = load_product(f, s).unwrap();
         assert_eq!(p.content_hash.len(), 64);
@@ -42,6 +50,9 @@ fn all_shipped_configuration_loads() {
         ("none", NO_PREMIUM),
     ] {
         load_rate_table(f, s).unwrap();
+    }
+    for source in FLEX_RATES {
+        load_rate_table("flex", source).unwrap();
     }
     assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 7);
 }
@@ -347,5 +358,41 @@ fn every_frequency_has_its_period_count_and_key() {
         assert_eq!(f.periods_per_year(), periods);
         assert_eq!(f.key(), key);
         assert_eq!(serde_json::to_value(f).unwrap(), key);
+    }
+}
+
+/// Purpose: a product's combination rules allow a life any set of covers that has a core
+/// cover, has every cover its other covers require and has at most one of each exclusive
+/// set; a life with no covers breaks no rule; a product with no rules allows anything; and
+/// rules that name a cover the product does not offer, or make a cover require itself,
+/// are refused when the product is loaded.
+/// Why it matters: these rules decide which policies can exist on a mix-and-match
+/// product. A rule naming a cover that is not there would never bite, and nobody would
+/// know until a combination the product was never priced for had been sold.
+#[test]
+fn combination_rules_decide_which_sets_of_covers_a_life_may_hold() {
+    use std::collections::BTreeSet;
+    let exclusive = FLEX.replace(
+        "requires = {\"specialist\": [\"hospital\"]},",
+        "requires = {\"specialist\": [\"hospital\"]}, exclusive = [[\"dental\", \"optical\"]],",
+    );
+    let product = load_product("flex.star", &exclusive).unwrap();
+    let check = |held: &[&str]| product.check_composition(&held.iter().copied().collect::<BTreeSet<_>>());
+    assert!(check(&[]).is_ok());
+    assert!(check(&["hospital", "specialist", "dental"]).is_ok());
+    assert!(check(&["specialist"]).unwrap_err().contains("at least one of"));
+    assert!(check(&["specialist", "dental"]).unwrap_err().contains("specialist is held only with hospital"));
+    assert!(check(&["hospital", "dental", "optical"]).unwrap_err().contains("only one of dental, optical"));
+    // A product that declares no rules allows any set.
+    let term = load_product("term_life.star", TERM).unwrap();
+    assert!(term.check_composition(&["trauma"].into_iter().collect()).is_ok());
+
+    for (from, to) in [
+        ("core = [\"hospital\", \"dental\", \"optical\"]", "core = [\"hospital\", \"physio\"]"),
+        ("requires = {\"specialist\": [\"hospital\"]}", "requires = {\"specialist\": [\"specialist\"]}"),
+    ] {
+        let changed = FLEX.replace(from, to);
+        assert_ne!(changed, FLEX);
+        assert!(load_product("bad.star", &changed).is_err(), "{to} should be refused");
     }
 }

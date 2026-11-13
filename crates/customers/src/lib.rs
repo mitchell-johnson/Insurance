@@ -29,3 +29,9 @@ pub mod service;
 pub mod store;
 pub mod validate;
 pub mod work;
+
+/// An error as the text a caller logs or returns. One function rather than
+/// a closure at every `?`, so the error paths share one conversion.
+pub(crate) fn text(e: impl std::fmt::Display) -> String {
+    e.to_string()
+}

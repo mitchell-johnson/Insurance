@@ -41,6 +41,26 @@ pub struct ClaimantView {
     /// Only what is actually being asked for. A held overpayment asks
     /// nothing of the claimant, so it is not shown as owing.
     pub repayment_asked_minor: i64,
+    /// Each benefit period paid, with every figure that made it up.
+    pub benefit_lines: Vec<BenefitLine>,
+}
+
+/// One benefit period as the claimant's statement shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenefitLine {
+    pub start: NaiveDate,
+    pub end: NaiveDate,
+    /// The benefit before other income.
+    pub benefit_minor: i64,
+    /// Other income declared for the period, taken off the benefit.
+    pub other_income_minor: i64,
+    /// A shortfall on earlier periods paid with this one.
+    pub arrears_minor: i64,
+    /// Taken back against an overpayment.
+    pub overpayment_offset_minor: i64,
+    /// What was paid.
+    pub paid_minor: i64,
+    pub returned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,6 +133,11 @@ pub enum Question {
     /// A work queue's open claims.
     Queue {
         queue: Queue,
+        /// The person asking. A claim they may not work because of a
+        /// declared relationship or because they underwrote the life is
+        /// left out, so it is never offered to them. Absent: the whole queue.
+        #[serde(default)]
+        staff: Option<StaffId>,
     },
     /// The claims in payment as a portfolio. Carries cause analysis: for the
     /// claims module's own staff only.
@@ -124,6 +149,9 @@ pub enum Question {
     /// One claim as the people working it need it, without the clinical file.
     Work {
         claim: ClaimId,
+        /// The person asking: a claim they are conflicted on is not shown.
+        #[serde(default)]
+        staff: Option<StaffId>,
     },
     /// The claims on one policy as an adviser or an employer may see them:
     /// that each exists and where it is, never its cause or type. The caller
@@ -247,13 +275,27 @@ impl ClaimsState {
                     view: self.claimant_view(claim)?,
                 }))
             })),
-            Question::Queue { queue } => Reply::Queue(self.queue(*queue, today)),
+            Question::Queue { queue, staff } => Reply::Queue(
+                self.queue(*queue, today)
+                    .into_iter()
+                    .filter(|r| self.may_see(staff.as_deref(), &r.claim))
+                    .collect(),
+            ),
             Question::Book => Reply::Book(Box::new(self.book(today))),
             Question::Report => Reply::Report(Box::new(self.report())),
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
-            Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
+            Question::Work { claim, staff } => Reply::Work(self.work_view(claim).filter(|_| self.may_see(staff.as_deref(), claim)).map(Box::new)),
             Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
             Question::Cases { staff } => Reply::Cases(self.cases(staff)),
+        }
+    }
+
+    /// Whether someone may see a claim in a queue or its working view: not
+    /// if they are conflicted on it. Nobody named is the system asking.
+    fn may_see(&self, staff: Option<&str>, claim: &str) -> bool {
+        match (staff, self.claims.get(claim)) {
+            (Some(s), Some(c)) => !self.conflicted(s, c),
+            _ => true,
         }
     }
 
@@ -369,6 +411,21 @@ impl ClaimsState {
                 .filter(|s| c.status == Status::InPayment && s.next_period < s.end)
                 .map(|s| s.next_period),
             repayment_asked_minor: c.overpayments.iter().filter(asked).map(|o| o.outstanding_minor()).sum(),
+            benefit_lines: c
+                .schedule
+                .iter()
+                .flat_map(|s| s.periods.iter())
+                .map(|(start, p)| BenefitLine {
+                    start: *start,
+                    end: p.end,
+                    benefit_minor: p.gross_minor - p.arrears_minor + p.other_income_minor,
+                    other_income_minor: p.other_income_minor,
+                    arrears_minor: p.arrears_minor,
+                    overpayment_offset_minor: p.offset_minor,
+                    paid_minor: p.gross_minor - p.offset_minor,
+                    returned: p.returned,
+                })
+                .collect(),
         })
     }
 
