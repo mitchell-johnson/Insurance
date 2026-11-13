@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 3 | 4 | 19 | 6 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 0 | 3 | 18 | 11 |
+| VUL Vulnerable customers, support people and representatives | 1 | 2 | 18 | 10 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
 | PAY Payment runs and bank connectivity | 11 | 1 | 2 | 1 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 4 | 4 | 2 | 0 |
 | MIG Migration | 2 | 2 | 14 | 10 |
-| **Total** | **199** | **119** | **259** | **166** |
+| **Total** | **200** | **118** | **259** | **165** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 25 | 29 | 15 |
 | B | 80 | 22 | 40 |
-| C | 92 | 66 | 188 |
+| C | 93 | 65 | 188 |
 | D | 2 | 2 | 16 |
 
 ### Priority 1 tests with no built test, by area
@@ -132,7 +132,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ADV** (3): ADV-019, ADV-035, ADV-037
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
-- **VUL** (2): VUL-001, VUL-002
+- **VUL** (1): VUL-002
 - **STF** (4): STF-002, STF-012, STF-017, STF-018
 - **INC** (2): INC-003, INC-009
 - **MIG** (2): MIG-004, MIG-011

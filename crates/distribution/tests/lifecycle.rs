@@ -994,3 +994,50 @@ fn an_avoided_policy_earns_nobody_anything() {
         assert_eq!(w.dist.allocations.len(), count);
     }
 }
+
+/// Purpose: the person behind a scheme member's life is recorded when the member joins as a
+/// named life or is identified later, and only on a policy the module knows.
+/// Why it matters: the replacement rule matches cover by the person, not by the core's life
+/// ID, which is only unique within a policy. A member whose person is unknown can never be
+/// matched, so cover moved off a scheme onto a retail policy would earn initial commission
+/// twice.
+#[test]
+fn the_person_behind_a_scheme_members_life_is_recorded() {
+    let (mut w, policy, _) = advised_in(worked_example());
+    let partition = w.cluster.locate(&policy).unwrap();
+    let today = w.today();
+    inject(
+        &mut w,
+        partition,
+        CoreEvent::MemberJoined {
+            policy: policy.clone(),
+            life: ic_core::LifeId("m-7".into()),
+            effective: today,
+            covers: vec![],
+            party: Some(ic_core::PartyId("person-7".into())),
+            info: None,
+        },
+    );
+    inject(
+        &mut w,
+        partition,
+        CoreEvent::MemberIdentified {
+            policy: policy.clone(),
+            life: ic_core::LifeId("m-8".into()),
+            party: ic_core::PartyId("person-8".into()),
+        },
+    );
+    inject(
+        &mut w,
+        partition,
+        CoreEvent::MemberIdentified {
+            policy: PolicyId("nobody".into()),
+            life: ic_core::LifeId("m-9".into()),
+            party: ic_core::PartyId("person-9".into()),
+        },
+    );
+    let lives = &w.dist.policies[&policy].lives;
+    assert_eq!(lives["m-7"].0, "person-7");
+    assert_eq!(lives["m-8"].0, "person-8");
+    assert!(!w.dist.policies.contains_key(&PolicyId("nobody".into())));
+}
