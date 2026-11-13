@@ -225,6 +225,42 @@ pub type HoldAnswer<'a> = std::pin::Pin<Box<dyn Future<Output = Result<bool, Str
 /// module then holds what it would have stopped, once its record is stale.
 pub trait Holds: Send + Sync {
     fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a>;
+
+    /// A relationship by the master's reference `{party}/{id}`: its record,
+    /// `None` when the master has no such relationship, `Err` when it
+    /// could not say.
+    fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a>;
+}
+
+/// What an answer about a relationship resolves to.
+pub type RelationshipAnswer<'a> = std::pin::Pin<Box<dyn Future<Output = Result<Option<Value>, String>> + Send + 'a>>;
+
+/// Whether the master's record of a relationship links the policy owner
+/// and the payer (FIN-016): it exists, is in force, and has the owner, and a
+/// payer known as a party, at one end or the other. A payer known only by
+/// an account has no party for the master to link.
+pub fn relationship_links(record: Option<&Value>, owner: &str, payer: &str) -> Result<(), String> {
+    let record = record.ok_or("the customer master has no such relationship")?;
+    if record.get("in_force").and_then(Value::as_bool) != Some(true) {
+        return Err("the relationship is not in force".to_string());
+    }
+    let ends = [record.get("party"), record.pointer("/target/id")].map(|v| v.and_then(Value::as_str).unwrap_or_default());
+    let links = |party: &str| ends.contains(&party);
+    match payer.strip_prefix("party:") {
+        _ if !links(owner) => Err(format!("the relationship does not name the owner {owner}")),
+        Some(party) if !links(party) => Err(format!("the relationship does not name the payer {party}")),
+        _ => Ok(()),
+    }
+}
+
+/// The relationship the master's answer gives: a 200 is the record, a 404
+/// is none, anything else is no answer.
+pub fn relationship_in(status: u16, body: Value) -> Result<Option<Value>, String> {
+    match status {
+        200 => Ok(Some(body)),
+        404 => Ok(None),
+        status => Err(format!("the customer master answered {status}")),
+    }
 }
 
 /// The customer master service, reached with the pump's own Entra token
@@ -274,9 +310,33 @@ impl MasterHolds {
     }
 }
 
+impl MasterHolds {
+    async fn find_relationship(&self, reference: &str) -> Result<Option<Value>, String> {
+        let Some((party, id)) = reference.split_once('/').filter(|(p, i)| plain_party(p) && plain_party(i)) else {
+            return Err(format!("{reference:?} is not a relationship reference"));
+        };
+        let token = self.credential.token(&self.scope).await.map_err(|e| e.to_string())?;
+        let response = self
+            .http
+            .get(format!("{}/v1/parties/{party}/relationships/{id}", self.base.trim_end_matches('/')))
+            .bearer_auth(token)
+            .header("x-ic-caller", "payments")
+            .header("x-ic-purpose", "compliance")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status().as_u16();
+        relationship_in(status, response.json::<Value>().await.unwrap_or(Value::Null))
+    }
+}
+
 impl Holds for MasterHolds {
     fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
         Box::pin(self.ask(party))
+    }
+
+    fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a> {
+        Box::pin(self.find_relationship(reference))
     }
 }
 
@@ -284,5 +344,9 @@ impl Holds for BTreeMap<String, bool> {
     fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
         let answer = self.get(party).copied().ok_or_else(|| format!("no answer for {party}"));
         Box::pin(std::future::ready(answer))
+    }
+
+    fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a> {
+        Box::pin(std::future::ready(Err(format!("no answer for {reference}"))))
     }
 }

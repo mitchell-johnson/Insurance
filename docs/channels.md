@@ -320,6 +320,27 @@ As with the other consoles, the portal service holds none of it. It passes the q
 - **Who may.** The ledger checks every role itself and keeps maker and checker apart whatever roles one person holds. A refusal for want of a role comes back as `403 authority`, any other as `409` with its code, and `503 finance_unavailable` when it has no leader.
 - **Not on the page.** A chart of accounts, a close configuration and a return definition are proposed from their files through the command route; the page only approves them.
 
+## The group console
+
+`/group` is the staff screen for group scheme administration (`docs/group.md`): the exception queue across every scheme or one, a scheme's standing found by its ID or its policy, a membership file with its preview and refused rows, one member, and a scheme's file layouts. Staff confirm a held file, approve or withdraw one, let backdated changes through or drop them, decide a possible match, put back members removed in error, ask underwriting again for cover above the automatic amount, freeze, unfreeze or resume a scheme, set a mapping, and end a scheme; registering a scheme, amending its terms and agreeing a renewal take the terms as JSON.
+
+The group service holds all of it. The portal sends each command under the caller `group-admin` with the signed-in person as the actor, so its identity needs the group app's `group-admin` role beside `employer-portal` (`deploy/entra/group-app.sh`).
+
+| Staff action | What it allows |
+| --- | --- |
+| `group.view` | opens the console to read, and to try a mapping (nothing is stored) |
+| `group.admin` | the commands as well |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/group/me` | Whether you may open the console, and act there. |
+| `GET /staff/v1/group/{question}` | `exceptions` (optional `scheme`), `scheme`, `invoices`, `mapping` (`scheme`), `file` (`scheme`, `file`), `member` (`scheme`, `employee`), `scheme_of` (`policy`). The outbox and the driver's work are not asked from here. |
+| `POST /staff/v1/group/commands` | One of `register_scheme`, `amend_terms`, `set_mapping`, `freeze`, `unfreeze`, `resume`, `confirm_held`, `decide_backdating`, `approve_file`, `withdraw_file`, `declare_pool`, `reinstate`, `request_excess_again`, `resolve_match`, `agree_renewal`, `terminate`, in the group module's JSON, with an `Idempotency-Key`. The driver's, a member's and other modules' commands are refused, and a file is received only by upload. |
+| `POST /staff/v1/group/schemes/{scheme}/mappings/try` | `{mapping, sample}`: what the sample would do read with that mapping. |
+
+- **Refusals.** The module's refusal comes back as `409` with its code, an unknown scheme or file as `404`. If the service refuses the portal itself (its token lacks `group-admin`), that is `502 role_not_held`, the portal's fault and not the person's; an unreachable service is `503`.
+- **Tests.** `tests/http.rs` `the_group_console` runs against the group module's own state machine and its own test harness (`tests/common/group_module.rs`), seeded with a possible match.
+
 ## Operations console and status page (addendum entry 6)
 
 `IC_REGIONS` tells the service which ledger node is in which region and `IC_HOME_REGION` which region normally leads. From that and what the nodes report:

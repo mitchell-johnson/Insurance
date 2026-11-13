@@ -1624,3 +1624,45 @@ async fn presentation_preferences_are_per_person() {
         assert_eq!(out["decision"], decision, "{act}");
     }
 }
+
+/// Purpose: a premium payer is recorded as a relationship from the payer to the owner, and
+/// payments can read one relationship by its reference (party and id) with whether it is in
+/// force, but a role without relationship access cannot, and an unknown one is not found.
+/// Why it matters: payments clears a third-party payer AML case (FIN-015, FIN-016) by naming
+/// such a relationship and never re-opens it, so it must check the reference is real and
+/// links the two people before accepting it.
+#[tokio::test]
+async fn a_premium_payer_relationship_can_be_checked_by_its_reference() {
+    let w = world_or_skip!();
+    let owner = w.person("Mere", "Tane", "2004-02-02", &[]).await;
+    let parent = w.person("Hemi", "Tane", "1972-07-07", &[]).await;
+    let (status, out) = w
+        .command(
+            &parent,
+            "staff",
+            json!({ "command": "add_relationship", "id": "pays-mere", "kind": "premium_payer",
+                    "target": { "kind": "party", "id": owner }, "valid_from": "2026-01-01",
+                    "attributes": { "basis": "parent" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (status, rel) = w.get(&format!("/v1/parties/{parent}/relationships/pays-mere"), "payments", "payments").await;
+    assert_eq!(status, StatusCode::OK, "{rel}");
+    assert_eq!(
+        (rel["party"].clone(), rel["kind"].clone(), rel["target"].clone(), rel["in_force"].clone()),
+        (json!(parent), json!("premium_payer"), json!({ "kind": "party", "id": owner }), json!(true))
+    );
+    let (status, _) = w.get(&format!("/v1/parties/{parent}/relationships/nope"), "payments", "payments").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = w.get(&format!("/v1/parties/{parent}/relationships/pays-mere"), "identity", "payments").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Ended, it is still found, and says so.
+    w.command(
+        &parent,
+        "staff",
+        json!({ "command": "end_relationship", "id": "pays-mere", "valid_to": "2026-03-01" }),
+    )
+    .await;
+    let (_, rel) = w.get(&format!("/v1/parties/{parent}/relationships/pays-mere"), "payments", "payments").await;
+    assert_eq!((rel["valid_to"].clone(), rel["in_force"].clone()), (json!("2026-03-01"), json!(false)));
+}

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Group schemes</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Group schemes</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+
+<section><h2>Work waiting</h2><p class="muted">Possible matches, held files, refused rows, blocked schemes, stale files, overdue declarations, short payment, renewals not agreed, loadings over too few members and brokers the commission module would not record.</p>
+<form id="ex-form"><div class="row"><div><label for="ex-scheme">Only this scheme (optional)</label><input id="ex-scheme"></div><button>Show</button></div></form>
+<div id="ex-msg" aria-live="polite"></div><div id="ex"></div></section>
+
+<section><h2>A scheme</h2>
+<form id="sc-form"><div class="row"><div><label for="sc-id">Scheme</label><input id="sc-id"></div><div><label for="sc-policy">or its policy</label><input id="sc-policy"></div><button>Show</button></div></form>
+<div id="sc-msg" aria-live="polite"></div><div id="sc"></div>
+<form id="sc-act" class="admin" hidden><div class="row"><div><label for="sc-reason">Reason (to freeze)</label><input id="sc-reason"></div>
+<button type="button" id="sc-freeze">Freeze</button><button type="button" id="sc-unfreeze">Unfreeze</button><button type="button" id="sc-resume">Resume after a block</button></div></form></section>
+
+<section><h2>A membership file</h2>
+<form id="fi-form"><div class="row"><div><label for="fi-scheme">Scheme</label><input id="fi-scheme" required></div><div><label for="fi-id">File</label><input id="fi-id" required></div><button>Show</button></div></form>
+<div id="fi-msg" aria-live="polite"></div><div id="fi"></div>
+<p class="admin" hidden><button type="button" id="fi-confirm">Confirm the held file</button> <button type="button" id="fi-approve">Approve</button> <button type="button" id="fi-withdraw">Withdraw</button>
+<button type="button" id="fi-back-yes">Let the backdated changes through</button> <button type="button" id="fi-back-no">Drop the backdated changes</button></p></section>
+
+<section><h2>A member</h2>
+<form id="mb-form"><div class="row"><div><label for="mb-scheme">Scheme</label><input id="mb-scheme" required></div><div><label for="mb-emp">Employee ID</label><input id="mb-emp" required></div><button>Show</button></div></form>
+<div id="mb-msg" aria-live="polite"></div><div id="mb"></div></section>
+
+<section class="admin" hidden><h2>Decide a possible match</h2><p class="muted">The member joined unlinked because the customer master found people they might be. Say who they are.</p>
+<form id="rm-form"><div class="row"><div><label for="rm-scheme">Scheme</label><input id="rm-scheme" required></div><div><label for="rm-emp">Employee ID</label><input id="rm-emp" required></div>
+<div><label for="rm-decision">Decision</label><select id="rm-decision"><option value="same_person">The same person as</option><option value="different_person">A different person, created as</option></select></div>
+<div><label for="rm-party">Party</label><input id="rm-party" required></div><button>Record</button></div></form><div id="rm-msg" aria-live="polite"></div></section>
+
+<section class="admin" hidden><h2>Put back members removed in error</h2><p class="muted">From the day they were removed, with no gap in cover.</p>
+<form id="ri-form"><div class="row"><div><label for="ri-scheme">Scheme</label><input id="ri-scheme" required></div><div><label for="ri-emps">Employee IDs, separated by commas</label><input id="ri-emps" required></div>
+<div><label for="ri-reason">Reason</label><input id="ri-reason" required></div><button>Reinstate</button></div></form><div id="ri-msg" aria-live="polite"></div></section>
+
+<section class="admin" hidden><h2>Ask underwriting again</h2><p class="muted">At the member's request, for cover above the automatic amount: after cover they paid for lapsed, or after a decline once their circumstances changed.</p>
+<form id="ux-form"><div class="row"><div><label for="ux-scheme">Scheme</label><input id="ux-scheme" required></div><div><label for="ux-emp">Employee ID</label><input id="ux-emp" required></div>
+<div><label for="ux-reason">Reason</label><input id="ux-reason" required></div><button>Ask</button></div></form><div id="ux-msg" aria-live="polite"></div></section>
+
+<section><h2>File layouts</h2><p class="muted">Try a mapping against a sample of the employer's file before setting it. Nothing is stored by a trial.</p>
+<form id="mp-form"><div class="row"><div><label for="mp-scheme">Scheme</label><input id="mp-scheme" required></div><button>Show the mappings in use</button></div></form>
+<div><label for="mp-json">Mapping (JSON)</label><textarea id="mp-json" rows="8"></textarea></div>
+<div><label for="mp-sample">Sample of the file</label><textarea id="mp-sample" rows="6"></textarea></div>
+<p><button type="button" id="mp-try">Try it</button> <button type="button" id="mp-set" class="admin" hidden>Set this mapping</button></p>
+<div id="mp-msg" aria-live="polite"></div><div id="mp"></div></section>
+
+<section class="admin" hidden><h2>End a scheme</h2><p class="muted">Every member is removed on the date, each with a continuation option, and the policy is cancelled. This cannot be undone.</p>
+<form id="tm-form"><div class="row"><div><label for="tm-scheme">Scheme</label><input id="tm-scheme" required></div><div><label for="tm-date">Effective</label><input id="tm-date" type="date" required></div>
+<div><label for="tm-reason">Reason</label><input id="tm-reason" required></div><div><label for="tm-sure"><input type="checkbox" id="tm-sure" required> I am sure</label></div><button>End the scheme</button></div></form><div id="tm-msg" aria-live="polite"></div></section>
+
+<section class="admin" hidden><h2>Another command</h2><p class="muted">Registering a scheme, amending its terms and agreeing a renewal take the scheme's terms as JSON.</p>
+<form id="raw-form"><div><label for="raw-cmd">Command (JSON)</label><textarea id="raw-cmd" rows="6" required></textarea></div><button>Send</button></form><div id="raw-msg" aria-live="polite"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/group/";
+let me = {};
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const val = (id) => $(id).value.trim();
+const pairs = (o) => table(["", ""], Object.entries(o || {}).map(([k, v]) => [words(k), v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)]));
+
+async function showExceptions() {
+  const scheme = val("ex-scheme");
+  const { exceptions } = await ask("exceptions", scheme ? { scheme } : undefined);
+  put($("ex"), exceptions.length ? table(["", "Scheme", "What", "About", "Raised"], exceptions.map((e) => [e.id, e.scheme, words(e.kind), e.subject, e.raised]))
+    : h("p", { class: "muted" }, "Nothing is waiting."));
+}
+$("ex-form").addEventListener("submit", run($("ex-msg"), showExceptions));
+
+async function showScheme() {
+  let scheme = val("sc-id");
+  if (!scheme && val("sc-policy")) {
+    const { schemes } = await ask("scheme_of", { policy: val("sc-policy") });
+    if (!schemes.length) throw new Error("No scheme is written on that policy.");
+    scheme = schemes[0]; $("sc-id").value = scheme;
+  }
+  if (!scheme) throw new Error("Give a scheme or its policy.");
+  const s = await ask("scheme", { scheme });
+  const { terms, ...rest } = s;
+  rest.outstanding_minor = money(rest.outstanding_minor);
+  put($("sc"), pairs(rest), h("details", {}, h("summary", {}, "Terms"), h("pre", {}, JSON.stringify(terms, null, 2))));
+  for (const id of ["fi-scheme", "mb-scheme", "rm-scheme", "ri-scheme", "ux-scheme", "mp-scheme", "tm-scheme"]) $(id).value = scheme;
+}
+$("sc-form").addEventListener("submit", run($("sc-msg"), showScheme));
+const onScheme = (command) => run($("sc-msg"), async () => { await send(command()); await showScheme(); return "Done."; });
+$("sc-freeze").addEventListener("click", onScheme(() => { if (!val("sc-reason")) throw new Error("Say why the scheme is frozen."); return { freeze: { scheme: val("sc-id"), reason: val("sc-reason") } }; }));
+$("sc-unfreeze").addEventListener("click", onScheme(() => ({ unfreeze: { scheme: val("sc-id") } })));
+$("sc-resume").addEventListener("click", onScheme(() => ({ resume: { scheme: val("sc-id") } })));
+
+async function showFile() {
+  const f = await ask("file", { scheme: val("fi-scheme"), file: val("fi-id") });
+  put($("fi"), h("p", {}, `${f.file}: ${words(f.status)}${f.code ? ` (${words(f.code)})` : ""}, received ${f.received || ""}.`),
+    h("h3", {}, "Summary"), pairs(f.summary),
+    (f.rejected || []).length ? [h("h3", {}, "Rows refused when read"), table(["Row", "Why"], f.rejected.map((r) => [r.row, words(r.code)]))] : "",
+    (f.refused || []).length ? [h("h3", {}, "Rows the core refused"), h("pre", {}, JSON.stringify(f.refused, null, 2))] : "");
+}
+$("fi-form").addEventListener("submit", run($("fi-msg"), showFile));
+const onFile = (name, extra, done) => run($("fi-msg"), async () => { await send({ [name]: { scheme: val("fi-scheme"), file: val("fi-id"), ...extra } }); await showFile(); return done; });
+$("fi-confirm").addEventListener("click", onFile("confirm_held", {}, "Confirmed."));
+$("fi-approve").addEventListener("click", onFile("approve_file", {}, "Approved."));
+$("fi-withdraw").addEventListener("click", onFile("withdraw_file", {}, "Withdrawn."));
+$("fi-back-yes").addEventListener("click", onFile("decide_backdating", { approve: true }, "The backdated changes go through."));
+$("fi-back-no").addEventListener("click", onFile("decide_backdating", { approve: false }, "The backdated changes were dropped."));
+
+$("mb-form").addEventListener("submit", run($("mb-msg"), async () => {
+  const m = await ask("member", { scheme: val("mb-scheme"), employee: val("mb-emp") });
+  const { covers, above_automatic, ...rest } = m;
+  put($("mb"), pairs(rest),
+    table(["Cover", "Type", "By formula", "Automatic"], (covers || []).map((c) => [c.cover, words(c.cover_type), money(c.formula_minor), money(c.automatic_minor)])),
+    (above_automatic || []).length ? table(["Above automatic", "Asked", "State", "In place", "From"], above_automatic.map((a) => [a.cover, money(a.asked_minor), words(a.state), money(a.in_place_minor), a.from || ""])) : "");
+}));
+
+$("rm-form").addEventListener("submit", run($("rm-msg"), async () => {
+  await send({ resolve_match: { scheme: val("rm-scheme"), employee_id: val("rm-emp"), decision: { decision: $("rm-decision").value, party: val("rm-party") } } });
+  return "Recorded.";
+}));
+$("ri-form").addEventListener("submit", run($("ri-msg"), async () => {
+  const employee_ids = val("ri-emps").split(",").map((e) => e.trim()).filter(Boolean);
+  await send({ reinstate: { scheme: val("ri-scheme"), employee_ids, reason: val("ri-reason") } });
+  return `Reinstated ${employee_ids.length}.`;
+}));
+$("ux-form").addEventListener("submit", run($("ux-msg"), async () => {
+  await send({ request_excess_again: { scheme: val("ux-scheme"), employee_id: val("ux-emp"), reason: val("ux-reason") } });
+  return "Sent to underwriting.";
+}));
+
+const mapping = () => { try { return JSON.parse($("mp-json").value); } catch { throw new Error("The mapping is not valid JSON."); } };
+$("mp-form").addEventListener("submit", run($("mp-msg"), async () => {
+  const m = await ask("mapping", { scheme: val("mp-scheme") });
+  if (m.mapping && !$("mp-json").value.trim()) $("mp-json").value = JSON.stringify(m.mapping, null, 2);
+  put($("mp"), h("pre", {}, JSON.stringify(m, null, 2)));
+}));
+$("mp-try").addEventListener("click", run($("mp-msg"), async () => {
+  const answer = await api(R, "POST", BASE + "schemes/" + encodeURIComponent(val("mp-scheme")) + "/mappings/try", { mapping: mapping(), sample: $("mp-sample").value });
+  put($("mp"), h("pre", {}, JSON.stringify(answer, null, 2)));
+  return "Tried. Nothing was stored.";
+}));
+$("mp-set").addEventListener("click", run($("mp-msg"), async () => { await send({ set_mapping: { scheme: val("mp-scheme"), mapping: mapping() } }); return "Set."; }));
+
+$("tm-form").addEventListener("submit", run($("tm-msg"), async () => {
+  await send({ terminate: { scheme: val("tm-scheme"), effective: $("tm-date").value, reason: val("tm-reason") } });
+  return "The scheme ends on " + $("tm-date").value + ".";
+}));
+$("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
+
+signIn(R).then(async () => {
+  me = await ask("me");
+  $("me").textContent = `You are ${me.staff}: ${me.admin ? "group administration" : "view only"}.`;
+  document.querySelectorAll(".admin").forEach((e) => { e.hidden = !me.admin; });
+  await showExceptions();
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

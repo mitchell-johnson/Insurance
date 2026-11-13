@@ -682,7 +682,11 @@ fn an_underwriting_approval_asks_the_core_again() {
     });
     assert!(world.state.outbox.is_empty());
     let wanted = || ic_collections::query::answer(&world.state, serde_json::json!({"q": "reinstatements_for_underwriting"})).unwrap();
-    assert_eq!(wanted(), serde_json::json!(["p1"]), "underwriting's driver is told to open p1");
+    assert_eq!(
+        wanted(),
+        serde_json::json!([{"policy": "p1", "partition": 0}]),
+        "underwriting's driver is told to open p1"
+    );
 
     world.core(0, approved("p2"));
     assert!(world.state.outbox.is_empty(), "p2 was not waiting on underwriting");

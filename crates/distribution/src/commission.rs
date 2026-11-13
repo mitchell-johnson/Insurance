@@ -412,6 +412,7 @@ impl DistributionState {
             given_up: None,
             matched_away_minor: 0,
             replacement: None,
+            conduct: vec![],
         };
         if origin == LayerOrigin::Indexation {
             // An indexation step inherits the cover's terms and book. It

@@ -274,3 +274,35 @@ pub fn owner_hold_changes(party: &crate::party::Party, written: &[crate::event::
     }
     out
 }
+
+/// The claims command saying an identity check saw the person alive.
+pub fn confirm_alive(party: &PartyId, source: &str, evidence_ref: &str) -> ic_core::Command {
+    ic_core::Command::Claims(Box::new(ic_claims::Command::ConfirmAlive {
+        party: party.0.clone(),
+        source: source.to_string(),
+        evidence_ref: evidence_ref.to_string(),
+    }))
+}
+
+/// The checks among new events that prove the person alive: passed, by a
+/// method that sees them (`LIVE_METHODS`), made within `PROOF_OF_LIFE_DAYS`
+/// of `now`, of someone not recorded as dead. As (source, evidence_ref).
+pub fn proofs_of_life(party: &crate::party::Party, written: &[crate::event::Recorded], now: chrono::DateTime<chrono::Utc>) -> Vec<(String, String)> {
+    use crate::party::{LIVE_METHODS, PROOF_OF_LIFE_DAYS};
+    if party.current(crate::model::Field::DateOfDeath, now).is_some() {
+        return Vec::new();
+    }
+    written
+        .iter()
+        .filter_map(|r| match &r.body {
+            crate::event::EventBody::Verified(v)
+                if v.outcome == crate::model::VerificationOutcome::Passed
+                    && LIVE_METHODS.contains(&v.method.as_str())
+                    && now - v.verified_at <= chrono::Duration::days(PROOF_OF_LIFE_DAYS) =>
+            {
+                Some((format!("identity_{}", v.method), v.evidence_ref.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}

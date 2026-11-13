@@ -399,8 +399,73 @@ impl ClaimsState {
             s.case_manager = Some(to.to_string());
         }
         note(&mut claim, cx, Some(actor), format!("assigned:{to}"));
+        let handover = previous.as_deref().is_some_and(|p| p != to);
+        if handover && claim.flags.communication_support {
+            // The new owner tells the claimant themselves, and says what was handed over.
+            note(&mut claim, cx, Some(actor), format!("handover:{}:{to}", previous.clone().unwrap_or_default()));
+            open_task(
+                &mut claim,
+                cx,
+                format!("handover/{to}/{}", cx.today),
+                TaskKind::ClaimantConversation,
+                Some(plus_days(cx.today, 2)),
+            );
+        }
         // The claimant is told who their owner is, and when it changes.
-        cx.notify("claim_assigned", id, &[("handover", previous.is_some().to_string())]);
+        cx.notify(
+            "claim_assigned",
+            id,
+            &[
+                ("handover", previous.is_some().to_string()),
+                ("owner", to.to_string()),
+                ("communication_support", claim.flags.communication_support.to_string()),
+            ],
+        );
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// Record a communication marker, or its end. Turned on, every deadline
+    /// still open for the claimant moves out by the rules' extension; turned
+    /// off, nothing already given is shortened.
+    pub(crate) fn record_communication_need(&mut self, cx: &mut Cx<'_>, id: &str, needed: bool, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        if !self.leads(&actor.staff) {
+            self.owner(actor, &claim)?;
+        }
+        if claim.flags.communication_support == needed {
+            return Ok(());
+        }
+        claim.flags.communication_support = needed;
+        let extra = self.rules.communication_extra_days;
+        if needed && extra > 0 {
+            let claimant = claim.claimant.clone();
+            let theirs: Vec<(NaiveDate, Due)> = claim
+                .due
+                .iter()
+                .filter(|(_, d)| match d {
+                    Due::Evidence(e) => claim
+                        .evidence
+                        .iter()
+                        .any(|x| &x.id == e && x.received_on.is_none() && customer_side(&x.from, claimant.as_deref())),
+                    Due::ReviewOverdue(_) => true,
+                    _ => false,
+                })
+                .cloned()
+                .collect();
+            for (on, due) in theirs {
+                claim.due.remove(&(on, due.clone()));
+                let later = plus_days(on, extra);
+                if let Due::Evidence(e) = &due {
+                    if let Some(x) = claim.evidence.iter_mut().find(|x| &x.id == e) {
+                        x.due = later;
+                    }
+                }
+                claim.due.insert((later, due));
+            }
+        }
+        note(&mut claim, cx, Some(actor), format!("communication_need:{needed}"));
+        cx.notify("communication_need_recorded", id, &[("needed", needed.to_string())]);
         self.commit(claim);
         Ok(())
     }
@@ -493,7 +558,11 @@ impl ClaimsState {
         if claim.evidence.iter().any(|e| e.id == evidence) {
             return Err(Reject::new("evidence_exists", format!("evidence request {evidence} already exists")));
         }
-        let due = plus_days(cx.today, self.rules.timers(claim.line()).evidence_days);
+        let mut days = self.rules.timers(claim.line()).evidence_days;
+        if claim.flags.communication_support && customer_side(&from, claim.claimant.as_deref()) {
+            days += self.rules.communication_extra_days;
+        }
+        let due = plus_days(cx.today, days);
         claim.due.insert((due, Due::Evidence(evidence.clone())));
         claim.evidence.push(Evidence {
             id: evidence.clone(),
@@ -771,4 +840,10 @@ impl ClaimsState {
         self.commit(claim);
         Ok(())
     }
+}
+
+/// Whether evidence asked `from` someone is the claimant's to give: asked of
+/// "claimant" or of the claimant's own party.
+fn customer_side(from: &str, claimant: Option<&str>) -> bool {
+    from == "claimant" || Some(from) == claimant
 }
