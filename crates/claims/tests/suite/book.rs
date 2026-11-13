@@ -3,7 +3,7 @@
 
 use ic_claims::command::ReopenBasis;
 use ic_claims::model::{EndReason, OverpaymentCause, RecoveryStatus, RunStatus, TimerKind};
-use ic_claims::{Command, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
+use ic_claims::{ClaimType, Command, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
 
 use crate::world::*;
 
@@ -1852,4 +1852,69 @@ fn reserve_admission_and_closing_name_the_cause_category() {
     let closed = w.core.noticed("claim_closed");
     let closed = closed.last().expect("closed");
     assert_eq!((closed["outcome"].as_str(), closed["cause_category"].as_str()), ("declined", "mental"));
+}
+
+/// Purpose: part of a death benefit can be advanced before the claim is decided, up to the
+/// rules' limit, and paid at once to the verified payee without closing the claim; the
+/// admission that follows counts the advance as part of the benefit, admits only the rest and
+/// cannot admit less than was advanced.
+/// Why it matters: persona test CLM-004. A family arranging a funeral in the first week cannot
+/// wait six weeks for the decision; an advance not counted against the final amount would pay
+/// the estate twice, and one that closed the claim would leave the rest of the benefit unpaid.
+#[test]
+fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.funeral_advance_max_minor = 15_000;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.ok(Command::Notify(Box::new(World::notification("c-1", "pol-1", "life", ClaimType::Death))));
+    w.ok(Command::Acknowledge {
+        claim: "c-1".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("c-1", "ana");
+    let advance = |amount_minor| Request::FuneralAdvance { amount_minor };
+    assert_eq!(w.undecided("c-1", "ana", advance(20_000), "R-OK"), "advance_limit");
+    w.open_claim("t-1");
+    assert_eq!(w.undecided("t-1", "ana", advance(1_000), "R-OK"), "not_open");
+
+    w.decided("c-1", "ana", advance(10_000), "R-OK");
+    let c = w.claim("c-1");
+    assert_eq!(
+        (c.status, c.advanced_minor, c.admitted_minor, c.payable_minor),
+        (Status::Open, 10_000, 10_000, 10_000)
+    );
+    assert!(w.core.instructions.iter().any(|i| matches!(
+        i,
+        Instruction::Admit {
+            amount_minor: 10_000,
+            release_reserve: false,
+            terminate: None,
+            ..
+        }
+    )));
+    assert_eq!(w.core.noticed("funeral_advance_admitted")[0]["amount_minor"], "10000");
+    w.verify_payee("c-1", "ana");
+    w.ok(pay("c-1", "ana", "adv-1", 10_000, None));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { close: false, .. })));
+    assert_eq!(w.claim("c-1").status, Status::Open, "the claim is still to be decided");
+    assert_eq!(w.undecided("c-1", "ana", advance(6_000), "R-OK"), "advance_limit");
+
+    w.assess("c-1", "CC-0001");
+    assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(10_000)), "R-OK"), "below_advance");
+    w.decided("c-1", "ana", World::admit_lump(Some(200_000)), "R-OK");
+    let c = w.claim("c-1");
+    assert_eq!((c.status, c.admitted_minor, c.payable_minor), (Status::Admitted, 200_000, 190_000));
+    assert!(matches!(
+        w.core.instructions.iter().rev().find(|i| matches!(i, Instruction::Admit { .. })),
+        Some(Instruction::Admit {
+            amount_minor: 190_000,
+            release_reserve: true,
+            ..
+        })
+    ));
+    let admitted = w.core.noticed("claim_admitted");
+    let admitted = admitted.last().expect("admitted");
+    assert_eq!((admitted["admitted_minor"].as_str(), admitted["advanced_minor"].as_str()), ("200000", "10000"));
 }
