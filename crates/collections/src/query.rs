@@ -38,6 +38,10 @@ pub enum Question {
     NoticesDue {
         limit: usize,
     },
+    /// Notices taken and waiting for their delivery outcome, oldest first.
+    NoticesSent {
+        limit: usize,
+    },
     /// Open tasks for a team, oldest first.
     Tasks {
         role: Role,
@@ -159,11 +163,15 @@ impl CollectionsState {
     }
 
     pub fn notices_due(&self, limit: usize) -> Vec<&Notice> {
-        self.notices
-            .values()
-            .filter(|n| n.state == NoticeState::Due)
-            .take(limit.min(MAX_ANSWER))
-            .collect()
+        self.notices_in(NoticeState::Due, limit)
+    }
+
+    /// Notices in a state, oldest first by day and then ID.
+    pub fn notices_in(&self, state: NoticeState, limit: usize) -> Vec<&Notice> {
+        let mut notices: Vec<&Notice> = self.notices.values().filter(|n| n.state == state).collect();
+        notices.sort_by(|a, b| (a.on, &a.id).cmp(&(b.on, &b.id)));
+        notices.truncate(limit.min(MAX_ANSWER));
+        notices
     }
 
     pub fn tasks_for(&self, role: Role, limit: usize) -> Vec<&Task> {
@@ -190,6 +198,7 @@ pub fn answer(state: &CollectionsState, question: Value) -> Result<Value, String
         Question::Queue { as_at, role, limit } => value(state.queue(as_at, role, limit)),
         Question::Policy { policy } => value(state.policies.get(&policy)),
         Question::NoticesDue { limit } => value(state.notices_due(limit)),
+        Question::NoticesSent { limit } => value(state.notices_in(NoticeState::Sent, limit)),
         Question::Tasks { role, limit } => value(state.tasks_for(role, limit)),
         Question::HardshipCase { case, role } => value(state.hardship_case(&case, role)),
         Question::Outbox { limit } => value(state.outbox.values().take(limit.min(MAX_ANSWER)).collect::<Vec<_>>()),
@@ -230,6 +239,10 @@ pub fn fact(event: &CoreEvent) -> Option<CoreFact> {
         } => CoreFact::Standing {
             policy: policy.clone(),
             to: *to,
+            oldest_unpaid_due: *oldest_unpaid_due,
+        },
+        CoreEvent::PolicyBalance { policy, oldest_unpaid_due, .. } => CoreFact::Balance {
+            policy: policy.clone(),
             oldest_unpaid_due: *oldest_unpaid_due,
         },
         CoreEvent::PolicyStatusChanged { policy, to, .. } => CoreFact::Status {

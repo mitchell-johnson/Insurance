@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 5 | 6 | 10 | 7 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
-| PAY Payment runs and bank connectivity | 11 | 1 | 2 | 1 |
+| PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 9 | 3 | 6 | 1 |
 | CFG Configuration operations and the actuary's interface | 6 | 0 | 8 | 2 |
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **233** | **128** | **216** | **141** |
+| **Total** | **234** | **128** | **215** | **140** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 85 | 24 | 33 |
-| C | 117 | 71 | 158 |
+| C | 118 | 71 | 157 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -104,7 +104,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANN** (2): ANN-001, ANN-002
 - **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013
-- **PAY** (1): PAY-010
 - **FIN** (1): FIN-009
 - **CFG** (2): CFG-005, CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015

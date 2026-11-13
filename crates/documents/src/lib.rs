@@ -12,6 +12,7 @@
 
 pub mod auth;
 pub mod channels;
+pub mod collections_notices;
 pub mod command;
 pub mod complaint_letters;
 pub mod complaints_relay;

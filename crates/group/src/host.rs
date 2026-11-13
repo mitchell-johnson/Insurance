@@ -3,14 +3,15 @@
 //! The deployed node hosts the module from [`module_spec`].
 
 use ic_core::event::Event as CoreEvent;
-use ic_core::{EventRecord, LayerOrigin};
+use ic_core::{EventRecord, LayerOrigin, PolicyId};
 use ic_raft::{hosted_reading, ModuleSpec, ModuleState};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::benefit::member_cover;
 use crate::command::{caller, Envelope, GroupCommand};
 use crate::event::Outbound;
-use crate::state::{FileStatus, GroupState};
+use crate::state::{CaseStatus, FileStatus, GroupState};
 
 /// The module's permanent name on the cluster.
 pub const MODULE: &str = "group";
@@ -85,6 +86,14 @@ pub enum Question {
     FilesToRead,
     /// The mapping a scheme's files are read with.
     Mapping { scheme: String },
+    /// The schemes written on a policy: a portal knows an employer by the
+    /// scheme policy it administers.
+    SchemeOf { policy: PolicyId },
+    /// One member as the employer may see them: what the employer told us
+    /// and what the member is covered for. Never date of birth, sex or
+    /// smoker status, a loading, an exclusion, or why underwriting decided
+    /// as it did.
+    Member { scheme: String, employee: String },
 }
 
 /// A file the driver has work to do on.
@@ -164,6 +173,59 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
             json!({ "files": files })
         }
         Question::Mapping { scheme: id } => json!({ "mapping": scheme(&id)?.mapping }),
+        Question::SchemeOf { policy } => {
+            let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();
+            json!({ "schemes": schemes })
+        }
+        Question::Member { scheme: id, employee } => {
+            let s = scheme(&id)?;
+            let m = s
+                .membership
+                .members
+                .get(&employee)
+                .ok_or_else(|| format!("{employee} is not a member of scheme {id}"))?;
+            let in_force = m.in_force_on(state.today());
+            let covers = if !in_force {
+                Vec::new()
+            } else {
+                member_cover(&s.product, &m.attrs, m.auto_cap_minor)
+            };
+            // Cover above the automatic amount: how much, and whether it is
+            // in place. A decline and a request not proceeded with look the same.
+            let above: Vec<Value> = s
+                .cases
+                .values()
+                .filter(|c| c.employee_id == employee && c.life == m.life && c.status != CaseStatus::Ended)
+                .map(|c| {
+                    let (state, in_place_minor) = match c.status {
+                        CaseStatus::Requested | CaseStatus::Writing => ("pending", 0),
+                        CaseStatus::Accepted => ("in_place", c.accepted_minor),
+                        _ => ("not_in_place", 0),
+                    };
+                    json!({ "cover": c.cover, "asked_minor": c.excess_minor, "state": state, "in_place_minor": in_place_minor, "from": c.effective })
+                })
+                .collect();
+            json!({
+                "scheme": s.id,
+                "employee": m.employee_id,
+                "category": m.attrs.category,
+                "salary_minor": m.attrs.salary_minor,
+                "hours_hundredths": m.attrs.hours_hundredths,
+                "billing_group": m.attrs.billing_group,
+                "employment_start": m.attrs.employment_start,
+                "joined": m.joined,
+                "left": m.left,
+                "in_force": in_force,
+                "on_leave_since": m.absence_since,
+                "covers": covers.iter().map(|c| json!({
+                    "cover": c.cover,
+                    "cover_type": c.cover_type,
+                    "formula_minor": c.formula_minor,
+                    "automatic_minor": c.automatic_minor,
+                })).collect::<Vec<_>>(),
+                "above_automatic": above,
+            })
+        }
         Question::Exceptions { scheme: only } => {
             let open: Vec<_> = state
                 .exceptions

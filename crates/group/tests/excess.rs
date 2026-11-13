@@ -689,3 +689,107 @@ fn reissued_terms_move_a_loading_to_the_member_without_a_gap_in_cover() {
     // What is owed is the employer's balance and each member's own, the leaver's included.
     assert_eq!(h.owed(), h.scheme().outstanding_minor + debt(&h, "E005") + debt(&h, "E004"));
 }
+
+/// Purpose: the employer's view of one member gives what the employer told us and what the
+/// member is covered for (the formula amount, the automatic amount, and cover above it as
+/// pending, in place or not in place), and nothing of the member's health: no loading, no
+/// exclusion, no date of birth or smoker status, and a decline looks the same as a request
+/// not proceeded with. A leaver shows as no longer in force with no cover, someone who is
+/// not a member is not found, and a policy answers with its scheme.
+/// Why it matters: the employer's administrator opens these records every month. A loading
+/// or a decline shown here tells an employer about an employee's health, which is the one
+/// thing a scheme must never do.
+#[test]
+fn the_employers_view_of_a_member_shows_cover_and_never_health() {
+    let mut t = terms();
+    t.excess_loading = ExcessLoading::EmployerItemised;
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E004", attrs("executive", 240_000_00, "wlg")),
+            row(3, "E005", attrs("executive", 240_000_00, "wlg")),
+        ],
+    );
+    let ask = |h: &Harness, q: serde_json::Value| ic_group::answer(&h.g, q);
+    let member = |h: &Harness, id: &str| ask(h, serde_json::json!({"ask": "member", "scheme": SCHEME, "employee": id})).unwrap();
+    let case_of = |h: &Harness, id: &str| h.requests.iter().find(|r| r.life == life(id)).unwrap().case;
+
+    let pending = member(&h, "E004");
+    assert_eq!(
+        (pending["category"].as_str(), pending["salary_minor"].as_i64(), pending["in_force"].as_bool()),
+        (Some("executive"), Some(240_000_00), Some(true))
+    );
+    assert_eq!(
+        (pending["covers"][0]["formula_minor"].as_i64(), pending["covers"][0]["automatic_minor"].as_i64()),
+        (Some(960_000_00), Some(750_000_00))
+    );
+    assert_eq!(
+        pending["above_automatic"],
+        serde_json::json!([{ "cover": pending["covers"][0]["cover"], "asked_minor": 210_000_00, "state": "pending", "in_place_minor": 0, "from": pending["joined"] }])
+    );
+
+    // One accepted with a loading and an exclusion, the other declined.
+    let loaded = ExcessDecision::Accepted {
+        sum_insured_minor: 210_000_00,
+        loadings: vec![DecStr::parse("0.5").unwrap()],
+        exclusions: vec!["cardiac".into()],
+        member_consents_to_itemising: true,
+        member_pays_loading: false,
+    };
+    h.underwriting(case_of(&h, "E004"), loaded).unwrap();
+    h.underwriting(case_of(&h, "E005"), ExcessDecision::Declined).unwrap();
+    let in_place = member(&h, "E004");
+    assert_eq!(
+        (
+            in_place["above_automatic"][0]["state"].as_str(),
+            in_place["above_automatic"][0]["in_place_minor"].as_i64()
+        ),
+        (Some("in_place"), Some(210_000_00))
+    );
+    let declined = member(&h, "E005");
+    assert_eq!(
+        (
+            declined["above_automatic"][0]["state"].as_str(),
+            declined["above_automatic"][0]["in_place_minor"].as_i64()
+        ),
+        (Some("not_in_place"), Some(0))
+    );
+    for answer in [&in_place, &declined, &member(&h, "E001")] {
+        let text = answer.to_string();
+        for word in ["loading", "exclusion", "cardiac", "0.5", "declin", "date_of_birth", "smoker", "sex", "party"] {
+            assert!(!text.contains(word), "{word} in {text}");
+        }
+    }
+    assert_eq!(member(&h, "E001")["above_automatic"], serde_json::json!([]));
+
+    // A leaver, someone unknown, and the scheme of a policy.
+    h.days(3);
+    let left = h.today();
+    h.apply(
+        "leave",
+        FileKind::Changes,
+        vec![change(1, "E004", RowChange::Leave, left, attrs("executive", 240_000_00, "wlg"))],
+    );
+    let gone = member(&h, "E004");
+    assert_eq!(
+        (gone["in_force"].as_bool(), gone["left"].as_str()),
+        (Some(false), Some(left.to_string().as_str()))
+    );
+    assert_eq!(
+        (gone["covers"].clone(), gone["above_automatic"].clone()),
+        (serde_json::json!([]), serde_json::json!([]))
+    );
+    assert!(ask(&h, serde_json::json!({"ask": "member", "scheme": SCHEME, "employee": "E999"})).is_err());
+    assert!(ask(&h, serde_json::json!({"ask": "member", "scheme": "nobody", "employee": "E001"})).is_err());
+    assert_eq!(
+        ask(&h, serde_json::json!({"ask": "scheme_of", "policy": h.policy})).unwrap(),
+        serde_json::json!({ "schemes": [SCHEME] })
+    );
+    assert_eq!(
+        ask(&h, serde_json::json!({"ask": "scheme_of", "policy": "pol-unknown"})).unwrap(),
+        serde_json::json!({ "schemes": [] })
+    );
+}

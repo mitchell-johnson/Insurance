@@ -216,7 +216,10 @@ impl RunType {
             RunType::LumpSumClaims | RunType::BenefitPayments | RunType::ProviderPayments | RunType::ExGratia => Purpose::ClaimsDisbursement,
             RunType::Commission | RunType::Reinsurer | RunType::TaxAndLevies | RunType::UnclaimedMoney => Purpose::ThirdPartyDisbursement,
             RunType::PremiumRefunds => Purpose::Refunds,
-            RunType::FundSettlement | RunType::FundTransfer => Purpose::Operating,
+            // Cash owed between funds sits in the collection account it
+            // landed in, and is settled from there (PAY-010).
+            RunType::FundSettlement => Purpose::PremiumCollection,
+            RunType::FundTransfer => Purpose::Operating,
         }
     }
 }

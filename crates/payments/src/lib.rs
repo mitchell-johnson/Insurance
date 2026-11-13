@@ -24,6 +24,7 @@ pub mod query;
 mod recon;
 mod refund;
 mod run;
+pub mod sweep;
 
 pub use config::Config;
 pub use drill::Readiness;
