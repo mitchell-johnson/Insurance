@@ -647,8 +647,8 @@ async fn match_party<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
     };
     // The key is a keyed hash of the request: it identifies a repeat
     // without keeping the identity in the clear.
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&app.store.index_key().digest("match-request", &ctx.who.caller))
-        .unwrap_or_else(|_| unreachable!("HMAC takes a key of any length"));
+    let mut mac =
+        <Hmac<Sha256> as Mac>::new_from_slice(&app.store.index_key().digest("match-request", &ctx.who.caller)).expect("HMAC takes a key of any length");
     mac.update(&body);
     let idem = Idempotency {
         caller: ctx.who.caller.clone(),

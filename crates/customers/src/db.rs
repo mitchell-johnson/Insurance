@@ -53,7 +53,7 @@ fn tls() -> tokio_postgres_rustls::MakeRustlsConnect {
     };
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
         .with_safe_default_protocol_versions()
-        .unwrap_or_else(|_| unreachable!("the ring provider supports the default protocol versions"))
+        .expect("the ring provider supports the default protocol versions")
         .with_root_certificates(roots)
         .with_no_client_auth();
     tokio_postgres_rustls::MakeRustlsConnect::new(config)
@@ -150,7 +150,7 @@ pub async fn open(connector: Connector, size: usize) -> Result<Pool, String> {
         .create_timeout(Some(std::time::Duration::from_secs(10)))
         .runtime(deadpool::Runtime::Tokio1)
         .build()
-        .map_err(|e| e.to_string())?;
+        .map_err(crate::text)?;
     migrate(&pool).await?;
     Ok(pool)
 }
@@ -159,27 +159,27 @@ pub async fn open(connector: Connector, size: usize) -> Result<Pool, String> {
 /// once; an advisory lock lets one do it while the others wait.
 async fn migrate(pool: &Pool) -> Result<(), String> {
     let mut client = pool.get().await.map_err(|e| format!("cannot reach the database: {e}"))?;
-    let tx = client.transaction().await.map_err(|e| e.to_string())?;
-    tx.execute("select pg_advisory_xact_lock(7151001)", &[]).await.map_err(|e| e.to_string())?;
+    let tx = client.transaction().await.map_err(crate::text)?;
+    tx.execute("select pg_advisory_xact_lock(7151001)", &[]).await.map_err(crate::text)?;
     tx.execute(
         "create table if not exists cm_migrations (version integer primary key, applied_at timestamptz not null default now())",
         &[],
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(crate::text)?;
     for (version, sql) in MIGRATIONS {
         let done = tx
             .query_opt("select 1 from cm_migrations where version = $1", &[version])
             .await
-            .map_err(|e| e.to_string())?
+            .map_err(crate::text)?
             .is_some();
         if !done {
             tx.batch_execute(sql).await.map_err(|e| format!("migration {version} failed: {e}"))?;
             tx.execute("insert into cm_migrations (version) values ($1)", &[version])
                 .await
-                .map_err(|e| e.to_string())?;
+                .map_err(crate::text)?;
             tracing::info!(version, "database migration applied");
         }
     }
-    tx.commit().await.map_err(|e| e.to_string())
+    tx.commit().await.map_err(crate::text)
 }
