@@ -170,9 +170,9 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
 | UW-012 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
 | UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
-| UW-014 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
+| UW-014 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
-| UW-016 | part | `underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
+| UW-016 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
 | UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
