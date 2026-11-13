@@ -30,6 +30,7 @@ CLOSE = close_config(
         automatic("fund_balance", "Every statutory fund balances on its own", "finance_operations", 5),
         automatic("migration_control", "Migration control accounts have not moved since the old system was loaded", "finance_operations", 5),
         automatic("rate_table_validation", "Every rate table activated has a validation recorded for the same content", "appointed_actuary", 5),
+        automatic("accounting_groups", "Every policy issued is in an accounting group", "finance_operations", 3),
     ],
     aged = [
         aged("unidentified_receipts", "Bank receipts nobody has identified, aged with an owner", "treasury", 2, by = "payments", max_age_days = 30, max_amount_minor = 5000000),
@@ -38,6 +39,17 @@ CLOSE = close_config(
         aged("held_balance", "Held balances aged by party", "counterparty_finance", 2, by = "commission", max_age_days = 90, max_amount_minor = 10000000),
     ],
     migration_control = ["1420", "1430"],
+    # Portfolios of contracts with similar risks managed together, and the
+    # profitability band of each product's new business. Placeholder until
+    # the appointed actuary sets them; a policy is placed once, at issue.
+    grouping = [
+        accounting_group("term-life", "individual-life"),
+        accounting_group("interim-accident", "individual-life"),
+        accounting_group("group-life", "group-life"),
+        accounting_group("health-plan", "health"),
+        accounting_group("health-flex", "health"),
+        accounting_group("invest-plan", "investment-linked"),
+    ],
     tax = [
         tax_account("2200", "GST payable", ["gst"]),
         tax_account("2210", "Levies payable", ["levy"]),

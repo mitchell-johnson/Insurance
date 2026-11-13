@@ -1025,10 +1025,12 @@ fn claims_that_leave_the_policy_in_force_are_on_the_experience_extract() {
     assert_eq!(copy.experience(day(1), day(5)).unwrap().bytes(), whole.bytes());
 }
 
-/// Purpose: the real claims module, hosted in the real core, admits a provider's invoice
-/// of $95 on a health policy straight through, capped at the $60 limit. The mart, fed
-/// only the core's event stream, counts one admitted claim of $60 in the health product's
-/// cell, with the insured's age band, and the policy stays in force.
+/// Purpose: the real claims module, hosted in the real core, admits five provider invoices
+/// of $95 on a health policy straight through, each capped at the $60 limit and each
+/// with the cause code GP-INF (tag `infection.viral`). The mart, fed only the core's
+/// event stream, counts five admitted claims of $300 in the health product's cell, with
+/// the insured's age band, and the policy stays in force; the claims by cause extract
+/// shows them under `infection`, with neither the code nor the lower tag.
 /// Why it matters: the mart reads the claims module's facts by the names of their keys.
 /// The other tests write those facts by hand, so this is the one that fails if the
 /// claims module renames a key or stops publishing a fact, which would otherwise show
@@ -1053,6 +1055,7 @@ fn the_real_claims_module_feeds_the_experience_extract() {
             },
         )]
         .into(),
+        cause_codes: [("GP-INF".to_string(), vec!["infection.viral".to_string()])].into(),
         prepared_by: approved().0,
         approved_by: approved().1,
         ..claims::Rules::default()
@@ -1078,40 +1081,43 @@ fn the_real_claims_module_feeds_the_experience_extract() {
     w.core.submit(p, "new-business", issue_command(issue)).unwrap();
     w.pay(p, &id, "r-h", 2_000_00);
     w.until(d(2027, 11, 25));
-    let invoice = claims::command::Notification {
-        claim: "clm-h".into(),
-        policy: id.0.clone(),
-        cover: "hospital".into(),
-        life: Some("life-1".into()),
-        claim_type: claims::ClaimType::Health,
-        event_date: d(2027, 11, 25),
-        channel: claims::Channel::Provider,
-        notifier: claims::Notifier::Provider,
-        claimant: Some("party-claimant".into()),
-        claimed_minor: None,
-        flags: claims::Flags::default(),
-        health: Some(claims::HealthItem {
-            category: "gp".into(),
-            invoice_minor: 95_00,
-            provider: Some("provider-7".into()),
-            pre_approval_request: false,
-            settles_pre_approval: None,
-            service_code: None,
-            service_date: None,
-        }),
-        underwriters: vec![],
-        catastrophe_event: None,
-        cause_code: None,
-    };
-    w.core.submit(p, "claims", wrap(claims::Command::Notify(Box::new(invoice)))).unwrap();
+    // Five invoices, so that the claims by cause row is large enough to show.
+    for n in 0..5 {
+        let invoice = claims::command::Notification {
+            claim: format!("clm-h{n}"),
+            policy: id.0.clone(),
+            cover: "hospital".into(),
+            life: Some("life-1".into()),
+            claim_type: claims::ClaimType::Health,
+            event_date: d(2027, 11, 25),
+            channel: claims::Channel::Provider,
+            notifier: claims::Notifier::Provider,
+            claimant: Some("party-claimant".into()),
+            claimed_minor: None,
+            flags: claims::Flags::default(),
+            health: Some(claims::HealthItem {
+                category: "gp".into(),
+                invoice_minor: 95_00,
+                provider: Some("provider-7".into()),
+                pre_approval_request: false,
+                settles_pre_approval: None,
+                service_code: None,
+                service_date: None,
+            }),
+            underwriters: vec![],
+            catastrophe_event: None,
+            cause_code: Some("GP-INF".into()),
+        };
+        w.core.submit(p, "claims", wrap(claims::Command::Notify(Box::new(invoice)))).unwrap();
+    }
     w.until(d(2027, 12, 2));
 
     let nov = period(2027, 11);
     let mart = mart_of(2, &w.events);
     let experience = mart.experience(nov.start(), nov.end()).unwrap();
     assert!(experience.reconciled);
-    assert_eq!((total(&experience, "admitted_claims"), total(&experience, "admitted_minor")), (1, 60_00));
-    let cell = rows(&experience).into_iter().find(|r| r["admitted_claims"] == "1").unwrap();
+    assert_eq!((total(&experience, "admitted_claims"), total(&experience, "admitted_minor")), (5, 300_00));
+    let cell = rows(&experience).into_iter().find(|r| r["admitted_claims"] == "5").unwrap();
     assert!(
         !cell["product"].is_empty() && !cell["cover_type"].is_empty(),
         "the claim was not placed: {cell:?}"
@@ -1119,6 +1125,14 @@ fn the_real_claims_module_feeds_the_experience_extract() {
     assert_eq!(cell["age_band"], "35-39");
     assert_ne!(cell["cover_days"], "0", "the policy the claim is on has no exposure in its cell");
     assert_eq!(total(&experience, "ending_claims"), 0);
+    // The cause reaches the mart as its category only.
+    let by_cause = mart.claims_by_cause(nov.start(), nov.end()).unwrap();
+    let row = rows(&by_cause).into_iter().next().unwrap();
+    assert_eq!(
+        (row["cause"].as_str(), row["claims"].as_str(), row["admitted_minor"].as_str()),
+        ("infection", "5", "30000")
+    );
+    assert!(!by_cause.lines.concat().contains("GP-INF") && !by_cause.lines.concat().contains("viral"));
 }
 
 /// Purpose: two policies each billed 60 are avoided for non-disclosure on 3 March, one

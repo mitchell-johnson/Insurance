@@ -133,6 +133,7 @@ impl PaymentsState {
             "payees": payees,
             "authorities": authorities,
             "customer_hold": self.customer_holds.get(party),
+            "insolvency": self.insolvencies.get(party),
         })
     }
 }

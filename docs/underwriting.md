@@ -25,7 +25,7 @@
 
 ## How it talks to the rest
 
-In: commands in an `Envelope` (`key`, `caller`, `at`, `today`, `command`). Callers are fixed names: `config`, `new-business`, `migration`, `adviser-portal`, `evidence`, `underwriting-console`, `reinsurance`, `issuer`, `timer`, `adviser-licensing`, `claims` and `delegate-api`.
+In: commands in an `Envelope` (`key`, `caller`, `at`, `today`, `command`). Callers are fixed names: `config`, `new-business`, `migration`, `adviser-portal`, `evidence`, `underwriting-console`, `reinsurance`, `issuer`, `timer`, `adviser-licensing`, `claims`, `delegate-api`, and `customer-app`, which may only record or withdraw the life's own consents (`record_consent`), signed where the kind needs it.
 
 Out, on each applied command: events for the audit trail, and `Effect`s, each with a stable key that is its idempotency key at the receiver. Effects are for reinsurance (reserve, release and confirm capacity, record risk factors), the core (issue the policy, issue and end interim cover, apply terms, a non-disclosure remedy), evidence providers (request, chase, cancel), a delegate (send the file) and people (notices).
 
