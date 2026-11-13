@@ -86,6 +86,13 @@ pub enum Question {
     TaxReconciliation {
         period: PeriodId,
     },
+    /// How many policies are in each accounting group, and how many have none.
+    AccountingGroups,
+    /// One policy's accounting group, or null while it has none.
+    AccountingGroup {
+        partition: PartitionId,
+        policy: String,
+    },
     /// A proposed rate table priced against the book in force on a closed
     /// date, beside the version it replaces.
     TableDryRun {
@@ -143,6 +150,8 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Work => encode(&state.work()),
         Question::AgedSuspense { as_at } => Ok(state.aged_suspense(as_at)),
         Question::TaxReconciliation { period } => encode(&state.tax_reconciliation(period)),
+        Question::AccountingGroups => Ok(state.accounting_group_counts()),
+        Question::AccountingGroup { partition, policy } => encode(&state.accounting_groups.get(&(partition, ic_core::PolicyId::from(policy.as_str())))),
         Question::TableDryRun { as_at, request } => {
             let covers = request.covers.iter().cloned().collect();
             let book = state.mart.rated_covers(as_at, &covers).map_err(|e| e.to_string())?;
