@@ -206,6 +206,18 @@ pub struct GroupLine {
     pub total_minor: i64,
 }
 
+/// The members billed in one benefit category and occupation class, and
+/// what they cost. A scheme whose rates are split by class shows each
+/// class on its own line; one that is not has a line per category.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClassLine {
+    pub category: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
+    pub members: u32,
+    pub total_minor: i64,
+}
+
 /// One scheme invoice as the employer sees it: a schedule by billing group,
 /// retrospective adjustments since the last invoice, and one total for
 /// loadings that are not shown against any member.
@@ -213,6 +225,10 @@ pub struct GroupLine {
 pub struct Invoice {
     pub period_index: u32,
     pub by_group: BTreeMap<String, GroupLine>,
+    /// The same charges by category and occupation class, ordered by both.
+    /// It adds up to the billing-group schedule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub by_class: Vec<ClassLine>,
     pub adjustments_by_group: BTreeMap<String, i64>,
     pub loading_minor: i64,
     pub loading_adjustments_minor: i64,

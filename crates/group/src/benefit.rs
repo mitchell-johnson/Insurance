@@ -162,6 +162,7 @@ pub(crate) mod tests {
             employment_start: Some(d(2020, 2, 1)),
             actively_at_work: Some(true),
             billing_group: Some("akl".to_string()),
+            occupation_class: None,
         }
     }
 

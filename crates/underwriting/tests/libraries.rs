@@ -289,6 +289,7 @@ fn rules_with(body: &str) -> String {
 }
 
 /// Purpose: a rule set without products, ending before it starts, with a repeated rule, a rule
+/// whose id is not an opaque code or that does not say what it is about, a rule
 /// with no reason, a zero or excessive loading, or a deferral of no months is refused; and a
 /// rule set that names another question set, an unknown question, reason or exclusion fails its
 /// reference check.
@@ -297,7 +298,7 @@ fn rules_with(body: &str) -> String {
 #[test]
 fn rule_set_is_validated_at_load_and_against_its_references() {
     let s = shipped::load().unwrap();
-    let good = "rule('a', answered_yes('diabetes'), loading(25), ['RC-0101'])";
+    let good = "rule('UR-0001', answered_yes('diabetes'), loading(25), ['RC-0101'], about = 'a test')";
     let set = load_rule_set("f", &rules_with(good)).unwrap();
     assert_eq!(set.check_references(&s.question_sets[0], &s.exclusions, &s.reasons), Ok(()));
     invalid(load_rule_set("f", "RULES = rule_set('r', 1, '2026-01-01', 'q', [], [])"), "products");
@@ -306,10 +307,32 @@ fn rule_set_is_validated_at_load_and_against_its_references() {
         "ends before",
     );
     invalid(load_rule_set("f", &rules_with(&format!("{good}, {good}"))), "twice");
-    invalid(load_rule_set("f", &rules_with("rule('a', always(), decline(), [])")), "no reason");
-    invalid(load_rule_set("f", &rules_with("rule('a', always(), loading(0), ['RC-0101'])")), "loading");
-    invalid(load_rule_set("f", &rules_with("rule('a', always(), loading(501), ['RC-0101'])")), "loading");
-    invalid(load_rule_set("f", &rules_with("rule('a', always(), defer(0), ['RC-0101'])")), "period");
+    // An id that names a condition would put it in the log; one is needed, and so is the why.
+    invalid(
+        load_rule_set("f", &rules_with("rule('diabetes', always(), loading(25), ['RC-0101'], about = 'x')")),
+        "opaque",
+    );
+    invalid(
+        load_rule_set("f", &rules_with("rule('UR-01', always(), loading(25), ['RC-0101'], about = 'x')")),
+        "opaque",
+    );
+    invalid(load_rule_set("f", &rules_with("rule('UR-0001', always(), loading(25), ['RC-0101'])")), "about");
+    invalid(
+        load_rule_set("f", &rules_with("rule('UR-0001', always(), decline(), [], about = 'a test')")),
+        "no reason",
+    );
+    invalid(
+        load_rule_set("f", &rules_with("rule('UR-0001', always(), loading(0), ['RC-0101'], about = 'a test')")),
+        "loading",
+    );
+    invalid(
+        load_rule_set("f", &rules_with("rule('UR-0001', always(), loading(501), ['RC-0101'], about = 'a test')")),
+        "loading",
+    );
+    invalid(
+        load_rule_set("f", &rules_with("rule('UR-0001', always(), defer(0), ['RC-0101'], about = 'a test')")),
+        "period",
+    );
 
     let refs = |body: &str| {
         load_rule_set("f", &rules_with(body))
@@ -317,12 +340,12 @@ fn rule_set_is_validated_at_load_and_against_its_references() {
             .check_references(&s.question_sets[0], &s.exclusions, &s.reasons)
             .unwrap_err()
     };
-    assert!(refs("rule('a', not_(all_of(answered_yes('nope'))), decline(), ['RC-0101'])").contains("question nope"));
-    assert!(refs("rule('a', any_of(at_least('nope', 1)), decline(), ['RC-0101'])").contains("question nope"));
-    assert!(refs("rule('a', at_most('nope', 1), decline(), ['RC-0101'])").contains("question nope"));
-    assert!(refs("rule('a', unanswered('nope'), decline(), ['RC-0101'])").contains("question nope"));
-    assert!(refs("rule('a', always(), decline(), ['RC-7777'])").contains("reason RC-7777"));
-    assert!(refs("rule('a', always(), exclude('EX-7777'), ['RC-0101'])").contains("exclusion EX-7777"));
+    assert!(refs("rule('UR-0001', not_(all_of(answered_yes('nope'))), decline(), ['RC-0101'], about = 'a test')").contains("question nope"));
+    assert!(refs("rule('UR-0001', any_of(at_least('nope', 1)), decline(), ['RC-0101'], about = 'a test')").contains("question nope"));
+    assert!(refs("rule('UR-0001', at_most('nope', 1), decline(), ['RC-0101'], about = 'a test')").contains("question nope"));
+    assert!(refs("rule('UR-0001', unanswered('nope'), decline(), ['RC-0101'], about = 'a test')").contains("question nope"));
+    assert!(refs("rule('UR-0001', always(), decline(), ['RC-7777'], about = 'a test')").contains("reason RC-7777"));
+    assert!(refs("rule('UR-0001', always(), exclude('EX-7777'), ['RC-0101'], about = 'a test')").contains("exclusion EX-7777"));
     let other = load_rule_set("f", "RULES = rule_set('r', 1, '2026-01-01', 'other', ['p'], [])").unwrap();
     assert!(other
         .check_references(&s.question_sets[0], &s.exclusions, &s.reasons)
@@ -374,7 +397,7 @@ fn shipped_rules_give_the_expected_dispositions() {
         0,
     ));
     assert_eq!((a.disposition(), a.loading_percent), (Disposition::Terms, 75), "loadings add");
-    assert!(a.reasons.contains("RC-0103") && a.fired == vec!["smoker".to_string(), "alcohol-raised".to_string()]);
+    assert!(a.reasons.contains("RC-0103") && a.fired == vec!["UR-0001".to_string(), "UR-0003".to_string()]);
 
     let back = with(&[("back_or_neck_last_5_years", yes.clone())]);
     assert_eq!(
@@ -467,8 +490,16 @@ fn shipped_rules_give_the_expected_dispositions() {
 /// rate unseen.
 #[test]
 fn backtest_shows_how_a_rule_change_shifts_outcomes() {
-    let current = load_rule_set("f", &rules_with("rule('d', answered_yes('diabetes'), evidence('blood_test'), ['RC-0101'])")).unwrap();
-    let proposed = load_rule_set("f", &rules_with("rule('d', answered_yes('diabetes'), loading(50), ['RC-0101'])")).unwrap();
+    let current = load_rule_set(
+        "f",
+        &rules_with("rule('UR-0001', answered_yes('diabetes'), evidence('blood_test'), ['RC-0101'], about = 'blood sugar')"),
+    )
+    .unwrap();
+    let proposed = load_rule_set(
+        "f",
+        &rules_with("rule('UR-0001', answered_yes('diabetes'), loading(50), ['RC-0101'], about = 'blood sugar')"),
+    )
+    .unwrap();
     let case = |diabetes: bool| BacktestCase {
         answers: [("diabetes".to_string(), Answer::YesNo(diabetes))].into(),
         age: 40,
