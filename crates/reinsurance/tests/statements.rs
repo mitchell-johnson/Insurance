@@ -28,6 +28,11 @@ fn cut(period_end: chrono::NaiveDate) -> Command {
     }
 }
 
+/// The status the reinsurer API lists for north's first statement.
+fn listed(b: &Bench) -> String {
+    b.ri.statements_for(&north(), None, 10)[0].status.clone()
+}
+
 fn instruct(number: u32) -> Command {
     Command::InstructSettlement {
         number,
@@ -104,7 +109,8 @@ fn a_statement_nets_the_account_and_lists_only_what_the_treaty_allows() {
 
 /// Purpose: the settlement path: agreement where the treaty requires it, maker-checker, a hold
 /// that blocks payment, one sweep per partition and one net payment, and a bank confirmation
-/// for the wrong amount kept as an open item.
+/// for the wrong amount kept as an open item; the reinsurer API lists the statement's status
+/// at each step.
 /// Why it matters: this is money leaving the insurer. Each control here is one the design
 /// names: agreed before payment, prepared by one person and approved by another, held while a
 /// listing is in question, and never forced to match.
@@ -112,6 +118,7 @@ fn a_statement_nets_the_account_and_lists_only_what_the_treaty_allows() {
 fn settlement_is_agreed_checked_and_paid_once() {
     let mut b = billed();
     b.ok("month-end", cut(d(2027, 3, 31)));
+    assert_eq!(listed(&b), "issued");
     assert_eq!(b.refused("finance", instruct(1)), "not_agreed");
     assert_eq!(
         b.refused(
@@ -130,6 +137,7 @@ fn settlement_is_agreed_checked_and_paid_once() {
             reference: "RE-1".into(),
         },
     );
+    assert_eq!(listed(&b), "agreed");
     b.ok(
         "reinsurance-ops",
         Command::AgreeStatement {
@@ -237,6 +245,7 @@ fn settlement_is_agreed_checked_and_paid_once() {
     );
     assert!(b.ri.exceptions().contains_key("settlement_mismatch:1"));
     assert_eq!(b.ri.statement(1).unwrap().status, StatementStatus::Instructed);
+    assert_eq!(listed(&b), "instructed");
     let paid = b.ok(
         "finance",
         Command::RecordSettlement {
@@ -260,6 +269,7 @@ fn settlement_is_agreed_checked_and_paid_once() {
     assert_eq!(cleared, 7_18);
     assert_eq!(b.ri.statement(1).unwrap().cleared.as_deref(), Some("nz-main"));
     assert_eq!(b.ri.statement(1).unwrap().status, StatementStatus::Settled { payment_ref: "BANK-2".into() });
+    assert_eq!(listed(&b), "settled");
     assert!(b.ri.exceptions().is_empty());
     assert_eq!(b.ri.balance(&retail(), &north()), 0);
     assert_eq!(
