@@ -247,7 +247,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| GRP-001 | part | `group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
+| GRP-001 | full | `group/tests/intake.rs::twelve_monthly_files_on_a_scheme_of_five_thousand`<br>`group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
 | GRP-002 | full | `group/src/diff.rs::change_file_rows_that_do_not_fit_are_rejected_with_reasons`<br>`group/src/mapping.rs::unreadable_rows_are_rejected_one_by_one`<br>`group/tests/apply.rs::one_refused_row_does_not_stop_the_rest_of_the_file` |
 | GRP-003 | full | `group/tests/apply.rs::repeats_and_strays_change_nothing` |
 | GRP-004 | full | `group/tests/intake.rs::a_file_that_removes_too_many_members_is_held_for_a_person`<br>`group/src/diff.rs::the_safety_check_trips_past_the_share` |
