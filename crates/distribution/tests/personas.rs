@@ -214,3 +214,157 @@ fn a_second_move_carries_both_tails_each_ending_on_its_own_date() {
     );
     w.assert_reconciled();
 }
+
+/// Adviser B at FAP One, with a book of B's own.
+fn with_adviser_b(w: &mut World) {
+    w.add_party("adviser-b", PartyKind::Adviser);
+    w.add_party("b-co", PartyKind::Company);
+    w.payee("b-co");
+    w.account("b-co", "acct-b-co");
+    w.engage("eng-b-one", "adviser-b", "fap-one", d(2020, 1, 1));
+    let start = d(START.0, START.1, START.2);
+    w.activate(
+        "b-book",
+        vec![
+            Change::CreateBook {
+                id: BookId::from("b-at-fap-one"),
+                name: "B at FAP One".into(),
+                engagement: Some(EngagementId::from("eng-b-one")),
+                owner: Some(party("fap-one")),
+                house: false,
+            },
+            Change::ActivateRule(rule(
+                "b-at-fap-one",
+                1,
+                start,
+                vec![
+                    base("b-co", Share::OfRemainder(pct(80.0)), true),
+                    base("fap-one", Share::OfRemainder(pct(20.0)), false),
+                ],
+                vec![liable("fap-one")],
+            )),
+        ],
+    )
+    .unwrap();
+}
+
+/// Purpose (ADV-010): adviser B adds trauma cover to a policy adviser A wrote. The added cover
+/// is a layer of its own, written under B's engagement into B's book; each premium is split
+/// across the layers, A's book earning on the life cover and B's on the trauma cover only.
+/// Why it matters: a second adviser servicing a customer must be paid for what they wrote
+/// without touching the first adviser's commission on the cover that was already there.
+#[test]
+fn a_cover_another_adviser_adds_earns_in_that_advisers_book_only() {
+    let mut w = worked_example();
+    with_adviser_b(&mut w);
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    w.core(
+        &policy,
+        "underwriting",
+        CoreCommand::AddCover(Box::new(ic_core::command::AddedCover {
+            policy: policy.clone(),
+            cover: "trauma".into(),
+            life: LifeId("life-1".into()),
+            sum_insured_minor: 100_000_00,
+            loadings: vec![],
+            exclusions: vec![],
+            reference: "uw-trauma".into(),
+        })),
+    )
+    .unwrap();
+    let trauma = format!("{policy}/trauma/1");
+    assert!(w.dist.layers.contains_key(&trauma), "the added cover is a layer of its own");
+    w.write(&policy, "trauma", 1, "eng-b-one", "b-at-fap-one", 360_00).unwrap();
+    w.days(31);
+    let before = w.events.len();
+    w.pay(&policy, "r2");
+    let on_trauma = on_layer(&w, before, &trauma);
+    let on_life = on_layer(&w, before, &layer(&policy, 1));
+    assert!(on_trauma.contains_key(&("b-co".into(), CommissionType::Initial)), "{on_trauma:?}");
+    assert!(on_trauma.keys().all(|(who, _)| who == "b-co" || who == "fap-one"));
+    assert!(
+        on_life
+            .keys()
+            .all(|(who, t)| (who == "a-co" || who == "fap-one") && *t == CommissionType::Renewal),
+        "{on_life:?}"
+    );
+    assert!(on_life.contains_key(&("a-co".into(), CommissionType::Renewal)));
+    w.assert_reconciled();
+}
+
+/// Purpose (ADV-011): one adviser holds two engagements at once, with FAP One and with FAP Two.
+/// Each policy lands in the book of the engagement it was written under, and nothing is shared
+/// between the two.
+/// Why it matters: advisers do work for two providers. Commission written under one provider's
+/// licence and paid through the other's book would breach both agreements.
+#[test]
+fn an_adviser_with_two_engagements_earns_each_policy_in_the_book_it_was_written_under() {
+    let mut w = worked_example();
+    w.engage("eng-a-two", "adviser-a", "fap-two", d(2020, 1, 1));
+    let start = d(START.0, START.1, START.2);
+    w.activate(
+        "a-two",
+        vec![
+            Change::CreateBook {
+                id: BookId::from("a-at-fap-two"),
+                name: "A at FAP Two".into(),
+                engagement: Some(EngagementId::from("eng-a-two")),
+                owner: Some(party("fap-two")),
+                house: false,
+            },
+            Change::ActivateRule(rule(
+                "a-at-fap-two",
+                1,
+                start,
+                vec![
+                    base("a-co", Share::OfRemainder(pct(60.0)), true),
+                    base("fap-two", Share::OfRemainder(pct(40.0)), false),
+                ],
+                vec![liable("fap-two")],
+            )),
+        ],
+    )
+    .unwrap();
+    let (one, _) = w.issue(1, 500_000_00, None);
+    let (two, _) = w.issue(2, 500_000_00, None);
+    w.write(&one, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.write(&two, "life", 1, "eng-a-two", "a-at-fap-two", 1_200_00).unwrap();
+    // Writing under one engagement into the other's book is refused.
+    let (three, _) = w.issue(3, 500_000_00, None);
+    assert_eq!(code(w.write(&three, "life", 1, "eng-a-one", "a-at-fap-two", 1_200_00)), "book_not_writers");
+    let before = w.events.len();
+    w.pay(&one, "o1");
+    w.pay(&two, "t1");
+    let first = on_layer(&w, before, &layer(&one, 1));
+    let second = on_layer(&w, before, &layer(&two, 1));
+    assert!(first.keys().all(|(who, _)| who == "a-co" || who == "fap-one"), "{first:?}");
+    assert!(second.keys().all(|(who, _)| who == "a-co" || who == "fap-two"), "{second:?}");
+    let a_first: i64 = first.iter().filter(|((w, _), _)| w == "a-co").map(|(_, v)| *v).sum();
+    let a_second: i64 = second.iter().filter(|((w, _), _)| w == "a-co").map(|(_, v)| *v).sum();
+    assert!(a_first > a_second, "75% under FAP One against 60% under FAP Two");
+    w.assert_reconciled();
+}
+
+/// Purpose (ADV-043): a policy bought direct is written to no book and earns nothing however
+/// many premiums it pays; it shows in no adviser's commission and raises no clawback when
+/// cancelled.
+/// Why it matters: direct business has no adviser to pay. Commission accrued on it would be an
+/// expense with no one entitled to it, and a clawback on it would chase money never paid.
+#[test]
+fn direct_business_sits_in_no_book_and_earns_nothing() {
+    let mut w = worked_example();
+    let (direct, _) = w.issue(1, 500_000_00, None);
+    let before = w.events.len();
+    w.pay(&direct, "d1");
+    w.days(31);
+    w.pay(&direct, "d2");
+    assert!(w.dist.layers[&layer(&direct, 1)].books_on(w.today()).is_empty());
+    assert!(!w.events[before..].iter().any(|e| matches!(e, Event::CommissionEarned { .. })));
+    w.core(&direct, "policy-servicing", CoreCommand::CancelPolicy { policy: direct.clone() })
+        .unwrap();
+    assert!(!w.events[before..].iter().any(|e| matches!(e, Event::ClawbackRaised { .. })));
+    assert_eq!(w.payable("a-co") + w.payable("fap-one"), 0);
+    w.assert_reconciled();
+}
