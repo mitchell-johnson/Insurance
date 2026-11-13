@@ -172,10 +172,61 @@ pub fn normalise(field: Field, value: &Value) -> Result<Value, Problem> {
                 Err("must be letters and digits".into())
             }
         }
-        Field::Vulnerability => match value {
-            Value::Bool(b) => Ok(Value::Bool(*b)),
-            _ => Err("must be true or false".into()),
-        },
+        Field::Vulnerability => marker(value),
+    }
+}
+
+/// The kinds of vulnerability a marker may name. A kind, never a diagnosis.
+pub const MARKER_KINDS: [&str; 7] = [
+    "health",
+    "life_event",
+    "bereavement",
+    "resilience",
+    "capability",
+    "financial_abuse_risk",
+    "other",
+];
+
+/// What the insurer does differently for a marked customer.
+pub const ADJUSTMENTS: [&str; 9] = [
+    "more_time",
+    "plain_language",
+    "large_print",
+    "speak_to_trained_person",
+    "pause_before_large_withdrawal",
+    "no_phone_calls",
+    "support_person_present",
+    "written_follow_up",
+    "check_understanding",
+];
+
+/// A vulnerability marker: `{kind, review_on, adjustments}`, or `false` to
+/// remove one. Nothing else is accepted, so no diagnosis or free text can be
+/// recorded in it.
+fn marker(value: &Value) -> Result<Value, String> {
+    let shape = "a marker is {kind, review_on, adjustments}, or false to remove it";
+    match value {
+        Value::Bool(false) => Ok(Value::Bool(false)),
+        Value::Object(m) => {
+            if m.keys().any(|k| !["kind", "review_on", "adjustments"].contains(&k.as_str())) {
+                return Err(shape.into());
+            }
+            let kind = one_of(m.get("kind").unwrap_or(&Value::Null), &MARKER_KINDS)?;
+            let review_on = m
+                .get("review_on")
+                .and_then(Value::as_str)
+                .and_then(|d| d.parse::<chrono::NaiveDate>().ok())
+                .ok_or("review_on is a date")?;
+            let mut adjustments = Vec::new();
+            for a in m.get("adjustments").and_then(Value::as_array).ok_or("adjustments is a list")? {
+                let a = one_of(a, &ADJUSTMENTS)?;
+                if !adjustments.contains(&a) {
+                    adjustments.push(a);
+                }
+            }
+            Ok(serde_json::json!({ "kind": kind, "review_on": review_on.to_string(), "adjustments": adjustments }))
+        }
+        _ => Err(shape.into()),
     }
 }
 
@@ -306,8 +357,28 @@ mod tests {
         assert_eq!(ok(Field::OrganisationName, json!("Acme Ltd")), json!("Acme Ltd"));
         assert_eq!(ok(Field::RegistrationNumber, json!("9429041234567")), json!("9429041234567"));
         bad(Field::RegistrationNumber, json!("94-29"));
-        assert_eq!(ok(Field::Vulnerability, json!(true)), json!(true));
+        let m = json!({ "kind": "bereavement", "review_on": "2027-05-01", "adjustments": ["more_time", "more_time", "plain_language"] });
+        assert_eq!(
+            ok(Field::Vulnerability, m),
+            json!({ "kind": "bereavement", "review_on": "2027-05-01", "adjustments": ["more_time", "plain_language"] })
+        );
+        assert_eq!(ok(Field::Vulnerability, json!(false)), json!(false));
+        bad(Field::Vulnerability, json!(true));
         bad(Field::Vulnerability, json!("yes"));
+        bad(
+            Field::Vulnerability,
+            json!({ "kind": "health", "review_on": "2027-01-01", "adjustments": [], "diagnosis": "x" }),
+        );
+        bad(Field::Vulnerability, json!({ "kind": "cancer", "review_on": "2027-01-01", "adjustments": [] }));
+        bad(Field::Vulnerability, json!({ "kind": "health", "review_on": "soon", "adjustments": [] }));
+        bad(
+            Field::Vulnerability,
+            json!({ "kind": "health", "review_on": "2027-01-01", "adjustments": "more_time" }),
+        );
+        bad(
+            Field::Vulnerability,
+            json!({ "kind": "health", "review_on": "2027-01-01", "adjustments": ["hug"] }),
+        );
     }
 
     /// Purpose: name keys ignore case, punctuation and accents, and the phonetic key groups

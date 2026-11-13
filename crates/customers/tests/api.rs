@@ -660,11 +660,14 @@ async fn callers_must_prove_who_they_are() {
     assert_eq!(status(req).await, StatusCode::OK);
 }
 
-/// Purpose: the routing question answers whether a request should go to a person first,
-/// true once staff record a vulnerability marker, without ever showing the marker; callers
-/// the policy does not name are refused.
-/// Why it matters: a vulnerable customer's request must reach a trained person, and the
-/// marker itself is the most sensitive fact the master holds.
+/// Purpose: a vulnerability marker records a kind, a review date and adjustments, never a
+/// diagnosis; the routing question then answers "go to a person first" with the
+/// adjustments for anyone serving the person, the kind only for trained support staff, and
+/// the person sees their own marker in the app; other readers see no trace of it, not even
+/// a withheld field; only staff may set or remove it.
+/// Why it matters: a vulnerable customer's request must reach a trained person who knows
+/// what helps (matrix VUL-001, VUL-002), and the marker is the most sensitive fact the
+/// master holds: a label on a list, or a field marked as hidden, tells everyone it exists.
 #[tokio::test]
 async fn vulnerable_people_are_routed_to_a_person() {
     let w = world_or_skip!();
@@ -672,17 +675,53 @@ async fn vulnerable_people_are_routed_to_a_person() {
     let path = format!("/v1/parties/{p}/routing");
     let (status, out) = w.get(&path, "portal", "servicing").await;
     assert_eq!(status, StatusCode::OK, "{out}");
-    assert_eq!(out["route_to_person"], false);
-    let mark = json!({ "command": "record", "facts": [{ "field": "vulnerability", "value": true }] });
+    assert_eq!(out, json!({ "party": p, "route_to_person": false }));
+    let marker = json!({ "kind": "bereavement", "review_on": "2027-05-01", "adjustments": ["more_time", "speak_to_trained_person"] });
+    let mark = json!({ "command": "record", "facts": [{ "field": "vulnerability", "value": marker }] });
     let (status, _) = w.command(&p, "documents", mark.clone()).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    let with_diagnosis = json!({ "command": "record", "facts": [{ "field": "vulnerability",
+        "value": { "kind": "health", "review_on": "2027-05-01", "adjustments": [], "diagnosis": "x" } }] });
+    let (status, _) = w.command(&p, "staff", with_diagnosis).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "no diagnosis can be recorded");
     let (status, out) = w.command(&p, "staff", mark).await;
     assert_eq!(status, StatusCode::OK, "{out}");
+    // Anyone serving her: go to a person, and what helps. Not the kind.
     let (_, out) = w.get(&path, "claims", "claims").await;
-    assert_eq!(out["route_to_person"], true);
-    assert_eq!(out.as_object().unwrap().len(), 2, "only the answer, never the marker: {out}");
+    assert_eq!(
+        out,
+        json!({ "party": p, "route_to_person": true, "review_on": "2027-05-01",
+                "adjustments": ["more_time", "speak_to_trained_person"] })
+    );
+    // Trained support staff: the kind too.
+    let (_, out) = w.get(&path, "staff", "vulnerability_support").await;
+    assert_eq!(out["kind"], "bereavement");
+    // An ordinary read shows no trace of it.
     let (_, r) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
-    assert!(r["facts"].get("vulnerability").is_none());
+    assert!(!r.to_string().contains("vulnerability"), "{r}");
+    let (_, r) = w.get(&format!("/v1/parties/{p}"), "staff", "vulnerability_support").await;
+    assert_eq!(r["facts"]["vulnerability"]["value"], marker);
+    // She sees her own marker in the app.
+    let mine = Call {
+        method: "GET",
+        path: format!("/v1/parties/{p}?purpose=self_service"),
+        role: "portal",
+        purpose: None,
+        body: None,
+        headers: vec![("x-ic-party", p.clone())],
+    };
+    let (status, r) = w.send(mine).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["facts"]["vulnerability"]["value"], marker);
+    // Removing it is a statement like any other; the history keeps what was.
+    let remove = json!({ "command": "record", "reason": "reviewed with her: no longer needed",
+        "facts": [{ "field": "vulnerability", "value": false }] });
+    let (status, out) = w.command(&p, "staff", remove).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, out) = w.get(&path, "claims", "claims").await;
+    assert_eq!(out["route_to_person"], false);
+    let (_, h) = w.get(&format!("/v1/parties/{p}/history"), "staff", "vulnerability_support").await;
+    assert_eq!(h["statements"].as_array().unwrap().iter().filter(|s| s["field"] == "vulnerability").count(), 2);
     let (status, _) = w.get(&path, "commission", "commission").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }

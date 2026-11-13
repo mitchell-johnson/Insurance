@@ -10,6 +10,7 @@
 //! around it ([`vault`], [`delivery`], [`service`]) render, encrypt, store
 //! and send, and can be retried at any point.
 
+pub mod auth;
 pub mod channels;
 pub mod command;
 pub mod complaint_letters;

@@ -346,7 +346,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| VUL-001 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
+| VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 

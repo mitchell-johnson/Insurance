@@ -30,7 +30,7 @@ param environment string = 'dev'
 @description('The Event Hubs namespace main.bicep created.')
 param eventHubsNamespaceName string
 
-@description('The Key Vault main.bicep created. It holds cluster-token, group-fingerprint-salt and group-api-key.')
+@description('The Key Vault main.bicep created. It holds cluster-token and group-fingerprint-salt.')
 param keyVaultName string
 
 @description('The OIDC issuer URL of the AKS cluster, for workload identity.')

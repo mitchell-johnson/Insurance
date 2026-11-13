@@ -3,6 +3,11 @@
 //! the core on a real node.
 
 mod common;
+/// The customer master's test harness, for its stand-in Entra ID tenant and signed tokens.
+// It reads the clock to date its tokens, which this crate forbids only for the state machine.
+#[allow(clippy::disallowed_methods)]
+#[path = "../../customers/tests/common/mod.rs"]
+mod customer_master;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -135,6 +140,12 @@ struct Everyone;
 
 impl CustomerMaster for Everyone {
     async fn resolve(&self, _scheme: &str, identity: &MemberIdentity) -> Result<Resolution, String> {
+        // Bo may be somebody already known; everybody else is new.
+        if identity.employee_id == "E002" {
+            return Ok(Resolution::Possible {
+                candidates: vec![party("party-known")],
+            });
+        }
         Ok(Resolution::Created {
             party: party(&format!("party-{}", identity.employee_id)),
         })
@@ -617,6 +628,16 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
         .collect();
     assert_eq!(kinds, vec!["underwriting"]);
     assert_eq!(pass.failed, 1);
+    // And the notices did what they are for. The possible match is on reinsurance's own
+    // list of exceptions, so the member's cover is known not to be counted against the
+    // other person's retention; and its books still agree with themselves.
+    let reinsurance = |question: serde_json::Value| {
+        let client = client.clone();
+        async move { client.query_module("reinsurance", &question).await.unwrap().unwrap() }
+    };
+    let exceptions = reinsurance(serde_json::json!("exceptions")).await.to_string();
+    assert!(exceptions.contains("possible_match:") && exceptions.contains("party-known"), "{exceptions}");
+    assert_eq!(reinsurance(serde_json::json!("reconcile")).await, serde_json::json!([]));
     // Its outbox holds nothing for us, and withdrawing what it never opened is settled.
     assert_eq!(driver.collect_answers().await.unwrap(), Default::default());
     let answers = driver.peers.underwriting_answers(0, 10).await.unwrap();
@@ -643,7 +664,8 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
 
     let token_file = dir.join("federated-token");
     std::fs::write(&token_file, "a-projected-service-account-token").unwrap();
-    let api_key = "service-key-0123456789abcdef0123456789";
+    let authority = customer_master::tenant().await;
+    let token = customer_master::token_with(&authority, &["group-admin"], "api://group-schemes");
     let listen = format!("127.0.0.1:{}", std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port());
     let mut child = binary()
         .env("IC_NODES", &addr)
@@ -657,7 +679,8 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
         .env("IC_GROUP_CUSTOMER_MASTER", &fake.base)
         .env("IC_GROUP_CUSTOMER_MASTER_SCOPE", "api://customers/.default")
         .env("IC_GROUP_FINGERPRINT_SALT", "test-salt-0123456789abcdef0123456789")
-        .env("IC_GROUP_API_KEY", api_key)
+        .env("IC_GROUP_AUDIENCE", "api://group-schemes")
+        .env("IC_GROUP_ENTRA_AUTHORITY", &authority)
         .env("IC_GROUP_LISTEN", &listen)
         .env("IC_GROUP_CYCLE_SECONDS", "1")
         .spawn()
@@ -672,7 +695,7 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
     }
     let answer: serde_json::Value = http
         .post(format!("http://{listen}/v1/questions"))
-        .bearer_auth(api_key)
+        .bearer_auth(&token)
         .body(r#"{"ask":"scheme","scheme":"harbour"}"#)
         .send()
         .await
@@ -681,6 +704,13 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
         .await
         .unwrap();
     assert_eq!(answer["members"].as_u64(), Some(3), "{answer}");
+    // The probes the deployment uses, and the counters its passes feed.
+    assert_eq!(http.get(format!("http://{listen}/readyz")).send().await.unwrap().status().as_u16(), 200);
+    let metrics = http.get(format!("http://{listen}/metrics")).send().await.unwrap().text().await.unwrap();
+    assert!(
+        metrics.contains("ic_group_passes_total ") && !metrics.contains("ic_group_passes_total 0\n"),
+        "{metrics}"
+    );
     assert!(std::process::Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()

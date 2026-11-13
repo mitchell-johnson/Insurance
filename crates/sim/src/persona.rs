@@ -72,6 +72,30 @@ pub fn member(member_ref: &str, dob: NaiveDate, category: &str, salary_minor: i6
     }
 }
 
+/// A unit-linked savings policy: one investment account and nothing to bill.
+/// What the owner pays in is a contribution, applied as a receipt and then
+/// allocated to funds on the product's menu.
+pub fn invest_plan(n: u64, inception: NaiveDate, dob: NaiveDate, sex: Sex) -> IssuePolicy {
+    IssuePolicy {
+        policy: PolicyId(format!("pol-{n:08}")),
+        number: format!("KIP{n:08}"),
+        group: GroupId(format!("grp-{n:08}")),
+        policyholder: PartyId(format!("party-{n:08}")),
+        product_code: "invest-plan".to_string(),
+        inception,
+        frequency: Frequency::Yearly,
+        lives: vec![named_life("life-1", &format!("party-{n:08}"), dob, sex, false)],
+        covers: vec![CoverSpec {
+            code: "account".to_string(),
+            life: Some(LifeId("life-1".to_string())),
+            sum_insured_minor: 0,
+            loadings: vec![],
+            exclusions: vec![],
+        }],
+        migrated: false,
+    }
+}
+
 /// A retail term life policy on one life, with optional trauma cover.
 #[allow(clippy::too_many_arguments)]
 pub fn term_life(
