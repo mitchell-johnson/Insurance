@@ -25,7 +25,7 @@
 //! | `POST /parties/search` | Fuzzy search by name and date of birth. |
 //! | `POST /merges`, `POST /unmerges` | Merge a duplicate, or undo it. |
 //! | `GET /reviews`, `POST /reviews/{id}/dismiss` | Possible duplicates for a person. |
-//! | `POST /admin/verify/{id}`, `POST /admin/rewrap`, `POST /admin/reshred` | Operations. |
+//! | `POST /admin/verify/{id}`, `POST /admin/rewrap`, `POST /admin/reshred`, `GET /admin/index` | Operations. |
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -943,6 +943,14 @@ struct ReshredRequest {
     since: NaiveDate,
 }
 
+/// Where a change of blind index key stands, so an operator knows when the
+/// next key may be promoted.
+async fn index_status<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap) -> Reply {
+    operator(&app, &headers, "index").await?;
+    let status = app.store.index_status().await.map_err(failed)?;
+    Ok((StatusCode::OK, Json(json!(status))))
+}
+
 async fn reshred<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, headers: HeaderMap, Json(r): Json<ReshredRequest>) -> Reply {
     operator(&app, &headers, "reshred").await?;
     match crate::work::reshred(&app, r.since).await {
@@ -987,6 +995,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/admin/verify/{id}", post(verify::<W, S>))
         .route("/v1/admin/rewrap", post(rewrap::<W, S>))
         .route("/v1/admin/reshred", post(reshred::<W, S>))
+        .route("/v1/admin/index", get(index_status::<W, S>))
         .layer(axum::extract::DefaultBodyLimit::max(256 * 1024))
         .with_state(app)
 }

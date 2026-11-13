@@ -139,6 +139,25 @@ pub struct Store<W> {
     pool: Pool,
     keys: KeyRing<W>,
     index: IndexKey,
+    /// The key being changed to, while a change is under way.
+    next: Option<IndexKey>,
+}
+
+/// How far a change of index key has got.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct IndexStatus {
+    /// The key lookups use, by its public id.
+    pub current: String,
+    /// The key being built, by its public id.
+    pub next: Option<String>,
+    /// Parties not yet indexed under the current key.
+    pub waiting_current: i64,
+    /// Parties not yet indexed under the next key.
+    pub waiting_next: Option<i64>,
+    /// Entries under keys no longer in use, still to be removed.
+    pub retired_entries: i64,
+    /// True once the next key covers everyone and can be promoted.
+    pub ready_to_promote: bool,
 }
 
 /// The public facts of a stream, and its key.
@@ -170,7 +189,159 @@ fn version_i64(v: u64) -> i64 {
 
 impl<W: KeyWrapper> Store<W> {
     pub fn new(pool: Pool, keys: KeyRing<W>, index: IndexKey) -> Self {
-        Self { pool, keys, index }
+        Self { pool, keys, index, next: None }
+    }
+
+    /// Build blind indexes under `next` as well, ahead of making it the
+    /// current key. Refused if it is the current key.
+    pub fn with_next_index(mut self, next: Option<IndexKey>) -> std::result::Result<Self, String> {
+        if next.as_ref().is_some_and(|n| n.id() == self.index.id()) {
+            return Err("the next index key is the current one".into());
+        }
+        self.next = next;
+        Ok(self)
+    }
+
+    /// The keys every write indexes under: the current one, then the next.
+    fn index_keys(&self) -> impl Iterator<Item = &IndexKey> {
+        std::iter::once(&self.index).chain(self.next.as_ref())
+    }
+
+    /// How many parties are not yet indexed under a key.
+    async fn waiting(&self, c: &impl GenericClient, key: &IndexKey) -> Result<i64> {
+        let row = c
+            .query_one(
+                "select count(*) from parties p where p.shredded_at is null \
+                 and not exists (select 1 from index_state s where s.party_id = p.id and s.key_id = $1)",
+                &[&key.id()],
+            )
+            .await
+            .map_err(db)?;
+        Ok(row.get(0))
+    }
+
+    /// Where a change of index key stands.
+    pub async fn index_status(&self) -> Result<IndexStatus> {
+        let client = self.client().await?;
+        let waiting_current = self.waiting(&*client, &self.index).await?;
+        let waiting_next = match &self.next {
+            Some(k) => Some(self.waiting(&*client, k).await?),
+            None => None,
+        };
+        let active: Vec<String> = self.index_keys().map(IndexKey::id).collect();
+        let retired: i64 = client
+            .query_one("select count(*) from blind_index where key_id <> all($1)", &[&active])
+            .await
+            .map_err(db)?
+            .get(0);
+        Ok(IndexStatus {
+            current: self.index.id(),
+            next: self.next.as_ref().map(IndexKey::id),
+            waiting_current,
+            waiting_next,
+            retired_entries: retired,
+            ready_to_promote: waiting_next == Some(0),
+        })
+    }
+
+    /// Entries made before keys were named are under the current key, if
+    /// it has not changed since. Check one party's against the current key;
+    /// if they agree, name them and count every party as indexed. If not,
+    /// leave them, and the rebuild indexes everyone afresh.
+    pub async fn adopt_index(&self) -> Result<bool> {
+        let client = self.client().await?;
+        let Some(row) = client
+            .query_opt("select party_id from blind_index where key_id = '' limit 1", &[])
+            .await
+            .map_err(db)?
+        else {
+            return Ok(false);
+        };
+        let id = PartyId(row.get(0));
+        let stored: BTreeSet<(String, Vec<u8>)> = client
+            .query("select kind, digest from blind_index where party_id = $1 and key_id = ''", &[&id.0])
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| (r.get(0), r.get(1)))
+            .collect();
+        let party = self.load_with(&*client, &id, false).await?.map(|l| l.party);
+        let expected: BTreeSet<(String, Vec<u8>)> = party
+            .map(|p| matching::party_keys(&p, &self.index).into_iter().map(|(k, d)| (k.to_string(), d)).collect())
+            .unwrap_or_default();
+        if expected != stored {
+            tracing::warn!(party = %id, "older blind indexes are not under the current key; rebuilding them all");
+            return Ok(false);
+        }
+        drop(client);
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(db)?;
+        let current = self.index.id();
+        tx.execute("update blind_index set key_id = $1 where key_id = ''", &[&current])
+            .await
+            .map_err(db)?;
+        tx.execute(
+            "insert into index_state (party_id, key_id) select id, $1 from parties where shredded_at is null on conflict do nothing",
+            &[&current],
+        )
+        .await
+        .map_err(db)?;
+        tx.commit().await.map_err(db)?;
+        Ok(true)
+    }
+
+    /// Index up to `limit` parties that some key in use has not covered,
+    /// under every key in use. Each party's facts are opened to do it.
+    pub async fn rebuild_index(&self, limit: i64) -> Result<usize> {
+        let mut done = 0;
+        let keys: Vec<String> = self.index_keys().map(IndexKey::id).collect();
+        let ids: Vec<String> = self
+            .client()
+            .await?
+            .query(
+                "select p.id from parties p where p.shredded_at is null and exists \
+                 (select 1 from unnest($1::text[]) k(id) where not exists \
+                  (select 1 from index_state s where s.party_id = p.id and s.key_id = k.id)) \
+                 order by p.id limit $2",
+                &[&keys, &limit],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        for id in ids {
+            let mut client = self.client().await?;
+            let tx = client.transaction().await.map_err(db)?;
+            if let Some(l) = self.load_with(&tx, &PartyId(id), true).await? {
+                self.reindex(&tx, &l.party).await?;
+                done += 1;
+            }
+            tx.commit().await.map_err(db)?;
+        }
+        Ok(done)
+    }
+
+    /// Remove up to `limit` entries made under keys no longer in use, once
+    /// the current key covers everyone (until then they may still be the
+    /// only way to find someone).
+    pub async fn retire_index(&self, limit: i64) -> Result<u64> {
+        let client = self.client().await?;
+        if self.waiting(&*client, &self.index).await? > 0 {
+            return Ok(0);
+        }
+        let active: Vec<String> = self.index_keys().map(IndexKey::id).collect();
+        let mut n = 0;
+        for table in ["blind_index", "index_state"] {
+            n += client
+                .execute(
+                    &format!("delete from {table} where ctid = any(array(select ctid from {table} where key_id <> all($1) limit $2))"),
+                    &[&active, &limit],
+                )
+                .await
+                .map_err(db)?;
+        }
+        Ok(n)
     }
 
     pub fn index_key(&self) -> &IndexKey {
@@ -456,10 +627,19 @@ impl<W: KeyWrapper> Store<W> {
     /// Replace a party's blind indexes with those its record calls for.
     async fn reindex(&self, tx: &Transaction<'_>, party: &Party) -> Result<()> {
         tx.execute("delete from blind_index where party_id = $1", &[&party.id.0]).await.map_err(db)?;
-        for (kind, digest) in matching::party_keys(party, &self.index) {
+        for key in self.index_keys() {
+            let key_id = key.id();
+            for (kind, digest) in matching::party_keys(party, key) {
+                tx.execute(
+                    "insert into blind_index (party_id, kind, digest, key_id) values ($1, $2, $3, $4)",
+                    &[&party.id.0, &kind, &digest, &key_id],
+                )
+                .await
+                .map_err(db)?;
+            }
             tx.execute(
-                "insert into blind_index (party_id, kind, digest) values ($1, $2, $3)",
-                &[&party.id.0, &kind, &digest],
+                "insert into index_state (party_id, key_id) values ($1, $2) on conflict do nothing",
+                &[&party.id.0, &key_id],
             )
             .await
             .map_err(db)?;
@@ -788,8 +968,8 @@ impl<W: KeyWrapper> Store<W> {
             .query(
                 "select distinct coalesce(p.merged_into, p.id) from blind_index b join parties p on p.id = b.party_id \
                  join unnest($1::text[], $2::bytea[]) as k(kind, digest) on b.kind = k.kind and b.digest = k.digest \
-                 where p.shredded_at is null limit 50",
-                &[&kinds, &digests],
+                 where p.shredded_at is null and b.key_id in ($3, '') limit 50",
+                &[&kinds, &digests, &self.index.id()],
             )
             .await
             .map_err(db)?;
@@ -1148,6 +1328,7 @@ impl<W: KeyWrapper> Store<W> {
             "delete from marker_reviews where party_id = $1",
             "delete from directory_relay where party_id = $1",
             "delete from blind_index where party_id = $1",
+            "delete from index_state where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
             "update parties set shredded_at = $2 where id = $1",
