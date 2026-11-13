@@ -257,6 +257,16 @@ pub struct Holding {
     pub as_at: NaiveDate,
 }
 
+/// A fund's latest price: the highest version of the latest pricing date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FundPrice {
+    pub pricing_date: NaiveDate,
+    pub version: u32,
+    /// What a seller receives for a unit: what a withdrawal or surrender
+    /// pays, so the value shown is what the customer would receive.
+    pub sell: ic_money::DecStr,
+}
+
 /// An order waiting for its price.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingOrder {
@@ -288,6 +298,9 @@ pub struct Data {
     pub countersign: crate::countersign::Countersign,
     /// The latest business date any partition has reported.
     pub today: Option<NaiveDate>,
+    /// Each fund's latest unit price, for valuing holdings.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub prices: BTreeMap<String, FundPrice>,
     keys: BTreeSet<String>,
     key_order: VecDeque<String>,
 }
@@ -425,13 +438,21 @@ impl ChannelState {
             add("billing".to_string(), "billing", None, false, json!(b));
         }
         for (fund, held) in extras.into_iter().flat_map(|e| e.holdings.iter()) {
-            add(
-                format!("holding/{fund}"),
-                "holding",
-                None,
-                false,
-                json!({ "fund": fund, "units_micro": held.units_micro, "as_at": held.as_at }),
-            );
+            let mut body = json!({ "fund": fund, "units_micro": held.units_micro, "as_at": held.as_at });
+            // A value is never shown without the date of the price it is at.
+            if let Some(price) = d.prices.get(fund) {
+                let value = ic_money::UnitQty::new(held.units_micro, ic_money::FundId(fund.clone())).value_at(
+                    price.sell.get(),
+                    ic_money::Currency::NZD,
+                    ic_money::RoundingMode::HalfEven,
+                );
+                if let Ok(value) = value {
+                    body["price"] = json!(price.sell);
+                    body["price_date"] = json!(price.pricing_date);
+                    body["value_minor"] = json!(value.minor);
+                }
+            }
+            add(format!("holding/{fund}"), "holding", None, false, body);
         }
         for (order, o) in extras.into_iter().flat_map(|e| e.orders.iter()) {
             add(
@@ -612,6 +633,33 @@ impl ChannelState {
             }
             Event::AnniversaryReached { policy, number, on } => {
                 self.data.extras.entry(policy.clone()).or_default().last_anniversary = Some((*number, *on));
+            }
+            Event::Investment(ic_core::invest::InvestEvent::UnitPriceActivated {
+                fund,
+                pricing_date,
+                version,
+                sell: Some(sell),
+                ..
+            }) => {
+                let newer = self
+                    .data
+                    .prices
+                    .get(&fund.0)
+                    .is_none_or(|p| (*pricing_date, *version) > (p.pricing_date, p.version));
+                if newer {
+                    let price = FundPrice {
+                        pricing_date: *pricing_date,
+                        version: *version,
+                        sell: sell.clone(),
+                    };
+                    self.data.prices.insert(fund.0.clone(), price);
+                    // Every policy holding the fund: its value moved.
+                    for (policy, extras) in &self.data.extras {
+                        if extras.holdings.contains_key(&fund.0) {
+                            touched.insert(policy.clone(), None);
+                        }
+                    }
+                }
             }
             Event::Investment(invest) => {
                 if let Some(policy) = self.follow_investment(invest) {

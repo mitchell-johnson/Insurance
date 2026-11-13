@@ -1691,8 +1691,9 @@ fn an_owner_or_a_dependant_ending_in_the_customer_master() {
 }
 
 /// Purpose: on a unit-linked policy the policyholder's phone shows an order while it waits for its price and then the units it
-/// bought in the fund, from the investment ledger's own events; a sell on a later pricing date takes units off the holding; a
-/// cancelled order goes from the phone; and when a price is corrected and the order replayed, the holding follows.
+/// bought in the fund, valued at the latest sell price and labelled with its date, from the investment ledger's own events; a
+/// sell on a later pricing date takes units off the holding; a cancelled order goes from the phone; and when a price is corrected
+/// and the order replayed, the holding follows.
 /// Why it matters: a unit-linked customer wants to know what they hold and what is still waiting. A holding that missed a sell, or
 /// counted an order before its price, would tell them they own units they do not.
 #[test]
@@ -1787,6 +1788,12 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         (Some(500_000_000), &json!("2027-11-15")),
         "{held}"
     );
+    // Valued at the sell price, what a withdrawal would pay, and labelled with that price's date.
+    assert_eq!(
+        (&held["price"], &held["price_date"], &held["value_minor"]),
+        (&json!("1.9800"), &json!("2027-11-15"), &json!(990_00)),
+        "{held}"
+    );
     assert_eq!(w.last_op(KIRI, &waiting), Some(Op::Delete));
 
     // A sell of 100 units on the next pricing date takes them off.
@@ -1803,6 +1810,7 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         (Some(400_000_000), &json!("2027-11-16")),
         "{held}"
     );
+    assert_eq!((&held["price_date"], &held["value_minor"]), (&json!("2027-11-16"), &json!(792_00)));
     assert!(w.ch.data.extras[&pol].orders.is_empty());
 
     // An order cancelled before its price leaves nothing waiting.
@@ -1834,6 +1842,9 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         held["units_micro"].as_i64().unwrap() < 400_000_000,
         "fewer units at the higher buy price: {held}"
     );
+    // A correction of an earlier date's price does not replace the latest date's for valuing.
+    assert_eq!(held["price_date"], "2027-11-16");
+    assert_eq!(w.ch.data.prices["growth"].version, 1);
 }
 
 /// Purpose: a broker taking over a scheme is engaged from the appointment date and authorised by the employer on the scheme

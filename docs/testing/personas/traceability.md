@@ -192,14 +192,14 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | CLM-001 | full | `claims/tests/suite/intake.rs::notification_opens_a_claim_with_a_reserve`<br>`claims/tests/suite/intake.rs::a_late_notified_death_prompts_a_register_check`<br>`customers/tests/api.rs::deaths_are_marked_and_retracted`<br>`customers/tests/lifecycle.rs::deaths_are_told_to_claims_on_every_partition` |
-| CLM-002 | part | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid` |
+| CLM-002 | full | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`core/src/claims.rs::a_joint_cover_ends_for_every_life_on_the_first_event` |
 | CLM-003 | part | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-004 | full | `claims/tests/suite/book.rs::a_funeral_advance_is_paid_early_and_counted_against_the_benefit`<br>`sim/tests/claims.rs::a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest` |
 | CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
 | CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
-| CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid` |
+| CLM-009 | full | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event` |
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`claims/tests/suite/covers.rs::the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not` |
@@ -429,7 +429,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
-| VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
+| VUL-002 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person`<br>`channels/tests/http.rs::staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why` |
 | VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |

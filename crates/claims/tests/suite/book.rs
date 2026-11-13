@@ -1898,6 +1898,7 @@ fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
             amount_minor: 10_000,
             release_reserve: false,
             terminate: None,
+            life: None,
             ..
         }
     )));

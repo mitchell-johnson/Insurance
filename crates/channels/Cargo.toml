@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 ic-core.workspace = true
+ic-money.workspace = true
 ic-ledger.workspace = true
 ic-log.workspace = true
 ic-readmodel.workspace = true
@@ -48,7 +49,6 @@ ic-payments = { path = "../payments" }
 ic-group = { path = "../group" }
 ic-sim.workspace = true
 ic-product.workspace = true
-ic-money.workspace = true
 tower.workspace = true
 http-body-util.workspace = true
 reqwest.workspace = true

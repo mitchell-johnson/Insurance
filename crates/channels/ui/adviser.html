@@ -38,7 +38,7 @@ async function open(policy, canTransact) {
   const holdings = view.rows.filter((r) => r.kind === "holding"), orders = view.rows.filter((r) => r.kind === "unit_order");
   const amount = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all units";
   put($("invest"), holdings.length || orders.length ? [
-    holdings.length ? table(["Fund", "Units", "As at"], holdings.map((r) => [r.body.fund, units(r.body.units_micro), r.body.as_at])) : null,
+    holdings.length ? table(["Fund", "Units", "As at", "Value"], holdings.map((r) => [r.body.fund, units(r.body.units_micro), r.body.as_at, r.body.price_date ? `${(r.body.value_minor / 100).toFixed(2)} at ${r.body.price} (price of ${r.body.price_date})` : "no price yet"])) : null,
     orders.length ? [h("h4", {}, "Waiting for a price"), table(["Order", "Fund", "Buy or sell", "Amount", "Pricing date"], orders.map((r) => [r.body.order, r.body.fund, words(r.body.direction), amount(r.body.amount || {}), r.body.pricing_date]))] : null,
   ] : h("p", { class: "muted" }, "No units held."));
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
