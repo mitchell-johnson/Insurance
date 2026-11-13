@@ -100,7 +100,7 @@ Every staff action is put to four questions, answered by Cedar policy in `config
 3. **How much**: is the amount within their authority profile, capped by the role's ceiling?
 4. **Why**: is there a purpose, such as the case they are working on?
 
-A refusal says which question failed, so the person knows what to ask for. Roles are templates; authority profiles are versioned; grants are requested and approved by someone else, expire, and are recertified. Break-glass access is time-limited and reviewed afterwards. An external entitlement source can feed all of this; when it cannot be reached, what people already hold runs to its end and nothing new is granted from it.
+A refusal says which question failed, so the person knows what to ask for. Roles are templates; authority profiles are versioned; grants are requested and approved by someone else, expire, and are recertified. Break-glass access is time-limited and reviewed afterwards. An external entitlement source can feed all of this; when it cannot be reached, what people already hold runs to its end and nothing new is granted from it. An entitlement the mapping does not name confers nothing and is listed in the alignment report (on `GET /staff/v1/admin`), with the member of staff every mapping must name to work its exceptions (`alignment_owner`).
 
 **Data classes.** A view is shaped to the classes of data the person's roles include. Health and claim detail are withheld from someone without that class, and the person is told that something was withheld, never what.
 
