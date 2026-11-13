@@ -21,6 +21,8 @@ x-image: &image
     args:
       # `release` unless the caller asks otherwise; CI's drill asks for `drill`.
       CARGO_PROFILE: ${CARGO_PROFILE:-release}
+      # Empty: every core. A laptop's Docker machine may need a cap, such as 3.
+      CARGO_BUILD_JOBS: ${CARGO_BUILD_JOBS:-}
 
 x-cluster: &cluster
   IC_NODES: node-1:7000,node-2:7000,node-3:7000,node-4:7000

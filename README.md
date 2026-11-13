@@ -47,6 +47,8 @@ deploy/compose/chaos.sh          # build, run the failure drill, tear down
 KEEP=1 deploy/compose/chaos.sh   # leave the cluster up afterwards
 ```
 
+On a laptop whose Docker machine has less than about 16 GiB, the release build runs out of memory. Build with the drill profile and fewer jobs, which a 7.7 GiB machine manages: `CARGO_PROFILE=drill CARGO_BUILD_JOBS=3 deploy/compose/chaos.sh`. The same cap works for the checks in an image: `docker build --target test --build-arg CARGO_BUILD_JOBS=3 .` (the test stage no longer needs the release build first).
+
 ## Build and test
 
 Needs Rust (the toolchain is pinned in `rust-toolchain.toml`), `clang`, `protoc` and the protobuf well-known types (`protobuf-compiler` and `libprotobuf-dev` on Debian).
