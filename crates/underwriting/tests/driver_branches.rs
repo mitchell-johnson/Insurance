@@ -243,6 +243,7 @@ fn end_interim() -> Effect {
 
 fn cover(sum: i64) -> CoverSpec {
     CoverSpec {
+        excess_option: None,
         code: "life".into(),
         life: Some("L1".into()),
         sum_insured_minor: sum,

@@ -47,6 +47,9 @@ pub struct CoverSpec {
     pub loadings: Vec<DecStr>,
     #[serde(default)]
     pub exclusions: Vec<String>,
+    /// The excess level chosen, where the cover offers a choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,8 +164,20 @@ pub struct AddedCover {
     pub loadings: Vec<DecStr>,
     #[serde(default)]
     pub exclusions: Vec<String>,
+    /// The excess level chosen, where the cover offers a choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
     /// The request or the underwriting decision this comes from.
     pub reference: String,
+}
+
+/// Another excess level on a cover a life holds, from today.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedExcess {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    pub excess_option: String,
 }
 
 /// Less cover for one life on a retail policy, at the owner's request.
@@ -362,6 +377,8 @@ pub enum Command {
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
     /// Give a life a cover from the product's menu that it does not hold.
     AddCover(Box<AddedCover>),
+    /// Move a life's cover to another of the excess levels the cover offers.
+    ChangeExcess(Box<ChangedExcess>),
     /// Change the underwriting terms on a life's cover from today. Each
     /// layer ends and is written again with the same sum insured, origin
     /// and rating date and the new terms; the days left of a period already
@@ -604,6 +621,7 @@ impl Command {
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::AddCover(_) => &["underwriting", "policy-servicing"],
+            Command::ChangeExcess(_) => &["policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
@@ -651,6 +669,7 @@ impl Command {
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
             Command::AddCover(_) => "add_cover",
+            Command::ChangeExcess(_) => "change_excess",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
             Command::AvoidPolicy { .. } => "avoid_policy",

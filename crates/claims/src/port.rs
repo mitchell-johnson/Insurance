@@ -76,6 +76,10 @@ pub struct CoverFacts {
     /// after any interest, before the estate.
     #[serde(default)]
     pub nominations: Vec<Nominee>,
+    /// The excess this life chose on the cover, where the cover offers a
+    /// choice. It replaces the schedule's excess for this life.
+    #[serde(default)]
+    pub chosen_excess_minor: Option<i64>,
     /// The scheme membership this policy continues, where it was issued
     /// under a leaver's continuation option.
     #[serde(default)]

@@ -87,6 +87,7 @@ pub fn invest_plan(n: u64, inception: NaiveDate, dob: NaiveDate, sex: Sex) -> Is
         frequency: Frequency::Yearly,
         lives: vec![named_life("life-1", &format!("party-{n:08}"), dob, sex, false)],
         covers: vec![CoverSpec {
+            excess_option: None,
             code: "account".to_string(),
             life: Some(LifeId("life-1".to_string())),
             sum_insured_minor: 0,
@@ -113,6 +114,7 @@ pub fn term_life(
     let life = LifeId("life-1".to_string());
     let loadings: Vec<DecStr> = loading.and_then(|l| DecStr::parse(l).ok()).into_iter().collect();
     let mut covers = vec![CoverSpec {
+        excess_option: None,
         code: "life".to_string(),
         life: Some(life.clone()),
         sum_insured_minor: life_cover_minor,
@@ -121,6 +123,7 @@ pub fn term_life(
     }];
     if let Some(t) = trauma_cover_minor {
         covers.push(CoverSpec {
+            excess_option: None,
             code: "trauma".to_string(),
             life: Some(life.clone()),
             sum_insured_minor: t,
@@ -153,6 +156,7 @@ pub fn health_family(n: u64, inception: NaiveDate, dobs: &[NaiveDate], frequency
     let covers = lives
         .iter()
         .map(|l| CoverSpec {
+            excess_option: None,
             code: "hospital".to_string(),
             life: Some(l.id.clone()),
             sum_insured_minor: 0,
@@ -187,13 +191,22 @@ pub fn health_flex(n: u64, inception: NaiveDate, people: &[(NaiveDate, &[&str])]
         .iter()
         .zip(people)
         .flat_map(|(l, (_, chosen))| {
-            chosen.iter().map(|code| CoverSpec {
-                code: code.to_string(),
-                life: Some(l.id.clone()),
-                sum_insured_minor: 0,
-                loadings: vec![],
-                exclusions: vec![],
-            })
+            // "hospital:high" chooses an excess level; hospital alone takes the standard one.
+            chosen
+                .iter()
+                .map(|chosen| (chosen.split_once(':').unwrap_or((chosen, "")), *chosen == "hospital"))
+                .map(|((code, option), plain_hospital)| CoverSpec {
+                    excess_option: match (option, plain_hospital) {
+                        ("", true) => Some("standard".to_string()),
+                        ("", false) => None,
+                        (option, _) => Some(option.to_string()),
+                    },
+                    code: code.to_string(),
+                    life: Some(l.id.clone()),
+                    sum_insured_minor: 0,
+                    loadings: vec![],
+                    exclusions: vec![],
+                })
         })
         .collect();
     IssuePolicy {
@@ -224,6 +237,7 @@ pub fn group_scheme(n: u64, inception: NaiveDate, first_members: Vec<LifeSpec>) 
         frequency: Frequency::Monthly,
         lives: first_members,
         covers: vec![CoverSpec {
+            excess_option: None,
             code: "group-life".to_string(),
             life: None,
             sum_insured_minor: 0,

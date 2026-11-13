@@ -585,6 +585,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             }) = d.terms_for(&c.code)
             {
                 covers.push(CoverSpec {
+                    excess_option: None,
                     code: c.code.clone(),
                     life: Some(f.life.clone()),
                     sum_insured_minor: revised_sum_insured_minor.unwrap_or(c.sum_insured_minor),
@@ -666,6 +667,7 @@ pub(crate) fn interim(cfg: &Config, p: &mut Proposal, cx: &mut Cx) {
             .collect(),
         covers: lives
             .map(|f| CoverSpec {
+                excess_option: None,
                 code: settings.cover_code.clone(),
                 life: Some(f.life.clone()),
                 sum_insured_minor: p.largest_sum_on(&f.life).min(settings.max_sum_insured_minor),

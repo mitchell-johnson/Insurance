@@ -19,6 +19,8 @@ pub enum RatingError {
     FrequencyNotOffered,
     #[error("product has no billing feature")]
     NoBilling,
+    #[error("the cover does not offer that choice of excess")]
+    ExcessOption,
     #[error("unknown cover {0}")]
     UnknownCover(String),
     #[error(transparent)]
@@ -40,6 +42,9 @@ pub struct RatingFactors {
     /// Occupation class, where the life has one.
     #[serde(default)]
     pub occupation_class: Option<String>,
+    /// The excess level chosen, where the cover offers a choice.
+    #[serde(default)]
+    pub excess_option: Option<String>,
     /// Loadings as fractions of the base premium, for example `0.50`.
     #[serde(default)]
     pub loadings: Vec<DecStr>,
@@ -86,7 +91,13 @@ pub fn cover_premium(cover: &CoverDefinition, table: &RateTable, f: &RatingFacto
     for l in &f.loadings {
         factor += l.get();
     }
-    Ok(base * factor)
+    // The excess the customer chose scales the cover's price, loadings included.
+    let excess = match (&f.excess_option, cover.excess_options.is_empty()) {
+        (None, true) => Dec::from(1i64),
+        (Some(code), false) => cover.excess_option(code).ok_or(RatingError::ExcessOption)?.premium_factor.get(),
+        _ => return Err(RatingError::ExcessOption),
+    };
+    Ok(base * factor * excess)
 }
 
 /// One period's bill, already rounded to cents.
