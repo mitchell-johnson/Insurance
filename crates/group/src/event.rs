@@ -102,6 +102,7 @@ pub struct ContinuationExcess {
     pub party: PartyId,
     pub product_code: String,
     pub cover: String,
+    pub cover_type: String,
     pub date_of_birth: Option<NaiveDate>,
     pub sex: Option<Sex>,
     pub smoker: Option<bool>,

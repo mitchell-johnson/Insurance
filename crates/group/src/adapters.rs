@@ -327,6 +327,7 @@ pub fn continuation_envelope(at: DateTime<Utc>, today: NaiveDate, request: &Cont
         }],
         "covers": [{
             "code": request.cover,
+            "cover_type": request.cover_type,
             "life": "L1",
             "sum_insured_minor": request.amount_minor,
         }],

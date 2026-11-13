@@ -1743,6 +1743,7 @@ async fn the_driver_asks_underwriting_to_continue_a_leavers_cover() {
         party: ic_core::PartyId("party-1".into()),
         product_code: "term-life".into(),
         cover: "life".into(),
+        cover_type: "life".into(),
         date_of_birth: None,
         sex: None,
         smoker: None,
@@ -1774,6 +1775,7 @@ async fn the_driver_asks_underwriting_to_continue_a_leavers_cover() {
                     continued_excess: Some(ContinuedExcess {
                         amount_minor: 150_000_00,
                         cover: "life".into(),
+                        cover_type: "life".into(),
                         product_code: "term-life".into(),
                         status: ContinuedStatus::Asked,
                     }),

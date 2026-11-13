@@ -209,6 +209,10 @@ pub struct Offer {
 pub struct ContinuedExcess {
     pub amount_minor: i64,
     pub cover: String,
+    /// The kind of cover continued, as underwriting matches it against the
+    /// earlier proposals: the scheme cover's type without `group_`.
+    #[serde(default)]
+    pub cover_type: String,
     pub product_code: String,
     pub status: ContinuedStatus,
 }

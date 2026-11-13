@@ -913,6 +913,7 @@ fn a_continued_cover_is_the_proposal_underwriting_agreed() {
         party: ic_core::PartyId("party-E004".into()),
         product_code: "term-life".into(),
         cover: "life".into(),
+        cover_type: "life".into(),
         date_of_birth: Some(chrono::NaiveDate::from_ymd_opt(1980, 5, 1).unwrap()),
         sex: Some(ic_product::Sex::Female),
         smoker: Some(false),
@@ -938,6 +939,12 @@ fn a_continued_cover_is_the_proposal_underwriting_agreed() {
         (Some("pol-cont-7"), Some("party-E004"), Some("group-continuation"))
     );
     assert_eq!(p["lives"][0]["life"], "L1");
+    // Underwriting's own types read it as the continuation it expects.
+    let open: ic_underwriting::command::OpenProposal = serde_json::from_value(p.clone()).unwrap_or_else(|e| panic!("{p}: {e}"));
+    let ic_underwriting::model::Entry::GroupContinuation { inception, earlier, .. } = &open.entry else {
+        panic!("{:?}", open.entry)
+    };
+    assert_eq!((*inception, earlier.len()), (day, 1));
     assert_eq!(
         (p["covers"][0]["code"].as_str(), p["covers"][0]["sum_insured_minor"].as_i64()),
         (Some("life"), Some(150_000_00))
