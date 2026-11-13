@@ -127,6 +127,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "represent" => found(Some(&state.represent)),
         "waiting" => found(Some(state.waiting_payments())),
         "fund_cash_settlement" => Ok(state.fund_cash_settlement(as_at(&question)?)),
+        "fund_sweep" => Ok(state.fund_sweep(as_at(&question)?)),
         "aged_unidentified_receipts" => Ok(state.aged_unidentified_receipts(as_at(&question)?)),
         "reconciliation" => found(state.reconciliation(text(&question, "account")?, day(&question)?)),
         "readiness" => found(Some(state.readiness(day(&question)?))),
@@ -158,6 +159,22 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         ic_core::Event::PaymentAuthorityCancelled { policy, claim } => crate::Command::PayerDeceased {
             policy: policy.clone(),
             claim: claim.clone(),
+        },
+        // Which fund each dollar of a receipt went to, so cash can follow it
+        // between the funds' bank accounts (PAY-010).
+        ic_core::Event::ReceiptApplied {
+            receipt,
+            allocated_minor,
+            fund: Some(fund),
+            ..
+        } => crate::Command::ReceiptFunded {
+            receipt: receipt.clone(),
+            fund: fund.clone(),
+            amount_minor: *allocated_minor,
+        },
+        ic_core::Event::ReceiptReversed { receipt, amount_minor, .. } => crate::Command::ReceiptUnfunded {
+            receipt: receipt.clone(),
+            amount_minor: *amount_minor,
         },
         // Claims released a payment: that is the instruction to pay it. A
         // benefit (`claim_paid`) and a provider's evidence or rehabilitation

@@ -118,6 +118,7 @@ impl PaymentsState {
         if let Some(other) = self.sources.get(&n.source) {
             return Err(Reject::new("duplicate_source", format!("{} is already being paid by item {other}", n.source)));
         }
+        self.vet_sweep(run, n)?;
         if run.run_type.inbound() {
             let Counterparty::Authority(a) = &n.counterparty else {
                 return bad("a collection draws on an authority");
@@ -847,6 +848,7 @@ impl PaymentsState {
             total += n.amount_minor;
             self.waiting_settled(&n);
             self.origin_settled(&n, settled_on, &account);
+            self.sweep_settled(&n, settled_on);
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }
@@ -868,6 +870,7 @@ impl PaymentsState {
                     // every receipt is.
                     None => {
                         let receipt = n.item.clone();
+                        self.sweeps.land(&receipt, &account, settled_on);
                         let command = match self.member_collected_from(&n) {
                             // A member's own money is set against that
                             // member's bills and nobody else's.
@@ -943,6 +946,7 @@ impl PaymentsState {
         }
         self.origin_returned(&n, returned_on, &format!("{reason:?}"));
         if was_settled {
+            self.sweep_returned(&n, returned_on);
             // The core heard it settle, so the core hears it come back, and
             // the statement will show the money moving the other way.
             if let Some(policy) = n.policy.clone() {

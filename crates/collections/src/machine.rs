@@ -75,6 +75,12 @@ pub enum CoreFact {
         to: Option<Standing>,
         oldest_unpaid_due: Option<NaiveDate>,
     },
+    /// The core's balance moved: the oldest unpaid due date, which a
+    /// payment or a reversal can move without changing standing.
+    Balance {
+        policy: PolicyId,
+        oldest_unpaid_due: Option<NaiveDate>,
+    },
     Status {
         policy: PolicyId,
         to: PolicyStatus,
