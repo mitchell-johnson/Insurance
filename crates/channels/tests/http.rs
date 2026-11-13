@@ -42,6 +42,7 @@ struct Portal {
     claims: Arc<common::claims::ClaimsCore>,
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
     master: Arc<common::customers::MasterDouble>,
+    commission: Arc<common::commission::CommissionModule>,
 }
 
 fn healthy() -> RegionReport {
@@ -286,6 +287,7 @@ fn portal() -> Portal {
     let finance = Arc::new(common::finance::seeded());
     let claims = Arc::new(common::claims::seeded());
     let reinsurance = Arc::new(common::reinsurance::seeded());
+    let commission = Arc::new(common::commission::seeded());
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
         json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
@@ -303,7 +305,7 @@ fn portal() -> Portal {
         ui: UiConfig::Dev,
         pricing: pricing.clone(),
         complaints: complaints.clone(),
-        commission: Arc::new(common::commission::seeded()),
+        commission: commission.clone(),
         finance: finance.clone(),
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
@@ -322,6 +324,7 @@ fn portal() -> Portal {
         claims,
         reinsurance,
         master,
+        commission,
     }
 }
 
@@ -2061,6 +2064,11 @@ async fn serve_for_a_browser() {
         .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
         .await;
     assert_eq!(status, StatusCode::OK);
+    // One of the adviser's layers was treated as a replacement.
+    portal.commission.matches(
+        json!([{ "layer": "pol-new/life/1", "policy": "pol-new", "writing": ["e1"], "matched_minor": 500_000_00,
+        "sum_insured_minor": 600_000_00, "reason": "same_group", "on": "2027-11-10", "replaced": ["pol-old/life/1"], "disputed": null, "overturned": false }]),
+    );
     println!("policy {}", portal.retail);
     axum::serve(listener, portal.app.clone()).await.unwrap();
 }
@@ -2217,4 +2225,65 @@ async fn the_conduct_officer_decides_disputed_replacements() {
             .unwrap();
         assert_eq!(down.clone().oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
     }
+}
+
+/// Purpose: an adviser sees the replacement matches on business they wrote and no one else's, without the cover it replaced;
+/// disputes one with a reason, which becomes a request to new business needing no customer's approval; cannot dispute a layer
+/// that is not theirs, one already disputed, or without a reason; cannot raise a dispute through the general request route; and an
+/// adviser with no engagements sees none.
+/// Why it matters: a match takes initial commission from the adviser who wrote the business, so they must be told and able to
+/// dispute it, but a dispute must not be raised against another adviser's business or by going around the check.
+#[tokio::test]
+async fn an_adviser_disputes_their_own_replacement_match() {
+    let portal = portal();
+    let row = |layer: &str, writing: &str, disputed: Value| {
+        json!({ "layer": layer, "policy": layer.split('/').next(), "writing": [writing], "matched_minor": 500_000_00, "sum_insured_minor": 600_000_00,
+                "reason": "same_group", "on": "2027-11-10", "replaced": ["pol-old/life/1"], "disputed": disputed, "overturned": false })
+    };
+    portal.commission.matches(json!([
+        row("pol-new/life/1", "e1", Value::Null),
+        row("pol-other/life/1", "e-someone-else", Value::Null),
+        row("pol-done/life/2", "e1", json!("dispute:1")),
+    ]));
+    let (status, mine) = portal.get("sub-adv", "/adviser/v1/replacements").await;
+    assert_eq!(status, StatusCode::OK);
+    let layers: Vec<&str> = mine.as_array().unwrap().iter().map(|m| m["layer"].as_str().unwrap()).collect();
+    assert_eq!(layers, ["pol-new/life/1", "pol-done/life/2"]);
+    assert!(mine[0].get("replaced").is_none() && mine[0].get("writing").is_none());
+    assert_eq!(portal.get("sub-kiri", "/adviser/v1/replacements").await.1, json!([]));
+
+    let dispute = |body: Value| portal.write("POST", "sub-adv", "/adviser/v1/replacements/dispute", body);
+    for bad in [
+        json!({ "layer": "pol-other/life/1", "reason": "mine" }),
+        json!({ "layer": "pol-done/life/2", "reason": "again" }),
+        json!({ "layer": "pol-new/life/1", "reason": "  " }),
+        json!({ "reason": "no layer" }),
+    ] {
+        assert_eq!(dispute(bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let (status, _) = dispute(json!({ "layer": "pol-new/life/1", "reason": "the customer asked for new cover after a review" })).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (_, requests) = portal.get("sub-adv", "/app/v1/requests").await;
+    let raised = requests
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["kind"] == "dispute_replacement")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (&raised["id"], &raised["module"], &raised["status"]),
+        (&json!("dispute:pol-new/life/1"), &json!("new-business"), &json!("pending"))
+    );
+    assert_eq!(
+        raised["payload"],
+        json!({ "policy": "pol-new", "cover": "life", "layer": 1, "reason": "the customer asked for new cover after a review" })
+    );
+    // One dispute per layer.
+    let (status, problem) = dispute(json!({ "layer": "pol-new/life/1", "reason": "twice" })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("duplicate")));
+    // The general route does not take a dispute, so the check above cannot be gone around.
+    let around =
+        json!({ "id": "x", "kind": "dispute_replacement", "module": "new-business", "payload": { "policy": "pol-other", "cover": "life", "layer": 1 } });
+    assert_eq!(portal.write("POST", "sub-adv", "/app/v1/requests", around).await.0, StatusCode::BAD_REQUEST);
 }

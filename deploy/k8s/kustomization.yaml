@@ -18,6 +18,7 @@ resources:
   - payments.yaml
   - reinsurance.yaml
   - underwriting.yaml
+  - underwriting-intake.yaml
   - bootstrap.yaml
   - admin.yaml
   - network.yaml
