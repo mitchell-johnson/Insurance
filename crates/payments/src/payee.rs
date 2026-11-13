@@ -56,6 +56,7 @@ impl PaymentsState {
     ) -> Result<(), Reject> {
         tx.need(Role::PayeeMaintainer)?;
         check_account(&account)?;
+        self.refuse_if_held(&party)?;
         if self.payees.contains_key(&id) {
             return Err(Reject::new("duplicate_payee", format!("payee {id} already exists")));
         }
@@ -87,6 +88,8 @@ impl PaymentsState {
         check_account(&account)?;
         let until = self.cooling_off(tx)?;
         let by = tx.actor.id.clone();
+        let party = self.payee_mut(id)?.party.clone();
+        self.refuse_if_held(&party)?;
         let p = self.payee_mut(id)?;
         p.account = account;
         p.name_check = name_check;

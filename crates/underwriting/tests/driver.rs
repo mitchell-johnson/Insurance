@@ -22,6 +22,7 @@ use ic_underwriting::config::{InterimSettings, Settings};
 use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::model::{Entry, ProposalStatus, Stage};
 use ic_underwriting::progress::ProgressRow;
+use ic_underwriting::reinstatement::reinstatement_proposal;
 use ic_underwriting::service::channels_envelope;
 use ic_underwriting::special::{answer, Query};
 use serde_json::Value;
@@ -722,7 +723,9 @@ async fn an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force() {
     assert!(ri.reservation("P2/L1/life/1").is_none() && ri.reservation("P3/L1/life/1").is_none());
 }
 
-/// Purpose: a lapsed policy goes through underwriting for reinstatement and the decision
+/// Purpose: a lapsed policy goes through underwriting for reinstatement, opened by collections
+/// with the proposal built from the policy as the core holds it (its lives, the cover held the
+/// day before the lapse, its product version; nothing for a policy that is not lapsed), and the decision
 /// reaches the core as an approval recorded against the lapse, carrying the decided loading
 /// and good for as long as the proposal is; no reinsurance capacity is reserved for cover
 /// already ceded; and the proposal ends issued with nothing left in the outbox.
@@ -745,16 +748,34 @@ async fn a_reinstatement_decision_is_recorded_against_the_lapse() {
         }
         assert_eq!(cluster.state(0).policies[&policy].status, PolicyStatus::Lapsed);
     }
-    let hash = b.product_hash.clone();
+    // What collections sends: the proposal built from the lapsed policy as the core holds it.
+    let mut open = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let lapsed = &cluster.state(0).policies[&policy];
+        let mut in_force = lapsed.clone();
+        in_force.status = PolicyStatus::InForce;
+        assert_eq!(reinstatement_proposal(&in_force, d(2027, 6, 1)), None);
+        reinstatement_proposal(lapsed, d(2027, 6, 1)).expect("a lapsed policy with named lives")
+    };
+    assert!(open.proposal.0.starts_with(&format!("reinstate:{policy}:")));
+    assert_eq!(
+        (open.policy_number.as_str(), &open.group, open.channel.as_str()),
+        (number.as_str(), &group, "collections")
+    );
+    assert_eq!(open.quote.product_hash, b.product_hash);
+    assert_eq!(
+        open.covers
+            .iter()
+            .map(|c| (c.code.as_str(), c.life.0.as_str(), c.sum_insured_minor))
+            .collect::<Vec<_>>(),
+        vec![("life", "L1", 500_000_00)]
+    );
+    assert_eq!(open.lives.len(), 1);
+    // Kept as P2 for the steps below.
+    open.proposal = "P2".into();
     let expires = b.module.with(|w| {
         w.days(95);
-        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 500_000_00)], false);
-        open.quote.product_hash = hash;
-        open.entry = Entry::Reinstatement { policy: policy.clone() };
-        open.policy = policy.clone();
-        open.policy_number = number;
-        open.group = group;
-        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.ok("collections", Command::OpenProposal(Box::new(open)));
         w.disclose("P2", "L1", &yes("smoked_last_12_months"));
         w.p("P2").expires_on
     });
