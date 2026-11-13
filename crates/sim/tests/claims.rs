@@ -994,6 +994,7 @@ fn a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_under
     days(&mut c, 10);
     let today = c.business_date().unwrap();
     let layer = ic_core::command::ExcessLayer {
+        continues: None,
         policy: id.clone(),
         cover: "group-life".into(),
         life: ic_core::LifeId("pilot-1".into()),

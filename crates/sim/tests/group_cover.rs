@@ -63,6 +63,7 @@ fn owed(c: &Cluster, p: PartitionId, id: &PolicyId) -> i64 {
 
 fn excess(id: &PolicyId, start: NaiveDate, loading: Option<&str>, itemised: bool) -> ExcessLayer {
     ExcessLayer {
+        continues: None,
         policy: id.clone(),
         cover: "group-life".into(),
         life: life("exec-1"),
@@ -875,4 +876,46 @@ fn a_joiner_and_a_changed_member_are_published_with_their_rating_factors() {
         _ => None,
     });
     assert_eq!(after.expect("the change carries the new factors").smoker, Some(true));
+}
+
+/// Purpose: an underwritten layer written to replace another names the layer it carries
+/// on, and the event says so; a layer number that is not that member's underwritten layer
+/// on that cover is refused and writes nothing; a layer that replaces nothing says nothing.
+/// Why it matters: reinsurance keeps a cession with the cover it follows. When a member
+/// agrees to pay their own loading the scheme writes a replacement layer for the same cover,
+/// and unless the event links the two the cession would restart on today's treaty terms.
+#[test]
+fn a_replacement_layer_names_the_layer_it_carries_on() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("0.50"), false)).unwrap();
+    let first = events(&mut c)
+        .into_iter()
+        .find_map(|e| match e {
+            Event::LayerAdded { layer, continues, .. } => Some((layer.layer, continues)),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(first.1, None);
+
+    let replacement = |continues| ExcessLayer {
+        continues,
+        ..excess(&id, d(2027, 11, 1), Some("0.50"), true)
+    };
+    let before = c.state(p).policies[&id].clone();
+    assert_eq!(add(&mut c, p, replacement(Some(first.0 + 7))).unwrap_err().code, "unknown_layer");
+    let of_another = ExcessLayer {
+        life: life("staff-1"),
+        ..replacement(Some(first.0))
+    };
+    assert_eq!(add(&mut c, p, of_another).unwrap_err().code, "unknown_layer");
+    assert_eq!(c.state(p).policies[&id], before);
+
+    events(&mut c);
+    add(&mut c, p, replacement(Some(first.0))).unwrap();
+    let linked = events(&mut c).into_iter().find_map(|e| match e {
+        Event::LayerAdded { layer, continues, origin, .. } => Some((layer.layer, continues, origin)),
+        _ => None,
+    });
+    assert_eq!(linked, Some((first.0 + 1, Some(first.0), LayerOrigin::UnderwrittenExcess)));
 }

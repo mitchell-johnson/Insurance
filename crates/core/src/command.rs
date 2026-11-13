@@ -131,6 +131,11 @@ pub struct ExcessLayer {
     pub member_pays: MemberPays,
     /// The underwriting decision this layer comes from.
     pub reference: String,
+    /// The layer this one replaces, on the same cover for the same member:
+    /// the same cover carried on under new terms. Reinsurance keeps the
+    /// cession of the layer named instead of starting a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continues: Option<u32>,
 }
 
 /// More cover on a retail policy in force, accepted by underwriting.

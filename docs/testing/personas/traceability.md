@@ -284,11 +284,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
 | GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
-| GRP-020 | part | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole` |
+| GRP-020 | part | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole`<br>`group/tests/driver.rs::payroll_changes_and_the_monthly_file_each_use_their_own_layout` |
+| GRP-019 | full | `group/tests/driver.rs::payroll_changes_and_the_monthly_file_each_use_their_own_layout` |
 | GRP-021 | full | `group/tests/year.rs::agreed_terms_take_effect_on_the_renewal_date` |
 | GRP-022 | full | `group/tests/year.rs::without_an_agreement_the_scheme_runs_on_old_rates_and_then_ends`<br>`group/tests/year.rs::a_rate_guarantee_rolls_the_year_without_an_agreement` |
 | GRP-023 | full | `group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy`<br>`group/tests/leavers.rs::an_option_not_taken_up_expires` |
-| GRP-024 | part | `group/src/model.rs::membership_follows_a_member_through_every_change`<br>`group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
+| GRP-024 | full | `group/tests/leavers.rs::a_seasonal_worker_serves_the_waiting_period_again_on_rejoining`<br>`group/src/model.rs::membership_follows_a_member_through_every_change` |
 | GRP-025 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
 | GRP-026 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
@@ -366,6 +367,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
+| SVC-022 | part | `customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
 | SVC-025 | part | `distribution/tests/replacement.rs::cover_given_up_after_new_cover_was_written_is_matched_looking_back` |
 
 ## ANV The anniversary window

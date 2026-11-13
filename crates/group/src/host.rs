@@ -84,7 +84,8 @@ pub enum Question {
     /// Files waiting for the driver: stored and not yet scanned, or scanned
     /// and not yet read.
     FilesToRead,
-    /// The mapping a scheme's files are read with.
+    /// The mappings a scheme's files are read with: one layout, or one for
+    /// full files and one for change files.
     Mapping { scheme: String },
     /// The schemes written on a policy: a portal knows an employer by the
     /// scheme policy it administers.
@@ -172,7 +173,10 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 .collect();
             json!({ "files": files })
         }
-        Question::Mapping { scheme: id } => json!({ "mapping": scheme(&id)?.mapping }),
+        Question::Mapping { scheme: id } => {
+            let s = scheme(&id)?;
+            json!({ "mapping": s.mapping, "second_mapping": s.second_mapping })
+        }
         Question::SchemeOf { policy } => {
             let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();
             json!({ "schemes": schemes })

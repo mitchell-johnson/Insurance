@@ -813,3 +813,125 @@ async fn findable(store: &ic_customers::store::Store<ic_azure::keywrap::KeyVault
     assert!(!keys.is_empty());
     store.candidates(&keys).await.unwrap().contains(who)
 }
+
+/// Purpose: a person's own hold on their money going out takes effect at once when they
+/// place it in the app (or ask staff to); ending it needs a passed identity check made
+/// after the hold and within a day, then waits out the cooling-off period, during which
+/// they can change their mind; the sweep ends it only once the period has passed; staff
+/// cannot ask for it to end, only legal can lift it, with a reference, and the
+/// service's own ending cannot be sent by anyone. Payments reads where it stands.
+/// Decision 3 in docs/decisions.md, persona row SVC-022.
+/// Why it matters: a customer who knows they are at risk (gambling, a scam in progress,
+/// a bad night) asks for this to protect themselves; if a scammer or a persuasive call
+/// could lift it on the spot it would protect no one.
+#[tokio::test]
+async fn a_customers_own_spending_hold_ends_only_after_cooling_off() {
+    let w = world_or_skip!();
+    let me = w.person("Lin", "Chen", "1979-09-09", &[]).await;
+    let app = |method: &'static str, body: Option<serde_json::Value>| common::Call {
+        method,
+        path: if method == "GET" {
+            format!("/v1/parties/{me}/spending-hold")
+        } else {
+            format!("/v1/parties/{me}/commands")
+        },
+        role: "portal",
+        purpose: Some("self_service"),
+        body,
+        headers: vec![("x-ic-party", me.clone()), ("x-ic-actor", "app-session-1".into())],
+    };
+    let status_of = || async {
+        let (status, out) = w.get(&format!("/v1/parties/{me}/spending-hold"), "payments", "payments").await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        out
+    };
+    assert_eq!(status_of().await["held"], false);
+    let (status, out) = w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["spending_hold_placed"]));
+    let held = status_of().await;
+    assert_eq!((held["held"].clone(), held["removal"].clone()), (json!(true), serde_json::Value::Null));
+    let (status, mine) = w.send(app("GET", None)).await;
+    assert_eq!((status, mine["held"].clone()), (StatusCode::OK, json!(true)), "the person sees their own");
+    // Staff may place it for the person, never end it.
+    let (status, out) = w.command(&me, "staff", json!({ "command": "place_spending_hold" })).await;
+    assert_eq!((status, out["events"].clone()), (StatusCode::OK, json!([])));
+    for (role, command) in [
+        ("staff", json!({ "command": "request_hold_removal", "verification": "ev-1" })),
+        ("staff", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" })),
+        ("migration", json!({ "command": "end_spending_hold" })),
+        ("legal", json!({ "command": "end_spending_hold" })),
+    ] {
+        let (status, _) = w.command(&me, role, command.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{role} {command}");
+    }
+    // Ending it needs a fresh identity check made after the hold.
+    let remove = |evidence: &str| app("POST", Some(json!({ "command": "request_hold_removal", "verification": evidence })));
+    let (status, out) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+    let verify = |evidence: &str, at: chrono::DateTime<Utc>| {
+        json!({ "command": "record_verification", "method": "document_and_selfie", "provider": "idv",
+                "outcome": "passed", "evidence_ref": evidence, "verified_at": at })
+    };
+    let (status, out) = w.command(&me, "identity", verify("ev-old", Utc::now() - chrono::Duration::days(2))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(
+        w.send(remove("ev-old")).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "too old, and before the hold"
+    );
+    w.command(&me, "identity", verify("ev-1", Utc::now())).await;
+    let (status, out) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let waiting = status_of().await;
+    assert_eq!(waiting["held"], true, "still held while cooling off");
+    let requested: chrono::DateTime<Utc> = serde_json::from_value(waiting["removal"]["requested_at"].clone()).unwrap();
+    let ends: chrono::DateTime<Utc> = serde_json::from_value(waiting["removal"]["ends_at"].clone()).unwrap();
+    assert_eq!(ends - requested, chrono::Duration::days(7));
+    // The person changes their mind, then asks again.
+    let (_, out) = w.send(app("POST", Some(json!({ "command": "cancel_hold_removal" })))).await;
+    assert_eq!(out["events"], json!(["spending_hold_removal_cancelled"]));
+    assert_eq!(status_of().await["removal"], serde_json::Value::Null);
+    let (status, _) = w.send(app("POST", Some(json!({ "command": "cancel_hold_removal" })))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing waiting");
+    w.send(remove("ev-1")).await;
+    // Placing it again while a removal waits cancels the removal.
+    let (_, out) = w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(out["events"], json!(["spending_hold_removal_cancelled"]));
+    w.send(remove("ev-1")).await;
+    // The sweep ends it only once the period has passed.
+    assert_eq!(w.app.store.end_spending_holds(Utc::now() + chrono::Duration::days(6)).await.unwrap(), 0);
+    assert_eq!(status_of().await["held"], true);
+    assert_eq!(w.app.store.end_spending_holds(Utc::now() + chrono::Duration::days(8)).await.unwrap(), 1);
+    assert_eq!(status_of().await["held"], false);
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 0);
+    let (status, _) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no hold to remove");
+    // Legal lifts it at once, with a reference.
+    w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    let (status, _) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "bad ref!" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, out) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" }))
+        .await;
+    assert_eq!((status, out["events"].clone()), (StatusCode::OK, json!(["spending_hold_ended"])), "{out}");
+    assert_eq!(status_of().await["held"], false);
+    let (status, _) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing to lift");
+    // Somebody else's app session cannot read or touch it; documents cannot read it.
+    let (status, _) = w.get(&format!("/v1/parties/{me}/spending-hold"), "documents", "notices").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Erasing the person clears anything waiting. A check made before this hold does
+    // not end it.
+    w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(w.send(remove("ev-1")).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    w.command(&me, "identity", verify("ev-2", Utc::now())).await;
+    assert_eq!(w.send(remove("ev-2")).await.0, StatusCode::OK);
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 1);
+    w.app.store.reshred(&[PartyId(me.clone())], Utc::now()).await.unwrap();
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 0);
+}

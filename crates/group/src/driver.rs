@@ -352,16 +352,30 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             .ask(Question::Mapping { scheme: scheme.to_string() })
             .await
             .map_err(|e| e.to_string())?;
-        let mapping: Option<FileMapping> = decode(answer, "mapping").map_err(|e| e.to_string())?;
-        let Some(mapping) = mapping else { return Ok(Err("no_mapping")) };
-        let table = match csv::parse(&bytes, mapping.delimiter) {
-            Ok(t) => t,
-            Err(e) => return Ok(Err(csv_code(&e))),
-        };
-        Ok(match mapping.map(&table, &format!("{}:{scheme}", self.salt)) {
-            Ok(mapped) => Ok((mapping, mapped)),
-            Err(e) => Err(mapping_code(&e)),
-        })
+        let first: Option<FileMapping> = decode(answer.clone(), "mapping").map_err(|e| e.to_string())?;
+        let second: Option<FileMapping> = decode(answer, "second_mapping").map_err(|e| e.to_string())?;
+        let Some(first) = first else { return Ok(Err("no_mapping")) };
+        // Where the scheme has two layouts, the file is read with the one
+        // it fits. The change layout is tried first: it needs columns a full
+        // file does not have, while a change file could pass for a full one
+        // and take everyone it does not name off cover.
+        let mut layouts = vec![first];
+        layouts.extend(second);
+        layouts.sort_by_key(|m| m.kind != crate::mapping::FileKind::Changes);
+        let salt = format!("{}:{scheme}", self.salt);
+        let mut refusal = None;
+        for mapping in layouts {
+            let outcome = match csv::parse(&bytes, mapping.delimiter) {
+                Ok(table) => mapping.map(&table, &salt).map_err(|e| mapping_code(&e)),
+                Err(e) => Err(csv_code(&e)),
+            };
+            match outcome {
+                Ok(mapped) => return Ok(Ok((mapping, mapped))),
+                // With two layouts, say why the full one did not fit.
+                Err(code) => refusal = Some(code),
+            }
+        }
+        Ok(Err(refusal.unwrap_or("no_mapping")))
     }
 
     /// Ask the customer master who a file's joiners are. The names are read
