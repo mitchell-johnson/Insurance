@@ -220,7 +220,7 @@ fn standing_json(standing: &AdviserStanding) -> Value {
 fn related(state: &ChannelState, party: &PartyId) -> BTreeSet<PolicyId> {
     let d = &state.data;
     let mut out: BTreeSet<PolicyId> = d.audiences.iter().filter(|(_, a)| a.contains(party)).map(|(p, _)| p.clone()).collect();
-    out.extend(d.directory.policyholders.iter().filter(|(_, h)| *h == party).map(|(p, _)| p.clone()));
+    out.extend(d.directory.policyholders.iter().filter(|(_, h)| h.contains(party)).map(|(p, _)| p.clone()));
     out.extend(d.directory.adviser_policies.get(party).into_iter().flatten().cloned());
     out.extend(d.directory.admin_policies.get(party).into_iter().flatten().cloned());
     out
@@ -517,7 +517,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 // The person is told that something was withheld, never what.
                 .field("withheld", DataClass::Ordinary, withheld)
                 .field("advisers", DataClass::Personal, advisers)
-                .field("policyholder", DataClass::Personal, d.directory.policyholders.get(&policy))
+                .field("policyholders", DataClass::Personal, d.directory.owners(&policy))
                 .field(
                     "may_see_kind",
                     DataClass::Ordinary,

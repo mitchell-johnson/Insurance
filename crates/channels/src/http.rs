@@ -2446,10 +2446,20 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
         return Err(Problem::not_found());
     }
     let may_see_kind = view.as_object_mut().and_then(|v| v.remove("may_see_kind")) == Some(Value::Bool(true));
-    let holder = view["policyholder"].as_str().map(PartyId::from);
-    if let (Some(master), Some(holder)) = (&s.master, holder) {
-        if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
-            view["approach"] = approach;
+    // How to serve the owners: for joint owners, the first who needs care.
+    let holders: Vec<PartyId> = view["policyholders"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(PartyId::from)
+        .collect();
+    if let Some(master) = &s.master {
+        for holder in holders {
+            if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
+                view["approach"] = approach;
+                break;
+            }
         }
     }
     ok(view)

@@ -348,7 +348,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-008 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases`<br>`sim/tests/reduce_cover.rs::a_reduction_needs_the_consent_of_a_standing_interest` |
 | JNT-009 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |
 | JNT-011 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases`<br>`documents/tests/interests.rs::a_released_or_future_interest_is_owed_nothing` |
-| JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
+| JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment`<br>`channels/tests/journeys.rs::every_joint_owner_signs_and_ownership_passes_to_the_buyer` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs`<br>`payments/tests/insolvency.rs::a_bankrupt_owners_accounts_are_frozen` |
