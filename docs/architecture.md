@@ -349,7 +349,7 @@ Owner thread: "Build documents and correspondence". Detail lives in [documents.m
 
 ### Working notes
 
-`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates together was 98.49 percent of lines on 2026-11-13 (`cargo llvm-cov -p ic-complaints -p ic-documents`).
+`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates together was 98.50 percent of lines on 2026-11-13, and every documents persona row (DOC-001 to DOC-010) is fully tested (`cargo llvm-cov -p ic-complaints -p ic-documents`).
 
 ## Customer master (`ic-customers`)
 
