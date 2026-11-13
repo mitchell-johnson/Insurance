@@ -319,6 +319,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-001 | full | `sim/tests/integrity.rs::a_quote_equals_the_first_bill`<br>`sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | SVC-002 | full | `sim/tests/reduce_cover.rs::a_reduction_takes_the_newest_layer_first`<br>`sim/tests/reduce_cover.rs::a_reduction_ends_layers_from_today_and_credits_the_days_left` |
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
+| SVC-008 | part | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
