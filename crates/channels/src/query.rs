@@ -50,6 +50,14 @@ pub enum Question {
         party: PartyId,
         have: Option<u64>,
     },
+    /// Whether this party is the life on an underwriting proposal, and the
+    /// enrolled key of the device they proved, if it stands.
+    DisclosureSigner {
+        party: PartyId,
+        device: Option<String>,
+        proposal: String,
+        life: String,
+    },
     /// The engagements an adviser has held, current or not, by ID.
     AdviserEngagements {
         party: PartyId,
@@ -362,6 +370,16 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             .map(|v| json!({ "id": v.id, "hardware_backed": v.hardware_backed, "enrolled": v.enrolled, "revoked": v.revoked }))
             .collect::<Vec<_>>()),
         Question::HeldBalance { party } => d.workbench.own_held(&party),
+        Question::DisclosureSigner { party, device, proposal, life } => {
+            let is_life = d.published.values().flat_map(|rows| rows.values()).any(|r| {
+                r.kind == "proposal_life" && r.subject.as_ref() == Some(&party) && r.body["proposal"] == proposal.as_str() && r.body["life"] == life.as_str()
+            });
+            let key = device
+                .and_then(|id| d.identity.devices.get(&id))
+                .filter(|v| v.party == party && v.revoked.is_none())
+                .map(|v| v.public_key.clone());
+            json!({ "life": is_life, "public_key": key })
+        }
         Question::AdviserEngagements { party } => {
             json!(d
                 .directory

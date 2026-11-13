@@ -24,6 +24,7 @@ use ic_azure::keywrap::KeyWrapper;
 use ic_azure::records::RecordStore;
 use ic_core::LifeId;
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 use crate::clinical::{ClinicalError, ClinicalStore, Fresh};
 use crate::command::{Command, Envelope, Reject, SigningProof, SubmitDisclosure};
@@ -36,6 +37,30 @@ use crate::special::Query;
 
 /// The caller the intake submits as.
 pub const CALLER: &str = "new-business";
+/// The caller an underwriter's reading goes through: the staff console.
+pub const CONSOLE: &str = "underwriting-console";
+
+/// An underwriter asks to read a life's disclosures.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OpenRequest {
+    /// The console's ID for this reading; a repeat is the same reading.
+    pub request: String,
+    pub proposal: ProposalId,
+    pub life: LifeId,
+    /// The staff ID the console signed in.
+    pub underwriter: String,
+    pub purpose: String,
+}
+
+/// One disclosure, opened.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Opened {
+    pub vault_ref: String,
+    pub hash: String,
+    pub submitted_at: DateTime<Utc>,
+    /// The record as sealed: the answers, the question set and who typed what.
+    pub record: serde_json::Value,
+}
 
 /// Which signed step the answers are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,6 +136,8 @@ pub enum IntakeError {
     Signature,
     #[error("the module refused the disclosure: {}: {}", .0.code, .0.message)]
     Refused(Reject),
+    #[error("the module answered without the disclosures")]
+    NoView,
     #[error("the clinical store: {0}")]
     Store(String),
     #[error("{0}")]
@@ -209,5 +236,49 @@ impl<U: Underwriting, W: KeyWrapper, R: RecordStore> Intake<U, W, R> {
             vault_ref,
             duplicate: applied.duplicate,
         })
+    }
+
+    /// Open a life's disclosures for an underwriter. The module decides
+    /// whether they may and logs the access first; only then is each record
+    /// read, and its hash checked against the one the module holds.
+    pub async fn open(&self, r: &OpenRequest) -> Result<Vec<Opened>, IntakeError> {
+        let at = (self.clock)();
+        let applied = self
+            .module
+            .propose(Envelope {
+                key: format!("open:{}", r.request),
+                caller: CONSOLE.to_string(),
+                at,
+                today: at.date_naive(),
+                command: Command::OpenDisclosures {
+                    proposal: r.proposal.clone(),
+                    life: r.life.clone(),
+                    underwriter: r.underwriter.clone(),
+                    purpose: r.purpose.clone(),
+                },
+            })
+            .await?
+            .map_err(IntakeError::Refused)?;
+        let Some(crate::command::View::Disclosures(refs)) = applied.view else {
+            return Err(IntakeError::NoView);
+        };
+        let mut out = Vec::new();
+        for d in refs {
+            let (bytes, _) = self
+                .store
+                .get(&d.vault_ref, &r.underwriter, &r.purpose)
+                .await
+                .map_err(|e| IntakeError::Store(e.to_string()))?;
+            if hex::encode(sha2::Sha256::digest(&bytes)) != d.hash {
+                return Err(IntakeError::Store(format!("{} does not have the hash it was submitted with", d.vault_ref)));
+            }
+            out.push(Opened {
+                record: serde_json::from_slice(&bytes).map_err(|e| IntakeError::Store(format!("{} is not a disclosure record: {e}", d.vault_ref)))?,
+                vault_ref: d.vault_ref,
+                hash: d.hash,
+                submitted_at: d.submitted_at,
+            });
+        }
+        Ok(out)
     }
 }

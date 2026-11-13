@@ -451,10 +451,12 @@ async fn background_work_survives_faults() {
     assert!(!w.app.store.outbox(10).await.unwrap().is_empty(), "nothing was published");
     w.sql("alter table parties rename to parties_gone").await.unwrap();
     w.sql("alter table death_relay rename to death_relay_gone").await.unwrap();
+    w.sql("alter table marker_reviews rename to marker_reviews_gone").await.unwrap();
     pass(3600).await;
     assert_eq!(core.proposed.lock().unwrap().len(), 2, "told on the first pass, once");
     w.sql("alter table parties_gone rename to parties").await.unwrap();
     w.sql("alter table death_relay_gone rename to death_relay").await.unwrap();
+    w.sql("alter table marker_reviews_gone rename to marker_reviews").await.unwrap();
     w.azure.set_down(false);
     pass(3600).await;
     assert!(w.app.store.outbox(10).await.unwrap().is_empty(), "published once Event Hubs returned");
@@ -582,4 +584,49 @@ async fn deaths_are_told_to_claims_on_every_partition() {
     assert_eq!(w.sql("select 1 from death_relay").await.unwrap(), 1);
     w.app.store.reshred(&[PartyId(q.clone())], Utc::now()).await.unwrap();
     assert_eq!(w.sql("select 1 from death_relay").await.unwrap(), 0);
+}
+
+/// Purpose: when a vulnerability marker's review date comes, one prompt opens for a trained
+/// person, and only once; a new marker with a later date starts again; removing the marker
+/// or erasing the party leaves nothing due.
+/// Why it matters: a marker kept past its time labels someone who may no longer need it,
+/// and one never reviewed may miss what has changed (matrix VUL-017).
+#[tokio::test]
+async fn markers_are_reviewed_when_due() {
+    let w = world_or_skip!();
+    let p = w.person("Rewi", "Kara", "1950-05-05", &[]).await;
+    let today = Utc::now().date_naive();
+    let marker = |on: chrono::NaiveDate, reason: &str| {
+        json!({ "command": "record", "reason": reason, "facts": [{ "field": "vulnerability",
+            "value": { "kind": "life_event", "review_on": on.to_string(), "adjustments": ["more_time"] } }] })
+    };
+    let (status, out) = w.command(&p, "staff", marker(today, "first")).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(
+        w.app.store.prompt_marker_reviews(today - chrono::Duration::days(1), Utc::now()).await.unwrap(),
+        0,
+        "not yet"
+    );
+    assert_eq!(w.app.store.prompt_marker_reviews(today, Utc::now()).await.unwrap(), 1);
+    assert_eq!(w.app.store.prompt_marker_reviews(today, Utc::now()).await.unwrap(), 0, "once");
+    let reviews = w.app.store.open_reviews(10).await.unwrap();
+    assert!(reviews
+        .iter()
+        .any(|r| r.kind == "consider_marker" && r.reason.as_deref() == Some("review_date") && r.party.0 == p));
+    // Renewed with a later date: due again then.
+    let later = today + chrono::Duration::days(180);
+    w.command(&p, "staff", marker(later, "renewed at review")).await;
+    assert_eq!(w.app.store.prompt_marker_reviews(today, Utc::now()).await.unwrap(), 0);
+    assert_eq!(w.app.store.prompt_marker_reviews(later, Utc::now()).await.unwrap(), 1);
+    // Removed: nothing due.
+    w.command(&p, "staff", marker(later, "renewed again")).await;
+    let remove = json!({ "command": "record", "reason": "removed at review", "facts": [{ "field": "vulnerability", "value": false }] });
+    let (status, out) = w.command(&p, "staff", remove).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 0);
+    // Erased: nothing due.
+    w.command(&p, "staff", marker(later, "marked again")).await;
+    assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 1);
+    w.app.store.reshred(&[PartyId(p.clone())], Utc::now()).await.unwrap();
+    assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 0);
 }

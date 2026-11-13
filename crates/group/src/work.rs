@@ -1212,6 +1212,10 @@ impl GroupState {
                     let mut invoice = s.building.take().filter(|i| i.period_index == period_index).unwrap_or_else(|| Invoice {
                         period_index,
                         terms_version: s.terms_version,
+                        // The balance as the core last gave it, before any of
+                        // this invoice. Adjustments already in that balance
+                        // are taken out again below, where they are itemised.
+                        brought_forward_minor: s.outstanding_minor,
                         ..Invoice::default()
                     });
                     for (life, total_minor) in lines {
@@ -1226,6 +1230,7 @@ impl GroupState {
                     }
                     invoice.adjustments_by_group = std::mem::take(&mut s.pending_adjustments);
                     invoice.loading_adjustments_minor = std::mem::take(&mut s.pending_loading_adjustments_minor);
+                    invoice.brought_forward_minor -= invoice.adjustments_by_group.values().sum::<i64>() + invoice.loading_adjustments_minor;
                     st.emit(GroupEvent::InvoiceIssued {
                         scheme: s.id.clone(),
                         period_index,

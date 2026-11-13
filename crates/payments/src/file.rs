@@ -161,7 +161,7 @@ impl PaymentsState {
             channel: s.channel.clone(),
             account: s.account.clone(),
             direction: if run.run_type.inbound() { Direction::Debit } else { Direction::Credit },
-            value_date: run.value_date,
+            value_date: s.deferred_to.unwrap_or(run.value_date),
             currency: run.currency,
             items,
         })

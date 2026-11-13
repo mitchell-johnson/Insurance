@@ -1080,3 +1080,197 @@ fn a_members_own_collection_is_applied_to_that_member_alone() {
     let old: ic_payments::model::Authority = serde_json::from_value(stored).unwrap();
     assert_eq!(old.life, None);
 }
+
+/// Purpose: a collection dishonoured for want of funds from a payer marked
+/// as in financial hardship is not queued to be presented again; a
+/// collections officer is asked to call and offer hardship help; only once
+/// the conversation is recorded, with what was said, may it be presented,
+/// and only if that was agreed; the marker is set by collections or a payee
+/// maintainer and nobody else; a payer without the marker is presented
+/// again as before.
+/// Why it matters: taking money again from someone who has just told us
+/// they cannot pay costs them a dishonour fee and the insurer their trust.
+/// The design notes put a conversation before any re-presentment for a
+/// customer in hardship (COL-016).
+#[test]
+fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
+    use ic_payments::model::ConversationOutcome;
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a2", "pol-2", "0201234567", false);
+    let mark = |hardship| Command::MarkHardship {
+        authority: "a1".to_string(),
+        hardship,
+    };
+    assert_eq!(desk.code(&mia(), mark(true)), "not_permitted");
+    assert_eq!(
+        desk.code(
+            &col(),
+            Command::MarkHardship {
+                authority: "zz".to_string(),
+                hardship: true
+            }
+        ),
+        "unknown_authority"
+    );
+    desk.ok(&pam(), mark(false));
+    let events = desk.ok(&col(), mark(true));
+    assert_eq!(
+        events,
+        vec![Event::HardshipMarked {
+            authority: "a1".to_string(),
+            hardship: true
+        }]
+    );
+
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    let s = desk.approve("d1");
+    desk.settle(&s, d(2027, 11, 15));
+    for item in ["c1", "c2"] {
+        desk.ok(
+            &svc(),
+            Command::RecordReturn {
+                item: item.to_string(),
+                reason: ReturnReason::InsufficientFunds,
+                returned_on: d(2027, 11, 16),
+            },
+        );
+    }
+    assert_eq!(
+        answer(&desk.state, json!({"q": "represent"})).unwrap(),
+        json!(["c2"]),
+        "only the payer not in hardship"
+    );
+    assert_eq!(answer(&desk.state, json!({"q": "awaiting_conversation"})).unwrap(), json!({"c1": "a1"}));
+    let call = desk
+        .state
+        .outbox
+        .values()
+        .find(|e| e.key == "hardship-call-c1")
+        .expect("collections is asked to call");
+    assert!(matches!(&call.instruction, Instruction::Notify { to: ic_payments::Role::Collections, subject, .. } if subject == "hardship_conversation"));
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 22));
+    let mut again = collect("c1-2", "a1", "pol-1", 150_00);
+    again.represents = Some("c1".to_string());
+    let early = Command::AddRunItems {
+        run: "d2".to_string(),
+        items: vec![again.clone()],
+    };
+    assert_eq!(desk.code(&mia(), early.clone()), "cannot_represent", "not before the conversation");
+
+    let talk = |outcome, note: &str| Command::RecordConversation {
+        item: "c1".to_string(),
+        outcome,
+        note: note.to_string(),
+    };
+    assert_eq!(desk.code(&mia(), talk(ConversationOutcome::Represent, "agreed")), "not_permitted");
+    assert_eq!(desk.code(&col(), talk(ConversationOutcome::Represent, " ")), "no_note");
+    desk.ok(
+        &col(),
+        talk(ConversationOutcome::Represent, "pay day is Thursday; agreed to try again on the 22nd"),
+    );
+    assert_eq!(desk.code(&col(), talk(ConversationOutcome::Represent, "again")), "no_conversation_due");
+    desk.ok(&mia(), early);
+
+    // Agreed not to present: it never is.
+    let s2 = desk.approve("d2");
+    desk.settle(&s2, d(2027, 11, 22));
+    desk.authority("a3", "pol-3", "0301234567", false);
+    desk.ok(
+        &col(),
+        Command::MarkHardship {
+            authority: "a3".to_string(),
+            hardship: true,
+        },
+    );
+    desk.prepare("d3", RunType::Collection, d(2027, 12, 15));
+    desk.add("d3", vec![collect("c3", "a3", "pol-3", 150_00)]);
+    let s3 = desk.approve("d3");
+    desk.settle(&s3, d(2027, 12, 15));
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "c3".to_string(),
+            reason: ReturnReason::InsufficientFunds,
+            returned_on: d(2027, 12, 16),
+        },
+    );
+    desk.ok(
+        &col(),
+        Command::RecordConversation {
+            item: "c3".to_string(),
+            outcome: ConversationOutcome::DoNotRepresent,
+            note: "hardship application started".to_string(),
+        },
+    );
+    assert!(!desk.state.represent.contains("c3"));
+}
+
+/// Purpose: a collection the channel could not take before the bank's
+/// cutoff, because it was down, goes for the bank's next window when a
+/// driver takes it, skipping the weekend; each of its items is recorded as
+/// deferred with its policy, its due date and the date it went for, and the
+/// population for a range of due dates is a question anyone can ask; makers
+/// are told; a submission taken inside its window is not deferred.
+/// Why it matters: an outage must not lose a collection or send it for a
+/// day the bank has closed, and every customer whose standing or fee moved
+/// because we collected late has to be found by query and put right, not
+/// discovered by complaint (COL-025).
+#[test]
+fn a_collection_held_up_by_an_outage_goes_next_window_and_is_found() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a2", "pol-2", "0201234567", false);
+    // Friday, with the file channel's cutoff at 16:00.
+    desk.at(t(2027, 11, 19, 9, 0));
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 19));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    let s = desk.approve("d1");
+    // The channel is down until 20:00.
+    desk.at(t(2027, 11, 19, 20, 0));
+    desk.deliver(&s);
+    let state = &desk.state;
+    assert_eq!(state.submissions[&s].deferred_to, Some(d(2027, 11, 22)), "Monday, the next window");
+    assert_eq!(state.batch(&s).unwrap().value_date, d(2027, 11, 22));
+    let found = answer(state, json!({"q": "deferred", "from": "2027-11-19", "to": "2027-11-19"})).unwrap();
+    assert_eq!(found["c1"]["policy"], "pol-1");
+    assert_eq!(
+        (found["c1"]["due"].clone(), found["c1"]["sent_for"].clone()),
+        (json!("2027-11-19"), json!("2027-11-22"))
+    );
+    assert_eq!(found["c2"]["amount_minor"], 90_00);
+    assert_eq!(
+        answer(state, json!({"q": "deferred", "from": "2027-11-20", "to": "2027-12-31"})).unwrap(),
+        json!({})
+    );
+    assert!(answer(state, json!({"q": "deferred", "from": "soon", "to": "2027-12-31"}))
+        .unwrap_err()
+        .contains("from is a date"));
+    let told = state
+        .outbox
+        .values()
+        .find(|e| e.key.starts_with(&format!("deferred-{s}")))
+        .expect("makers are told");
+    assert!(matches!(&told.instruction, Instruction::Notify { subject, detail, .. } if subject == "submission_deferred" && detail.contains("2 items, 24000")));
+
+    // Taken on Saturday morning it still goes for Monday; inside its window
+    // a run is sent for its own day.
+    desk.at(t(2027, 11, 20, 8, 0));
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 22));
+    desk.add("d2", vec![collect("c3", "a1", "pol-1", 10_00)]);
+    let early = desk.approve("d2");
+    desk.deliver(&early);
+    assert_eq!(desk.state.submissions[&early].deferred_to, None);
+    desk.at(t(2027, 11, 22, 8, 0));
+    desk.prepare("d3", RunType::Collection, d(2027, 11, 22));
+    desk.add("d3", vec![collect("c4", "a2", "pol-2", 10_00)]);
+    let late = desk.approve("d3");
+    desk.at(t(2027, 11, 23, 9, 0));
+    desk.deliver(&late);
+    assert_eq!(
+        desk.state.submissions[&late].deferred_to,
+        Some(d(2027, 11, 23)),
+        "before Tuesday's cutoff it goes Tuesday"
+    );
+}

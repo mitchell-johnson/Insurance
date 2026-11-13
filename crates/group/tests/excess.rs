@@ -548,3 +548,50 @@ fn a_member_who_stops_paying_their_loading_loses_only_that_cover() {
     assert_eq!(h.scheme().status, ic_group::state::SchemeStatus::Active);
     assert!(h.core_lives().contains(&"E004".to_string()));
 }
+
+/// Purpose: a member who pays the loading that is theirs to pay keeps the cover, month
+/// after month: their payments settle only what they owe, the employer's balance is
+/// neither reduced by them nor increased by the member's part, the case stays in place
+/// and nothing is raised to staff.
+/// Why it matters: the lapse test shows what happens to a member who does not pay; this
+/// is the ordinary case beside it. If a member's payment were set against the scheme's
+/// invoice, the employer would be undercharged and the member lapsed for money they had
+/// paid.
+#[test]
+fn a_member_who_pays_their_loading_keeps_the_cover() {
+    let mut t = terms();
+    t.excess_loading = ExcessLoading::MemberPays;
+    let (mut h, case) = with_executive(t);
+    h.underwriting(case, accept(210_000_00, Some("0.5"), false)).unwrap();
+    let member = life("E004");
+    let members_debt = |h: &Harness| h.c.state(h.p).policies[&h.policy].member_outstanding_minor(&life("E004"));
+
+    let mut paid_by_member = 0;
+    for month in 0..8 {
+        h.days(30);
+        let schemes = h.scheme().outstanding_minor;
+        let theirs = members_debt(&h);
+        assert_eq!(h.owed(), schemes + theirs, "the two debts are kept apart and add up");
+        if theirs > 0 {
+            let command = ic_core::Command::ApplyMemberReceipt {
+                policy: h.policy.clone(),
+                life: member.clone(),
+                receipt: format!("member-receipt-{month}"),
+                amount: ic_money::Money::new(theirs, ic_money::Currency::NZD),
+            };
+            h.c.submit(h.p, "cash-matching", command).unwrap();
+            h.settle();
+            paid_by_member += theirs;
+            assert_eq!(members_debt(&h), 0);
+            assert_eq!(h.scheme().outstanding_minor, schemes, "the member's money is not the employer's");
+        }
+        if schemes > 0 {
+            h.pay(schemes);
+            assert_eq!(h.owed(), 0);
+        }
+    }
+    assert!(paid_by_member > 0, "the member was billed for the loading");
+    assert_eq!(status(&h, case), CaseStatus::Accepted);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
+    assert!(h.g.exceptions.is_empty(), "{:?}", h.g.exceptions);
+}

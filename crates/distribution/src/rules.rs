@@ -149,8 +149,61 @@ pub struct Rule {
     /// engagement that submitted it. Off unless an agreement turns it on.
     #[serde(default)]
     pub clawback_by_cause: bool,
+    /// Worked examples the rule must reproduce exactly before it can be
+    /// activated: what the agreement says each payee is paid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub examples: Vec<RuleExample>,
     /// The signed instructions that support the rule.
     pub instructions_ref: String,
+}
+
+/// One worked example of a rule: an amount of commission on a day, and
+/// what each payee is paid out of it, by component.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleExample {
+    pub name: String,
+    pub on: NaiveDate,
+    pub commission_type: CommissionType,
+    /// Base commission to share out.
+    pub gross_minor: i64,
+    /// The premium that earned it, for overrides paid as a rate on premium.
+    #[serde(default)]
+    pub premium_minor: i64,
+    /// Every payee and component paid, with the amount. Anything not listed
+    /// must be paid nothing.
+    pub expect: Vec<(PartyId, Component, i64)>,
+}
+
+impl Composed<'_> {
+    /// Run a worked example: an error says what differs.
+    pub fn check_example(&self, example: &RuleExample) -> Result<(), RuleError> {
+        let ctype = example.commission_type;
+        let mut paid: BTreeMap<(PartyId, Component), i64> = BTreeMap::new();
+        for a in self.allocate_base(example.gross_minor, ctype, example.on)? {
+            *paid.entry((a.payee, a.component)).or_insert(0) += a.amount_minor;
+        }
+        for component in self.extra_components(ctype, example.on) {
+            for a in self.allocate_extra(&component, example.premium_minor, ctype == CommissionType::Initial, ctype, example.on) {
+                *paid.entry((a.payee, a.component)).or_insert(0) += a.amount_minor;
+            }
+        }
+        paid.retain(|_, v| *v != 0);
+        let mut expected: BTreeMap<(PartyId, Component), i64> = BTreeMap::new();
+        for (payee, component, amount) in &example.expect {
+            *expected.entry((payee.clone(), component.clone())).or_insert(0) += amount;
+        }
+        expected.retain(|_, v| *v != 0);
+        if paid == expected {
+            return Ok(());
+        }
+        let show = |m: &BTreeMap<(PartyId, Component), i64>| m.iter().map(|((p, c), v)| format!("{p} {} {v}", c.label())).collect::<Vec<_>>().join(", ");
+        invalid(format!(
+            "example {} pays {} where the agreement says {}",
+            example.name,
+            show(&paid),
+            show(&expected)
+        ))
+    }
 }
 
 fn hash_of<T: Serialize>(tag: &[u8], value: &T) -> String {
