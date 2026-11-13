@@ -8,7 +8,8 @@
 <div data-panel="policy">
 <section><h2>Look up a policy</h2><form id="lookup"><div class="row"><div><label for="pol">Policy ID</label><input id="pol" required></div><div><label for="case">Case or task you are working on</label><input id="case" required></div><div><label for="scope">Queue or team (optional)</label><input id="scope" placeholder="queue:claims-life"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
 <section id="pol-view" hidden><h2>Policy</h2><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
-<h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
+<h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
+<section><h2>Be the second person on a colleague's change</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs you to agree it before it goes to the customer.</p><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form><div id="second-msg" aria-live="polite"></div></section>
 
 <div data-panel="bench" hidden>
 <section><h2>Daily control: held money by age</h2><div id="control"></div></section>
@@ -55,8 +56,16 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
 }));
 $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
-  await api(R, "POST", "/staff/v1/requests", { id: crypto.randomUUID(), policy, kind: $("ckind").value, module: "policy-servicing", payload: { note: $("cnote").value } });
-  return "Sent to the customer's app for their approval.";
+  const payload = { note: $("cnote").value };
+  if ($("ceffective").value) payload.effective = $("ceffective").value;
+  if ($("camount").value) payload.amount_minor = Math.round(Number($("camount").value) * 100);
+  const id = crypto.randomUUID();
+  await api(R, "POST", "/staff/v1/requests", { id, policy, kind: $("ckind").value, module: "policy-servicing", payload, reason: $("creason").value.trim(), case: $("case").value.trim() });
+  return `Request ${id} recorded. If it is above your limit or backdated, a colleague agrees it first; then it goes to the customer's app.`;
+}));
+$("second").addEventListener("submit", run($("second-msg"), async () => {
+  await api(R, "POST", "/staff/v1/requests/" + encodeURIComponent($("second-id").value.trim()) + "/second-approval", {});
+  return "Agreed. It now waits for the customer's approval in their app.";
 }));
 
 async function bench() {

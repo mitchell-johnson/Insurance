@@ -323,6 +323,7 @@ fn a_customer_asks_about_their_own_things() {
             payload: json!({}),
             signed: true,
             route_to_person: false,
+            assisted: None,
         },
     )
     .unwrap();

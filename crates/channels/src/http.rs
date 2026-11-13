@@ -779,6 +779,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
                 payload: new.payload,
                 signed,
                 route_to_person,
+                assisted: None,
             },
         )
         .await?;
@@ -1082,6 +1083,7 @@ async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Me
             payload: payload.clone(),
             signed: false,
             route_to_person: false,
+            assisted: None,
         },
     )
     .await?;
@@ -2446,8 +2448,22 @@ async fn staff_command(State(s): State<Shared>, headers: HeaderMap, method: Meth
 
 /// A request made for a customer who called. The customer approves it in the app.
 async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    #[derive(Deserialize)]
+    struct Entered {
+        id: String,
+        policy: Option<PolicyId>,
+        kind: String,
+        module: String,
+        #[serde(default)]
+        payload: Value,
+        /// Why the change is made, and the case it belongs to.
+        #[serde(default)]
+        reason: String,
+        #[serde(default)]
+        case: String,
+    }
     let session = s.staff(&headers, &method, &uri, &body).await?;
-    let new: NewRequest = parse(&body)?;
+    let new: Entered = parse(&body)?;
     let command = Command::SubmitRequest {
         id: new.id,
         policy: new.policy,
@@ -2456,7 +2472,22 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
         payload: new.payload,
         signed: false,
         route_to_person: false,
+        assisted: Some(crate::state::Assisted {
+            reason: new.reason,
+            case: new.case,
+            backdated: false,
+            above_limit: false,
+            second: None,
+        }),
     };
+    accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
+}
+
+/// A second member of staff agrees a change another entered for a customer;
+/// it then waits for the customer's approval in the app.
+async fn staff_second_approval(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let command = Command::SecondApproveRequest { id };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
 }
 
@@ -2646,6 +2677,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/access", post(staff_command))
         .route("/staff/v1/policies/{policy}", get(staff_policy))
         .route("/staff/v1/requests", post(staff_request))
+        .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/workbench", get(workbench))
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))
