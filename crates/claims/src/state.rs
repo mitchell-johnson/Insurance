@@ -70,6 +70,18 @@ pub struct ClaimsState {
     /// Restricted investigations, by case.
     #[serde(default)]
     pub investigations: BTreeMap<String, crate::investigate::Investigation>,
+    /// Overpayments held on other partitions that this partition's benefits
+    /// may recover, by `party|partition|overpayment`.
+    #[serde(default)]
+    pub remote_offsets: BTreeMap<String, crate::offsets::RemoteOffset>,
+    /// Offsets taken and returned across partitions that have been dealt
+    /// with, so a repeated message changes nothing.
+    #[serde(default)]
+    pub offset_keys: BTreeSet<String>,
+    /// Claims whose overpayments changed in the command being applied, to
+    /// be shared at its end. Always empty between commands.
+    #[serde(skip)]
+    pub(crate) to_share: BTreeSet<ClaimId>,
     pub owned: BTreeMap<StaffId, BTreeSet<ClaimId>>,
 }
 
@@ -268,6 +280,16 @@ impl ClaimsState {
         core.work(1);
         let today = core.business_date();
         let cx = &mut Cx { core, index, today };
+        self.to_share.clear();
+        let result = self.dispatch(cx, index, command);
+        if result.is_ok() {
+            self.share_offsets(cx);
+        }
+        self.to_share.clear();
+        result
+    }
+
+    fn dispatch(&mut self, cx: &mut Cx<'_>, index: u64, command: Command) -> Result<(), Reject> {
         match command {
             Command::ActivateAuthority { book } => self.activate_authority(cx, *book),
             Command::ActivateRules { rules } => self.activate_rules(cx, *rules),
@@ -382,6 +404,31 @@ impl ClaimsState {
             Command::ExclusionControl { after } => self.exclusion_control(cx, after),
             Command::RecordDeath { party, date_of_death } => self.record_death(cx, &party, date_of_death),
             Command::RetractDeath { party, date_of_death } => self.retract_death(cx, &party, date_of_death),
+            Command::OffsetSource {
+                from,
+                claim,
+                policy,
+                overpayment,
+                party,
+                outstanding_minor,
+                pct,
+                seq,
+                settled_minor,
+            } => self.offset_source(cx, from, claim, policy, overpayment, party, outstanding_minor, pct, seq, settled_minor),
+            Command::OffsetTaken {
+                from,
+                take_ref,
+                paid_claim,
+                claim,
+                overpayment,
+                amount_minor,
+            } => self.offset_taken(cx, from, &take_ref, &paid_claim, &claim, &overpayment, amount_minor),
+            Command::OffsetReturned {
+                from,
+                take_ref,
+                claim,
+                amount_minor,
+            } => self.offset_returned(cx, from, &take_ref, &claim, amount_minor),
             Command::ReferForInvestigation { case, rule, claims } => self.refer(cx, case, rule, "compliance", claims),
             Command::CloseInvestigation { case, outcome, actor } => self.close_case(cx, &case, outcome, &actor),
             Command::Reinsurance(notice) => self.reinsurance(cx, notice),
@@ -528,6 +575,9 @@ impl ClaimsState {
             self.index(&old, false);
         }
         self.index(&claim, true);
+        if self.rules.partitions > 1 && !claim.overpayments.is_empty() {
+            self.to_share.insert(claim.id.clone());
+        }
         self.claims.insert(claim.id.clone(), claim);
     }
 
@@ -645,6 +695,7 @@ impl ClaimsState {
     pub fn drain_due(&mut self, core: &mut dyn Core, index: u64) {
         let today = core.business_date();
         let cx = &mut Cx { core, index, today };
+        self.to_share.clear();
         let ids: BTreeSet<ClaimId> = self.due_index.iter().take_while(|(d, _)| *d <= today).map(|(_, id)| id.clone()).collect();
         for id in ids.into_iter().take(DUE_CHUNK) {
             let Ok(mut claim) = self.claim(&id) else { continue };
@@ -656,6 +707,8 @@ impl ClaimsState {
             }
             self.commit(claim);
         }
+        self.share_offsets(cx);
+        self.to_share.clear();
     }
 
     fn fall_due(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, on: NaiveDate, due: Due) {

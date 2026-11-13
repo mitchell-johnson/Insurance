@@ -126,6 +126,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-003 | part | `channels/tests/journeys.rs::family_privacy_and_consent`<br>`channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
+| AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
 | AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
@@ -291,7 +292,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
-| GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause` |
+| GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
@@ -301,6 +302,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
 | HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
+| HLT-003 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
+| HLT-006 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 
 ## JNT Joint lives, ownership, assignments and dependants

@@ -423,6 +423,20 @@ impl ChannelState {
     /// This is what the portals read, and what feeds are built from.
     pub fn visible_rows(&self, viewer: &PartyId, policy: &PolicyId, on: NaiveDate, fresh: bool) -> (Vec<Relationship>, Vec<Row>) {
         let relationships = self.data.directory.relationships(&self.data.view, viewer, policy, on);
+        self.rows_for(viewer, policy, on, fresh, relationships)
+    }
+
+    /// What a person's phone holds of a policy: what they see, less what
+    /// they see only as a scheme's administrator. The employer's view is
+    /// the portal's, so a director who is also a member, or holds their
+    /// own policies, never carries colleagues' cover on their phone.
+    pub fn device_rows(&self, viewer: &PartyId, policy: &PolicyId, on: NaiveDate) -> Vec<Row> {
+        let mut relationships = self.data.directory.relationships(&self.data.view, viewer, policy, on);
+        relationships.retain(|r| *r != Relationship::EmployerAdmin);
+        self.rows_for(viewer, policy, on, true, relationships).1
+    }
+
+    fn rows_for(&self, viewer: &PartyId, policy: &PolicyId, on: NaiveDate, fresh: bool, relationships: Vec<Relationship>) -> (Vec<Relationship>, Vec<Row>) {
         if relationships.is_empty() {
             return (relationships, vec![]);
         }
@@ -454,7 +468,7 @@ impl ChannelState {
         };
         let all = self.rows(policy, on, only);
         for party in targets {
-            let (_, rows) = self.visible_rows(&party, policy, on, true);
+            let rows = self.device_rows(&party, policy, on);
             let visible: BTreeMap<String, Value> = rows.into_iter().map(|r| (r.key, r.body)).collect();
             if visible.is_empty() && !self.data.feeds.contains_key(&party) {
                 continue;

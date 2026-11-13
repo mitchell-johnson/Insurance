@@ -507,6 +507,9 @@ impl ClaimsState {
             offset_pct: 0,
             instalment_minor: 0,
             history: vec![(cx.today, RecoveryStatus::Held, claim.decisions.len() as u32 + 1)],
+            shared_seq: 0,
+            shared: None,
+            remote_received: Default::default(),
         })
     }
 

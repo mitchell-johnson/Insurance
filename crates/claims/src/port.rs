@@ -236,6 +236,24 @@ pub enum Instruction {
         overpayment: String,
         amount_minor: i64,
     },
+    /// Another partition kept back part of a benefit against this
+    /// overpayment: the money moves from offset in transit to reduce the
+    /// receivable.
+    ReceiveOffset {
+        claim: String,
+        policy: String,
+        overpayment: String,
+        amount_minor: i64,
+    },
+    /// Part of an offset this partition took for another partition's
+    /// overpayment came back unused: the money moves out of transit and the
+    /// benefit is owed to the claimant again.
+    ReturnOffset {
+        claim: String,
+        policy: String,
+        cover: String,
+        amount_minor: i64,
+    },
     WriteOffOverpayment {
         claim: String,
         policy: String,
@@ -263,6 +281,8 @@ impl Instruction {
             | Instruction::Reopen { policy, .. }
             | Instruction::RaiseOverpayment { policy, .. }
             | Instruction::RecoverOverpayment { policy, .. }
+            | Instruction::ReceiveOffset { policy, .. }
+            | Instruction::ReturnOffset { policy, .. }
             | Instruction::WriteOffOverpayment { policy, .. }
             | Instruction::IdentifyMember { policy, .. } => policy,
         }
@@ -277,6 +297,10 @@ pub struct Offset {
     pub policy: String,
     pub overpayment: String,
     pub amount_minor: i64,
+    /// The partition holding the overpayment, where it is not this one:
+    /// the amount goes to offset in transit and that partition is told.
+    #[serde(default)]
+    pub partition: Option<u16>,
 }
 
 /// Ending a policy on a death claim.

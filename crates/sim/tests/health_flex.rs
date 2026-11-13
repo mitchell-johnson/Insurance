@@ -163,3 +163,113 @@ fn any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount() 
     // Specialist without hospital is the only rule a single life can break: four of the fifteen subsets.
     assert_eq!((valid, refused), (11, 4));
 }
+
+fn add_cover(c: &mut Cluster, caller: &str, policy: &PolicyId, cover: &str, life: &str) -> Result<(), Reject> {
+    let command = Command::AddCover(Box::new(ic_core::command::AddedCover {
+        policy: policy.clone(),
+        cover: cover.to_string(),
+        life: LifeId(life.to_string()),
+        sum_insured_minor: 0,
+        loadings: vec![],
+        exclusions: vec![],
+        reference: "req-1".to_string(),
+    }));
+    c.submit(0, caller, command)
+}
+
+/// The adjustment billed by the last command.
+fn adjusted(c: &mut Cluster) -> i64 {
+    c.take_events()
+        .into_iter()
+        .find_map(|e| match e.event {
+            Event::PremiumAdjusted { total_minor, .. } => Some(total_minor),
+            _ => None,
+        })
+        .expect("the days left of the billed period are billed for the new cover")
+}
+
+/// Purpose: a cover from the menu can be added to a life after issue. It starts on the day
+/// it is added, the combination rules are checked on what the life would then hold, the days
+/// left of the year already billed are billed at what the cover adds to the whole policy's
+/// price, including a bundle discount the new cover brings in, and a cover given up can be
+/// taken again as a new layer. Adding a cover the life already holds, one the product does
+/// not offer, one for a stranger, or from a module that may not, is refused and changes
+/// nothing.
+/// Why it matters: the product is sold as a menu the customer can change, and most changes
+/// are additions made mid-year. If an addition skipped the combination rules a customer
+/// could reach by two steps a set of covers refused in one, and if the part-year premium
+/// ignored the discount the customer would be overcharged until the anniversary.
+#[test]
+fn a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left() {
+    let mut c = cluster();
+    // Yearly prices at issue, for comparison.
+    let (_, hospital) = issue(&mut c, 1, &[(adult(), &["hospital"])]).unwrap();
+    let (_, with_specialist) = issue(&mut c, 2, &[(adult(), &["hospital", "specialist"])]).unwrap();
+    let (_, all_three) = issue(&mut c, 3, &[(adult(), &["hospital", "specialist", "dental"])]).unwrap();
+    let (id, _) = issue(&mut c, 4, &[(adult(), &["hospital"]), (adult(), &["dental"])]).unwrap();
+    let (solo, _) = issue(&mut c, 5, &[(adult(), &["hospital"])]).unwrap();
+    let (_, dental_alone) = issue(&mut c, 6, &[(adult(), &["dental"])]).unwrap();
+    for (n, policy) in [&id, &solo].into_iter().enumerate() {
+        let receipt = Command::ApplyReceipt {
+            policy: policy.clone(),
+            receipt: format!("r-{n}"),
+            amount: ic_money::Money::new(20_000_00, ic_money::Currency::NZD),
+        };
+        c.submit(0, "cash-matching", receipt).unwrap();
+    }
+    for _ in 0..73 {
+        assert!(c.end_of_day().unwrap().breaks.is_empty());
+    }
+    let today = c.state(0).business_date.unwrap();
+    let year_end = d(2028, 11, 15);
+    let part = |yearly: i64| yearly * (year_end - today).num_days() / (year_end - start()).num_days();
+
+    let before = (c.state(0).ledger.head(), c.state(0).policies[&id].clone());
+    assert_eq!(code(add_cover(&mut c, "claims", &id, "optical", "life-1")), "caller_not_allowed");
+    assert_eq!(code(add_cover(&mut c, "policy-servicing", &id, "specialist", "life-2")), "composition");
+    assert_eq!(code(add_cover(&mut c, "policy-servicing", &id, "hospital", "life-1")), "cover_held");
+    assert_eq!(code(add_cover(&mut c, "policy-servicing", &id, "physio", "life-1")), "unknown_cover");
+    assert_eq!(code(add_cover(&mut c, "policy-servicing", &id, "optical", "life-9")), "unknown_life");
+    assert_eq!((c.state(0).ledger.head(), c.state(0).policies[&id].clone()), before);
+
+    // A cover nobody on the policy had: it joins the policy today.
+    c.take_events();
+    add_cover(&mut c, "policy-servicing", &id, "optical", "life-2").unwrap();
+    assert!(adjusted(&mut c) > 0);
+    let optical = &c.state(0).policies[&id].covers["optical"];
+    assert_eq!((optical.start, optical.layers[0].start, optical.layers[0].end), (today, today, None));
+    assert!(holds(&c, &id, "optical", "life-2") && !holds(&c, &id, "optical", "life-1"));
+    // A cover someone else already had: the other person's is untouched.
+    add_cover(&mut c, "underwriting", &id, "dental", "life-1").unwrap();
+    // The policy already had its third cover from the step before, so this one comes at the
+    // discounted price and the discount on the others is not counted a second time.
+    let fourth = adjusted(&mut c);
+    let expected = part(dental_alone * 95 / 100);
+    assert!(
+        (fourth - expected).abs() <= 4,
+        "dental for the first person: billed {fourth}, expected {expected}"
+    );
+    let dental = &c.state(0).policies[&id].covers["dental"];
+    assert_eq!((dental.start, dental.layers.len(), dental.layers[1].start), (start(), 2, today));
+
+    // On a policy of one person the part-year premium is what the cover adds to the price.
+    c.take_events();
+    add_cover(&mut c, "policy-servicing", &solo, "specialist", "life-1").unwrap();
+    let second = adjusted(&mut c);
+    let expected = part(with_specialist - hospital);
+    assert!((second - expected).abs() <= 4, "specialist: billed {second}, expected {expected}");
+    // The third cover brings the bundle discount in on all three.
+    add_cover(&mut c, "policy-servicing", &solo, "dental", "life-1").unwrap();
+    let third = adjusted(&mut c);
+    let expected = part(all_three - with_specialist);
+    assert!((third - expected).abs() <= 6, "dental: billed {third}, expected {expected}");
+    assert!(c.reconcile().is_empty());
+
+    // Given up and taken again: a new layer from today, the old one kept as it ended.
+    give_up(&mut c, &solo, "dental", "life-1").unwrap();
+    assert!(!holds(&c, &solo, "dental", "life-1"));
+    add_cover(&mut c, "policy-servicing", &solo, "dental", "life-1").unwrap();
+    assert!(holds(&c, &solo, "dental", "life-1"));
+    assert_eq!(c.state(0).policies[&solo].covers["dental"].layers.len(), 2);
+    assert!(c.end_of_day().unwrap().breaks.is_empty());
+}

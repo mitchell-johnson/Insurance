@@ -61,6 +61,19 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#detail:not([hidden])").waitFor();
     await sees(p, "m-1");
     await p.locator("#claims").getByText("No claims.").waitFor();
+    // The scheme on the group service: upload a file, see its preview, approve it, open a member's record.
+    await p.locator("#group:not([hidden])").waitFor();
+    await p.setInputFiles("#file", { name: "nov 2027.csv", mimeType: "text/csv", buffer: Buffer.from("employee_id,salary\nE001,80000\n") });
+    await p.getByRole("button", { name: "Upload" }).click();
+    await p.locator("#file-msg").getByText("Uploaded").waitFor();
+    await p.getByRole("button", { name: "Show preview" }).click();
+    await p.locator("#file-msg").getByText("quarantined").waitFor();
+    await p.locator("#approve-file").click();
+    await p.locator("#file-msg").getByText("approved").waitFor();
+    await p.fill("#employee", "E001");
+    await p.getByRole("button", { name: "Show", exact: true }).click();
+    await p.locator("#member-view").getByText("staff").waitFor();
+    if (/loading|exclusion/i.test(await p.locator("#member-view").innerText())) throw new Error("the employer saw a loading");
   } });
   await visit(browser, "/staff", { subject: "sub-fin1" }, { run: async (p) => {
     await p.getByRole("tab", { name: "Held balances" }).click();

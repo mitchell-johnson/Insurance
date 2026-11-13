@@ -154,6 +154,9 @@ pub struct AppState {
     /// The documents module, for downloading a PDF. `None` where it is not
     /// configured: those routes answer 503.
     pub documents: Option<Arc<dyn crate::documents::Documents>>,
+    /// The group service, for an employer's membership files and invoices.
+    /// `None` where it is not configured: those routes answer 503.
+    pub group: Option<Arc<dyn crate::group::Group>>,
     /// The commission module, for replacement matches.
     pub commission: Arc<dyn crate::forward::Source>,
 }
@@ -1081,6 +1084,108 @@ async fn scheme_second_admin(State(s): State<Shared>, headers: HeaderMap, method
         changes: c.changes,
     };
     directory(&s, &headers, session, command).await
+}
+
+// --- the employer's group scheme, held by the group service ---
+
+impl AppState {
+    fn group(&self) -> Result<&Arc<dyn crate::group::Group>, Problem> {
+        self.group
+            .as_ref()
+            .ok_or_else(|| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "group_unavailable", "the group service is not configured here"))
+    }
+
+    /// The group service's scheme on this policy, once it is clear the
+    /// signed-in person administers the policy today. Any other policy, or
+    /// one with no scheme, is not found, so nobody learns which exist.
+    async fn administered_scheme(&self, session: &Session, policy: &str) -> Result<String, Problem> {
+        let all = self
+            .ask(Question::Policies {
+                party: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        let administers = all
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|p| p["policy"] == policy && p["relationships"].as_array().is_some_and(|r| r.iter().any(|x| x == "employer_admin")));
+        if !administers {
+            return Err(Problem::not_found());
+        }
+        let (status, answer) = self.group()?.ask(crate::group::scheme_of(policy)).await.map_err(group_down)?;
+        match (status, crate::group::named_scheme(&answer)) {
+            (200, Some(scheme)) => Ok(scheme),
+            (200, None) => Err(Problem::not_found()),
+            (status, _) => Err(Problem::new(
+                StatusCode::BAD_GATEWAY,
+                "group_unavailable",
+                format!("the group service answered {status} for the scheme on {policy}"),
+            )),
+        }
+    }
+}
+
+fn group_down(e: String) -> Problem {
+    Problem::new(StatusCode::SERVICE_UNAVAILABLE, "group_unavailable", e)
+}
+
+/// The group service's answer as it gave it.
+fn grouped(answer: Result<crate::group::Answered, String>) -> Answer {
+    let (status, body) = answer.map_err(group_down)?;
+    Ok((StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response())
+}
+
+/// The scheme's standing, its invoices, one file with its preview, or one
+/// member as the employer sees them.
+async fn group_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((policy, name)): Path<(String, String)>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let scheme = s.administered_scheme(&session, &policy).await?;
+    let question = crate::group::question(&name, &scheme, |f| q.get(f).cloned()).map_err(Problem::bad_request)?;
+    let (status, body) = s.group()?.ask(question).await.map_err(group_down)?;
+    let body = if name == "member" && status == 200 {
+        crate::group::employer_member(&body)
+    } else {
+        body
+    };
+    grouped(Ok((status, body)))
+}
+
+/// Upload a membership file. It is stored in quarantine and scanned
+/// before anything reads it; the preview follows on the file's question.
+async fn group_upload(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((policy, file)): Path<(String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let file = crate::group::name(&file).ok_or_else(|| Problem::bad_request("a file name is letters, digits, dots, dashes and underscores"))?;
+    if body.is_empty() {
+        return Err(Problem::bad_request("the file is empty"));
+    }
+    let scheme = s.administered_scheme(&session, &policy).await?;
+    grouped(s.group()?.upload(&scheme, file, &session.party.0, body.to_vec()).await)
+}
+
+/// Approve or withdraw a file, or declare a pool, as the signed-in
+/// administrator.
+async fn group_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let sent: Value = parse(&body)?;
+    let scheme = s.administered_scheme(&session, &policy).await?;
+    let command = crate::group::command(&scheme, &sent).map_err(Problem::bad_request)?;
+    grouped(s.group()?.command(&key, &session.party.0, command).await)
 }
 
 // --- the staff console ---
@@ -2020,6 +2125,12 @@ pub fn router(state: Shared) -> Router {
         .route("/employer/v1/schemes", get(schemes))
         .route("/employer/v1/schemes/{policy}/admins/{party}", put(scheme_admin))
         .route("/employer/v1/schemes/{policy}/second-admin", put(scheme_second_admin))
+        .route("/employer/v1/schemes/{policy}/group/commands", post(group_command))
+        .route(
+            "/employer/v1/schemes/{policy}/group/files/{file}",
+            post(group_upload).layer(axum::extract::DefaultBodyLimit::max(crate::group::MAX_UPLOAD_BYTES)),
+        )
+        .route("/employer/v1/schemes/{policy}/group/{question}", get(group_question))
         .route("/staff/v1/me", get(staff_me))
         .route("/staff/v1/admin", get(staff_admin))
         .route("/staff/v1/access", post(staff_command))

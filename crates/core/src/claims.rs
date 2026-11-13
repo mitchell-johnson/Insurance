@@ -215,6 +215,11 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     facts.definitions = c.definitions.iter().map(|d| format!("{}@{}", d.id, d.version)).collect();
     let mine = |l: &&crate::policy::Layer| life_id.as_ref().is_none_or(|id| &l.life == id);
     let at_event: Vec<&crate::policy::Layer> = c.layers.iter().filter(mine).filter(|l| l.in_force_on(on)).collect();
+    // A life given the cover after the policy began has it from its own
+    // first layer, and waiting periods run from there.
+    if let Some(first) = at_event.iter().map(|l| l.start).min().filter(|_| life_id.is_some()) {
+        facts.cover_start = Some(first.max(c.start));
+    }
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.
@@ -363,6 +368,13 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             amount_minor,
             ..
         } => move_receivable(&mut s.ledger, p, ctx, &claim, "claim_overpayment_recovered", overpayment, amount_minor),
+        Instruction::ReceiveOffset {
+            claim,
+            overpayment,
+            amount_minor,
+            ..
+        } => move_receivable(&mut s.ledger, p, ctx, &claim, "claim_offset_received", overpayment, amount_minor),
+        Instruction::ReturnOffset { claim, amount_minor, .. } => return_offset(&mut s.ledger, p, ctx, &claim, amount_minor),
         Instruction::WriteOffOverpayment {
             claim,
             overpayment,
@@ -627,8 +639,10 @@ fn pay_benefit(
     }
     let c = policy.currency;
     // The overpayment an offset recovers may be on another policy of the
-    // same person on this partition.
-    let other = offset_policy(state, policy, offset.as_ref())?;
+    // same person on this partition, or on another partition: then the
+    // money goes to offset in transit and that partition takes it up.
+    let remote = offset.as_ref().is_some_and(|o| o.partition.is_some_and(|p| p != state.partition));
+    let other = if remote { None } else { offset_policy(state, policy, offset.as_ref())? };
     let drawn = record.reserve_minor.min(gross);
     let released = if close { record.reserve_minor - drawn } else { 0 };
     let (expense, d) = incurred(policy, &record.cover, "benefit_paid");
@@ -636,8 +650,10 @@ fn pay_benefit(
     set.debit(accounts::claim_reserve(&policy.id, c), i128::from(drawn + released), d.clone());
     set.debit(expense, i128::from(gross - drawn - released), d.clone());
     set.credit(accounts::benefit_payable(&policy.id, c), i128::from(gross - taken), d.clone());
-    if let Some(o) = &offset {
-        set.credit(accounts::claim_recovery_receivable(&PolicyId(o.policy.clone()), c), i128::from(taken), d);
+    match &offset {
+        Some(_) if remote => set.credit(accounts::claims_offset_in_transit(c), i128::from(taken), Dimensions::default()),
+        Some(o) => set.credit(accounts::claim_recovery_receivable(&PolicyId(o.policy.clone()), c), i128::from(taken), d),
+        None => {}
     }
     let extra = [
         ("payment_ref", payment_ref.clone()),
@@ -652,7 +668,9 @@ fn pay_benefit(
         record.open = !close;
     }
     instruct(policy, claim, payment_ref, gross - taken, false);
-    reduce_receivable(state, policy, other, offset.as_ref());
+    if !remote {
+        reduce_receivable(state, policy, other, offset.as_ref());
+    }
     Ok(())
 }
 
@@ -916,6 +934,23 @@ fn reopen(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &s
     Ok(())
 }
 
+/// Part of an offset kept back here for another partition was more than was
+/// owed there. It comes out of transit and the benefit it was kept from is
+/// owed again, so the expense it was drawn from is given back; paying it
+/// with the next benefit draws it again.
+fn return_offset(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, amount: i64) -> Result<(), Reject> {
+    let record = known(policy, claim)?;
+    if amount <= 0 {
+        return invalid("an offset returned is positive");
+    }
+    let c = policy.currency;
+    let (expense, d) = incurred(policy, &record.cover, "claim_offset_returned");
+    let mut set = PostingSet::new();
+    set.debit(accounts::claims_offset_in_transit(c), i128::from(amount), Dimensions::default());
+    set.credit(expense, i128::from(amount), d);
+    post(ledger, policy, ctx, "claim_offset_returned", set, claim, &[])
+}
+
 /// Raise, recover or write off an overpayment. The receivable is on the
 /// claim's policy; recovery is money in, a write-off is its own expense.
 fn move_receivable(
@@ -943,6 +978,11 @@ fn move_receivable(
         }
         "claim_overpayment_recovered" => {
             set.debit(accounts::settlement(c), i128::from(amount), Dimensions::default());
+            set.credit(receivable, i128::from(amount), d);
+        }
+        // Kept back from a benefit on another partition, on its way here.
+        "claim_offset_received" => {
+            set.debit(accounts::claims_offset_in_transit(c), i128::from(amount), Dimensions::default());
             set.credit(receivable, i128::from(amount), d);
         }
         _ => {
