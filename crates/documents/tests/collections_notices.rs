@@ -53,6 +53,7 @@ fn lender_interest() -> EventRecord {
         log_index: 1,
         traceparent: None,
         event: CoreEvent::Interest(InterestEvent::Recorded {
+            owner: None,
             kind: Default::default(),
             policy: policy("p1"),
             interest: "i-1".into(),

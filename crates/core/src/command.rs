@@ -502,6 +502,9 @@ pub enum Command {
     Interest(Box<crate::interest::InterestCommand>),
     /// Record a nomination for a death benefit, a change to one or its removal.
     Nominate(Box<crate::nomination::Nominate>),
+    /// The customer master says the owner's own hold on money going out
+    /// stands on this policy, or has ended.
+    SetOwnerHold(Box<crate::owner_hold::SetOwnerHold>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -632,6 +635,7 @@ impl Command {
             Command::Investment(command) => command.allowed_callers(),
             Command::Interest(command) => command.allowed_callers(),
             Command::Nominate(command) => command.allowed_callers(),
+            Command::SetOwnerHold(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
             Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
@@ -693,6 +697,7 @@ impl Command {
             Command::Investment(_) => "investment",
             Command::Interest(_) => "interest",
             Command::Nominate(_) => "nominate",
+            Command::SetOwnerHold(_) => "set_owner_hold",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",
