@@ -368,6 +368,19 @@ pub enum Command {
         receipt: String,
         amount: Money,
     },
+    /// Record an arrangement to clear the premium overdue today by
+    /// instalments. While it is kept the policy's standing is held and it
+    /// does not lapse.
+    MakeArrangement {
+        policy: PolicyId,
+        arrangement: String,
+        instalments: Vec<crate::arrangement::Instalment>,
+    },
+    /// End an arrangement the owner cannot keep. It counts as broken today.
+    EndArrangement {
+        policy: PolicyId,
+        arrangement: String,
+    },
     /// Pay a scheme member's credit back to the member.
     RefundMemberCredit {
         policy: PolicyId,
@@ -525,6 +538,7 @@ impl Command {
             Command::Interest(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
+            Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
             Command::RefundMemberCredit { .. } => &["cash-matching", "policy-servicing"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -570,6 +584,8 @@ impl Command {
             Command::ReverseReceipt { .. } => "reverse_receipt",
             Command::RefundSuspense { .. } => "refund_suspense",
             Command::ApplyMemberReceipt { .. } => "apply_member_receipt",
+            Command::MakeArrangement { .. } => "make_arrangement",
+            Command::EndArrangement { .. } => "end_arrangement",
             Command::RefundMemberCredit { .. } => "refund_member_credit",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",

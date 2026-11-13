@@ -381,6 +381,24 @@ impl Reinsurance {
             sha256: sha256.clone(),
             body,
         });
+        let party = self
+            .latest_treaty(&treaty)
+            .and_then(|t| t.panel.iter().find(|p| p.reinsurer == reinsurer))
+            .and_then(|p| p.party.clone());
+        if let Some(party) = party {
+            ctx.notices.push(Notice::StatementLetterDue {
+                statement: number,
+                party,
+                treaty: treaty.clone(),
+                reinsurer: reinsurer.clone(),
+                period_start,
+                period_end,
+                currency,
+                net_minor: net,
+                record: document.clone(),
+                record_sha256: sha256.clone(),
+            });
+        }
         self.statements.push(Statement {
             number,
             treaty,

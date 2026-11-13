@@ -1206,3 +1206,71 @@ fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
     );
     assert!(!desk.state.represent.contains("c3"));
 }
+
+/// Purpose: a collection the channel could not take before the bank's
+/// cutoff, because it was down, goes for the bank's next window when a
+/// driver takes it, skipping the weekend; each of its items is recorded as
+/// deferred with its policy, its due date and the date it went for, and the
+/// population for a range of due dates is a question anyone can ask; makers
+/// are told; a submission taken inside its window is not deferred.
+/// Why it matters: an outage must not lose a collection or send it for a
+/// day the bank has closed, and every customer whose standing or fee moved
+/// because we collected late has to be found by query and put right, not
+/// discovered by complaint (COL-025).
+#[test]
+fn a_collection_held_up_by_an_outage_goes_next_window_and_is_found() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a2", "pol-2", "0201234567", false);
+    // Friday, with the file channel's cutoff at 16:00.
+    desk.at(t(2027, 11, 19, 9, 0));
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 19));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    let s = desk.approve("d1");
+    // The channel is down until 20:00.
+    desk.at(t(2027, 11, 19, 20, 0));
+    desk.deliver(&s);
+    let state = &desk.state;
+    assert_eq!(state.submissions[&s].deferred_to, Some(d(2027, 11, 22)), "Monday, the next window");
+    assert_eq!(state.batch(&s).unwrap().value_date, d(2027, 11, 22));
+    let found = answer(state, json!({"q": "deferred", "from": "2027-11-19", "to": "2027-11-19"})).unwrap();
+    assert_eq!(found["c1"]["policy"], "pol-1");
+    assert_eq!(
+        (found["c1"]["due"].clone(), found["c1"]["sent_for"].clone()),
+        (json!("2027-11-19"), json!("2027-11-22"))
+    );
+    assert_eq!(found["c2"]["amount_minor"], 90_00);
+    assert_eq!(
+        answer(state, json!({"q": "deferred", "from": "2027-11-20", "to": "2027-12-31"})).unwrap(),
+        json!({})
+    );
+    assert!(answer(state, json!({"q": "deferred", "from": "soon", "to": "2027-12-31"}))
+        .unwrap_err()
+        .contains("from is a date"));
+    let told = state
+        .outbox
+        .values()
+        .find(|e| e.key.starts_with(&format!("deferred-{s}")))
+        .expect("makers are told");
+    assert!(matches!(&told.instruction, Instruction::Notify { subject, detail, .. } if subject == "submission_deferred" && detail.contains("2 items, 24000")));
+
+    // Taken on Saturday morning it still goes for Monday; inside its window
+    // a run is sent for its own day.
+    desk.at(t(2027, 11, 20, 8, 0));
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 22));
+    desk.add("d2", vec![collect("c3", "a1", "pol-1", 10_00)]);
+    let early = desk.approve("d2");
+    desk.deliver(&early);
+    assert_eq!(desk.state.submissions[&early].deferred_to, None);
+    desk.at(t(2027, 11, 22, 8, 0));
+    desk.prepare("d3", RunType::Collection, d(2027, 11, 22));
+    desk.add("d3", vec![collect("c4", "a2", "pol-2", 10_00)]);
+    let late = desk.approve("d3");
+    desk.at(t(2027, 11, 23, 9, 0));
+    desk.deliver(&late);
+    assert_eq!(
+        desk.state.submissions[&late].deferred_to,
+        Some(d(2027, 11, 23)),
+        "before Tuesday's cutoff it goes Tuesday"
+    );
+}

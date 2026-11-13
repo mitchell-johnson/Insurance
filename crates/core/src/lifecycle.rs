@@ -199,6 +199,8 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         cancellation: None,
         avoidance: None,
         surrender: None,
+        arrangement: None,
+        arrears_pause: None,
         variations: Vec::new(),
         pruned: Default::default(),
         migrated: cmd.migrated,

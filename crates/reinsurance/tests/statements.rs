@@ -1232,3 +1232,59 @@ fn a_long_listing_is_filed_in_parts_the_statement_names() {
     assert!(applied.notices.iter().any(|n| matches!(n, Notice::ReleaseLogged { .. })));
     assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
 }
+
+/// Purpose: a statement cut for a reinsurer named on the panel with its organisation party
+/// asks documents for a covering letter with the totals, the period, the payment reference and
+/// the filed record's name and hash, and nothing from the listing; a reinsurer with no party
+/// gets no letter.
+/// Why it matters: the letter is how a reinsurer learns a statement is waiting and what to pay
+/// or expect. It goes by email, so it must carry no policy-level data, and the record's hash
+/// lets the reinsurer check the file it collects is the one the letter describes.
+#[test]
+fn a_statement_asks_documents_for_a_covering_letter_to_the_reinsurers_party() {
+    let mut b = Bench::empty();
+    let addressed = RETAIL.replace(
+        "reinsurer(\"reinsurer-north\", \"0.60\")",
+        "reinsurer(\"reinsurer-north\", \"0.60\", party = \"party-north-re\")",
+    );
+    assert_ne!(addressed, RETAIL, "the shipped panel moved");
+    for (file, source) in [("retail_life_surplus.star", addressed.as_str()), ("group_life_surplus.star", GROUP)] {
+        let treaty = Box::new(load_treaty(file, source).unwrap());
+        b.ok("config", Command::ActivateTreaty { treaty });
+    }
+    let table = Box::new(ic_reinsurance::loader::load_rate_table("ri_life_base.star", RATES).unwrap());
+    b.ok("config", Command::ActivateRateTable { table });
+    b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+    b.factors("P1", "L1", d(1990, 3, 10), false);
+    b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    b.today = d(2027, 4, 2);
+    let applied = b.ok("month-end", cut(d(2027, 3, 31)));
+    let s = b.ri.statement(1).unwrap().clone();
+    let letters: Vec<&Notice> = applied.notices.iter().filter(|n| matches!(n, Notice::StatementLetterDue { .. })).collect();
+    assert_eq!(letters.len(), 1);
+    assert_eq!(letters[0].audience(), ic_reinsurance::machine::Audience::Documents);
+    let command = ic_reinsurance::driver::documents_command(letters[0], d(2027, 4, 2)).unwrap();
+    let asked = &command["command"]["request_letter"];
+    assert_eq!(command["key"], "ri-letter:1");
+    assert_eq!(asked["request"], "ri:1");
+    assert_eq!(asked["recipient"]["party"]["party"], "party-north-re");
+    assert_eq!(asked["detail"]["net_owed_to_reinsurer_minor"], s.net_minor.to_string());
+    assert_eq!(asked["detail"]["record"], s.document);
+    assert_eq!(asked["detail"]["record_sha256"], s.sha256);
+    assert_eq!(asked["detail"]["period"], "2027-01-01 to 2027-03-31");
+    assert!(!command.to_string().contains("P1"), "nothing from the listing: {command}");
+    assert!(ic_reinsurance::driver::documents_command(&Notice::ExceptionClosed { id: "x".into() }, d(2027, 4, 2)).is_none());
+
+    let south = b.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: retail(),
+            reinsurer: ic_reinsurance::ReinsurerId::from("reinsurer-south"),
+            period_end: d(2027, 3, 31),
+        },
+    );
+    assert!(
+        !south.notices.iter().any(|n| matches!(n, Notice::StatementLetterDue { .. })),
+        "no party, no letter"
+    );
+}

@@ -1,13 +1,16 @@
 //! The close service process. Configuration is in the environment; see
 //! `ic_finance::service::Config` and `docs/finance.md`.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use ic_azure::blob::BlobContainer;
 use ic_azure::credential::AzureCredential;
 use ic_finance::driver::{core_sources, distribution_sources, finance_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver};
-use ic_finance::service::{run_passes, ClusterBooks, ClusterModules, Config};
+use ic_finance::service::{run_on_temporal, run_passes, ClusterBooks, ClusterModules, Config};
 use ic_raft::{ClusterAuth, ClusterClient};
+use temporalio_client::envconfig::LoadClientConfigProfileOptions;
+use temporalio_client::{Client, ClientOptions, Connection};
 
 async fn stop_signal() {
     let ctrl_c = async {
@@ -54,6 +57,14 @@ async fn main() -> Result<(), String> {
             .collect(),
     };
     tracing::info!(?config, "finance close service started");
-    run_passes(&driver, config.pass_every, stop_signal(), |_| {}).await;
-    Ok(())
+    if !config.temporal {
+        run_passes(&driver, config.pass_every, stop_signal(), |_| {}).await;
+        return Ok(());
+    }
+    // The connection is read by the SDK from TEMPORAL_ADDRESS,
+    // TEMPORAL_NAMESPACE and the other TEMPORAL_* variables.
+    let (connection, options) = ClientOptions::load_from_config(LoadClientConfigProfileOptions::default()).map_err(|e| e.to_string())?;
+    let connection = Connection::connect(connection).await.map_err(|e| format!("temporal: {e}"))?;
+    let temporal = Client::new(connection, options).map_err(|e| e.to_string())?;
+    run_on_temporal(temporal, Arc::new(driver), &config, stop_signal(), |_| {}).await
 }

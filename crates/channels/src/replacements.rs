@@ -67,12 +67,29 @@ pub fn for_adviser(matches: &Value, engagements: &Value) -> Value {
     Value::Array(rows)
 }
 
-/// The request kind new business takes an adviser's dispute from. It is
+/// The request kind that records an adviser's dispute and its reason. It is
 /// raised only through the adviser's own route, which checks they wrote
-/// the layer; the general request route refuses it.
+/// the layer and carries it to the commission module; the general request
+/// route refuses it.
 pub const DISPUTE: &str = "dispute_replacement";
-/// The module that carries a dispute to the commission module.
-pub const DISPUTE_MODULE: &str = "new-business";
+/// The module that owns the outcome: the commission module, by its name on
+/// the nodes.
+pub const DISPUTE_MODULE: &str = crate::forward::COMMISSION_MODULE;
+/// The caller the commission module takes an adviser's dispute from.
+pub const DISPUTE_CALLER: &str = "adviser-portal";
+
+/// The commission module's `DisputeReplacement` for a dispute recorded as
+/// request `id`, which is the reference it keeps, by `adviser`, whom that
+/// module checks wrote the layer.
+pub fn dispute_envelope(id: &str, payload: &Value, adviser: &ic_core::PartyId) -> Value {
+    json!({
+        "key": id,
+        "actor": { "module": DISPUTE_CALLER },
+        "command": { "dispute_replacement": {
+            "policy": payload["policy"], "cover": payload["cover"], "layer": payload["layer"], "reference": id, "adviser": adviser,
+        } },
+    })
+}
 
 /// An adviser's dispute of one of their matches, as the request new
 /// business acts on: the layer and the adviser's reason. Refused unless
