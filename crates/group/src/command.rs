@@ -71,7 +71,16 @@ pub enum ExcessDecision {
         /// The member agreed that the employer may see the loaded premium.
         #[serde(default)]
         member_consents_to_itemising: bool,
+        /// The member has agreed to pay the loading themselves. On a case
+        /// whose cover is already in place this is underwriting's reissue
+        /// of the terms: the layer is replaced by one the member pays the
+        /// loading of.
+        #[serde(default)]
+        member_pays_loading: bool,
     },
+    /// Underwriting offered the member the loading to pay and the member
+    /// declined, or the offer ran out. The terms in place stand.
+    ReofferDeclined,
     Declined,
     /// The member did not complete underwriting.
     NotProceeded,

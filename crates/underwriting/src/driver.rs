@@ -708,6 +708,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     loadings: cover.loadings.clone(),
                     exclusions: cover.exclusions.clone(),
                     member_consents_to_itemising: *employer_may_see_loading,
+                    member_pays_loading: false,
                 };
                 self.excess_decision(key, scheme, case, decision).await?
             }
