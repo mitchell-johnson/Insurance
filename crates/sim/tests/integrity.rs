@@ -627,6 +627,11 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             exclusions: vec![],
             reference: "req-1".into(),
         })),
+        Command::SetOwnerHold(Box::new(ic_core::owner_hold::SetOwnerHold {
+            policy: p.clone(),
+            held: true,
+            reference: "hold-1".into(),
+        })),
         Command::Nominate(Box::new(ic_core::nomination::Nominate {
             policy: p.clone(),
             nomination: "nom-1".into(),
@@ -649,7 +654,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 49, "{names:?}");
+    assert_eq!(names.len(), 50, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail
