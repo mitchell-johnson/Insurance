@@ -397,16 +397,29 @@ impl Harness {
             file: file.to_string(),
             clean: true,
         })?;
-        let r = self.driver(GroupCommand::SubmitRows {
-            scheme: SCHEME.to_string(),
-            file: file.to_string(),
-            mapping_hash: mapping(1).content_hash,
-            kind,
-            file_date: self.today(),
-            rows,
-            rejected: vec![],
-            last: true,
-        });
+        // In parts, as the driver sends a large file.
+        let parts: Vec<Vec<MemberRow>> = if rows.is_empty() {
+            vec![vec![]]
+        } else {
+            rows.chunks(2000).map(<[MemberRow]>::to_vec).collect()
+        };
+        let count = parts.len();
+        let mut r = Ok(());
+        for (n, part) in parts.into_iter().enumerate() {
+            r = self.driver(GroupCommand::SubmitRows {
+                scheme: SCHEME.to_string(),
+                file: file.to_string(),
+                mapping_hash: mapping(1).content_hash,
+                kind,
+                file_date: self.today(),
+                rows: part,
+                rejected: vec![],
+                last: n + 1 == count,
+            });
+            if r.is_err() {
+                break;
+            }
+        }
         self.settle();
         r
     }

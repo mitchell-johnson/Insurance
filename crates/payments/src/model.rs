@@ -363,6 +363,26 @@ pub struct Submission {
     pub bank_reference: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settled_on: Option<NaiveDate>,
+    /// The day it was sent for, when the bank's window for the run's own
+    /// value date had passed before a driver could take it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deferred_to: Option<NaiveDate>,
+}
+
+/// An item that reached the bank later than its run's value date because
+/// the bank's window had passed, for example while a channel was down.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Deferred {
+    pub run: Id,
+    pub submission: Id,
+    pub run_type: RunType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub policy: Option<PolicyId>,
+    pub amount_minor: i64,
+    /// The value date it was due to go for.
+    pub due: NaiveDate,
+    /// The value date it went for.
+    pub sent_for: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

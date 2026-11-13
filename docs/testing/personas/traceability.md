@@ -91,6 +91,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
+| COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
 ## XFR Policy transfer between groups
@@ -247,7 +248,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| GRP-001 | part | `group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
+| GRP-001 | full | `group/tests/intake.rs::twelve_monthly_files_on_a_scheme_of_five_thousand`<br>`group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
 | GRP-002 | full | `group/src/diff.rs::change_file_rows_that_do_not_fit_are_rejected_with_reasons`<br>`group/src/mapping.rs::unreadable_rows_are_rejected_one_by_one`<br>`group/tests/apply.rs::one_refused_row_does_not_stop_the_rest_of_the_file` |
 | GRP-003 | full | `group/tests/apply.rs::repeats_and_strays_change_nothing` |
 | GRP-004 | full | `group/tests/intake.rs::a_file_that_removes_too_many_members_is_held_for_a_person`<br>`group/src/diff.rs::the_safety_check_trips_past_the_share` |
@@ -365,6 +366,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 
 ## CMP Complaints and disputes

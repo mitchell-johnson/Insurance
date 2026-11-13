@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::collections::BTreeMap;
+
 use common::*;
 use ic_core::Reject;
 use ic_group::command::{caller, GroupCommand, Resolution};
@@ -377,4 +379,82 @@ fn an_unnamed_scheme_links_a_member_only_when_they_register() {
     h.settle();
     assert_eq!(h.scheme().membership.active("E002").unwrap().party, Some(party("party-m")));
     assert!(h.saw(|e| matches!(e, GroupEvent::MemberLinked { how, .. } if how == "self_registered")));
+}
+
+/// Purpose: a year of monthly full files on a named scheme of 5,000 members, each with
+/// joiners, leavers and pay changes, goes through preview, approval and the core in
+/// chunks; after every month the module's membership is the core's, the invoice counts
+/// every member once and its amount due is what the core says is owed, the daily
+/// reconciliation is clean on every one of the year's days, and nothing is left queued
+/// or raised to staff but the renewal at the year's end.
+/// Why it matters: every other test here uses a handful of members. Chunking, the
+/// one-command-in-flight rule and the invoice built from many chunk events only do real
+/// work at this size, and a scheme this large is an ordinary customer. A count that
+/// drifted by one member a month would be a wrong invoice by the end of the year.
+#[test]
+fn twelve_monthly_files_on_a_scheme_of_five_thousand() {
+    const SIZE: u32 = 5_000;
+    let mut h = Harness::new(terms());
+    let id = |n: u32| format!("E{n:05}");
+    let member = |n: u32, (salary, hired): (i64, Option<chrono::NaiveDate>)| {
+        let mut a = attrs("staff", salary, if n.is_multiple_of(2) { "akl" } else { "wlg" });
+        // Someone hired during the year starts work, and cover, on the day they were hired.
+        a.employment_start = hired.or(a.employment_start);
+        row(n, &id(n), a)
+    };
+
+    // Who is employed, and on what pay: E00001..E05000 to start, beside the founder (E001),
+    // who is on the scheme already and in every file.
+    let mut staff: BTreeMap<u32, (i64, Option<chrono::NaiveDate>)> = (1..=SIZE).map(|n| (n, (60_000_00, None))).collect();
+    let mut next = SIZE + 1;
+    let mut first = true;
+    for month in 1..=12u32 {
+        if !first {
+            // Thirty leave, forty join, fifty get a rise.
+            let leavers: Vec<u32> = staff.keys().copied().filter(|n| n % 167 == month % 167).take(30).collect();
+            for n in leavers {
+                staff.remove(&n);
+            }
+            for _ in 0..40 {
+                staff.insert(next, (60_000_00, Some(h.today())));
+                next += 1;
+            }
+            let raised: Vec<u32> = staff.keys().copied().filter(|n| n % 97 == month % 97).take(50).collect();
+            for n in raised {
+                staff.get_mut(&n).unwrap().0 += 1_000_00;
+            }
+        }
+        let mut rows: Vec<_> = staff.iter().map(|(n, who)| member(*n, *who)).collect();
+        rows.push(row(900_000, "E001", attrs("staff", 60_000_00, "akl")));
+        let members = staff.len() + 1;
+        let file = format!("month-{month:02}");
+        first = false;
+        h.apply(&file, FileKind::Full, rows);
+        let s = h.scheme();
+        assert!(s.files[&file].rejected.is_empty(), "{file}: {:?}", s.files[&file].rejected.first());
+        assert_eq!(s.files[&file].status, FileStatus::Applied, "{file}");
+        assert_eq!(s.membership.active_count(), members, "{file}");
+        assert_eq!(h.core_lives().len(), members, "{file}: the core has the same members");
+        assert!(s.queue.is_empty() && s.in_flight.is_none(), "{file}: nothing is left to apply");
+
+        // The rest of the month, each day reconciled, then the invoice and the payment.
+        let issued = h.scheme().invoices.back().map(|i| i.period_index);
+        for _ in 0..32 {
+            h.days(1);
+            if h.scheme().invoices.back().map(|i| i.period_index) != issued {
+                break;
+            }
+        }
+        let s = h.scheme();
+        let invoice = s.invoices.back().unwrap();
+        assert_eq!(invoice.members() as usize, members, "{file}: every member is on the invoice once");
+        assert_eq!(invoice.amount_due_minor(), h.owed(), "{file}");
+        h.pay(h.owed());
+        assert_eq!(h.scheme().outstanding_minor, 0);
+    }
+    assert_eq!(staff.len() as u32, SIZE + 11 * 10);
+    // The twelfth invoice falls on the renewal date, and this test agrees no renewal: that
+    // is the one thing staff are asked to look at after the whole year.
+    let raised: Vec<_> = h.g.exceptions.values().map(|e| e.kind).collect();
+    assert_eq!(raised, vec![ExceptionKind::RenewalNotAgreed]);
 }
