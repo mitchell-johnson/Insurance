@@ -528,7 +528,7 @@ Owned by the thread "Build underwriting and new business". The full module descr
 
 ## Payments and bank channels
 
-This section is the handover for money in and money out: what exists, where it is, and everything that is unfinished, written so the work can be finished without the thread that built it. The fuller description and runbook are in [payments.md](payments.md). State as of 12 November 2026.
+This section is the handover for money in and money out: what exists, where it is, and everything that is unfinished, written so the work can be finished without the thread that built it. The fuller description and runbook are in [payments.md](payments.md). This thread also owns collections (`ic-collections`), described at the end of this section. State as of 13 November 2026.
 
 ### What is built and where
 
@@ -579,6 +579,23 @@ This section is the handover for money in and money out: what exists, where it i
 10. **Notices.** `Notify` instructions are written to the structured log (`payments.notice`) with a role. Delivery to a work queue or a person is not wired to the channels or documents modules.
 11. **Egress addresses.** Recorded per region and checked in configuration, not enforced on the network.
 12. **Screens.** The portal has no payments operations screens (run preparation, approval, exceptions). The commands and queries they would call exist.
+
+### Collections (`crates/collections`, module `collections`)
+
+Built 13 November 2026 by agreement with the core thread: the core keeps standing, lapse, arrangements and hardship overrides; this module decides who is told what and when, and when a person steps in. Hosted on the ledger nodes (`ic_collections::module_spec()`), reading core events and posting to the core through the host's outbox (caller `collections`).
+
+- `config.rs`: the dunning sequence per product (`SetSequence`, role configuration). A sequence without exactly one suspension and one final notice, with the final notice closer to lapse than the product's minimum, or a minimum under `NOTICE_FLOOR_DAYS` (14, to be confirmed by legal and conduct), is refused. Mandatory notices go by post or email with proof of delivery. An optional early call day for a high annual premium; a call task escalation age; an officer's arrangement limit.
+- `dunning.rs`: follows `PolicyIssued`, `PremiumDue` (scaled to a year for the queue), `StandingChanged`, `PolicyStatusChanged` and the arrangement events. A partition's `BusinessDateAdvanced { from }` takes the steps for `from` for that partition's policies, after its end-of-day has settled standing. A late arrival gets its latest reminder and every mandatory notice reached; earlier reminders are `StepPassed`. One notice per party, step and day (policies join it until the documents service takes it) and one open task per party and kind. A broken arrangement pauses the clock by the days it ran, as the core does.
+- `cases.rs`: outcomes as reason codes, each driving the next step; arrangements proposed to the core as `MakeArrangement` and ended as `EndArrangement`; hardship applied for by an officer or the hardship team, decided by the hardship team by someone else, granted to the core as `GrantHardship` (share in basis points) and ended early today as `EndHardship`. A core refusal becomes a task.
+- `query.rs`: the queue (days to lapse, then annual premium; an officer's answer lists what it withheld), policy, notices due, tasks per team, hardship case (a health-disclosing note is withheld from officers), outbox, unsequenced products; `react` and the outbox adapters.
+- Tests: `crates/collections/tests/` (`sequence.rs`, `dunning.rs`, `cases.rs`, `queue.rs`); line coverage about 99%. Matrix rows COL-012, 013, 014, 015, 018, 019 and 026 are in `traceability.md`.
+
+Not done, in order:
+1. **Arrears age between standing changes.** The module learns the oldest unpaid due date only from `StandingChanged`. A payment that clears the oldest premium while a later one is still overdue leaves standing unchanged, so the module's age is too old until the next change. Ask the core for the oldest unpaid due date on `ReceiptApplied` and `ReceiptReversed`, or an event when it moves.
+2. **Notice delivery.** Notices wait in the state (`notices_due`) for the documents service, which reports `record_notice_sent` and `record_notice_delivery` as caller `delivery`. The documents thread has not wired that relay. An undeliverable mandatory notice raises a task, but the core does not yet pause the lapse step for it (COL-009 is the core's).
+3. **Sequences for the real products** are not written; until one is set, a product is listed by `unsequenced` and nothing is sent.
+4. **Advisers and lenders** are not told at the call step; vulnerability, recent claims and tenure do not bring the call earlier (premium only). Winback tasks, retention offers, scheme employer arrears and reporting measures are not built.
+5. **Screens.** The portal has no collections screens; the questions and commands exist.
 
 ### Checks
 
