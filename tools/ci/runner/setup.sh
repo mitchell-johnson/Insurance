@@ -36,6 +36,12 @@ RUNNERS=(
   "insurance-drill insurance-drill"
 )
 
+# The ci runners share one volume for build output at /data/target, so a
+# crate compiled by one is not compiled again by the other. Cargo locks a
+# target directory while it builds in it, so two jobs that want the same one
+# take turns rather than corrupt it.
+SHARED_TARGET=insurance-ci-target
+
 # A login agent that opens Docker Desktop, so the runners come back after a
 # reboot even if Docker's own "start when you sign in" setting is off.
 AGENT_LABEL=fyi.johnson.docker-desktop
@@ -44,7 +50,8 @@ AGENT=$HOME/Library/LaunchAgents/$AGENT_LABEL.plist
 registered() { docker run --rm -v "$1:/data" --entrypoint test "$IMAGE" -f /data/state/.runner; }
 
 start() {
-  local name=$1
+  local name=$1 label=$2 shared=()
+  [[ $label != insurance-ci ]] || shared=(-v "$SHARED_TARGET:/data/target")
   docker rm -f "$name" >/dev/null 2>&1 || true
   # Host networking puts the runner in the Docker machine's network, where
   # the ports of the containers its jobs start are published, so a job
@@ -55,6 +62,7 @@ start() {
     --stop-timeout 120 \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$name:/data" \
+    "${shared[@]}" \
     --log-opt max-size=20m --log-opt max-file=3 \
     "$IMAGE" run >/dev/null
   echo "started $name"
@@ -89,7 +97,7 @@ case ${1:-up} in
         gh api -X POST "repos/$REPO/actions/runners/registration-token" --jq .token |
           docker run --rm -i -v "$name:/data" "$IMAGE" configure "$URL" "$HOST-$name" "$label"
       fi
-      start "$name"
+      start "$name" "$label"
     done
     ;;
   status)
@@ -105,6 +113,7 @@ case ${1:-up} in
       docker volume rm "$name" >/dev/null 2>&1 || true
       echo "removed $name"
     done
+    docker volume rm "$SHARED_TARGET" >/dev/null 2>&1 || true
     ;;
   *)
     echo "usage: $0 [up|status|remove]" >&2
