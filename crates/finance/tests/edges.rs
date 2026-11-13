@@ -477,7 +477,7 @@ fn a_migration_control_account_must_stay_still_after_cutover() {
 /// clears nothing. When the validation of version 3's own content arrives in May, version
 /// 3 drops out of every period and version 4 stays. A validation recorded before its
 /// table is activated counts once the table goes live. The shipped close lists the check
-/// and does not let it block.
+/// as blocking.
 /// Why it matters: the core records that a table was validated and does not insist on it,
 /// so the close is the only place a table that went live unchecked is seen. It has to
 /// match on the content hash, or a report run on one draft would vouch for another.
@@ -520,8 +520,8 @@ fn a_rate_table_activated_without_a_validation_shows_at_the_close() {
     );
     assert_eq!(red(&b, period(2028, 4)).len(), 2);
     let declared = close_config().checks.into_iter().find(|c| c.id == check).unwrap();
-    assert!(!declared.blocking);
-    assert!(b.state.blockers(period(2028, 4)).iter().all(|c| c.id != check));
+    assert!(declared.blocking);
+    assert!(b.state.blockers(period(2028, 4)).iter().any(|c| c.id == check));
 
     let from = s.events.len();
     while s.date < d(2028, 5, 3) {

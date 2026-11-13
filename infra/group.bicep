@@ -10,11 +10,15 @@
 // - A managed identity for the service, federated to its Kubernetes service
 //   account, with only the roles it needs.
 //
-// Deployed as a module of main.bicep, or on its own into the same resource
-// group:
+// Deployed on its own into the same resource group as main.bicep:
 //   az deployment group create -g <rg> -f infra/group.bicep \
 //     -p name=<name> eventHubsNamespaceName=<namespace> aksOidcIssuer=<url> \
 //     keyVaultName=<vault>
+//
+// Then a person who may create app registrations runs
+// deploy/entra/group-app.sh: the service's app registration, its app roles
+// and who holds them, and the customer master's group-admin role for this
+// identity. Bicep does not make app registrations here.
 
 @description('Azure region.')
 param location string = resourceGroup().location

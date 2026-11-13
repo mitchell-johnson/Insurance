@@ -19,7 +19,6 @@ use ic_finance::service::{run_passes, ClusterBooks, ClusterModules, Config};
 use ic_finance::{FinCommand, FinEnvelope};
 use ic_raft::server::{self, ColdTarget, EventTarget, Settings};
 use ic_raft::{ClusterAuth, ClusterClient};
-use ic_sim::config::shipped_activations;
 use serde_json::json;
 
 /// Purpose: the service reads its settings from the environment, refuses to start without
@@ -179,7 +178,7 @@ async fn against_a_real_node(temporal: Option<&str>) {
     // The core closes one business day.
     let (day, next) = (d(2027, 11, 15), d(2027, 11, 16));
     let mut setup = vec![("leader", Command::OpenBusinessDate { date: day })];
-    setup.extend(shipped_activations().unwrap().into_iter().map(|c| ("config", c)));
+    setup.extend(shipped().into_iter().map(|c| ("config", c)));
     setup.push(("leader", Command::AdvanceBusinessDate { to: next }));
     for (n, (who, command)) in setup.into_iter().enumerate() {
         let envelope = ic_core::Envelope {

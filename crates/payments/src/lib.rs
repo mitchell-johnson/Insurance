@@ -21,6 +21,7 @@ pub mod intake;
 pub mod iso20022;
 pub mod machine;
 pub mod model;
+pub mod notices;
 mod payee;
 pub mod query;
 mod recon;

@@ -114,6 +114,10 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
+        "notices" => {
+            let role = serde_json::from_value(question["role"].clone()).map_err(|_| "the question needs a role".to_string())?;
+            found(Some(state.open_notices(role)))
+        }
         "next_value_date" => {
             let run_type = serde_json::from_value(question["run_type"].clone()).map_err(|_| "the question needs a run_type".to_string())?;
             let at = question["at"]
