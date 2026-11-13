@@ -298,7 +298,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-023 | full | `group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy`<br>`group/tests/leavers.rs::an_option_not_taken_up_expires` |
 | GRP-024 | full | `group/tests/leavers.rs::a_seasonal_worker_serves_the_waiting_period_again_on_rejoining`<br>`group/src/model.rs::membership_follows_a_member_through_every_change` |
 | GRP-025 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
-| GRP-026 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations` |
+| GRP-026 | full | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`group/tests/year.rs::a_pools_renewal_waits_for_an_overdue_declaration` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
