@@ -218,9 +218,9 @@ impl ClaimsState {
         }
 
         let periodic = claim.claim_type.periodic();
-        // A case opened by the billing rule takes the claim out of the
-        // rules' hands without saying so: it waits for a person like any other.
-        let held = self.screen_billing(cx, &mut claim);
+        // A case opened by a rule takes the claim out of the rules' hands
+        // without saying so: it waits for a person like any other.
+        let held = self.screen(cx, &mut claim, facts.cover_start);
         let straight = self.straight_through(&claim, &facts).filter(|_| !held);
         let pre_approval = claim.health.as_ref().is_some_and(|h| h.pre_approval_request);
         let reserved = |claim: &Claim, gross: i64| {
