@@ -72,7 +72,7 @@ const portal = (() => {
   }
   function signOut(realm) { store.removeItem("token:" + realm); store.removeItem("dev:" + realm); window.location.reload(); }
 
-  async function api(realm, method, path, body) {
+  async function signedIn(realm) {
     const cfg = await loadConfig();
     const headers = {};
     if (cfg.mode === "dev") {
@@ -80,6 +80,10 @@ const portal = (() => {
       headers["x-dev-subject"] = dev.subject || "";
       if (dev.roles) headers["x-dev-roles"] = dev.roles;
     } else headers["authorization"] = "Bearer " + store.getItem("token:" + realm);
+    return { cfg, headers };
+  }
+  async function api(realm, method, path, body) {
+    const { cfg, headers } = await signedIn(realm);
     if (method !== "GET") headers["idempotency-key"] = crypto.randomUUID();
     // A file goes as it is; anything else as JSON.
     const raw = typeof Blob !== "undefined" && body instanceof Blob;
@@ -90,6 +94,25 @@ const portal = (() => {
     if (!res.ok) { const e = new Error((data && data.detail) || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; throw e; }
     return data;
   }
+  // Fetch a file as the signed-in person and hand it to the browser to save.
+  async function download(realm, path, name) {
+    const { headers } = await signedIn(realm);
+    const res = await fetch(path, { headers });
+    if (res.status === 404) throw new Error("That document is not available to you.");
+    if (!res.ok) { const data = await res.json().catch(() => null); throw new Error((data && data.detail) || "The download failed (" + res.status + ")."); }
+    const url = URL.createObjectURL(await res.blob());
+    const a = h("a", { href: url, download: name });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+    return "Downloaded " + name + ".";
+  }
+  // The documents among a policy's rows, each with a button to download it.
+  function documents(realm, rows, out) {
+    const docs = rows.filter((r) => r.kind === "document");
+    if (!docs.length) return h("p", { class: "muted" }, "No documents yet.");
+    return table(["Document", "Issued", ""], docs.map((r) => [r.body.title || r.body.document, r.body.issued_on || "",
+      h("button", { class: "quiet", on: { click: run(out, () => download(realm, "/app/v1/documents/" + encodeURIComponent(r.body.document) + "/pdf", r.body.document + ".pdf")) } }, "Download")]));
+  }
   // Run an action from a button or form, showing its outcome in `out`.
   function run(out, fn) {
     return async (ev) => {
@@ -98,5 +121,5 @@ const portal = (() => {
       catch (e) { say(out, "bad", e.message); }
     };
   }
-  return { h, clear, put, money, table, say, signIn, signOut, api, run, loadConfig };
+  return { h, clear, put, money, table, say, signIn, signOut, api, run, loadConfig, download, documents };
 })();

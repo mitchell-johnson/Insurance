@@ -39,7 +39,7 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   await visit(browser, "/status", null, { run: async (p) => { await sees(p, "Last checked"); await p.locator(".banner.ok").waitFor(); } });
   await visit(browser, "/ops", { subject: "sub-ops", roles: "operations" }, { run: async (p) => { await sees(p, "auckland"); await sees(p, "sydney"); } });
   await visit(browser, "/ops", { subject: "sub-kiri" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
-  await visit(browser, "/adviser", { subject: "sub-adv" }, { run: async (p) => {
+  await visit(browser, "/adviser", { subject: "sub-adv" }, { expectStatus: [404], run: async (p) => {
     await sees(p, "fap-1");
     await sees(p, "$900.00");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();
@@ -52,6 +52,10 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#rows").getByText("prop-1").waitFor();
     await sees(p, "The applicant");
     await p.locator("#claims").getByText("No claims.").waitFor();
+    // The schedule is listed; the documents module decides who may download it, and it is the customer's.
+    await p.locator("#docs").getByText("Policy schedule").waitFor();
+    await p.locator("#docs").getByRole("button", { name: "Download" }).click();
+    await p.locator("#docs-msg").getByText("not available to you").waitFor();
     await p.fill("#note", "customer asked by phone");
     await p.click("#send");
     await sees(p, "Sent");
