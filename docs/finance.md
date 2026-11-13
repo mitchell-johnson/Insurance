@@ -98,8 +98,15 @@ Anything that cannot be done yet is listed in `Pass::waiting` and tried on the n
 | `IC_FINANCE_ROOTS_ENDPOINT`, `IC_FINANCE_ROOTS_CONTAINER` | where the core publishes Merkle roots (container defaults to `merkle-roots`) |
 | `IC_FINANCE_EXTRACTS_ENDPOINT`, `IC_FINANCE_EXTRACTS_CONTAINER` | where extracts are written (container defaults to `finance-extracts`) |
 | `IC_FINANCE_PASS_SECONDS` | seconds between passes, 60 by default |
+| `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE` | the Temporal service. When the address is set the close runs as a Temporal workflow |
+| `IC_FINANCE_TASK_QUEUE` | the Temporal task queue, `ic-finance-close` by default |
+| `IC_FINANCE_STEP_TIMEOUT_SECS` | how long Temporal lets one attempt of a step run, 300 by default |
 
 `deploy/k8s/finance.yaml` runs two replicas under their own service account. It refuses to start without the cluster or either storage endpoint, runs a pass at once after one that did something, and stops on SIGTERM.
+
+### On Temporal
+
+Where a Temporal service is configured, each replica runs a worker and starts a run of `CloseRunWorkflow` (`src/temporal.rs`) every `IC_FINANCE_PASS_SECONDS`. A run is one pass with each step as an activity: record the Merkle roots, list the closing periods, then one step for each period, oldest first. Temporal's history shows which step a run is on and what each returned; a step that could not reach the ledger or storage is retried on its own, a step whose answer cannot be read fails the run with its own words, and a step in flight when a worker dies is given to the other replica. The workflow is named after the task queue, so there is one run at a time and a replica that starts one while another is going waits for that one. The workflow holds no state: every step asks the ledger what is outstanding. Without `TEMPORAL_ADDRESS` the service runs the same steps itself on its timer.
 
 ## Actuarial tables
 
@@ -139,4 +146,4 @@ Roles: `finance_operator` enters, `finance_approver` approves journals, `finance
 
 ## Not built yet
 
-- A Temporal workflow for the close. The driver is a restartable pass on a timer, with all its state in the ledger.
+- People's steps in the close (waivers, sign-off) are not workflow steps: a run reports what it is waiting for and the next run looks again.

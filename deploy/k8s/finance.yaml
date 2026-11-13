@@ -73,6 +73,11 @@ spec:
             # After ic-ledger: the token is mounted under this service's identity.
             - configMapRef:
                 name: ic-finance-close
+            # TEMPORAL_ADDRESS here makes the close a Temporal workflow
+            # (queue ic-finance-close). Without it the service runs the same
+            # steps itself on its timer.
+            - configMapRef:
+                name: ic-temporal
           resources:
             requests:
               cpu: 50m
