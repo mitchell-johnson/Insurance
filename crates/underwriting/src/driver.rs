@@ -468,6 +468,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     commencement: *commencement,
                     proposal_expires: *proposal_expires,
                     risk_codes: risk_codes.clone(),
+                    excess_reference: None,
                 };
                 let reserved = self
                     .reinsure(

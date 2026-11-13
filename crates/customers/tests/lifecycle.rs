@@ -725,3 +725,91 @@ async fn relationship_changes_reach_the_channels_directory() {
     w.app.store.reshred(&[PartyId(owner.clone())], Utc::now()).await.unwrap();
     assert_eq!(w.sql("select 1 from directory_relay").await.unwrap(), 0);
 }
+
+/// Purpose: the blind index key can be changed without anyone becoming unfindable.
+/// Entries made before keys were named are adopted as the current key's after one
+/// party's are checked against it; with a next key every party is indexed again under
+/// both, the status says when the next key covers everyone, and once it is promoted
+/// lookups use only its entries and the old key's are removed. Older entries that do not
+/// match the current key are not adopted; everyone is indexed afresh instead. An
+/// operator reads the status at `/v1/admin/index`; other callers cannot.
+/// Why it matters: the index key can leak or need rotating like any secret. Every
+/// duplicate check and match depends on it, so a change that dropped entries early would
+/// let a known person be created again or a claimant go unmatched.
+#[tokio::test]
+async fn the_index_key_can_be_changed_without_losing_anyone() {
+    let w = world_or_skip!();
+    let ana = PartyId(w.person("Ana", "Moana", "1980-02-03", &[("email", json!("ana@example.nz"))]).await);
+    let ben = PartyId(w.person("Ben", "Tane", "1975-06-07", &[]).await);
+    let next = "a-next-index-key-of-at-least-32-bytes!!";
+    // Entries from before keys were named: adopted once, after a check.
+    w.sql("update blind_index set key_id = ''").await.unwrap();
+    w.sql("delete from index_state").await.unwrap();
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ana).await, "older entries still answer");
+    assert!(w.app.store.adopt_index().await.unwrap());
+    assert!(!w.app.store.adopt_index().await.unwrap(), "only once");
+    let status = w.app.store.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.next.clone(), status.ready_to_promote), (0, None, false));
+
+    // Changing: everyone is indexed under both keys, a few at a time.
+    let changing = w.store_with(common::INDEX_KEY, Some(next)).await;
+    let status = changing.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.waiting_next, status.ready_to_promote), (0, Some(2), false));
+    assert_eq!(changing.rebuild_index(1).await.unwrap(), 1);
+    assert_eq!(changing.rebuild_index(10).await.unwrap(), 1);
+    assert_eq!(changing.rebuild_index(10).await.unwrap(), 0, "nothing left");
+    assert!(changing.index_status().await.unwrap().ready_to_promote);
+    assert!(findable(&changing, common::INDEX_KEY, &ana).await, "lookups still use the current key");
+    assert!(!findable(&changing, next, &ana).await, "and not the next one yet");
+    assert_eq!(changing.retire_index(100).await.unwrap(), 0, "nothing is retired while both are in use");
+
+    // Promoted: only the new key's entries answer, and the old ones go.
+    let promoted = w.store_with(next, None).await;
+    assert!(findable(&promoted, next, &ana).await);
+    let status = promoted.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.retired_entries > 0), (0, true));
+    assert!(!findable(&promoted, common::INDEX_KEY, &ana).await, "the old key finds nobody");
+    assert!(promoted.retire_index(100).await.unwrap() > 0);
+    assert_eq!(promoted.index_status().await.unwrap().retired_entries, 0);
+    assert_eq!(
+        w.sql(&format!(
+            "select 1 from index_state where key_id <> '{}'",
+            promoted.index_status().await.unwrap().current
+        ))
+        .await
+        .unwrap(),
+        0
+    );
+
+    // Older entries that are not the current key's are not adopted; everyone is
+    // indexed afresh, and older entries are kept until then.
+    w.sql("update blind_index set key_id = ''").await.unwrap();
+    w.sql("delete from index_state").await.unwrap();
+    assert!(!w.app.store.adopt_index().await.unwrap());
+    assert_eq!(w.app.store.retire_index(100).await.unwrap(), 0, "kept while anyone is waiting");
+    assert_eq!(w.app.store.index_status().await.unwrap().waiting_current, 2);
+    assert_eq!(work::maintain_index(&w.app).await.unwrap(), (2, 0));
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ben).await);
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ana).await);
+    assert_eq!(w.app.store.index_status().await.unwrap().waiting_current, 0);
+    // Erasing a party removes what it was indexed under.
+    w.app.store.reshred(std::slice::from_ref(&ana), Utc::now()).await.unwrap();
+    assert_eq!(w.sql(&format!("select 1 from index_state where party_id = '{}'", ana.0)).await.unwrap(), 0);
+
+    // Only an operator reads the status.
+    let (status, out) = w.get("/v1/admin/index", "operations", "operations").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["waiting_current"], 0);
+    assert_eq!(out["next"], serde_json::Value::Null);
+    let (status, _) = w.get("/v1/admin/index", "staff", "operations").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Whether the store finds a party by its own index entries under `key`.
+async fn findable(store: &ic_customers::store::Store<ic_azure::keywrap::KeyVaultWrapper>, key: &str, who: &PartyId) -> bool {
+    let key = ic_customers::crypto::IndexKey::new(key.as_bytes()).unwrap();
+    let party = store.load(who).await.unwrap().unwrap();
+    let keys: Vec<(&'static str, Vec<u8>)> = ic_customers::matching::party_keys(&party, &key).into_iter().collect();
+    assert!(!keys.is_empty());
+    store.candidates(&keys).await.unwrap().contains(who)
+}
