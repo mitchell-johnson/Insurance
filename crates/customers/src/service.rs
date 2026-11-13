@@ -369,8 +369,22 @@ async fn contact_points<W: KeyWrapper, S: WormStore>(
             text(Field::FamilyName).map(|family| first.map_or(family.clone(), |g| format!("{g} {family}")))
         }
     };
+    let as_text = |v: &Value| match v {
+        Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        other => other.as_str().unwrap_or_default().to_string(),
+    };
+    // A contact point the party chose for this relationship comes first.
+    let chosen = q.relationship.as_deref().and_then(|rel| {
+        facts
+            .get(&Field::RelationshipContacts)?
+            .value
+            .as_array()?
+            .iter()
+            .find_map(|c| (c["relationship"] == rel && c["channel"] == q.channel.as_str()).then(|| as_text(&c["destination"])))
+    });
     let destination = match q.channel.as_str() {
         "in_app" | "push" => Some(resolved.0.clone()),
+        _ if chosen.is_some() => chosen,
         _ => fields.iter().find_map(|f| {
             facts.get(f).map(|v| match &v.value {
                 Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
@@ -432,8 +446,38 @@ async fn relationships_to<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App
     }
 }
 
-async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoutingQuery {
+    /// What the person (or someone for them) is about to do: one of the
+    /// representative scopes except `all`.
+    #[serde(default)]
+    act: Option<String>,
+}
+
+/// Acts that move value out or redirect it, where a marked person is paused
+/// for a conversation or a specialist looks first.
+const RISKY_ACTS: [&str; 5] = [
+    "surrender",
+    "change_beneficiary",
+    "change_bank_details",
+    "change_payment_method",
+    "change_cover",
+];
+
+async fn routing<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path(id): Path<String>,
+    Query(q): Query<RoutingQuery>,
+    headers: HeaderMap,
+) -> Reply {
     let ctx = app.ctx(&headers, None).await?;
+    if q.act
+        .as_deref()
+        .is_some_and(|a| !crate::model::REPRESENTATIVE_SCOPES.contains(&a) || a == "all")
+    {
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "act is one of the representative scopes"));
+    }
     let (resolved, party) = app.find(&id).await?;
     if !app.access.allows(&app.ask(&ctx), "routing") {
         return Err(app.deny(&ctx, Some(&resolved), "routing").await);
@@ -446,6 +490,18 @@ async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
         // only for those the policy lets read the marker.
         answer["adjustments"] = m["adjustments"].clone();
         answer["review_on"] = m["review_on"].clone();
+        // For an act that moves value: a conversation with a trained person
+        // first where the person asked for one, and a specialist's review
+        // where the marker is a risk of financial abuse. Neither says why,
+        // and neither is a refusal: the person's decision stands afterwards.
+        if let Some(act) = q.act.as_deref().filter(|a| RISKY_ACTS.contains(a)) {
+            let asked = m["adjustments"]
+                .as_array()
+                .is_some_and(|a| a.iter().any(|v| v == "pause_before_large_withdrawal"));
+            answer["act"] = json!(act);
+            answer["pause_for_conversation"] = json!(asked || m["kind"] == "financial_abuse_risk");
+            answer["specialist_review"] = json!(m["kind"] == "financial_abuse_risk");
+        }
         let ask = app.ask_about(&ctx, &resolved).await?;
         if !app.access.readable(&ask, &[Field::Vulnerability]).is_empty() {
             answer["kind"] = m["kind"].clone();
