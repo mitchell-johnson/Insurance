@@ -504,6 +504,8 @@ pub enum Audience {
     Records,
     /// The people who run reinsurance: exceptions and work that is due.
     Staff,
+    /// The documents module, which writes and sends letters.
+    Documents,
 }
 
 /// Something another module, or a person, needs to know.
@@ -580,6 +582,21 @@ pub enum Notice {
     SupplementaryListingDue {
         statement: u32,
     },
+    /// For the documents module: the covering letter for a statement, to
+    /// the reinsurer's organisation party. Totals only; the listing is
+    /// collected by the reinsurer, never emailed.
+    StatementLetterDue {
+        statement: u32,
+        party: ic_core::PartyId,
+        treaty: TreatyId,
+        reinsurer: ReinsurerId,
+        period_start: NaiveDate,
+        period_end: NaiveDate,
+        currency: ic_money::Currency,
+        net_minor: i64,
+        record: String,
+        record_sha256: String,
+    },
     /// For the payments module: one net payment. Positive is paid to the
     /// reinsurer, negative is collected from it.
     SettlementDue {
@@ -615,6 +632,7 @@ impl Notice {
             | Notice::DisputedItemRaised { .. }
             | Notice::DisputeResolved { .. } => Audience::Claims,
             Notice::SettlementDue { .. } => Audience::Payments,
+            Notice::StatementLetterDue { .. } => Audience::Documents,
             Notice::Document { .. } | Notice::ReleaseLogged { .. } => Audience::Records,
             // Underwriting releases capacity itself and has no use for being
             // told; a hold that lapsed by its date is for the people watching.

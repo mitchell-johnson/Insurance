@@ -54,6 +54,11 @@ pub struct PanelShare {
     pub reinsurer: ReinsurerId,
     #[serde(deserialize_with = "de_ppm")]
     pub share: Ppm,
+    /// The reinsurer as an organisation in the customer master: the party
+    /// its statement letters are addressed to. Without one no letter is
+    /// asked for.
+    #[serde(default)]
+    pub party: Option<ic_core::PartyId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

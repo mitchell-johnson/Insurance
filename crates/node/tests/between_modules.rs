@@ -45,7 +45,10 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
     let node = server::start_with(settings, ic_node::modules().unwrap()).await.unwrap();
     let client = ClusterClient::new(vec![addr]).with_auth(auth);
     let audiences = ClusterAudiences::new(client.clone(), Duration::from_secs(20));
-    assert_eq!(audiences.reached(), vec![Audience::Group, Audience::Underwriting, Audience::Payments]);
+    assert_eq!(
+        audiences.reached(),
+        vec![Audience::Group, Audience::Underwriting, Audience::Payments, Audience::Documents]
+    );
 
     let on = NaiveDate::from_ymd_opt(2027, 3, 1).unwrap();
     let notice = Notice::RequireUnderwrittenExcess {
@@ -119,6 +122,33 @@ async fn other_modules_read_reinsurance_notices_and_it_reads_theirs() {
         let reply = client.propose_module_until("reinsurance", &told, Duration::from_secs(20)).await.unwrap();
         assert_eq!(reply.result.unwrap()["result"]["Err"]["code"], "unknown_statement");
     }
+    // Documents takes a statement's covering letter as a requested letter, once however
+    // often it is told, and holds it pending until the documents service issues it.
+    let letter = Notice::StatementLetterDue {
+        statement: 7,
+        party: ic_core::PartyId("party-north-re".into()),
+        treaty: "retail".into(),
+        reinsurer: "north-re".into(),
+        period_start: NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+        period_end: NaiveDate::from_ymd_opt(2027, 3, 31).unwrap(),
+        currency: ic_money::Currency::NZD,
+        net_minor: 90_000_00,
+        record: "reinsurance/retail/north-re/statement-7.json".into(),
+        record_sha256: "ab".repeat(32),
+    };
+    for _ in 0..2 {
+        assert_eq!(audiences.hand_on(14, &letter, on).await.unwrap(), Handed::Taken);
+    }
+    let asked = client
+        .query_module("documents", &serde_json::json!({"letter_request": {"request": "ri:7"}}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(asked["status"], "pending", "{asked}");
+    assert_eq!(asked["caller"], "reinsurance");
+    assert_eq!(asked["request"]["kind"], "reinsurance_statement");
+    assert_eq!(asked["request"]["recipient"]["party"]["party"], "party-north-re");
+    assert_eq!(asked["request"]["detail"]["payment_reference"], "ri-stmt-7");
     // A notice for someone else is never sent to either.
     let other = Notice::ExceptionClosed { id: "x".into() };
     assert!(matches!(audiences.hand_on(8, &other, on).await, Err(DriverError::Answer(_))));
