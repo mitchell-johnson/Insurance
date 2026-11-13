@@ -202,7 +202,7 @@ pub fn waiting_cash_report(as_at: NaiveDate, mut waiting: Vec<WaitingCash>) -> V
 }
 
 /// What one pass did.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Pass {
     pub roots_recorded: Vec<NaiveDate>,
     /// IDs of the extracts stored and registered.
@@ -275,11 +275,14 @@ impl<B: Books, M: Modules, R: WormStore, X: WormStore> Driver<B, M, R, X> {
         })
     }
 
-    /// Do everything that can be done now.
-    pub async fn pass(&self) -> Result<Pass, DriverError> {
-        let work: Work = decode("work", self.books.ask(json!({ "q": "work" })).await?)?;
+    async fn work(&self) -> Result<Work, DriverError> {
+        decode("work", self.books.ask(json!({ "q": "work" })).await?)
+    }
+
+    /// Record every Merkle root the ledger is waiting for that is published.
+    pub async fn record_roots(&self) -> Result<Pass, DriverError> {
         let mut pass = Pass::default();
-        for date in work.roots_wanted {
+        for date in self.work().await?.roots_wanted {
             match self.published(date).await? {
                 Ok(None) => pass.waiting.push(format!("the Merkle root of {date} is not published")),
                 Err(problem) => pass.waiting.push(problem),
@@ -296,6 +299,32 @@ impl<B: Books, M: Modules, R: WormStore, X: WormStore> Driver<B, M, R, X> {
                 }
             }
         }
+        Ok(pass)
+    }
+
+    /// The periods past their last day and not yet closed, oldest first.
+    pub async fn closing(&self) -> Result<Vec<PeriodId>, DriverError> {
+        Ok(self.work().await?.closing.into_iter().map(|w| w.period).collect())
+    }
+
+    /// Do everything that can be done now for one period, on what the
+    /// ledger says of it at this moment. `earlier_open` is whether a period
+    /// before it is still open, which holds its close back. Returns whether
+    /// the period is closed and what was done.
+    pub async fn work_period(&self, period: PeriodId, earlier_open: bool) -> Result<(bool, Pass), DriverError> {
+        let mut pass = Pass::default();
+        // A period the ledger no longer lists has closed.
+        let closed = match self.work().await?.closing.iter().find(|w| w.period == period) {
+            Some(w) => self.period(w, earlier_open, &mut pass).await?,
+            None => true,
+        };
+        Ok((closed, pass))
+    }
+
+    /// Do everything that can be done now.
+    pub async fn pass(&self) -> Result<Pass, DriverError> {
+        let mut pass = self.record_roots().await?;
+        let work = self.work().await?;
         let mut earlier_open = false;
         for period in &work.closing {
             let closed = self.period(period, earlier_open, &mut pass).await?;

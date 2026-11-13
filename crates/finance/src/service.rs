@@ -28,6 +28,15 @@ pub struct Config {
     pub extracts_endpoint: String,
     pub extracts_container: String,
     pub pass_every: Duration,
+    /// Whether the close runs as a Temporal workflow. It does wherever a
+    /// Temporal service is configured (`TEMPORAL_ADDRESS`); without one the
+    /// service runs the same steps itself on the timer.
+    pub temporal: bool,
+    /// The Temporal task queue the close workers poll.
+    pub task_queue: String,
+    /// How long Temporal lets one attempt of a step run before it gives the
+    /// step to another worker. An extract is written inside one step.
+    pub step_timeout: Duration,
 }
 
 impl Config {
@@ -37,13 +46,13 @@ impl Config {
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
         let need = |key: &str| get(key).ok_or_else(|| format!("{key} is not set"));
-        let seconds = match get("IC_FINANCE_PASS_SECONDS") {
+        let seconds = |key: &str, default: u64| match get(key) {
             Some(text) => text
                 .parse::<u64>()
                 .ok()
                 .filter(|s| *s > 0)
-                .ok_or("IC_FINANCE_PASS_SECONDS must be a whole number of seconds above zero")?,
-            None => 60,
+                .ok_or(format!("{key} must be a whole number of seconds above zero")),
+            None => Ok(default),
         };
         Ok(Self {
             cluster: get("IC_CLUSTER_NODES").or_else(|| get("IC_NODES")).ok_or("IC_CLUSTER_NODES is not set")?,
@@ -51,7 +60,10 @@ impl Config {
             roots_container: get("IC_FINANCE_ROOTS_CONTAINER").unwrap_or_else(|| "merkle-roots".into()),
             extracts_endpoint: need("IC_FINANCE_EXTRACTS_ENDPOINT")?,
             extracts_container: get("IC_FINANCE_EXTRACTS_CONTAINER").unwrap_or_else(|| "finance-extracts".into()),
-            pass_every: Duration::from_secs(seconds),
+            pass_every: Duration::from_secs(seconds("IC_FINANCE_PASS_SECONDS", 60)?),
+            temporal: get("TEMPORAL_ADDRESS").is_some(),
+            task_queue: get("IC_FINANCE_TASK_QUEUE").unwrap_or_else(|| crate::temporal::TASK_QUEUE.into()),
+            step_timeout: Duration::from_secs(seconds("IC_FINANCE_STEP_TIMEOUT_SECS", 300)?),
         })
     }
 
@@ -173,5 +185,51 @@ pub async fn run_passes<B, M, R, X>(
             () = &mut stop => return,
             () = tokio::time::sleep(if busy { Duration::from_millis(10) } else { every }) => {}
         }
+    }
+}
+
+/// How much a pass or a run did.
+fn done(p: &Pass) -> usize {
+    p.roots_recorded.len() + p.extracts_registered.len() + p.reports_sent.len() + p.closed.len()
+}
+
+/// Run the close on Temporal until `stop` completes: a worker for the
+/// steps, and a run started every `pass_every` (at once after a run that
+/// did something). Every replica does both. The runs share one workflow
+/// ID, so a replica that starts a run while one is going waits for that one.
+pub async fn run_on_temporal(
+    client: temporalio_client::Client,
+    steps: std::sync::Arc<dyn crate::temporal::CloseSteps>,
+    config: &Config,
+    stop: impl Future<Output = ()>,
+    mut seen: impl FnMut(&Result<Pass, String>),
+) -> Result<(), String> {
+    let input = crate::temporal::CloseRunInput {
+        step_timeout_secs: config.step_timeout.as_secs(),
+    };
+    let starter = async {
+        loop {
+            let run = crate::temporal::close_run(&client, &config.task_queue, input.clone()).await;
+            let busy = match &run {
+                Ok(p) if p.waiting.is_empty() => {
+                    tracing::debug!(done = done(p), "close run");
+                    done(p) > 0
+                }
+                Ok(p) => {
+                    tracing::warn!(done = done(p), waiting = ?p.waiting, "a close run left work waiting");
+                    done(p) > 0
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "a close run failed");
+                    false
+                }
+            };
+            seen(&run);
+            tokio::time::sleep(if busy { Duration::from_millis(10) } else { config.pass_every }).await;
+        }
+    };
+    tokio::select! {
+        worker = crate::temporal::run_worker(client.clone(), &config.task_queue, steps, stop) => worker,
+        () = starter => Ok(()),
     }
 }
