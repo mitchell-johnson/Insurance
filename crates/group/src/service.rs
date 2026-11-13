@@ -8,6 +8,7 @@
 //! the person is; each presents its own Entra ID token ([`crate::auth`]).
 
 use std::future::Future;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -176,8 +177,59 @@ impl CustomerMaster for HttpCustomerMaster {
     }
 }
 
+/// What the pass loop has been doing, for `/metrics`. Counted in this
+/// process only: every replica reports its own.
+#[derive(Debug, Default)]
+pub struct Health {
+    passes: AtomicU64,
+    passes_failed: AtomicU64,
+    steps: AtomicU64,
+    waiting: AtomicU64,
+}
+
+impl Health {
+    /// Take note of a pass, as `run_passes` reports it.
+    pub fn record(&self, pass: &Result<Pass, DriverError>) {
+        self.passes.fetch_add(1, Ordering::Relaxed);
+        match pass {
+            Ok(p) => {
+                self.steps.fetch_add(u64::from(p.done), Ordering::Relaxed);
+                self.waiting.store(u64::from(p.failed), Ordering::Relaxed);
+            }
+            Err(_) => {
+                self.passes_failed.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// The counters in the Prometheus text format.
+    pub fn metrics(&self) -> String {
+        let line = |name: &str, kind: &str, help: &str, value: &AtomicU64| {
+            format!("# HELP {name} {help}\n# TYPE {name} {kind}\n{name} {}\n", value.load(Ordering::Relaxed))
+        };
+        [
+            line("ic_group_passes_total", "counter", "Driver passes started.", &self.passes),
+            line(
+                "ic_group_passes_failed_total",
+                "counter",
+                "Driver passes that could not run at all.",
+                &self.passes_failed,
+            ),
+            line("ic_group_steps_total", "counter", "Outbox entries delivered and file steps taken.", &self.steps),
+            line(
+                "ic_group_waiting",
+                "gauge",
+                "Steps the last pass could not take and will try again.",
+                &self.waiting,
+            ),
+        ]
+        .concat()
+    }
+}
+
 struct Web<M, C, P, D, F> {
     driver: Arc<Driver<M, C, P, D, F>>,
+    health: Arc<Health>,
     /// Validates callers' Entra ID tokens.
     entra: Entra,
 }
@@ -360,9 +412,9 @@ where
     }
 }
 
-/// The service's routes: `POST /v1/schemes/{scheme}/files/{file}` to
-/// upload, `POST /v1/commands`, `POST /v1/questions`, and `GET /healthz`.
-pub fn router<M, C, P, D, F>(driver: Arc<Driver<M, C, P, D, F>>, entra: Entra) -> Router
+/// Ready when the cluster answers: without it every route here would
+/// answer 503, so the replica is better left out until it does.
+async fn ready<M, C, P, D, F>(State(web): State<Arc<Web<M, C, P, D, F>>>) -> (StatusCode, &'static str)
 where
     M: Module + 'static,
     C: Core + 'static,
@@ -370,12 +422,42 @@ where
     D: CustomerMaster + 'static,
     F: FileStore + 'static,
 {
-    let web = Arc::new(Web { driver, entra });
+    match web.driver.core.business_date().await {
+        Ok(_) => (StatusCode::OK, "ready"),
+        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "the cluster is not answering"),
+    }
+}
+
+async fn metrics<M, C, P, D, F>(State(web): State<Arc<Web<M, C, P, D, F>>>) -> String
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    web.health.metrics()
+}
+
+/// The service's routes: `POST /v1/schemes/{scheme}/files/{file}` to
+/// upload, `POST /v1/commands`, `POST /v1/questions`, and `GET /healthz`,
+/// `GET /readyz` and `GET /metrics`, which need no token.
+pub fn router<M, C, P, D, F>(driver: Arc<Driver<M, C, P, D, F>>, entra: Entra, health: Arc<Health>) -> Router
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    let web = Arc::new(Web { driver, entra, health });
     Router::new()
         .route("/v1/schemes/{scheme}/files/{file}", post(upload::<M, C, P, D, F>))
         .route("/v1/commands", post(command::<M, C, P, D, F>))
         .route("/v1/questions", post(question::<M, C, P, D, F>))
         .route("/healthz", get(|| async { "ok" }))
+        .route("/readyz", get(ready::<M, C, P, D, F>))
+        .route("/metrics", get(metrics::<M, C, P, D, F>))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .with_state(web)
 }

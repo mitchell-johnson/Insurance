@@ -704,6 +704,13 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
         .await
         .unwrap();
     assert_eq!(answer["members"].as_u64(), Some(3), "{answer}");
+    // The probes the deployment uses, and the counters its passes feed.
+    assert_eq!(http.get(format!("http://{listen}/readyz")).send().await.unwrap().status().as_u16(), 200);
+    let metrics = http.get(format!("http://{listen}/metrics")).send().await.unwrap().text().await.unwrap();
+    assert!(
+        metrics.contains("ic_group_passes_total ") && !metrics.contains("ic_group_passes_total 0\n"),
+        "{metrics}"
+    );
     assert!(std::process::Command::new("kill")
         .args(["-TERM", &child.id().to_string()])
         .status()

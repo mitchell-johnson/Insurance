@@ -209,6 +209,17 @@ pub enum Command {
         number: u32,
         payment_ref: String,
         amount_minor: i64,
+        /// The bank account the money moved through, as the core's ledger
+        /// names it. Without one, nothing clears settlement clearing and an
+        /// exception asks for it (`clear_settlement`).
+        #[serde(default)]
+        bank_account: Option<String>,
+    },
+    /// Name the bank account a settlement recorded without one moved
+    /// through, so settlement clearing is cleared against it.
+    ClearSettlement {
+        number: u32,
+        bank_account: String,
     },
     /// The bank sent a settlement back after it was recorded as paid, or
     /// before the module heard it had been.
@@ -334,6 +345,7 @@ impl Command {
             // The payments module says what the bank did with a settlement;
             // people record one that was paid some other way.
             Command::RecordSettlement { .. } | Command::SettlementReturned { .. } => &["payments", "reinsurance-ops", "finance", "month-end"],
+            Command::ClearSettlement { .. } => &["reinsurance-ops", "finance"],
             Command::FacultativeReinsurerTold { .. } | Command::ResumeRecoveries { .. } | Command::ReofferSettlement { .. } => &["reinsurance-ops"],
             Command::LoadMigratedCession { .. } | Command::LoadOpeningBalance { .. } => &["migration"],
             Command::AcknowledgeInstructions { .. }
@@ -372,6 +384,7 @@ impl Command {
             Command::ReleaseHold { .. } => "release_hold",
             Command::InstructSettlement { .. } => "instruct_settlement",
             Command::RecordSettlement { .. } => "record_settlement",
+            Command::ClearSettlement { .. } => "clear_settlement",
             Command::SettlementReturned { .. } => "settlement_returned",
             Command::ReofferSettlement { .. } => "reoffer_settlement",
             Command::IssueSupplementaryListing { .. } => "issue_supplementary_listing",
@@ -434,7 +447,9 @@ impl Instruction {
     pub fn lane(&self) -> String {
         match &self.body {
             InstructionBody::RecordCession { key, .. } => format!("cover:{key}"),
-            InstructionBody::Post { .. } | InstructionBody::Sweep { .. } => format!("money:{}", self.partition),
+            InstructionBody::Post { .. } | InstructionBody::Sweep { .. } | InstructionBody::ClearSettlement { .. } => {
+                format!("money:{}", self.partition)
+            }
         }
     }
 }
@@ -462,6 +477,16 @@ pub enum InstructionBody {
         reinsurer: ReinsurerId,
         statement: u32,
         cut_seq: u64,
+        amount_minor: i64,
+    },
+    /// The bank moved this partition's part of a statement's settlement:
+    /// out of settlement clearing to the bank account. Negative is money
+    /// received, or a settlement the bank sent back.
+    ClearSettlement {
+        treaty: TreatyId,
+        reinsurer: ReinsurerId,
+        statement: u32,
+        bank_account: String,
         amount_minor: i64,
     },
 }
@@ -1111,7 +1136,9 @@ impl Reinsurance {
                 number,
                 payment_ref,
                 amount_minor,
-            } => self.record_settlement(ctx, number, payment_ref, amount_minor),
+                bank_account,
+            } => self.record_settlement(ctx, number, payment_ref, amount_minor, bank_account),
+            Command::ClearSettlement { number, bank_account } => self.clear_settlement(ctx, number, bank_account),
             Command::SettlementReturned { number, payment_ref, reason } => self.settlement_returned(ctx, number, &payment_ref, &reason),
             Command::ReofferSettlement { number, reference } => self.reoffer_settlement(ctx, number, reference),
             Command::IssueSupplementaryListing { number, reason } => self.issue_supplementary(ctx, number, reason),

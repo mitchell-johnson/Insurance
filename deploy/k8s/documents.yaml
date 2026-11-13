@@ -56,6 +56,12 @@ data:
   IC_CUSTOMER_MASTER_SCOPE: REPLACE-customer-master-scope
   # Who owns a conduct case a licence event opens.
   IC_CONDUCT_OFFICER: REPLACE-conduct-officer-id
+  # Downloads (GET /v1/documents/{id}/pdf): the tenant, and the app ID URI
+  # of the documents app registration, whose app roles `portal` and `staff`
+  # are granted to the portal's and staff tools' identities. Remove both to
+  # leave the route off.
+  IC_ENTRA_TENANT: REPLACE-tenantId
+  IC_DOCUMENTS_AUDIENCE: REPLACE-documents-app-id-uri
 ---
 apiVersion: v1
 kind: Service

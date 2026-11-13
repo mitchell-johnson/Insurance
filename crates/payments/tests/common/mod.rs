@@ -100,6 +100,8 @@ fn endpoint(channel: &str, region: &str) -> Endpoint {
         certificate_expires: d(2028, 6, 30),
         egress_address: format!("203.0.113.{}", region.len()),
         whitelisted: true,
+        client_certificate: None,
+        bank_authority: None,
     }
 }
 
@@ -415,6 +417,10 @@ pub fn iso_config() -> Config {
     let mut c = config();
     for channel in c.channels.values_mut().filter(|ch| ch.bank == "anz") {
         channel.format = ic_payments::config::WireFormat::Iso20022;
+        for (region, endpoint) in &mut channel.endpoints {
+            endpoint.client_certificate = Some(format!("cert-{region}"));
+            endpoint.bank_authority = Some("bank-ca".to_string());
+        }
     }
     for (code, account) in c.accounts.iter_mut().filter(|(_, a)| a.bank == "anz") {
         account.at_bank = Some(ic_payments::iso20022::OrderingAccount {
