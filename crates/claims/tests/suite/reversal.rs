@@ -562,3 +562,34 @@ fn pursuing_an_overpayment_asks_for_a_letter_the_documents_service_takes() {
     });
     assert!(letters(&w).is_empty());
 }
+
+/// Purpose: reversing an admission that rested on a false declaration bills back the premium the
+/// claim's waiver paid, from the waiver's start; a reversal for the insurer's own error leaves
+/// what was waived alone.
+/// Why it matters: premium waived on a lie is premium the policyholder owed all along, and the
+/// claims cost it was charged to must come back; but a customer who did nothing wrong must not be
+/// billed for the insurer's mistake.
+#[test]
+fn a_reversal_for_a_false_declaration_bills_back_the_waived_premium() {
+    for lied in [true, false] {
+        let mut w = World::new();
+        paid_two_months(&mut w);
+        w.ok(Command::StartWaiver {
+            claim: "ip-1".into(),
+            from: d(2027, 3, 1),
+            actor: actor("ana"),
+        });
+        to_senior(&mut w, "ip-1");
+        w.conference("ip-1", "sam");
+        w.conversation("ip-1", "talk-1");
+        w.decided("ip-1", "sam", Request::ReverseAdmission { false_declaration: lied }, "R-REV");
+        w.approved("ip-1", "sue");
+        assert_eq!(w.claim("ip-1").status, Status::Reversed);
+        let billed_back = w
+            .core
+            .instructions
+            .iter()
+            .any(|i| matches!(i, Instruction::UnwaivePremium { from, .. } if *from == d(2027, 3, 1)));
+        assert_eq!(billed_back, lied, "billed back only for a false declaration");
+    }
+}

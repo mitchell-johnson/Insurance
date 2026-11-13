@@ -1684,10 +1684,11 @@ fn late_payment_interest_is_its_own_posting_and_settles_with_the_benefit() {
 /// Purpose: premium waiver on the real ledger: with a waiver running beside a benefit, the
 /// premium is billed as usual and then paid from claims expense at the day end, so the policy
 /// owes nothing, stays in good standing, and the core's claim record, the journal and the
-/// claims event all carry the same waived amount.
+/// claims event all carry the same waived amount. A reversal for a false declaration bills it
+/// back in its own entry, and the policy owes it again.
 /// Why it matters: the design recognises earned premium and claims cost both. A waiver that
 /// merely stopped billing would understate both, and one that left the receivable owing would
-/// lapse the policy of the very customer the benefit is for.
+/// lapse the policy of the very customer the benefit is for; premium waived on a lie is owed.
 #[test]
 fn a_waived_premium_is_billed_and_paid_from_claims_expense() {
     let mut c = cluster();
@@ -1732,6 +1733,65 @@ fn a_waived_premium_is_billed_and_paid_from_claims_expense() {
         .iter()
         .any(|e| e.body.kind == "premium_waived" && e.body.detail["claim"] == "clm-ip"));
     clean(&c);
+
+    // The admission rested on a false declaration: what was waived is owed again.
+    reverse(&mut c, "clm-ip", true);
+    let p = &c.state(0).policies[&id];
+    assert_eq!((p.claims["clm-ip"].waived_minor, p.outstanding_minor()), (0, waived));
+    assert!(c.nodes[&0]
+        .journal
+        .iter()
+        .any(|e| e.body.kind == "premium_waiver_reversed" && e.body.detail["claim"] == "clm-ip"));
+    assert_eq!(module_events(&c, "premium_waiver_reversed")[0]["amount_minor"].parse::<i64>().unwrap(), waived);
+    days(&mut c, 2);
+}
+
+/// Take a claim to the senior queue, hold its conference and the claimant conversation, and
+/// reverse its admission with a second senior's signature.
+fn reverse(c: &mut Cluster, id: &str, false_declaration: bool) {
+    ok(
+        c,
+        claims::Command::Escalate {
+            claim: id.into(),
+            actor: actor("sam"),
+        },
+    );
+    let conference = claim(c, id).task(claims::TaskKind::CaseConference).next().unwrap().id.clone();
+    for (task, kind) in [(conference, None), ("talk-1".to_string(), Some(claims::TaskKind::ClaimantConversation))] {
+        if let Some(kind) = kind {
+            ok(
+                c,
+                claims::Command::OpenTask {
+                    claim: id.into(),
+                    task: task.clone(),
+                    kind,
+                    due: None,
+                    actor: actor("sam"),
+                },
+            );
+        }
+        ok(
+            c,
+            claims::Command::CompleteTask {
+                claim: id.into(),
+                task,
+                outcome: "held".into(),
+                attendees: vec!["sam".into(), "sue".into()],
+                vault_ref: None,
+                spend_minor: 0,
+                actor: actor("sam"),
+            },
+        );
+    }
+    ok(c, decide(id, Request::ReverseAdmission { false_declaration }));
+    ok(
+        c,
+        claims::Command::Approve {
+            claim: id.into(),
+            actor: actor("sue"),
+        },
+    );
+    assert_eq!(claim(c, id).status, Status::Reversed);
 }
 
 /// Purpose: an assignment recorded on the policy in the core reaches the claim: the lender
