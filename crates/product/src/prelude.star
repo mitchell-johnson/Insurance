@@ -39,7 +39,7 @@ def benefit_category(code, salary_multiple, max_sum_insured):
 
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
-          automatic_acceptance_limit = None):
+          automatic_acceptance_limit = None, excess_options = []):
     return {
         "code": code,
         "cover_type": cover_type,
@@ -53,7 +53,12 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "max_sum_insured_minor": max_sum_insured,
         "categories": categories,
         "automatic_acceptance_limit_minor": automatic_acceptance_limit,
+        "excess_options": excess_options,
     }
+
+def excess_option(code, excess, premium_factor = "1"):
+    """An excess level a customer may choose on a cover, and what it does to the premium."""
+    return {"code": code, "excess_minor": excess, "premium_factor": premium_factor}
 
 def levy(code, rate):
     return {"code": code, "rate": rate}

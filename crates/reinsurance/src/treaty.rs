@@ -10,7 +10,7 @@ use ic_money::Currency;
 use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
-use crate::math::{de_ppm, de_rate, Ppm, WHOLE};
+use crate::math::{de_ppm, de_rate, div_half_even, Ppm, WHOLE};
 use crate::{ReinsurerId, TreatyId, TreatyRef};
 
 /// The products and cover types a treaty applies to.
@@ -483,8 +483,26 @@ pub struct ReinsurerRateTable {
     pub version: u32,
     pub effective_from: NaiveDate,
     pub rows: Vec<ReinsurerRate>,
+    /// How a life is rated when its sex is not one the table holds, on the
+    /// same basis as the product (`docs/decisions.md`, decision 1).
+    #[serde(default)]
+    pub unmatched_sex: UnmatchedSex,
     #[serde(default)]
     pub content_hash: String,
+}
+
+/// How a rate table that rates by sex rates a life whose sex it does not
+/// hold: at the lower of its female and male rates, or at a stated blend.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UnmatchedSex {
+    #[default]
+    LowerOf,
+    /// `female_share` of the female rate and the rest of the male rate.
+    Blended {
+        #[serde(deserialize_with = "de_ppm")]
+        female_share: Ppm,
+    },
 }
 
 impl ReinsurerRateTable {
@@ -499,8 +517,31 @@ impl ReinsurerRateTable {
     }
 
     /// The rate for a life on a date. A row that asks about a fact the
-    /// module does not hold does not match: a rate is never guessed.
+    /// module does not hold does not match: a rate is never guessed. The one
+    /// exception is sex: a known life whose rating sex is not recorded, as
+    /// for a life who is neither male nor female, is rated by
+    /// [`UnmatchedSex`] from the female and male rates for its other facts.
     pub fn rate(&self, factors: Option<&RiskFactors>, on: NaiveDate) -> Option<i64> {
+        match factors {
+            Some(f) if f.sex.is_none() => {
+                let as_sex = |sex| {
+                    let known = RiskFactors { sex: Some(sex), ..f.clone() };
+                    self.row_rate(Some(&known), on)
+                };
+                match (as_sex(Sex::Female), as_sex(Sex::Male), self.unmatched_sex) {
+                    (Some(female), Some(male), UnmatchedSex::LowerOf) => Some(female.min(male)),
+                    (Some(female), Some(male), UnmatchedSex::Blended { female_share }) => Some(div_half_even(
+                        female as i128 * female_share as i128 + male as i128 * (WHOLE - female_share) as i128,
+                        WHOLE as i128,
+                    ) as i64),
+                    _ => None,
+                }
+            }
+            _ => self.row_rate(factors, on),
+        }
+    }
+
+    fn row_rate(&self, factors: Option<&RiskFactors>, on: NaiveDate) -> Option<i64> {
         let age = factors.and_then(|f| f.age_on(on));
         let sex = factors.and_then(|f| f.sex);
         let smoker = factors.and_then(|f| f.smoker);

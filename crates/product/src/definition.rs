@@ -146,6 +146,37 @@ pub struct CoverDefinition {
     pub categories: Vec<BenefitCategory>,
     #[serde(default)]
     pub automatic_acceptance_limit_minor: Option<i64>,
+    /// The excess levels a customer may choose between on this cover. Where
+    /// there are any, each life's cover carries one, and it prices the cover
+    /// and replaces the schedule's excess at claim.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excess_options: Vec<ExcessOption>,
+}
+
+/// One excess level on a cover's menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExcessOption {
+    pub code: String,
+    /// What the customer pays of a claim before the cover does.
+    pub excess_minor: i64,
+    /// What the cover's premium is multiplied by at this excess.
+    pub premium_factor: DecStr,
+}
+
+impl CoverDefinition {
+    pub fn excess_option(&self, code: &str) -> Option<&ExcessOption> {
+        self.excess_options.iter().find(|o| o.code == code)
+    }
+
+    /// Whether a choice of excess is one this cover accepts: one of its
+    /// options where it has any, and none where it has none.
+    pub fn accepts_excess(&self, choice: Option<&str>) -> bool {
+        match choice {
+            None => self.excess_options.is_empty(),
+            Some(code) => self.excess_option(code).is_some(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

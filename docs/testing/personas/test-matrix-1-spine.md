@@ -67,7 +67,7 @@ Design: Products and covers in Starlark; Capacity model (quotes and dry runs).
 | PRD-008 | US-P34-1 | P34 | Adviser generates 5,000 quotes in an hour | Ledger write volume is unchanged. Quotes served by the stateless dry-run service | L | B | 3 |
 | PRD-009 | US-P08-3 | P8, P7 | Family health rating with five children where the product charges for the first three | Premium lines per life, children four and five at zero, notice shows each | J | B | 2 |
 | PRD-010 | US-P12-3 | P12 | GST attribute: health covers taxable, life covers not, on one customer | GST posted on health premium lines only, to the tax payable account | J | B | 1 |
-| PRD-011 | US-P49-2 | P49 | Rating a life whose recorded sex is neither option the table holds | **Design gap.** Test is written to fail until the design says how the factor is captured | N | B | 2 |
+| PRD-011 | US-P49-2 | P49 | Rating a life whose recorded sex is neither option the table holds | Rated at the lower of the table's male and female rates by the product's `unmatched_sex_rating` setting. Gender kept apart and never used in pricing. Reinsurance rates on the same basis (decision 1 in `docs/decisions.md`) | N | B | 2 |
 | PRD-012 | US-ST12-1 | ST12 | Rate table referenced by a product is missing for an anniversary date | Offer cannot be computed, exception item raised, register refuses the dangling reference at activation | N | B | 2 |
 
 ## BIL Billing and earning

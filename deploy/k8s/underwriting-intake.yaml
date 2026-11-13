@@ -161,7 +161,9 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: ["ic-portal", "ic-api"]
+                # The portal and API for disclosures; the evidence provider's
+                # adapter and the delegates' gateway for reports and files.
+                values: ["ic-portal", "ic-api", "ic-evidence-adapter", "ic-delegate-gateway"]
       ports:
         - port: 8080
 ---

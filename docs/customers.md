@@ -7,6 +7,7 @@
 - **Parties.** A person or an organisation, with a lifecycle: prospect, active, deceased, exited. Each has a group (`grp_…`) used to keep related parties on one core partition.
 - **Facts on two timelines.** Every value is a statement with `valid_from` (and an optional `valid_to`) and the time it was recorded. A read answers "what was true on `as_of`, as we knew it at `known_at`"; both default to now. Among the statements covering a date, the one recorded last wins, so a backdated correction takes effect without rewriting history. A correction the business refuses is kept as a declined correction, visible to the person.
 - **Relationships**, each with a start and an optional end: to a policy (`owner`, `life_insured`, `beneficiary`, `dependant`, `payer`, `interested_party`, `assignee`, `claimant`, `adviser`), to a scheme (`employer_administrator`, `scheme_member`, `broker`), and to another party (`director`, `trustee`, `signatory`, `beneficial_owner`, `employee`, `attorney`, `guardian`, `executor`, `partner`, `parent`, `staff`).
+- **Gender** as the person tells it, in any words (up to 100 characters), identity class. It is never a rating factor and never matched; the rating sex factor belongs to underwriting and is kept apart (decision 1 in `docs/decisions.md`).
 - **Consents** by purpose and date, **identity verifications**, **risk ratings**, **legal holds**, and a **vulnerability marker**: `{kind, review_on, adjustments}` from fixed lists (`validate.rs`, `MARKER_KINDS`, `ADJUSTMENTS`), so no diagnosis or free text can be recorded; `false` removes it. The routing answer gives anyone serving the person `route_to_person`, the adjustments and the review date; the kind only to staff reading for `vulnerability_support`. The person sees their own marker in the app. When `review_on` comes, the hourly sweep opens one `consider_marker` prompt (reason `review_date`); only the date is kept outside the sealed events, in `marker_reviews`. Any other read leaves it out without a trace, not even as a withheld field.
 
 Fields, their classes and normal forms are in `src/model.rs` and `src/validate.rs`. IRD numbers are checked against their check digit; email and phone numbers are normalised; names keep their spelling and gain a folded key for matching.
@@ -35,14 +36,16 @@ Decisions are made by the Cedar policy in `config/cedar/customers.cedar`: which 
 | `POST /v1/parties` | staff, group, servicing, complaints | Create. Refused with 409 `possible_duplicate` and the candidates unless `allow_duplicate`, which opens a review. `Idempotency-Key` makes a retry safe. |
 | `GET /v1/parties/{id}` | by policy | Facts for `?purpose=`, `as_of`, `known_at`. An absorbed ID answers for its survivor. 410 once erased. |
 | `GET /v1/parties/{id}/history` | by policy | Every statement released to the caller. |
-| `POST /v1/parties/{id}/commands` | by policy | `record`, `decline_correction`, `add_relationship`, `end_relationship`, `set_consent`, `record_verification`, `set_risk_rating`, `activate`, `mark_deceased`, `retract_death`, `exit`, `assign_group`, `place_hold`, `release_hold`, `record_concern`. `If-Match` carries the version; `Idempotency-Key` makes a retry safe. A command that changes nothing writes nothing. |
+| `POST /v1/parties/{id}/commands` | by policy | `record`, `decline_correction`, `add_relationship`, `end_relationship`, `set_consent`, `record_verification`, `set_risk_rating`, `activate`, `mark_deceased`, `retract_death`, `exit`, `assign_group`, `place_hold`, `release_hold`, `record_concern`, `question_capacity`, `settle_capacity`, `place_spending_hold`, `request_hold_removal`, `cancel_hold_removal`, `override_spending_hold`. `If-Match` carries the version; `Idempotency-Key` makes a retry safe. A command that changes nothing writes nothing. |
 | `GET /v1/parties/{id}/contact-points?purpose=notices&channel=email\|sms\|post\|in_app\|push&relationship=` | documents | The documents contract: `{name, destination, language, format, deceased}`, or 404 when there is no contact point on that channel. |
 | `GET /v1/parties/{id}/relationships`, `GET /v1/relationships?target=policy:P1` | by policy | Relationships of a party, or to a policy, scheme or party. |
 | `GET /v1/parties/{id}/routing` | portal, staff, claims, servicing, complaints | `{route_to_person, adjustments, review_on}`, and `kind` for `vulnerability_support`. |
-| `GET /v1/parties/{id}/authority?actor=&act=&on=&benefits_actor=` | portal, staff, claims, servicing, payments, complaints | May a representative do `act` for this party on `on`? `{decision: allow \| refuse \| route, reason, relationship}`. Representatives are `attorney`, `guardian` and `authorised_representative` relationships held by the actor to `party:<id>`, each with `basis` (enduring_power_of_attorney, court_order, written_authority), `document` (the vault reference) and `scope` (view, pay_premiums, change_payment_method, change_contact_details, change_bank_details, change_cover, change_beneficiary, surrender, claim, complain, all); `valid_from` is activation, `valid_to` the end. An act in scope that benefits the representative (beneficiary, bank details, surrender, claim) is routed to a person. Every answer is audited with the actor. |
+| `GET /v1/parties/{id}/spending-hold` | payments, policy-servicing, claims, staff, legal, core; the person in the app | The person's own hold on money going out: `{held, placed_at, removal: {requested_at, ends_at} \| null}`. See "A person's own spending hold". |
+| `GET /v1/actors/{actor}/actions` | privacy | Everything one person did as the actor, and every authority question asked about them, across all parties, dated and newest first: the record a guardian or attorney gives the court or the family. |
+| `GET /v1/parties/{id}/authority?actor=&act=&on=&benefits_actor=` | portal, staff, claims, servicing, payments, complaints | May a representative do `act` for this party on `on`? `{decision: allow \| refuse \| route, reason, relationship}`. Representatives are `attorney`, `guardian` and `authorised_representative` relationships held by the actor to `party:<id>`, each with `basis` (enduring_power_of_attorney, court_order, written_authority), `document` (the vault reference) and `scope` (view, pay_premiums, change_payment_method, change_contact_details, change_bank_details, change_cover, change_beneficiary, surrender, claim, complain, all); `valid_from` is activation, `valid_to` the end. An act in scope that benefits the representative (beneficiary, bank details, surrender, claim) is routed to a person. While the person's capacity is in question (`question_capacity` by staff, claims or servicing; `settle_capacity` with `has_capacity` or `lacks_capacity` by legal only) every act of a named representative, activated or not, is routed (`capacity_in_question`); nothing else about the record changes, so cover, claims and notices go on. Every answer is audited with the actor. |
 | `GET /v1/parties/{id}/export?purpose=subject_access` | staff; portal for the person themselves | Every record of the party and those merged into it (Privacy Act access request). |
 | `GET /v1/parties/{id}/audit` | privacy | Who saw what. |
-| `POST /v1/merges`, `POST /v1/unmerges`, `GET /v1/reviews`, `POST /v1/reviews/{id}/dismiss` | staff, migration | Duplicates (`kind: duplicate`): a merge is an event on both parties; the absorbed ID resolves to the survivor until the merge is undone. Prompts (`kind: consider_marker`, with `reason`): opened by `record_concern`, a third party's worry (`from` family, friend, carer, professional, staff, other; `about` financial_abuse, capacity, wellbeing, bereavement, coercion, other); a trained person decides on a marker and dismisses the prompt. Nothing about the person is told to whoever raised it. |
+| `POST /v1/merges`, `POST /v1/unmerges`, `GET /v1/reviews`, `POST /v1/reviews/{id}/dismiss` | staff, migration | Duplicates (`kind: duplicate`): a merge is an event on both parties; the absorbed ID resolves to the survivor until the merge is undone. Prompts (`kind: consider_marker`, with `reason`): opened by a death for the other owners of a policy the person owned and a recorded partner (reason `bereavement`, one open at a time), or by `record_concern`, a third party's worry (`from` family, friend, carer, professional, staff, other; `about` financial_abuse, capacity, wellbeing, bereavement, coercion, other); a trained person decides on a marker and dismisses the prompt. Nothing about the person is told to whoever raised it. |
 | `POST /v1/admin/verify/{id}`, `/rewrap`, `/reshred` | operations | Chain check, key rotation, erasing again after a restore. |
 | `GET /healthz`, `GET /readyz` | probes | Readiness fails while the database does not answer. |
 
@@ -57,6 +60,27 @@ Relationship changes on a policy go to the channels directory, which decides wha
 ## Retention and erasure
 
 The schedule is code (`src/retention.rs`, version `SCHEDULE_VERSION`): each field class is kept seven years after the last relationship ends or the last change, verification evidence five, prospects with no relationship two. A legal hold or an unresolved merge stops erasure.
+
+### A person's own spending hold
+
+Decision 3 in `docs/decisions.md` (persona row SVC-022). A person can put a hold on their own money going out: refunds, surrenders, withdrawals, policy loans and changes to their payout account. Premium collection and claim payments to payees they already nominated are not held; payments and the core enforce it, from the events (`spending_hold_placed` goes on the priority hub) and from `GET /v1/parties/{id}/spending-hold`.
+
+- `place_spending_hold` (the person in the app, or staff when the person asks): takes effect at once. Sent again while a removal waits, it cancels the removal.
+- `request_hold_removal {verification}` (the person in the app only): names a passed identity check (`evidence_ref` of a `record_verification` from the identity service) made after the hold was placed and within the last 24 hours. The hold stands for the cooling-off period (`IC_CUSTOMERS_HOLD_COOLING_OFF_DAYS`, default 7) and then the hourly sweep ends it (`spending_hold_ended`, reason `cooling_off`).
+- `cancel_hold_removal` (the person): the hold stays.
+- `override_spending_hold {reference}` (legal only): a court order or legal direction ends it at once, recorded with its reference (reason `legal_direction`).
+- Staff cannot ask for it to end, and no caller can send the cooling-off ending (`end_spending_hold` is forbidden in the policy). Only the request time is kept outside the sealed events, in `spending_hold_removals`.
+
+### Changing the index key
+
+Every blind-index entry carries the public id of the key it was made under (the first eight bytes of a MAC under the key, in hex), and `index_state` records which parties have been indexed under which key. To change the key:
+
+1. Put the new key in Key Vault as a second secret and mount it as `IC_CUSTOMERS_NEXT_INDEX_KEY_FILE`. From then on every write indexes under both keys, and the background pass opens up to 200 parties a cycle and indexes them under both. Lookups still use the current key only.
+2. Watch `GET /v1/admin/index` (app role `operations`) until `ready_to_promote` is true (`waiting_next` is 0).
+3. Make the new key `IC_CUSTOMERS_INDEX_KEY_FILE` and remove the next key. Lookups now use only the new key's entries.
+4. The background pass removes entries under keys no longer in use, 5000 a cycle, but only once the current key covers everyone; `retired_entries` reaches 0. Then delete the old secret.
+
+Promoting early loses nothing: anyone the new key has not covered is indexed by the next passes, and old entries stay until then, though such a person is not found by a lookup until they are. Entries made before keys were named are adopted as the current key's once, after one party's entries are checked against it; if they do not match, everyone is indexed afresh.
 
 The sweep runs in every replica (hourly by default) over parties unchanged for 30 days. It writes the batch to the erasure register first, then for each party takes its row lock, checks again, destroys the wrapped key, blanks every payload, deletes its blind indexes and appends a `shredded` tombstone. The chain stays verifiable; the content is gone. Absorbed parties go with their survivor.
 
@@ -73,6 +97,8 @@ The binary is `ic-customers`; settings come from the environment.
 | `IC_CUSTOMERS_POOL_SIZE` | Connections per replica | 16 |
 | `IC_CUSTOMERS_KEY_VAULT`, `IC_CUSTOMERS_KEK` | Key Vault URL and wrapping key | key `customers-kek` |
 | `IC_CUSTOMERS_INDEX_KEY_FILE` (or `IC_CUSTOMERS_INDEX_KEY`) | Blind-index key, 32 characters or more | required |
+| `IC_CUSTOMERS_HOLD_COOLING_OFF_DAYS` | How long a spending hold stands after the person asks for it to end | 7 |
+| `IC_CUSTOMERS_NEXT_INDEX_KEY_FILE` (or `IC_CUSTOMERS_NEXT_INDEX_KEY`) | The key being changed to, while a change is under way | optional; must differ from the current key |
 | `IC_CUSTOMERS_TENANT`, `IC_CUSTOMERS_AUDIENCE`, `IC_CUSTOMERS_AUTHORITY` | Entra ID token checks | Entra public cloud |
 | `IC_EVENT_HUBS_NAMESPACE`, `IC_CUSTOMERS_EVENT_HUB`, `IC_CUSTOMERS_PRIORITY_HUB`, `IC_CUSTOMERS_HUB_PARTITIONS` | Where events go | `customer-events`, `customer-priority`, 8 |
 | `IC_CUSTOMERS_REGISTER_ENDPOINT`, `IC_CUSTOMERS_REGISTER_CONTAINER` | Erasure register | container `customers-erasures` |
@@ -85,5 +111,4 @@ Tests need a PostgreSQL server named by `IC_TEST_POSTGRES_URL` (CI starts one); 
 
 ## Not built yet
 
-- **Changing the index key** needs a rebuild of every blind index from the decrypted facts; there is no command for it yet.
 - **Locking the register's immutability policy** in prod is a deliberate, irreversible step for a person once the period is agreed.

@@ -570,7 +570,7 @@ impl Command {
             | ActivateDelegatedAuthority { .. } => &["config"],
             // Group administration opens a proposal only for a member's cover
             // above the automatic acceptance limit, and may withdraw it.
-            OpenProposal(_) => &["new-business", "migration", "group-admin"],
+            OpenProposal(_) => &["new-business", "migration", "group-admin", "collections"],
             SubmitDisclosure(_) => &["new-business", "migration"],
             Withdraw { .. } => &["new-business", "group-admin"],
             RecordConsent { .. } | PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => {
@@ -672,6 +672,10 @@ pub enum Effect {
         /// Never clinical.
         #[serde(default)]
         risk_codes: Vec<String>,
+        /// Reinsurance's reference, when it asked for this cover to be
+        /// underwritten because of the member's other cover.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        excess_reference: Option<String>,
     },
     ReleaseCapacity {
         reservation: String,

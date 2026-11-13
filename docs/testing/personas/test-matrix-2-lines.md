@@ -81,10 +81,10 @@ Design: Claims; Claims operations.
 | CLM-034 | US-ST13-1 | ST13, P52 | Claim three weeks after inception with altered documents | Fraud rule fires. Investigation is a restricted case | X | C | 2 |
 | CLM-035 | US-P57-2 | P57 | Claim payment returned by the bank | Goes back to benefit payable with a task. Never to suspense | N | B | 1 |
 | CLM-036 | US-P58-2 | P58, ST4 | Ex gratia payment approved after a complaint | Separate posting type with its own authority limit. Recoverable from the reinsurer only if the treaty says so | J | C | 2 |
-| CLM-037 | US-P12-2 | P12 | Claim paid after the period that attracts late-payment interest | Interest is its own posting type by value date. **Design gap** on whether the payee may decline it | J | C | 3 |
+| CLM-037 | US-P12-2 | P12 | Claim paid after the period that attracts late-payment interest, and the payee declines it | Interest is its own posting type by value date and is offered with its amount. A decline after being told is recorded and reversed by its own posting with reason `declined_by_payee`, and can be withdrawn until the claim closes (decision 2) | J | C | 3 |
 | CLM-038 | US-ST10-1 | all | Daily control | Open reserves plus benefit payable in the core equal the claims module's open claims | R | B | 1 |
 | CLM-039 | US-P21-2 | P21 | Death claim with a policy loan and two interests | Loan repaid from benefit payable as a posting line, interests paid in order of notice date, balance to the owner | J | C | 1 |
-| CLM-040 | US-N06-1 | N6 | Income protection claimant is imprisoned mid-claim | **Design gap.** Test holds the expected behaviour open until the product rule exists | N | C | 3 |
+| CLM-040 | US-N06-1 | N6 | Income protection claimant is imprisoned mid-claim | Under `benefit_while_imprisoned = suspend`, the benefit stops for days in custody after sentence on evidence and a recorded conversation. Claim stays open, waiver continues, timers pause. Resumes the day after release with no new waiting period (decision 5) | N | C | 3 |
 | CLM-041 | US-P11-3 | P11 | Trauma event while travelling overseas | Registered at once. Routed to the complex queue with a case conference step. Evidence through adapters | J | C | 2 |
 | CLM-042 | US-P28-2 | P28, ST4 | Claim on a customer with a communication marker | One owner shown by name. Handover recorded and the claimant told. Customer-side deadlines extended within limits | J | C | 2 |
 
@@ -226,7 +226,7 @@ Design: Policy model: joint lives, ownership and dependants.
 | JNT-026 | US-B12-1 | B12 | Partnership asks to reduce cover while the lender's interest stands | Quote shows the consent requirement. Refused without it | N | C | 2 |
 | JNT-027 | US-B19-1 | B19, P54 | Notice of assignment arrives the same day as a second lender's | Each interest carries the time notice was received. Priority follows it | J | C | 3 |
 | JNT-028 | US-P23-1 | P23 | Blended children on one plan: partner's two and his son | Each a party related to the policyholder with own life record and terms | J | B | 3 |
-| JNT-029 | US-N05-1 | N5 | Official in a bankruptcy claims the surrender value | **Design gap.** Held open until the design says whether this is an interest, an ownership change or a restriction | N | C | 3 |
+| JNT-029 | US-N05-1 | N5 | Official in a bankruptcy claims the surrender value | An insolvency interest is recorded, ranked by notice date. Surrender, withdrawal, loan, ownership and payout changes need the Official Assignee's consent. Cover and premiums continue. Value payable is held until a legal direction (decision 4) | N | C | 3 |
 | JNT-030 | US-P50-1 | P50 | S2: attempted transfer of ownership to an unrelated person overseas | Due diligence and screening on the new owner. Abuse indicator routes to a specialist. Not acted on until reviewed | N | C | 1 |
 | JNT-031 | US-P51-3 | P51, B23 | Newly formed trust applies as policyholder with three trustees | Due diligence and screening on the trust and each trustee complete before issue. Signing rule recorded on the ownership relationship. Issue refused while any check is open | J | C | 2 |
 

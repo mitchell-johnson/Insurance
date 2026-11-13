@@ -170,6 +170,14 @@ impl IndexKey {
     }
 }
 
+impl IndexKey {
+    /// A public name for the key: the first eight bytes of a MAC under it,
+    /// in hex. It tells keys apart without saying anything about them.
+    pub fn id(&self) -> String {
+        hex::encode(&self.digest("key-id", "ic-customers blind index")[..8])
+    }
+}
+
 impl std::fmt::Debug for IndexKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("IndexKey(..)")
