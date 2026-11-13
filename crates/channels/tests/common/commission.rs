@@ -16,7 +16,15 @@ use serde_json::Value;
 
 type Asked<'a> = Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>>;
 
-pub struct CommissionModule(pub Mutex<(DistributionState, u64)>);
+pub struct CommissionModule(pub Mutex<(DistributionState, u64)>, pub Mutex<Option<Value>>);
+
+impl CommissionModule {
+    /// Answer `replacement_matches` with these rows, in the shape the
+    /// module gives, in place of its own (which has none here).
+    pub fn matches(&self, rows: Value) {
+        *self.1.lock().unwrap() = Some(rows);
+    }
+}
 
 /// Open on the fixture's business date.
 pub fn seeded() -> CommissionModule {
@@ -43,11 +51,14 @@ pub fn seeded() -> CommissionModule {
         },
     );
     assert_eq!(applied.result, Ok(()), "the business date opens");
-    CommissionModule(Mutex::new((state, 1)))
+    CommissionModule(Mutex::new((state, 1)), Mutex::new(None))
 }
 
 impl Source for CommissionModule {
     fn ask(&self, question: Value) -> Asked<'_> {
+        if let Some(rows) = self.1.lock().unwrap().clone().filter(|_| question == "replacement_matches") {
+            return Box::pin(async move { Ok(rows) });
+        }
         let answer = ic_distribution::host::answer(&self.0.lock().unwrap().0, question).map_err(|e| format!("{REFUSED}{e}"));
         Box::pin(async move { answer })
     }

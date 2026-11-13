@@ -40,3 +40,64 @@ pub fn decision(body: &Value) -> Result<Value, String> {
 pub fn envelope(key: &str, staff: Value, command: Value) -> Value {
     json!({ "key": format!("replacement:{key}"), "actor": { "staff": staff }, "command": command })
 }
+
+/// The matches on business an adviser wrote, under any of `engagements`,
+/// as they may see them: their own layer, the amount, the reason and
+/// where it stands. What it replaced is left out: that cover may be
+/// another adviser's business.
+pub fn for_adviser(matches: &Value, engagements: &Value) -> Value {
+    let theirs = |m: &&Value| {
+        m["writing"]
+            .as_array()
+            .is_some_and(|w| w.iter().any(|e| engagements.as_array().is_some_and(|mine| mine.contains(e))))
+    };
+    let rows: Vec<Value> = matches
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(theirs)
+        .map(|m| {
+            json!({
+                "layer": m["layer"], "policy": m["policy"], "matched_minor": m["matched_minor"],
+                "sum_insured_minor": m["sum_insured_minor"], "reason": m["reason"], "on": m["on"],
+                "disputed": m["disputed"], "overturned": m["overturned"],
+            })
+        })
+        .collect();
+    Value::Array(rows)
+}
+
+/// The request kind new business takes an adviser's dispute from. It is
+/// raised only through the adviser's own route, which checks they wrote
+/// the layer; the general request route refuses it.
+pub const DISPUTE: &str = "dispute_replacement";
+/// The module that carries a dispute to the commission module.
+pub const DISPUTE_MODULE: &str = "new-business";
+
+/// An adviser's dispute of one of their matches, as the request new
+/// business acts on: the layer and the adviser's reason. Refused unless
+/// the layer is among `theirs` and stands undisputed.
+pub fn dispute(body: &Value, theirs: &Value) -> Result<(String, Value), String> {
+    let layer = body["layer"].as_str().filter(|s| !s.is_empty()).ok_or("a dispute names the layer")?;
+    let reason = body["reason"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or("say why it was not a replacement")?;
+    let found = theirs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|m| m["layer"] == layer)
+        .ok_or("that layer is not one of your matches")?;
+    if !found["disputed"].is_null() || found["overturned"] == true {
+        return Err("that match is already disputed or decided".to_string());
+    }
+    let (policy, rest) = layer.split_once('/').ok_or("that layer is not one of your matches")?;
+    let (cover, number) = rest.rsplit_once('/').ok_or("that layer is not one of your matches")?;
+    let number: u32 = number.parse().map_err(|_| "that layer is not one of your matches")?;
+    Ok((
+        format!("dispute:{layer}"),
+        json!({ "policy": policy, "cover": cover, "layer": number, "reason": reason.chars().take(500).collect::<String>() }),
+    ))
+}
