@@ -470,3 +470,68 @@ fn a_migration_control_account_must_stay_still_after_cutover() {
     };
     assert_eq!(items, ["migration control account 1499 is not in the chart"]);
 }
+
+/// Purpose: the core activates version 3 of a rate table on 28 March and version 4 on 10
+/// April, and nobody records a validation. The March close shows version 3 as activated
+/// unchecked, April shows both, and a validation recorded for other content of version 3
+/// clears nothing. When the validation of version 3's own content arrives in May, version
+/// 3 drops out of every period and version 4 stays. A validation recorded before its
+/// table is activated counts once the table goes live. The shipped close lists the check
+/// and does not let it block.
+/// Why it matters: the core records that a table was validated and does not insist on it,
+/// so the close is the only place a table that went live unchecked is seen. It has to
+/// match on the content hash, or a report run on one draft would vouch for another.
+#[test]
+fn a_rate_table_activated_without_a_validation_shows_at_the_close() {
+    let activated = |version: u32, hash: &str| Event::RateTableActivated {
+        id: "life_base".to_string(),
+        version,
+        content_hash: hash.to_string(),
+        scoped: false,
+    };
+    let validated = |version: u32, hash: &str| Event::RateTableValidated {
+        id: "life_base".to_string(),
+        version,
+        content_hash: hash.to_string(),
+        report_hash: "report".to_string(),
+        schema_version: 1,
+        by: "pipeline".to_string(),
+    };
+    let mut s = Stream::open(d(2028, 3, 28));
+    s.push(activated(3, "aaa"));
+    while s.date < d(2028, 4, 10) {
+        s.close();
+    }
+    s.push(activated(4, "bbb"));
+    s.push(validated(3, "other"));
+    s.push(validated(5, "ccc"));
+    let mut b = Books::ready(1);
+    b.feed(&s.events).unwrap();
+
+    let check = "rate_table_validation";
+    let red = |b: &Books, p| match status(b, p, check) {
+        CheckStatus::Red { items } => items,
+        other => panic!("{check} is {other:?} for {p}"),
+    };
+    let march = red(&b, period(2028, 3));
+    assert_eq!(
+        march,
+        ["rate table life_base version 3 (aaa) was activated on 2028-03-28 with no validation recorded for that content"]
+    );
+    assert_eq!(red(&b, period(2028, 4)).len(), 2);
+    let declared = close_config().checks.into_iter().find(|c| c.id == check).unwrap();
+    assert!(!declared.blocking);
+    assert!(b.state.blockers(period(2028, 4)).iter().all(|c| c.id != check));
+
+    let from = s.events.len();
+    while s.date < d(2028, 5, 3) {
+        s.close();
+    }
+    s.push(validated(3, "aaa"));
+    s.push(activated(5, "ccc"));
+    b.feed(&s.events[from..]).unwrap();
+    assert_eq!(status(&b, period(2028, 3), check), CheckStatus::Green);
+    let may = red(&b, period(2028, 5));
+    assert_eq!(may.len(), 1, "{may:?}");
+    assert!(may[0].starts_with("rate table life_base version 4 (bbb)"), "{}", may[0]);
+}

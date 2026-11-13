@@ -142,6 +142,10 @@ impl PaymentsState {
                         id.clone(),
                         exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
                     );
+                    // Cash matching applies it under the outbox key: that is
+                    // the receipt the core names when it says which fund
+                    // the money went to.
+                    self.sweeps.land(&format!("match-{id}"), account, date);
                     self.push_outbox(OutboxEntry {
                         key: format!("match-{id}"),
                         instruction: Instruction::Match {
@@ -296,6 +300,7 @@ impl PaymentsState {
                 "value_date": run.value_date,
             }));
         }
+        items.extend(self.unswept(as_at));
         let count = items.len();
         items.truncate(MAX_REPORTED);
         serde_json::json!({ "green": count == 0, "as_at": as_at, "items": items, "count": count })

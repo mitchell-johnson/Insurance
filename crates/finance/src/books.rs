@@ -736,7 +736,20 @@ pub struct FinanceState {
     /// came back out.
     #[serde(default, with = "crate::pairs")]
     pub(crate) turnover: BTreeMap<(PeriodId, String, BalanceFamily), i128>,
+    /// Every rate table version the core has activated or recorded a
+    /// validation for, by table, version and content hash.
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) rate_tables: BTreeMap<(String, u32, String), TableSeen>,
     idempotency: BTreeMap<String, StoredResult>,
+}
+
+/// What the core has said of one version of a rate table.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableSeen {
+    /// The first business date a partition activated it on.
+    pub activated: Option<NaiveDate>,
+    /// Whether a validation of this content has been recorded.
+    pub validated: bool,
 }
 
 impl Default for FinanceState {
@@ -812,6 +825,7 @@ impl FinanceState {
             stalled: BTreeMap::new(),
             mart: crate::mart::Mart::default(),
             turnover: BTreeMap::new(),
+            rate_tables: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1417,6 +1431,7 @@ impl FinanceState {
         let mut closes: Vec<Close> = Vec::new();
         let mut backdated: Vec<BackdatedItem> = Vec::new();
         let mut turnover: Vec<((PeriodId, String, BalanceFamily), i128)> = Vec::new();
+        let mut tables: Vec<((String, u32, String), Option<NaiveDate>)> = Vec::new();
         for record in &events {
             if record.partition != partition {
                 return reject("partition", format!("event {} is not from partition {partition}", record.id));
@@ -1546,6 +1561,10 @@ impl FinanceState {
                         differences: differences(totals, &feed.roles),
                     });
                 }
+                Event::RateTableActivated { id, version, content_hash, .. } => {
+                    tables.push(((id.clone(), *version, content_hash.clone()), Some(record.business_date)))
+                }
+                Event::RateTableValidated { id, version, content_hash, .. } => tables.push(((id.clone(), *version, content_hash.clone()), None)),
                 _ => {}
             }
         }
@@ -1604,6 +1623,14 @@ impl FinanceState {
 
         self.ledger = ledger;
         self.feeds.insert(partition, feed);
+        for (key, activated) in tables {
+            let seen = self.rate_tables.entry(key).or_default();
+            match activated {
+                // Every partition activates a table: the first date stands.
+                Some(date) => seen.activated = Some(seen.activated.map_or(date, |first| first.min(date))),
+                None => seen.validated = true,
+            }
+        }
         for (key, amount) in turnover {
             let cell = self.turnover.entry(key).or_insert(0);
             *cell = cell.saturating_add(amount);
