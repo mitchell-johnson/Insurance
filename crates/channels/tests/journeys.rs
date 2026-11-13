@@ -437,7 +437,7 @@ fn a_childs_health_information_becomes_their_own() {
 }
 
 /// Purpose: the policyholder lets a relative look, an accountant see the money side, and a support person help; each sees what that
-/// access is for, none can change anything, a support person's prepared request waits for the policyholder's own signature, and the
+/// access is for (the accountant nothing of a claim or of the policyholder's other policies), none can change anything, a support person's prepared request waits for the policyholder's own signature, and the
 /// access ends when the policyholder says so or the policy changes hands.
 /// Why it matters: people share sign-ins when there is no proper way to let someone help. This is the proper way, and it must not
 /// become a way round the policyholder: no health information, no commands, no approving on their behalf.
@@ -499,6 +499,30 @@ fn people_the_policyholder_lets_in() {
         !kinds.is_empty() && kinds.iter().all(|k| ["policy", "billing", "notice", "document"].contains(k)),
         "{kinds:?}"
     );
+    // The accountant is let in on this policy only: a claim on it, and the policyholder's own other policy, stay out of view.
+    let claim = format!("{pol}/claims/c-1");
+    w.send(
+        module("claims"),
+        Command::PublishRows {
+            rows: vec![Row {
+                key: claim.clone(),
+                policy: pol.clone(),
+                kind: "claim".into(),
+                subject: None,
+                sensitive: false,
+                body: json!({ "status": "assessing" }),
+            }],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    let mut own = term_life(2, open(), d(1990, 3, 10), Sex::Female, false, 200_000_00, None, Frequency::Monthly, None);
+    own.policyholder = p(KIRI);
+    let personal = w.issue(own);
+    assert!(w.sees(KIRI, &pol).contains(&claim) && !w.sees(KIRI, &personal).is_empty());
+    assert!(!w.sees("accountant", &pol).contains(&claim));
+    assert!(w.sees("accountant", &personal).is_empty());
+    assert!(w.held("accountant").iter().all(|k| k.starts_with(pol.0.as_str())), "{:?}", w.held("accountant"));
 
     // None of them can change anything.
     for who in ["daughter", "accountant"] {
