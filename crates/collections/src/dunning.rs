@@ -99,6 +99,7 @@ impl CollectionsState {
                 outstanding_minor,
             } => self.broken(policy, arrangement, outstanding_minor, on, ctx),
             CoreFact::DayClosed { closed } => self.day_closed(partition, closed, ctx),
+            CoreFact::ReinstatementApproved { policy } => self.reinstatement_approved(policy, ctx),
         }
     }
 

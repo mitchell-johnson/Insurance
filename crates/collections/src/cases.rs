@@ -156,6 +156,40 @@ impl CollectionsState {
         Ok(())
     }
 
+    /// Underwriting approved the reinstatement the core sent it to: ask the
+    /// core again, if collections asked first and is waiting for it (an open
+    /// `ReinstatementUnderwriting` task names the policy). A second refusal,
+    /// for arrears still unpaid say, becomes a reinstatement task as before.
+    pub(crate) fn reinstatement_approved(&mut self, policy: PolicyId, ctx: &mut Ctx) {
+        let waiting = self.open_tasks.iter().any(|id| {
+            self.tasks
+                .get(id)
+                .is_some_and(|t| t.kind == TaskKind::ReinstatementUnderwriting && t.policies.contains(&policy))
+        });
+        if waiting {
+            // A request already with the core, or a policy no longer lapsed,
+            // needs nothing more.
+            let _ = self.request_reinstatement(policy, ctx);
+        }
+    }
+
+    /// Lapsed policies waiting for underwriting to take up their
+    /// reinstatement, in order.
+    pub fn reinstatements_for_underwriting(&self) -> Vec<PolicyId> {
+        let mut policies: Vec<PolicyId> = self
+            .open_tasks
+            .iter()
+            .filter_map(|id| self.tasks.get(id))
+            .filter(|t| t.kind == TaskKind::ReinstatementUnderwriting)
+            .flat_map(|t| t.policies.iter())
+            .filter(|p| self.policies.get(*p).is_some_and(|p| p.ended))
+            .cloned()
+            .collect();
+        policies.sort();
+        policies.dedup();
+        policies
+    }
+
     /// The core's answer to a posting. A refusal is a task: the officer
     /// tells the customer and agrees something else.
     pub(crate) fn core_outcome(&mut self, id: &str, applied: bool, code: Option<String>, message: Option<String>, ctx: &mut Ctx) -> Result<(), Reject> {

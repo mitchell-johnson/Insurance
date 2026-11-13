@@ -105,6 +105,11 @@ pub enum CoreFact {
     DayClosed {
         closed: NaiveDate,
     },
+    /// Underwriting approved reinstating a lapsed policy; the core relies
+    /// on the decision until `valid_until`.
+    ReinstatementApproved {
+        policy: PolicyId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

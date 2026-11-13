@@ -192,7 +192,7 @@ pub fn config() -> Config {
 pub struct Desk {
     pub state: PaymentsState,
     pub now: NaiveDateTime,
-    sent: u64,
+    pub sent: u64,
 }
 
 impl Desk {

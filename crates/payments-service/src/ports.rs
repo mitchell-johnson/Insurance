@@ -42,6 +42,12 @@ pub trait Core: Send + Sync {
     /// Hand an unexpected credit to cash matching. `Ok(Some(reason))` means
     /// nobody could say whose it is.
     fn match_receipt(&self, payment: IncomingPayment) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    /// The same, knowing the policy whose direct debit authority draws on
+    /// the paying account. A core that cannot use it matches without it.
+    fn match_receipt_from(&self, payment: IncomingPayment, payer_policy: Option<PolicyId>) -> impl Future<Output = Result<Option<String>, String>> + Send {
+        let _ = payer_policy;
+        self.match_receipt(payment)
+    }
 }
 
 /// Signing keys by the name they are held under.
@@ -139,13 +145,21 @@ impl Core for ClusterCore {
     }
 
     async fn match_receipt(&self, payment: IncomingPayment) -> Result<Option<String>, String> {
+        self.match_receipt_from(payment, None).await
+    }
+
+    async fn match_receipt_from(&self, payment: IncomingPayment, payer_policy: Option<PolicyId>) -> Result<Option<String>, String> {
+        let mut matcher = self.matcher.clone();
+        if let (Some(account), Some(policy)) = (&payment.payer_account, payer_policy) {
+            matcher.authorities.insert(account.clone(), policy);
+        }
         let partitions = self.client.partitions(Duration::from_secs(20)).await?;
         let mut all = Candidates::default();
         for partition in 0..partitions {
-            let found = self.client.payment_candidates(partition, &self.matcher, &payment).await.map_err(lost)?;
+            let found = self.client.payment_candidates(partition, &matcher, &payment).await.map_err(lost)?;
             all = all.merge(found);
         }
-        match self.matcher.decide(all, &payment) {
+        match matcher.decide(all, &payment) {
             Outcome::Apply { command, .. } => self.send(&payment.id, "cash-matching", command).await,
             Outcome::Exception { reason, .. } => Ok(Some(reason)),
         }

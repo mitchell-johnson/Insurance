@@ -927,3 +927,61 @@ fn a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical() {
     bad.risk_tags.insert("cardiovascular.heart".into());
     assert_eq!(w.err("new-business", Command::SubmitDisclosure(Box::new(bad))), "risk_tags");
 }
+
+/// Purpose: two lives on one application, one of whom has lived overseas and has no local
+/// medical records for those years. Each life runs on its own: the life at home is accepted at
+/// once and waits; for the other the rules ask (with consent) for alternative medical history,
+/// and a person decides once it arrives. The policy issues only when both have a decision, and
+/// that decision records the rule, question, exclusion and reason versions it was made under;
+/// the same answers against the same versions give the same assessment and record.
+/// Why it matters: a life that cannot give local records must not be accepted on silence, nor
+/// hold up the other life's decision; and a decision questioned at claim must be reproducible
+/// from what was in force when it was made (UW-014, UW-016).
+#[test]
+fn a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits() {
+    let mut w = World::new();
+    let open = w.open_command(
+        "P1",
+        &["L1", "L2"],
+        &[("L1", "life", "life", 400_000_00), ("L2", "life", "life", 400_000_00)],
+        false,
+    );
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    let home = w.disclose("P1", "L1", &clean());
+    w.automatic(&home);
+    assert_eq!((w.stage("P1", "L1"), w.p("P1").status.clone()), (Stage::Accepted, ProposalStatus::Open));
+
+    let overseas = yes("lived_overseas_last_5_years");
+    assert_eq!(
+        w.prepared("P1", "L2", &overseas),
+        w.prepared("P1", "L2", &overseas),
+        "the same answers and versions give the same record"
+    );
+    w.consent("P1", "L2", ConsentKind::ObtainRecords);
+    let asked = w.disclose("P1", "L2", &overseas);
+    assert!(asked.effects.iter().any(|e| matches!(
+        e,
+        Effect::RequestEvidence { request, kind: ic_underwriting::evidence::EvidenceKind::AlternativeMedicalHistory, .. }
+            if request == "P1/L2/alternative_medical_history"
+    )));
+    assert_eq!(w.stage("P1", "L2"), Stage::AwaitingEvidence);
+    assert_eq!(w.p("P1").status, ProposalStatus::Open, "nothing issues while one life waits");
+
+    w.ok(
+        "evidence",
+        Command::EvidenceReceived {
+            request: "P1/L2/alternative_medical_history".into(),
+            vault_ref: "clinical://PTY-L2/evidence/abc".into(),
+            cost_minor: 120_00,
+        },
+    );
+    let case = w.take("P1", "L2", "amy");
+    let decided = w.propose(&case, "amy", vec![standard("life")]).unwrap();
+    let issued = w.automatic(&decided);
+    let Some(Effect::IssuePolicy { command, .. }) = issued.effects.iter().find(|e| matches!(e, Effect::IssuePolicy { .. })) else {
+        panic!("both lives decided: the policy issues")
+    };
+    assert_eq!(command.lives.len(), 2);
+    let versions = &w.p("P1").lives[&LifeId::from("L2")].decisions[0].versions;
+    assert!(versions.rule_set.is_some() && versions.question_set.is_some() && versions.exclusions.is_some() && versions.reasons.is_some());
+}

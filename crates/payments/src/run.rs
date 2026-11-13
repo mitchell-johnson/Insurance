@@ -157,11 +157,8 @@ impl PaymentsState {
                 return Err(Reject::new("unknown_payee", format!("there is no payee {p}")));
             }
         }
-        if self.hold_reason(n, now, None).is_some() {
-            return Err(Reject::new(
-                crate::hold::HELD,
-                format!("item {}: the customer has a hold on money going out", n.item),
-            ));
+        if let Some(reason) = self.hold_reason(n, now, None) {
+            return Err(Reject::new(reason, format!("item {}: money going out to this party is stopped", n.item)));
         }
         match &n.refund {
             None if matches!(n.counterparty, Counterparty::Authority(_)) => bad("only a refund is paid to the account of an authority"),

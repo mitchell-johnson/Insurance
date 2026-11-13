@@ -636,3 +636,45 @@ fn money_a_reinsurer_pays_is_matched_to_its_statement() {
     );
     assert_eq!(unidentified(&desk), vec!["ri-stmt-7-2"], "a refused one stays for a person");
 }
+
+/// The payer's policy carried on the match instruction for the first
+/// unidentified line in the outbox.
+fn payer_policy_of_first_match(desk: &Desk) -> Option<ic_core::PolicyId> {
+    desk.state.outbox.values().find_map(|e| match &e.instruction {
+        Instruction::Match { payer_policy, .. } => Some(payer_policy.clone()),
+        _ => None,
+    })?
+}
+
+/// Purpose: a direct credit from an account that exactly one policy's
+/// authority draws on is handed to cash matching naming that policy, written
+/// however the bank spaces the account number; when two policies' authorities
+/// draw on the account, or none does, no policy is named.
+/// Why it matters: customers who pay by direct debit often top up by direct
+/// credit with no usable reference. The account they pay from is the best
+/// evidence of whose money it is, but only when it points at one policy;
+/// guessing between two would put money on the wrong policy.
+#[test]
+fn a_direct_credit_from_an_authoritys_account_names_its_policy() {
+    let mut desk = Desk::new();
+    let a = "anz-sf1-collection";
+    let open = 10_000_000_00;
+    desk.authority("auth-1", "POL7", "0601111111", true);
+    let spaced = StatementLine {
+        payer_account: Some("06-0111-1111".to_string()),
+        ..line("l1", 150_00, "top up")
+    };
+    desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![spaced]));
+    assert_eq!(payer_policy_of_first_match(&desk), Some(policy("POL7")));
+
+    let mut desk = Desk::new();
+    desk.authority("auth-1", "POL7", "0601111111", true);
+    desk.authority("auth-2", "POL8", "0601111111", true);
+    desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![line("l1", 150_00, "top up")]));
+    assert_eq!(payer_policy_of_first_match(&desk), None);
+
+    let mut desk = Desk::new();
+    desk.authority("auth-1", "POL7", "0209999999", true);
+    desk.ok(&svc(), statement(a, d(2027, 11, 15), open, open + 150_00, vec![line("l1", 150_00, "top up")]));
+    assert_eq!(payer_policy_of_first_match(&desk), None);
+}
