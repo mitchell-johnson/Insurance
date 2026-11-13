@@ -598,3 +598,27 @@ fn covers_can_share_a_limit_counter_and_declare_a_premium_waiver() {
     let unnamed = shared.replace("\"surgical\"", "\"\"");
     assert!(load_product("health_flex.star", &unnamed).is_err());
 }
+
+/// Purpose: a lump sum cover can name the covers a payment on it reduces and can be declared
+/// joint on the first event; the shipped term life product declares neither; and a cover that
+/// reduces itself, a cover that is not there, or a cover that pays no lump sum does not load,
+/// nor does a joint cover that pays a monthly benefit.
+/// Why it matters: the core takes cover off on a claim from these two settings alone. A link
+/// to a cover that does not exist would silently reduce nothing, and a joint income benefit
+/// has no single sum to pay once, so each is a configuration error to stop at load.
+#[test]
+fn a_cover_can_reduce_another_and_be_joint_on_the_first_event() {
+    let shipped = load_product("term_life.star", TERM).unwrap();
+    assert!(shipped.covers.iter().all(|c| c.reduces.is_empty() && !c.joint_first_event));
+    let linked = |to: &str| TERM.replace("code = \"trauma\",", &format!("code = \"trauma\",\n            reduces = [\"{to}\"],"));
+    let p = load_product("term_life.star", &linked("life")).unwrap();
+    assert_eq!(p.cover("trauma").unwrap().reduces, vec!["life".to_string()]);
+    assert!(load_product("term_life.star", &linked("trauma")).is_err());
+    assert!(load_product("term_life.star", &linked("funeral")).is_err());
+
+    let joint = TERM.replace("code = \"life\",", "code = \"life\",\n            joint_first_event = True,");
+    assert!(load_product("term_life.star", &joint).unwrap().cover("life").unwrap().joint_first_event);
+    let income = INCOME.replace("code = \"income\",", "code = \"income\",\n            joint_first_event = True,");
+    assert_ne!(income, INCOME, "the shipped product has the cover this test edits");
+    assert!(load_product("income_protection.star", &income).is_err());
+}

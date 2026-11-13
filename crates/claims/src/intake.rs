@@ -268,6 +268,7 @@ impl ClaimsState {
             }
             (Some(amount), false) => {
                 cx.core.execute(Instruction::Admit {
+                    life: None,
                     claim: claim.id.clone(),
                     policy: claim.policy.clone(),
                     cover: claim.cover.clone(),

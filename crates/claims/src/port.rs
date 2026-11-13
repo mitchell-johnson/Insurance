@@ -186,6 +186,12 @@ pub enum Instruction {
         /// benefit payable to the loan.
         #[serde(default)]
         repay_loan_minor: i64,
+        /// The life a lump sum is admitted for. The core takes the amount
+        /// off that life's cover, off the covers the product says it
+        /// reduces, and off a joint cover for every life on it. Absent: the
+        /// cover is left as it is (a funeral advance, a health claim).
+        #[serde(default)]
+        life: Option<String>,
     },
     /// Release a payment from benefit payable to the payments module, and
     /// close the claim if that was the last of it.

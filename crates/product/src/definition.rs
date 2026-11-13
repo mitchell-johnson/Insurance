@@ -205,6 +205,17 @@ pub struct CoverDefinition {
     /// cover's limits count on their own.
     #[serde(default)]
     pub shared_counter: Option<String>,
+    /// Covers on the same policy that a lump sum paid on this one reduces,
+    /// by the amount paid and for the same life: trauma cover accelerated
+    /// from life cover names the life cover here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reduces: Vec<String>,
+    /// One sum insured across every life on the cover, paid once on the
+    /// first event to any of them. A payment reduces or ends the cover for
+    /// all of them. A cover that carries on in full for the survivor is not
+    /// joint: it is a single cover on each life.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub joint_first_event: bool,
 }
 
 /// One excess level on a cover's menu.
