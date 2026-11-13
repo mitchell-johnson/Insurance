@@ -1468,7 +1468,8 @@ fn an_owner_or_a_dependant_ending_in_the_customer_master() {
 }
 
 /// Purpose: on a unit-linked policy the policyholder's phone shows an order while it waits for its price and then the units it
-/// bought in the fund, from the investment ledger's own events; a sell on a later pricing date takes units off the holding.
+/// bought in the fund, from the investment ledger's own events; a sell on a later pricing date takes units off the holding; a
+/// cancelled order goes from the phone; and when a price is corrected and the order replayed, the holding follows.
 /// Why it matters: a unit-linked customer wants to know what they hold and what is still waiting. A holding that missed a sell, or
 /// counted an order before its price, would tell them they own units they do not.
 #[test]
@@ -1580,4 +1581,34 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         "{held}"
     );
     assert!(w.ch.data.extras[&pol].orders.is_empty());
+
+    // An order cancelled before its price leaves nothing waiting.
+    let later = order("sell-2", Direction::Sell, OrderAmount::Units { micro: 1_000_000 }, d(2027, 11, 17));
+    invest(&mut w, "policy-servicing", InvestCommand::PlaceOrder(Box::new(later)));
+    w.relay();
+    assert!(w.row(KIRI, &format!("{pol}/unit_order/sell-2")).is_some());
+    invest(&mut w, "policy-servicing", InvestCommand::CancelOrder { order_id: "sell-2".into() });
+    w.relay();
+    assert_eq!(w.last_op(KIRI, &format!("{pol}/unit_order/sell-2")), Some(Op::Delete));
+
+    // The first price is corrected: the buy is put on the new price and the holding follows.
+    let mut corrected = price(open());
+    corrected.price_id = "growth:2027-11-15.2".into();
+    corrected.version = 2;
+    corrected.buy = DecStr::parse("2.5000").unwrap();
+    corrected.mid = DecStr::parse("2.5000").unwrap();
+    corrected.supersedes = Some("growth:2027-11-15.1".into());
+    invest(&mut w, "unit-pricing", InvestCommand::ActivateUnitPrice(Box::new(corrected)));
+    let replay = InvestCommand::ReplayOrders {
+        superseded: "growth:2027-11-15.1".into(),
+        limit: 100,
+        materiality_minor: 0,
+    };
+    invest(&mut w, "unit-orders", replay);
+    w.relay();
+    let held = w.row(KIRI, &format!("{pol}/holding/growth")).unwrap();
+    assert!(
+        held["units_micro"].as_i64().unwrap() < 400_000_000,
+        "fewer units at the higher buy price: {held}"
+    );
 }

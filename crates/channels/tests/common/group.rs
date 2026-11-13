@@ -22,6 +22,10 @@ pub struct GroupDouble {
     /// Every command, as (key, actor, command).
     pub commands: Mutex<Vec<(String, String, Value)>>,
     pub down: AtomicBool,
+    /// `scheme_of` answers no scheme.
+    pub unmapped: AtomicBool,
+    /// `scheme_of` answers 500.
+    pub broken: AtomicBool,
 }
 
 impl GroupDouble {
@@ -33,6 +37,12 @@ impl GroupDouble {
     }
 
     fn answer(&self, question: &Value) -> Answered {
+        if question["ask"] == "scheme_of" && self.broken.load(Ordering::SeqCst) {
+            return (500, json!({ "code": "internal" }));
+        }
+        if question["ask"] == "scheme_of" && self.unmapped.load(Ordering::SeqCst) {
+            return (200, json!({ "schemes": [] }));
+        }
         if question["ask"] == "scheme_of" {
             let on: Vec<&String> = self.schemes.iter().filter(|(_, p)| question["policy"] == p.as_str()).map(|(s, _)| s).collect();
             return (200, json!({ "schemes": on }));
