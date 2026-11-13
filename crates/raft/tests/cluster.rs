@@ -319,12 +319,16 @@ async fn a_follower_cut_off_and_returned_does_not_unseat_the_leader() {
 }
 
 /// Wait until a member has dropped the start of its log behind a snapshot.
-async fn wait_for_purge(g: &Group, id: u64) -> u64 {
+/// Wait until a node has dropped its log up to and including `past`. The
+/// purge follows the snapshot a little behind the entries that caused it,
+/// and an earlier purge (the configuration alone is long enough for one)
+/// must not be taken for the one the test is waiting for.
+async fn wait_for_purge(g: &Group, id: u64, past: u64) -> u64 {
     let deadline = tokio::time::Instant::now() + PATIENCE;
     loop {
         match g.nodes[&id].log.first_index() {
-            Some(first) if first > 1 => return first,
-            _ => assert!(tokio::time::Instant::now() < deadline, "node {id} never dropped its log"),
+            Some(first) if first > past => return first,
+            _ => assert!(tokio::time::Instant::now() < deadline, "node {id} never dropped its log past {past}"),
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
@@ -347,7 +351,7 @@ async fn a_restart_from_snapshot_and_log_rebuilds_the_same_state() {
     }
     let before = g.settle().await;
     for id in 1..=3 {
-        let first = wait_for_purge(&g, id).await;
+        let first = wait_for_purge(&g, id, 20).await;
         assert!(first > 20, "node {id} kept its log from index {first}");
         assert!(g.disk(id).join("snapshot.json").exists());
         let journal = std::fs::read_to_string(g.disk(id).join("log.jsonl")).unwrap();
@@ -385,11 +389,10 @@ async fn a_member_left_behind_the_log_catches_up_from_a_snapshot() {
         g.run_keyed(&format!("receipt:a-{n}"), "cash-matching", receipt(&policy, &format!("a-{n}"), 1_00))
             .await;
     }
-    let first_kept = wait_for_purge(&g, leader).await;
-    assert!(
-        first_kept > g.nodes[&leader].log.last_index().unwrap() - 60,
-        "the leader still holds what the absent member missed"
-    );
+    // The absent member missed sixty entries; wait until the leader has dropped the first of them.
+    let missed_from = g.nodes[&leader].log.last_index().unwrap() - 60;
+    let first_kept = wait_for_purge(&g, leader, missed_from).await;
+    assert!(first_kept > missed_from, "the leader still holds what the absent member missed");
 
     g.boot(away).await;
     let hash = g.settle().await;
