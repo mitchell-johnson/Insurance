@@ -213,6 +213,10 @@ pub struct CoreState {
     /// Funds, unit prices and unit orders. Unit holdings are ledger balances.
     #[serde(default)]
     pub investment: crate::invest::InvestmentBook,
+    /// The latest validation recorded for each rate table version, by
+    /// `id/version`.
+    #[serde(default)]
+    pub table_validations: BTreeMap<String, crate::command::TableValidation>,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -237,6 +241,7 @@ impl CoreState {
             claims: ic_claims::ClaimsState::default(),
             counterparty: Default::default(),
             investment: Default::default(),
+            table_validations: BTreeMap::new(),
         }
     }
 
@@ -262,6 +267,7 @@ impl CoreState {
             &self.claims,
             &self.counterparty,
             &self.investment,
+            &self.table_validations,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -321,6 +327,38 @@ impl CoreState {
                     scoped: table.scope.is_some(),
                 });
                 self.catalog.activate_rate_table(*table);
+                Ok(())
+            }
+            Command::RecordRateTableValidation(v) => {
+                let plain = |s: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_graphic());
+                if !plain(&v.id) || !plain(&v.content_hash) || !plain(&v.report_hash) || !plain(&v.by) || v.schema_version == 0 {
+                    return Err(Reject::new(
+                        "invalid_validation",
+                        "a validation names the table, its content hash, the report hash, the schema and who ran it",
+                    ));
+                }
+                if self.catalog.rate_table_hash(&v.id, v.version).is_some_and(|active| active != v.content_hash) {
+                    return Err(Reject::new(
+                        "config_conflict",
+                        format!(
+                            "rate table {} version {} is active with other content than the report was run on",
+                            v.id, v.version
+                        ),
+                    ));
+                }
+                let key = format!("{}/{}", v.id, v.version);
+                if self.table_validations.get(&key) == Some(&*v) {
+                    return Ok(());
+                }
+                ctx.emit(Event::RateTableValidated {
+                    id: v.id.clone(),
+                    version: v.version,
+                    content_hash: v.content_hash.clone(),
+                    report_hash: v.report_hash.clone(),
+                    schema_version: v.schema_version,
+                    by: v.by.clone(),
+                });
+                self.table_validations.insert(key, *v);
                 Ok(())
             }
             Command::ActivateDefinitions { definitions } => {

@@ -641,6 +641,7 @@ async fn underwriting_answers_become_decisions_exactly_once() {
         loadings: vec![],
         exclusions: vec!["EX-BACK".into()],
         member_consents_to_itemising: false,
+        member_pays_loading: false,
     };
     *d.peers.effects.lock().unwrap() = vec![
         (1, None),

@@ -148,3 +148,9 @@ The underwriting module decides the remedy on an approved case; the core carries
 - **Ending early charges forward only**: `EndHardship` brings the end to today, charges the rest of the period already billed back at the full premium, and bills in full from then on. Days behind it stay as billed. One ended before its first day never applies.
 - **One at a time**, and the latest is kept on the policy. Retail policies only: a scheme's premium is refused (`not_retail`).
 - **Not handled**: a cover reduced or increased during an override has its adjustment for the days left worked out at the full premium, so that one adjustment is too large by the override's reduction. A policy fee is reduced with the premium.
+
+## Rate table validation is recorded, not enforced (13 Nov 2026)
+
+- **The core records that a rate table version passed validation and does not gate activation on it.** `RecordRateTableValidation` (caller `config` or `finance`) stores the report hash, schema version and who ran it against the table's content hash, and publishes `RateTableValidated`. Finance, which runs the checks, turns a close check red for any table activated without a matching record. Agreed with finance: the core does not depend on the finance crate, and the shipped test configuration activates tables with no report.
+- **A record is tied to content.** One for a version that is active under another content hash is refused. A version can be validated before it is activated.
+- **Loadings stay off the event feed.** Finance asked for a layer's total loading on the published layer facts so its table dry run can price what is billed. Loadings imply health, so they are not published; a question answered to finance alone will give them instead (not built yet).

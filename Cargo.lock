@@ -2329,6 +2329,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "ic-azure",
+ "ic-channels",
  "ic-core",
  "ic-customers",
  "ic-ledger",
