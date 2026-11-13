@@ -46,6 +46,9 @@ pub struct Investigation {
     /// Who referred it: `claims` for a rule run here, else the caller.
     pub referred_by: String,
     pub claims: BTreeSet<ClaimId>,
+    /// Claims on other partitions billing the same service: partition and claim.
+    #[serde(default)]
+    pub elsewhere: BTreeSet<(u16, ClaimId)>,
     pub closed: Option<Closed>,
 }
 
@@ -83,6 +86,8 @@ pub struct CaseView {
     pub referred_by: String,
     /// Each claim with its status, amount billed and provider.
     pub claims: Vec<(ClaimId, Status, i64, Option<String>)>,
+    /// The same service billed on other partitions: partition and claim.
+    pub elsewhere: Vec<(u16, ClaimId)>,
     pub closed: Option<Closed>,
 }
 
@@ -96,7 +101,7 @@ impl ClaimsState {
     /// Run the rules on a claim being registered. Returns whether a case is
     /// open on it.
     pub(crate) fn screen(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, cover_start: Option<NaiveDate>) -> bool {
-        if self.screen_billing(cx, claim) {
+        if self.screen_billing(cx, claim) | self.screen_elsewhere(cx, claim) {
             return true;
         }
         let days = self.rules.early_claim_days;
@@ -106,6 +111,95 @@ impl ClaimsState {
             self.open_case(cx, &case, EARLY_CLAIM, "claims", [claim.id.clone()].into(), Some(claim));
         }
         early
+    }
+
+    /// The duplicate billing rule across partitions: tell every other
+    /// partition what this claim bills, and open a case on it if one of them
+    /// has already said it billed the same. Returns whether a case opened.
+    fn screen_elsewhere(&mut self, cx: &mut Cx<'_>, claim: &mut Claim) -> bool {
+        let Some((date, provider, code)) = billed(claim) else { return false };
+        let here = cx.core.partition();
+        for to in (0..self.rules.partitions).filter(|p| *p != here) {
+            let command = crate::Command::BilledElsewhere {
+                from: here,
+                claim: claim.id.clone(),
+                service_date: date,
+                provider: provider.clone(),
+                service_code: code.clone(),
+            };
+            if cx.core.send(to, command).is_err() {
+                cx.notify("billing_unshared", &claim.id, &[("partition", to.to_string())]);
+            }
+        }
+        let from = (date, provider.clone(), code.clone(), 0, String::new());
+        let elsewhere: BTreeSet<(u16, ClaimId)> = self
+            .billed_elsewhere
+            .range(from..)
+            .take_while(|(d, p, s, _, _)| *d == date && *p == provider && *s == code)
+            .map(|(_, _, _, p, c)| (*p, c.clone()))
+            .collect();
+        if elsewhere.is_empty() {
+            return false;
+        }
+        // A case the rule here has just opened takes the other claims too.
+        let case = match claim.investigation.clone() {
+            Some(case) => case,
+            None => {
+                let case = format!("investigation/{}", claim.id);
+                self.open_case(cx, &case, DUPLICATE_BILLING, "claims", [claim.id.clone()].into(), Some(claim));
+                case
+            }
+        };
+        if let Some(i) = self.investigations.get_mut(&case) {
+            i.elsewhere.extend(elsewhere);
+        }
+        true
+    }
+
+    /// Another partition bills a service: remember it, and open a case on
+    /// each claim here that bills the same and is not already in one.
+    pub(crate) fn billed_elsewhere(&mut self, cx: &mut Cx<'_>, from: u16, claim: String, key: Billed) -> Result<(), Reject> {
+        let (date, provider, code) = key;
+        if from == cx.core.partition() || claim.is_empty() || provider.is_empty() || code.is_empty() {
+            return Err(Reject::new(
+                "invalid_billing",
+                "a service billed elsewhere names its partition, claim, provider and service",
+            ));
+        }
+        if !self.billed_elsewhere.insert((date, provider.clone(), code.clone(), from, claim.clone())) {
+            return Ok(());
+        }
+        let start = (date, provider.clone(), code.clone(), String::new());
+        let here: Vec<ClaimId> = self
+            .billed
+            .range(start..)
+            .take_while(|(d, p, s, _)| *d == date && *p == provider && *s == code)
+            .map(|(_, _, _, id)| id.clone())
+            .collect();
+        for id in here {
+            let Ok(mut c) = self.claim(&id) else { continue };
+            match c.investigation.clone() {
+                // Already held: the case learns of the other claim.
+                Some(case) => {
+                    if let Some(i) = self.investigations.get_mut(&case) {
+                        i.elsewhere.insert((from, claim.clone()));
+                    }
+                }
+                None => {
+                    let case = format!("investigation/{id}");
+                    if self.investigations.contains_key(&case) {
+                        // A closed case on this claim: a new one for the new evidence.
+                        continue;
+                    }
+                    self.open_case(cx, &case, DUPLICATE_BILLING, "claims", [id.clone()].into(), Some(&mut c));
+                    if let Some(i) = self.investigations.get_mut(&case) {
+                        i.elsewhere.insert((from, claim.clone()));
+                    }
+                    self.commit(c);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// The duplicate billing rule: any other claim on this partition for the
@@ -170,6 +264,7 @@ impl ClaimsState {
                 opened_on: cx.today,
                 referred_by: referred_by.to_string(),
                 claims: claims.clone(),
+                elsewhere: BTreeSet::new(),
                 closed: None,
             },
         );
@@ -294,6 +389,7 @@ impl ClaimsState {
                     .filter_map(|id| self.claims.get(id))
                     .map(|c| (c.id.clone(), c.status, c.claimed_minor, c.health.as_ref().and_then(|h| h.provider.clone())))
                     .collect(),
+                elsewhere: i.elsewhere.iter().cloned().collect(),
                 closed: i.closed.clone(),
             })
             .collect();

@@ -583,6 +583,7 @@ impl ClaimsState {
             shared_seq: 0,
             shared: None,
             remote_received: Default::default(),
+            letters: vec![],
         })
     }
 
