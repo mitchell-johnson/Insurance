@@ -1800,3 +1800,167 @@ impl InvestmentBook {
         breaks
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(2027, 11, day).unwrap()
+    }
+
+    fn order(id: &str) -> NewOrder {
+        NewOrder {
+            order_id: id.to_string(),
+            policy: PolicyId("pol-1".to_string()),
+            fund: FundId("growth".to_string()),
+            direction: Direction::Sell,
+            amount: OrderAmount::AllUnits,
+            kind: OrderKind::Withdrawal,
+            pricing_date: d(16),
+            switch_to: None,
+        }
+    }
+
+    /// Purpose: the name an order kind is given on journal entries and events is the same
+    /// word it has on the wire, for every kind.
+    /// Why it matters: finance groups unit movements by this name and servicing sends the
+    /// kind by its wire form. If the two drifted apart for one kind, that kind's fees or
+    /// withdrawals would be reported under a name nobody sends and nothing reconciles to.
+    #[test]
+    fn an_order_kind_is_named_on_entries_as_it_is_on_the_wire() {
+        let kinds = [
+            OrderKind::PremiumAllocation,
+            OrderKind::Withdrawal,
+            OrderKind::RegularWithdrawal,
+            OrderKind::SwitchOut,
+            OrderKind::SwitchIn,
+            OrderKind::FeeDeduction,
+            OrderKind::InsuranceCharge,
+            OrderKind::TaxDeduction,
+            OrderKind::FeeRebate,
+            OrderKind::Surrender,
+            OrderKind::Claim,
+        ];
+        for kind in kinds {
+            assert_eq!(serde_json::to_value(kind).unwrap(), serde_json::Value::String(kind.name().to_string()));
+        }
+    }
+
+    /// Purpose: every investment command has its own name, and each one that is about a
+    /// single policy says which, including a cancellation, which names only the order.
+    /// Why it matters: the name is what telemetry and the audit trail call the command, and
+    /// the policy is how the host routes and scopes it. Two commands sharing a name would
+    /// be counted as one, and a cancellation with no policy would bypass the checks every
+    /// other command on that policy goes through.
+    #[test]
+    fn every_investment_command_has_its_own_name_and_names_its_policy() {
+        let policy = PolicyId("pol-1".to_string());
+        let mut book = InvestmentBook::default();
+        book.orders.insert(
+            "o-1".to_string(),
+            UnitOrder {
+                order: order("o-1"),
+                placed_on: d(15),
+                state: OrderState::Pending,
+            },
+        );
+        let fund = FundDefinition {
+            id: FundId("growth".to_string()),
+            version: 1,
+            content_hash: "h".to_string(),
+            name: "Growth".to_string(),
+            currency: ic_money::Currency::NZD,
+            cut_off: "14:00".to_string(),
+            buy_spread_bps: 0,
+            sell_spread_bps: 0,
+            price_decimals: 4,
+            unit_rounding: ic_money::RoundingMode::HalfEven,
+            non_pricing_days: Default::default(),
+            open_to_new_money: true,
+            pricing: Default::default(),
+        };
+        let one = DecStr::parse("1.0000").unwrap();
+        let price = UnitPrice {
+            price_id: "p-1".to_string(),
+            fund: fund.id.clone(),
+            pricing_date: d(15),
+            version: 1,
+            buy: one.clone(),
+            sell: one.clone(),
+            mid: one,
+            inputs_hash: "i".to_string(),
+            supersedes: None,
+        };
+        let commands = [
+            (InvestCommand::ActivateFund(Box::new(fund)), false),
+            (InvestCommand::ActivateUnitPrice(Box::new(price)), false),
+            (
+                InvestCommand::AllocateCash {
+                    policy: policy.clone(),
+                    reference: "a".to_string(),
+                    amount_minor: 1,
+                },
+                true,
+            ),
+            (InvestCommand::PlaceOrder(Box::new(order("o-2"))), true),
+            (InvestCommand::CancelOrder { order_id: "o-1".to_string() }, true),
+            (
+                InvestCommand::RaisePayout {
+                    policy: policy.clone(),
+                    payout: "p".to_string(),
+                    amount_minor: 1,
+                    reason: PayoutReason::Withdrawal,
+                },
+                true,
+            ),
+            (
+                InvestCommand::ReinstructPayout {
+                    policy: policy.clone(),
+                    payout: "p".to_string(),
+                    payment: "q".to_string(),
+                },
+                true,
+            ),
+            (
+                InvestCommand::Surrender {
+                    policy: policy.clone(),
+                    surrender: "s".to_string(),
+                    pricing_dates: BTreeMap::new(),
+                },
+                true,
+            ),
+            (
+                InvestCommand::CompleteSurrender {
+                    policy: policy.clone(),
+                    payout: "p".to_string(),
+                },
+                true,
+            ),
+            (
+                InvestCommand::ExecuteOrders {
+                    fund: FundId("growth".to_string()),
+                    pricing_date: d(15),
+                    limit: 1,
+                },
+                false,
+            ),
+            (
+                InvestCommand::ReplayOrders {
+                    superseded: "p-1".to_string(),
+                    limit: 1,
+                    materiality_minor: 0,
+                },
+                false,
+            ),
+        ];
+        let names: BTreeSet<&str> = commands.iter().map(|(c, _)| c.name()).collect();
+        assert_eq!(names.len(), commands.len());
+        for (command, about_one_policy) in &commands {
+            assert_eq!(command.policy(&book), about_one_policy.then_some(&policy), "{}", command.name());
+            assert!(!command.allowed_callers().is_empty());
+        }
+        let unknown = InvestCommand::CancelOrder { order_id: "o-9".to_string() };
+        assert_eq!(unknown.policy(&book), None);
+    }
+}
