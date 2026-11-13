@@ -264,3 +264,80 @@ impl PaymentsState {
             .collect()
     }
 }
+
+impl PaymentsState {
+    /// Prepare each fund's settlement run for what its collection accounts
+    /// owe other funds as at `as_at` (PAY-010), for the first value date the
+    /// route still takes. One run per fund per day, `sweep-{fund}-{yyyymmdd}`;
+    /// asking again that day changes nothing. Each item pays the insurer's
+    /// own payee whose party is the code of the account it pays into. A
+    /// sweep with no such payee, or nothing open, is left for a person, who
+    /// sees it in `fund_sweep`. The run is checked and approved by people
+    /// like any other.
+    pub(crate) fn propose_fund_sweep(&mut self, tx: &mut Tx<'_>, as_at: NaiveDate) -> Result<(), Reject> {
+        tx.need(crate::model::Role::Service)?;
+        let config = self.cfg()?.clone();
+        let mut by_fund: BTreeMap<String, Vec<NewItem>> = BTreeMap::new();
+        for ((from, to_fund), owed) in &self.sweeps.owed {
+            let key = (from.clone(), to_fund.clone());
+            let open = owed.amount_minor - self.in_flight(&key);
+            let Some(fund) = config.accounts.get(from).map(|a| a.fund.clone()) else {
+                continue;
+            };
+            let Some(to_account) = self.collection_account(from, to_fund) else { continue };
+            let payee = self.payees.iter().find(|(_, p)| p.kind == PayeeKind::Own && !p.closed && p.party == to_account);
+            let (Some((payee, _)), true) = (payee, owed.since.is_some_and(|s| s <= as_at) && open > 0) else {
+                continue;
+            };
+            by_fund.entry(fund).or_default().push(NewItem {
+                // Numbered within its run below.
+                item: String::new(),
+                source: format!("{SWEEP}{from}:{to_fund}:{}", as_at.format("%Y%m%d")),
+                counterparty: Counterparty::Payee(payee.clone()),
+                amount_minor: open,
+                policy: None,
+                payable: None,
+                refund: None,
+                represents: None,
+            });
+        }
+        let maker = crate::model::Actor {
+            id: tx.actor.id.clone(),
+            roles: [crate::model::Role::Maker].into(),
+        };
+        for (fund, mut items) in by_fund {
+            let run = format!("sweep-{fund}-{}", as_at.format("%Y%m%d"));
+            if self.runs.contains_key(&run) {
+                continue;
+            }
+            let Some(route) = config.routes.get(&RunType::FundSettlement) else { continue };
+            let channel = if self.redirected.contains(&RunType::FundSettlement) {
+                route.secondary.clone().unwrap_or_else(|| route.primary.clone())
+            } else {
+                route.primary.clone()
+            };
+            let value_date = config.next_window(&channel, tx.now);
+            let currency = config
+                .accounts
+                .values()
+                .find(|a| a.fund == fund && a.purpose == Purpose::PremiumCollection)
+                .map(|a| a.currency);
+            let Some(currency) = currency else { continue };
+            for (i, item) in items.iter_mut().enumerate() {
+                item.item = format!("{run}-{}", i + 1);
+            }
+            let mut inner = Tx {
+                actor: &maker,
+                now: tx.now,
+                events: Vec::new(),
+            };
+            self.prepare_run(&mut inner, run.clone(), RunType::FundSettlement, fund, currency, value_date, false)?;
+            if let Err(refused) = self.add_run_items(&mut inner, &run, items) {
+                self.runs.remove(&run);
+                return Err(refused);
+            }
+            tx.events.extend(inner.events);
+        }
+        Ok(())
+    }
+}
