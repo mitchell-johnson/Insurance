@@ -112,6 +112,8 @@ fn a_notice_already_taken_is_not_added_to() {
     assert_eq!(world.state.notices[&first].policies.len(), 2);
     assert_eq!(world.delivery(Command::RecordNoticeSent { notice: first.clone() }).result, Ok(()));
     assert_eq!(world.state.notices[&first].state, NoticeState::Sent);
+    let sent = ic_collections::query::answer(&world.state, serde_json::json!({"q": "notices_sent", "limit": 10})).unwrap();
+    assert_eq!(sent[0]["id"], first.as_str());
     assert_eq!(world.delivery(Command::RecordNoticeSent { notice: first.clone() }).result, Ok(()));
     world.core(2, CoreFact::DayClosed { closed: day });
     let second = world.state.notices_due(10);
@@ -302,4 +304,53 @@ fn a_closed_day_takes_only_its_own_partitions_steps() {
     world.today = d(2027, 3, 5);
     let events = world.close_day_on(1);
     assert_eq!(reached(&events), vec![("p1".to_string(), 3, StepKind::Reminder)]);
+}
+
+/// Purpose: a payment that clears the oldest premium while a later one is
+/// still overdue moves the arrears' age forward without a change of
+/// standing, so the next step comes when the later premium has aged to it;
+/// a balance with nothing unpaid ends the spell like a paid standing.
+/// Why it matters: an age read only from standing changes would stay at
+/// the oldest premium's date after it was paid, and send the suspension or
+/// final notice weeks early.
+#[test]
+fn the_age_of_the_arrears_follows_the_oldest_unpaid_premium() {
+    let mut world = World::new();
+    world.issue("p1", "party-1", 10_000);
+    world.overdue("p1", d(2027, 3, 1));
+    world.close_through(d(2027, 3, 20));
+    // The 1 March premium is paid; the one due 15 March is now the oldest.
+    world.core(
+        0,
+        CoreFact::Balance {
+            policy: "p1".into(),
+            oldest_unpaid_due: Some(d(2027, 3, 15)),
+        },
+    );
+    assert_eq!(world.state.policies[&PolicyId::from("p1")].age(d(2027, 4, 1)), Some(17));
+    let events = world.close_through(d(2027, 4, 14));
+    assert!(reached(&events).is_empty());
+    let events = world.close_through(d(2027, 4, 15));
+    assert_eq!(reached(&events), vec![("p1".to_string(), 31, StepKind::SuspensionNotice)]);
+    let applied = world.core(
+        0,
+        CoreFact::Balance {
+            policy: "p1".into(),
+            oldest_unpaid_due: None,
+        },
+    );
+    assert!(applied
+        .events
+        .iter()
+        .any(|r| matches!(&r.event, Event::SequenceStopped { why, .. } if why == "paid")));
+    assert!(world
+        .core(
+            0,
+            CoreFact::Balance {
+                policy: "ghost".into(),
+                oldest_unpaid_due: None
+            }
+        )
+        .events
+        .is_empty());
 }

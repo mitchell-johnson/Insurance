@@ -60,6 +60,16 @@ impl CollectionsState {
                 }
             }
             CoreFact::Standing { policy, to, oldest_unpaid_due } => self.standing(policy, to, oldest_unpaid_due, ctx),
+            CoreFact::Balance { policy, oldest_unpaid_due } => {
+                // Standing is the core's to say; the age of the arrears
+                // follows the oldest unpaid premium, and nothing unpaid
+                // ends the spell.
+                let standing = self.policies.get(&policy).map(|p| p.standing);
+                if let Some(standing) = standing {
+                    let to = if oldest_unpaid_due.is_none() { Some(Standing::Paid) } else { standing };
+                    self.standing(policy, to, oldest_unpaid_due, ctx);
+                }
+            }
             CoreFact::Status { policy, to } => self.status(policy, to, ctx),
             CoreFact::ArrangementMade {
                 policy,
