@@ -318,7 +318,8 @@ async fn documents_accepts_every_letter_underwriting_sends() {
 
 /// Purpose: an evidence order (request, chase, cancel) is published to the evidence hub under an
 /// ID from its outbox number, carrying the request and, for a new order, the kind and the
-/// party, and nothing else; a request for a delegate's file goes to the delegates hub; neither
+/// party, and nothing else; a request for a delegate's file, or for a delegate to decide a
+/// member's excess, goes to the delegates hub; neither
 /// reaches the staff hub; a hub that refuses the driver parks the order with its status; and an
 /// effect meant for none of them is parked.
 /// Why it matters: the provider's adapter acts on these orders, so a lost one leaves a case
@@ -366,13 +367,31 @@ async fn evidence_orders_and_delegate_requests_go_to_their_own_hubs() {
         delegate_ref: "D-9".into(),
     };
     assert_eq!(notices.forward(63, &file).await, Ok(None));
+    let ask = Effect::RequestDelegatedDecision {
+        proposal: "X1".into(),
+        life: "L1".into(),
+        party: "PTY-1".into(),
+        cover: "life".into(),
+        cover_type: "group_life".into(),
+        sum_insured_minor: 300_000_00,
+        authority: "broker-1".into(),
+    };
+    assert_eq!(notices.forward(66, &ask).await, Ok(None));
     assert_eq!(
         delegates.sent.lock().unwrap().clone(),
-        vec![(
-            order_id(63),
-            "delegate_file_request".into(),
-            json!({"proposal": "P1", "life": "L1", "delegate_ref": "D-9"})
-        )]
+        vec![
+            (
+                order_id(63),
+                "delegate_file_request".into(),
+                json!({"proposal": "P1", "life": "L1", "delegate_ref": "D-9"})
+            ),
+            (
+                order_id(66),
+                "delegated_decision_request".into(),
+                json!({"proposal": "X1", "life": "L1", "party": "PTY-1", "cover": "life", "cover_type": "group_life",
+                    "sum_insured_minor": 300_000_00, "authority": "broker-1"})
+            ),
+        ]
     );
     assert!(staff.sent.lock().unwrap().is_empty());
 

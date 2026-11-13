@@ -460,6 +460,7 @@ fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
             policy: open.policy.clone(),
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         };
         open
     };
@@ -494,6 +495,7 @@ fn group_administration_asks_for_excess_cover_and_always_gets_an_answer() {
             policy: p,
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         }, covers, .. } if p == &policy && covers[0].sum_insured_minor == 300_000_00));
     assert_eq!(ended(&applied), None);
 
@@ -576,6 +578,7 @@ fn an_employer_sees_a_loading_only_with_the_members_signed_consent() {
             policy: open.policy.clone(),
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         };
         w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     };

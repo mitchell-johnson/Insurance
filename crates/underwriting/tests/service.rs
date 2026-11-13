@@ -220,6 +220,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         policy: excess.policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     w.ok("group-admin", Command::OpenProposal(Box::new(excess)));
     w.ok(

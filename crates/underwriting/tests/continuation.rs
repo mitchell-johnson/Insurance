@@ -16,6 +16,7 @@ fn excess(w: &mut World, id: &str, sum: i64, smoker: bool) {
         policy: open.policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     let disclosed = w.disclose(id, "L1", &if smoker { yes("smoked_last_12_months") } else { clean() });
