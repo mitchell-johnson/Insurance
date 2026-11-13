@@ -178,6 +178,42 @@ fn a_retail_customer_follows_their_policy() {
     assert_eq!(w.ch.today(0), open(), "the business date comes from the stream");
 }
 
+/// Purpose: a premium receipt the core applies while the app is open moves the billing row on the customer's device, as one change
+/// after the version the device holds, so the app shows the new standing without a fresh snapshot (AUD-015).
+/// Why it matters: a customer who has just paid and still sees the amount owing will pay again or ring; the sync feed is how the
+/// app learns of the payment, so it must carry it promptly and in order.
+#[test]
+fn a_receipt_moves_the_billing_row_while_the_app_is_open() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let billing = format!("{pol}/billing");
+    let owed = w.row(KIRI, &billing).unwrap()["outstanding_minor"].as_i64().unwrap();
+    assert!(owed > 0, "the first premium is due at issue");
+    let Sync::Snapshot { version, .. } = w.feed(KIRI).unwrap().sync(None) else {
+        panic!("expected a snapshot")
+    };
+
+    w.core(
+        &pol,
+        "cash-matching",
+        ic_core::Command::ApplyReceipt {
+            policy: pol.clone(),
+            receipt: "rcpt-1".into(),
+            amount: ic_money::Money::new(owed, ic_money::Currency::NZD),
+        },
+    );
+    let effects = w.relay();
+    assert_eq!(moved(&effects), [KIRI.to_string()].into());
+    let Sync::Changes { version: now, changes } = w.feed(KIRI).unwrap().sync(Some(version)) else {
+        panic!("expected changes")
+    };
+    assert!(now > version);
+    assert!(changes.iter().any(|c| c.key == billing), "{changes:?}");
+    assert_eq!(w.row(KIRI, &billing).unwrap()["outstanding_minor"], 0);
+    // A device already at the new version has nothing more to fetch.
+    assert_eq!(w.feed(KIRI).unwrap().sync(Some(now)), Sync::Changes { version: now, changes: vec![] });
+}
+
 /// Purpose: the relay delivers at least once and in order; a repeat changes nothing, a hole is reported and nothing after it is applied, and redelivery heals it.
 /// Why it matters: the event stream is the only source of the views; applying across a gap would leave them silently wrong.
 #[test]

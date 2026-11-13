@@ -3781,3 +3781,31 @@ async fn an_adviser_and_their_group_read_their_own_statements() {
     assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/2").await.0, StatusCode::NOT_FOUND);
     assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/x").await.0, StatusCode::BAD_REQUEST);
 }
+
+/// Purpose: what a write answers says only what concerns the person who wrote: their own feed's new version (so the app syncs to
+/// at least that and reads its own write) and nothing about anyone else on the policy, such as a relative whose feed also moved.
+/// Why it matters: a write's answer that listed every feed it moved would tell one person who else can see the policy; without
+/// the version the app could show a stale screen straight after the customer's own change.
+#[tokio::test]
+async fn a_write_answers_with_the_writers_own_version_and_nobody_elses() {
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let viewer = format!("/app/v1/policies/{policy}/delegates/daughter");
+    assert_eq!(portal.write("PUT", "sub-kiri", &viewer, json!({ "access": "viewer" })).await.0, StatusCode::OK);
+    let version_of = |who: &str| portal.local.with(|s| s.data.feeds.get(&ic_core::PartyId::from(who)).map(|f| f.version));
+    let before = version_of("daughter").expect("the relative follows the policy");
+
+    // Kiri declines indexation in the app; the policy's rows move for her and for her daughter.
+    let request = json!({ "id": "r9", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, answer) = portal.write("POST", "sub-kiri", "/app/v1/requests", request).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    let version = answer["version"].as_u64().expect("the writer's own version");
+    assert_eq!(Some(version), version_of(KIRI));
+    assert!(version_of("daughter") > Some(before), "the daughter's feed moved too");
+    assert!(!answer.to_string().contains("daughter"), "and Kiri's answer does not say so: {answer}");
+    // Syncing from just before that version brings her request.
+    let changes = portal
+        .local
+        .with(|s| serde_json::to_value(s.data.feeds[&ic_core::PartyId::from(KIRI)].sync(Some(version - 1))).unwrap());
+    assert!(changes.to_string().contains("request/r9"), "{changes}");
+}

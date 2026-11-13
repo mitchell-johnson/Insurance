@@ -35,7 +35,7 @@ use crate::identity::{action_hash, Enrolment, IdentityCommand, MAX_CHALLENGE_SEC
 use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
 use crate::staff::{AccessRequest, At, Decision, Purpose, PurposeKind, StaffCommand};
-use crate::state::{ChannelState, Command, Envelope, Output, GATEWAY};
+use crate::state::{ChannelState, Command, Effect, Envelope, Output, GATEWAY};
 use crate::ui::UiConfig;
 use crate::workbench::WorkbenchCommand;
 
@@ -284,6 +284,7 @@ impl AppState {
 
     /// Propose a command and return its effects, or the module's refusal.
     async fn propose(&self, key: String, actor: Actor, command: Command) -> Result<Value, Problem> {
+        let own = actor.party().cloned();
         let envelope = Envelope {
             key,
             at: self.now(),
@@ -292,7 +293,23 @@ impl AppState {
         };
         let output = self.channel.propose(envelope).await?;
         let effects = output.result?;
-        Ok(json!({ "accepted": true, "duplicate": output.duplicate, "effects": effects }))
+        // What the caller is told: never another party's feed, sessions or
+        // control, which would say who else is on the policy. Their own
+        // feed's version is the one to sync to for reading their own write.
+        let mine = |party: &PartyId| own.as_ref() == Some(party);
+        let version = effects.iter().find_map(|e| match e {
+            Effect::FeedMoved { party, version } if mine(party) => Some(*version),
+            _ => None,
+        });
+        let effects: Vec<Effect> = effects
+            .into_iter()
+            .filter(|e| match e {
+                Effect::FeedMoved { party, .. } | Effect::Revoked { party } => mine(party),
+                Effect::ControlPassed { .. } => false,
+                _ => true,
+            })
+            .collect();
+        Ok(json!({ "accepted": true, "duplicate": output.duplicate, "effects": effects, "version": version }))
     }
 
     /// Resolve the caller to a party and check the session still stands.
