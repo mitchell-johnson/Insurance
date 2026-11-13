@@ -241,6 +241,7 @@ async fn the_hosted_module_and_its_driver_cede_a_policy_on_a_real_node() {
                 number: 1,
                 payment_ref: "ri-stmt-1".into(),
                 amount_minor: 1,
+                bank_account: None,
             },
         ),
     ];
