@@ -77,7 +77,7 @@ async function load() {
   for (const id of ["pfund", "lfund", "sfund"]) { const keep = $(id).value; put($(id), funds.map((f) => h("option", { value: f.fund }, f.fund))); if (keep) $(id).value = keep; }
   put($("errors"), table(["Error", "Fund", "Cause", "Detected", "Wrong price and its correction", "Remediation", "State", ""], errors.map((e) => [e.id, e.fund, e.cause, e.detected_on,
     Object.entries(e.prices).map(([wrong, c]) => `${wrong}: ${c ? `${c.price} (${c.material ? "material" : "immaterial"}, ${c.size})` : "not yet corrected"}`).join("; "),
-    h("pre", {}, JSON.stringify(e.remediation, null, 1)), e.closed ? `closed by ${e.closed[0]}: ${e.closed[2]}` : "open",
+    portal.details(e.remediation), e.closed ? `closed by ${e.closed[0]}: ${e.closed[2]}` : "open",
     !e.closed && can("lead") ? button("Close", $("error-msg"), async () => { const summary = window.prompt("Summary of what was done:"); if (!summary) return null; await send({ close_error: { error: e.id, summary } }); await load(); return "Closed."; }) : ""])));
   $("prepare").querySelector("button").disabled = !can("preparer");
   $("suspend").querySelector("button").disabled = !can("lead"); $("raise").querySelector("button").disabled = !can("lead");
@@ -89,7 +89,7 @@ $("prepare").addEventListener("submit", run($("prepare-msg"), async () => {
 }));
 $("show-val").addEventListener("click", run($("prepare-msg"), async () => {
   const v = await ask("valuations", { fund: $("pfund").value, pricing_date: $("pdate").value });
-  put($("valuation"), h("pre", {}, JSON.stringify(v, null, 2)));
+  put($("valuation"), portal.details(v));
 }));
 $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   const rows = await ask("prices", { fund: $("lfund").value, from: $("lfrom").value, to: $("lto").value });
@@ -109,5 +109,5 @@ signIn(R).then(async () => {
   const me = await ask("me"); roles = me.roles;
   $("roles").textContent = roles.length ? roles.map((r) => words(r.replace("unit_pricing_", ""))).join(", ") : "View only.";
   await load();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

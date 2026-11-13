@@ -117,7 +117,7 @@ async function show(id) {
   put($("c-timers"), table(["Timer", "Due", "Met", "Escalated"], Object.entries(w.timers || {}).map(([kind, [due, met, escalated]]) => [words(kind), due, met || "", cell(escalated)])));
   fields();
 }
-const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 $("lookup").addEventListener("submit", run($("c-msg"), () => show($("c-id").value)));
 $("queue").addEventListener("submit", run($("q-msg"), async () => {
   const { rows } = await ask("queue", { queue: $("q-name").value });
@@ -136,11 +136,11 @@ $("inv-show").addEventListener("click", run($("inv-msg"), async () => {
     c.case, words(c.rule), c.opened_on, c.referred_by,
     c.claims.map(([id, status, billed, provider]) => `${id} (${words(status)}, ${money(billed)}${provider ? `, ${provider}` : ""})`).join("; "),
     (c.elsewhere || []).map(([p, id]) => `${id} on partition ${p}`).join("; ") || "none",
-    c.closed ? JSON.stringify(c.closed) : ""])) : h("p", { class: "muted" }, "No cases are open to you."));
+    c.closed ? portal.text(c.closed) : ""])) : h("p", { class: "muted" }, "No cases are open to you."));
 }));
 signIn(R).then(async () => {
   const me = await ask("me");
   $("me").textContent = `You act as ${me.staff}. The ledger has ${me.partitions} partitions; a claim's actions go to the one holding it.`;
   fields();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

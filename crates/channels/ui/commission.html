@@ -30,7 +30,7 @@ async function load() {
 $("ask").addEventListener("submit", run($("ask-msg"), async () => {
   const fields = $("f").value.trim();
   const answer = await api(R, "GET", `${BASE}/${$("q").value}` + (fields ? "?" + new URLSearchParams(fields) : ""));
-  put($("answer"), h("pre", {}, JSON.stringify(answer, null, 1)));
+  put($("answer"), portal.details(answer));
 }));
 $("send").addEventListener("submit", run($("send-msg"), async () => {
   let command;
@@ -38,5 +38,5 @@ $("send").addEventListener("submit", run($("send-msg"), async () => {
   const done = await api(R, "POST", BASE + "/commands", { command, purpose: $("purpose").value });
   return done.duplicate ? "Already done." : "Done.";
 }));
-signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
+signIn(R).then(load).catch(portal.refuse);
 </script></body></html>

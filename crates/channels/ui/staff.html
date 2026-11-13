@@ -57,7 +57,7 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
     ? h("div", { class: "banner warn" }, "Whether this customer needs anything done differently could not be checked. Take care, and check again before any change.")
     : h("div", { class: "banner" }, `Serve this customer with: ${a.adjustments.map(words).join(", ") || "care"}.` + (a.review_on ? ` Reviewed ${a.review_on}.` : "") + (a.kind ? ` Reason: ${words(a.kind)}.` : "")));
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
-  put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", h("pre", {}, JSON.stringify(r.body, null, 1))])));
+  put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", portal.details(r.body)])));
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));
 }));
 $("for-customer").addEventListener("submit", run($("cust-msg"), async () => {
@@ -117,5 +117,5 @@ async function admin() {
   put($("grants"), table(["Grant", "Holder", "State", ""], view.grants.map((g) => [g.id, g.holder, words(g.state), g.state === "requested" ? h("button", { class: "quiet", on: { click: run($("admin-msg"), async () => { await api(R, "POST", "/staff/v1/access", { approve_grant: { id: g.id } }); await admin(); return "Approved."; }) } }, "Approve") : ""])));
   $("alignment").textContent = JSON.stringify(view.alignment, null, 2) + (view.external_source_available ? "" : "\nThe entitlement source is unavailable: nothing new is granted from it until it returns.");
 }
-signIn(R).catch((e) => say($("msg"), "bad", e.message));
+signIn(R).catch(portal.refuse);
 </script></body></html>
