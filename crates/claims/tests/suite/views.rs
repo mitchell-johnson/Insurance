@@ -289,3 +289,29 @@ fn the_working_view_shows_the_work_and_not_the_clinical_file() {
         ic_claims::report::Reply::Work(Some(_))
     ));
 }
+
+/// Purpose: the policy status question lists every claim on one policy, oldest first, with
+/// only its ID, status and dates, and nothing for a policy with no claims.
+/// Why it matters: this is what an adviser or an employer is shown (Mitchell's decision of
+/// 13 November 2026: status, never cause). A type, reason or amount here would tell an employer
+/// about an employee's health.
+#[test]
+fn the_policy_status_shows_an_adviser_each_claim_without_its_cause() {
+    use ic_claims::report::{Question, Reply};
+    let mut w = World::new();
+    w.open_claim("c-2");
+    w.assess("c-2", "CC-0003");
+    w.advance(2);
+    w.open_claim("c-1");
+    w.benefit_in_payment("ip-1");
+    let Reply::PolicyStatus(rows) = w.state.answer(&Question::PolicyStatus { policy: "pol-1".into() }, d(2027, 3, 5)) else {
+        panic!("a policy status question gets a policy status reply");
+    };
+    let ids: Vec<&str> = rows.iter().map(|r| r.claim.as_str()).collect();
+    assert_eq!(ids, ["c-2", "c-1"], "oldest first, and only this policy's claims");
+    let json = serde_json::to_string(&rows).expect("serialises");
+    for hidden in ["CC-0003", "cause", "trauma", "Trauma", "minor", "party"] {
+        assert!(!json.contains(hidden), "{hidden} leaked: {json}");
+    }
+    assert_eq!(w.state.policy_status("pol-none"), vec![]);
+}
