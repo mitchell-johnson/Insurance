@@ -555,6 +555,16 @@ fn a_benefit_ends_closes_and_can_recur() {
         reserve_minor: 20_000,
         actor: actor(who),
     };
+    // A recurrence inside the window serves no new waiting period, whatever the cover's is.
+    w.core.cover(
+        "pol-2",
+        "ip",
+        ic_claims::port::CoverFacts {
+            sum_insured_minor: 4_000,
+            waiting_days: 91,
+            ..facts("income_protection")
+        },
+    );
     w.on(d(2027, 6, 1));
     w.ok(recur("ben"));
     let c = w.claim("ip-1");
@@ -1726,4 +1736,99 @@ fn a_benefit_is_suspended_in_custody_and_resumes_on_release() {
     w.benefit_in_payment("ip-1");
     w.conversation("ip-1", "talk-custody");
     assert_eq!(w.undecided("ip-1", "ana", suspend("vault-sentence"), "R-CUSTODY"), "paid_in_custody");
+}
+
+/// Purpose: a claim admitted while the Official Assignee's insolvency interest stands on the
+/// policy pays any lender first as usual, but holds what the owner or the estate would get:
+/// neither a payment nor a benefit run releases it until legal records a direction naming who
+/// to pay, and then only to that party.
+/// Why it matters: decision 4 of 13 November (JNT-029). Whether a bankrupt's policy money belongs
+/// to the Official Assignee is a legal question decided case by case; paying the owner first
+/// could leave the insurer paying twice.
+#[test]
+fn proceeds_are_held_under_an_insolvency_interest_until_legal_directs() {
+    use ic_claims::port::{CoverFacts, Interest};
+    let mut w = World::new();
+    w.core.cover(
+        "pol-1",
+        "trauma",
+        CoverFacts {
+            interests: vec![
+                Interest {
+                    party: "official-assignee".into(),
+                    extent_minor: None,
+                    priority: 2,
+                    insolvency: true,
+                },
+                Interest {
+                    party: "bank".into(),
+                    extent_minor: Some(50_000),
+                    priority: 1,
+                    insolvency: false,
+                },
+            ],
+            ..facts("trauma")
+        },
+    );
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    let c = w.claim("c-1");
+    let due: Vec<_> = c.interests.iter().map(|i| (i.party.as_str(), i.owed_minor)).collect();
+    assert_eq!(due, vec![("bank", 50_000)], "the Official Assignee is not paid out as a lender");
+    assert!(c.insolvency_hold);
+    assert_eq!(w.core.noticed("proceeds_held").len(), 1);
+    w.ok(Command::PayInterest {
+        claim: "c-1".into(),
+        payment_ref: "i-1".into(),
+        party: "bank".into(),
+        actor: actor("ana"),
+    });
+    assert_eq!(w.refused(pay("c-1", "ana", "p-1", 150_000, None)), "held_for_direction");
+
+    let direct = |who: &str, party: &str| Command::DirectProceeds {
+        claim: "c-1".into(),
+        party: party.into(),
+        direction: "vault-direction-1".into(),
+        actor: actor(who),
+    };
+    assert_eq!(w.refused(direct("ana", "party-claimant")), "legal_only");
+    // Directed to someone other than the verified payee: still held.
+    w.ok(direct("lex", "official-assignee"));
+    assert_eq!(w.refused(pay("c-1", "ana", "p-1", 150_000, None)), "held_for_direction");
+    w.ok(direct("lex", "party-claimant"));
+    w.ok(pay("c-1", "ana", "p-1", 150_000, None));
+    assert_eq!(w.claim("c-1").status, Status::Paid);
+
+    // A benefit in payment is left out of runs until the direction, then paid as usual.
+    let mut w = World::new();
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            interests: vec![Interest {
+                party: "official-assignee".into(),
+                extent_minor: None,
+                priority: 1,
+                insolvency: true,
+            }],
+            ..facts("income_protection")
+        },
+    );
+    w.benefit_in_payment("ip-1");
+    let run = |id: &str| Command::PrepareRun {
+        run: id.into(),
+        kind: RunKind::Benefit,
+        benefit_date: d(2027, 3, 1),
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(run("run-1")), "nothing_to_pay", "nothing is paid while held");
+    w.ok(Command::DirectProceeds {
+        claim: "ip-1".into(),
+        party: "party-claimant".into(),
+        direction: "vault-direction-2".into(),
+        actor: actor("lex"),
+    });
+    w.pay_run("run-2", d(2027, 3, 1));
+    assert_eq!(w.state.runs["run-2"].count, 1);
 }

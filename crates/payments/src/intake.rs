@@ -96,6 +96,9 @@ impl PaymentsState {
             source: waiting.source.clone(),
             amount_minor: waiting.amount_minor,
         });
+        if let Some(claim) = &waiting.claim {
+            self.claim_left_forecast(claim);
+        }
         if let Some(run) = &waiting.run {
             let known = self.claims_runs.entry(run.clone()).or_default();
             known.outstanding.insert(waiting.payment.clone());

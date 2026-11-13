@@ -702,6 +702,13 @@ pub struct Claim {
     /// payee changed their mind: it goes out with the next payment.
     #[serde(default)]
     pub interest_owed_again_minor: i64,
+    /// Admitted while an insolvency interest stood on the policy: what is
+    /// payable to the owner or the estate is held until a legal direction.
+    #[serde(default)]
+    pub insolvency_hold: bool,
+    /// The party the legal direction says to pay, with its vault reference.
+    #[serde(default)]
+    pub directed_to: Option<(String, String)>,
     /// Premiums for periods starting on or after this date are paid from
     /// claims expense while the benefit runs.
     #[serde(default)]
@@ -712,6 +719,12 @@ pub struct Claim {
 }
 
 impl Claim {
+    /// Whether proceeds may go to `party`: always, unless an insolvency
+    /// interest holds them, and then only to whom a legal direction names.
+    pub fn directed(&self, party: &str) -> bool {
+        !self.insolvency_hold || self.directed_to.as_ref().is_some_and(|(p, _)| p == party)
+    }
+
     /// The person the claim is about, for anyone deciding who may see it.
     /// A claim on a living person's health is about the life insured, even
     /// where a company owns the policy and is paid the benefit; a death claim

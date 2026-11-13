@@ -18,6 +18,7 @@ pub mod invest;
 pub mod loadings;
 pub mod machine;
 pub mod nomination;
+pub mod owner_hold;
 pub mod payments;
 pub mod policy;
 pub mod premium;

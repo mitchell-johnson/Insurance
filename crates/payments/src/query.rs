@@ -114,6 +114,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
+        "incident" => found(state.incidents.get(text(&question, "incident")?)),
+        "funding_forecast" => Ok(state.funding_forecast(date(&question, "from")?, date(&question, "to")?)),
         "notices" => {
             let role = serde_json::from_value(question["role"].clone()).map_err(|_| "the question needs a role".to_string())?;
             found(Some(state.open_notices(role)))
@@ -214,6 +216,14 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                     payable: Some(ic_core::PayableKind::Benefit),
                 }),
             }
+        }
+        // Claims admitted a claim, or closed one: the funding forecast.
+        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind == "claim_admitted" => crate::Command::ClaimAdmitted {
+            claim: subject.clone(),
+            amount_minor: detail.get("admitted_minor").and_then(|v| v.parse().ok()).unwrap_or(0),
+        },
+        ic_core::Event::Module { module, kind, subject, .. } if module == "claims" && kind == "claim_closed" => {
+            crate::Command::ClaimClosed { claim: subject.clone() }
         }
         // Claims submitted a run, with the net total it released.
         ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind == "run_submitted" => crate::Command::ClaimsRunSubmitted {

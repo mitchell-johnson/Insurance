@@ -157,6 +157,24 @@ pub enum Command {
         run: String,
         submitted_minor: i64,
     },
+    /// Many collections failed together for a reason that is not the
+    /// payers' doing (COL-024).
+    DeclareIncident {
+        incident: Id,
+        authorities: BTreeSet<Id>,
+        from: NaiveDate,
+        to: NaiveDate,
+        reason: String,
+    },
+    /// Claims admitted a claim (`claim_admitted`), for the funding forecast.
+    ClaimAdmitted {
+        claim: String,
+        amount_minor: i64,
+    },
+    /// Claims closed a claim (`claim_closed`): nothing more is forecast.
+    ClaimClosed {
+        claim: String,
+    },
     /// Someone holding a notice's role closes it with what they did.
     CloseNotice {
         notice: u64,
@@ -509,6 +527,9 @@ pub enum Event {
     NoticeClosed {
         notice: u64,
     },
+    IncidentDeclared {
+        incident: Id,
+    },
     /// The customer master's answer about a party's hold changed.
     CustomerHoldRecorded {
         party: String,
@@ -583,6 +604,12 @@ pub struct PaymentsState {
     /// Cash owed between statutory funds (PAY-010).
     #[serde(default)]
     pub sweeps: crate::sweep::Sweeps,
+    /// Collection incidents (COL-024).
+    #[serde(default)]
+    pub incidents: BTreeMap<Id, crate::incident::Incident>,
+    /// Claims admitted and not yet released for payment (PAY-013).
+    #[serde(default)]
+    pub admitted: BTreeMap<String, crate::forecast::Admitted>,
     /// Work for people: every notice raised, until closed (`notices.rs`).
     #[serde(default)]
     pub notices: crate::notices::Notices,
@@ -683,6 +710,19 @@ impl PaymentsState {
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
             Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::DeclareIncident {
+                incident,
+                authorities,
+                from,
+                to,
+                reason,
+            } => self.declare_incident(tx, incident, authorities, from, to, reason),
+            Command::ClaimAdmitted { claim, amount_minor } => self.claim_admitted(tx, &claim, amount_minor),
+            Command::ClaimClosed { claim } => {
+                tx.need(Role::Service)?;
+                self.claim_left_forecast(&claim);
+                Ok(())
+            }
             Command::CloseNotice { notice, action } => self.close_notice(tx, notice, action),
             Command::ProposeFundSweep { as_at } => self.propose_fund_sweep(tx, as_at),
             Command::ClaimsRunSubmitted { run, submitted_minor } => self.claims_run_submitted(tx, &run, submitted_minor),

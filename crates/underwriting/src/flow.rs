@@ -514,6 +514,20 @@ pub(crate) fn make_effective(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: 
         life_mut(p, life)?.stage = Stage::Accepted;
     } else {
         offer(p, life, cfg, cx)?;
+        // Cover declined or deferred beside cover offered: the person is
+        // told of the decline in its own notice, with the reasons they may be
+        // told and how to ask for review, as for a decline of everything.
+        if d.terms.iter().any(|t| matches!(t.outcome, CoverOutcome::Decline | CoverOutcome::Defer { .. })) {
+            let reasons = told(cfg, p, &d);
+            let party = life_mut(p, life)?.party.clone();
+            cx.effect(Effect::Notify {
+                to: Recipient::Party { party },
+                kind: NoticeKind::Declined,
+                proposal,
+                life: Some(life.clone()),
+                reasons,
+            });
+        }
     }
     settle(cfg, p, cx)
 }

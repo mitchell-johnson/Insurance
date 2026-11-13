@@ -129,6 +129,10 @@ pub enum ConsentKind {
     /// for their underwritten cover on an itemised invoice. A loading implies
     /// health, so without this the employer learns only that cover is in place.
     EmployerSeesLoading,
+    /// The life has read the replacement disclosure (what is kept, what is
+    /// gained, the premium compared, and that the adviser earns nothing on
+    /// the amount replaced) and confirms it with a signed step.
+    ReplacementDisclosure,
 }
 
 /// Cover the insurer already holds on the person, from the life index.
@@ -643,6 +647,10 @@ pub struct Proposal {
     /// in place from the employer to the member, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reoffers: Vec<Reoffer>,
+    /// Advised as a replacement of cover in force: each life confirms the
+    /// replacement disclosure before its disclosure is taken.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replacement: bool,
 }
 
 /// An offer to a scheme member to pay the loading on their excess cover

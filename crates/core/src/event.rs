@@ -214,6 +214,14 @@ pub enum Event {
         from: PolicyStatus,
         to: PolicyStatus,
     },
+    /// Underwriting's decision to reinstate a lapsed policy was recorded,
+    /// or replaced by a later one. Reinstatement on payment can go ahead
+    /// while it can be relied on.
+    ReinstatementApproved {
+        policy: PolicyId,
+        reference: String,
+        valid_until: NaiveDate,
+    },
     StandingChanged {
         policy: PolicyId,
         from: Option<Standing>,
@@ -729,6 +737,12 @@ pub enum Event {
     /// released.
     Interest(crate::interest::InterestEvent),
 
+    /// The owner's own hold on money going out began or ended on a policy.
+    OwnerHoldChanged {
+        policy: PolicyId,
+        held: bool,
+        reference: String,
+    },
     /// A nomination for a death benefit was recorded: a first one, a change
     /// or a removal (no nominees). Parties are opaque IDs.
     NominationRecorded {

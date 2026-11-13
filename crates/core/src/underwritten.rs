@@ -443,7 +443,8 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
 /// Underwriting's decision on a lapsed policy, kept with the lapse until the
 /// policy is reinstated or the window closes. A later decision replaces an
 /// earlier one.
-pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, today: NaiveDate, spec: ReinstatementTerms) -> Result<(), Reject> {
+pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: ReinstatementTerms) -> Result<(), Reject> {
+    let today = ctx.date;
     let Some(lapse) = policy.lapse.as_ref().filter(|_| policy.status == PolicyStatus::Lapsed) else {
         return Err(Reject::new("not_lapsed", "only a lapsed policy can be reinstated"));
     };
@@ -473,12 +474,18 @@ pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, toda
             return Err(Reject::new("invalid_loading", "a loading cannot be negative"));
         }
     }
-    if let Some(lapse) = policy.lapse.as_mut() {
-        lapse.approval = Some(ReinstatementApproval {
-            reference: spec.reference,
-            valid_until: spec.valid_until,
-            terms: spec.terms,
+    let approval = ReinstatementApproval {
+        reference: spec.reference,
+        valid_until: spec.valid_until,
+        terms: spec.terms,
+    };
+    if let Some(lapse) = policy.lapse.as_mut().filter(|l| l.approval.as_ref() != Some(&approval)) {
+        ctx.emit(Event::ReinstatementApproved {
+            policy: policy.id.clone(),
+            reference: approval.reference.clone(),
+            valid_until: approval.valid_until,
         });
+        lapse.approval = Some(approval);
     }
     Ok(())
 }

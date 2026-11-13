@@ -608,7 +608,8 @@ fn a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms() 
 /// any other caller; on a policy that is not lapsed; with no reference; already out of date;
 /// for a cover or a life the policy does not have; for a negative loading; and after the
 /// reinstatement window has closed. Inside the product's evidence-free days, a decision that
-/// carries terms is still applied when the policy is reinstated.
+/// carries terms is still applied when the policy is reinstated. A decision recorded is
+/// announced once, so collections can retry the reinstatement it was waiting on.
 /// Why it matters: the decision is what lets a risk back onto the books after months off
 /// them, and it can change the terms a claim is assessed on. Each refusal is a way of
 /// recording one that nobody made, or that could not be applied when the day came.
@@ -646,8 +647,20 @@ fn a_reinstatement_decision_that_cannot_stand_is_refused() {
 
     // Five days lapsed is inside the shipped product's evidence-free days, but terms
     // underwriting decided still apply.
+    c.take_events();
     c.submit(0, "underwriting", approve(&id, good_until, vec![loaded("life-1", "life", "0.25")]))
         .unwrap();
+    // Collections is told, so it can retry a reinstatement it was waiting on; a repeat tells nobody.
+    let approved = |c: &mut Cluster| {
+        c.take_events()
+            .into_iter()
+            .filter(|e| matches!(&e.event, ic_core::event::Event::ReinstatementApproved { reference, valid_until, .. } if reference == "uw-decision-3" && *valid_until == good_until))
+            .count()
+    };
+    assert_eq!(approved(&mut c), 1);
+    c.submit(0, "underwriting", approve(&id, good_until, vec![loaded("life-1", "life", "0.25")]))
+        .unwrap();
+    assert_eq!(approved(&mut c), 0);
     pay(&mut c, &id, "catch-up");
     c.submit(0, "collections", reinstate(&id)).unwrap();
     let policy = c.state(0).policies[&id].clone();

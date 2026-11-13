@@ -201,7 +201,7 @@ fn a_released_provider_cost_waits_like_a_benefit() {
         ("claim-cost:clm-1:clm-1-cost-1", 450_00, "")
     );
     assert_eq!(held.payable, Some(PayableKind::Benefit));
-    assert!(react(&claims_event("3-81", "claim_admitted", detail)).is_empty());
+    assert!(react(&claims_event("3-81", "claim_reserved", detail)).is_empty());
 
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     desk.ok(&mia(), take("r1", &["clm-1-cost-1"]));
@@ -632,4 +632,76 @@ fn a_held_payout_waits_only_once_directed_and_for_the_directed_party() {
         (waiting.source.as_str(), waiting.payee.as_str(), waiting.amount_minor),
         ("payout:pol-1:po-9", "party-oa", 500_00)
     );
+}
+
+fn claims_note(id: &str, kind: &str, claim: &str, detail: serde_json::Value) -> ic_payments::Envelope {
+    let event = json!({"module": {"module": "claims", "kind": kind, "subject": claim, "detail": detail}});
+    let record = serde_json::from_value(json!({"id": id, "partition": 3, "seq": 90, "business_date": "2027-11-15", "log_index": 950, "event": event}));
+    react(&record.unwrap()).remove(0)
+}
+
+/// Purpose: PAY-013. A claim admitted for at least the pre-advice threshold
+/// is flagged to treasury the moment claims admits it, once; the funding
+/// forecast carries admitted claims, payments waiting and runs by value
+/// date; a claim leaves the forecast when its payment is released or the
+/// claim closes; a periodic benefit admitted at nothing is not forecast.
+/// Why it matters: a $600,000 death claim paid from an account holding
+/// less is refused at approval, days after the money could have been
+/// moved. Treasury needs to hear when the claim is admitted, not when the
+/// run fails.
+#[test]
+fn a_large_admitted_claim_is_flagged_and_forecast() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    let mut n = 9100;
+    let mut apply = |desk: &mut Desk, envelope: ic_payments::Envelope| {
+        n += 1;
+        desk.state.apply(n, envelope).unwrap()
+    };
+    apply(
+        &mut desk,
+        claims_note("3-501", "claim_admitted", "clm-big", json!({"admitted_minor": "60000000"})),
+    );
+    apply(
+        &mut desk,
+        claims_note("3-502", "claim_admitted", "clm-big", json!({"admitted_minor": "60000000"})),
+    );
+    apply(
+        &mut desk,
+        claims_note("3-503", "claim_admitted", "clm-small", json!({"admitted_minor": "100000"})),
+    );
+    apply(
+        &mut desk,
+        claims_note("3-504", "claim_admitted", "clm-ip", json!({"admitted_minor": "0", "monthly_minor": "400000"})),
+    );
+    let flagged: Vec<_> = desk.state.outbox.values().filter(|e| e.key.starts_with("large-claim-")).collect();
+    assert_eq!(flagged.len(), 1);
+    assert_eq!(
+        answer(&desk.state, json!({"q": "notices", "role": "treasury"})).unwrap()[0][1]["subject"],
+        "large_claim_admitted"
+    );
+
+    desk.prepare("r1", RunType::Commission, d(2027, 11, 16));
+    desk.add("r1", vec![pay("i1", "p1", 300_00)]);
+    let ask = |desk: &Desk| answer(&desk.state, json!({"q": "funding_forecast", "from": "2027-11-15", "to": "2027-11-30"})).unwrap();
+    let forecast = ask(&desk);
+    assert_eq!(
+        (forecast["admitted_minor"].clone(), forecast["large_claims"][0]["claim"].clone()),
+        (json!(601_000_00), json!("clm-big"))
+    );
+    assert_eq!(
+        forecast["runs"],
+        json!([{"value_date": "2027-11-16", "run_type": "commission", "fund": "sf1", "total_minor": 300_00}])
+    );
+
+    // Released for payment: it is waiting money now, not a forecast.
+    let detail = json!({"policy": "pol-1", "payment_ref": "clm-big/1", "net_minor": "60000000", "payee": "p1"});
+    apply(&mut desk, claims_note("3-505", "claim_paid", "clm-big", detail));
+    apply(&mut desk, claims_note("3-506", "claim_closed", "clm-small", json!({"outcome": "declined"})));
+    let forecast = ask(&desk);
+    assert_eq!(
+        (forecast["admitted_minor"].clone(), forecast["waiting_minor"].clone()),
+        (json!(0), json!(600_000_00))
+    );
+    assert!(answer(&desk.state, json!({"q": "funding_forecast", "from": "2027-11-15"})).is_err());
 }

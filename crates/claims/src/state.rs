@@ -404,6 +404,12 @@ impl ClaimsState {
             Command::ExclusionControl { after } => self.exclusion_control(cx, after),
             Command::RecordDeath { party, date_of_death } => self.record_death(cx, &party, date_of_death),
             Command::RetractDeath { party, date_of_death } => self.retract_death(cx, &party, date_of_death),
+            Command::DirectProceeds {
+                claim,
+                party,
+                direction,
+                actor,
+            } => self.direct_proceeds(cx, &claim, party, direction, &actor),
             Command::OfferLateInterest { claim, actor } => self.offer_late_interest(cx, &claim, &actor),
             Command::DeclineLateInterest { claim, vault_ref, actor } => self.decline_late_interest(cx, &claim, vault_ref, &actor),
             Command::WithdrawInterestDecline { claim, actor } => self.withdraw_interest_decline(cx, &claim, &actor),

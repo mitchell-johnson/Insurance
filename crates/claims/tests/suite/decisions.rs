@@ -590,7 +590,7 @@ fn a_person_admitting_a_health_claim_is_bound_by_the_same_limits() {
     w.decided("h-1", "ana", World::admit_lump(None), "R-OK");
     let c = w.claim("h-1");
     assert_eq!((c.admitted_minor, c.payable_minor), (440, 400));
-    assert_eq!(w.state.health_used["pol-3/life-1/dental/2027-01-01"], 440);
+    assert_eq!(w.state.health_used["pol-3/life-1/health/dental/2027-01-01"], 440);
 
     w.ok(Command::Notify(Box::new(dental("pre-1", 900, true))));
     w.assign("pre-1", "ana");
