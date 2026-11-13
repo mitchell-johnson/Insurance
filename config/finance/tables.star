@@ -24,6 +24,11 @@ def by_age_sex_smoker(kind, rate_max):
         "change_block_factor": 3,
     }
 
+def to_age(schema, last):
+    """The same schema for a table that stops at an earlier age, as a cover that expires does."""
+    schema["ages"] = [schema["ages"][0], last]
+    return schema
+
 def per_life_by_age(rate_max):
     return {
         "kind": "annual_premium_per_life",
@@ -43,6 +48,8 @@ def per_life_by_age(rate_max):
 TABLE_SCHEMAS = {
     "life-base": by_age_sex_smoker("mortality_per_mille", "1000"),
     "trauma-base": by_age_sex_smoker("morbidity_per_mille", "1000"),
+    # Income protection: per thousand of monthly benefit, to the cover's expiry at 65.
+    "income-base": to_age(by_age_sex_smoker("disability_income_per_mille", "10000"), 67),
     "health-base": {
         "kind": "annual_premium_per_life",
         "version": 1,

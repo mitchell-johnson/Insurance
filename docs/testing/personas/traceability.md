@@ -227,7 +227,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-037 | full | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit`<br>`claims/tests/suite/book.rs::late_interest_is_offered_and_declined_only_by_an_informed_payee`<br>`sim/tests/claims.rs::declined_late_interest_is_reversed_in_its_own_entry` |
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | part | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death` |
-| CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release` |
+| CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release`<br>`product/tests/products.rs::income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting`<br>`sim/tests/claims.rs::the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting` |
 | CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
 
 ## RI Reinsurance
