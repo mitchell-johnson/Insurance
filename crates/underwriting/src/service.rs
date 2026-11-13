@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use crate::command::{Applied, Envelope, Reject};
 use crate::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, Refusal, Reinsurer, Schemes, Underwriting};
-use crate::notices::StaffNotices;
+use crate::notices::{Letters, Notices};
 use crate::progress::ProgressRow;
 use crate::special::Query;
 
@@ -103,6 +103,18 @@ pub fn channels_envelope(key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> 
         "at": at.timestamp(),
         "actor": {"kind": "module", "id": crate::progress::MODULE},
         "command": {"publish_rows": {"rows": rows, "remove": []}},
+    })
+}
+
+/// A command to the documents module, as it reads one: sent by this module
+/// under its own name, by the driver, at the driver's clock.
+pub fn documents_envelope(key: &str, at: DateTime<Utc>, command: Value) -> Value {
+    serde_json::json!({
+        "key": key,
+        "caller": crate::progress::MODULE,
+        "actor": "underwriting-driver",
+        "at": at,
+        "command": command,
     })
 }
 
@@ -189,6 +201,13 @@ impl Core for Cluster {
     }
 }
 
+impl Letters for Cluster {
+    async fn request(&self, key: &str, at: DateTime<Utc>, command: Value) -> Result<Result<(), Refusal>, DriverError> {
+        let answered: Answered<Reject> = self.to_module("documents", &documents_envelope(key, at, command)).await?;
+        Ok(answered.result.map_err(|r| Refusal::new(&r.code, r.message)))
+    }
+}
+
 impl Channels for Cluster {
     async fn publish(&self, key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> Result<Result<(), Refusal>, DriverError> {
         let answered: AnsweredWith<Reject> = self.to_module("channels", &channels_envelope(key, at, rows)).await?;
@@ -233,11 +252,14 @@ pub async fn serve(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> 
     let config = Config::from_lookup(&get)?;
     let auth = ClusterAuth::from_lookup(&get, read)?;
     let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
-    let staff = StaffNotices {
-        staff: EventHubsSink::new(&config.event_hubs, &config.event_hub, credential),
-    };
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
-    let driver = connect(client, &config, Utc::now, staff).await?;
+    let notices = Notices {
+        staff: EventHubsSink::new(&config.event_hubs, &config.event_hub, credential),
+        // Letters go to a module, which needs no partition count.
+        letters: Cluster::new(client.clone(), 1, config.patience),
+        clock: Utc::now,
+    };
+    let driver = connect(client, &config, Utc::now, notices).await?;
     tracing::info!(?config, "underwriting driver started");
     driver.run(config.cycle_every, config.sweep_page, stop, |_, _| {}).await;
     tracing::info!("underwriting driver stopped");

@@ -51,6 +51,7 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
 | `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
 | `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
+| `GET /app/v1/documents/{id}/pdf` | One of your own documents (one you own or were sent a copy of), as a PDF. Anyone else's is 404, the same as one that does not exist. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign` | For the person insured on that proposal: what to sign for their answers (`{step, answers, adviser_entered}`, `step` being `disclosure` or `interview`). The underwriting intake checks the answers and keeps nothing. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures` | From an enrolled device: the same answers with `message` (as `to-sign` gave it) and `signature` (the device key's, over those bytes). |
 
@@ -123,6 +124,10 @@ One place to see and resolve money held from an adviser, a provider or any other
 | --- | --- |
 | `GET /staff/v1/replacements` | Every match, and whether you may decide. |
 | `POST /staff/v1/replacements/decide` | Decide a disputed match: `replacement: true` takes the held commission back; `false` makes the layer new business from now. |
+
+### Documents
+
+`GET /staff/v1/documents/{id}/pdf?purpose=...` downloads a document for staff holding `documents.download`, with the purpose logged by the documents module. Clinical documents are refused (403) and stay with the claims team's tools. Customers use `GET /app/v1/documents/{id}/pdf`. Both call the documents service (`docs/documents.md`, "Downloading") with the portal's Entra token (`IC_DOCUMENTS_URL`, `IC_DOCUMENTS_SCOPE`; app roles `portal` and `staff`), naming the party, or the staff member and purpose. The PDF is passed back with `Cache-Control: no-store` and never kept. A destroyed document is 410; the service not configured or unreachable is 503.
 
 ## The complaints and conduct workbench
 

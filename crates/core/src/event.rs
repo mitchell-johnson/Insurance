@@ -99,6 +99,10 @@ pub struct LifeInfo {
     pub smoker: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupation_class: Option<String>,
+    /// The scheme benefit category the member is in, where the scheme has
+    /// them: what a category rate table prices on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 impl LifeInfo {
@@ -111,6 +115,7 @@ impl LifeInfo {
             sex: None,
             smoker: None,
             occupation_class: None,
+            category: None,
         }
     }
 
@@ -123,6 +128,7 @@ impl LifeInfo {
             sex: factors.and_then(|f| f.sex),
             smoker: factors.and_then(|f| f.smoker),
             occupation_class: factors.and_then(|f| f.occupation_class.clone()),
+            category: factors.and_then(|f| f.category.clone()),
         }
     }
 }
@@ -393,6 +399,27 @@ pub enum Event {
         arrangement: String,
         /// What is still owed of the premium the arrangement was for.
         outstanding_minor: i64,
+    },
+    /// A hardship override was applied: `share_bps` of the premium is
+    /// billed for the days from `from` up to `to`. `adjusted_minor` is the
+    /// credit on the period already billed, zero or negative.
+    HardshipGranted {
+        policy: PolicyId,
+        hardship: String,
+        from: NaiveDate,
+        to: NaiveDate,
+        share_bps: u32,
+        adjusted_minor: i64,
+    },
+    /// A hardship override was ended before its planned end. The full
+    /// premium is billed from `on`; `adjusted_minor` is the charge for the
+    /// rest of the period already billed, zero or positive.
+    HardshipEnded {
+        policy: PolicyId,
+        hardship: String,
+        on: NaiveDate,
+        planned_to: NaiveDate,
+        adjusted_minor: i64,
     },
     /// A member's own cover ended because the member did not pay for it.
     /// Each layer also has its `LayerEnded`. The cover the employer pays

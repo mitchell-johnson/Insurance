@@ -895,6 +895,9 @@ async fn representatives_act_only_within_their_authority() {
         add("r0", "attorney", "2026-03-01", None, json!(["everything"]), "enduring_power_of_attorney"),
         add("r0", "attorney", "2026-03-01", None, json!("view"), "enduring_power_of_attorney"),
         add("r0", "attorney", "2026-03-01", None, json!(["view"]), "a handshake"),
+        json!({ "command": "add_relationship", "id": "r0", "kind": "attorney",
+                "target": { "kind": "party", "id": donor }, "valid_from": "2026-03-01",
+                "attributes": { "basis": "enduring_power_of_attorney", "scope": ["view"] } }),
     ] {
         let (status, _) = w.command(&attorney, "staff", bad).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);

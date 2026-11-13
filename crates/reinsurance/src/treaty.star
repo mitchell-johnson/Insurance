@@ -20,8 +20,8 @@ def surplus(retention, automatic_limit):
 def excess_of_loss(retention, limit):
     return {"kind": "excess_of_loss", "retention_minor": retention, "limit_minor": limit}
 
-def reinsurer(id, share):
-    return {"reinsurer": id, "share": share}
+def reinsurer(id, share, party = None):
+    return {"reinsurer": id, "share": share, "party": party}
 
 def rate_table_premium(table):
     return {"kind": "rate_table", "table": table}

@@ -268,6 +268,9 @@ pub struct FakeCore {
     pub unreachable: std::sync::Mutex<bool>,
     /// Proposals go unanswered.
     pub lost: std::sync::Mutex<bool>,
+    /// The directory refuses commands that mention this party.
+    pub refuse_party: std::sync::Mutex<Option<String>>,
+    pub directed: std::sync::Mutex<Vec<(String, Value)>>,
     pub proposed: std::sync::Mutex<Vec<(u16, String, Value)>>,
 }
 
@@ -290,6 +293,22 @@ impl ic_customers::relay::Core for FakeCore {
         if *self.refuse.lock().unwrap() == Some(partition) {
             return Ok(Some("not_open".into()));
         }
+        Ok(None)
+    }
+}
+
+impl ic_customers::relay::Directory for FakeCore {
+    async fn direct(&self, key: &str, command: &ic_channels::directory::DirectoryCommand) -> Result<Option<String>, String> {
+        if *self.lost.lock().unwrap() {
+            return Err("no answer".into());
+        }
+        let command = serde_json::to_value(command).unwrap();
+        if let Some(p) = self.refuse_party.lock().unwrap().as_deref() {
+            if command.to_string().contains(p) {
+                return Ok(Some("unknown_policy: no such policy".into()));
+            }
+        }
+        self.directed.lock().unwrap().push((key.to_string(), command));
         Ok(None)
     }
 }

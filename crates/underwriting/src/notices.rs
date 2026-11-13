@@ -10,17 +10,22 @@
 //! is read more widely than that.
 //!
 //! Letters to a customer or an adviser are documents, which the documents
-//! module renders and delivers; until it has a door for them they are parked
-//! with the reason, as are evidence requests and delegate files.
+//! module renders and delivers: each is a `request_letter` to it under the
+//! request `uw:{outbox number}`, carrying the kind, the recipient, the
+//! proposal, the life and the reason codes the person may be told, and
+//! nothing clinical. A refusal parks the letter for a person. Evidence
+//! requests and delegate files have no receiver yet and are parked.
 
 use std::future::Future;
+
+use chrono::{DateTime, Utc};
 
 use ic_azure::eventhubs::EventHubsSink;
 use ic_azure::AzureError;
 use serde_json::{json, Value};
 
 use crate::command::{Effect, Recipient};
-use crate::driver::{DriverError, Forward, NothingConnected};
+use crate::driver::{DriverError, Forward, NothingConnected, Refusal};
 
 /// Where notices for staff are published.
 pub trait StaffFeed: Send + Sync {
@@ -40,13 +45,67 @@ pub fn notice_id(seq: u64) -> String {
     format!("underwriting-notice:{seq}")
 }
 
-/// Staff notices to `staff`; everything else as with nothing connected.
-#[derive(Clone)]
-pub struct StaffNotices<S> {
-    pub staff: S,
+/// The documents module, which renders and delivers letters.
+pub trait Letters: Send + Sync {
+    /// Send one `request_letter` command. `key` is the same on every try.
+    fn request(&self, key: &str, at: DateTime<Utc>, command: Value) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
 }
 
-impl<S: StaffFeed> Forward for StaffNotices<S> {
+/// No documents module: letters are parked with the reason.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoLetters;
+
+impl Letters for NoLetters {
+    async fn request(&self, _key: &str, _at: DateTime<Utc>, _command: Value) -> Result<Result<(), Refusal>, DriverError> {
+        Ok(Err(Refusal::new("not_connected", "correspondence is not connected to underwriting")))
+    }
+}
+
+/// The request a letter goes under at the documents module.
+pub fn letter_request(seq: u64) -> String {
+    format!("uw:{seq}")
+}
+
+/// Staff notices to `staff`, letters to `letters`; everything else as with
+/// nothing connected.
+#[derive(Clone)]
+pub struct Notices<S, L> {
+    pub staff: S,
+    pub letters: L,
+    pub clock: fn() -> DateTime<Utc>,
+}
+
+impl<S: StaffFeed, L: Letters> Notices<S, L> {
+    /// `recipient` is in the documents module's shape, which names the variant outside.
+    async fn letter(&self, seq: u64, recipient: Value, effect: &Effect) -> Result<Option<String>, DriverError> {
+        let Effect::Notify {
+            kind, proposal, life, reasons, ..
+        } = effect
+        else {
+            return NothingConnected.forward(seq, effect).await;
+        };
+        let at = (self.clock)();
+        let request = letter_request(seq);
+        let command = json!({"request_letter": {
+            "request": request,
+            "kind": kind,
+            "recipient": recipient,
+            "policy": null,
+            "subject": proposal,
+            "life": life,
+            "reasons": reasons,
+            "detail": {},
+            "business_date": at.date_naive(),
+        }});
+        Ok(match self.letters.request(&request, at, command).await? {
+            Ok(()) => None,
+            Err(r) if r.code == "not_connected" => Some(r.message),
+            Err(r) => Some(format!("documents refused the letter: {}: {}", r.code, r.message)),
+        })
+    }
+}
+
+impl<S: StaffFeed, L: Letters> Forward for Notices<S, L> {
     async fn forward(&self, seq: u64, effect: &Effect) -> Result<Option<String>, DriverError> {
         let Effect::Notify { to, kind, proposal, life, .. } = effect else {
             return NothingConnected.forward(seq, effect).await;
@@ -55,7 +114,8 @@ impl<S: StaffFeed> Forward for StaffNotices<S> {
             Recipient::Underwriter { underwriter } => json!({"underwriter": underwriter}),
             Recipient::QueueLead { queue } => json!({"queue_lead": queue}),
             Recipient::UnderwritingManager => json!("underwriting_manager"),
-            Recipient::Party { .. } | Recipient::Adviser { .. } => return NothingConnected.forward(seq, effect).await,
+            Recipient::Party { party } => return self.letter(seq, json!({"party": {"party": party}}), effect).await,
+            Recipient::Adviser { adviser } => return self.letter(seq, json!({"adviser": {"adviser": adviser}}), effect).await,
         };
         let kind = json!(kind);
         let name = kind.as_str().unwrap_or_default();

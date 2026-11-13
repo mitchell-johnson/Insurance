@@ -141,13 +141,26 @@ pub struct ExcessCase {
     /// members are left in that total; never put in an event.
     #[serde(default)]
     pub in_employer_total: bool,
+    /// The case whose layer this one's layer takes the place of, where
+    /// underwriting reissued the terms with the member paying the loading.
+    /// The old layer ends when this one is in the core.
+    #[serde(default)]
+    pub replaces: Option<u64>,
 }
 
 impl ExcessCase {
+    /// The request to underwriting this case's cover goes back to.
+    pub fn request_case(&self) -> u64 {
+        self.replaces.unwrap_or(self.id)
+    }
+
     /// What this case counts for against the member's formula excess.
     pub fn counts_minor(&self) -> i64 {
         match self.status {
             CaseStatus::Requested => self.excess_minor,
+            // A replacement counts once its own layer is written: until
+            // then the layer it replaces is the cover held.
+            CaseStatus::Writing if self.replaces.is_some() => 0,
             CaseStatus::Writing | CaseStatus::Accepted if self.end_from.is_none() => self.accepted_minor,
             _ => 0,
         }
