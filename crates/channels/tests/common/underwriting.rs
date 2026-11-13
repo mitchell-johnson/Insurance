@@ -6,7 +6,8 @@
 //! Seeded with: `P1` issued on terms `amy` decided, and a claim's
 //! non-disclosure review of it waiting for a senior (`ndr/CLM-1/L1`);
 //! `P2` disclosed with a hazardous occupation, its case waiting in a
-//! queue; and one effect parked as undeliverable.
+//! queue; `P3`, an adviser's application with nothing decided; and one
+//! effect parked as undeliverable.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -85,6 +86,9 @@ pub fn seeded() -> UnderwritingModule {
     );
     w.open("P2", 500_000_00);
     w.disclose("P2", "L1", &world::yes("hazardous_occupation"));
+    // P3: an adviser's application on which the life gives their own consents.
+    let with_adviser = w.open_command("P3", &["L1"], &[("L1", "life", "life", 500_000_00)], true);
+    w.ok("new-business", Command::OpenProposal(Box::new(with_adviser)));
     let first = w.s.outbox(0, 1)[0].0;
     w.ok(
         "effects-driver",

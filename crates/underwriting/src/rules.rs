@@ -99,7 +99,13 @@ pub enum Action {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
+    /// An opaque code (`UR-` and four digits). It is what a decision, the
+    /// log and the capacity request carry, so it must not name a condition.
     pub id: String,
+    /// What the rule is for, in the rule set only: underwriters read it in
+    /// the console against the code.
+    #[serde(default)]
+    pub about: String,
     pub when: Condition,
     pub then: Action,
     pub reasons: Vec<String>,
@@ -305,6 +311,15 @@ pub fn load_rule_set(file: &str, source: &str) -> Result<RuleSet, LoadError> {
     for r in &set.rules {
         if r.id.is_empty() || !seen.insert(r.id.as_str()) {
             return Err(invalid(file, format!("rule id `{}` is empty or declared twice", r.id)));
+        }
+        // A rule's id travels in the log with every disclosure it fired on:
+        // a descriptive id such as `diabetes` would put a condition there.
+        let opaque = r.id.strip_prefix("UR-").is_some_and(|n| n.len() == 4 && n.bytes().all(|b| b.is_ascii_digit()));
+        if !opaque || r.about.trim().is_empty() {
+            return Err(invalid(
+                file,
+                format!("rule `{}` needs an opaque id (UR- and four digits) and says what it is about", r.id),
+            ));
         }
         if r.reasons.is_empty() {
             return Err(invalid(file, format!("rule {} gives no reason code", r.id)));

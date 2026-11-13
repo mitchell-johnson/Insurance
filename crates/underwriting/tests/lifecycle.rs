@@ -985,3 +985,65 @@ fn a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_polic
     let versions = &w.p("P1").lives[&LifeId::from("L2")].decisions[0].versions;
     assert!(versions.rule_set.is_some() && versions.question_set.is_some() && versions.exclusions.is_some() && versions.reasons.is_some());
 }
+
+/// Purpose: everything the log holds about an underwriting run (each command as it arrived,
+/// each event, each effect waiting for delivery) is inspected after a medical disclosure that
+/// called for evidence and a person's decision. None of it carries an answer, a question's
+/// wording, a rule's name or a reason's text: only IDs, codes and references to the sealed
+/// record.
+/// Why it matters: the log is replicated, kept for years and read by operations; the design
+/// puts clinical content only in the clinical store, where each read has a purpose and can be
+/// shredded with the person's key. Content that leaked into the log could never be erased
+/// (UW-029).
+#[test]
+fn the_log_of_an_underwriting_run_holds_ids_and_references_only() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    w.consent("P1", "L1", ConsentKind::ObtainRecords);
+    let answers = with(&[("diabetes", Answer::YesNo(true)), ("smoked_last_12_months", Answer::YesNo(true))]);
+    w.disclose("P1", "L1", &answers);
+    w.ok(
+        "evidence",
+        Command::EvidenceReceived {
+            request: "P1/L1/blood_test".into(),
+            vault_ref: "clinical://PTY-L1/evidence/abc".into(),
+            cost_minor: 85_00,
+        },
+    );
+    let case = w.p("P1").lives[&LifeId::from("L1")].open_case().unwrap().id.clone();
+    w.ok(
+        "underwriting-console",
+        Command::TakeCase {
+            case: case.clone(),
+            underwriter: "amy".into(),
+        },
+    );
+    let decided = w.propose(&case, "amy", vec![accept("life", 50, None)]).unwrap();
+    w.automatic(&decided);
+    w.respond("P1", "L1", OfferResponse::Accept);
+
+    let run: Vec<_> = w.log.iter().filter(|e| e.caller != "config").collect();
+    let mut seen = serde_json::to_string(&run).unwrap();
+    seen.push_str(&serde_json::to_string(&w.s.outbox(0, 1000)).unwrap());
+    let shipped = ic_underwriting::shipped::load().unwrap();
+    let clinical: Vec<&str> = shipped
+        .question_sets
+        .iter()
+        .flat_map(|q| q.questions.iter())
+        .filter(|q| q.clinical)
+        .map(|q| q.id.as_str())
+        .collect();
+    assert!(clinical.contains(&"diabetes"));
+    for id in clinical {
+        assert!(!seen.contains(&format!("\"{id}\"")), "the clinical question {id} reached the log");
+    }
+    for rule in &shipped.rule_sets[0].rules {
+        assert!(!seen.contains(&rule.about), "a rule's description reached the log: {}", rule.about);
+    }
+    let fired = &w.p("P1").lives[&LifeId::from("L1")].assessments["life"].fired;
+    assert!(!fired.is_empty() && fired.iter().all(|r| r.starts_with("UR-")), "{fired:?}");
+    assert!(
+        seen.contains("vault://P1/L1/disclosure"),
+        "the answers are referred to by where they are sealed"
+    );
+}

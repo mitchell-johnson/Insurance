@@ -68,6 +68,55 @@ pub fn signed(mut request: Value, body: &Value, device: &str, public_key: &str) 
     Ok(request)
 }
 
+/// The consents a life gives or withdraws on a proposal, as the
+/// underwriting module names them.
+pub const CONSENTS: [&str; 5] = [
+    "adviser_access",
+    "existing_cover_prefill",
+    "obtain_records",
+    "employer_sees_loading",
+    "replacement_disclosure",
+];
+
+/// The consents given only with the life's signed step: letting an adviser
+/// help with the answers, letting the employer see a loading (which implies
+/// health), and confirming a replacement disclosure.
+pub const SIGNED_CONSENTS: [&str; 3] = ["adviser_access", "employer_sees_loading", "replacement_disclosure"];
+
+/// The exact bytes a life signs to give a consent, as the underwriting
+/// module checks them: `ic.underwriting.consent.v1`, the proposal, the life
+/// and the kind, joined by zero bytes.
+pub fn consent_message(proposal: &str, life: &str, kind: &str) -> Vec<u8> {
+    let mut m = b"ic.underwriting.consent.v1".to_vec();
+    for part in [proposal, life, kind] {
+        m.push(0);
+        m.extend_from_slice(part.as_bytes());
+    }
+    m
+}
+
+/// The `record_consent` command for a life's consent, from the page's body
+/// (`{granted, signature}`). Giving a consent that needs the life's signed
+/// step needs the enrolled device's signature over [`consent_message`],
+/// checked here against its key; `signer` is that device and key.
+pub fn consent(proposal: &str, life: &str, kind: &str, body: &Value, signer: Option<(&str, &str)>) -> Result<Value, String> {
+    if !CONSENTS.contains(&kind) {
+        return Err(format!("{kind} is not a consent a life gives"));
+    }
+    let granted = body["granted"].as_bool().ok_or("say whether you give it (granted: true or false)")?;
+    let signed = if granted && SIGNED_CONSENTS.contains(&kind) {
+        let (device, public_key) = signer.ok_or("this consent is given from your enrolled device")?;
+        let signature = body["signature"].as_str().ok_or("send the device's signature")?;
+        if !crate::identity::verify(public_key, &consent_message(proposal, life, kind), signature) {
+            return Err("the signature is not this device's over the consent".to_string());
+        }
+        json!({ "key_id": device, "public_key": public_key, "signature": signature, "alg": "ecdsa-p256" })
+    } else {
+        Value::Null
+    };
+    Ok(json!({ "record_consent": { "proposal": proposal, "life": life, "kind": kind, "granted": granted, "signed": signed } }))
+}
+
 /// The intake service, reached with the portal's own Entra token for the
 /// intake's audience, which carries the app roles `new-business` (a life's
 /// signed answers) and `underwriting-console` (an underwriter's reading).
