@@ -48,6 +48,11 @@ impl Catalog {
 
     /// Whether a rate table may be activated: as for products, a version is
     /// immutable once active.
+    /// The content hash of an active rate table version.
+    pub fn rate_table_hash(&self, id: &str, version: u32) -> Option<&str> {
+        self.rate_tables.get(id).and_then(|v| v.get(&version)).map(|t| t.content_hash.as_str())
+    }
+
     pub fn check_rate_table(&self, t: &RateTable) -> Result<(), String> {
         if t.content_hash.is_empty() {
             return Err(format!("rate table {} carries no content hash; load it from its source", t.id));

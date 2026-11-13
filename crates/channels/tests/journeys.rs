@@ -52,6 +52,7 @@ fn submit(id: &str, policy: Option<&PolicyId>, kind: &str, module: &str) -> Comm
         module: module.to_string(),
         payload: json!({ "choice": "yes" }),
         signed: false,
+        route_to_person: false,
     }
 }
 

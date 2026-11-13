@@ -2345,6 +2345,7 @@ dependencies = [
  "hex",
  "http-body-util",
  "ic-azure",
+ "ic-channels",
  "ic-core",
  "ic-customers",
  "ic-ledger",
@@ -2562,6 +2563,8 @@ dependencies = [
 name = "ic-reinsurance"
 version = "0.1.0"
 dependencies = [
+ "axum",
+ "base64 0.22.1",
  "chrono",
  "hex",
  "ic-azure",
@@ -2572,7 +2575,11 @@ dependencies = [
  "ic-product",
  "ic-raft",
  "ic-sim",
+ "jsonwebtoken",
  "proptest",
+ "rand 0.8.8",
+ "reqwest 0.12.28",
+ "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",

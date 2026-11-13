@@ -614,8 +614,8 @@ pub struct DryRun {
 pub const DRY_RUN_LISTED: usize = 20;
 
 /// The annual rate for a cover's factors: the first row that matches, as the
-/// premium calculation in `ic-product` finds it. A scheme's benefit category
-/// is not published to finance, so a row for one category never matches.
+/// premium calculation in `ic-product` finds it. A row for a scheme benefit
+/// category matches only a member the core has published in that category.
 fn rate_for(table: &RateTable, age: u32, c: &RatedCover) -> Option<i128> {
     table
         .rows
@@ -625,7 +625,7 @@ fn rate_for(table: &RateTable, age: u32, c: &RatedCover) -> Option<i128> {
                 && age <= r.age_to
                 && (r.sex.is_none() || r.sex == c.sex)
                 && (r.smoker.is_none() || r.smoker == c.smoker)
-                && r.category.is_none()
+                && (r.category.is_none() || r.category == c.category)
                 && (r.occupation_class.is_none() || r.occupation_class == c.occupation_class)
         })
         .and_then(|r| scaled(r.annual_rate.as_str()))

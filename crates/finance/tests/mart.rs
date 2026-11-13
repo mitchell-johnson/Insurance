@@ -2,7 +2,7 @@
 
 mod common;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::NaiveDate;
 use common::*;
@@ -160,8 +160,8 @@ fn extracts_reconcile_are_frozen_and_satisfy_the_close() {
     );
 
     // The files as they would be stored, registered with the ledger.
-    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v4.csv");
-    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v4");
+    assert_eq!(in_force_nov.name(), "extracts/2027-11-30/in_force-v5.csv");
+    assert_eq!(in_force_nov.id(), "in_force:2027-11-30:v5");
     assert_eq!(in_force_nov.bytes().iter().filter(|b| **b == b'\n').count() as u64, in_force_nov.rows() + 1);
     let red = |w: &World| {
         let checks = w.books.state.checks(nov);
@@ -778,13 +778,15 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
 }
 
 /// Purpose: a scheme is issued with one member, a second joins the next day with her
-/// factors (born 1980, female, non-smoker, occupation class 2), and three days later the
-/// employer corrects her to a smoker in a class typed with a comma in it. The in-force
-/// and movement extracts carry her age, sex, smoker status and class from the day she
+/// factors (born 1980, female, non-smoker, occupation class 2, benefit category staff), and
+/// three days later the employer corrects her to a smoker in a class and a category each
+/// typed with a comma in it. The in-force and movement extracts carry her age, sex,
+/// smoker status, class and category from the day she
 /// joined; the extract as at the day she joined is the same file to the byte after the
 /// correction; the later extract carries the corrected factors with the comma replaced;
 /// a notice with no factors changes nothing; and the experience extract splits her
-/// exposure between the two classes by what was recorded at each period end.
+/// exposure between the two classes by what was recorded at each period end. The covers
+/// handed to a table dry run carry her category as the core published it.
 /// Why it matters: most of a scheme's members join after issue, so without this the
 /// extracts for group business would be blank in every rating column. And a correction
 /// must not rewrite a file the actuary has already valued from.
@@ -799,6 +801,7 @@ fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
             sex: Some(Sex::Female),
             smoker: Some(smoker),
             occupation_class: Some(class.to_string()),
+            category: Some(if smoker { "exec, senior" } else { "staff" }.to_string()),
             ..LifeInfo::new("m2".into(), None)
         })
     };
@@ -831,9 +834,10 @@ fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
             joined["age"].as_str(),
             joined["sex"].as_str(),
             joined["smoker"].as_str(),
-            joined["occupation_class"].as_str()
+            joined["occupation_class"].as_str(),
+            joined["category"].as_str()
         ),
-        ("47", "female", "false", "2")
+        ("47", "female", "false", "2", "staff")
     );
     let first = rows(&before).into_iter().find(|r| r["life"] == "m1").unwrap();
     assert_eq!((first["age"].as_str(), first["occupation_class"].as_str()), ("", ""));
@@ -863,9 +867,10 @@ fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
         (
             after["smoker"].as_str(),
             after["occupation_class"].as_str(),
+            after["category"].as_str(),
             after["sum_insured_minor"].as_str()
         ),
-        ("true", "4_heavy", "450")
+        ("true", "4_heavy", "exec__senior", "450")
     );
 
     let moved = rows(&mart.movement(day(1), day(5)).unwrap());
@@ -883,6 +888,13 @@ fn a_member_who_joins_after_issue_carries_her_factors_from_that_day() {
     assert_eq!(cell(day(2), day(4), "2").as_deref(), Some("3"));
     assert_eq!(cell(day(2), day(5), "4_heavy").as_deref(), Some("4"));
     assert_eq!(cell(day(2), day(5), "2"), None);
+    let categories: BTreeSet<String> = rows(&mart.experience(day(2), day(5)).unwrap())
+        .into_iter()
+        .map(|r| r["category"].clone())
+        .collect();
+    assert_eq!(categories, BTreeSet::from([String::new(), "exec__senior".to_string()]));
+    let priced = mart.rated_covers(day(5), &BTreeSet::from(["group-life".to_string()])).unwrap();
+    assert!(priced.iter().any(|c| c.category.as_deref() == Some("exec, senior")), "{priced:?}");
 }
 
 /// A fact as the claims module publishes it through the core.
@@ -1084,6 +1096,8 @@ fn the_real_claims_module_feeds_the_experience_extract() {
             provider: Some("provider-7".into()),
             pre_approval_request: false,
             settles_pre_approval: None,
+            service_code: None,
+            service_date: None,
         }),
         underwriters: vec![],
         catastrophe_event: None,

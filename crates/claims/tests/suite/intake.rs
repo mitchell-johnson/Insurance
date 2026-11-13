@@ -17,6 +17,8 @@ fn dental(id: &str, invoice: i64) -> ic_claims::command::Notification {
         provider: Some("provider-9".into()),
         pre_approval_request: false,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     n
 }

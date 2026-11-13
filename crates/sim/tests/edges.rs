@@ -936,3 +936,61 @@ fn active_configuration_cannot_be_rewritten() {
         format!("{:f>64}", "term-life")
     );
 }
+
+/// Purpose: a validation recorded for a rate table version is published once with the
+/// report's hash, schema and who ran it, whether it arrives before or after the table is
+/// activated; the same record twice is published once; a newer report replaces it; and a
+/// record for content other than what is active under that version is refused.
+/// Why it matters: finance holds the month's close for any table that is active without
+/// a passed report. A record that could be attached to different content than the report
+/// was run on would turn that check green for a table nobody validated.
+#[test]
+fn a_rate_table_validation_is_recorded_against_the_content_it_was_run_on() {
+    use ic_core::command::TableValidation;
+    let mut c = cluster(1);
+    let active = c
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e.event {
+            Event::RateTableActivated { id, version, content_hash, .. } if id == "life-base" => Some((version, content_hash)),
+            _ => None,
+        })
+        .expect("the shipped life table is active");
+    let record = |version: u32, content: &str, report: &str| {
+        Command::RecordRateTableValidation(Box::new(TableValidation {
+            id: "life-base".into(),
+            version,
+            content_hash: content.into(),
+            report_hash: report.into(),
+            schema_version: 1,
+            by: "svc-finance".into(),
+        }))
+    };
+    let validated = |c: &mut Cluster| {
+        c.take_events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                Event::RateTableValidated { version, report_hash, .. } => Some((version, report_hash)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(code(c.submit(0, "finance", record(active.0, "other-content", "report-1"))), "config_conflict");
+    assert_eq!(code(c.submit(0, "finance", record(active.0, &active.1, ""))), "invalid_validation");
+    assert_eq!(
+        code(c.submit(0, "policy-servicing", record(active.0, &active.1, "report-1"))),
+        "caller_not_allowed"
+    );
+    c.submit(0, "finance", record(active.0, &active.1, "report-1")).unwrap();
+    c.submit(0, "finance", record(active.0, &active.1, "report-1")).unwrap();
+    assert_eq!(validated(&mut c), vec![(active.0, "report-1".to_string())]);
+    c.submit(0, "config", record(active.0, &active.1, "report-2")).unwrap();
+    // A version not yet active can be validated ahead of its activation.
+    c.submit(0, "finance", record(active.0 + 1, "next-content", "report-3")).unwrap();
+    assert_eq!(
+        validated(&mut c),
+        vec![(active.0, "report-2".to_string()), (active.0 + 1, "report-3".to_string())]
+    );
+    assert_eq!(c.state(0).table_validations.len(), 2);
+}

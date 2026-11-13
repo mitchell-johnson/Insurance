@@ -24,6 +24,9 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 starlark.workspace = true
+axum.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
 
 [[bin]]
 name = "ic-reinsurance"
@@ -33,6 +36,9 @@ path = "src/bin/ic-reinsurance.rs"
 ic-azure = { workspace = true, features = ["testing"] }
 ic-sim.workspace = true
 proptest.workspace = true
+rsa = "0.9"
+rand.workspace = true
+base64.workspace = true
 
 [lints]
 workspace = true

@@ -561,6 +561,8 @@ fn dental(id: &str, invoice: i64, pre_approval: bool) -> ic_claims::command::Not
         provider: None,
         pre_approval_request: pre_approval,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     n
 }

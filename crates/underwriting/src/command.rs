@@ -23,7 +23,9 @@ use crate::case::{CaseType, ChaserFrom, Escalation, Queue};
 use crate::codes::{AppliedExclusion, ExclusionLibrary, ReasonLibrary};
 use crate::config::{DelegatedAuthority, Settings};
 use crate::evidence::{EvidenceKind, EvidenceStatus};
-use crate::model::{AccessEnd, AdviserRef, ConsentKind, CoverTerms, Entry, ExistingCover, ProposalId, ProposedCover, ProposedLife, QuoteBinding, VersionRef};
+use crate::model::{
+    AccessEnd, AdviserRef, ConsentKind, CoverTerms, Entry, ExistingCover, OfferStatus, ProposalId, ProposedCover, ProposedLife, QuoteBinding, VersionRef,
+};
 use crate::questions::QuestionSet;
 use crate::rules::{Assessment, RuleSet};
 use crate::signing::SignedStep;
@@ -410,6 +412,14 @@ pub enum Command {
         proposal: ProposalId,
         underwriter: String,
     },
+    /// Group administration asks for a scheme member to be offered to pay
+    /// the loading on their excess cover themselves, on the terms already
+    /// in place. Underwriting holds the terms, so the move is its offer.
+    ReofferExcessTerms {
+        proposal: ProposalId,
+        /// Why, in staff's words. Never clinical.
+        reason: String,
+    },
 
     // --- reinsurance capacity ---
     CapacityAnswered {
@@ -588,6 +598,7 @@ impl Command {
             CapacityAnswered { .. } | FacultativeTermsRecorded { .. } => &["reinsurance"],
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
+            ReofferExcessTerms { .. } => &["group-admin"],
             AcknowledgeEffects { .. } | ParkEffect { .. } | ProgressPublished { .. } => &["effects-driver"],
             RequeueEffect { .. } | OpenDisclosures { .. } => &["underwriting-console"],
             LicenceChanged { .. } => &["adviser-licensing"],
@@ -723,6 +734,19 @@ pub enum Effect {
         /// scheme member's excess cover.
         #[serde(default)]
         employer_may_see_loading: bool,
+        /// The member pays the loading, not the employer: they accepted an
+        /// offer to. Only ever true for a scheme member's excess cover.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        member_pays_loading: bool,
+    },
+    /// An offer to move a loading to the member was declined or ran out.
+    /// The terms in place stand; group administration decides what next.
+    ReofferEnded {
+        key: String,
+        proposal: ProposalId,
+        policy: PolicyId,
+        /// `declined` or `expired`.
+        outcome: String,
     },
     /// A proposal on a policy already in force ended with no terms to
     /// apply: declined, lapsed or withdrawn. Whoever asked is told, so the
@@ -923,6 +947,18 @@ pub enum Event {
         life: LifeId,
         offer: String,
         response: OfferResponse,
+    },
+    /// A scheme member is offered to pay their own loading.
+    ReofferMade {
+        proposal: ProposalId,
+        life: LifeId,
+        offer: String,
+        expires_on: NaiveDate,
+    },
+    ReofferEnded {
+        proposal: ProposalId,
+        offer: String,
+        status: OfferStatus,
     },
     ProposalLapsed {
         proposal: ProposalId,

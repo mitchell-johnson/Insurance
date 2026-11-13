@@ -129,6 +129,7 @@ fn authority() -> AuthorityBook {
         staff: [
             ("sam".to_string(), person(&[Role::Assessor, Role::QueueLead])),
             ("sue".to_string(), person(&[Role::Assessor, Role::ClaimsManager])),
+            ("ivy".to_string(), person(&[Role::Investigator])),
         ]
         .into(),
         prepared_by: "config-ann".into(),
@@ -834,6 +835,8 @@ fn a_health_invoice_goes_straight_through_to_the_provider() {
         provider: Some("provider-7".into()),
         pre_approval_request: false,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     ok(&mut c, claims::Command::Notify(invoice));
     let record = claim(&c, "clm-h");
@@ -867,6 +870,172 @@ fn a_health_invoice_goes_straight_through_to_the_provider() {
     assert_eq!(money(&c, &id), (0, 0, 0));
     assert_eq!(claim(&c, "clm-h").status, Status::Paid);
     assert_eq!(c.state(0).claims.remittance("prov-1")["provider-7"], (1, 60_00));
+}
+
+/// Purpose: on the real ledger, a provider's second bill for one service is held in a restricted
+/// case, and once an investigator confirms it, part of what the provider was paid on the first
+/// bill is a receivable that its next invoice pays down: the provider run keeps it back, credits
+/// the receivable and sends the provider only the rest, and every control account reconciles.
+/// Why it matters: persona test CLM-015. The offset is a posting on the provider's payment, not a
+/// note: if the core did not credit the receivable and debit benefit payable in the same entry,
+/// payments would settle the full amount and the debt would sit uncollected in the books.
+#[test]
+fn a_duplicate_provider_bill_is_recovered_from_the_providers_next_run() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = health_family(n, start(), &[d(1988, 5, 5)], Frequency::Monthly);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-h".into(),
+        amount: Money::new(2_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    let bill = |claim: &str, code: &str| {
+        let claims::Command::Notify(mut invoice) = notification(claim, &id, "hospital", ClaimType::Health, today) else {
+            unreachable!()
+        };
+        invoice.channel = Channel::Provider;
+        invoice.notifier = Notifier::Provider;
+        invoice.health = Some(claims::HealthItem {
+            category: "gp".into(),
+            invoice_minor: 95_00,
+            provider: Some("provider-7".into()),
+            pre_approval_request: false,
+            settles_pre_approval: None,
+            service_code: Some(code.into()),
+            service_date: Some(today),
+        });
+        claims::Command::Notify(invoice)
+    };
+    let run = |c: &mut Cluster, run: &str| {
+        let prepare = claims::Command::PrepareRun {
+            run: run.into(),
+            kind: RunKind::Provider,
+            benefit_date: today,
+            actor: actor("sue"),
+        };
+        ok(c, prepare);
+        ok(
+            c,
+            claims::Command::ApproveRun {
+                run: run.into(),
+                actor: actor("sam"),
+            },
+        );
+    };
+    ok(&mut c, bill("clm-h1", "gp-standard"));
+    run(&mut c, "prov-1");
+    c.submit(0, "payments", settle(&id, &format!("prov-1/clm-h1/{today}"), 60_00)).unwrap();
+
+    ok(&mut c, bill("clm-h2", "gp-standard"));
+    let case = claim(&c, "clm-h2").investigation.clone().expect("held in a case");
+    assert_eq!(claim(&c, "clm-h2").status, Status::Open);
+    let confirmed = claims::investigate::Outcome::Confirmed {
+        decline: vec!["clm-h2".into()],
+        recover: vec![("clm-h1".into(), 30_00)],
+    };
+    ok(
+        &mut c,
+        claims::Command::CloseInvestigation {
+            case,
+            outcome: confirmed,
+            actor: actor("ivy"),
+        },
+    );
+    assert_eq!(claim(&c, "clm-h2").status, Status::Declined);
+    assert_eq!(money(&c, &id), (0, 0, 30_00));
+
+    ok(&mut c, bill("clm-h3", "gp-extended"));
+    run(&mut c, "prov-2");
+    // 60 owed on the new invoice: 30 pays the debt and 30 goes to the provider.
+    assert_eq!(money(&c, &id), (0, 30_00, 0));
+    assert_eq!(c.state(0).claims.remittance("prov-2")["provider-7"], (1, 30_00));
+    let kept = c.nodes[&0]
+        .journal
+        .iter()
+        .rev()
+        .find(|e| e.body.kind == "claim_offset")
+        .expect("the offset entry");
+    assert_eq!(kept.body.detail["claim"], "clm-h3");
+    c.submit(0, "payments", settle(&id, &format!("prov-2/clm-h3/{today}"), 30_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    let h1 = claim(&c, "clm-h1");
+    assert_eq!(
+        (h1.overpayments[0].recovered_minor, h1.overpayments[0].status),
+        (30_00, RecoveryStatus::Recovered)
+    );
+}
+
+/// Purpose: a scheme member whose salary formula gives more cover than the automatic limit is
+/// covered up to the limit, and above it only by an underwritten layer in force on the event date:
+/// a death the day before the layer starts is covered at the limit, a death on its first day at
+/// the limit plus the layer.
+/// Why it matters: persona test CLM-025. A pilot's formula cover above the automatic limit was
+/// never accepted; paying it would pay cover nobody underwrote or charged for, and ignoring an
+/// accepted layer would short-pay a family whose cover was bought.
+#[test]
+fn a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = group_scheme(n, start(), vec![member("pilot-1", d(1975, 1, 1), "executive", 240_000_00)]);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-p".into(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    let layer = ic_core::command::ExcessLayer {
+        policy: id.clone(),
+        cover: "group-life".into(),
+        life: ic_core::LifeId("pilot-1".into()),
+        start: today,
+        sum_insured_minor: 210_000_00,
+        loadings: vec![],
+        exclusions: vec![],
+        loading_itemised: false,
+        member_pays: Default::default(),
+        reference: "uw-pilot".into(),
+    };
+    c.submit(0, "group-admin", Command::AddExcessLayer(Box::new(layer))).unwrap();
+    let facts = |c: &mut Cluster, claim_id: &str, event: NaiveDate| {
+        let claims::Command::Notify(mut n) = notification(claim_id, &id, "group-life", ClaimType::Death, event) else {
+            unreachable!()
+        };
+        n.life = Some("pilot-1".into());
+        n.flags.group = true;
+        n.notifier = Notifier::Employer;
+        ok(c, claims::Command::Notify(n));
+        ok(
+            c,
+            claims::Command::Assign {
+                claim: claim_id.into(),
+                to: "sam".into(),
+                actor: actor("sam"),
+            },
+        );
+        ok(
+            c,
+            claims::Command::CoverCheck {
+                claim: claim_id.into(),
+                relied_on: vec![],
+                actor: actor("sam"),
+            },
+        );
+        claim(c, claim_id).cover_check.clone().unwrap().facts
+    };
+    let before = facts(&mut c, "clm-p1", today.pred_opt().unwrap());
+    assert_eq!((before.in_force, before.sum_insured_minor), (true, 750_000_00), "the automatic limit");
+    let after = facts(&mut c, "clm-p2", today);
+    assert_eq!((after.in_force, after.sum_insured_minor), (true, 960_000_00), "the limit and the layer");
 }
 
 /// Purpose: the cover check answers from the policy record for a group scheme member: cover by

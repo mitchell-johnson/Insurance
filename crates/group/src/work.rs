@@ -435,9 +435,11 @@ impl GroupState {
                 if let Some(c) = s.cases.get_mut(case) {
                     c.status = CaseStatus::NotProceeded;
                     let life = c.life.clone();
-                    let request_key = format!("grp-uw:{}:{case}", s.id);
+                    let request_key = format!("grp-uw:{}:{}", s.id, c.request_case());
+                    // A refused replacement leaves the cover it was to replace as it was.
+                    let suffix = if c.replaces.is_some() { format!("/{case}") } else { String::new() };
                     self.send(Outbound::UnderwritingOutcome {
-                        key: format!("{request_key}/excess-rejected"),
+                        key: format!("{request_key}/excess-rejected{suffix}"),
                         request_key,
                         outcome: IssueOutcome::Rejected { code: code.to_string() },
                     });
@@ -547,12 +549,17 @@ impl GroupState {
                 let Some(c) = s.cases.get_mut(&case) else { return };
                 c.status = CaseStatus::Accepted;
                 let (life, end_from, layer) = (c.life.clone(), c.end_from, c.layer);
+                let replaced = c.replaces.map(|old| (old, c.effective));
                 self.emit(GroupEvent::ExcessCoverDecided {
                     scheme: s.id.clone(),
                     case,
                     life,
                     in_place: true,
                 });
+                // The layer this one takes the place of ends the day this one starts.
+                if let Some((old, from)) = replaced {
+                    self.end_layer(s, old, from);
+                }
                 if let (Some(from), Some(_)) = (end_from, layer) {
                     self.end_layer(s, case, from);
                 }
@@ -828,6 +835,7 @@ impl GroupState {
                     ended_by_leave: false,
                     reference: reference.clone(),
                     in_employer_total: false,
+                    replaces: None,
                 },
             );
             let request = UnderwritingRequest {
@@ -882,6 +890,69 @@ impl GroupState {
         self.enqueue_core(s, command, After::LayerEnded { case });
     }
 
+    /// Underwriting reissued the terms of cover that is in place, with the
+    /// member now paying the loading (staff asked for it and the member
+    /// agreed). The core changes who pays only by a new layer, so a layer
+    /// with the same terms, the member paying, is written from today, and
+    /// the old one ends from the same day once the new one is there. If
+    /// the core refuses the new layer the old one stays as it was.
+    fn replace_with_member_paying(&mut self, s: &mut Scheme, case: u64, decision: ExcessDecision) -> Result<(), Reject> {
+        let ExcessDecision::Accepted {
+            sum_insured_minor,
+            loadings,
+            exclusions,
+            ..
+        } = decision
+        else {
+            return Ok(());
+        };
+        let Some(old) = s.cases.get(&case).cloned() else { return Ok(()) };
+        if sum_insured_minor <= 0 || sum_insured_minor > old.accepted_minor {
+            return Err(Reject::new(
+                "invalid_amount",
+                "reissued terms are for a positive amount, no more than the cover in place",
+            ));
+        }
+        if loadings.is_empty() {
+            return Err(Reject::new("no_loading", "there is no loading for the member to pay"));
+        }
+        if s.cases.values().any(|c| c.replaces == Some(case) && c.status == CaseStatus::Writing) {
+            return Err(Reject::new("case_closed", format!("case {case} is already being replaced")));
+        }
+        let start = self.today().max(old.effective);
+        let id = self.fresh_id();
+        let layer = ExcessLayer {
+            policy: s.policy.clone(),
+            cover: old.cover.clone(),
+            life: old.life.clone(),
+            start,
+            sum_insured_minor,
+            loadings,
+            exclusions,
+            loading_itemised: false,
+            member_pays: MemberPays::Loading,
+            reference: old.reference.clone().unwrap_or_else(|| format!("grp-case:{case}")),
+        };
+        s.cases.insert(
+            id,
+            ExcessCase {
+                id,
+                accepted_minor: sum_insured_minor,
+                status: CaseStatus::Writing,
+                effective: start,
+                layer: None,
+                end_from: None,
+                ended_by_leave: false,
+                in_employer_total: false,
+                replaces: Some(case),
+                ..old
+            },
+        );
+        self.enqueue_core(s, Command::AddExcessLayer(Box::new(layer)), After::LayerWritten { case: id });
+        self.pump(s);
+        Ok(())
+    }
+
     fn record_excess_decision(&mut self, s: &mut Scheme, case: u64, decision: ExcessDecision) -> Result<(), Reject> {
         let itemised_terms = s.terms.excess_loading == ExcessLoading::EmployerItemised;
         let policy = s.policy.clone();
@@ -899,6 +970,19 @@ impl GroupState {
             ExcessLoading::EmployerTotal => too_few_for_a_total,
             ExcessLoading::EmployerItemised => false,
         };
+        // Underwriting's second word on cover already in place.
+        let in_place = s
+            .cases
+            .get(&case)
+            .is_some_and(|c| c.status == CaseStatus::Accepted && c.layer.is_some() && c.end_from.is_none());
+        match &decision {
+            ExcessDecision::ReofferDeclined if in_place => {
+                self.emit(GroupEvent::LoadingMoveDeclined { scheme: s.id.clone(), case });
+                return Ok(());
+            }
+            ExcessDecision::Accepted { member_pays_loading: true, .. } if in_place => return self.replace_with_member_paying(s, case, decision),
+            _ => {}
+        }
         let c = s
             .cases
             .get_mut(&case)
@@ -906,12 +990,15 @@ impl GroupState {
             .ok_or_else(|| Reject::new("case_closed", format!("case {case} is not waiting for a decision")))?;
         let life = c.life.clone();
         match decision {
+            ExcessDecision::ReofferDeclined => return Err(Reject::new("case_closed", format!("case {case} has no cover in place to reoffer"))),
             ExcessDecision::Accepted {
                 sum_insured_minor,
                 loadings,
                 exclusions,
                 member_consents_to_itemising,
+                member_pays_loading: member_agreed_to_pay,
             } => {
+                let member_pays_loading = member_pays_loading || member_agreed_to_pay;
                 if sum_insured_minor <= 0 || sum_insured_minor > c.excess_minor {
                     return Err(Reject::new(
                         "invalid_amount",
@@ -1295,9 +1382,10 @@ impl GroupState {
                         .find(|c| c.life == layer.life && c.cover == layer.cover && c.layer.is_none());
                     if let Some(c) = waiting {
                         c.layer = Some(layer.layer);
-                        let request_key = format!("grp-uw:{}:{}", s.id, c.id);
+                        let request_key = format!("grp-uw:{}:{}", s.id, c.request_case());
+                        let suffix = if c.replaces.is_some() { format!("/{}", c.id) } else { String::new() };
                         st.send(Outbound::UnderwritingOutcome {
-                            key: format!("{request_key}/excess-issued"),
+                            key: format!("{request_key}/excess-issued{suffix}"),
                             request_key,
                             outcome: IssueOutcome::Issued {
                                 life: layer.life.clone(),

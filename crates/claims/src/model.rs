@@ -362,6 +362,9 @@ pub struct InterestDue {
     pub owed_minor: i64,
     /// Released to them and not returned.
     pub paid_minor: i64,
+    /// Owed as a nominated beneficiary's share, not as a lender's interest.
+    #[serde(default)]
+    pub nominated: bool,
 }
 
 /// One paid period of a benefit in payment.
@@ -535,6 +538,12 @@ pub struct HealthItem {
     /// The pre-approval this invoice settles.
     #[serde(default)]
     pub settles_pre_approval: Option<String>,
+    /// The provider's code for the service billed, and the date it was
+    /// given: what the duplicate billing rule compares.
+    #[serde(default)]
+    pub service_code: Option<String>,
+    #[serde(default)]
+    pub service_date: Option<NaiveDate>,
 }
 
 /// Something that falls due on a claim. The business date reaching it is
@@ -624,6 +633,10 @@ pub struct Claim {
     /// Brought in from the system before this one, with the state it had there.
     #[serde(default)]
     pub migrated: bool,
+    /// The restricted case this claim is in, while it is open. Never shown
+    /// outside the investigators' own view.
+    #[serde(default)]
+    pub investigation: Option<String>,
     /// Lenders and assignees paid before the claimant, in priority order.
     #[serde(default)]
     pub interests: Vec<InterestDue>,
