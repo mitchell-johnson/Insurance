@@ -15,7 +15,11 @@ const ID: &str = "grp-uw:S1:7";
 fn issued_with_loading(w: &mut World) {
     let mut open = w.open_command(ID, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
     open.product_code = "group-life".into();
-    open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+    open.entry = Entry::GroupExcess {
+        policy: open.policy.clone(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     w.disclose(ID, "L1", &yes("heart_condition"));
     let case = w.take(ID, "L1", "amy");
@@ -188,7 +192,11 @@ fn a_declined_or_expired_offer_leaves_the_terms_and_says_so() {
     );
     let mut open = w.open_command("grp-uw:S1:8", &["L1"], &[("L1", "life", "life", 300_000_00)], false);
     open.product_code = "group-life".into();
-    open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+    open.entry = Entry::GroupExcess {
+        policy: open.policy.clone(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     let standard = Command::ReofferExcessTerms {
         proposal: "grp-uw:S1:8".into(),

@@ -6,17 +6,22 @@ use ic_core::Command;
 use ic_money::DecStr;
 use ic_product::{load_definitions, load_product, load_rate_table, LoadError};
 
-const PRODUCTS: [(&str, &str); 4] = [
+const PRODUCTS: [(&str, &str); 5] = [
     ("term_life.star", include_str!("../../../products/term_life.star")),
     ("health_plan.star", include_str!("../../../products/health_plan.star")),
     ("group_life.star", include_str!("../../../products/group_life.star")),
     ("invest_plan.star", include_str!("../../../products/invest_plan.star")),
+    ("health_flex.star", include_str!("../../../products/health_flex.star")),
 ];
-const RATES: [(&str, &str); 5] = [
+const RATES: [(&str, &str); 9] = [
     ("rates/life_base.star", include_str!("../../../products/rates/life_base.star")),
     ("rates/trauma_base.star", include_str!("../../../products/rates/trauma_base.star")),
     ("rates/health_base.star", include_str!("../../../products/rates/health_base.star")),
     ("rates/no_premium.star", include_str!("../../../products/rates/no_premium.star")),
+    ("rates/flex_hospital.star", include_str!("../../../products/rates/flex_hospital.star")),
+    ("rates/flex_specialist.star", include_str!("../../../products/rates/flex_specialist.star")),
+    ("rates/flex_dental.star", include_str!("../../../products/rates/flex_dental.star")),
+    ("rates/flex_optical.star", include_str!("../../../products/rates/flex_optical.star")),
     (
         "rates/group_life_standard.star",
         include_str!("../../../products/rates/group_life_standard.star"),

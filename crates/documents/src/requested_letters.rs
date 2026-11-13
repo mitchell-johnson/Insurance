@@ -39,15 +39,9 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
     /// Issue one requested letter. `Ok(false)` leaves it waiting.
     async fn requested_letter(&self, record: &LetterRequestRecord, pass: &mut LetterPass) -> Result<bool, DriverError> {
         let letter = &record.request;
-        let Some(kind) = requested_kind(&record.caller, &letter.kind) else {
-            // The module accepted it, so the kind was known then: a kind
-            // since retired is for a person to cancel.
-            pass.errors.push(format!(
-                "{}: {} letters of kind {} are no longer issued",
-                letter.request, record.caller, letter.kind
-            ));
-            return Ok(false);
-        };
+        // The module accepted it, so the kind was known then: a kind since
+        // retired is for a person to cancel.
+        let kind = requested_kind(&record.caller, &letter.kind).ok_or_else(|| DriverError::NotFound(format!("letter kind {}", letter.kind)))?;
         let party = letter.recipient.party();
         let contact = match Letters::person(self, party).await {
             Ok(Some(contact)) if !contact.deceased => contact,
@@ -119,14 +113,10 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
     /// One pass over the letters other modules have asked for.
     pub async fn requested_letters(&self) -> LetterPass {
         let mut pass = LetterPass::default();
-        let due: Vec<LetterRequestRecord> = match self.module.ask(Query::LettersRequested { limit: self.batch }).await {
-            Ok(answer) => match serde_json::from_value(answer) {
-                Ok(due) => due,
-                Err(e) => {
-                    pass.errors.push(format!("letters requested: {e}"));
-                    return pass;
-                }
-            },
+        let asked = self.module.ask(Query::LettersRequested { limit: self.batch }).await;
+        let due = asked.and_then(|answer| serde_json::from_value::<Vec<LetterRequestRecord>>(answer).map_err(|e| DriverError::Answer(e.to_string())));
+        let due = match due {
+            Ok(due) => due,
             Err(e) => {
                 pass.errors.push(format!("letters requested: {e}"));
                 return pass;

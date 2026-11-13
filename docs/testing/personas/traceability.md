@@ -295,6 +295,14 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
+## HLT Composable health product
+
+| Matrix | Status | Built tests |
+| --- | --- | --- |
+| HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
+| HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
+| HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
+
 ## JNT Joint lives, ownership, assignments and dependants
 
 | Matrix | Status | Built tests |

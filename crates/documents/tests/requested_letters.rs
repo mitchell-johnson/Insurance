@@ -345,8 +345,8 @@ async fn statements_and_ordinary_letters_carry_their_own_class() {
 
 /// Purpose: a letter whose template has no wording, whose person has no
 /// contact point or has died, waits and is reported (a missing template
-/// once, however many letters need it); one that is cancelled is not
-/// issued; and an outage of the module is reported and loses nothing.
+/// once, however many letters need it); and an outage of the module or
+/// the customer master is reported and loses nothing.
 /// Why it matters: wording is written by people and arrives after the
 /// code. Letters must queue until it does, not fail for good; a letter in
 /// a dead person's name causes distress; and one pass that failed must not
@@ -379,6 +379,12 @@ async fn letters_wait_for_wording_and_people_and_survive_outages() {
     let down = world.driver.requested_letters().await;
     assert!(down.errors[0].starts_with("letters requested"));
     world.driver.module.set_down(false);
+    // The customer master is down: each letter says so and waits.
+    world.driver.directory.set_down(true);
+    let down = world.driver.requested_letters().await;
+    assert_eq!(down.issued, 0);
+    assert!(down.errors.iter().any(|e| e.starts_with("letter:uw:3") && e.contains("unavailable")));
+    world.driver.directory.set_down(false);
 
     let stop = async { tokio::time::sleep(std::time::Duration::from_millis(30)).await };
     let mut passes = 0;
