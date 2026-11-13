@@ -635,6 +635,7 @@ fn the_driver_process_checks_its_settings() {
             records_container: "reinsurance-records".into(),
             event_hubs: "https://ns.servicebus.windows.net".into(),
             event_hub: "reinsurance-events".into(),
+            drops_endpoint: None,
         }
     );
     let tuned = Config::from_lookup(lookup(&[
@@ -1029,6 +1030,7 @@ async fn one_audience_being_away_does_not_keep_staff_waiting() {
         modules: TestAudiences::default(),
         records: ic_azure::blob::MemoryWormStore::default(),
         staff: StaffSeen::default(),
+        outbound: ic_reinsurance::carriers::MemoryDrops::default(),
     };
     *carriers.modules.away.lock().unwrap() = true;
     assert!(matches!(w.driver.hand_on(&carriers, d(2027, 3, 2)).await, Err(DriverError::Unavailable(_))));

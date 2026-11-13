@@ -1225,3 +1225,23 @@ fn closing_a_period_lets_go_of_history_more_than_a_year_behind_it() {
         assert_eq!(ask(&w, kind, period(2028, 12)).unwrap()["reconciled"], serde_json::json!(true), "{kind}");
     }
 }
+
+/// Purpose: the claims module's source still publishes every fact and key the mart reads:
+/// `claim_reserved` with `policy`, `cover`, `life` and `event_date`; `claim_admitted` with
+/// `admitted_minor` and, for a benefit in payment, `monthly_minor`; and
+/// `admission_reversed`.
+/// Why it matters: only a straight-through admission is run end to end against the real
+/// claims module. A reversal or a benefit in payment whose fact was renamed would not
+/// fail anything: the mart would count nothing, and the gap would first be seen by an
+/// actuary. Reading the source is crude, and it fails the build on the day of the rename.
+#[test]
+fn the_claims_module_still_publishes_the_facts_the_mart_reads() {
+    let decide = include_str!("../../claims/src/decide.rs");
+    let intake = include_str!("../../claims/src/intake.rs");
+    for needed in ["\"claim_admitted\"", "(\"admitted_minor\", ", "(\"monthly_minor\", ", "\"admission_reversed\""] {
+        assert!(decide.contains(needed), "crates/claims/src/decide.rs no longer has {needed}");
+    }
+    for needed in ["\"claim_reserved\"", "(\"policy\", ", "(\"cover\", ", "(\"event_date\", ", "\"life\""] {
+        assert!(intake.contains(needed), "crates/claims/src/intake.rs no longer has {needed}");
+    }
+}

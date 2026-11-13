@@ -104,6 +104,7 @@ fn core_events_require_documents_exactly_once() {
                 allocated_minor: 100,
                 to_suspense_minor: 0,
                 net_by_cover_type: Default::default(),
+                fund: None,
             },
         ),
         core(3, today, CoreEvent::PolicyReinstated { policy: pol.clone() }),

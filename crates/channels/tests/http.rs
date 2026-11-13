@@ -2259,7 +2259,8 @@ async fn the_conduct_officer_decides_disputed_replacements() {
 }
 
 /// Purpose: an adviser sees the replacement matches on business they wrote and no one else's, without the cover it replaced;
-/// disputes one with a reason, which becomes a request to new business needing no customer's approval; cannot dispute a layer
+/// disputes one with a reason, which is recorded as their request, carried to the commission module under the portal's own caller
+/// naming the adviser, and resolved with that module's answer, including a refusal; cannot dispute a layer
 /// that is not theirs, one already disputed, or without a reason; cannot raise a dispute through the general request route; and an
 /// adviser with no engagements sees none.
 /// Why it matters: a match takes initial commission from the adviser who wrote the business, so they must be told and able to
@@ -2292,8 +2293,16 @@ async fn an_adviser_disputes_their_own_replacement_match() {
     ] {
         assert_eq!(dispute(bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
-    let (status, _) = dispute(json!({ "layer": "pol-new/life/1", "reason": "the customer asked for new cover after a review" })).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, done) = dispute(json!({ "layer": "pol-new/life/1", "reason": "the customer asked for new cover after a review" })).await;
+    assert_eq!((status, &done["disputed"]), (StatusCode::OK, &json!("dispute:pol-new/life/1")), "{done}");
+    // The commission module was told, by the portal under its own caller, naming the adviser and the request as the reference.
+    let sent = portal.commission.disputes();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["actor"], json!({ "module": "adviser-portal" }));
+    assert_eq!(
+        sent[0]["command"]["dispute_replacement"],
+        json!({ "policy": "pol-new", "cover": "life", "layer": 1, "reference": "dispute:pol-new/life/1", "adviser": "adv-1" })
+    );
     let (_, requests) = portal.get("sub-adv", "/app/v1/requests").await;
     let raised = requests
         .as_array()
@@ -2304,15 +2313,38 @@ async fn an_adviser_disputes_their_own_replacement_match() {
         .clone();
     assert_eq!(
         (&raised["id"], &raised["module"], &raised["status"]),
-        (&json!("dispute:pol-new/life/1"), &json!("new-business"), &json!("pending"))
+        (&json!("dispute:pol-new/life/1"), &json!("distribution"), &json!("applied"))
     );
     assert_eq!(
         raised["payload"],
         json!({ "policy": "pol-new", "cover": "life", "layer": 1, "reason": "the customer asked for new cover after a review" })
     );
-    // One dispute per layer.
+    // A second dispute of the same layer is one request already made.
     let (status, problem) = dispute(json!({ "layer": "pol-new/life/1", "reason": "twice" })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("duplicate")));
+    // A dispute the commission module refuses is resolved with its refusal, which the adviser is told.
+    portal
+        .commission
+        .matches(json!([row("pol-new/life/1", "e1", Value::Null), row("pol-new2/life/1", "e1", Value::Null)]));
+    // The stand-in refuses a layer it has already been sent; make it count this one as sent.
+    portal.commission.2.lock().unwrap()[0]["command"]["dispute_replacement"]["policy"] = json!("pol-new2");
+    let (status, problem) = dispute(json!({ "layer": "pol-new2/life/1", "reason": "not one" })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("already_disputed")));
+    let (_, requests) = portal.get("sub-adv", "/app/v1/requests").await;
+    let refused = requests
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "dispute:pol-new2/life/1")
+        .unwrap()
+        .clone();
+    assert_eq!((&refused["status"], &refused["code"]), (&json!("rejected"), &json!("already_disputed")));
+    // The commission module's own state machine takes the envelope from this caller: it gets as far as the layer, unknown there.
+    use ic_channels::forward::Source;
+    let real = common::commission::seeded();
+    let envelope = ic_channels::replacements::dispute_envelope("dispute:pol-new/life/1", &raised["payload"], &p("adv-1"));
+    let output = real.tell(envelope).await.unwrap();
+    assert_eq!(output["result"]["Err"]["code"], "unknown_layer", "{output}");
     // The general route does not take a dispute, so the check above cannot be gone around.
     let around =
         json!({ "id": "x", "kind": "dispute_replacement", "module": "new-business", "payload": { "policy": "pol-other", "cover": "life", "layer": 1 } });

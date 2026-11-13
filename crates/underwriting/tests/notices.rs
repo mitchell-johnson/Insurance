@@ -6,7 +6,7 @@ use ic_azure::AzureError;
 use ic_underwriting::case::Queue;
 use ic_underwriting::command::{Effect, NoticeKind, Recipient};
 use ic_underwriting::driver::{DriverError, Forward};
-use ic_underwriting::notices::{notice_id, StaffFeed, StaffNotices};
+use ic_underwriting::notices::{notice_id, NoLetters, Notices, StaffFeed};
 use serde_json::{json, Value};
 
 /// Remembers what was published, or fails every time with `down`'s status.
@@ -50,7 +50,11 @@ fn notice(to: Recipient, kind: NoticeKind) -> Effect {
 #[tokio::test]
 async fn a_staff_notice_is_published_once_by_id_and_without_its_reasons() {
     let feed = Feed::default();
-    let staff = StaffNotices { staff: feed.clone() };
+    let staff = Notices {
+        staff: feed.clone(),
+        letters: NoLetters,
+        clock: chrono::Utc::now,
+    };
     let cases = [
         (
             Recipient::Underwriter { underwriter: "u1".into() },
@@ -93,7 +97,11 @@ async fn a_staff_notice_is_published_once_by_id_and_without_its_reasons() {
 #[tokio::test]
 async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
     let feed = Feed::default();
-    let staff = StaffNotices { staff: feed.clone() };
+    let staff = Notices {
+        staff: feed.clone(),
+        letters: NoLetters,
+        clock: chrono::Utc::now,
+    };
     for to in [Recipient::Party { party: "party-1".into() }, Recipient::Adviser { adviser: "a1".into() }] {
         assert_eq!(
             staff.forward(1, &notice(to, NoticeKind::Declined)).await,
@@ -108,11 +116,13 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
 
     let escalated = notice(Recipient::UnderwritingManager, NoticeKind::CaseEscalated);
     for status in [503, 429, 408] {
-        let down = StaffNotices {
+        let down = Notices {
             staff: Feed {
                 down: Some(status),
                 ..Feed::default()
             },
+            letters: NoLetters,
+            clock: chrono::Utc::now,
         };
         let answer = down.forward(3, &escalated).await;
         assert!(
@@ -121,15 +131,173 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
         );
     }
     for status in [404, 403] {
-        let refused = StaffNotices {
+        let refused = Notices {
             staff: Feed {
                 down: Some(status),
                 ..Feed::default()
             },
+            letters: NoLetters,
+            clock: chrono::Utc::now,
         };
         assert_eq!(
             refused.forward(3, &escalated).await,
             Ok(Some(format!("the staff notices hub refused the notice: {status}: no")))
         );
     }
+}
+
+/// Records each letter request, refuses the ones scripted, or cannot be reached.
+#[derive(Clone, Default)]
+struct Documents {
+    sent: Arc<Mutex<Vec<(String, Value)>>>,
+    refuse: Option<(&'static str, &'static str)>,
+    down: bool,
+}
+
+impl ic_underwriting::notices::Letters for Documents {
+    async fn request(
+        &self,
+        key: &str,
+        _at: chrono::DateTime<chrono::Utc>,
+        command: Value,
+    ) -> Result<Result<(), ic_underwriting::driver::Refusal>, DriverError> {
+        if self.down {
+            return Err(DriverError::Unavailable("documents".into()));
+        }
+        self.sent.lock().unwrap().push((key.into(), command));
+        Ok(match self.refuse {
+            Some((code, message)) => Err(ic_underwriting::driver::Refusal::new(code, message)),
+            None => Ok(()),
+        })
+    }
+}
+
+fn at_noon() -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339("2027-02-01T12:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+}
+
+/// Purpose: a letter to a party or an adviser goes to the documents module as `request_letter`
+/// under the request `uw:{outbox number}`, with the kind, the recipient in the module's own
+/// shape, the proposal as subject, the life, the reason codes and the business date; a refusal
+/// parks it with documents' code; a documents module that cannot be reached stops the pass; and
+/// with no documents module the letter is parked as before.
+/// Why it matters: these are the letters a person is owed: an offer, a decline with the reasons
+/// they may be told, a lapsed proposal. The request must be the same on every try, or a retry
+/// after a lost reply would send the person a second letter.
+#[tokio::test]
+async fn a_letter_is_requested_from_documents_under_a_stable_request() {
+    let documents = Documents::default();
+    let notices = Notices {
+        staff: Feed::default(),
+        letters: documents.clone(),
+        clock: at_noon,
+    };
+    let declined = notice(Recipient::Party { party: "PTY-L1".into() }, NoticeKind::Declined);
+    assert_eq!(notices.forward(12, &declined).await, Ok(None));
+    assert_eq!(notices.forward(12, &declined).await, Ok(None));
+    let sent = documents.sent.lock().unwrap().clone();
+    let expected = json!({"request_letter": {
+        "request": "uw:12", "kind": "declined", "recipient": {"party": {"party": "PTY-L1"}},
+        "policy": null, "subject": "P1", "life": "L1", "reasons": ["a reason that may be clinical"],
+        "detail": {}, "business_date": "2027-02-01",
+    }});
+    assert_eq!(sent, vec![("uw:12".to_string(), expected.clone()), ("uw:12".to_string(), expected)]);
+
+    let refusing = Notices {
+        staff: Feed::default(),
+        letters: Documents {
+            refuse: Some(("clinical_to_adviser", "not to an adviser")),
+            ..Documents::default()
+        },
+        clock: at_noon,
+    };
+    let to_adviser = notice(Recipient::Adviser { adviser: "ADV-1".into() }, NoticeKind::OfferMade);
+    assert_eq!(
+        refusing.forward(13, &to_adviser).await,
+        Ok(Some("documents refused the letter: clinical_to_adviser: not to an adviser".into()))
+    );
+    let away = Notices {
+        staff: Feed::default(),
+        letters: Documents {
+            down: true,
+            ..Documents::default()
+        },
+        clock: at_noon,
+    };
+    assert!(matches!(away.forward(14, &declined).await, Err(DriverError::Unavailable(_))));
+    let none = Notices {
+        staff: Feed::default(),
+        letters: NoLetters,
+        clock: at_noon,
+    };
+    assert_eq!(
+        none.forward(15, &declined).await,
+        Ok(Some("correspondence is not connected to underwriting".into()))
+    );
+}
+
+/// Applies each letter request to a real documents state machine, as the
+/// cluster would after the driver sent it.
+#[derive(Clone)]
+struct RealDocuments {
+    state: Arc<Mutex<(ic_documents::DocumentsState, u64)>>,
+}
+
+impl ic_underwriting::notices::Letters for RealDocuments {
+    async fn request(&self, key: &str, at: chrono::DateTime<chrono::Utc>, command: Value) -> Result<Result<(), ic_underwriting::driver::Refusal>, DriverError> {
+        use ic_log::StateMachine;
+        let envelope = ic_underwriting::service::documents_envelope(key, at, command);
+        let envelope: ic_documents::command::Envelope = serde_json::from_value(envelope).map_err(|e| DriverError::Unavailable(e.to_string()))?;
+        let mut guard = self.state.lock().unwrap();
+        let (state, index) = &mut *guard;
+        *index += 1;
+        let applied = state.apply(*index, envelope);
+        Ok(applied.result.map_err(|r| ic_underwriting::driver::Refusal::new(&r.code, r.message)))
+    }
+}
+
+/// Purpose: every letter underwriting can ask for, to a party or an adviser as the module sends
+/// it, is read and accepted by the real documents state machine under underwriting's own name;
+/// sent again, it is taken as the same request; and a health letter to an adviser is parked.
+/// Why it matters: the two modules agree on the letter only through JSON. A renamed field or a
+/// kind that documents does not know would park every decline letter in production, and nobody
+/// would hear of it until a customer complained that they were never told.
+#[tokio::test]
+async fn documents_accepts_every_letter_underwriting_sends() {
+    let documents = RealDocuments {
+        state: Arc::new(Mutex::new((ic_documents::DocumentsState::new(), 0))),
+    };
+    let notices = Notices {
+        staff: Feed::default(),
+        letters: documents.clone(),
+        clock: at_noon,
+    };
+    let to_party = [
+        NoticeKind::OfferMade,
+        NoticeKind::Declined,
+        NoticeKind::ProposalLapsed,
+        NoticeKind::ProposalWithdrawn,
+        NoticeKind::PolicyIssued,
+        NoticeKind::AdviserUnavailable,
+        NoticeKind::InterviewToConfirm,
+    ];
+    for (seq, kind) in (100..).zip(to_party) {
+        let effect = notice(Recipient::Party { party: "PTY-L1".into() }, kind);
+        assert_eq!(notices.forward(seq, &effect).await, Ok(None), "{kind:?} to the party");
+        assert_eq!(notices.forward(seq, &effect).await, Ok(None), "{kind:?} sent again");
+    }
+    // An adviser may be told a proposal lapsed. A decline to an adviser is
+    // health information, which documents refuses, so the letter is parked
+    // for a person rather than sent.
+    let lapsed = notice(Recipient::Adviser { adviser: "ADV-1".into() }, NoticeKind::ProposalLapsed);
+    assert_eq!(notices.forward(200, &lapsed).await, Ok(None));
+    let declined = notice(Recipient::Adviser { adviser: "ADV-1".into() }, NoticeKind::Declined);
+    let parked = notices.forward(201, &declined).await.unwrap();
+    assert!(
+        parked.as_deref().is_some_and(|why| why.starts_with("documents refused the letter: ")),
+        "{parked:?}"
+    );
+    assert_eq!(documents.state.lock().unwrap().1, 16);
 }

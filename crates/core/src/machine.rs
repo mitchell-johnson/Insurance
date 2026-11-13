@@ -502,6 +502,18 @@ impl CoreState {
             Command::ApplyMemberReceipt { policy, life, receipt, amount } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
                 voluntary::apply_receipt(&mut s.ledger, &s.catalog, p, ctx, life, receipt, amount)
             }),
+            Command::MakeArrangement {
+                policy,
+                arrangement,
+                instalments,
+            } => self.with_policy(&policy, true, |_, p| crate::arrangement::make(p, ctx, arrangement, instalments)),
+            Command::EndArrangement { policy, arrangement } => self.with_policy(&policy, true, |s, p| {
+                crate::arrangement::end(p, ctx, &arrangement)?;
+                if let Some(product) = s.catalog.product(&p.product_hash).cloned() {
+                    arrears::refresh(&product, p, ctx);
+                }
+                Ok(())
+            }),
             Command::RefundMemberCredit { policy, life, amount } => {
                 self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
             }

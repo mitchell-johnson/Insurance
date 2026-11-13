@@ -2293,6 +2293,7 @@ name = "ic-finance"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "futures",
  "hex",
  "ic-azure",
  "ic-core",
@@ -2307,6 +2308,11 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "starlark",
+ "temporalio-client",
+ "temporalio-common",
+ "temporalio-macros",
+ "temporalio-sdk",
+ "temporalio-workflow",
  "thiserror",
  "tokio",
  "tracing",
@@ -2597,6 +2603,7 @@ dependencies = [
  "ic-azure",
  "ic-channels",
  "ic-core",
+ "ic-documents",
  "ic-group",
  "ic-ledger",
  "ic-log",

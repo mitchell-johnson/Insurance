@@ -24,6 +24,12 @@ starlark.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+temporalio-sdk = "=1.2.0"
+temporalio-client = "=1.2.0"
+temporalio-macros = "=1.2.0"
+temporalio-workflow = "=1.2.0"
+temporalio-common = "=1.2.0"
+futures = "0.3"
 
 [[bin]]
 name = "ic-finance-close"
@@ -33,6 +39,7 @@ path = "src/bin/ic-finance-close.rs"
 ic-sim.workspace = true
 proptest.workspace = true
 ic-azure = { workspace = true, features = ["testing"] }
+temporalio-sdk = { version = "=1.2.0", features = ["testing"] }
 
 [lints]
 workspace = true

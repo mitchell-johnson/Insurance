@@ -1,6 +1,8 @@
 //! The close service against a real node and the Azure stand-in.
 
 mod common;
+#[path = "support/temporal_server.rs"]
+mod temporal_server;
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -22,7 +24,8 @@ use serde_json::json;
 
 /// Purpose: the service reads its settings from the environment, refuses to start without
 /// the cluster or either storage account, defaults the containers and the timer, and
-/// refuses a timer that is not a positive number of seconds.
+/// refuses a timer that is not a positive number of seconds. It runs the close on
+/// Temporal exactly when a Temporal service is named.
 /// Why it matters: a close service that started with no storage configured would look
 /// healthy for a month and then have nowhere to put the extracts on the day they are due.
 #[test]
@@ -41,6 +44,12 @@ fn the_service_refuses_to_start_half_configured() {
         ("merkle-roots", "finance-extracts")
     );
     assert_eq!(config.pass_every, Duration::from_secs(60));
+    // No Temporal service named: the service runs the steps itself.
+    assert!(!config.temporal);
+    assert_eq!(
+        (config.task_queue.as_str(), config.step_timeout),
+        ("ic-finance-close", Duration::from_secs(300))
+    );
     assert_eq!(config.location(), "https://stfinance.blob.core.windows.net/finance-extracts");
 
     for (missing, named) in [
@@ -57,12 +66,20 @@ fn the_service_refuses_to_start_half_configured() {
         ("IC_CLUSTER_NODES", "a:1"),
         ("IC_FINANCE_PASS_SECONDS", "5"),
         ("IC_FINANCE_EXTRACTS_CONTAINER", "x"),
+        ("TEMPORAL_ADDRESS", "temporal:7233"),
+        ("IC_FINANCE_TASK_QUEUE", "q"),
+        ("IC_FINANCE_STEP_TIMEOUT_SECS", "9"),
     ]);
     let config = read(&vars).unwrap();
     assert_eq!(
         (config.cluster.as_str(), config.pass_every, config.extracts_container.as_str()),
         ("a:1", Duration::from_secs(5), "x")
     );
+    assert!(config.temporal, "a Temporal service is named, so the close runs on it");
+    assert_eq!((config.task_queue.as_str(), config.step_timeout), ("q", Duration::from_secs(9)));
+    vars.insert("IC_FINANCE_STEP_TIMEOUT_SECS", "0");
+    assert!(read(&vars).unwrap_err().starts_with("IC_FINANCE_STEP_TIMEOUT_SECS must be"));
+    vars.insert("IC_FINANCE_STEP_TIMEOUT_SECS", "9");
     for bad in ["0", "soon"] {
         vars.insert("IC_FINANCE_PASS_SECONDS", bad);
         assert!(read(&vars).unwrap_err().starts_with("IC_FINANCE_PASS_SECONDS must be"));
@@ -80,7 +97,28 @@ fn the_service_refuses_to_start_half_configured() {
 /// hosted, and a binary that ignored SIGTERM would be killed mid-pass on every rollout.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_close_service_runs_against_a_real_node() {
-    let dir = std::env::temp_dir().join(format!("ic-finance-service-{}", std::process::id()));
+    against_a_real_node(None).await;
+}
+
+/// Purpose: the same deployed arrangement with a Temporal service configured. Two replicas
+/// of the shipped binary each run a worker and start runs of the close workflow; the day's
+/// Merkle root is found in Blob Storage and recorded through a workflow step, and both
+/// replicas stop cleanly on SIGTERM.
+/// Why it matters: in production the close runs on Temporal, and the choice is made by
+/// the environment alone. This fails if the binary cannot reach Temporal from its
+/// settings, if two replicas trip over each other's runs, or if a worker with a run in
+/// flight does not stop when its pod is replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_close_service_runs_on_temporal_against_a_real_node() {
+    if temporal_server::skipped("the finance close service on Temporal") {
+        return;
+    }
+    let server = temporal_server::start().await;
+    against_a_real_node(Some(&server.address)).await;
+}
+
+async fn against_a_real_node(temporal: Option<&str>) {
+    let dir = std::env::temp_dir().join(format!("ic-finance-service-{}-{}", std::process::id(), temporal.is_some()));
     let _ = std::fs::remove_dir_all(&dir);
     let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
     let addr = format!("127.0.0.1:{port}");
@@ -184,18 +222,29 @@ async fn the_close_service_runs_against_a_real_node() {
 
     let token_file = dir.join("federated-token");
     std::fs::write(&token_file, "a-projected-service-account-token").unwrap();
-    let mut child = binary()
-        .env("IC_NODES", &addr)
-        .env("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef")
-        .env("AZURE_FEDERATED_TOKEN_FILE", &token_file)
-        .env("AZURE_TENANT_ID", "tenant-1")
-        .env("AZURE_CLIENT_ID", "client-1")
-        .env("AZURE_AUTHORITY_HOST", format!("{}/", fake.base))
-        .env("IC_FINANCE_ROOTS_ENDPOINT", &fake.base)
-        .env("IC_FINANCE_EXTRACTS_ENDPOINT", &fake.base)
-        .env("IC_FINANCE_PASS_SECONDS", "1")
-        .spawn()
-        .unwrap();
+    let queue = temporal_server::task_queue("service");
+    let replica = || {
+        let mut p = binary();
+        if let Some(address) = temporal {
+            p.env("TEMPORAL_ADDRESS", address)
+                .env("TEMPORAL_NAMESPACE", "default")
+                .env("IC_FINANCE_TASK_QUEUE", &queue)
+                .env("IC_FINANCE_STEP_TIMEOUT_SECS", "20");
+        }
+        p.env("IC_NODES", &addr)
+            .env("IC_CLUSTER_TOKEN", "test-cluster-token-0123456789abcdef")
+            .env("AZURE_FEDERATED_TOKEN_FILE", &token_file)
+            .env("AZURE_TENANT_ID", "tenant-1")
+            .env("AZURE_CLIENT_ID", "client-1")
+            .env("AZURE_AUTHORITY_HOST", format!("{}/", fake.base))
+            .env("IC_FINANCE_ROOTS_ENDPOINT", &fake.base)
+            .env("IC_FINANCE_EXTRACTS_ENDPOINT", &fake.base)
+            .env("IC_FINANCE_PASS_SECONDS", "1");
+        p.spawn().unwrap()
+    };
+    // On Temporal a second replica runs beside the first.
+    let mut second = temporal.map(|_| replica());
+    let mut child = replica();
     let mut tries = 0;
     while wanted().await != json!([]) {
         assert!(child.try_wait().unwrap().is_none(), "ic-finance-close exited at start");
@@ -218,6 +267,20 @@ async fn the_close_service_runs_against_a_real_node() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     assert!(exit.success());
+    if let Some(mut second) = second.take() {
+        assert!(std::process::Command::new("kill")
+            .args(["-TERM", &second.id().to_string()])
+            .status()
+            .unwrap()
+            .success());
+        let mut tries = 0;
+        while second.try_wait().unwrap().is_none() {
+            tries += 1;
+            assert!(tries < 600, "the second replica did not stop on SIGTERM");
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(second.wait().unwrap().success());
+    }
 
     // The same driver in this process: nothing is left to do, and the timer loop stops when told.
     let driver = Driver {

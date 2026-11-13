@@ -407,18 +407,34 @@ async fn the_served_loop_stops_when_told_even_with_no_cluster() {
         records_container: String::new(),
         event_hubs: String::new(),
         event_hub: String::new(),
+        drops_endpoint: None,
     };
     let records = ic_azure::blob::MemoryWormStore::default;
     let staff = || ic_azure::eventhubs::EventHubsSink::new("http://127.0.0.1:1", "h", ic_azure::credential::AzureCredential::static_token("t"));
     let auth = || ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
     let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
-    let served = tokio::spawn(ic_reinsurance::service::serve(config("127.0.0.1:1"), auth(), records(), staff(), async {
-        let _ = stopped.await;
-    }));
+    let served = tokio::spawn(ic_reinsurance::service::serve(
+        config("127.0.0.1:1"),
+        auth(),
+        records(),
+        staff(),
+        ic_reinsurance::carriers::ReinsurerDrops::Off,
+        async {
+            let _ = stopped.await;
+        },
+    ));
     tokio::time::sleep(Duration::from_millis(60)).await;
     assert!(!served.is_finished(), "the loop runs until it is told to stop");
     stop.send(()).unwrap();
     assert_eq!(served.await.unwrap(), Ok(()));
-    let nowhere = ic_reinsurance::service::serve(config(","), auth(), records(), staff(), std::future::ready(())).await;
+    let nowhere = ic_reinsurance::service::serve(
+        config(","),
+        auth(),
+        records(),
+        staff(),
+        ic_reinsurance::carriers::ReinsurerDrops::Off,
+        std::future::ready(()),
+    )
+    .await;
     assert_eq!(nowhere, Err("no node addresses given".to_string()));
 }

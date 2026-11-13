@@ -873,30 +873,63 @@ async fn adviser_replacements(State(s): State<Shared>, headers: HeaderMap, metho
     ok(s.own_matches(&session.party).await?)
 }
 
-/// Dispute one of this adviser's matches: a request new business carries
-/// to the commission module as `DisputeReplacement`, with the request's ID
-/// as the reference. It needs no customer's approval: the commission is
-/// the adviser's.
+/// Dispute one of this adviser's matches. The dispute and its reason are
+/// recorded here as the adviser's request, carried to the commission
+/// module as `DisputeReplacement` with the request's ID as the reference
+/// and the adviser named, and the request is resolved with what that
+/// module said. A retry with the same key carries it again; the commission
+/// module applies it once.
 async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
     let request: Value = parse(&body)?;
     let theirs = s.own_matches(&session.party).await?;
     let (id, payload) = crate::replacements::dispute(&request, &theirs).map_err(Problem::bad_request)?;
-    let result = s
-        .propose(
-            key(&headers, &session.party.0)?,
-            Actor::Party(session.party),
-            Command::SubmitRequest {
-                id,
-                policy: None,
-                kind: crate::replacements::DISPUTE.to_string(),
-                module: crate::replacements::DISPUTE_MODULE.to_string(),
-                payload,
-                signed: false,
-            },
+    let key = key(&headers, &session.party.0)?;
+    s.propose(
+        key.clone(),
+        Actor::Party(session.party.clone()),
+        Command::SubmitRequest {
+            id: id.clone(),
+            policy: None,
+            kind: crate::replacements::DISPUTE.to_string(),
+            module: crate::replacements::DISPUTE_MODULE.to_string(),
+            payload: payload.clone(),
+            signed: false,
+        },
+    )
+    .await?;
+    let output = s
+        .commission
+        .tell(crate::replacements::dispute_envelope(&id, &payload, &session.party))
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    let refused = output["result"].get("Err").map(|e| {
+        (
+            e["code"].as_str().unwrap_or("refused").to_string(),
+            e["message"].as_str().unwrap_or("the commission module refused it").to_string(),
         )
-        .await?;
-    accepted(result)
+    });
+    let resolve = Command::ResolveRequest {
+        id: id.clone(),
+        reference: refused.is_none().then(|| id.clone()),
+        rejected: refused.clone(),
+    };
+    // Resolved already by an earlier try: what it said then stands.
+    match s
+        .propose(
+            format!("resolve:{key}"),
+            Actor::Module(crate::replacements::DISPUTE_MODULE.to_string()),
+            resolve,
+        )
+        .await
+    {
+        Err(p) if p.code != "not_pending" => return Err(p),
+        _ => {}
+    }
+    match refused {
+        Some((code, message)) => Err(Problem::new(StatusCode::CONFLICT, &code, message)),
+        None => ok(json!({ "disputed": id })),
+    }
 }
 
 // --- the employer portal ---

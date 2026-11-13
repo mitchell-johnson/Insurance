@@ -70,6 +70,12 @@ spec:
             # are the driver's defaults.
             - configMapRef:
                 name: ic-azure
+          env:
+            # The dropsBlobEndpoint output of infra/reinsurance.bicep. Left
+            # out, statements and listings are only filed, not left for
+            # reinsurers to collect.
+            - name: IC_REINSURANCE_DROPS_ENDPOINT
+              value: REPLACE-dropsBlobEndpoint
           resources:
             requests:
               cpu: 50m
