@@ -268,7 +268,7 @@ impl Command {
     fn modules(&self) -> &'static [&'static str] {
         match self {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
-            Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
+            Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration", "group-admin"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
             Command::DisputeReplacement { .. } => &["new-business", "policy-servicing", "adviser-portal"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
