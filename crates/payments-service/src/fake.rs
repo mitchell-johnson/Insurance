@@ -498,6 +498,8 @@ pub fn iso_document(message: &BankMessage, numbers: &BTreeMap<String, String>) -
 pub struct FakeMaster {
     pub url: String,
     pub holds: Arc<Mutex<BTreeMap<String, bool>>>,
+    /// Relationship records by `{party}/{id}`.
+    pub relationships: Arc<Mutex<BTreeMap<String, Value>>>,
 }
 
 impl FakeMaster {
@@ -506,9 +508,11 @@ impl FakeMaster {
         let master = Self {
             url: format!("http://{}", listener.local_addr()?),
             holds: Arc::new(Mutex::new(holds.iter().map(|(p, h)| (p.to_string(), *h)).collect())),
+            relationships: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/parties/{id}/spending-hold", get(spending_hold))
+            .route("/v1/parties/{party}/relationships/{id}", get(relationship))
             .with_state(master.clone());
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -524,6 +528,19 @@ async fn spending_hold(State(master): State<FakeMaster>, Path(id): Path<String>,
     let held = master.holds.lock().expect("the fake master's holds").get(&id).copied();
     match held {
         Some(held) => (StatusCode::OK, Json(json!({"party": id, "held": held, "placed_at": null, "removal": null}))),
+        None => (StatusCode::NOT_FOUND, Json(json!({"code": "not_found"}))),
+    }
+}
+
+async fn relationship(State(master): State<FakeMaster>, Path((party, id)): Path<(String, String)>) -> (StatusCode, Json<Value>) {
+    let found = master
+        .relationships
+        .lock()
+        .expect("the fake master's relationships")
+        .get(&format!("{party}/{id}"))
+        .cloned();
+    match found {
+        Some(record) => (StatusCode::OK, Json(record)),
         None => (StatusCode::NOT_FOUND, Json(json!({"code": "not_found"}))),
     }
 }

@@ -524,7 +524,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 <<<<<<< HEAD
 =======
 | FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
-| FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
+| FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 >>>>>>> origin/main
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
 | FIN-018 | full | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed`<br>`finance/tests/assessed_claim.rs::an_assessed_claim_admitted_paid_and_reversed_reaches_the_mart_and_the_books` |

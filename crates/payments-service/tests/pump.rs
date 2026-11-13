@@ -1787,3 +1787,74 @@ async fn the_customer_masters_answer_is_read_strictly() {
     assert_eq!(refresh_after(None), Duration::minutes(15));
     assert_eq!(refresh_after(Some(45)), Duration::minutes(23));
 }
+
+/// Purpose: the pump asks the customer master about each relationship
+/// compliance named to clear a payer case, and records whether it links the
+/// owner and the payer: one that does clears the case, one the master does
+/// not know leaves it open. The rule for "links" is checked on its own: in
+/// force, naming the owner, and naming a payer known as a party, at either
+/// end.
+/// Why it matters: FIN-016's clearance stops the AML rule for good, so it
+/// must rest on a relationship the customer master actually holds between
+/// these two people, not on a reference typed into a form.
+#[tokio::test]
+async fn a_payer_relationship_is_confirmed_with_the_customer_master() {
+    use ic_payments::aml::{Clearance, PayerCase};
+    use ic_payments_service::fake::FakeMaster;
+    use ic_payments_service::ports::{relationship_in, relationship_links, Holds, MasterHolds};
+    use serde_json::json;
+
+    let record = json!({"party": "biz", "id": "r1", "kind": "premium_payer", "target": {"kind": "party", "id": "own"}, "in_force": true});
+    assert_eq!(relationship_links(Some(&record), "own", "account:0201"), Ok(()));
+    assert_eq!(relationship_links(Some(&record), "own", "party:biz"), Ok(()));
+    assert!(relationship_links(Some(&record), "own", "party:other").unwrap_err().contains("payer"));
+    assert!(relationship_links(Some(&record), "else", "party:biz").unwrap_err().contains("owner"));
+    let ended = json!({"party": "biz", "target": {"id": "own"}, "in_force": false});
+    assert!(relationship_links(Some(&ended), "own", "party:biz").unwrap_err().contains("in force"));
+    assert!(relationship_links(None, "own", "party:biz").is_err());
+    assert_eq!(relationship_in(404, Value::Null), Ok(None));
+    assert!(relationship_in(503, Value::Null).is_err());
+    let answers: BTreeMap<String, bool> = BTreeMap::new();
+    assert!(answers.relationship("biz/r1").await.is_err());
+
+    let world = World::new().await;
+    let master = FakeMaster::start(&[]).await.unwrap();
+    master.relationships.lock().unwrap().insert("biz/r1".to_string(), record);
+    let service = MasterHolds {
+        base: master.url.clone(),
+        scope: "api://ic-customers/.default".to_string(),
+        credential: ic_azure::credential::AzureCredential::static_token("t"),
+        http: reqwest::Client::new(),
+    };
+    assert!(service.relationship("no-slash").await.unwrap_err().contains("not a relationship reference"));
+    let mut pump = world.pump("akl", "a");
+    pump.holds = Some(Arc::new(service));
+    let today = world.now.lock().unwrap().date();
+    let case = |payer: &str, reference: &str| PayerCase {
+        owner: "own".to_string(),
+        payer: payer.to_string(),
+        policies: vec!["pol-1".to_string()],
+        opened: today,
+        last_paid: today,
+        cleared: None,
+        proposed: Some(Clearance {
+            by: "carla".to_string(),
+            on: today,
+            relationship: Some(reference.to_string()),
+            note: "company pays".to_string(),
+        }),
+    };
+    {
+        let mut guard = world.module.state.lock().unwrap();
+        let cases = &mut guard.0.payer_checks.cases;
+        cases.insert("own|party:biz".to_string(), case("party:biz", "biz/r1"));
+        cases.insert("own|party:mum".to_string(), case("party:mum", "mum/r9"));
+    }
+    let pass = pump.pass().await;
+    assert_eq!(pass.relationships, 2, "{:?}", pass.problems);
+    let state = world.state();
+    assert!(state.payer_checks.cases["own|party:biz"].cleared.is_some());
+    let unknown = &state.payer_checks.cases["own|party:mum"];
+    assert!(unknown.cleared.is_none() && unknown.proposed.is_none());
+    assert_eq!(pump.pass().await.relationships, 0, "nothing left to ask");
+}
