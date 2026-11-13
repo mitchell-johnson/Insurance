@@ -56,7 +56,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 6 | 11 | 2 | 8 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 19 | 9 | 2 | 7 |
+| UW Underwriting, underwriting operations and delegated authority | 20 | 9 | 1 | 7 |
 | CLM Claims and claims operations | 25 | 10 | 7 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **278** | **129** | **170** | **126** |
+| **Total** | **279** | **129** | **169** | **126** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 90 | 28 | 24 |
-| C | 157 | 68 | 121 |
+| C | 158 | 68 | 120 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
