@@ -201,6 +201,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
+| CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
@@ -266,7 +267,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-006 | full | `group/tests/intake.rs::approval_needs_a_second_person_and_staff_for_deep_backdating`<br>`group/src/diff.rs::dates_are_held_to_the_backdating_limits` |
 | GRP-007 | full | `group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-008 | full | `group/src/diff.rs::cover_follows_hours_across_the_minimum`<br>`group/tests/leavers.rs::cover_follows_a_member_whose_hours_cross_the_minimum` |
-| GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back` |
+| GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back`<br>`sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer` |
 | GRP-010 | full | `group/tests/excess.rs::a_loading_is_itemised_to_the_employer_only_with_the_members_consent`<br>`sim/tests/group_cover.rs::a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed` |
 | GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading`<br>`group/tests/excess.rs::staff_are_told_when_leavers_leave_too_few_members_in_the_total` |
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
