@@ -44,5 +44,6 @@ pub use machine::UnderwritingState;
 pub use special::{answer, Query};
 pub mod clinical;
 pub mod disclosures;
+pub mod inbound;
 pub mod intake_service;
 pub mod prepare;
