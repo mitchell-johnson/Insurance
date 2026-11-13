@@ -174,20 +174,20 @@ impl CollectionsState {
     }
 
     /// Lapsed policies waiting for underwriting to take up their
-    /// reinstatement, in order.
-    pub fn reinstatements_for_underwriting(&self) -> Vec<PolicyId> {
-        let mut policies: Vec<PolicyId> = self
+    /// reinstatement, in order, each with the core partition it lives on.
+    pub fn reinstatements_for_underwriting(&self) -> Vec<serde_json::Value> {
+        let waiting: std::collections::BTreeMap<&PolicyId, u16> = self
             .open_tasks
             .iter()
             .filter_map(|id| self.tasks.get(id))
             .filter(|t| t.kind == TaskKind::ReinstatementUnderwriting)
             .flat_map(|t| t.policies.iter())
-            .filter(|p| self.policies.get(*p).is_some_and(|p| p.ended))
-            .cloned()
+            .filter_map(|p| self.policies.get(p).filter(|t| t.ended).map(|t| (p, t.partition)))
             .collect();
-        policies.sort();
-        policies.dedup();
-        policies
+        waiting
+            .into_iter()
+            .map(|(policy, partition)| serde_json::json!({"policy": policy, "partition": partition}))
+            .collect()
     }
 
     /// The core's answer to a posting. A refusal is a task: the officer
