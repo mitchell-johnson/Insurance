@@ -44,7 +44,10 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
         .ok_or_else(unknown_cover)?;
     let def = product.cover(&spec.cover).ok_or_else(unknown_cover)?;
-    let effective = ctx.date.max(policy.inception);
+    if spec.start.is_some_and(|s| s < policy.inception || s > ctx.date) {
+        return Err(Reject::new("start", "a layer starts no earlier than the policy and no later than today"));
+    }
+    let effective = spec.start.unwrap_or(ctx.date).max(policy.inception);
     if !policy.lives.get(&spec.life).is_some_and(|l| l.in_force_on(effective)) {
         return Err(Reject::new("unknown_life", format!("life {} is not on the policy", spec.life)));
     }
@@ -65,7 +68,12 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         .ok_or_else(|| Reject::new("sum_insured", "the sum insured is out of range"))?;
     ic_product::rating::check_sum_insured(def, total).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.cover)))?;
 
-    let billed = billed_period(policy, effective)?;
+    // A layer dated back reaches every period billed since its start.
+    let before = spec.start.map(|_| policy.clone());
+    let billed = match before {
+        Some(_) => None,
+        None => billed_period(policy, effective)?,
+    };
     let without = match billed {
         Some((start, _)) => Some(retail_period_premium(catalog, &product, policy, start, &mut ctx.work)?),
         None => None,
@@ -118,6 +126,10 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     if let (Some(period), Some(without)) = (billed, without) {
         let with = retail_premium_with(catalog, &product, policy, period.0, &mut ctx.work, Layers::With(&spec.cover, id))?;
         adjust(ledger, policy, ctx, &spec.life, effective, period, &with, &without)?;
+    }
+    if let Some(before) = before {
+        crate::reduce::adjust_billed(ledger, catalog, &before, policy, ctx, &spec.life, (effective, None))?;
+        cash::apply_suspense(ledger, policy, ctx)?;
     }
     Ok(())
 }
