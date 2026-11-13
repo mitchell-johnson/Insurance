@@ -630,6 +630,7 @@ impl FinanceState {
             crate::mart::IN_FORCE => self.mart.in_force(to),
             crate::mart::MOVEMENT => self.mart.movement(from, to),
             crate::mart::EXPERIENCE => self.mart.experience(from, to),
+            crate::mart::CLAIMS_BY_CAUSE => self.mart.claims_by_cause(from, to),
             other => return Err(format!("there is no {other} extract")),
         }
         .map_err(|e| e.to_string())?;
