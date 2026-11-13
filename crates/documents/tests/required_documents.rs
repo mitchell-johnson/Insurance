@@ -65,6 +65,7 @@ const SCHEDULE: &str = "Schedule {{policy}} for {{name}}, {{product}} from {{inc
 const WORDING: &str = "This policy pays the sum insured.";
 const LAPSE: &str = "Dear {{name}}. Policy {{policy}} is unpaid since {{oldest_unpaid_due|date}}.";
 const PREMIUM: &str = "Premium for {{policy}}, {{period_start|date}} to {{period_end|date}}: {{base|money}}.{{#each discounts}} {{name}} -{{amount|money}}.{{/each}} Premium {{net_premium|money}}, charges {{charges|money}}, total {{total|money}}.";
+const DISCOUNT: &str = "Dear {{name}}. Your {{tier}} discount on {{policy}} ends on {{from|date}}.";
 const RECEIPT: &str = "Dear {{name}}. We received {{allocated|money}} for policy {{policy}} (receipt {{receipt}}).";
 
 fn sample() -> Value {
@@ -73,7 +74,8 @@ fn sample() -> Value {
         "covers": [{ "cover": "life", "sum_insured": 50000000 }],
         "oldest_unpaid_due": "2027-11-15", "allocated": 12345, "receipt": "rc-1",
         "period_start": "2027-11-15", "period_end": "2027-12-14", "base": 5000,
-        "discounts": [{ "name": "Multi-policy", "amount": 500 }], "net_premium": 4500, "charges": 0, "total": 4500
+        "discounts": [{ "name": "Multi-policy", "amount": 500 }], "net_premium": 4500, "charges": 0, "total": 4500,
+        "tier": "gold", "from": "2028-01-15"
     })
 }
 
@@ -334,6 +336,44 @@ async fn a_bill_gets_a_premium_notice_with_its_discount_lines() {
     assert!(w.driver.module.state().triggers.values().all(|t| t.kind != DocumentKind::Invoice));
     let pass = w.pass().await;
     assert_eq!((pass.issued, pass.left, pass.errors), (0, 1, waiting), "the bill is not asked about again");
+}
+
+/// Purpose: a discount lost from a future date (a wellness tier
+/// withdrawn) is told to the policyholder as a premium change notice
+/// with its own clock, naming the tier and the date; a tier awarded or
+/// kept asks for nothing.
+/// Why it matters: the premium goes up from the first bill on or after
+/// that date, and the customer must hear of it before then (DSC-004).
+/// Only the tier code may reach the letter, never what earned or lost it.
+#[tokio::test]
+async fn a_lost_discount_is_noticed_before_the_bill_it_raises() {
+    let w = World::new(&[("discount", DocumentKind::PremiumChangeNotice, DISCOUNT)]).await;
+    let changed = |seq: u64, held: bool| {
+        event(
+            seq,
+            CoreEvent::EntitlementChanged {
+                policy: the_policy(),
+                code: "wellness".into(),
+                tier: Some("gold".into()),
+                life: None,
+                held,
+                from: NaiveDate::from_ymd_opt(2028, 1, 15).unwrap(),
+                until: None,
+                reference: "wl-7".into(),
+            },
+        )
+    };
+    w.observe(9, vec![changed(1, true), changed(2, false)]).await;
+    let triggers = w.driver.module.state().triggers;
+    assert_eq!(triggers.values().filter(|t| t.kind == DocumentKind::PremiumChangeNotice).count(), 1);
+    w.pass().await;
+    let notice = w.driver.document("required:9-2:PremiumChangeNotice").await.unwrap();
+    assert_eq!(notice.notice.as_ref().unwrap().purpose, "discount_change");
+    assert_eq!(notice.data_class, DataClass::Financial);
+    assert_eq!(
+        w.driver.read(&notice.id).await.unwrap().text,
+        "Dear Aroha Ngata. Your gold discount on KTL00000001 ends on 15 January 2028."
+    );
 }
 
 /// Purpose: a document whose product has no active template of its kind
