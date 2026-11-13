@@ -185,6 +185,14 @@ pub enum Command {
     ClaimClosed {
         claim: String,
     },
+    /// Claims changed an overpayment (`overpayment_*`), with what is still
+    /// owed on it (`repay.rs`).
+    OverpaymentChanged {
+        claim: String,
+        overpayment: String,
+        policy: String,
+        outstanding_minor: i64,
+    },
     /// Someone holding a notice's role closes it with what they did.
     CloseNotice {
         notice: u64,
@@ -632,6 +640,10 @@ pub struct PaymentsState {
     /// money going out (SVC-022).
     #[serde(default)]
     pub customer_holds: BTreeMap<String, crate::hold::HoldRecord>,
+    /// Claim overpayments still owed, under the reference a repayment
+    /// quotes (`repay.rs`).
+    #[serde(default)]
+    pub repayables: crate::repay::Repayables,
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
@@ -742,6 +754,12 @@ impl PaymentsState {
                 reason,
             } => self.declare_incident(tx, incident, authorities, from, to, reason),
             Command::ClaimAdmitted { claim, amount_minor } => self.claim_admitted(tx, &claim, amount_minor),
+            Command::OverpaymentChanged {
+                claim,
+                overpayment,
+                policy,
+                outstanding_minor,
+            } => self.overpayment_changed(tx, &claim, &overpayment, &policy, outstanding_minor),
             Command::ClaimClosed { claim } => {
                 tx.need(Role::Service)?;
                 self.claim_left_forecast(&claim);
