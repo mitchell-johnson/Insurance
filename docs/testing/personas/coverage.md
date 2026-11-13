@@ -66,7 +66,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 5 | 17 | 5 |
-| ANV The anniversary window | 2 | 2 | 15 | 4 |
+| ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 7 | 7 | 7 | 7 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
@@ -75,15 +75,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 2 | 4 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
-| DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
+| DOC Policy documents and correspondence | 9 | 1 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **248** | **131** | **198** | **136** |
+| **Total** | **250** | **130** | **197** | **135** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 86 | 29 | 27 |
-| C | 131 | 69 | 146 |
+| B | 87 | 29 | 26 |
+| C | 132 | 68 | 146 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -100,7 +100,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **HLT** (2): HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
-- **ANV** (3): ANV-001, ANV-006, ANV-014
+- **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
 - **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013

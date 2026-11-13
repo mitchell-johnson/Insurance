@@ -377,6 +377,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ANV-002 | full | `sim/tests/scenarios.rs::anniversary_indexes_cover_and_re_rates_stepped_premium` |
 | ANV-007 | full | `sim/tests/reopen.rs::a_decline_of_indexation_made_on_a_wrong_notice_is_set_aside_from_the_anniversary` |
 | ANV-011 | part | `sim/tests/unwind.rs::a_death_notified_six_weeks_late_ends_the_policy_as_at_the_day_it_happened` |
+| ANV-014 | full | `documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried`<br>`documents/tests/delivery.rs::an_unconfirmed_send_times_out_and_the_chain_runs_to_its_end` |
 | ANV-016 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean` |
 
 ## ANN Annuities
@@ -509,13 +510,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | DOC-001 | full | `documents/tests/render.rs::rendering_is_deterministic`<br>`documents/tests/driver.rs::verification_detects_a_changed_document` |
 | DOC-002 | full | `documents/tests/templates.rs::every_product_version_and_language_needs_a_passing_case`<br>`documents/tests/languages.rs::a_translation_is_rendered_from_the_same_data_and_says_what_controls` |
-| DOC-003 | part | `documents/tests/templates.rs::submission_checks_structure_readability_and_translations`<br>`documents/tests/render.rs::reading_grade_ranks_plain_words_below_dense_ones` |
+| DOC-003 | full | `documents/tests/templates.rs::submission_checks_structure_readability_and_translations`<br>`documents/tests/render.rs::reading_grade_ranks_plain_words_below_dense_ones`<br>`documents/tests/templates.rs::a_translation_is_versioned_with_its_primary` |
 | DOC-004 | full | `documents/tests/render.rs::a_missing_or_mistyped_value_fails_the_render`<br>`documents/tests/templates.rs::a_failing_rendering_run_blocks_activation_and_is_reported` |
 | DOC-005 | full | `documents/tests/delivery.rs::proven_delivery_starts_the_notice_clock`<br>`documents/tests/delivery.rs::a_bounced_notice_falls_back_to_post_and_is_deemed_delivered` |
 | DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
 | DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
-| DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master` |
+| DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it` |
 | DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration
