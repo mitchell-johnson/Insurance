@@ -522,6 +522,9 @@ pub enum Command {
     SetEntitlement(Box<crate::entitlement::SetEntitlement>),
     /// Some of a scheme's members move to a new scheme: a sale or demerger.
     SplitScheme(Box<crate::group::SplitScheme>),
+    /// Set the covers a scheme member chose from the scheme's menu, for
+    /// themselves or one dependant, from a date.
+    SetMemberCovers(Box<crate::group::SetMemberCovers>),
     /// An approved, per-policy discount is given, or its end brought forward.
     SetDiscountOverride(Box<crate::discount_override::SetDiscountOverride>),
     // --- payments: money leaving through a payable ---
@@ -657,6 +660,7 @@ impl Command {
             Command::SetOwnerHold(command) => command.allowed_callers(),
             Command::SetEntitlement(command) => command.allowed_callers(),
             Command::SplitScheme(command) => command.allowed_callers(),
+            Command::SetMemberCovers(command) => command.allowed_callers(),
             Command::SetDiscountOverride(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
@@ -722,6 +726,7 @@ impl Command {
             Command::SetOwnerHold(_) => "set_owner_hold",
             Command::SetEntitlement(_) => "set_entitlement",
             Command::SplitScheme(_) => "split_scheme",
+            Command::SetMemberCovers(_) => "set_member_covers",
             Command::SetDiscountOverride(_) => "set_discount_override",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",

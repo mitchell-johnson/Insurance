@@ -233,7 +233,12 @@ fn settle_credits(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, p
         let mut set = PostingSet::new();
         set.debit(accounts::premium_receivable(&policy.id, c), to_suspense as i128, Dimensions::default());
         let suspense = match payer {
-            Some(life) => accounts::member_suspense(&policy.id, life, c),
+            Some(life) => {
+                // The member now has money of their own on the policy, to be
+                // set against their next bill or paid back.
+                policy.member_accounts.insert(life.clone());
+                accounts::member_suspense(&policy.id, life, c)
+            }
             None => accounts::policy_suspense(&policy.id, c),
         };
         set.credit(suspense, to_suspense as i128, Dimensions::default());

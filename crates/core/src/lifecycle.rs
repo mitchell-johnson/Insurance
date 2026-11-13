@@ -32,6 +32,7 @@ pub(crate) fn life_infos(policy: &Policy) -> Vec<LifeInfo> {
             let party = match &l.kind {
                 LifeKind::Named { party } => Some(party.clone()),
                 LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+                LifeKind::Dependant { party, .. } => party.clone(),
                 LifeKind::Pool { .. } => None,
             };
             LifeInfo::with_factors(l.id.clone(), party, l.factors.as_of(NaiveDate::MAX))
@@ -59,10 +60,11 @@ pub(crate) fn layer_infos(policy: &Policy) -> Vec<LayerInfo> {
 /// A scheme member's cover under each formula-driven cover, on the given
 /// details.
 pub(crate) fn member_covers(product: &ProductDefinition, policy: &Policy, life: &LifeId, factors: &LifeFactors) -> Vec<MemberCover> {
+    let dependant = policy.lives.get(life).is_some_and(|l| matches!(l.kind, LifeKind::Dependant { .. }));
     policy
         .covers
         .values()
-        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce)
+        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce && !dependant)
         .filter_map(|c| {
             let def = product.cover(&c.code)?;
             let sum_insured_minor = member_sum_insured(def, factors, life, product.rounding, product.currency).ok()?;
@@ -343,7 +345,11 @@ pub(crate) fn anniversaries(catalog: &Catalog, product: &ProductDefinition, poli
         });
         let lives = &policy.lives;
         let mut expired = Vec::new();
-        for cover in policy.covers.values_mut().filter(|c| c.status == CoverStatus::InForce && !c.formula_driven) {
+        for cover in policy
+            .covers
+            .values_mut()
+            .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
+        {
             let Some(def) = product.cover(&cover.code) else {
                 continue;
             };
@@ -396,7 +402,11 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
         if let Some(code) = product.indexation() {
             if let Some(rate) = catalog.index_rate_on(code, on) {
                 let mut added = Vec::new();
-                for cover in policy.covers.values_mut().filter(|c| c.status == CoverStatus::InForce && !c.formula_driven) {
+                for cover in policy
+                    .covers
+                    .values_mut()
+                    .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
+                {
                     let Some(def) = product.cover(&cover.code) else {
                         continue;
                     };

@@ -38,6 +38,7 @@ fn all_shipped_configuration_loads() {
         ("term_life.star", TERM),
         ("health_plan.star", HEALTH),
         ("group_life.star", GROUP),
+        ("group_benefits.star", include_str!("../../../products/group_benefits.star")),
         ("invest_plan.star", INVEST),
         ("health_flex.star", FLEX),
         ("interim_accident.star", INTERIM),

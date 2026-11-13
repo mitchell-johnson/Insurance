@@ -66,6 +66,15 @@ pub enum LifeKind {
     UnnamedMember { member_ref: String, linked_party: Option<PartyId> },
     /// Cover expressed in aggregate for a group.
     Pool { headcount: u32, total_salary_minor: i64 },
+    /// A scheme member's partner or child. A dependant has no cover the
+    /// scheme gives automatically, only the covers chosen for them, and
+    /// leaves the scheme when their member does.
+    Dependant {
+        /// The member they are on the scheme through.
+        of: LifeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        party: Option<PartyId>,
+    },
 }
 
 /// Rating attributes of a life. These are insurance facts, not identity.
@@ -127,6 +136,9 @@ pub enum LayerOrigin {
     /// A scheme member's cover above the automatic amount, accepted by
     /// underwriting and written as its own layer on the scheme's cover.
     UnderwrittenExcess,
+    /// A cover a scheme member chose from the scheme's menu, for themselves
+    /// or a dependant: a health plan, or a level of one.
+    MemberChoice,
 }
 
 /// Who pays for an underwritten layer on a scheme member's cover.
@@ -225,6 +237,16 @@ impl Cover {
     /// A cover's sum insured on a date is the sum of its layers in force.
     pub fn sum_insured_on(&self, on: NaiveDate) -> i64 {
         self.layers.iter().filter(|l| l.in_force_on(on)).map(|l| l.sum_insured_minor).sum()
+    }
+    /// Whether a layer is one scheme member's own: cover chosen from the
+    /// scheme's menu, or underwritten cover above the automatic amount. It
+    /// is priced on that member's line and ends when they leave.
+    pub fn members_own(&self, layer: &Layer) -> bool {
+        layer.origin == LayerOrigin::MemberChoice || (self.formula_driven && layer.origin == LayerOrigin::UnderwrittenExcess)
+    }
+    /// A cover on a scheme that members choose, one at a time.
+    pub fn chosen_by_members(&self) -> bool {
+        self.layers.iter().any(|l| l.origin == LayerOrigin::MemberChoice)
     }
 }
 
@@ -699,6 +721,21 @@ pub struct PaymentRecord {
 }
 
 impl Policy {
+    /// Who is billed for cover on a life that the member pays for: the life
+    /// itself, or for a dependant the member they are on the scheme through.
+    pub fn payer_of(&self, life: &LifeId) -> LifeId {
+        match self.lives.get(life).map(|l| &l.kind) {
+            Some(LifeKind::Dependant { of, .. }) => of.clone(),
+            _ => life.clone(),
+        }
+    }
+    /// The dependants on the scheme through a member, whether or not they
+    /// have left.
+    pub fn dependants_of<'a>(&'a self, member: &'a LifeId) -> impl Iterator<Item = &'a LifeRecord> + 'a {
+        self.lives
+            .values()
+            .filter(move |l| matches!(&l.kind, LifeKind::Dependant { of, .. } if of == member))
+    }
     pub fn is_frozen(&self) -> bool {
         self.transfer_out.is_some()
     }

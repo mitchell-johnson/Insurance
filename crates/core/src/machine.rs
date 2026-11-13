@@ -760,6 +760,12 @@ impl CoreState {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
             }
+            Command::SetMemberCovers(command) => {
+                let id = command.policy.clone();
+                self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
+                    group::set_member_covers(&mut s.ledger, &s.catalog, p, ctx, *command)
+                })
+            }
             Command::SplitScheme(command) => {
                 let (id, new_id) = (command.policy.clone(), command.new_policy.clone());
                 // The new scheme is written only if the whole split stands.

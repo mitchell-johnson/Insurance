@@ -662,6 +662,13 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             lives: vec![LifeId("life-1".into())],
             effective: d(2027, 11, 15),
         })),
+        Command::SetMemberCovers(Box::new(ic_core::SetMemberCovers {
+            policy: p.clone(),
+            life: LifeId("life-1".into()),
+            covers: vec![],
+            effective: d(2027, 11, 15),
+            reference: "enrol-1".into(),
+        })),
         Command::SetEntitlement(Box::new(ic_core::entitlement::SetEntitlement {
             policy: p.clone(),
             code: "wellness".into(),
@@ -694,7 +701,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 53, "{names:?}");
+    assert_eq!(names.len(), 54, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail
