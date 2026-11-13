@@ -197,3 +197,80 @@ impl Core for ClusterCore {
         Ok(reply.rejected.map(|r| r.code))
     }
 }
+
+/// The core command setting or ending a person's own hold on one policy.
+pub fn owner_hold(policy: &str, held: bool, reference: &str) -> ic_core::Command {
+    ic_core::Command::SetOwnerHold(Box::new(ic_core::owner_hold::SetOwnerHold {
+        policy: ic_core::PolicyId(policy.to_string()),
+        held,
+        reference: reference.to_string(),
+    }))
+}
+
+/// One hold change for the core: on `policy`, held or not, from `due_on`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldChange {
+    pub policy: String,
+    pub held: bool,
+    pub reference: String,
+    pub due_on: NaiveDate,
+}
+
+/// The hold changes a party's new events mean for the core. `party` is the
+/// state after the events; `held_before` whether a hold stood before them.
+/// A hold placed or ended applies to every policy the party owns now or
+/// from a later date. While it stands, a new ownership takes it, and an
+/// ownership ending releases the policy on the day it ends, so the next
+/// owner is not held by someone else's hold.
+pub fn owner_hold_changes(party: &crate::party::Party, written: &[crate::event::Recorded], held_before: bool, today: NaiveDate) -> Vec<HoldChange> {
+    use crate::event::EventBody;
+    use crate::model::{RelationshipKind, Target};
+    let owned = |r: &crate::model::Relationship| match (&r.kind, &r.target) {
+        (RelationshipKind::Owner, Target::Policy(p)) => Some(p.clone()),
+        _ => None,
+    };
+    let id = &party.id.0;
+    let mut out = Vec::new();
+    let mut push = |policy: String, held: bool, reference: String, due_on: NaiveDate| {
+        out.push(HoldChange {
+            policy,
+            held,
+            reference,
+            due_on,
+        })
+    };
+    let mut held = held_before;
+    for r in written {
+        let seq = r.seq;
+        match &r.body {
+            EventBody::SpendingHoldPlaced | EventBody::SpendingHoldEnded { .. } => {
+                let (now_held, reference) = match &r.body {
+                    EventBody::SpendingHoldEnded { reference: Some(legal), .. } => (false, legal.clone()),
+                    EventBody::SpendingHoldEnded { .. } => (false, format!("spending-hold-ended:{id}:{seq}")),
+                    _ => (true, format!("spending-hold:{id}:{seq}")),
+                };
+                held = now_held;
+                for rel in party.relationships.values().filter(|r| r.valid_to.is_none_or(|end| end > today)) {
+                    if let Some(policy) = owned(rel) {
+                        push(policy.clone(), now_held, reference.clone(), today);
+                        if let (true, Some(end)) = (now_held, rel.valid_to) {
+                            push(policy, false, format!("ownership-ended:{id}:{seq}"), end);
+                        }
+                    }
+                }
+            }
+            EventBody::RelationshipAdded(rel) if held => {
+                if let Some(policy) = owned(rel) {
+                    push(policy, true, format!("spending-hold:{id}:{seq}"), today);
+                }
+            }
+            EventBody::RelationshipEnded { id: rid, valid_to } if held => {
+                if let Some(policy) = party.relationships.get(rid).and_then(owned) {
+                    push(policy, false, format!("ownership-ended:{id}:{seq}"), (*valid_to).max(today));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}

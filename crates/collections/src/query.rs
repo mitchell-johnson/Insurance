@@ -57,6 +57,11 @@ pub enum Question {
     },
     /// Products with policies and no sequence: nothing is sent for them.
     Unsequenced,
+    /// Lapsed policies the core sent to underwriting for reinstatement
+    /// (an open `reinstatement_underwriting` task names them). The
+    /// underwriting driver opens a proposal for each, as caller
+    /// `collections`; `duplicate_proposal` means it already did.
+    ReinstatementsForUnderwriting,
     StateHash,
 }
 
@@ -203,6 +208,7 @@ pub fn answer(state: &CollectionsState, question: Value) -> Result<Value, String
         Question::HardshipCase { case, role } => value(state.hardship_case(&case, role)),
         Question::Outbox { limit } => value(state.outbox.values().take(limit.min(MAX_ANSWER)).collect::<Vec<_>>()),
         Question::Unsequenced => value(&state.unsequenced),
+        Question::ReinstatementsForUnderwriting => value(state.reinstatements_for_underwriting()),
         Question::StateHash => value(state.state_hash()),
     }
 }

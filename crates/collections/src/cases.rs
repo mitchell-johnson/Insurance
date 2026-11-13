@@ -173,6 +173,23 @@ impl CollectionsState {
         }
     }
 
+    /// Lapsed policies waiting for underwriting to take up their
+    /// reinstatement, in order.
+    pub fn reinstatements_for_underwriting(&self) -> Vec<PolicyId> {
+        let mut policies: Vec<PolicyId> = self
+            .open_tasks
+            .iter()
+            .filter_map(|id| self.tasks.get(id))
+            .filter(|t| t.kind == TaskKind::ReinstatementUnderwriting)
+            .flat_map(|t| t.policies.iter())
+            .filter(|p| self.policies.get(*p).is_some_and(|p| p.ended))
+            .cloned()
+            .collect();
+        policies.sort();
+        policies.dedup();
+        policies
+    }
+
     /// The core's answer to a posting. A refusal is a task: the officer
     /// tells the customer and agrees something else.
     pub(crate) fn core_outcome(&mut self, id: &str, applied: bool, code: Option<String>, message: Option<String>, ctx: &mut Ctx) -> Result<(), Reject> {

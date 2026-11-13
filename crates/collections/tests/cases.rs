@@ -646,7 +646,8 @@ fn a_reinstatement_is_asked_of_the_core_and_its_refusal_is_a_task() {
 /// Purpose: when underwriting approves a reinstatement that the core sent
 /// to it, collections asks the core again for the policy it is waiting on,
 /// once; an approval for a policy collections is not waiting on asks
-/// nothing. The core's event is read as that fact.
+/// nothing. The core's event is read as that fact. While it waits, the
+/// policy is listed for underwriting's driver to open its proposal.
 /// Why it matters: the customer has done everything asked of them once
 /// underwriting says yes. Waiting for an officer to notice would leave them
 /// uncovered for days; asking for policies nobody is chasing would reinstate
@@ -680,6 +681,8 @@ fn an_underwriting_approval_asks_the_core_again() {
         message: None,
     });
     assert!(world.state.outbox.is_empty());
+    let wanted = || ic_collections::query::answer(&world.state, serde_json::json!({"q": "reinstatements_for_underwriting"})).unwrap();
+    assert_eq!(wanted(), serde_json::json!(["p1"]), "underwriting's driver is told to open p1");
 
     world.core(0, approved("p2"));
     assert!(world.state.outbox.is_empty(), "p2 was not waiting on underwriting");

@@ -7,7 +7,7 @@
 use std::future::Future;
 use std::time::Duration;
 
-use chrono::{NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use ic_azure::blob::WormStore;
 use ic_azure::eventhubs::EventHubsSink;
 use ic_azure::keywrap::KeyWrapper;
@@ -174,6 +174,62 @@ pub async fn relay_directory<W: KeyWrapper, S: WormStore, D: crate::relay::Direc
     Ok(told)
 }
 
+/// How long a hold change waits for a partition to hold its policy (one
+/// still being issued, say) before it is given up and logged.
+pub const OWNER_HOLD_WAIT_DAYS: i64 = 7;
+
+/// Tell the core of a person's own hold, policy by policy, in order. The
+/// master does not know which partition holds a policy, so each change goes
+/// to every partition and `unknown_policy` means "not here". A change no
+/// partition takes is tried again until `OWNER_HOLD_WAIT_DAYS` have passed;
+/// any other refusal, or a partition out of reach, holds up that party's
+/// later changes so the core never sees a hold end before it starts.
+/// Returns the number told.
+pub async fn relay_owner_holds<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(app: &App<W, S>, core: &C, now: DateTime<Utc>) -> Result<usize, String> {
+    let waiting = app.store.owner_holds_to_relay(now.date_naive(), 100).await.map_err(crate::text)?;
+    if waiting.is_empty() {
+        return Ok(0);
+    }
+    let partitions = core.partitions().await?;
+    let mut told = 0;
+    let mut held = std::collections::BTreeSet::new();
+    for n in waiting {
+        if held.contains(&n.party) {
+            continue;
+        }
+        let command = crate::relay::owner_hold(&n.policy, n.held, &n.reference);
+        let mut taken = false;
+        let mut failed = None;
+        for partition in 0..partitions {
+            match core
+                .propose(partition, &format!("owner-hold:{}:{partition}:{}", n.row, n.attempts), &command)
+                .await
+            {
+                Ok(None) => taken = true,
+                Ok(Some(code)) if code == "unknown_policy" => {}
+                Ok(Some(code)) => failed = Some(format!("partition {partition} refused: {code}")),
+                Err(e) => failed = Some(format!("partition {partition}: {e}")),
+            }
+        }
+        let gave_up = !taken && failed.is_none() && now - n.recorded_at > chrono::Duration::days(OWNER_HOLD_WAIT_DAYS);
+        let failed = match (failed, taken || gave_up) {
+            (Some(e), _) => Some(e),
+            (None, true) => None,
+            (None, false) => Some("no partition holds the policy yet".to_string()),
+        };
+        app.store.owner_hold_done(n.row, failed.as_deref()).await.map_err(crate::text)?;
+        match failed {
+            None if gave_up => tracing::warn!(party = %n.party, policy = %n.policy, "no partition ever held the policy; hold change given up"),
+            None => told += 1,
+            Some(e) => {
+                tracing::warn!(party = %n.party, policy = %n.policy, error = %e, "the core has not yet taken a hold change; will retry");
+                held.insert(n.party);
+            }
+        }
+    }
+    Ok(told)
+}
+
 /// Run the outbox every `every`, and the sweep every `sweep_every`, until
 /// `stop` completes. A failed pass is logged and tried again next time.
 /// Keep the blind index under every key in use: name older entries, index
@@ -209,6 +265,9 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::rel
             }
             if let Err(e) = relay_directory(app, core).await {
                 tracing::warn!(error = %e, "relaying to the channels directory failed; will retry");
+            }
+            if let Err(e) = relay_owner_holds(app, core, Utc::now()).await {
+                tracing::warn!(error = %e, "telling the core of spending holds failed; will retry");
             }
         }
         if let Err(e) = maintain_index(app).await {
