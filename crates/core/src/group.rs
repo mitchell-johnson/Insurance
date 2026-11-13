@@ -443,7 +443,7 @@ fn stage(
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "membership can only change on a scheme in force"));
     }
-    if !policy.covers.values().any(|c| c.formula_driven) {
+    if !policy.is_scheme() {
         return Err(Reject::new("not_a_scheme", "this policy is not a group scheme"));
     }
     if policy.pending_invoice.is_some() {
@@ -1107,6 +1107,7 @@ pub(crate) fn split(
                 variations: policy.variations.clone(),
                 declined_anniversaries: policy.declined_anniversaries.clone(),
                 split_from: Some(origin),
+                scheme: policy.scheme,
                 lives: Default::default(),
                 reopen_windows: Default::default(),
                 notices: Default::default(),
@@ -1204,7 +1205,7 @@ pub(crate) fn set_member_covers(ledger: &mut Ledger, catalog: &Catalog, policy: 
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "cover can only change on a scheme in force"));
     }
-    if !policy.covers.values().any(|c| c.formula_driven) {
+    if !policy.is_scheme() {
         return Err(Reject::new("not_a_scheme", "this policy is not a group scheme"));
     }
     if policy.pending_invoice.is_some() {

@@ -625,6 +625,11 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// A group scheme: its lives are members, billed together on one
+    /// invoice. A scheme whose product has only covers that members choose
+    /// (a health-only employer plan) has no formula cover to know it by.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scheme: bool,
     /// The scheme this one was split from, and the date.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split_from: Option<crate::group::SplitFrom>,
@@ -721,6 +726,10 @@ pub struct PaymentRecord {
 }
 
 impl Policy {
+    /// Whether this is a group scheme rather than a retail policy.
+    pub fn is_scheme(&self) -> bool {
+        self.scheme || self.covers.values().any(|c| c.formula_driven)
+    }
     /// Who is billed for cover on a life that the member pays for: the life
     /// itself, or for a dependant the member they are on the scheme through.
     pub fn payer_of(&self, life: &LifeId) -> LifeId {

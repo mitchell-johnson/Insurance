@@ -110,7 +110,11 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
     if !product.allows_frequency(cmd.frequency) {
         return Err(Reject::new("frequency", "the product does not offer that premium frequency"));
     }
-    if cmd.lives.is_empty() || cmd.covers.is_empty() {
+    // A scheme on a product with nothing but a menu starts with members and
+    // no cover: each member's covers are chosen afterwards.
+    let scheme = product.line == ic_product::LineOfBusiness::Group;
+    let menu_only = scheme && product.covers.iter().all(|c| c.rating.premium_type != PremiumType::GroupUnitRate);
+    if cmd.lives.is_empty() || (cmd.covers.is_empty() && !menu_only) {
         return Err(Reject::new("invalid_policy", "a policy needs at least one life and one cover"));
     }
     if cmd.lives.len() > MAX_MEMBERSHIP_CHUNK {
@@ -155,6 +159,12 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             layers: vec![],
             formula_driven: formula,
         });
+        if !formula && scheme {
+            return Err(Reject::new(
+                "invalid_policy",
+                format!("cover {} is chosen by each member of a scheme once the scheme is issued", spec.code),
+            ));
+        }
         if !formula {
             let life = spec
                 .life
@@ -246,6 +256,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         owner_hold: None,
         entitlements: Vec::new(),
         split_from: None,
+        scheme,
         discount_overrides: Vec::new(),
         continuation_of: cmd.continuation_of,
         payments: BTreeMap::new(),
@@ -260,7 +271,7 @@ pub fn quote(catalog: &Catalog, application: IssuePolicy, today: NaiveDate) -> R
     let (policy, product) = build_policy(catalog, application, today, 0)?;
     let mut work = 0;
     let mut premium = retail_period_premium(catalog, &product, &policy, policy.inception, &mut work)?;
-    if policy.covers.values().any(|c| c.formula_driven) {
+    if policy.is_scheme() {
         for life in policy.lives.values() {
             crate::premium::add_premium(&mut premium, &member_period_premium(catalog, &product, &policy, life, policy.inception)?)?;
         }
@@ -298,7 +309,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
     // Rate everything before anything is written, so a policy that cannot be
     // priced is refused whole.
     retail_period_premium(&state.catalog, &product, &policy, policy.inception, &mut ctx.work)?;
-    if policy.covers.values().any(|c| c.formula_driven) {
+    if policy.is_scheme() {
         for life in policy.lives.values() {
             ctx.work += 2;
             member_period_premium(&state.catalog, &product, &policy, life, policy.inception)?;
@@ -694,7 +705,7 @@ pub(crate) fn reinstate(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     }
     // What the missed periods will cost, priced before anything is written.
     let mut missed: i64 = 0;
-    if !policy.covers.values().any(|c| c.formula_driven) {
+    if !policy.is_scheme() {
         let mut n = policy.periods_billed;
         while let Some(start) = period_start(policy.inception, policy.frequency, n) {
             if start > ctx.date {

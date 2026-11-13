@@ -52,6 +52,7 @@ CLOSE = close_config(
         accounting_group("interim-accident", "individual-life"),
         accounting_group("group-life", "group-life"),
         accounting_group("group-benefits", "group-life"),
+        accounting_group("group-health", "health"),
         accounting_group("health-plan", "health"),
         accounting_group("health-flex", "health"),
         accounting_group("invest-plan", "investment-linked"),

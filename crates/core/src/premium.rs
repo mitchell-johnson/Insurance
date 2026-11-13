@@ -86,7 +86,7 @@ pub(crate) fn retail_premium_with(
     let mut annual: BTreeMap<Line, Dec> = BTreeMap::new();
     let mut lives = std::collections::BTreeSet::new();
     for cover in policy.covers.values() {
-        if cover.status != CoverStatus::InForce || cover.formula_driven {
+        if cover.status != CoverStatus::InForce || cover.formula_driven || cover.chosen_by_members() {
             continue;
         }
         let def = product.cover(&cover.code).ok_or_else(|| PremiumError::UnknownCover(cover.code.clone()))?;

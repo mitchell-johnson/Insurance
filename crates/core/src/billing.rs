@@ -272,7 +272,7 @@ pub(crate) fn bill_due_periods(
     policy: &mut Policy,
     ctx: &mut Ctx<'_>,
 ) -> Result<bool, Reject> {
-    let scheme = policy.covers.values().any(|c| c.formula_driven);
+    let scheme = policy.is_scheme();
     // Bounded per command; a policy catching up after a transfer or an outage
     // takes several end-of-day steps.
     for _ in 0..3 {

@@ -486,3 +486,87 @@ fn a_member_who_stops_paying_loses_their_upgrade_and_their_dependants_cover_only
         Some((life("staff-1"), vec![("specialist".to_string(), 1), ("hospital".to_string(), 2)]))
     );
 }
+
+/// Purpose: an employer health scheme with no life cover at all is issued with its members
+/// and nothing to bill, is billed as a scheme once members choose from the menu (one
+/// invoice for the employer, the member's own bill beside it), takes joiners and leavers
+/// through the membership file like any scheme, and refuses both a cover written at issue
+/// and the commands that belong to a retail policy.
+/// Why it matters: a health-only employer plan is the common case. If the core knew a
+/// scheme only by its formula cover, this one would be billed as a retail policy with no
+/// layers, which is nothing at all, and every member would be on risk unbilled.
+#[test]
+fn a_health_only_scheme_is_a_scheme_from_issue_and_is_billed_on_what_members_choose() {
+    let mut c = cluster();
+    let mut issue = group_scheme(
+        41,
+        d(2027, 11, 1),
+        vec![
+            member("staff-1", d(1985, 1, 1), "staff", 60_000_00),
+            member("staff-2", d(1995, 1, 1), "staff", 50_000_00),
+        ],
+    );
+    issue.product_code = "group-health".into();
+    let mut with_cover = issue.clone();
+    with_cover.covers[0].code = "dental".into();
+    with_cover.covers[0].life = Some(life("staff-1"));
+    issue.covers.clear();
+    let (p, id) = (c.partition_of(&issue.group), issue.policy.clone());
+    assert_eq!(c.submit(p, "new-business", issue_command(with_cover)).unwrap_err().code, "invalid_policy");
+    c.submit(p, "new-business", issue_command(issue)).unwrap();
+    assert!(c.state(p).policies[&id].is_scheme());
+    assert_eq!(employer_owes(&c, p, &id), 0, "nobody has chosen anything yet");
+
+    // Staff-1 (42): hospital at the standard excess from the employer, 115.00 a month with
+    // GST. Staff-2 (32): dental paid for themselves.
+    choose(&mut c, p, &id, "staff-1", d(2027, 11, 1), vec![chosen("hospital", Some("standard"), false)]).unwrap();
+    choose(&mut c, p, &id, "staff-2", d(2027, 11, 1), vec![chosen("dental", None, true)]).unwrap();
+    assert_eq!(employer_owes(&c, p, &id), 115_00);
+    let dental = member_owes(&c, p, &id, "staff-2");
+    assert!(dental > 0);
+
+    let joins = MemberChange::Joined {
+        life: dependant("staff-1-partner", "staff-1", d(1986, 2, 2)),
+        effective: d(2027, 11, 1),
+    };
+    membership(&mut c, p, &id, vec![joins]).unwrap();
+    choose(
+        &mut c,
+        p,
+        &id,
+        "staff-1-partner",
+        d(2027, 11, 1),
+        vec![chosen("hospital", Some("standard"), false)],
+    )
+    .unwrap();
+    assert_eq!(employer_owes(&c, p, &id), 2 * 115_00);
+
+    // December is one scheme invoice and one member bill.
+    days(&mut c, 30);
+    let seen = events(&mut c);
+    let invoiced = seen.iter().find_map(|e| match e {
+        Event::PremiumDue { total_minor, members, .. } => Some((*total_minor, *members)),
+        _ => None,
+    });
+    assert_eq!(invoiced, Some((2 * 115_00, Some(2))));
+    assert!(seen
+        .iter()
+        .any(|e| matches!(e, Event::MemberPremiumBilled { life: l, total_minor, .. } if *l == life("staff-2") && *total_minor == dental)));
+
+    // A leaver takes their dependant and their covers with them.
+    let leave = MemberChange::Left {
+        life: life("staff-1"),
+        effective: d(2027, 12, 1),
+    };
+    membership(&mut c, p, &id, vec![leave]).unwrap();
+    assert_eq!(employer_owes(&c, p, &id), 2 * 115_00, "November stands and December is credited in full");
+
+    // What belongs to a retail policy is refused here.
+    let unwind = Command::UnwindAfter {
+        policy: id.clone(),
+        after: d(2027, 11, 15),
+        cause: ic_core::UnwindCause::Remediation,
+        reference: "rem-1".into(),
+    };
+    assert_eq!(c.submit(p, "remediation", unwind).unwrap_err().code, "scheme_policy");
+}
