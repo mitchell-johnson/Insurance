@@ -35,6 +35,7 @@ pub fn rules() -> Rules {
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,
+        DecisionKind::FuneralAdvance,
     ];
     Rules {
         version: 1,

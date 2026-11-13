@@ -83,6 +83,12 @@ pub enum Request {
     },
     Decline,
     Withdraw,
+    /// Advance part of a death benefit before the claim is decided, for the
+    /// funeral or the family's immediate needs. It is admitted now, paid with
+    /// `Pay` to the verified payee, and counted against the final amount.
+    FuneralAdvance {
+        amount_minor: i64,
+    },
     /// Overturn the insurer's own admission. The benefit stops from the
     /// decision date and what was paid is recorded as an overpayment, held.
     ReverseAdmission {
@@ -131,6 +137,7 @@ impl Request {
             Request::Admit { .. } => DecisionKind::Admit,
             Request::Decline => DecisionKind::Decline,
             Request::Withdraw => DecisionKind::Withdraw,
+            Request::FuneralAdvance { .. } => DecisionKind::FuneralAdvance,
             Request::ReverseAdmission { .. } => DecisionKind::ReverseAdmission,
             Request::ExGratia { .. } => DecisionKind::ExGratia,
             Request::EndBenefit { .. } => DecisionKind::EndBenefit,

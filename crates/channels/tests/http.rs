@@ -2087,9 +2087,14 @@ async fn the_finance_console() {
         "trial_balance?period=2027-11&fund=SF1-life",
         "movements?period=2027-11",
         "aged_suspense?as_at=2027-11-30",
+        "accounting_groups",
     ] {
         assert_eq!(ask("sub-aud", fine).await.0, StatusCode::OK, "{fine}");
     }
+    // One policy's accounting group: the partition is a number, and a policy in no group is 404.
+    // A policy not yet placed has no group: the ledger answers nothing rather than a guess.
+    assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=1").await, (StatusCode::OK, Value::Null));
+    assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=one").await.0, StatusCode::BAD_REQUEST);
     // Only the console's questions, each with its fields; one the ledger cannot read is its refusal.
     for bad in [
         "table_dry_run?as_at=2027-11-30",
@@ -2150,6 +2155,18 @@ async fn the_finance_console() {
     assert!(balance.as_array().unwrap().iter().any(|row| row["account"] == "6500"), "{balance}");
     // The ledger keeps maker and checker apart whatever roles one person holds.
     assert_eq!(tell("sub-gllead", journal("j2", lines(json!(250_00)))).await.0, StatusCode::OK);
+    // A command with no fields goes by its name alone; a reader may not send it.
+    assert_eq!(tell("sub-aud", json!("classify_policies")).await.0, StatusCode::FORBIDDEN);
+    assert_eq!(tell("sub-gllead", json!("classify_policies")).await.0, StatusCode::OK);
+    assert_eq!(tell("sub-gllead", json!(["classify_policies"])).await.0, StatusCode::BAD_REQUEST);
+    // A cut-over total comes in minor units and reaches the ledger on its own scale: here the ledger
+    // refuses it only because the account is not a migration control account.
+    let cutover =
+        |minor: Value| json!({ "record_cutover_total": { "account": "1999", "unit": { "Currency": "NZD" }, "total_minor": minor, "evidence": "legacy TB" } });
+    let (status, problem) = tell("sub-gllead", cutover(json!(1_000_00))).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert!(problem.to_string().contains("migration control"), "{problem}");
+    assert_eq!(tell("sub-gllead", cutover(json!(i64::MAX))).await.0, StatusCode::BAD_REQUEST);
     let (status, problem) = tell("sub-gllead", json!({ "approve_journal": { "id": "j2" } })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("separation")), "{problem}");
 

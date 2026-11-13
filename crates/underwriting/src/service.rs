@@ -11,6 +11,7 @@ use std::time::Duration;
 use chrono::{DateTime, Utc};
 use ic_azure::credential::AzureCredential;
 use ic_azure::eventhubs::EventHubsSink;
+use ic_core::PolicyId;
 use ic_ledger::PartitionId;
 use ic_raft::{ClusterAuth, ClusterClient};
 use ic_reinsurance::capacity::Outcome;
@@ -205,6 +206,46 @@ impl Core for Cluster {
             events: reply.events.into_iter().map(|e| e.event).collect(),
         })
     }
+
+    async fn lapsed_for_underwriting(&self) -> Result<Vec<ic_core::policy::Policy>, DriverError> {
+        let listed = self
+            .ask_module("collections", &serde_json::json!({"q": "reinstatements_for_underwriting"}))
+            .await?;
+        let listed: Vec<Listed> = serde_json::from_value(listed)
+            .map_err(|e| DriverError::Answer(format!("collections listed the lapsed policies in a form this driver does not read: {e}")))?;
+        let mut found = Vec::new();
+        for item in listed {
+            let (policy, partition) = match item {
+                Listed::Policy(policy) => (policy, None),
+                Listed::Placed { policy, partition } => (policy, Some(partition)),
+            };
+            // Where collections says, or else each partition in turn.
+            let mut entry = None;
+            for p in partition.map_or(0..self.partitions, |p| p..p + 1) {
+                entry = self.client.locate(p, &policy).await.map_err(|e| DriverError::Unavailable(e.to_string()))?;
+                if entry.is_some() {
+                    break;
+                }
+            }
+            let Some(entry) = entry else { continue };
+            let view = self
+                .client
+                .policy_by_number(entry.partition, &entry.number)
+                .await
+                .map_err(|e| DriverError::Unavailable(e.to_string()))?;
+            found.extend(view.map(|v| v.policy));
+        }
+        Ok(found)
+    }
+}
+
+/// A lapsed policy as collections lists it: its ID, or its ID and the
+/// partition it is on.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Listed {
+    Policy(PolicyId),
+    Placed { policy: PolicyId, partition: PartitionId },
 }
 
 impl Letters for Cluster {
