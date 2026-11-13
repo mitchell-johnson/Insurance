@@ -115,6 +115,21 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
         if c.max_sum_insured_minor.is_some_and(|m| m < c.min_sum_insured_minor) || c.min_sum_insured_minor < 0 {
             return Err(invalid(file, format!("cover {}: sum insured limits are inconsistent", c.code)));
         }
+        let mut options = BTreeSet::new();
+        for o in &c.excess_options {
+            if o.code.is_empty() || !options.insert(o.code.as_str()) {
+                return Err(invalid(file, format!("cover {}: excess options need distinct codes", c.code)));
+            }
+            if o.excess_minor < 0 || o.premium_factor.get() <= Dec::from(0i64) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: excess option {} needs an excess of zero or more and a premium factor above zero",
+                        c.code, o.code
+                    ),
+                ));
+            }
+        }
         if let Benefit::InvestmentAccount { funds } = &c.benefit {
             if funds.is_empty() {
                 return Err(invalid(file, format!("cover {}: investment account needs a fund menu", c.code)));

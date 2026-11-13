@@ -265,6 +265,7 @@ fn a_cover_another_adviser_adds_earns_in_that_advisers_book_only() {
         &policy,
         "underwriting",
         CoreCommand::AddCover(Box::new(ic_core::command::AddedCover {
+            excess_option: None,
             policy: policy.clone(),
             cover: "trauma".into(),
             life: LifeId("life-1".into()),

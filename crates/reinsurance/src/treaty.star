@@ -111,8 +111,16 @@ def aggregate_treaty(id, name, version, period_start, period_end, currency, scop
 def reinsurer_rate(rate, age_from = None, age_to = None, sex = None, smoker = None):
     return {"rate": rate, "age_from": age_from, "age_to": age_to, "sex": sex, "smoker": smoker}
 
-def reinsurer_rate_table(id, version, effective_from, rows):
-    return {"id": id, "version": version, "effective_from": effective_from, "rows": rows}
+# How a table that rates by sex rates a life whose sex it does not hold:
+# the lower of its female and male rates (the default), or a blend.
+def sex_lower_of():
+    return {"kind": "lower_of"}
+
+def sex_blended(female_share):
+    return {"kind": "blended", "female_share": female_share}
+
+def reinsurer_rate_table(id, version, effective_from, rows, unmatched_sex = None):
+    return {"id": id, "version": version, "effective_from": effective_from, "rows": rows, "unmatched_sex": unmatched_sex or sex_lower_of()}
 
 # Worked examples. Every treaty ships at least one; they run when the treaty
 # is loaded, so a treaty that does not do what its author says cannot be

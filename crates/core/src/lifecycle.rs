@@ -162,8 +162,15 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             }
             let total: i64 = cover.layers.iter().filter(|l| l.life == life).map(|l| l.sum_insured_minor).sum::<i64>() + spec.sum_insured_minor;
             ic_product::rating::check_sum_insured(def, total).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.code)))?;
+            if !def.accepts_excess(spec.excess_option.as_deref()) {
+                return Err(Reject::new(
+                    "excess_option",
+                    format!("cover {}: choose one of the excess levels it offers, or none where it offers none", spec.code),
+                ));
+            }
             let id = cover.layers.len() as u32 + 1;
             cover.layers.push(Layer {
+                excess_option: spec.excess_option,
                 id,
                 life,
                 start: cmd.inception,
@@ -406,11 +413,11 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             continue;
                         }
                         // The step carries the same underwriting terms as the cover it indexes.
-                        let (loadings, exclusions) = cover
+                        let (loadings, exclusions, excess_option) = cover
                             .layers
                             .iter()
                             .find(|l| l.life == life && l.in_force_on(on))
-                            .map(|l| (l.loadings.clone(), l.exclusions.clone()))
+                            .map(|l| (l.loadings.clone(), l.exclusions.clone(), l.excess_option.clone()))
                             .unwrap_or_default();
                         let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
                         cover.layers.push(Layer {
@@ -422,6 +429,7 @@ pub(crate) fn apply_indexation(catalog: &Catalog, product: &ProductDefinition, p
                             origin: LayerOrigin::Indexation,
                             loadings,
                             exclusions,
+                            excess_option,
                             loading_itemised: false,
                             rated_from: None,
                             member_pays: MemberPays::Nothing,

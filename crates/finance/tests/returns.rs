@@ -305,3 +305,162 @@ fn a_return_definition_that_would_report_nothing_is_refused() {
     assert_eq!(w.books.console_code("olive", file(unknown)), "account");
     assert!(w.books.state.returns.is_empty());
 }
+
+/// Purpose: the regulator changes what line L2 means from December 2027. Version 1 of the
+/// mapping is given December's predecessor as its last period and version 2 starts in
+/// December with reserves alone on the line. November files under version 1 and is
+/// refused under version 2; December files under version 2 and is refused under version
+/// 1; the November return, already filed, is exactly as it was; and a mapping whose last
+/// period is before its first is refused when loaded.
+/// Why it matters: a definition change must not reach back into a period already reported,
+/// and nobody should be able to file a period on the mapping that was not in force for
+/// it. Without an effective period on the mapping both are a matter of picking the right
+/// file by hand on filing day.
+#[test]
+fn a_changed_line_definition_is_a_new_mapping_version_from_a_period() {
+    let (nov, dec) = (period(2027, 11), period(2027, 12));
+    let v1 = || ReturnDefinition {
+        effective_to: Some(nov),
+        ..definition()
+    };
+    let v2 = || {
+        let source = QUARTERLY
+            .replace("\"version\": 1", "\"version\": 2")
+            .replace("[\"2400\", \"2410\", \"2420\", \"2430\"]", "[\"2400\"]");
+        ReturnDefinition {
+            effective_from: Some(dec),
+            ..ReturnDefinition::load("insurer_quarterly.star", &source).unwrap()
+        }
+    };
+    assert_eq!(
+        (v2().version, v2().in_effect(nov), v2().in_effect(dec), v1().in_effect(dec)),
+        (2, false, true, false)
+    );
+    assert_ne!(v2().content_hash, v1().content_hash);
+    let backwards = ReturnDefinition {
+        effective_from: Some(dec),
+        effective_to: Some(nov),
+        ..definition()
+    };
+    assert!(matches!(backwards.validate(), Err(ConfigError::Invalid(_))));
+
+    let mut w = world(d(2028, 1, 6));
+    w.close(nov);
+    w.close(dec);
+    let b = &mut w.books;
+    let file = |id: &str, definition: ReturnDefinition, period| FinCommand::FileReturn {
+        id: id.to_string(),
+        definition,
+        period,
+    };
+    assert_eq!(b.console_code("olive", file("q-11", v2(), nov)), "not_effective");
+    b.console("olive", file("q-11", v1(), nov)).unwrap();
+    let november = b.state.returns["q-11"].clone();
+    assert_eq!(b.console_code("olive", file("q-12", v1(), dec)), "not_effective");
+    b.console("olive", file("q-12", v2(), dec)).unwrap();
+    let december = &b.state.returns["q-12"][0];
+    assert_eq!((december.definition_version, &december.definition_hash), (2, &v2().content_hash));
+    assert_eq!(b.state.returns["q-11"], november, "the return already filed is untouched");
+    // November cannot be restated onto the new meaning of the line either.
+    let onto_v2 = FinCommand::RestateReturn {
+        id: "q-11".to_string(),
+        definition: v2(),
+        reason: "new definition".to_string(),
+    };
+    assert_eq!(b.console_code("lena", onto_v2), "not_effective");
+}
+
+/// Purpose: November's return is filed, then restated after a correction. Asked for line
+/// L2, the ledger answers with the mapping's ID, version and hash, the accounts the line
+/// sums, the figure by account as the period closed, the amount posted since by period,
+/// the hash of the closed trial balance, the question that gives the same rows today and
+/// the extracts registered for the period's last day with their definition version and
+/// hash. The first filing can still be asked for by its version, a conduct line points
+/// at the conduct question, and a return, version or line that does not exist is named.
+/// Why it matters: a figure sent to a regulator will be questioned months later by
+/// someone who was not there. They need to get from the number to the query, the extract
+/// and the definition behind it without asking the person who filed it.
+#[test]
+fn any_figure_on_a_filed_return_opens_to_what_is_behind_it() {
+    let mut w = world(d(2027, 12, 20));
+    let (nov, dec) = (period(2027, 11), period(2027, 12));
+    let mut reserves = journal("res", JournalKind::Accrual, nov, "6000", "2400", 4_000_00);
+    reserves.value_date = d(2027, 11, 30);
+    w.books.console("olive", FinCommand::ProposeJournal { journal: reserves }).unwrap();
+    w.books.console("ana", FinCommand::ApproveJournal { id: "res".to_string() }).unwrap();
+    w.close(nov);
+    let b = &mut w.books;
+    let file = FinCommand::FileReturn {
+        id: "q-2027-11".to_string(),
+        definition: definition(),
+        period: nov,
+    };
+    b.console("olive", file).unwrap();
+    let mut correction = journal("res-fix", JournalKind::Correction, dec, "6000", "2400", 500_00);
+    correction.value_date = d(2027, 11, 30);
+    b.console("olive", FinCommand::ProposeJournal { journal: correction }).unwrap();
+    b.console("ana", FinCommand::ApproveJournal { id: "res-fix".to_string() }).unwrap();
+    let restate = FinCommand::RestateReturn {
+        id: "q-2027-11".to_string(),
+        definition: definition(),
+        reason: "November reserve corrected in December".to_string(),
+    };
+    b.console("lena", restate).unwrap();
+
+    let ask = |q: serde_json::Value| ic_finance::host::answer(&b.state, q);
+    let line = ask(serde_json::json!({"q": "return_line", "id": "q-2027-11", "code": "L2"})).unwrap();
+    assert_eq!(
+        (line["version"].clone(), line["definition"].clone(), line["definition_version"].clone()),
+        (serde_json::json!(2), serde_json::json!("insurer-quarterly"), serde_json::json!(1))
+    );
+    assert_eq!(line["definition_hash"], serde_json::json!(definition().content_hash));
+    assert_eq!(
+        line["line"]["source"],
+        serde_json::json!({"source": "balance", "accounts": ["2400", "2410", "2420", "2430"]})
+    );
+    assert_eq!(line["line"]["as_closed"]["2400"], serde_json::json!(4_000_00 * FINE_PER_MINOR));
+    assert_eq!(line["line"]["restated"]["2027-12"], serde_json::json!(500_00 * FINE_PER_MINOR));
+    let closed = b.state.periods[&nov].closed.clone().unwrap();
+    assert_eq!(line["trial_balance_hash"], serde_json::to_value(closed.trial_balance_hash).unwrap());
+    assert_eq!(line["query"], serde_json::json!({"q": "trial_balance", "period": "2027-11", "fund": null}));
+    assert_eq!(line["reason"], serde_json::json!("November reserve corrected in December"));
+    let extracts = line["extracts"].as_array().unwrap();
+    assert!(extracts.len() >= 2, "{extracts:?}");
+    assert!(extracts
+        .iter()
+        .all(|x| x["as_at"] == serde_json::json!("2027-11-30") && x["definition_version"].is_u64() && x["content_hash"].is_string()));
+    // The rows the query gives today add up to the line.
+    let today = ask(line["query"].clone()).unwrap();
+    let reserve: i128 = today
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["account"] == "2400")
+        .map(|r| serde_json::from_value::<i128>(r["balance"].clone()).unwrap())
+        .sum();
+    assert_eq!(-reserve, 4_000_00 * FINE_PER_MINOR, "November's own trial balance holds the figure as closed");
+
+    let first = ask(serde_json::json!({"q": "return_line", "id": "q-2027-11", "version": 1, "code": "L2"})).unwrap();
+    assert_eq!(
+        (first["version"].clone(), first["reason"].clone()),
+        (serde_json::json!(1), serde_json::Value::Null)
+    );
+    assert!(first["line"]["restated"].as_object().unwrap().is_empty());
+    let life = ask(serde_json::json!({"q": "return_line", "id": "q-2027-11", "code": "P1L"})).unwrap();
+    assert_eq!(life["query"]["fund"], serde_json::json!("SF1-life"));
+    let declined = ask(serde_json::json!({"q": "return_line", "id": "q-2027-11", "code": "C2"})).unwrap();
+    assert_eq!(declined["query"], serde_json::json!({"q": "conduct", "period": "2027-11"}));
+    assert_eq!(declined["line"]["source"]["measure"], serde_json::json!("claim_declined"));
+
+    for (question, problem) in [
+        (serde_json::json!({"q": "return_line", "id": "q-none", "code": "L2"}), "has not been filed"),
+        (
+            serde_json::json!({"q": "return_line", "id": "q-2027-11", "version": 9, "code": "L2"}),
+            "no version 9",
+        ),
+        (serde_json::json!({"q": "return_line", "id": "q-2027-11", "code": "ZZ"}), "no line ZZ"),
+    ] {
+        let refused = ask(question).unwrap_err();
+        assert!(refused.contains(problem), "{refused}");
+    }
+}

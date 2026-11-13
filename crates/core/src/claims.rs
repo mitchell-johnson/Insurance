@@ -220,6 +220,12 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     if let Some(first) = at_event.iter().map(|l| l.start).min().filter(|_| life_id.is_some()) {
         facts.cover_start = Some(first.max(c.start));
     }
+    // The excess level the life held the cover at on the event date.
+    facts.chosen_excess_minor = at_event
+        .iter()
+        .find_map(|l| l.excess_option.as_deref())
+        .and_then(|option| product.and_then(|pr| pr.cover(cover)).and_then(|def| def.excess_option(option)))
+        .map(|o| o.excess_minor);
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.

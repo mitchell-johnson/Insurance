@@ -69,6 +69,13 @@ pub enum Question {
     Return {
         id: String,
     },
+    /// One figure on a filed return with what is behind it.
+    ReturnLine {
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+        code: String,
+    },
     /// What the close is waiting for from its drivers.
     Work,
     /// Money held in policy suspense, by policy, as an aged items report.
@@ -139,6 +146,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Extract { kind, period, offset, limit } => {
             encode(&state.extract(&kind, period, offset, limit.unwrap_or(crate::report::MAX_EXTRACT_LINES))?)
         }
+        Question::ReturnLine { id, version, code } => encode(&state.line_lineage(&id, version, &code)?),
         Question::Return { id } => state.returns.get(&id).map_or_else(|| Err(format!("return {id} has not been filed")), encode),
     }
 }

@@ -169,6 +169,7 @@ fn reserve() -> Effect {
         commencement: d(2027, 2, 1),
         proposal_expires: d(2027, 5, 1),
         risk_codes: vec!["pursuit.diving".into()],
+        excess_reference: Some("UWX/k/1".into()),
     }
 }
 
@@ -243,6 +244,7 @@ fn end_interim() -> Effect {
 
 fn cover(sum: i64) -> CoverSpec {
     CoverSpec {
+        excess_option: None,
         code: "life".into(),
         life: Some("L1".into()),
         sum_insured_minor: sum,

@@ -1259,3 +1259,70 @@ fn the_claims_module_still_publishes_the_facts_the_mart_reads() {
         assert!(intake.contains(needed), "crates/claims/src/intake.rs no longer has {needed}");
     }
 }
+
+/// Purpose: a policy is issued to a named policyholder on a life with a party record, a
+/// date of birth and a policy number, and a claim is registered and admitted on it. The
+/// three extracts have exactly the columns the layouts list; no line of any of them
+/// carries the date of birth, the policyholder, the life's party, the policy number or
+/// the claim's reference; and the mart as stored holds no party at all.
+/// Why it matters: the mart is what goes to actuaries, the reinsurer and the regulator.
+/// It is allowed opaque IDs and rating facts. A column added for convenience that carries
+/// a person's identity or anything medical would leave the building in every file cut
+/// from then on, and this is the test that would have to be changed to let it.
+#[test]
+fn the_mart_and_its_files_hold_ids_and_rating_facts_only() {
+    let day = |n: u32| d(2028, 3, n);
+    let policy = PolicyId::from("pol-1");
+    let mut s = Stream::new(day(1));
+    s.push(Event::PolicyIssued {
+        policy: policy.clone(),
+        number: "NUMBER-778899".to_string(),
+        group: "grp".into(),
+        policyholder: "party-holder-555".into(),
+        product_code: "term-life".to_string(),
+        product_hash: "h".to_string(),
+        inception: day(1),
+        lives: vec![LifeInfo {
+            date_of_birth: Some(d(1980, 6, 17)),
+            sex: Some(Sex::Female),
+            smoker: Some(false),
+            ..LifeInfo::new("life-1".into(), Some("party-life-444".into()))
+        }],
+        layers: vec![layer("life", 1, "life-1", 500_000_00, day(1))],
+        members: vec![],
+    });
+    s.close(day(2));
+    s.push(claim_fact(
+        "claim_reserved",
+        "CLM-REF-321",
+        &[("policy", "pol-1"), ("cover", "life"), ("life", "life-1"), ("event_date", "2028-03-01")],
+    ));
+    s.push(claim_fact("claim_admitted", "CLM-REF-321", &[("admitted_minor", "50000")]));
+    s.close(day(3));
+    let mart = mart_of(1, &s.events);
+
+    let files = [
+        mart.in_force(day(2)).unwrap(),
+        mart.movement(day(1), day(2)).unwrap(),
+        mart.experience(day(1), day(2)).unwrap(),
+    ];
+    let headers: Vec<&str> = files.iter().map(|x| x.lines[0].as_str()).collect();
+    assert_eq!(
+        headers,
+        [
+            "partition,policy,product,inception,status,cover,cover_type,layer,life,age,sex,smoker,occupation_class,category,start,sum_insured_minor",
+            "business_date,partition,policy,product,kind,effective,cover,cover_type,layer,life,age,sex,smoker,occupation_class,category,policies,covers,sum_insured_minor,premium_minor",
+            "product,cover_type,age_band,sex,smoker,occupation_class,category,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor,admitted_claims,admitted_minor,admitted_monthly_minor",
+        ]
+    );
+    let private = ["1980-06-17", "1980", "party-holder-555", "party-life-444", "NUMBER-778899", "CLM-REF-321"];
+    for file in &files {
+        assert!(file.lines.len() > 1, "{} is empty", file.kind);
+        for line in &file.lines {
+            assert!(private.iter().all(|p| !line.contains(p)), "{}: {line}", file.kind);
+        }
+    }
+    assert_eq!(total(&files[2], "admitted_claims"), 1);
+    let stored = serde_json::to_string(&mart).unwrap();
+    assert!(["party-holder-555", "party-life-444", "NUMBER-778899"].iter().all(|p| !stored.contains(p)));
+}

@@ -333,6 +333,10 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
     let (product, expires, commencement) = (p.product_code.clone(), p.expires_on, cx.today);
     let covers: Vec<_> = p.covers_on(life).cloned().collect();
     let alteration = matches!(p.entry, Entry::Alteration { .. } | Entry::Reinstatement { .. });
+    let excess_reference = match &p.entry {
+        Entry::GroupExcess { reinsurance_reference, .. } => reinsurance_reference.clone(),
+        _ => None,
+    };
     let library = cfg.exclusions_on(p.received_on);
     let f = life_mut(p, life)?;
     close_cases(f, cx);
@@ -394,6 +398,7 @@ pub(crate) fn after_signed(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &m
                 commencement,
                 proposal_expires: expires,
                 risk_codes: risk_codes(&c.code),
+                excess_reference: excess_reference.clone(),
             });
         }
     }
@@ -585,6 +590,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             }) = d.terms_for(&c.code)
             {
                 covers.push(CoverSpec {
+                    excess_option: None,
                     code: c.code.clone(),
                     life: Some(f.life.clone()),
                     sum_insured_minor: revised_sum_insured_minor.unwrap_or(c.sum_insured_minor),
@@ -666,6 +672,7 @@ pub(crate) fn interim(cfg: &Config, p: &mut Proposal, cx: &mut Cx) {
             .collect(),
         covers: lives
             .map(|f| CoverSpec {
+                excess_option: None,
                 code: settings.cover_code.clone(),
                 life: Some(f.life.clone()),
                 sum_insured_minor: p.largest_sum_on(&f.life).min(settings.max_sum_insured_minor),
