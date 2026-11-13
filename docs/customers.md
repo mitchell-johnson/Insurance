@@ -52,6 +52,8 @@ Errors are `{"error": {"code", "message"}}`. 503 always means try again; it is n
 
 Every death recorded here, whoever recorded it, is told to claims: `RecordDeath { party, date_of_death }` from caller `customer-master`, proposed to every core partition, because a person's claims can sit on any of them and each partition finds its own. A row in `death_relay` is written in the same transaction as the death and removed once every partition has accepted it. A refusal (for example before the core has opened a business date) or an unreachable cluster keeps it, with the reason and an attempt count, for the next pass. Each attempt uses its own key (`death:{party}:{date}:{partition}:{attempt}`), because the core remembers a refusal under its key; claims treats the same death again as nothing new. A retraction goes the same way, as `RetractDeath` for the date that was recorded (keys `retraction:…`), and replaces a death on that date not yet told; claims restores the benefit or sends it to review. Without `IC_CLUSTER_NODES` deaths are kept and not sent.
 
+Relationship changes on a policy go to the channels directory, which decides what the portal and app show to whom (`docs/channels.md`). An owner added becomes `RecordOwnership`, an assignee added or ended becomes `RecordAssignment` (active or not), and a dependant with `controls_from` becomes `RecordDependant`. They are proposed to the `channels` module through the same cluster, as `Actor::Module("customer-master")`. A row in `directory_relay` is written in the same transaction as the change and removed once the directory accepts or refuses it for good (a refusal such as `unknown_policy` is recorded on the row with its reason). An unreachable cluster keeps the row; while one row for a party waits, that party's later rows wait behind it, so the directory sees one person's changes in order. Keys are `directory:{row}:{attempt}`. The directory has no command for an owner or dependant ending, so those are not sent; sign-in bindings (`BindSubject`) come from the identity service, not from here.
+
 ## Retention and erasure
 
 The schedule is code (`src/retention.rs`, version `SCHEDULE_VERSION`): each field class is kept seven years after the last relationship ends or the last change, verification evidence five, prospects with no relationship two. A legal hold or an unresolved merge stops erasure.
@@ -75,7 +77,7 @@ The binary is `ic-customers`; settings come from the environment.
 | `IC_EVENT_HUBS_NAMESPACE`, `IC_CUSTOMERS_EVENT_HUB`, `IC_CUSTOMERS_PRIORITY_HUB`, `IC_CUSTOMERS_HUB_PARTITIONS` | Where events go | `customer-events`, `customer-priority`, 8 |
 | `IC_CUSTOMERS_REGISTER_ENDPOINT`, `IC_CUSTOMERS_REGISTER_CONTAINER` | Erasure register | container `customers-erasures` |
 | `IC_CUSTOMERS_LISTEN`, `IC_CUSTOMERS_CYCLE_SECONDS`, `IC_CUSTOMERS_SWEEP_MINUTES` | Port and background pace | `0.0.0.0:8080`, 2, 60 |
-| `IC_CLUSTER_NODES`, `IC_CLUSTER_TOKEN_FILE` | The ledger cluster, for telling claims of deaths | optional; deaths wait without it |
+| `IC_CLUSTER_NODES`, `IC_CLUSTER_TOKEN_FILE` | The ledger cluster, for telling claims of deaths and the channels directory of relationships | optional; both wait without it |
 
 Azure resources are in `infra/customers.bicep` (its own PostgreSQL Flexible Server, the wrapping key, the index-key secret, the hubs, the register and the identity). The Kubernetes manifests are `deploy/k8s/customers.yaml`. The service applies its own migrations at start under an advisory lock, so replicas starting together are safe. SIGTERM stops it cleanly.
 
@@ -83,6 +85,5 @@ Tests need a PostgreSQL server named by `IC_TEST_POSTGRES_URL` (CI starts one); 
 
 ## Not built yet
 
-- **Relationship changes to the channels directory.** The channels module expects `BindSubject`, `RecordOwnership`, `RecordAssignment` and `RecordDependant` from the customer master. The events are on `customer-events`; the relay that turns them into those commands is not written.
 - **Changing the index key** needs a rebuild of every blind index from the decrypted facts; there is no command for it yet.
 - **Locking the register's immutability policy** in prod is a deliberate, irreversible step for a person once the period is agreed.

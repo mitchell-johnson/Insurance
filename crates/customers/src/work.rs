@@ -144,9 +144,39 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
     Ok(told)
 }
 
+/// Tell the channels directory of relationship changes, in order. A refused
+/// command (the directory has not yet seen the policy, say) stays with the
+/// reason and holds up that party's later changes, so the directory never
+/// sees an assignee leave before arriving; other parties carry on. Returns
+/// the number told.
+pub async fn relay_directory<W: KeyWrapper, S: WormStore, D: crate::relay::Directory>(app: &App<W, S>, directory: &D) -> Result<usize, String> {
+    let mut told = 0;
+    let mut held = std::collections::BTreeSet::new();
+    for (row, party, command, attempts) in app.store.directory_to_relay(100).await.map_err(|e| e.to_string())? {
+        if held.contains(&party) {
+            continue;
+        }
+        let command: ic_channels::directory::DirectoryCommand = serde_json::from_value(command).map_err(|e| e.to_string())?;
+        let failed = match directory.direct(&format!("directory:{row}:{attempts}"), &command).await {
+            Ok(None) => None,
+            Ok(Some(why)) => Some(format!("refused: {why}")),
+            Err(e) => Some(e),
+        };
+        app.store.directory_done(row, failed.as_deref()).await.map_err(|e| e.to_string())?;
+        match failed {
+            None => told += 1,
+            Some(e) => {
+                tracing::warn!(party = %party, error = %e, "the channels directory has not yet taken a relationship change; will retry");
+                held.insert(party);
+            }
+        }
+    }
+    Ok(told)
+}
+
 /// Run the outbox every `every`, and the sweep every `sweep_every`, until
 /// `stop` completes. A failed pass is logged and tried again next time.
-pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(
+pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::relay::Directory>(
     app: &App<W, S>,
     hubs: &Hubs,
     core: Option<&C>,
@@ -163,6 +193,9 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(
         if let Some(core) = core {
             if let Err(e) = relay_deaths(app, core).await {
                 tracing::warn!(error = %e, "relaying deaths to claims failed; will retry");
+            }
+            if let Err(e) = relay_directory(app, core).await {
+                tracing::warn!(error = %e, "relaying to the channels directory failed; will retry");
             }
         }
         if last_sweep.is_none_or(|t| t.elapsed() >= sweep_every) {

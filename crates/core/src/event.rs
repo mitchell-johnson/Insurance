@@ -394,6 +394,27 @@ pub enum Event {
         /// What is still owed of the premium the arrangement was for.
         outstanding_minor: i64,
     },
+    /// A hardship override was applied: `share_bps` of the premium is
+    /// billed for the days from `from` up to `to`. `adjusted_minor` is the
+    /// credit on the period already billed, zero or negative.
+    HardshipGranted {
+        policy: PolicyId,
+        hardship: String,
+        from: NaiveDate,
+        to: NaiveDate,
+        share_bps: u32,
+        adjusted_minor: i64,
+    },
+    /// A hardship override was ended before its planned end. The full
+    /// premium is billed from `on`; `adjusted_minor` is the charge for the
+    /// rest of the period already billed, zero or positive.
+    HardshipEnded {
+        policy: PolicyId,
+        hardship: String,
+        on: NaiveDate,
+        planned_to: NaiveDate,
+        adjusted_minor: i64,
+    },
     /// A member's own cover ended because the member did not pay for it.
     /// Each layer also has its `LayerEnded`. The cover the employer pays
     /// for is untouched.

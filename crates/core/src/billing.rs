@@ -251,7 +251,7 @@ pub(crate) fn bill_due_periods(
             }
         } else {
             let premium = retail_period_premium(catalog, product, policy, start, &mut ctx.work)?;
-            let bill = Bill::from_modal(policy, &premium);
+            let bill = crate::hardship::reduced(policy, Bill::from_modal(policy, &premium), (start, end));
             let id = raise_receivable(ledger, policy, ctx, &bill, ReceivableKind::Period, (start, end), start, "premium_due")?;
             policy.periods_billed += 1;
             if let Some(id) = id {

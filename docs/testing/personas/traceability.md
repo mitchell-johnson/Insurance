@@ -89,6 +89,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried` |
 | COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
+| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies` |
 | COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |

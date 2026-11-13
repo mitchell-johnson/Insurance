@@ -632,6 +632,27 @@ impl<W: KeyWrapper> Store<W> {
                 None => tx.execute("delete from marker_reviews where party_id = $1", &[&id.0]).await.map_err(db)?,
             };
         }
+        // The channels directory hears of ownership, assignees and children.
+        for r in &written {
+            let command = match &r.body {
+                EventBody::RelationshipAdded(rel) => crate::relay::directory_command(id, rel, false),
+                EventBody::RelationshipEnded { id: rid, .. } => loaded
+                    .party
+                    .relationships
+                    .get(rid)
+                    .and_then(|rel| crate::relay::directory_command(id, rel, true)),
+                _ => None,
+            };
+            if let Some(command) = command {
+                let command = serde_json::to_value(&command).map_err(|e| StoreError::Integrity(e.to_string()))?;
+                tx.execute(
+                    "insert into directory_relay (party_id, command, recorded_at) values ($1, $2, $3)",
+                    &[&id.0, &command, &now],
+                )
+                .await
+                .map_err(db)?;
+            }
+        }
         for r in &written {
             if let EventBody::ConcernRaised { about, .. } = &r.body {
                 tx.execute(
@@ -877,6 +898,31 @@ impl<W: KeyWrapper> Store<W> {
             .collect()
     }
 
+    /// Directory commands waiting, in order: (row, party, command, attempts).
+    pub async fn directory_to_relay(&self, limit: i64) -> Result<Vec<(i64, PartyId, Value, i32)>> {
+        let client = self.client().await?;
+        let rows = client
+            .query("select id, party_id, command, attempts from directory_relay order by id limit $1", &[&limit])
+            .await
+            .map_err(db)?;
+        Ok(rows.iter().map(|r| (r.get(0), PartyId(r.get(1)), r.get(2), r.get(3))).collect())
+    }
+
+    /// A directory command accepted, or failed with the reason.
+    pub async fn directory_done(&self, row: i64, failed: Option<&str>) -> Result<()> {
+        let client = self.client().await?;
+        match failed {
+            None => client.execute("delete from directory_relay where id = $1", &[&row]).await,
+            Some(e) => {
+                client
+                    .execute("update directory_relay set attempts = attempts + 1, last_error = $2 where id = $1", &[&row, &e])
+                    .await
+            }
+        }
+        .map_err(db)?;
+        Ok(())
+    }
+
     /// Open a prompt for every marker whose review date has come, once.
     /// Returns the number opened.
     pub async fn prompt_marker_reviews(&self, today: NaiveDate, now: DateTime<Utc>) -> Result<usize> {
@@ -1095,6 +1141,7 @@ impl<W: KeyWrapper> Store<W> {
             "delete from party_keys where party_id = $1",
             "delete from death_relay where party_id = $1",
             "delete from marker_reviews where party_id = $1",
+            "delete from directory_relay where party_id = $1",
             "delete from blind_index where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",

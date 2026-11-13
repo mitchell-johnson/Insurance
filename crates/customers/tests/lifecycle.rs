@@ -452,11 +452,13 @@ async fn background_work_survives_faults() {
     w.sql("alter table parties rename to parties_gone").await.unwrap();
     w.sql("alter table death_relay rename to death_relay_gone").await.unwrap();
     w.sql("alter table marker_reviews rename to marker_reviews_gone").await.unwrap();
+    w.sql("alter table directory_relay rename to directory_relay_gone").await.unwrap();
     pass(3600).await;
     assert_eq!(core.proposed.lock().unwrap().len(), 2, "told on the first pass, once");
     w.sql("alter table parties_gone rename to parties").await.unwrap();
     w.sql("alter table death_relay_gone rename to death_relay").await.unwrap();
     w.sql("alter table marker_reviews_gone rename to marker_reviews").await.unwrap();
+    w.sql("alter table directory_relay_gone rename to directory_relay").await.unwrap();
     w.azure.set_down(false);
     pass(3600).await;
     assert!(w.app.store.outbox(10).await.unwrap().is_empty(), "published once Event Hubs returned");
@@ -629,4 +631,79 @@ async fn markers_are_reviewed_when_due() {
     assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 1);
     w.app.store.reshred(&[PartyId(p.clone())], Utc::now()).await.unwrap();
     assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 0);
+}
+
+/// Purpose: relationship changes the channels directory needs (a policy's owner, an
+/// assignee arriving or leaving, a child with the date they control their own health
+/// information) are told to it in order as module `customer-master`; other relationships
+/// are not; a refusal or no answer keeps the change and holds up only that party's later
+/// changes; erasing the party removes what is waiting.
+/// Why it matters: the directory decides who sees which policy in the app. An assignee
+/// told of leaving before arriving would keep access, and a new owner never told would
+/// leave the old one seeing the policy.
+#[tokio::test]
+async fn relationship_changes_reach_the_channels_directory() {
+    let w = world_or_skip!();
+    let core = common::FakeCore::default();
+    let owner = w.person("Ana", "Owner", "1970-01-01", &[]).await;
+    let child = w.person("Tia", "Owner", "2015-01-01", &[]).await;
+    let bank = w.person("Bank", "Assignee", "1960-01-01", &[]).await;
+    let add = |id: &str, kind: &str, attributes: serde_json::Value| {
+        json!({ "command": "add_relationship", "id": id, "kind": kind, "target": { "kind": "policy", "id": "P1" },
+                "valid_from": "2026-01-01", "attributes": attributes })
+    };
+    w.command(&owner, "staff", add("own", "owner", json!({}))).await;
+    w.command(&owner, "staff", add("adv", "adviser", json!({}))).await;
+    w.command(&child, "staff", add("dep", "dependant", json!({ "controls_from": "2031-01-01" })))
+        .await;
+    w.command(&bank, "staff", add("asg", "assignee", json!({}))).await;
+    let (status, out) = w
+        .command(&bank, "staff", json!({ "command": "end_relationship", "id": "asg", "valid_to": "2026-06-01" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // The bank's changes wait; everyone else's go.
+    *core.refuse_party.lock().unwrap() = Some(bank.clone());
+    assert_eq!(work::relay_directory(&w.app, &core).await.unwrap(), 2);
+    assert_eq!(
+        w.sql("select 1 from directory_relay where attempts = 1 and last_error like 'refused%'")
+            .await
+            .unwrap(),
+        1
+    );
+    *core.refuse_party.lock().unwrap() = None;
+    *core.lost.lock().unwrap() = true;
+    assert_eq!(work::relay_directory(&w.app, &core).await.unwrap(), 0);
+    *core.lost.lock().unwrap() = false;
+    assert_eq!(work::relay_directory(&w.app, &core).await.unwrap(), 2);
+    assert_eq!(work::relay_directory(&w.app, &core).await.unwrap(), 0, "told once");
+    let told: Vec<serde_json::Value> = core.directed.lock().unwrap().iter().map(|(_, c)| c.clone()).collect();
+    assert_eq!(
+        told,
+        vec![
+            json!({ "record_ownership": { "policy": "P1", "policyholder": owner } }),
+            json!({ "record_dependant": { "policy": "P1", "party": child, "controls_from": "2031-01-01" } }),
+            json!({ "record_assignment": { "policy": "P1", "party": bank, "active": true } }),
+            json!({ "record_assignment": { "policy": "P1", "party": bank, "active": false } }),
+        ]
+    );
+    assert!(core.directed.lock().unwrap()[2].0.ends_with(":2"), "a new key per attempt");
+    // The same relationship again changes nothing, so tells nothing.
+    w.command(&child, "staff", add("dep", "dependant", json!({ "controls_from": "2031-01-01" })))
+        .await;
+    assert_eq!(
+        w.sql("select 1 from directory_relay").await.unwrap(),
+        0,
+        "the same relationship again changes nothing"
+    );
+    // Erased while waiting: nothing left to send.
+    w.command(
+        &owner,
+        "staff",
+        json!({ "command": "add_relationship", "id": "own2", "kind": "owner",
+        "target": { "kind": "policy", "id": "P2" }, "valid_from": "2026-01-01" }),
+    )
+    .await;
+    assert_eq!(w.sql("select 1 from directory_relay").await.unwrap(), 1);
+    w.app.store.reshred(&[PartyId(owner.clone())], Utc::now()).await.unwrap();
+    assert_eq!(w.sql("select 1 from directory_relay").await.unwrap(), 0);
 }

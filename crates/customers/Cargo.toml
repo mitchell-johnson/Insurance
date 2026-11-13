@@ -11,6 +11,7 @@ ic-azure.workspace = true
 ic-core.workspace = true
 ic-raft.workspace = true
 ic-claims = { path = "../claims" }
+ic-channels = { path = "../channels" }
 chrono = { workspace = true, features = ["clock"] }
 serde.workspace = true
 serde_json.workspace = true
