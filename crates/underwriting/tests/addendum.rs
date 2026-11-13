@@ -132,7 +132,8 @@ fn adviser_proposal(w: &mut World) {
 /// Purpose: what an adviser can see. Consent is per life, per application, given with a signed
 /// step. With it the adviser sees where that life's answers are and how evidence is coming
 /// along; without it only the stage. Never reasons, notes or reports. Access ends when the
-/// decision is made or consent is withdrawn; answers the adviser typed are allowed only under
+/// decision is made or consent is withdrawn, and does not come back once the policy is issued or
+/// when a claim later opens the file; answers the adviser typed are allowed only under
 /// consent; every look is logged with its purpose; another adviser sees nothing.
 /// Why it matters: one partner's health answers must not reach the couple's adviser, or the
 /// other partner through them, without that person's own consent.
@@ -261,6 +262,30 @@ fn an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent() {
         panic!("no view")
     };
     assert_eq!((status.as_str(), lives[0].answers_ref.clone()), ("issuing", None));
+
+    // Issued, and later a claim: the claims assessor opens the file, and the
+    // adviser's sight of the answers still does not come back.
+    let policy = w.p("P1").policy.clone();
+    w.ok(
+        "issuer",
+        Command::PolicyIssued {
+            proposal: "P1".into(),
+            layers: vec![],
+        },
+    );
+    w.ok(
+        "claims",
+        Command::OpenFileForClaim {
+            claim_ref: "CLM-1".into(),
+            policy,
+            life: "L1".into(),
+            assessor: "claims-assessor-1".into(),
+        },
+    );
+    let Some(View::Adviser { status, lives }) = lookup(&mut w, "adv-1").unwrap().view else {
+        panic!("no view")
+    };
+    assert_eq!((status.as_str(), lives[0].answers_ref.clone(), lives[0].evidence.len()), ("issued", None, 0));
 
     // No adviser on the proposal: nothing to consent to.
     w.open("P2", 100_000_00);

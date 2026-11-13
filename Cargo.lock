@@ -2352,6 +2352,7 @@ dependencies = [
  "ic-channels",
  "ic-core",
  "ic-customers",
+ "ic-distribution",
  "ic-ledger",
  "ic-log",
  "ic-money",

@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::command::{Envelope, ExcessDecision};
 use crate::driver::{Answers, Core, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use crate::event::{GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{Question, MODULE};
 use crate::state::Outcome;
 
@@ -146,6 +146,52 @@ pub fn reinsurance_envelope(key: &str, on: NaiveDate, notice: &ReinsuranceNotice
         other => json!(other),
     };
     json!({ "key": key, "caller": crate::command::caller::STAFF, "on": on, "command": command })
+}
+
+/// A scheme cover's layer as the commission module's `write_layer`, sent by
+/// `group-admin`. The commission module keeps every answer under its key,
+/// a refusal included, so a layer it does not know yet (its own feed of the
+/// core has not reached the scheme) would be refused for good under one
+/// key. The key therefore carries the hour of the attempt: an attempt in a
+/// later hour is a new command, and one that finds the layer already
+/// written is settled.
+pub fn commission_envelope(key: &str, at: DateTime<Utc>, layer: &CommissionLayer) -> Value {
+    json!({
+        "key": format!("{key}@{}", at.format("%Y%m%dT%H")),
+        "actor": { "module": crate::command::caller::STAFF },
+        "command": { "write_layer": {
+            "policy": layer.policy,
+            "cover": layer.cover,
+            "layer": 0,
+            "writing": [[layer.engagement, COMMISSION_WHOLE]],
+            "books": [[layer.book, COMMISSION_WHOLE]],
+            "schedule": layer.schedule,
+            "option": layer.option,
+            "annual_premium_minor": layer.annual_premium_minor,
+            "replacement": false,
+        }},
+    })
+}
+
+/// The commission module's whole share, in millionths.
+const COMMISSION_WHOLE: u32 = 1_000_000;
+
+/// What the commission module's answer to a layer means here: written, a
+/// refusal for a person, or one to try again. The answer is the module's
+/// whole output, with the command's result under `result`.
+pub fn commission_answer(answer: &Value) -> Result<Option<String>, String> {
+    let result = &answer["result"];
+    if result.get("Ok").is_none() && result.get("Err").is_none() {
+        return Err(format!("not an answer from the commission module: {answer}"));
+    }
+    match result["Err"]["code"].as_str() {
+        None => Ok(None),
+        // Written by an earlier attempt whose answer was lost.
+        Some("layer_written") => Ok(None),
+        // The commission module has not yet seen the scheme in the core.
+        Some(code @ ("unknown_layer" | "unknown_policy")) => Err(format!("commission does not know the layer yet: {code}")),
+        Some(code) => Ok(Some(code.to_string())),
+    }
 }
 
 /// A request for a member's excess as the underwriting module's proposal:
@@ -281,16 +327,19 @@ pub struct ClusterPeers {
     reinsurance: String,
     /// The name the underwriting module is hosted under.
     underwriting: String,
+    /// The name the commission module is hosted under.
+    distribution: String,
     events: EventHubsSink,
 }
 
 impl ClusterPeers {
-    pub fn new(client: ClusterClient, patience: Duration, reinsurance: &str, underwriting: &str, events: EventHubsSink) -> Self {
+    pub fn new(client: ClusterClient, patience: Duration, reinsurance: &str, underwriting: &str, distribution: &str, events: EventHubsSink) -> Self {
         Self {
             client,
             patience,
             reinsurance: reinsurance.to_string(),
             underwriting: underwriting.to_string(),
+            distribution: distribution.to_string(),
             events,
         }
     }
@@ -312,6 +361,17 @@ impl ClusterPeers {
 }
 
 impl Peers for ClusterPeers {
+    async fn commission(&self, key: &str, layer: &CommissionLayer) -> Result<Option<String>, String> {
+        let command = commission_envelope(key, Utc::now(), layer);
+        let reply = self
+            .client
+            .propose_module_until(&self.distribution, &command, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        let answer = reply.result.map_err(|e| format!("commission could not read the command: {e}"))?;
+        commission_answer(&answer)
+    }
+
     async fn reinsurance(&self, key: &str, on: NaiveDate, notice: &ReinsuranceNotice) -> Result<(), String> {
         let command = reinsurance_envelope(key, on, notice);
         let reply = self
