@@ -230,6 +230,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         product_code: "LIFE".into(),
         product_version: "hash-1".into(),
         interests: vec![],
+        nominations: vec![],
     }
 }
 

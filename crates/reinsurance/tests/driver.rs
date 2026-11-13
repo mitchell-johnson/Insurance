@@ -636,6 +636,7 @@ fn the_driver_process_checks_its_settings() {
             event_hubs: "https://ns.servicebus.windows.net".into(),
             event_hub: "reinsurance-events".into(),
             drops_endpoint: None,
+            api: None,
         }
     );
     let tuned = Config::from_lookup(lookup(&[
