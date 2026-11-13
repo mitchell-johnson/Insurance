@@ -2603,6 +2603,7 @@ dependencies = [
  "ic-sim",
  "jsonwebtoken",
  "rand 0.8.8",
+ "ring",
  "rsa",
  "serde",
  "serde_json",
