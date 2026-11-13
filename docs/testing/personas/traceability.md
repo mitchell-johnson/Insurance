@@ -492,7 +492,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-008 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`underwriting/tests/special.rs::a_declared_conflict_removes_the_underwriter_from_the_case`<br>`underwriting/tests/special.rs::an_underwriter_never_acts_on_their_own_application` |
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
-| STF-012 | part | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
+| STF-012 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named`<br>`channels/src/classes.rs::field` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | full | `channels/tests/staff.rs::external_source_drives_templates` |
