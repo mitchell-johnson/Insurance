@@ -42,6 +42,11 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   await visit(browser, "/adviser", { subject: "sub-adv" }, { run: async (p) => {
     await sees(p, "fap-1");
     await sees(p, "$900.00");
+    await p.locator("#matches").getByText("pol-new/life/1").waitFor();
+    await p.getByRole("button", { name: "Dispute" }).click();
+    await p.fill("#d-reason", "new cover after a needs review");
+    await p.locator("#dispute button").first().click();
+    await sees(p, "Disputed. The commission");
     await p.getByRole("button", { name: "Open" }).first().click();
     await p.locator("#detail:not([hidden])").waitFor();
     await p.fill("#note", "customer asked by phone");
@@ -201,7 +206,7 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");
-    await sees(p, "The rule has matched nothing.");
+    await p.locator("#matches").getByText("pol-new/life/1").waitFor();
   } });
   await visit(browser, "/replacements", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/reinsurance", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
