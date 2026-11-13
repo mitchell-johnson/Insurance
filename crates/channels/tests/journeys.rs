@@ -1311,3 +1311,68 @@ fn the_date_falls_back_to_the_commands_time() {
     assert!(ch.rows(&PolicyId::from("nope"), open(), None).is_empty());
     assert!(ch.pending_for("claims").is_empty());
 }
+
+/// Purpose: one person on one phone is a member of their company's scheme, the policyholder of a family health plan with their
+/// partner on it, the holder of their own term life policy, and the scheme's administrator. Their phone holds their own scheme cover
+/// and nothing else of the scheme, the family plan as its policyholder without the partner's claim, and their own policy; as the
+/// scheme's administrator they see the scheme's members and billing and no other member's claim, not even a fellow director's.
+/// Why it matters: persona row AUD-006. A small employer's director holds every role at once; a slip in any one of them would show
+/// a colleague's or a partner's health to the person who employs or pays for them.
+#[test]
+fn one_person_in_three_roles_sees_each_slice() {
+    const HONE: &str = "party-00000040";
+    let mut w = World::new();
+    let mut own = term_life(40, open(), d(1981, 4, 4), Sex::Male, false, 300_000_00, None, Frequency::Monthly, None);
+    own.policyholder = p(HONE);
+    let own = w.issue(own);
+    let mut family = health_family(41, open(), &[d(1981, 4, 4), d(1983, 6, 6)], Frequency::Monthly);
+    family.policyholder = p(HONE);
+    family.lives[0].kind = LifeKind::Named { party: p(HONE) };
+    let partner = "party-00000041-2";
+    let family = w.issue(family);
+    let scheme = w.issue(group_scheme(42, open(), vec![linked_member("m-1", HONE), linked_member("m-2", "director-2")]));
+    w.dir(
+        module("group-admin"),
+        DirectoryCommand::SetEmployerAdmin {
+            policy: scheme.clone(),
+            party: p(HONE),
+            admin: true,
+        },
+    )
+    .unwrap();
+
+    // Claims publishes a claim for the other director and one for the partner.
+    let claim = |policy: &PolicyId, id: &str, subject: &str| Row {
+        key: format!("{policy}/claims/{id}"),
+        policy: policy.clone(),
+        kind: "claim".into(),
+        subject: Some(p(subject)),
+        sensitive: true,
+        body: json!({ "state": "received" }),
+    };
+    let rows = vec![claim(&scheme, "c-dir", "director-2"), claim(&family, "c-partner", partner)];
+    w.send(module("claims"), Command::PublishRows { rows, remove: vec![] }).unwrap();
+
+    let held = w.held(HONE);
+    let of = |policy: &PolicyId| held.iter().filter(|k| k.starts_with(&format!("{policy}/"))).cloned().collect::<Vec<_>>();
+    // The scheme: their own cover as a member, nothing the employer sees.
+    assert_eq!(of(&scheme), [format!("{scheme}/member/m-1/group-life")], "{held:?}");
+    // The family plan: as policyholder, the plan, both covers and the billing, never the partner's claim.
+    assert!(of(&family).iter().any(|k| k.ends_with("/policy")), "{held:?}");
+    assert!(of(&family).len() > 2, "{held:?}");
+    assert!(!held.iter().any(|k| k.contains("/claims/")), "{held:?}");
+    // Their own policy, whole.
+    assert!(of(&own).iter().any(|k| k.ends_with("/policy")), "{held:?}");
+    assert!(
+        w.held(partner).contains(&format!("{family}/claims/c-partner")),
+        "the claimant keeps their own claim"
+    );
+
+    // As administrator, through the portal: the scheme's members and billing, no claim of anyone's.
+    let on = w.ch.today(w.at);
+    let (relationships, rows) = w.ch.visible_rows(&p(HONE), &scheme, on, true);
+    assert_eq!(relationships, [Relationship::Member, Relationship::EmployerAdmin]);
+    assert!(rows.iter().all(|r| !r.sensitive && r.kind != "claim"), "{rows:?}");
+    assert_eq!(rows.iter().filter(|r| r.kind == "member").count(), 2);
+    assert!(w.sees("director-2", &scheme).contains(&format!("{scheme}/claims/c-dir")));
+}

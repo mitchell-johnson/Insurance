@@ -126,6 +126,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-003 | part | `channels/tests/journeys.rs::family_privacy_and_consent`<br>`channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
+| AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
 | AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
@@ -301,6 +302,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
 | HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
+| HLT-003 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
+| HLT-006 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 
 ## JNT Joint lives, ownership, assignments and dependants
