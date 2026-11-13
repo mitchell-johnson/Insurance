@@ -14,7 +14,7 @@ pub mod year;
 use std::collections::{BTreeMap, VecDeque};
 
 use chrono::NaiveDate;
-use ic_core::event::{EventRecord, MessageBody, OutboundMessage};
+use ic_core::event::{EventRecord, OutboundMessage};
 use ic_core::recon::{self, Break};
 use ic_core::{home_partition, Applied, Command, CoreState, Envelope, GroupId, PolicyId, Reject};
 use ic_ledger::{merkle_root, Hash32, JournalEntry, PartitionId, PARTITION_COUNT};
@@ -239,12 +239,8 @@ impl<L: OrderedLog> Cluster<L> {
                 if how == Delivery::Delay {
                     continue;
                 }
-                let command = match m.body.clone() {
-                    MessageBody::TransferRecord(record) => Command::LandTransfer { record },
-                    MessageBody::TransferLanded { policy, transfer_id } => Command::CompleteTransfer { policy, transfer_id },
-                    MessageBody::TransferRejected { policy, transfer_id, .. } => Command::AbortTransfer { policy, transfer_id },
-                };
-                if let Err(e) = self.submit_keyed(m.to_partition, &m.id, "transfer", command).result {
+                let (caller, command) = m.body.clone().into_delivery();
+                if let Err(e) = self.submit_keyed(m.to_partition, &m.id, caller, command).result {
                     self.relay_errors.push(format!("{}: {e}", m.id));
                 }
                 delivered += 1;

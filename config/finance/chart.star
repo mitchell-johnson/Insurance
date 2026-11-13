@@ -20,6 +20,7 @@ CHART = chart(
         account("1110", "Claim recoveries receivable", "asset", control = True, roles = ["claim_recovery_receivable"]),
         account("1150", "Policy loans", "asset", control = True, roles = ["policy_loan"]),
         account("1200", "Policies in transit between groups", "asset", control = True, roles = ["transfer_in_transit"]),
+        account("1210", "Claim offsets in transit between partitions", "asset", control = True, roles = ["claims_offset_in_transit"]),
         account("1300", "Fund unit positions", "asset", control = True, roles = ["fund_unit_position"]),
         account("1400", "Reinsurance assets (actuarial)", "asset"),
         account("1410", "Reinsurance recoverable on claims", "asset", control = True, roles = ["reinsurance_recoverable"]),

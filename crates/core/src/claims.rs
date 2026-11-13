@@ -15,7 +15,7 @@ use ic_ledger::{Dimensions, Ledger};
 
 use crate::accounts::{self, dims};
 use crate::arrears;
-use crate::event::Event;
+use crate::event::{Event, MessageBody, OutboundMessage};
 use crate::machine::{CoreState, Ctx, Reject};
 use crate::policy::{ClaimLedger, ClaimPayment, ClaimPaymentState, LayerOrigin, LifeKind, Policy, PolicyStatus, UnwindCause};
 use crate::postings::PostingSet;
@@ -54,6 +54,12 @@ impl ic_claims::Core for Port<'_, '_> {
     fn work(&mut self, units: u32) {
         self.ctx.work += units;
     }
+    fn partition(&self) -> u16 {
+        self.state.partition
+    }
+    fn send(&mut self, to_partition: u16, command: ic_claims::Command) -> Result<(), ic_claims::Reject> {
+        send(self.state, self.ctx, to_partition, command).map_err(outward)
+    }
 }
 
 /// Apply one claims command. The module's state is part of the partition's
@@ -65,6 +71,27 @@ pub(crate) fn apply(state: &mut CoreState, ctx: &mut Ctx<'_>, command: ic_claims
     let result = module.apply(&mut Port { state, ctx }, index, command);
     state.claims = module;
     result.map_err(|e| Reject::new(&e.code, e.message))
+}
+
+/// Queue a claims command for another partition. It leaves through the
+/// outbox in the same step as whatever this command posted, and the relay
+/// delivers it at least once as caller `partition`. The receiver must treat
+/// a repeat as already done: the message ID stops a repeat only for as long
+/// as the receiver keeps its idempotency keys.
+///
+/// The core does not know how many partitions there are, so the caller
+/// names each one. Whoever drives the claims module knows the topology.
+pub(crate) fn send(state: &CoreState, ctx: &mut Ctx<'_>, to_partition: ic_ledger::PartitionId, command: ic_claims::Command) -> Result<(), Reject> {
+    if to_partition == state.partition {
+        return Err(Reject::new("same_partition", "a partition does not send itself a message"));
+    }
+    let id = format!("claims:{}:{}:{}", state.partition, ctx.index, ctx.messages.len());
+    ctx.messages.push(OutboundMessage {
+        id,
+        to_partition,
+        body: MessageBody::Claims(Box::new(command)),
+    });
+    Ok(())
 }
 
 /// Let claims work through what has fallen due: at the cutoff and after each
@@ -922,5 +949,56 @@ pub(crate) fn reconcile(state: &CoreState, breaks: &mut Vec<crate::recon::Break>
                 ),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> Ctx<'static> {
+        Ctx {
+            index: 7,
+            date: NaiveDate::MIN,
+            caller: "claims",
+            salt: "",
+            events: vec![],
+            entries: vec![],
+            messages: vec![],
+            work: 1,
+        }
+    }
+
+    /// Purpose: a claims command queued for another partition leaves with an
+    /// ID that names the sender, the log entry and its place in that entry,
+    /// and the relay delivers it as a claims command from caller `partition`.
+    /// Why it matters: the ID is the receiver's idempotency key, so two
+    /// messages from one entry must never share one, and the caller is what
+    /// stops a partition message reaching a command meant for staff.
+    #[test]
+    fn a_claims_message_for_another_partition_is_queued_and_delivered_as_partition() {
+        let state = CoreState::new(1);
+        let mut ctx = ctx();
+        send(&state, &mut ctx, 2, ic_claims::Command::DrainDue).unwrap();
+        send(&state, &mut ctx, 3, ic_claims::Command::DrainDue).unwrap();
+        let ids: Vec<&str> = ctx.messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["claims:1:7:0", "claims:1:7:1"]);
+        assert_eq!(ctx.messages[1].to_partition, 3);
+        let (caller, command) = ctx.messages.remove(0).body.into_delivery();
+        assert_eq!(caller, "partition");
+        assert_eq!(command, crate::Command::Claims(Box::new(ic_claims::Command::DrainDue)));
+    }
+
+    /// Purpose: a partition cannot queue a claims message to itself.
+    /// Why it matters: the relay only carries messages between partitions,
+    /// so a message addressed home would mean the sender chose the wrong
+    /// partition, and applying it would hide that.
+    #[test]
+    fn a_claims_message_to_the_same_partition_is_refused() {
+        let state = CoreState::new(1);
+        let mut ctx = ctx();
+        let refused = send(&state, &mut ctx, 1, ic_claims::Command::DrainDue).unwrap_err();
+        assert_eq!(refused.code, "same_partition");
+        assert!(ctx.messages.is_empty());
     }
 }

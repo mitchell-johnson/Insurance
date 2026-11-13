@@ -271,4 +271,12 @@ pub trait Core {
     fn notify(&mut self, kind: &str, claim: &str, detail: BTreeMap<String, String>);
     /// Count work against the partition's apply budget.
     fn work(&mut self, units: u32);
+    /// The partition this claims state lives on.
+    fn partition(&self) -> u16;
+    /// Queue a claims command for another partition. It leaves in the same
+    /// step as this command's postings and arrives at least once, as caller
+    /// `partition`, so the command must allow that caller and must treat a
+    /// repeat as already done. The core does not know how many partitions
+    /// there are: whoever asks names each one.
+    fn send(&mut self, to_partition: u16, command: crate::Command) -> Result<(), Reject>;
 }
