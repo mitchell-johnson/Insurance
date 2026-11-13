@@ -114,6 +114,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
+        "incident" => found(state.incidents.get(text(&question, "incident")?)),
         "funding_forecast" => Ok(state.funding_forecast(date(&question, "from")?, date(&question, "to")?)),
         "notices" => {
             let role = serde_json::from_value(question["role"].clone()).map_err(|_| "the question needs a role".to_string())?;
