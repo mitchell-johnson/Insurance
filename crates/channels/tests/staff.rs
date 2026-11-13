@@ -402,8 +402,9 @@ fn maker_checker_and_separation_of_duties() {
 
 /// Purpose: a cover grant gives the coverer the covered person's queues and not their authority;
 /// a profile uplift raises a limit only to the template's ceiling; both need a second person, end
-/// on their own, and are named on the decisions that relied on them. Covering never opens the
-/// covered person's clinical information.
+/// on their own, and are named on the decisions that relied on them. An uplift lasts two weeks at
+/// most and raises amounts only, never the data classes seen; covering never opens the covered
+/// person's clinical information.
 /// Why it matters: leave cover and short staffing are when controls usually get bypassed with
 /// shared logins. Grants make the exception explicit, time-boxed and auditable, and the ceiling
 /// means no approval can hand out more authority than the role was ever meant to carry.
@@ -477,6 +478,18 @@ fn cover_and_uplift_grants() {
         to: T0 + 7 * DAY,
     };
     assert_eq!(code(s.apply(&p("ben"), T0, uplift("g-up", 600_000_00))), "above_ceiling");
+    // An uplift is for a short-staffed week or two, never longer (STF-006).
+    let long = StaffCommand::RequestGrant {
+        id: "g-long".into(),
+        holder: p("ben"),
+        kind: GrantKind::ProfileUplift {
+            limits: limits(&[("admit", 300_000_00)]),
+        },
+        reason: "short staffed".into(),
+        from: T0,
+        to: T0 + 15 * DAY,
+    };
+    assert_eq!(code(s.apply(&p("ben"), T0, long)), "too_long");
     s.apply(&p("ben"), T0, uplift("g-up", 300_000_00)).unwrap();
     assert_eq!(code(s.apply(&p("mia"), T0, StaffCommand::ApproveGrant { id: "g-up".into() })), "forbidden");
     s.apply(&p("sam"), T0, StaffCommand::ApproveGrant { id: "g-up".into() }).unwrap();
@@ -492,6 +505,29 @@ fn cover_and_uplift_grants() {
         value: 300_000_01,
     });
     assert_eq!(s.authorise(&pol, &on_anas_queue).denied, Some(Denial::HowMuch));
+    // An uplift raises amounts only: it never widens the data classes the holder's roles see.
+    let col_up = StaffCommand::RequestGrant {
+        id: "g-col".into(),
+        holder: p("col"),
+        kind: GrantKind::ProfileUplift {
+            limits: limits(&[("suspense", 5_000_00)]),
+        },
+        reason: "month end".into(),
+        from: T0,
+        to: T0 + 3 * DAY,
+    };
+    s.apply(&p("col"), T0, col_up).unwrap();
+    s.apply(&p("sam"), T0, StaffCommand::ApproveGrant { id: "g-col".into() }).unwrap();
+    let mut allocate = request("col", "suspense.allocate", DataClass::Financial);
+    allocate.scopes = vec!["queue:collections".into()];
+    allocate.purpose = case("case-9");
+    allocate.amount = Some(Amount {
+        limit: "suspense".into(),
+        value: 5_000_00,
+    });
+    assert!(s.authorise(&pol, &allocate).allowed);
+    allocate.class = DataClass::InsuranceSensitive;
+    assert_eq!(s.authorise(&pol, &allocate).denied, Some(Denial::Class));
     // A limit the profile and templates do not know is zero.
     on_anas_queue.amount = Some(Amount {
         limit: "write_off".into(),
