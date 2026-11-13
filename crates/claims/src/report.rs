@@ -125,6 +125,12 @@ pub enum Question {
     Work {
         claim: ClaimId,
     },
+    /// The claims on one policy as an adviser or an employer may see them:
+    /// that each exists and where it is, never its cause or type. The caller
+    /// checks that the person asking serves or administers the policy.
+    PolicyStatus {
+        policy: String,
+    },
 }
 
 /// One claim for the staff working it: who has it, what is waiting and
@@ -217,6 +223,7 @@ pub enum Reply {
     Report(Box<Report>),
     Remittance(BTreeMap<String, (u32, i64)>),
     Work(Option<Box<WorkView>>),
+    PolicyStatus(Vec<StatusView>),
 }
 
 impl ClaimsState {
@@ -235,6 +242,7 @@ impl ClaimsState {
             Question::Report => Reply::Report(Box::new(self.report())),
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
             Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
+            Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
         }
     }
 
@@ -302,6 +310,13 @@ impl ClaimsState {
             notified_on: c.notified_on,
             closed_on: c.closed_on,
         })
+    }
+
+    /// Every claim on a policy, oldest first, as [`StatusView`]s.
+    pub fn policy_status(&self, policy: &str) -> Vec<StatusView> {
+        let mut out: Vec<StatusView> = self.by_policy.get(policy).into_iter().flatten().filter_map(|id| self.status_view(id)).collect();
+        out.sort_by(|a, b| (a.notified_on, &a.claim).cmp(&(b.notified_on, &b.claim)));
+        out
     }
 
     pub fn claimant_view(&self, claim: &str) -> Option<ClaimantView> {

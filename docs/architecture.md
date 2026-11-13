@@ -653,7 +653,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
 
 - **Offsets across partitions.** An overpayment is offset only against benefits on the same partition (`offset_sources` in `book.rs`). Across partitions it needs a message from the partition paying the benefit to the one holding the receivable; the core's outbound message mechanism (`ctx.messages`, as the transfer uses) is the place. Also: when a policy moves, an offset against another policy's benefit silently stops.
 - **Actuarial reserve table**: built after this section was first written. `Command::ApplyValuation` (caller `config`, `config::Valuation`, handler `apply_valuation` in `state.rs`) sets the reserve of claims in payment from the actuary's approved figures. Not built: the path from the actuarial model to the activation (design gap noted in the notes).
-- **Claim status for advisers and employers.** `ClaimsState::status_view` exists and is not served. The shipped audience policy treats the existence of a claim as a health fact, so only staff and the person it is about see it. Serving it needs a decision (below).
+- **Claim status for advisers and employers.** Mitchell decided on 13 November 2026: status only, no cause. Claims answers `Question::PolicyStatus { policy }` (ID, status, notified and closed dates per claim). The portal thread has been asked to serve it on the adviser and employer routes after its own relationship check; until then nobody outside staff sees it.
 - **Non-disclosure remedy.** Underwriting's outcome is recorded on the claim; there is no core command to vary or avoid the policy from it.
 - **Undoing a recorded death** is built (`RetractDeath`, reopen basis `death_retracted`); the customer master has been asked to send it on its own retraction. An overpayment recorded for the withdrawn death is not written off automatically.
 - **Death register or app confirmation satisfying proof of life without a person**, **tax withheld from late payment interest**, **a waiver checked against a product fact** (today the owner judges from the wording), **reversal billing back waived premium**: none built; each is one command or one rule and is described under its feature in `docs/claims.md`.
@@ -662,7 +662,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
 
 ### Open questions for Mitchell
 
-1. Should advisers and employers see that a claim exists and its status? The design gives them status without cause; the shipped privacy policy says existence itself is sensitive. Today they see nothing.
+1. Answered 13 November 2026: advisers and employers see status only, no cause.
 2. Claims rules and authority limits are not shipped as configuration: the insurer's own staff IDs and limits have to be activated by two people before any claim can be worked. Is a sample book wanted for the demonstration environment?
 3. Late payment interest: the rate, the free days, and whether tax is withheld are the insurer's and the law's to set. The rule is off unless configured.
 
