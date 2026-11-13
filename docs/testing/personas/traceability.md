@@ -231,6 +231,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-039 | part | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death` |
 | CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release` |
 | CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
+| CLM-042 | full | `claims/tests/suite/intake.rs::a_communication_marker_gives_one_owner_a_said_handover_and_more_time` |
 
 ## RI Reinsurance
 
