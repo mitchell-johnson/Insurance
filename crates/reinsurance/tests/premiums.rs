@@ -373,3 +373,30 @@ RATE_TABLE = reinsurer_rate_table(
     let kept: ic_reinsurance::treaty::ReinsurerRateTable = serde_json::from_value(serde_json::to_value(&blended).unwrap()).unwrap();
     assert_eq!(kept, blended);
 }
+
+/// Purpose: money for different reinsurers on one partition travels in different delivery
+/// lanes, and money for one reinsurer under one treaty on one partition shares a lane; a
+/// cover's cession record has a lane of its own.
+/// Why it matters: a posting the core refuses holds only its own lane until a person decides.
+/// One reinsurer's refused posting must not stop every other reinsurer's money on the same
+/// partition, but a sweep must never overtake the postings to the account it sweeps.
+#[test]
+fn each_reinsurers_money_on_a_partition_is_its_own_delivery_lane() {
+    let mut b = anna();
+    b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    let posts: Vec<_> = b.instructions.iter().filter(|i| matches!(i.body, InstructionBody::Post { .. })).collect();
+    let lane_of = |reinsurer: &ic_reinsurance::ReinsurerId| {
+        let lanes: std::collections::BTreeSet<String> = posts
+            .iter()
+            .filter(|i| matches!(&i.body, InstructionBody::Post { reinsurer: r, .. } if r == reinsurer))
+            .map(|i| i.lane())
+            .collect();
+        assert_eq!(lanes.len(), 1, "one reinsurer's postings on one partition share a lane: {lanes:?}");
+        lanes.into_iter().next().unwrap()
+    };
+    let (n, s) = (lane_of(&north()), lane_of(&south()));
+    assert_ne!(n, s);
+    assert_eq!(n, "money:1:retail-life-surplus:reinsurer-north");
+    let cession = b.instructions.iter().find(|i| matches!(i.body, InstructionBody::RecordCession { .. })).unwrap();
+    assert_eq!(cession.lane(), "cover:P1/life/1/L1");
+}
