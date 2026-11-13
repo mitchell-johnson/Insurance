@@ -103,7 +103,14 @@ impl World {
         Self::with(1, Settings::default())
     }
 
+    /// A world whose rules may be activated without worked examples, so
+    /// tests about other things need not write them. A test about examples
+    /// turns the production setting back on.
     pub fn with(partitions: u16, settings: Settings) -> Self {
+        let settings = Settings {
+            rule_examples_required: false,
+            ..settings
+        };
         let mut cluster = Cluster::in_memory(partitions, 7);
         cluster.open(d(START.0, START.1, START.2)).unwrap();
         for cmd in shipped_activations().unwrap() {
@@ -586,6 +593,7 @@ pub fn rule(book: &str, version: u32, from: NaiveDate, lines: Vec<Line>, liabili
         liability,
         fragments: vec![],
         clawback_by_cause: false,
+        examples: vec![],
         instructions_ref: "signed-instructions".into(),
     }
 }

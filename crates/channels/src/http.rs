@@ -148,6 +148,9 @@ pub struct AppState {
     pub master: Option<Arc<dyn crate::customers::Master>>,
     /// The complaints module, for the complaints and conduct workbench.
     pub complaints: Arc<dyn crate::forward::Source>,
+    /// The underwriting intake, for signing disclosures. `None` where it is
+    /// not configured: those routes answer 503.
+    pub intake: Option<Arc<dyn crate::disclosures::Intake>>,
     /// The commission module, for replacement matches.
     pub commission: Arc<dyn crate::forward::Source>,
 }
@@ -427,6 +430,80 @@ fn mastered(answer: Result<crate::customers::Answered, String>) -> Answer {
 async fn profile(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     mastered(s.master()?.record(&session.party).await)
+}
+
+/// The intake's answer, as it gave it; 503 when it cannot be reached.
+fn intake_answer(answer: Result<crate::disclosures::Answered, String>) -> Answer {
+    let (status, body) = answer.map_err(|e| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "underwriting_intake_unavailable", e))?;
+    Ok((StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY), Json(body)).into_response())
+}
+
+impl AppState {
+    fn intake(&self) -> Result<&Arc<dyn crate::disclosures::Intake>, Problem> {
+        self.intake.as_ref().ok_or_else(|| {
+            Problem::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "underwriting_intake_unavailable",
+                "the underwriting intake is not configured here",
+            )
+        })
+    }
+
+    /// The enrolled key of the device this person proved, once it is clear
+    /// they are the life on this proposal. Anyone else gets 404.
+    async fn signer(&self, session: &Session, proposal: &str, life: &str) -> Result<Option<String>, Problem> {
+        let signer = self
+            .ask(Question::DisclosureSigner {
+                party: session.party.clone(),
+                device: session.device.clone(),
+                proposal: proposal.to_string(),
+                life: life.to_string(),
+            })
+            .await?;
+        if signer["life"] != true {
+            return Err(Problem::not_found());
+        }
+        Ok(signer["public_key"].as_str().map(str::to_string))
+    }
+}
+
+/// What the person insured signs for their answers. The answers go to the
+/// intake, which checks them against the question set and keeps nothing.
+async fn disclosure_to_sign(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life)): Path<(String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    s.signer(&session, &proposal, &life).await?;
+    let request = crate::disclosures::answers(&proposal, &life, &parse(&body)?).map_err(Problem::bad_request)?;
+    intake_answer(s.intake()?.to_sign(request).await)
+}
+
+/// The signed answers, from a device the person enrolled.
+async fn disclosure_submit(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life)): Path<(String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let Some(device) = session.device.clone() else {
+        return Err(device_required("signing your answers"));
+    };
+    let key = s
+        .signer(&session, &proposal, &life)
+        .await?
+        .ok_or_else(|| device_required("signing your answers"))?;
+    let body: Value = parse(&body)?;
+    let request = crate::disclosures::answers(&proposal, &life, &body).map_err(Problem::bad_request)?;
+    let request = crate::disclosures::signed(request, &body, &device, &key).map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_signature", e))?;
+    intake_answer(s.intake()?.submit(request).await)
 }
 
 /// Change your contact details or consents, from an enrolled device.
@@ -1779,6 +1856,8 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/profile", get(profile))
         .route("/app/v1/profile/commands", post(profile_command))
         .route("/app/v1/profile/export", get(profile_export))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", post(disclosure_to_sign))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures", post(disclosure_submit))
         .route("/app/v1/sync", get(sync))
         .route("/app/v1/policies/{policy}", get(policy))
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))

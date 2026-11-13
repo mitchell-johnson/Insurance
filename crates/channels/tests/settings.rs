@@ -133,19 +133,43 @@ fn bad_values_are_refused_at_start() {
     // The customer master: off unless both are set, and never over plain HTTP to another host.
     assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().master, None);
     let scope = ("IC_CUSTOMERS_SCOPE", "api://ic-customers/.default");
-    for url in ["https://customers.internal", "http://localhost:8090"] {
+    for url in [
+        "https://customers.internal",
+        "http://localhost:8090",
+        "http://ic-customers",
+        "http://ic-customers.insurance.svc/",
+        "http://ic-customers.ns.svc.cluster.local:80",
+    ] {
         assert_eq!(
             load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", url), scope]).unwrap().master,
             Some((url.to_string(), scope.1.to_string()))
         );
     }
-    for url in ["http://customers.internal", "http://localhost.example.com"] {
+    for url in [
+        "http://customers.internal",
+        "http://localhost.example.com",
+        "http://svc.example.com",
+        "http://",
+        "ftp://ic-customers",
+    ] {
         assert!(
             load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", url), scope]).unwrap_err().contains("https"),
             "{url}"
         );
     }
     assert!(load(&[NODES, OPEN, DEV, scope]).unwrap_err().contains("together"));
+    // The underwriting intake is configured the same way.
+    let intake = ("IC_UNDERWRITING_INTAKE_SCOPE", "api://ic-underwriting-intake/.default");
+    assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().intake, None);
+    assert_eq!(
+        load(&[NODES, OPEN, DEV, ("IC_UNDERWRITING_INTAKE_URL", "https://intake.internal"), intake])
+            .unwrap()
+            .intake,
+        Some(("https://intake.internal".to_string(), intake.1.to_string()))
+    );
+    assert!(load(&[NODES, OPEN, DEV, intake])
+        .unwrap_err()
+        .contains("IC_UNDERWRITING_INTAKE_URL and IC_UNDERWRITING_INTAKE_SCOPE together"));
     assert!(load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", "https://customers.internal")])
         .unwrap_err()
         .contains("together"));
