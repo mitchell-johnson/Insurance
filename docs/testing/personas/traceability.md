@@ -366,6 +366,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
+| SVC-022 | part | `customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
 | SVC-025 | part | `distribution/tests/replacement.rs::cover_given_up_after_new_cover_was_written_is_matched_looking_back` |
 
 ## ANV The anniversary window

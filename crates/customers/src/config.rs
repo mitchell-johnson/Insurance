@@ -48,6 +48,9 @@ pub struct Config {
     pub listen: String,
     pub cycle_every: Duration,
     pub sweep_every: Duration,
+    /// How long a person's own spending hold stands after they ask for it
+    /// to end (decision 3 in docs/decisions.md).
+    pub hold_cooling_off_days: u64,
     /// The ledger cluster, for telling claims of deaths.
     pub cluster: Option<Cluster>,
 }
@@ -146,6 +149,7 @@ impl Config {
             listen: get("IC_CUSTOMERS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(number("IC_CUSTOMERS_CYCLE_SECONDS", 2)?),
             sweep_every: Duration::from_secs(60 * number("IC_CUSTOMERS_SWEEP_MINUTES", 60)?),
+            hold_cooling_off_days: number("IC_CUSTOMERS_HOLD_COOLING_OFF_DAYS", 7)?,
             cluster,
         })
     }
@@ -204,6 +208,7 @@ mod tests {
         assert_eq!(c.kek, "customers-kek");
         assert_eq!(c.hub_partitions, 8);
         assert_eq!(c.sweep_every, Duration::from_secs(3600));
+        assert_eq!(c.hold_cooling_off_days, 7);
         let shown = format!("{c:?}");
         assert!(!shown.contains("kkkk") && shown.contains("pg.postgres.database.azure.com/customers"));
         let mut env = base();

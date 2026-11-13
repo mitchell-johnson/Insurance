@@ -586,6 +586,33 @@ async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
     }
 }
 
+/// Whether a person's own hold on money going out stands, and when a
+/// removal they asked for takes effect. Payments and servicing ask before
+/// paying out or changing a payout account; the core and payments also
+/// take the events.
+async fn spending_hold<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
+    if !app.access.allows(&ask, "spending_hold") {
+        return Err(app.deny(&ctx, Some(&resolved), "spending_hold").await);
+    }
+    app.audit(&ctx, Some(&resolved), "spending_hold", vec![], "allow").await?;
+    let hold = party.spending_hold.as_ref();
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "party": resolved,
+            "held": hold.is_some(),
+            "placed_at": hold.map(|h| h.placed_at),
+            "removal": hold.and_then(|h| h.removal_requested_at).map(|at| json!({
+                "requested_at": at,
+                "ends_at": at + app.store.hold_cooling_off(),
+            })),
+        })),
+    ))
+}
+
 /// Every action one person took, or was asked about, with dates: what a
 /// guardian or attorney asks for to show what they did under their
 /// authority. Read by privacy, like a party's own trail.
@@ -1012,6 +1039,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/export", get(export::<W, S>))
         .route("/v1/parties/{id}/audit", get(audit_trail::<W, S>))
         .route("/v1/actors/{actor}/actions", get(actions_by::<W, S>))
+        .route("/v1/parties/{id}/spending-hold", get(spending_hold::<W, S>))
         .route("/v1/relationships", get(relationships_to::<W, S>))
         .route("/v1/merges", post(merge::<W, S>))
         .route("/v1/unmerges", post(unmerge::<W, S>))
