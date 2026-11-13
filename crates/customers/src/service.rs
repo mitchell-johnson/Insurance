@@ -426,6 +426,29 @@ async fn relationships_of<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App
     }
 }
 
+/// One relationship by its reference (the party and the relationship's id),
+/// with whether it is in force today: how payments checks a reference it is
+/// given before accepting it.
+async fn relationship_one<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path((id, relationship)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, _) = app.find(&id).await?;
+    if !app.access.allows(&app.ask(&ctx), "relationships") {
+        return Err(app.deny(&ctx, Some(&resolved), "relationships").await);
+    }
+    let rows = app.store.relationships_of(&resolved).await.map_err(failed)?;
+    let Some(row) = rows.into_iter().find(|r| r.relationship.id == relationship) else {
+        return Err(refused(StatusCode::NOT_FOUND, "not_found", "no such relationship"));
+    };
+    let in_force = row.relationship.in_force(Utc::now().date_naive());
+    let mut out = serde_json::to_value(&row).expect("a relationship row serialises");
+    out["in_force"] = json!(in_force);
+    Ok((StatusCode::OK, Json(out)))
+}
+
 #[derive(Debug, Deserialize)]
 struct TargetQuery {
     /// `policy:P1`, `scheme:S1` or `party:pty_...`.
@@ -1134,6 +1157,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/commands", post(command::<W, S>))
         .route("/v1/parties/{id}/contact-points", get(contact_points::<W, S>))
         .route("/v1/parties/{id}/relationships", get(relationships_of::<W, S>))
+        .route("/v1/parties/{id}/relationships/{relationship}", get(relationship_one::<W, S>))
         .route("/v1/parties/{id}/routing", get(routing::<W, S>))
         .route("/v1/parties/{id}/authority", get(authority::<W, S>))
         .route("/v1/parties/{id}/export", get(export::<W, S>))
