@@ -923,6 +923,17 @@ async fn book(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: 
     .await?)
 }
 
+/// What an advice provider or a group sees of the advisers under it and
+/// the policies they service. Empty for anyone who is neither.
+async fn practice(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    ok(s.ask(Question::Practice {
+        party: session.party,
+        at: session.at,
+    })
+    .await?)
+}
+
 async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
@@ -2462,6 +2473,7 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/devices/{device}", delete(revoke_device))
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
+        .route("/adviser/v1/practice", get(practice))
         .route("/adviser/v1/replacements", get(adviser_replacements))
         .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))

@@ -130,6 +130,7 @@ fn portal() -> Portal {
         ("sub-abe", "abe"),
         ("sub-sam", "sam"),
         ("sub-cat", "cat"),
+        ("sub-fap", "fap-1"),
         ("sub-paymk", "pay-mk"),
         ("sub-payap", "pay-ap"),
         ("sub-paypm", "pay-pm"),
@@ -592,6 +593,15 @@ async fn an_advisers_request_needs_the_customers_signed_approval() {
             .0,
         StatusCode::OK
     );
+
+    // The adviser's provider sees the adviser and the policy; the adviser has no practice of their own.
+    let (status, practice) = portal.get("sub-fap", "/adviser/v1/practice").await;
+    assert_eq!(
+        (status, &practice["advisers"][0]["adviser"], &practice["policies"]),
+        (StatusCode::OK, &json!("adv-1"), &json!(1)),
+        "{practice}"
+    );
+    assert_eq!(portal.get("sub-adv", "/adviser/v1/practice").await.1["advisers"], json!([]));
 
     let (status, book) = portal.get("sub-adv", "/adviser/v1/book").await;
     assert_eq!(

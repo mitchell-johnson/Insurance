@@ -344,6 +344,37 @@ impl Directory {
             .collect()
     }
 
+    /// The engagements a body answers for on a date: advisers engaged with
+    /// it, or with any body linked below it on that date. A provider sees
+    /// its advisers; a group sees every provider under it and theirs.
+    pub fn practice(&self, party: &PartyId, on: NaiveDate) -> Vec<&Engagement> {
+        let mut bodies: BTreeSet<&PartyId> = [party].into();
+        for _ in 0..MAX_STRUCTURE_DEPTH {
+            let before = bodies.len();
+            for (child, links) in &self.structure {
+                if links.iter().any(|l| in_window(l.from, l.to, on) && bodies.contains(&l.parent)) {
+                    bodies.insert(child);
+                }
+            }
+            if bodies.len() == before {
+                break;
+            }
+        }
+        self.engagements
+            .values()
+            .filter(|e| bodies.contains(&e.fap) && in_window(e.from, e.to, on))
+            .collect()
+    }
+
+    /// The policies an adviser holds authority on under one engagement.
+    pub fn policies_of(&self, engagement: &Engagement) -> Vec<&PolicyId> {
+        self.authorities
+            .iter()
+            .filter(|(_, by_adviser)| by_adviser.get(&engagement.adviser).is_some_and(|a| a.engagement == engagement.id))
+            .map(|(p, _)| p)
+            .collect()
+    }
+
     fn policies_under(&self, engagements: &[&Engagement]) -> BTreeSet<PolicyId> {
         let ids: BTreeSet<&str> = engagements.iter().map(|e| e.id.as_str()).collect();
         self.authorities
