@@ -202,6 +202,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`claims/tests/suite/covers.rs::the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not` |
+| CLM-013 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
+| CLM-014 | full | `sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-015 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-016 | full | `claims/tests/suite/book.rs::a_benefit_run_is_prepared_by_one_person_and_approved_by_another`<br>`claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/covers.rs::a_benefit_starts_only_after_the_waiting_period` |
 | CLM-017 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/book.rs::other_income_shows_as_its_own_figure_on_each_benefit_line` |
@@ -312,8 +314,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
 | HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
 | HLT-003 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
+| HLT-004 | full | `claims/tests/suite/covers.rs::an_episode_is_priced_line_by_line_against_each_covers_counters` |
 | HLT-006 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
+| HLT-009 | full | `claims/tests/suite/covers.rs::counters_never_cross_covers_unless_the_shell_shares_one` |
 | HLT-010 | full | `sim/tests/health_flex.rs::an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer`<br>`sim/tests/claims.rs::the_cover_check_reports_the_excess_level_held_on_the_event_date` |
 
 ## JNT Joint lives, ownership, assignments and dependants
