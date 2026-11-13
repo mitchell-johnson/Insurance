@@ -479,6 +479,10 @@ pub enum Instruction {
         reference: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         payer_account: Option<String>,
+        /// The policy whose direct debit authority draws on the paying
+        /// account, when exactly one does: cash matching's payer rule.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payer_policy: Option<PolicyId>,
         received_on: NaiveDate,
     },
     /// Tell people something they must act on.

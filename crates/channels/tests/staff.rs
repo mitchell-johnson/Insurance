@@ -1344,3 +1344,56 @@ fn personal_connections_and_flagged_attempts() {
     s.apply(&p("alice"), T0, end("ana", "cousin")).unwrap();
     assert!(s.connections[&p("ana")].is_empty());
 }
+
+/// Purpose: a product owner and a platform engineer, whose templates hold no personal data class, are refused customer data
+/// whichever action they ask for: a policy's personal detail and a claim's insurance-sensitive detail are refused for the class
+/// even where the template holds the action, and an action the template does not hold is refused for that.
+/// Why it matters: persona row STF-017. People who build and run the system need to see it working, not who the customers are;
+/// a role that drifted into a personal class would let them read every policy without a case.
+#[test]
+fn builders_and_operators_hold_no_personal_class() {
+    let mut s = StaffState::new();
+    let owner = template("product-owner", &["policy.view", "product.configure"], &[DataClass::Ordinary], "none", &[]);
+    let engineer = template("platform-engineer", &["platform.operate", "claim.view"], &[DataClass::Ordinary], "none", &[]);
+    let admin = template("administrator", &[actions::MANAGE_STAFF], &[DataClass::Ordinary], "none", &[]);
+    s.apply(
+        &p("module:entitlements"),
+        T0,
+        StaffCommand::Bootstrap {
+            templates: vec![admin, owner, engineer],
+            profiles: vec![Profile {
+                id: "none".into(),
+                version: 1,
+                limits: BTreeMap::new(),
+            }],
+            admin: p("alice"),
+            admin_templates: vec!["administrator".into()],
+        },
+    )
+    .unwrap();
+    for (who, templates) in [("po", "product-owner"), ("pe", "platform-engineer")] {
+        s.apply(
+            &p("alice"),
+            T0,
+            StaffCommand::Employ {
+                party: p(who),
+                team: "platform".into(),
+                manager: None,
+                templates: vec![templates.into()],
+            },
+        )
+        .unwrap();
+    }
+    let pol = policy();
+    for (who, action, class, denied) in [
+        ("po", "policy.view", DataClass::Personal, Denial::Class),
+        ("po", "claim.view", DataClass::InsuranceSensitive, Denial::What),
+        ("pe", "claim.view", DataClass::InsuranceSensitive, Denial::Class),
+        ("pe", "policy.view", DataClass::Personal, Denial::What),
+        ("pe", "claim.view_clinical", DataClass::Clinical, Denial::What),
+    ] {
+        let mut r = request(who, action, class);
+        r.purpose = case("case-1");
+        assert_eq!(s.authorise(&pol, &r).denied, Some(denied), "{who} {action}");
+    }
+}

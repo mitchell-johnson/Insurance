@@ -92,6 +92,10 @@ pub struct Columns {
     /// this column existed keeps its hash.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mobile_phone: Option<String>,
+    /// The occupation class, for a scheme whose rates are split by it.
+    /// Left out of the stored form when unset, like the mobile phone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
 }
 
 /// A phone number as the customer master matches on it: international form.
@@ -293,8 +297,9 @@ impl FileMapping {
             find(&c.email)?,
             find(&c.national_id)?,
             find(&c.mobile_phone)?,
+            find(&c.occupation_class)?,
         ];
-        let [given, family, dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous, email, national_id, mobile_phone] =
+        let [given, family, dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous, email, national_id, mobile_phone, class] =
             cols;
 
         let mut out = Mapped::default();
@@ -322,6 +327,7 @@ impl FileMapping {
                     change,
                     effective,
                     previous,
+                    class,
                 ],
             ) {
                 Ok(mut member) => {
@@ -351,9 +357,9 @@ impl FileMapping {
         row: u32,
         employee_id: &str,
         cell: &impl Fn(Option<usize>) -> Option<&'a str>,
-        cols: [Option<usize>; 12],
+        cols: [Option<usize>; 13],
     ) -> Result<MemberRow, (&'static str, &'static str)> {
-        let [dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous] = cols;
+        let [dob, sex, smoker, category, salary, hours, started, at_work, billing_group, change, effective, previous, class] = cols;
         let date = |col: Option<usize>, field: &'static str| -> Result<Option<NaiveDate>, (&'static str, &'static str)> {
             cell(col)
                 .map(|s| NaiveDate::parse_from_str(s, &self.date_format).map_err(|_| ("bad_date", field)))
@@ -404,6 +410,7 @@ impl FileMapping {
                 employment_start: date(started, "employment_start")?,
                 actively_at_work: flag(at_work, "actively_at_work")?,
                 billing_group: cell(billing_group).map(str::to_string),
+                occupation_class: cell(class).map(str::to_string),
             },
             previous_employee_id: cell(previous).map(str::to_string),
             fingerprint: None,
@@ -437,6 +444,7 @@ pub(crate) mod tests {
                 employment_start: Some("Start Date".to_string()),
                 actively_at_work: Some("At Work".to_string()),
                 billing_group: Some("Site".to_string()),
+                occupation_class: None,
                 change: None,
                 effective: None,
                 previous_employee_id: Some("Old Emp No".to_string()),
@@ -532,6 +540,7 @@ E003,Mele,Tupou,30/09/1992,female,staff,62000.5,20,01/10/2027,TRUE,akl,X9,
                 employment_start: Some(d(2020, 2, 1)),
                 actively_at_work: Some(true),
                 billing_group: Some("akl".to_string()),
+                occupation_class: None,
             }
         );
         assert_eq!(aroha.fingerprint, Some(fingerprint("salt", "Aroha", "Ngata", Some(d(1980, 5, 1)))));
@@ -605,8 +614,27 @@ E003,Mele,Tupou,30/09/1992,female,staff,62000.5,20,01/10/2027,TRUE,akl,X9,
     fn a_mapping_without_a_mobile_column_keeps_its_stored_form() {
         let stored = serde_json::to_value(full_mapping()).unwrap();
         assert!(stored["columns"].get("mobile_phone").is_none(), "{stored}");
+        assert!(stored["columns"].get("occupation_class").is_none(), "{stored}");
         let with = serde_json::to_value(change_mapping()).unwrap();
         assert_eq!(with["columns"]["mobile_phone"], "mobile");
+    }
+
+    /// Purpose: a layout that names an occupation class column carries each member's class onto
+    /// the record, trimmed, and leaves it unset for a member whose cell is empty.
+    /// Why it matters: a scheme rated by class bills each member on the class the file gives. A
+    /// class lost in reading would put a wharf worker on the office rate.
+    #[test]
+    fn an_occupation_class_column_is_read_onto_the_record() {
+        let mut m = change_mapping();
+        m.columns.occupation_class = Some("class".to_string());
+        let text = "id;given;family;born;smoker;category;pay;event;from;ird;mobile;class\n\
+                    E002;;;;;executive;;upd;2027-12-01;;; 4 \n\
+                    E003;;;;;executive;;upd;2027-12-01;;;\n";
+        let mapped = m.map(&csv::parse(text.as_bytes(), m.delimiter).unwrap(), "salt").unwrap();
+        assert!(mapped.rejected.is_empty(), "{:?}", mapped.rejected);
+        let classes: Vec<_> = mapped.rows.iter().map(|r| r.attrs.occupation_class.as_deref()).collect();
+        assert_eq!(classes, vec![Some("4"), None]);
+        assert_eq!(mapped.rows[0].attrs.factors().occupation_class.as_deref(), Some("4"));
     }
 
     /// Purpose: each kind of unreadable cell rejects its own row with a code and the field's name,

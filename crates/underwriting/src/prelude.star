@@ -120,8 +120,8 @@ def decline():
 def defer(months):
     return {"do": "defer", "months": months}
 
-def rule(id, when, then, reasons):
-    return {"id": id, "when": when, "then": then, "reasons": reasons}
+def rule(id, when, then, reasons, about = ""):
+    return {"id": id, "when": when, "then": then, "reasons": reasons, "about": about}
 
 def rule_set(id, version, effective_from, question_set, products, rules, effective_to = None):
     return {"id": id, "version": version, "effective_from": effective_from, "effective_to": effective_to,

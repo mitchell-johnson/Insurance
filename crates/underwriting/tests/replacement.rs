@@ -22,7 +22,8 @@ fn confirm(id: &str, granted: bool, signed: Option<ic_underwriting::signing::Sig
 /// disclosure with its own signed step: a disclosure sent first is refused
 /// `replacement_disclosure`, an unsigned or mis-signed confirmation is refused `signature`, a
 /// confirmation on an application that is not a replacement is refused, and once the
-/// disclosure has been taken on it the confirmation cannot be withdrawn.
+/// disclosure has been taken on it the confirmation cannot be withdrawn. The life may confirm
+/// in the customer app, which may do nothing else here.
 /// Why it matters: the replacement disclosure is where the customer is told what they keep and
 /// what they gain, the premiums compared, and that the adviser earns nothing on the amount
 /// replaced. Conduct rules expect it before the customer commits; an application that could
@@ -66,9 +67,15 @@ fn a_replacement_waits_for_the_signed_replacement_disclosure() {
         w.err("new-business", Command::SubmitDisclosure(Box::new(w.disclosure("P1", "L1", &clean())))),
         "replacement_disclosure"
     );
+    // The life confirms in the app; the app may not make the application itself.
+    assert_eq!(w.err("customer-app", confirm("P1", true, None)), "signature");
     w.ok(
-        "new-business",
+        "customer-app",
         confirm("P1", true, Some(signed("consent", &["P1", "L1", "replacement_disclosure"]))),
+    );
+    assert_eq!(
+        w.err("customer-app", Command::SubmitDisclosure(Box::new(w.disclosure("P1", "L1", &clean())))),
+        "caller"
     );
     w.disclose("P1", "L1", &clean());
     assert_ne!(w.stage("P1", "L1"), Stage::AwaitingDisclosure);

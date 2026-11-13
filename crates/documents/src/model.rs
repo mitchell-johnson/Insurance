@@ -391,6 +391,8 @@ pub struct RequestedKind {
     pub clinical: bool,
     /// Delivery must be provable.
     pub proven: bool,
+    /// The `detail` entries a request of this kind must carry.
+    pub needs: &'static [&'static str],
 }
 
 /// Every letter another module may ask for.
@@ -401,6 +403,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-offer-made",
         clinical: true,
         proven: false,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -408,6 +411,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-declined",
         clinical: true,
         proven: true,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -415,6 +419,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-proposal-lapsed",
         clinical: false,
         proven: false,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -422,6 +427,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-proposal-withdrawn",
         clinical: false,
         proven: false,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -429,6 +435,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-policy-issued",
         clinical: false,
         proven: false,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -436,6 +443,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-adviser-unavailable",
         clinical: false,
         proven: true,
+        needs: &[],
     },
     RequestedKind {
         caller: "underwriting",
@@ -443,6 +451,7 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "uw-interview-to-confirm",
         clinical: false,
         proven: false,
+        needs: &[],
     },
     RequestedKind {
         caller: "reinsurance",
@@ -450,6 +459,36 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         template: "ri-reinsurance-statement",
         clinical: false,
         proven: true,
+        needs: &[],
+    },
+    // A member who goes on leave of absence is told the day their cover
+    // stops if they are not back, and told again when that day comes.
+    RequestedKind {
+        caller: "group",
+        kind: "absence_started",
+        template: "grp-absence-started",
+        clinical: false,
+        proven: true,
+        needs: &[],
+    },
+    RequestedKind {
+        caller: "group",
+        kind: "absence_limit_reached",
+        template: "grp-absence-limit-reached",
+        clinical: false,
+        proven: true,
+        needs: &[],
+    },
+    // Asking someone to repay a claim overpayment. The reference is the
+    // one payments holds for it (`repayment_reference`), so that a credit
+    // quoting it is matched to the overpayment.
+    RequestedKind {
+        caller: "claims",
+        kind: "overpayment_repayment",
+        template: "cl-overpayment-repayment",
+        clinical: false,
+        proven: true,
+        needs: &["repayment_reference", "amount"],
     },
 ];
 

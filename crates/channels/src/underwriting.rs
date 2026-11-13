@@ -29,6 +29,8 @@ use crate::staff::{At, StaffState};
 pub const MODULE: &str = "underwriting";
 /// The caller that module takes people's commands from.
 pub const CALLER: &str = "underwriting-console";
+/// The caller a life's own consents come from, through the app.
+pub const APP_CALLER: &str = "customer-app";
 
 /// Staff actions that open the console.
 pub mod actions {
@@ -150,6 +152,13 @@ pub fn command(sent: &Value, staff: &PartyId, senior: bool) -> Result<(Value, St
 /// business date `today`.
 pub fn envelope(key: &str, at: At, today: &str, command: Value) -> Value {
     json!({ "key": key, "caller": CALLER, "at": when(at), "today": today, "command": command })
+}
+
+/// The envelope that carries a life's own consent from the app, on the
+/// New Zealand date.
+pub fn app_envelope(key: &str, at: At, command: Value) -> Value {
+    let today = crate::payments::nz(at).date().to_string();
+    json!({ "key": key, "caller": APP_CALLER, "at": when(at), "today": today, "command": command })
 }
 
 /// A prepared non-disclosure remedy, signed by a second senior.

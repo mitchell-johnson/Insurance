@@ -935,3 +935,137 @@ async fn a_customers_own_spending_hold_ends_only_after_cooling_off() {
     w.app.store.reshred(&[PartyId(me.clone())], Utc::now()).await.unwrap();
     assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 0);
 }
+
+/// The hold changes the fake core took, as (partition, policy, held, reference).
+fn holds_taken(core: &common::FakeCore) -> Vec<(u16, String, bool, String)> {
+    let on = *core.policies_on.lock().unwrap();
+    core.proposed
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(p, _, _)| on.is_none_or(|on| on == *p))
+        .filter_map(|(p, _, c)| match serde_json::from_value::<ic_core::Command>(c.clone()) {
+            Ok(ic_core::Command::SetOwnerHold(h)) => Some((*p, h.policy.0.clone(), h.held, h.reference.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Purpose: a person's own spending hold reaches the core on every policy they own,
+/// follows ownership while it stands, ends when legal lifts it, waits out a core that
+/// cannot be reached, and gives up on a policy no partition ever holds.
+/// Why it matters: the core is where a withdrawal or surrender is refused, so a hold
+/// the core never hears of protects nothing until money reaches the bank, and a hold
+/// left on a policy after it changes hands would stop the next owner's money.
+#[tokio::test]
+async fn a_spending_hold_is_told_to_the_core_policy_by_policy() {
+    let w = world_or_skip!();
+    let me = w.person("Ana", "Ruiz", "1968-04-04", &[]).await;
+    let today = Utc::now().date_naive();
+    let add = |id: &str, kind: &str, policy: &str, to: Option<&str>| {
+        json!({ "command": "add_relationship", "id": id, "kind": kind, "target": { "kind": "policy", "id": policy },
+                "valid_from": "2026-01-01", "valid_to": to })
+    };
+    for c in [
+        add("o1", "owner", "P1", None),
+        add("o2", "owner", "P2", Some("2099-01-01")),
+        add("old", "owner", "P0", Some("2026-02-01")),
+        add("adv", "adviser", "P3", None),
+    ] {
+        let (status, out) = w.command(&me, "staff", c).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let core = common::FakeCore {
+        partitions: 2,
+        ..Default::default()
+    };
+    *core.policies_on.lock().unwrap() = Some(1);
+    assert_eq!(
+        work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(),
+        0,
+        "nothing held, nothing told"
+    );
+    assert!(core.proposed.lock().unwrap().is_empty());
+
+    let (status, out) = w.command(&me, "staff", json!({ "command": "place_spending_hold" })).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // Out of reach: the changes wait, with the reason.
+    *core.lost.lock().unwrap() = true;
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 0);
+    assert_eq!(
+        w.sql("select 1 from owner_hold_relay where attempts = 1 and last_error like 'partition%'")
+            .await
+            .unwrap(),
+        1,
+        "the party's later changes wait behind the first"
+    );
+    *core.lost.lock().unwrap() = false;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 2);
+    let placed = holds_taken(&core);
+    assert_eq!(
+        placed.iter().map(|h| (h.0, h.1.as_str(), h.2)).collect::<Vec<_>>(),
+        vec![(1, "P1", true), (1, "P2", true)],
+        "owned policies only, not the one already passed on"
+    );
+    assert!(placed[0].3.starts_with(&format!("spending-hold:{me}:")), "{placed:?}");
+    assert_eq!(core.proposed.lock().unwrap().len(), 4, "each change goes to every partition");
+    assert_eq!(
+        w.sql("select 1 from owner_hold_relay where policy = 'P2' and not held and due_on = '2099-01-01'")
+            .await
+            .unwrap(),
+        1,
+        "P2 is let go when its ownership ends"
+    );
+
+    // While it stands, a new policy takes it and a policy passed on is let go.
+    w.command(&me, "staff", add("o4", "owner", "P4", None)).await;
+    w.command(
+        &me,
+        "staff",
+        json!({ "command": "end_relationship", "id": "o1", "valid_to": today.to_string() }),
+    )
+    .await;
+    // A partition that refuses for another reason holds the party's changes.
+    *core.refuse.lock().unwrap() = Some(0);
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 0);
+    *core.refuse.lock().unwrap() = None;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 2);
+    let moved = holds_taken(&core);
+    assert_eq!(moved.iter().map(|h| (h.1.as_str(), h.2)).collect::<Vec<_>>(), vec![("P4", true), ("P1", false)]);
+    assert!(moved[1].3.starts_with("ownership-ended:"), "{moved:?}");
+    assert!(core.proposed.lock().unwrap().iter().all(|(_, key, _)| key.starts_with("owner-hold:")));
+
+    // Legal lifts it: every policy still owned is released under legal's reference.
+    let (status, out) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "CIV-2026-7" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 2);
+    let lifted = holds_taken(&core);
+    assert_eq!(
+        lifted.iter().map(|h| (h.1.as_str(), h.2, h.3.as_str())).collect::<Vec<_>>(),
+        vec![("P2", false, "CIV-2026-7"), ("P4", false, "CIV-2026-7")]
+    );
+    // Ownership changes after it ends tell the core nothing.
+    w.command(&me, "staff", add("o5", "owner", "P5", None)).await;
+    assert_eq!(w.sql("select 1 from owner_hold_relay where due_on <= now()::date").await.unwrap(), 0);
+
+    // A policy no partition holds is tried again for a week, then given up.
+    *core.policies_on.lock().unwrap() = Some(9);
+    w.command(&me, "staff", json!({ "command": "place_spending_hold" })).await;
+    assert_eq!(work::relay_owner_holds(&w.app, &core, Utc::now()).await.unwrap(), 0);
+    assert_eq!(
+        w.sql("select 1 from owner_hold_relay where last_error = 'no partition holds the policy yet'")
+            .await
+            .unwrap(),
+        1
+    );
+    let later = Utc::now() + chrono::Duration::days(work::OWNER_HOLD_WAIT_DAYS + 1);
+    assert_eq!(work::relay_owner_holds(&w.app, &core, later).await.unwrap(), 0, "given up, not told");
+    assert_eq!(w.sql("select 1 from owner_hold_relay where due_on <= now()::date").await.unwrap(), 0);
+    // The change due when P2's ownership ends is still waiting for its day.
+    assert_eq!(w.sql("select 1 from owner_hold_relay where due_on = '2099-01-01'").await.unwrap(), 2);
+}

@@ -241,6 +241,7 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 "salary_minor": m.attrs.salary_minor,
                 "hours_hundredths": m.attrs.hours_hundredths,
                 "billing_group": m.attrs.billing_group,
+                "occupation_class": m.attrs.occupation_class,
                 "employment_start": m.attrs.employment_start,
                 "joined": m.joined,
                 "left": m.left,

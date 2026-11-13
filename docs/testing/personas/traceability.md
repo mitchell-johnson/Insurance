@@ -87,12 +87,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | COL-001 | full | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | COL-002 | full | `sim/tests/scenarios.rs::a_dishonour_does_not_reset_the_lapse_clock` |
-| COL-003 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does` |
+| COL-003 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_from_an_authoritys_account_names_its_policy` |
 | COL-004 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_goes_to_cash_matching_and_stays_open_until_identified` |
 | COL-007 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date` |
 | COL-008 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/edges.rs::a_lapse_reverses_the_levy_on_unpaid_premium` |
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried`<br>`collections/tests/dunning.rs::an_undeliverable_mandatory_notice_raises_a_task` |
-| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
+| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms`<br>`collections/tests/cases.rs::an_underwriting_approval_asks_the_core_again` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
 | COL-012 | full | `collections/tests/sequence.rs::mandatory_notices_cannot_be_configured_away`<br>`collections/tests/dunning.rs::each_step_is_an_event_with_its_notice_or_task`<br>`collections/tests/dunning.rs::a_late_arrival_gets_the_latest_reminder_and_every_mandatory_notice`<br>`collections/tests/sequence.rs::a_sequence_is_checked_before_it_is_used`<br>`documents/tests/collections_notices.rs::dunning_notices_are_issued_once_and_reported_sent` |
 | COL-013 | part | `collections/tests/cases.rs::an_outcome_drives_the_next_step` |
@@ -169,10 +169,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-010 | full | `underwriting/tests/libraries.rs::a_case_tracks_ownership_escalation_and_priority`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
 | UW-012 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
-| UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
-| UW-014 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
+| UW-013 | full | `channels/tests/http.rs::the_person_insured_signs_their_disclosure`<br>`underwriting/tests/lifecycle.rs::preparation_checks_answers_and_runs_the_rules`<br>`underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
+| UW-014 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
-| UW-016 | part | `underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
+| UW-016 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
 | UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
@@ -185,7 +185,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-026 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
-| UW-029 | part | `underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
+| UW-029 | full | `underwriting/tests/lifecycle.rs::the_log_of_an_underwriting_run_holds_ids_and_references_only`<br>`underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
 
 ## CLM Claims and claims operations
 
@@ -305,6 +305,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
 | GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send`<br>`group/tests/excess.rs::the_employers_view_of_a_member_shows_cover_and_never_health` |
+| GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
@@ -334,7 +335,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
-| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs`<br>`payments/tests/insolvency.rs::a_bankrupt_owners_accounts_are_frozen` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
@@ -479,7 +480,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | part | `channels/tests/staff.rs::external_source_drives_templates` |
-| STF-017 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |
+| STF-017 | full | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness`<br>`channels/tests/staff.rs::builders_and_operators_hold_no_personal_class` |
 | STF-018 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |
 
 ## PAY Payment runs and bank connectivity
@@ -516,10 +517,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-009 | full | `finance/tests/mart.rs::the_mart_and_its_files_hold_ids_and_rating_facts_only` |
 | FIN-010 | full | `finance/tests/returns.rs::a_return_is_filed_from_a_closed_period_and_restated_as_a_new_version`<br>`finance/tests/returns.rs::a_changed_line_definition_is_a_new_mapping_version_from_a_period` |
 | FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
+| FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
-| FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
-| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
+| FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
+| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed`<br>`finance/tests/assessed_claim.rs::an_assessed_claim_admitted_paid_and_reversed_reaches_the_mart_and_the_books` |
 
 ## CFG Configuration operations and the actuary's interface
 

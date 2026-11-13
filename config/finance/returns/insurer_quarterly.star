@@ -37,5 +37,6 @@ RETURN = {
         conduct("C6", "Complaints upheld", "complaint_upheld"),
         conduct("C7", "Policies lapsed", "policy_lapsed"),
         conduct("C8", "Lapsed policies reinstated", "policy_reinstated"),
+        conduct("C9", "Replacement cover written", "replacement_written"),
     ],
 }

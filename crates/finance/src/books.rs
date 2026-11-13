@@ -22,9 +22,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use ic_core::event::{Event, EventRecord, RoleTotal};
-use ic_core::Reject;
+use ic_core::{PolicyId, Reject};
 use ic_ledger::{
     merkle_root, Account, AccountClass, AccountId, AccountUnit, Amount, BalanceFamily, Dimensions, EntryDraft, EntryId, Hash32, JournalEntry, Ledger,
     PartitionId, Posting, Side,
@@ -320,6 +320,20 @@ pub enum FinCommand {
         definition: ReturnDefinition,
         reason: String,
     },
+    /// Place every policy still without an accounting group by the rules
+    /// of the close configuration now in force. A policy already placed is
+    /// never moved.
+    ClassifyPolicies,
+    /// The balance the old system says a migration control account should
+    /// hold once it is loaded, on the trial balance's scale, with where the
+    /// figure comes from. It can be replaced until the period the account
+    /// was loaded in closes.
+    RecordCutoverTotal {
+        account: String,
+        unit: BalanceFamily,
+        total: i128,
+        evidence: String,
+    },
 }
 
 impl FinCommand {
@@ -330,7 +344,7 @@ impl FinCommand {
             FinCommand::Ingest { .. } | FinCommand::CoreEvent { .. } | FinCommand::RecordMerkleRoot { .. } => &["feed"],
             FinCommand::RetryFeed { .. } => &["operator", "finance-console"],
             FinCommand::RegisterExtract { .. } => &["reporting"],
-            FinCommand::RecordConductFacts { .. } => &["claims", "complaints"],
+            FinCommand::RecordConductFacts { .. } => &["claims", "complaints", "distribution"],
             FinCommand::ClosePeriod { .. } => &["finance-console", "close-workflow"],
             // Who may report which check is declared in the close configuration.
             FinCommand::ReportCheck { .. } | FinCommand::ReportAgedItems { .. } => &[],
@@ -363,6 +377,8 @@ impl FinCommand {
             FinCommand::RecordConductFacts { .. } => "record_conduct_facts",
             FinCommand::FileReturn { .. } => "file_return",
             FinCommand::RestateReturn { .. } => "restate_return",
+            FinCommand::ClassifyPolicies => "classify_policies",
+            FinCommand::RecordCutoverTotal { .. } => "record_cutover_total",
         }
     }
 }
@@ -488,6 +504,17 @@ pub enum FinEvent {
         period: PeriodId,
         version: u32,
         hash: Hash32,
+    },
+    PoliciesClassified {
+        placed: u64,
+        still_ungrouped: u64,
+        rule_version: u32,
+    },
+    CutoverTotalRecorded {
+        account: String,
+        unit: BalanceFamily,
+        total: i128,
+        by: String,
     },
 }
 
@@ -743,7 +770,55 @@ pub struct FinanceState {
     /// validation for, by table, version and content hash.
     #[serde(default, with = "crate::pairs")]
     pub(crate) rate_tables: BTreeMap<(String, u32, String), TableSeen>,
+    /// Each policy's accounting group, set once when it is issued and never
+    /// changed.
+    #[serde(default, with = "crate::pairs")]
+    pub accounting_groups: BTreeMap<(PartitionId, PolicyId), AccountingGroup>,
+    /// Policies issued when no rule named their product, until classified.
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) ungrouped: BTreeMap<(PartitionId, PolicyId), Ungrouped>,
+    /// The old system's figure for each migration control account and unit.
+    #[serde(default, with = "crate::pairs")]
+    pub cutover_totals: BTreeMap<(String, BalanceFamily), CutoverTotal>,
     idempotency: BTreeMap<String, StoredResult>,
+}
+
+/// The group of insurance contracts a policy belongs to: its portfolio,
+/// the financial year it was issued in, and its profitability band.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccountingGroup {
+    pub portfolio: String,
+    /// The financial year of inception, named by the year it ends in: "FY2028".
+    pub cohort: String,
+    pub profitability: String,
+    /// The version of the close configuration whose rule placed it.
+    pub rule_version: u32,
+    /// The business date it was placed.
+    pub assigned_on: NaiveDate,
+}
+
+impl AccountingGroup {
+    /// The group's name, as a dimension: `portfolio/cohort/profitability`.
+    pub fn id(&self) -> String {
+        format!("{}/{}/{}", self.portfolio, self.cohort, self.profitability)
+    }
+}
+
+/// The balance the old system says a migration control account holds at
+/// cutover, as the finance lead recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CutoverTotal {
+    pub total: i128,
+    pub evidence: String,
+    pub by: String,
+}
+
+/// A policy waiting for a rule that names its product.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ungrouped {
+    pub product: String,
+    pub inception: NaiveDate,
+    pub issued_on: NaiveDate,
 }
 
 /// What the core has said of one version of a rate table.
@@ -829,6 +904,9 @@ impl FinanceState {
             mart: crate::mart::Mart::default(),
             turnover: BTreeMap::new(),
             rate_tables: BTreeMap::new(),
+            accounting_groups: BTreeMap::new(),
+            ungrouped: BTreeMap::new(),
+            cutover_totals: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1000,6 +1078,7 @@ impl FinanceState {
                 }
                 // The mart takes the event as it arrives: it needs no chart.
                 self.mart.apply(&record).map_err(|e| Reject::new("mart", e.to_string()))?;
+                self.group_on_issue(&record);
                 self.inbox.entry(partition).or_default().push(*record);
                 // While stalled, events queue until the cause is fixed.
                 if !self.stalled.contains_key(&partition) {
@@ -1016,6 +1095,7 @@ impl FinanceState {
                 for record in &events {
                     // In step with the feed just checked: the order cannot be wrong here.
                     self.mart.apply(record).ok();
+                    self.group_on_issue(record);
                 }
                 Ok(())
             }
@@ -1217,7 +1297,135 @@ impl FinanceState {
                 ctx.events.push(FinEvent::ReturnFiled { id, period, version, hash });
                 Ok(())
             }
+            FinCommand::ClassifyPolicies => {
+                ctx.actor_with(&[ROLE_OPERATOR, ROLE_LEAD])?;
+                let Some(rule_version) = self.close_config.as_ref().map(|c| c.version) else {
+                    return reject("close_config", "no close configuration is in force, so there are no grouping rules");
+                };
+                let waiting: Vec<_> = self.ungrouped.keys().cloned().collect();
+                let mut placed = 0u64;
+                for key in waiting {
+                    let Some(u) = self.ungrouped.get(&key).cloned() else { continue };
+                    let today = self.mart.closed_through().map_or(u.issued_on, |d| d.max(u.issued_on));
+                    if let Some(group) = self.group_for(&u.product, u.inception, today) {
+                        self.ungrouped.remove(&key);
+                        self.accounting_groups.insert(key, group);
+                        placed += 1;
+                    }
+                }
+                ctx.events.push(FinEvent::PoliciesClassified {
+                    placed,
+                    still_ungrouped: self.ungrouped.len() as u64,
+                    rule_version,
+                });
+                Ok(())
+            }
+            FinCommand::RecordCutoverTotal {
+                account,
+                unit,
+                total,
+                evidence,
+            } => {
+                let by = ctx.actor_with(&[ROLE_LEAD])?;
+                let listed = self.close_config.as_ref().is_some_and(|c| c.migration_control.contains(&account));
+                if !listed {
+                    return reject(
+                        "cutover_total",
+                        format!("{account} is not a migration control account in the close configuration"),
+                    );
+                }
+                if evidence.trim().is_empty() {
+                    return reject("cutover_total", "say where the old system's figure comes from");
+                }
+                if let Some(cutover) = self.cutover_period(&account) {
+                    if self.periods.get(&cutover).is_some_and(|p| p.closed.is_some()) {
+                        return reject(
+                            "cutover_total",
+                            format!("{account} was loaded in {cutover}, which is closed: its agreement with the old system stands"),
+                        );
+                    }
+                }
+                self.cutover_totals.insert(
+                    (account.clone(), unit.clone()),
+                    CutoverTotal {
+                        total,
+                        evidence,
+                        by: by.clone(),
+                    },
+                );
+                ctx.events.push(FinEvent::CutoverTotalRecorded { account, unit, total, by });
+                Ok(())
+            }
         }
+    }
+
+    // ---- accounting groups ---------------------------------------------
+
+    /// The group the rules now in force give a policy of `product` that
+    /// incepted on `inception`, or none when no rule names the product.
+    fn group_for(&self, product: &str, inception: NaiveDate, today: NaiveDate) -> Option<AccountingGroup> {
+        let config = self.close_config.as_ref()?;
+        let rule = config.grouping.iter().find(|g| g.product == product)?;
+        let year_end_month = self.year_end_month();
+        // The financial year is named by the calendar year it ends in.
+        let ends_in = if inception.month() > year_end_month {
+            inception.year() + 1
+        } else {
+            inception.year()
+        };
+        Some(AccountingGroup {
+            portfolio: rule.portfolio.clone(),
+            cohort: format!("FY{ends_in}"),
+            profitability: rule.profitability.clone(),
+            rule_version: config.version,
+            assigned_on: today,
+        })
+    }
+
+    /// Place a policy in its accounting group on the event that issues it.
+    /// It is placed once: a policy already placed or waiting is left alone.
+    fn group_on_issue(&mut self, record: &EventRecord) {
+        let Event::PolicyIssued {
+            policy,
+            product_code,
+            inception,
+            ..
+        } = &record.event
+        else {
+            return;
+        };
+        let key = (record.partition, policy.clone());
+        if self.accounting_groups.contains_key(&key) || self.ungrouped.contains_key(&key) {
+            return;
+        }
+        match self.group_for(product_code, *inception, record.business_date) {
+            Some(group) => {
+                self.accounting_groups.insert(key, group);
+            }
+            None => {
+                self.ungrouped.insert(
+                    key,
+                    Ungrouped {
+                        product: product_code.clone(),
+                        inception: *inception,
+                        issued_on: record.business_date,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Policies by accounting group, and how many have none.
+    pub fn accounting_group_counts(&self) -> serde_json::Value {
+        let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+        for g in self.accounting_groups.values() {
+            *counts.entry(g.id()).or_insert(0) += 1;
+        }
+        let groups: Vec<serde_json::Value> = counts
+            .into_iter()
+            .map(|(group, policies)| serde_json::json!({ "group": group, "policies": policies }))
+            .collect();
+        serde_json::json!({ "groups": groups, "ungrouped": self.ungrouped.len() })
     }
 
     // ---- configuration -------------------------------------------------

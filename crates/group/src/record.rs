@@ -46,6 +46,11 @@ pub struct MemberAttrs {
     pub actively_at_work: Option<bool>,
     #[serde(default)]
     pub billing_group: Option<String>,
+    /// The occupation class the scheme's rates are split by, where they are
+    /// (named directors on a hazardous site, say). Left out of the stored
+    /// form when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occupation_class: Option<String>,
 }
 
 impl MemberAttrs {
@@ -57,6 +62,7 @@ impl MemberAttrs {
             smoker: self.smoker,
             category: self.category.clone(),
             salary_minor: self.salary_minor,
+            occupation_class: self.occupation_class.clone(),
             ..LifeFactors::default()
         }
     }
@@ -78,6 +84,10 @@ impl MemberAttrs {
         check("salary", other.salary_minor.is_some() && other.salary_minor != self.salary_minor);
         check("hours", other.hours_hundredths.is_some() && other.hours_hundredths != self.hours_hundredths);
         check("billing_group", other.billing_group.is_some() && other.billing_group != self.billing_group);
+        check(
+            "occupation_class",
+            other.occupation_class.is_some() && other.occupation_class != self.occupation_class,
+        );
         out
     }
 
@@ -94,6 +104,7 @@ impl MemberAttrs {
             employment_start: other.employment_start.or(self.employment_start),
             actively_at_work: other.actively_at_work.or(self.actively_at_work),
             billing_group: other.billing_group.clone().or_else(|| self.billing_group.clone()),
+            occupation_class: other.occupation_class.clone().or_else(|| self.occupation_class.clone()),
         }
     }
 }
@@ -173,6 +184,7 @@ mod tests {
             employment_start: Some(d(2020, 1, 1)),
             actively_at_work: Some(true),
             billing_group: Some("akl".to_string()),
+            occupation_class: None,
         };
         assert!(held.changed_fields(&MemberAttrs::default()).is_empty());
         assert_eq!(held.merged(&MemberAttrs::default()), held);
@@ -186,14 +198,25 @@ mod tests {
             employment_start: Some(d(2021, 1, 1)),
             actively_at_work: Some(false),
             billing_group: Some("wlg".to_string()),
+            occupation_class: Some("2".to_string()),
         };
         assert_eq!(
             held.changed_fields(&row),
-            vec!["date_of_birth", "sex", "smoker", "category", "salary", "hours", "billing_group"]
+            vec![
+                "date_of_birth",
+                "sex",
+                "smoker",
+                "category",
+                "salary",
+                "hours",
+                "billing_group",
+                "occupation_class"
+            ]
         );
         assert_eq!(held.merged(&row), row);
         assert_eq!(row.factors().salary_minor, Some(90_000_00));
         assert_eq!(row.factors().category.as_deref(), Some("executive"));
+        assert_eq!(row.factors().occupation_class.as_deref(), Some("2"));
     }
 
     /// Purpose: the fingerprint ignores case and spacing, and changes with the name, the date of

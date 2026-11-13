@@ -129,6 +129,12 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | underwriting | proposal_lapsed, proposal_withdrawn, policy_issued, interview_to_confirm | uw-<kind with dashes> | personal | no |
 | underwriting | adviser_unavailable | uw-adviser-unavailable | personal | yes |
 | reinsurance | reinsurance_statement | ri-reinsurance-statement | personal | yes |
+| group | absence_started, absence_limit_reached | grp-absence-started, grp-absence-limit-reached | personal | yes |
+| claims | overpayment_repayment | cl-overpayment-repayment | personal | yes |
+
+The overpayment letter must carry `detail.repayment_reference` (from module payments, `{"q":"repayment_reference","overpayment":…}`, "OP" and six digits) and `detail.amount`; without either it is refused with `missing_detail`. A credit quoting that reference is matched to the overpayment, so the template must print it.
+
+Group sends the leave-of-absence letters to the member (the party on the scheme policy's life), with `policy` the scheme policy, `life` the life, and `detail` `since` and `cover_ends` (persona GRP-038).
 
 A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Other refusals: `unknown_letter_kind`, `no_request`, `request_conflict` (same id, other content; an identical resend is accepted). The service issues each waiting request as document `letter:<request>` to the recipient as addressee, with `name`, `reference` (the subject), `policy`, `life`, `reasons`, `date` and the `detail` entries as data, and the issue marks the request issued. A request whose template has no wording, or whose person has no contact point or has died, waits and is reported every pass; `CancelLetterRequest` (the asking module or servicing, with a reason) drops one. `Query::LetterRequest` says where one stands; settled requests are forgotten after 90 days. An adviser is addressed by their party id in the customer master. Reinsurance listings (personal data) never go by email: Mitchell decided they reach reinsurers by SFTP and by an API the reinsurers call, both run by the reinsurance service. The statement letter carries totals only.
 
