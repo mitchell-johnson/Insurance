@@ -49,6 +49,10 @@ pub struct PayerCase {
     /// Open while `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleared: Option<Clearance>,
+    /// A clearance naming a relationship, until the customer master
+    /// confirms the relationship links the payer and the owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub proposed: Option<Clearance>,
 }
 
 /// How compliance closed a case.
@@ -76,6 +80,13 @@ pub struct PayerChecks {
 
 fn digits(number: &str) -> String {
     number.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
+/// The customer master's reference for a relationship: `{party}/{id}`,
+/// each part plain.
+pub fn relationship_reference(reference: &str) -> bool {
+    let plain = |s: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    reference.split_once('/').is_some_and(|(party, id)| plain(party) && plain(id))
 }
 
 fn case_key(owner: &str, payer: &str) -> String {
@@ -160,6 +171,7 @@ impl PaymentsState {
                         opened: paid.seen,
                         last_paid: paid.seen,
                         cleared: None,
+                        proposed: None,
                     },
                 );
                 true
@@ -200,10 +212,10 @@ impl PaymentsState {
     /// master records when there is one.
     pub(crate) fn clear_payer(&mut self, tx: &mut Tx<'_>, case: &str, relationship: Option<String>, note: String) -> Result<(), Reject> {
         tx.need(Role::Compliance)?;
-        if note.trim().is_empty() || relationship.as_deref().is_some_and(|r| r.trim().is_empty()) {
+        if note.trim().is_empty() || relationship.as_deref().is_some_and(|r| !relationship_reference(r)) {
             return Err(Reject::new(
                 "invalid_clearance",
-                "a clearance says why, and names a relationship only by its reference",
+                "a clearance says why, and names a relationship by the customer master's {party}/{id}",
             ));
         }
         let record = self
@@ -214,14 +226,62 @@ impl PaymentsState {
         if record.cleared.is_some() {
             return Err(Reject::new("case_cleared", format!("payer case {case} is already cleared")));
         }
-        record.cleared = Some(Clearance {
+        let clearance = Clearance {
             by: tx.actor.id.clone(),
             on: tx.now.date(),
             relationship,
             note,
-        });
+        };
+        // A relationship is taken only once the customer master confirms it.
+        if clearance.relationship.is_some() {
+            record.proposed = Some(clearance);
+            return Ok(());
+        }
+        record.cleared = Some(clearance);
         tx.emit(Event::PayerCaseCleared { case: case.to_string() });
         Ok(())
+    }
+
+    /// What the customer master said about a proposed clearance's
+    /// relationship. Confirmed, the case is cleared for good; otherwise the
+    /// proposal is dropped and compliance is told why.
+    pub(crate) fn confirm_relationship(&mut self, tx: &mut Tx<'_>, case: &str, confirmed: bool, reason: String) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        let Some(proposed) = self.payer_checks.cases.get_mut(case).and_then(|c| c.proposed.take()) else {
+            // Answered already: a second answer changes nothing.
+            return Ok(());
+        };
+        if confirmed {
+            if let Some(record) = self.payer_checks.cases.get_mut(case) {
+                record.cleared = Some(proposed);
+            }
+            tx.emit(Event::PayerCaseCleared { case: case.to_string() });
+            return Ok(());
+        }
+        let relationship = proposed.relationship.unwrap_or_default();
+        self.push_outbox(OutboxEntry {
+            key: format!("aml-unconfirmed-{case}-{relationship}"),
+            instruction: Instruction::Notify {
+                to: Role::Compliance,
+                subject: "relationship_not_confirmed".to_string(),
+                detail: format!("payer case {case} stays open: relationship {relationship}: {reason}"),
+            },
+            about: None,
+        });
+        Ok(())
+    }
+
+    /// Proposed clearances for the pump to check with the customer master:
+    /// (case, owner, payer, relationship reference).
+    pub fn relationships_to_check(&self) -> Vec<(String, String, String, String)> {
+        self.payer_checks
+            .cases
+            .iter()
+            .filter_map(|(key, c)| {
+                let relationship = c.proposed.as_ref()?.relationship.clone()?;
+                Some((key.clone(), c.owner.clone(), c.payer.clone(), relationship))
+            })
+            .collect()
     }
 
     /// Open cases, oldest first.
