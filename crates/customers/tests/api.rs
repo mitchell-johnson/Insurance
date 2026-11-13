@@ -1351,3 +1351,57 @@ async fn trustee_changes_are_dated_on_the_resolution() {
     let text = rels.to_string();
     assert!(text.contains("2026-03-01") && text.contains(&resigned), "{rels}");
 }
+
+/// Purpose: asked about a particular act, routing tells whoever serves a marked person to
+/// pause a value-moving act (a surrender, a beneficiary or bank change) for a conversation
+/// where the person asked for one, and to have a specialist review it first where the
+/// marker is a risk of financial abuse, without saying which; other acts, and unmarked
+/// people, are not paused; an act that is not one of the known ones is refused. Persona
+/// rows VUL-003 (large surrender paused), VUL-005 (full surrender to a new overseas
+/// account) and VUL-007 (beneficiary changed to a tradesperson), the master's part.
+/// Why it matters: the moment money leaves is when a person at risk is most easily
+/// exploited, and the people serving them need to know to slow down without being told
+/// the person's circumstances.
+#[tokio::test]
+async fn risky_acts_by_a_marked_person_are_paused_or_reviewed() {
+    let w = world_or_skip!();
+    let mark = |kind: &str, adjustments: Value| {
+        json!({ "command": "record", "facts": [{ "field": "vulnerability",
+            "value": { "kind": kind, "review_on": "2027-05-01", "adjustments": adjustments } }] })
+    };
+    let asked = w.person("Grace", "Tane", "1938-01-01", &[]).await;
+    w.command(&asked, "staff", mark("resilience", json!(["pause_before_large_withdrawal"]))).await;
+    let at_risk = w.person("Harold", "Smith", "1935-01-01", &[]).await;
+    w.command(&at_risk, "staff", mark("financial_abuse_risk", json!(["speak_to_trained_person"])))
+        .await;
+    let plain = w.person("Ivy", "Brown", "1980-01-01", &[]).await;
+    let route = |p: &str, act: &str| {
+        let path = format!("/v1/parties/{p}/routing?act={act}");
+        let w = &w;
+        async move {
+            let (status, out) = w.get(&path, "policy-servicing", "servicing").await;
+            (status, out)
+        }
+    };
+    let (_, out) = route(&asked, "surrender").await;
+    assert_eq!(
+        (out["pause_for_conversation"].clone(), out["specialist_review"].clone()),
+        (json!(true), json!(false)),
+        "{out}"
+    );
+    let (_, out) = route(&asked, "view").await;
+    assert!(out.get("pause_for_conversation").is_none(), "{out}");
+    for act in ["change_beneficiary", "change_bank_details", "surrender"] {
+        let (_, out) = route(&at_risk, act).await;
+        assert_eq!(
+            (out["pause_for_conversation"].clone(), out["specialist_review"].clone()),
+            (json!(true), json!(true)),
+            "{act}"
+        );
+        assert!(out.get("kind").is_none(), "the reason is not told: {out}");
+    }
+    let (_, out) = route(&plain, "surrender").await;
+    assert_eq!(out, json!({ "party": plain, "route_to_person": false }));
+    let (status, _) = route(&plain, "everything").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}

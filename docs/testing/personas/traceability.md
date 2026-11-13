@@ -398,8 +398,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
+| VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-004 | part | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-007 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
