@@ -172,6 +172,20 @@ pub struct ReinstatementTerms {
     pub terms: Vec<crate::policy::LayerTerms>,
 }
 
+/// That one version of a rate table passed validation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TableValidation {
+    pub id: String,
+    pub version: u32,
+    /// The content hash of the table the report was run on.
+    pub content_hash: String,
+    /// Hash of the validation report, as finance keeps it.
+    pub report_hash: String,
+    pub schema_version: u32,
+    /// Who ran it: an opaque staff or service identifier.
+    pub by: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 // Externally tagged: internally tagged enums cannot carry 128-bit integers in JSON.
 #[serde(rename_all = "snake_case")]
@@ -183,6 +197,11 @@ pub enum Command {
     ActivateRateTable {
         table: Box<RateTable>,
     },
+    /// Record that a version of a rate table passed validation: the hash of
+    /// the report, the report's schema and who ran it. The core does not
+    /// run or read the report. Finance reads the record from the event feed
+    /// and holds the close for a table active without one.
+    RecordRateTableValidation(Box<TableValidation>),
     ActivateDefinitions {
         definitions: Vec<Definition>,
     },
@@ -523,6 +542,7 @@ impl Command {
             Command::ActivateProduct { .. } | Command::ActivateRateTable { .. } | Command::ActivateDefinitions { .. } | Command::ActivateIndexRate { .. } => {
                 &["config"]
             }
+            Command::RecordRateTableValidation(_) => &["config", "finance"],
             Command::OpenBusinessDate { .. } | Command::AdvanceBusinessDate { .. } => &["leader"],
             Command::RunEndOfDay { .. } => &["end-of-day"],
             // Group administration issues the retail policy of a continuation
@@ -569,6 +589,7 @@ impl Command {
         match self {
             Command::ActivateProduct { .. } => "activate_product",
             Command::ActivateRateTable { .. } => "activate_rate_table",
+            Command::RecordRateTableValidation(_) => "record_rate_table_validation",
             Command::ActivateDefinitions { .. } => "activate_definitions",
             Command::ActivateIndexRate { .. } => "activate_index_rate",
             Command::OpenBusinessDate { .. } => "open_business_date",

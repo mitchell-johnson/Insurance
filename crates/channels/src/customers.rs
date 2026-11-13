@@ -32,6 +32,22 @@ pub trait Master: Send + Sync {
     fn command(&self, party: &PartyId, version: Option<String>, key: String, body: Value) -> Asked<'_>;
     /// Everything held about the person (a Privacy Act access request).
     fn export(&self, party: &PartyId) -> Asked<'_>;
+    /// Whether the person's requests go to a person first, and the
+    /// adjustments to make: never the marker's kind.
+    fn routing(&self, party: &PartyId) -> Asked<'_>;
+}
+
+/// Whether a request goes to a person first, from the master's routing
+/// answer. A master that cannot answer sends it to a person: a request
+/// looked at by someone who did not need to is better than one from a
+/// vulnerable customer handled without care. With no master configured
+/// there is nothing to go on.
+pub fn route_to_person(answer: Option<Result<Answered, String>>) -> bool {
+    match answer {
+        None => false,
+        Some(Ok((200, body))) => body["route_to_person"] != false,
+        Some(_) => true,
+    }
 }
 
 /// Check a person's command before it leaves the portal.
@@ -135,6 +151,21 @@ impl Master for Hosted {
                 format!("/v1/parties/{}/export?purpose=subject_access", encode(&party)),
                 &party,
                 "subject_access",
+                vec![],
+                None,
+            )
+            .await
+        })
+    }
+
+    fn routing(&self, party: &PartyId) -> Asked<'_> {
+        let party = party.clone();
+        Box::pin(async move {
+            self.call(
+                reqwest::Method::GET,
+                format!("/v1/parties/{}/routing", encode(&party)),
+                &party,
+                "self_service",
                 vec![],
                 None,
             )

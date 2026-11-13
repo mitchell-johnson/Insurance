@@ -2658,3 +2658,30 @@ async fn an_employer_administrator_hands_over_at_noon() {
     let (status, problem) = portal.send("GET", "/employer/v1/schemes", &old, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("session_revoked")));
 }
+
+/// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module
+/// picks up, with nothing about why; anyone else's is not; and when the master cannot answer, the request is marked too.
+/// Why it matters: a vulnerable customer's request must reach someone trained before anything happens, and an outage of the master
+/// must not quietly send such a request down the automated path.
+#[tokio::test]
+async fn a_vulnerable_customers_request_goes_to_a_person() {
+    let portal = portal();
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
+    let ask =
+        |id: &str| json!({ "id": id, "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing", "payload": { "declined": true } });
+    assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", ask("r-v1")).await.0, StatusCode::ACCEPTED);
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    assert_eq!(mine[0]["route_to_person"], true);
+    assert!(mine[0].get("kind_of_marker").is_none() && mine[0].get("adjustments").is_none());
+    assert!(portal.master.calls.lock().unwrap().iter().any(|c| c.what == "routing" && c.party == KIRI));
+
+    let other = json!({ "id": "r-h1", "policy": portal.scheme, "kind": "remove_member", "module": "group-admin" });
+    assert_eq!(portal.write("POST", "sub-hr", "/app/v1/requests", other).await.0, StatusCode::ACCEPTED);
+    assert!(portal.get("sub-hr", "/app/v1/requests").await.1[0].get("route_to_person").is_none());
+
+    portal.master.down.store(true, Ordering::SeqCst);
+    portal.master.vulnerable.lock().unwrap().clear();
+    assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", ask("r-v2")).await.0, StatusCode::ACCEPTED);
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    assert!(mine.as_array().unwrap().iter().all(|r| r["route_to_person"] == true), "{mine}");
+}

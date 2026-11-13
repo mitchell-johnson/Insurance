@@ -28,6 +28,8 @@ pub struct MasterDouble {
     pub calls: Mutex<Vec<Call>>,
     records: Mutex<BTreeMap<String, (u64, Value)>>,
     pub down: AtomicBool,
+    /// Parties whose requests go to a person first.
+    pub vulnerable: Mutex<Vec<String>>,
 }
 
 impl MasterDouble {
@@ -111,6 +113,22 @@ impl Master for MasterDouble {
             Ok(self
                 .found(&party)
                 .map_or_else(missing, |(_, r)| (200, json!({ "party": party.0, "fields": r, "history": [] }))))
+        })
+    }
+
+    fn routing(&self, party: &PartyId) -> Asked<'_> {
+        let party = party.clone();
+        Box::pin(async move {
+            self.note(Call {
+                what: "routing",
+                party: party.0.clone(),
+                version: None,
+                key: None,
+                body: None,
+            })?;
+            let to_person = self.vulnerable.lock().unwrap().contains(&party.0);
+            let adjustments = if to_person { json!(["plain_language"]) } else { json!([]) };
+            Ok((200, json!({ "route_to_person": to_person, "adjustments": adjustments, "review_on": null })))
         })
     }
 }

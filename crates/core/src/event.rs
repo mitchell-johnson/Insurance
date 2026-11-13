@@ -148,6 +148,15 @@ pub enum Event {
         content_hash: String,
         scoped: bool,
     },
+    /// A version of a rate table was recorded as having passed validation.
+    RateTableValidated {
+        id: String,
+        version: u32,
+        content_hash: String,
+        report_hash: String,
+        schema_version: u32,
+        by: String,
+    },
     DefinitionsActivated {
         count: u32,
     },
