@@ -52,9 +52,19 @@ The text is the document: it is what is rendered, hashed and stored. `pdf.rs` se
 
 - **Email** that may carry the text attaches `<document>.pdf`. An email that only points to the secure inbox attaches nothing.
 - **Post** writes `print/<document>/<party>-<attempt>.pdf` to the print outbox before the JSON instruction, which names it in `pdf`.
-- **Download**: `Driver::pdf(id, fonts)` gives the stored text as a PDF, for the portal and app.
+- **Download**: `GET /v1/documents/{id}/pdf` on the service (below), built on `Driver::pdf(id, fonts)`.
 
-A character the font cannot draw is an error, never a gap. The email or print instruction then goes with the text alone (`pdf` is null) and the reason is logged, so no notice is held up. The bundled faces are Liberation Sans (SIL Open Font License, `crates/documents/fonts/OFL.txt`), which covers Latin scripts including the macron vowels of te reo Māori.
+A character the font cannot draw is an error, never a gap. The email or print instruction then goes with the text alone (`pdf` is null) and the reason is logged, so no notice is held up. The bundled faces are Liberation Sans (SIL Open Font License, `crates/documents/fonts/OFL.txt`), which covers Latin scripts including the macron vowels of te reo Māori. The insurer's own typeface is set with `IC_DOCUMENTS_FONT_REGULAR` and `IC_DOCUMENTS_FONT_BOLD`, the paths of two TrueType files (both or neither, for example from a mounted config map); the service reads and checks them at start and refuses to start if either is missing or unusable.
+
+**Downloading.** With `IC_ENTRA_TENANT` and `IC_DOCUMENTS_AUDIENCE` set (both or neither; `IC_ENTRA_AUTHORITY` defaults to `https://login.microsoftonline.com`), the service serves `GET /v1/documents/{id}/pdf` to callers with an Entra ID token for that audience (`auth.rs`). The token's app role decides the rule; a token with several roles names one in `x-ic-caller`.
+
+| Role | Must send | May download |
+| --- | --- | --- |
+| `portal` | `x-ic-party`: the customer asking | A document the party owns or was a recipient of (an adviser or attorney it was copied to). Any other document answers 404, the same as one that does not exist. |
+| `staff` | `x-ic-actor` and `x-ic-purpose` | Any document except a clinical one (403), which stays with the claims team's tools. |
+| anything else | | Nothing (403). |
+
+A missing or invalid token is 401; a destroyed document is 410; the module or the tenant's signing keys unreachable is 503. The answer is `application/pdf`, `Cache-Control: no-store`, named `<id>.pdf`. Each download is logged with the document, role, workload, party or actor and purpose, never the contents. Without the two settings the route is not served (404).
 
 ## Notice clocks
 
@@ -111,5 +121,6 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 ## Not built, or waiting on others
 
 - **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
-- **The insurer's own typeface.** PDFs are set in the bundled Liberation Sans. `Fonts::new` and `AzureChannels::with_fonts` take other TrueType faces, but the service has no setting for them yet. Text in a script the font lacks (Chinese, for example) goes as text without a PDF.
+- **Scripts outside the typeface.** Text in a script the font lacks (Chinese, for example) goes as text without a PDF, and the download route answers 500 for it. A second face for such scripts is not set.
+- **The documents app registration.** The portal and staff tools call the route inside the cluster; it is not routed through the ingress. `deploy/k8s/documents.yaml` sets the two Entra settings, but the app registration (audience, app roles `portal` and `staff`, granted to those callers' identities) needs a person to create in Entra ID.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

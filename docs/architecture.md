@@ -327,8 +327,8 @@ Letters the complaints register owes, on the branch `claude/project-thread-3jubf
 ### Not built
 
 - **Letter wording.** The three templates above, and every other template, are content for legal, product and compliance to write and approve; until a template is active its letters are left for people and the pass logs it.
-- **Document download route.** `Driver::pdf` exists; no HTTP route serves it. Needs the portal thread to say who is asking (staff seat or customer party id) so the access check can sit in `ic-documents`.
-- **Brand typeface.** `Fonts::new` / `AzureChannels::with_fonts` accept TrueType faces; there is no setting yet. Scripts outside Latin go as text without a PDF. PDFs are not tagged (PDF/UA).
+- **Document download.** Built 2026-11-13: `GET /v1/documents/{id}/pdf` (`service.rs`, `auth.rs`), Entra roles `portal` (with `x-ic-party`, owner or recipient only, else 404) and `staff` (with `x-ic-actor`, `x-ic-purpose`, never clinical). Not done: the Entra app registration, and the portal calling it.
+- **Typeface.** `IC_DOCUMENTS_FONT_REGULAR` / `IC_DOCUMENTS_FONT_BOLD` set the insurer's TrueType faces (checked at start); the faces themselves are the insurer's to supply. Scripts outside the face go as text without a PDF. PDFs are not tagged (PDF/UA).
 - **Audio and braille** are recorded and passed to the print house; not produced here.
 - **Outcome, update and other complaint letters** (`RecordUpdate`, outcome letters, forum bundles) are still issued by handlers through the workbench; only acknowledgement, deadlock and licence letters are automatic.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

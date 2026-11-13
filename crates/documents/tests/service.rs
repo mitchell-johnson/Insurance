@@ -319,6 +319,9 @@ fn run_config(cluster: &str) -> Config {
     let mut env = settings();
     env.insert("IC_CLUSTER_NODES", cluster.to_string());
     env.insert("IC_DOCUMENTS_LISTEN", "127.0.0.1:0".into());
+    // As deployed: downloads on.
+    env.insert("IC_ENTRA_TENANT", "tenant-1".into());
+    env.insert("IC_DOCUMENTS_AUDIENCE", "api://ic-documents".into());
     let mut config = Config::from_lookup(|k| env.get(k).cloned()).unwrap();
     config.cycle_every = Duration::from_millis(10);
     config.cluster_wait = Duration::from_millis(300);
