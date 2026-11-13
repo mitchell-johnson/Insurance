@@ -175,6 +175,7 @@ impl Reinsurance {
                 amount_minor: *amount_minor,
                 value_date: *value_date,
                 reference: reference.clone(),
+                bank_account: None,
             },
             InstructionBody::Sweep {
                 treaty,
@@ -191,6 +192,7 @@ impl Reinsurance {
                 amount_minor: *amount_minor,
                 value_date: on,
                 reference: format!("statement {statement}"),
+                bank_account: None,
             },
         };
         Some(CoreDelivery {
