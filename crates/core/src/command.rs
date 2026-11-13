@@ -153,6 +153,13 @@ pub struct UnderwrittenLayer {
     pub exclusions: Vec<String>,
     /// The underwriting decision this layer comes from.
     pub reference: String,
+    /// The day the layer starts, where that is before today: cover a
+    /// leaver continues from the day after leaving, accepted later. Not
+    /// before the policy's start and not after the business date. Every
+    /// period already billed is charged for its days from then. Absent:
+    /// the layer starts today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<NaiveDate>,
 }
 
 /// A cover a life does not hold, added to a retail policy after issue.

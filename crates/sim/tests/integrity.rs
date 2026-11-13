@@ -438,6 +438,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             effective: d(2027, 1, 1),
         },
         Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+            start: None,
             policy: p.clone(),
             cover: "life".into(),
             life: LifeId("l".into()),

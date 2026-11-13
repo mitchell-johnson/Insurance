@@ -132,6 +132,7 @@ fn a_quoted_issue_is_refused_when_the_product_has_changed() {
 
 fn increase(policy: &PolicyId, cover: &str, sum: i64, loading: Option<&str>) -> Command {
     Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+        start: None,
         policy: policy.clone(),
         cover: cover.into(),
         life: ic_core::LifeId("life-1".into()),
@@ -684,4 +685,58 @@ fn a_reinstatement_decision_that_cannot_stand_is_refused() {
     c.submit(0, "new-business", issue_command(closed)).unwrap();
     days(&mut c, 91 + 181);
     assert_eq!(code(c.submit(0, "underwriting", approve(&other, d(2029, 6, 1), vec![]))), "window_closed");
+}
+
+/// Purpose: an underwritten layer can be dated back to a day the policy was already in force:
+/// it starts that day, every period billed since is charged for its days from then in its own
+/// adjustment, and the policy has then been billed what it would have been had the cover been
+/// there from that day; a start before the policy began or after today is refused and adds
+/// nothing.
+/// Why it matters: a scheme leaver who continues cover above the automatic limit is issued
+/// their policy from the day after leaving, and underwriting adds the amount above the limit
+/// when they take it up, up to sixty days later. A layer that could only start on the day it
+/// was added would leave them without that cover in between, or with it unpaid for.
+#[test]
+fn an_increase_dated_back_starts_that_day_and_is_billed_for_every_period_since() {
+    let mut c = cluster();
+    let whole = term_life(21, start(), d(1988, 6, 2), Sex::Male, false, 500_000_00, None, Frequency::Monthly, None);
+    let whole_id = whole.policy.clone();
+    c.submit(0, "new-business", issue_command(whole)).unwrap();
+    let part = term_life(22, start(), d(1988, 6, 2), Sex::Male, false, 400_000_00, None, Frequency::Monthly, None);
+    let id = part.policy.clone();
+    c.submit(0, "new-business", issue_command(part)).unwrap();
+    pay(&mut c, &whole_id, "r-whole");
+    pay(&mut c, &id, "r-part");
+    days(&mut c, 40);
+    let today = c.business_date().unwrap();
+    let billed = |c: &Cluster, id: &PolicyId| -> i64 { c.state(0).policies[id].receivables.iter().map(|r| r.total_minor).sum() };
+    assert_eq!(c.state(0).policies[&id].receivables.len(), 2, "two months are billed");
+    assert!(billed(&c, &id) < billed(&c, &whole_id));
+
+    let dated = |start: NaiveDate| {
+        let mut command = increase(&id, "life", 100_000_00, None);
+        if let Command::AddUnderwrittenLayer(spec) = &mut command {
+            spec.start = Some(start);
+            spec.exclusions.clear();
+        }
+        command
+    };
+    assert_eq!(code(c.submit(0, "underwriting", dated(d(2027, 11, 14)))), "start");
+    assert_eq!(code(c.submit(0, "underwriting", dated(today + chrono::Days::new(1)))), "start");
+    assert_eq!(c.state(0).policies[&id].covers["life"].layers.len(), 1);
+
+    c.submit(0, "underwriting", dated(start())).unwrap();
+    let policy = &c.state(0).policies[&id];
+    let layer = policy.covers["life"].layers.last().unwrap();
+    assert_eq!((layer.start, layer.sum_insured_minor), (start(), 100_000_00));
+    let adjustments: Vec<_> = policy.receivables.iter().filter(|r| r.kind == ic_core::ReceivableKind::Adjustment).collect();
+    assert_eq!(adjustments.len(), 2, "one for each period already billed");
+    assert_eq!(adjustments[0].period_start, start());
+    assert_eq!(adjustments[1].period_start, d(2027, 12, 15));
+    let difference = billed(&c, &id) - billed(&c, &whole_id);
+    assert!(
+        difference.abs() <= 2,
+        "billed as if the cover had been there all along, to the rounding: {difference}"
+    );
+    days(&mut c, 1);
 }

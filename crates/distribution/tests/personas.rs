@@ -104,6 +104,7 @@ fn an_increase_after_a_move_belongs_to_the_new_arrangement_and_pays_no_tail() {
         &policy,
         "underwriting",
         CoreCommand::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+            start: None,
             policy: policy.clone(),
             cover: "life".into(),
             life: LifeId("life-1".into()),

@@ -672,6 +672,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     // written is not written again when the rest is tried again.
                     let layer = if increase {
                         ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
+                            start: None,
                             policy: policy.clone(),
                             cover: cover.code.clone(),
                             life: life.clone(),
