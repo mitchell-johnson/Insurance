@@ -95,29 +95,45 @@ impl DiscountStep {
     }
 }
 
+/// One priced line: a cover on a life. A bill that is not priced by life
+/// uses an empty life.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Line {
+    pub cover: String,
+    pub life: String,
+}
+
+/// An entitlement held on the day a period is priced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Held {
+    pub code: String,
+    /// Empty where the entitlement has no tiers.
+    pub tier: String,
+    /// The life that holds it. Absent: the policy holds it, for every life.
+    pub life: Option<String>,
+}
+
 /// What of the policy's state the chain's conditions read.
 #[derive(Debug, Clone, Copy)]
 pub struct PricingState<'a> {
     pub covers: u32,
     pub lives: u32,
     pub frequency: Frequency,
-    /// Entitlements held, by code, each with its tier (empty where the
-    /// entitlement has none).
-    pub entitlements: &'a BTreeMap<String, String>,
+    pub entitlements: &'a [Held],
 }
 
-/// A discount that applied, with what it took off each cover's annual premium.
+/// A discount that applied, with what it took off each line's annual premium.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied {
     pub code: String,
     pub name: String,
     pub posting_type: String,
-    pub by_cover: BTreeMap<String, Dec>,
+    pub by_line: BTreeMap<Line, Dec>,
 }
 
 impl Applied {
     pub fn total(&self) -> Dec {
-        sum(&self.by_cover)
+        sum(&self.by_line)
     }
 }
 
@@ -134,7 +150,7 @@ fn zero() -> Dec {
     Dec::from(0i64)
 }
 
-fn sum(amounts: &BTreeMap<String, Dec>) -> Dec {
+fn sum(amounts: &BTreeMap<Line, Dec>) -> Dec {
     amounts.values().fold(zero(), |a, b| a + *b)
 }
 
@@ -144,13 +160,25 @@ enum Rate {
     Fixed(Dec),
 }
 
-fn rate(d: &Discount, state: &PricingState<'_>) -> Option<Rate> {
+/// A discount's rate on one line, where the line is in its scope and its
+/// condition holds there. An entitlement held by a life reaches that life's
+/// lines only; one held by the policy reaches them all.
+fn rate(d: &Discount, state: &PricingState<'_>, line: &Line) -> Option<Rate> {
+    if !(d.covers.is_empty() || d.covers.contains(&line.cover)) {
+        return None;
+    }
+    let held = |code: &String| {
+        state
+            .entitlements
+            .iter()
+            .find(|h| &h.code == code && h.life.as_ref().is_none_or(|l| l == &line.life))
+    };
     let holds = match &d.condition {
         DiscountCondition::Always => true,
         DiscountCondition::MinCovers { count } => state.covers >= *count,
         DiscountCondition::MinLives { count } => state.lives >= *count,
         DiscountCondition::Frequency { frequencies } => frequencies.contains(&state.frequency),
-        DiscountCondition::Entitlement { code } => state.entitlements.contains_key(code),
+        DiscountCondition::Entitlement { code } => held(code).is_some(),
     };
     if !holds {
         return None;
@@ -160,29 +188,32 @@ fn rate(d: &Discount, state: &PricingState<'_>) -> Option<Rate> {
         (DiscountBasis::Percent { percent }, _) => Some(Rate::Fraction(percent.get() / hundred)),
         (DiscountBasis::FixedAnnual { amount }, _) => Some(Rate::Fixed(amount.get())),
         (DiscountBasis::Tier { percent_by_tier }, DiscountCondition::Entitlement { code }) => {
-            let tier = state.entitlements.get(code)?;
-            percent_by_tier.get(tier).map(|p| Rate::Fraction(p.get() / hundred))
+            percent_by_tier.get(&held(code)?.tier).map(|p| Rate::Fraction(p.get() / hundred))
         }
         (DiscountBasis::Tier { .. }, _) => None,
     }
 }
 
-/// What a discount takes off each cover: a fraction of `of`, or its fixed
-/// amount spread over what is `left`; never more than is left on a cover,
-/// and never more in all than the discount's own cap.
-fn reduction(d: &Discount, rate: &Rate, of: &BTreeMap<String, Dec>, left: &BTreeMap<String, Dec>) -> BTreeMap<String, Dec> {
-    let in_scope = |code: &String| d.covers.is_empty() || d.covers.contains(code);
-    let scope_left = left.iter().filter(|(c, _)| in_scope(c)).fold(zero(), |a, (_, v)| a + *v);
+/// What a discount takes off each line: a fraction of `of`, or its fixed
+/// amount spread over what is `left` on the lines it reaches; never more
+/// than is left on a line, and never more in all than the discount's own
+/// cap. `None` where it reaches no line.
+fn reduction(d: &Discount, state: &PricingState<'_>, of: &BTreeMap<Line, Dec>, left: &BTreeMap<Line, Dec>) -> Option<BTreeMap<Line, Dec>> {
+    let rates: Vec<(&Line, &Dec, Rate)> = left.iter().filter_map(|(line, v)| rate(d, state, line).map(|r| (line, v, r))).collect();
+    if rates.is_empty() {
+        return None;
+    }
+    let reach = rates.iter().fold(zero(), |a, (_, v, _)| a + **v);
     let mut out = BTreeMap::new();
-    for (code, remaining) in left.iter().filter(|(c, _)| in_scope(c)) {
+    for (line, remaining, rate) in &rates {
         let wanted = match rate {
-            Rate::Fraction(f) => of.get(code).copied().unwrap_or_else(zero) * *f,
-            Rate::Fixed(_) if scope_left <= zero() => zero(),
-            Rate::Fixed(amount) => *amount * *remaining / scope_left,
+            Rate::Fraction(f) => of.get(*line).copied().unwrap_or_else(zero) * *f,
+            Rate::Fixed(_) if reach <= zero() => zero(),
+            Rate::Fixed(amount) => *amount * **remaining / reach,
         };
-        let taken = wanted.min(*remaining).max(zero());
+        let taken = wanted.min(**remaining).max(zero());
         if taken > zero() {
-            out.insert(code.clone(), taken);
+            out.insert((*line).clone(), taken);
         }
     }
     if let Some(cap) = d.max_annual.as_ref().map(DecStr::get) {
@@ -191,54 +222,51 @@ fn reduction(d: &Discount, rate: &Rate, of: &BTreeMap<String, Dec>, left: &BTree
             out.values_mut().for_each(|v| *v = *v * cap / total);
         }
     }
-    out
+    Some(out)
 }
 
-fn take(left: &mut BTreeMap<String, Dec>, taken: &BTreeMap<String, Dec>) {
-    for (code, amount) in taken {
-        if let Some(v) = left.get_mut(code) {
+fn take(left: &mut BTreeMap<Line, Dec>, taken: &BTreeMap<Line, Dec>) {
+    for (line, amount) in taken {
+        if let Some(v) = left.get_mut(line) {
             *v -= *amount;
         }
     }
 }
 
-fn applied(d: &Discount, by_cover: BTreeMap<String, Dec>) -> Applied {
+fn applied(d: &Discount, by_line: BTreeMap<Line, Dec>) -> Applied {
     Applied {
         code: d.code.clone(),
         name: d.name.clone(),
         posting_type: d.posting_type.clone(),
-        by_cover,
+        by_line,
     }
 }
 
-/// Run a chain over the annual base premium of each cover. Returns what is
-/// left of each cover's premium and the discounts that applied, in order.
-pub fn apply(chain: &[DiscountStep], limits: Limits<'_>, base: &BTreeMap<String, Dec>, state: &PricingState<'_>) -> (BTreeMap<String, Dec>, Vec<Applied>) {
+/// Run a chain over the annual base premium of each line. Returns what is
+/// left of each line's premium and the discounts that applied, in order.
+pub fn apply(chain: &[DiscountStep], limits: Limits<'_>, base: &BTreeMap<Line, Dec>, state: &PricingState<'_>) -> (BTreeMap<Line, Dec>, Vec<Applied>) {
     let mut left = base.clone();
     let mut out: Vec<Applied> = Vec::new();
     for step in chain {
         match step {
             DiscountStep::One { discount } => {
-                if let Some(r) = rate(discount, state) {
-                    let taken = reduction(discount, &r, &left, &left);
+                if let Some(taken) = reduction(discount, state, &left, &left) {
                     take(&mut left, &taken);
                     out.push(applied(discount, taken));
                 }
             }
             DiscountStep::Additive { discounts } => {
                 for d in discounts {
-                    if let Some(r) = rate(d, state) {
-                        let taken = reduction(d, &r, base, &left);
+                    if let Some(taken) = reduction(d, state, base, &left) {
                         take(&mut left, &taken);
                         out.push(applied(d, taken));
                     }
                 }
             }
             DiscountStep::BestOf { discounts } => {
-                let mut best: Option<(&Discount, BTreeMap<String, Dec>)> = None;
+                let mut best: Option<(&Discount, BTreeMap<Line, Dec>)> = None;
                 for d in discounts {
-                    if let Some(r) = rate(d, state) {
-                        let taken = reduction(d, &r, &left, &left);
+                    if let Some(taken) = reduction(d, state, &left, &left) {
                         if best.as_ref().is_none_or(|(_, b)| sum(&taken) > sum(b)) {
                             best = Some((d, taken));
                         }
@@ -268,10 +296,10 @@ pub fn apply(chain: &[DiscountStep], limits: Limits<'_>, base: &BTreeMap<String,
             continue;
         }
         let back = excess.min(total);
-        for (code, amount) in d.by_cover.iter_mut() {
+        for (line, amount) in d.by_line.iter_mut() {
             let returned = *amount * back / total;
             *amount -= returned;
-            if let Some(v) = left.get_mut(code) {
+            if let Some(v) = left.get_mut(line) {
                 *v += returned;
             }
         }

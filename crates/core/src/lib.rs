@@ -11,6 +11,7 @@ pub mod bitemporal;
 pub mod catalog;
 pub mod command;
 pub mod counterparty;
+pub mod entitlement;
 pub mod event;
 pub mod ids;
 pub mod interest;

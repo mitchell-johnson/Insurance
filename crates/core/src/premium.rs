@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 
 use chrono::NaiveDate;
 use ic_money::{round_to_money, Dec, MoneyError, RoundingMode};
-use ic_product::discount::PricingState;
-use ic_product::rating::{cover_premium, modal_premium, modal_premium_with, ModalPremium, RatingError, RatingFactors};
+use ic_product::discount::{Line, PricingState};
+use ic_product::rating::{cover_premium, modal_premium, modal_premium_by_line, ModalPremium, RatingError, RatingFactors};
 use ic_product::schedule::{age_on, anniversary, policy_year};
 use ic_product::{CoverDefinition, PremiumType, ProductDefinition, RateBasis};
 
@@ -83,7 +83,7 @@ pub(crate) fn retail_premium_with(
     layers: Layers<'_>,
 ) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
-    let mut annual: BTreeMap<String, Dec> = BTreeMap::new();
+    let mut annual: BTreeMap<Line, Dec> = BTreeMap::new();
     let mut lives = std::collections::BTreeSet::new();
     for cover in policy.covers.values() {
         if cover.status != CoverStatus::InForce || cover.formula_driven {
@@ -129,17 +129,31 @@ pub(crate) fn retail_premium_with(
                 loadings: layer.loadings.clone(),
             };
             let p = cover_premium(def, table, &rf, layer.sum_insured_minor)?;
-            *annual.entry(cover.code.clone()).or_insert(Dec::from(0i64)) += p;
+            let line = Line {
+                cover: cover.code.clone(),
+                life: layer.life.to_string(),
+            };
+            *annual.entry(line).or_insert(Dec::from(0i64)) += p;
         }
     }
     // What of the policy's state the product's discounts are judged on.
+    // Entitlements are read as held on the period's first day, or on the
+    // later day the cover is priced as it stands on.
+    let held = crate::entitlement::held_on(
+        policy,
+        match layers {
+            Layers::On(day) => day.max(period_start),
+            _ => period_start,
+        },
+    );
+    let covers: std::collections::BTreeSet<&str> = annual.keys().map(|l| l.cover.as_str()).collect();
     let state = PricingState {
-        covers: annual.len() as u32,
+        covers: covers.len() as u32,
         lives: lives.len() as u32,
         frequency: policy.frequency,
-        entitlements: &BTreeMap::new(),
+        entitlements: &held,
     };
-    Ok(modal_premium_with(product, &annual, &state)?)
+    Ok(modal_premium_by_line(product, &annual, &state)?)
 }
 
 /// Formula-driven sum insured for a scheme member: a multiple of salary, to

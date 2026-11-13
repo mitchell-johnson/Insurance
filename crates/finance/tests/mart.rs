@@ -460,6 +460,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
                 continues: None,
             },
             Event::PremiumAdjusted {
+                discounts: vec![],
                 policy: sch.clone(),
                 receivable: 2,
                 life: "m2".into(),

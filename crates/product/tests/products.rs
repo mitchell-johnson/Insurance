@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use ic_money::{dec, Dec, DecStr};
-use ic_product::discount::PricingState;
-use ic_product::rating::{cover_premium, modal_premium, modal_premium_with, ModalPremium, RatingFactors};
+use ic_product::discount::{Held, Line, PricingState};
+use ic_product::rating::{cover_premium, modal_premium, modal_premium_by_line, modal_premium_with, ModalPremium, RatingFactors};
 use ic_product::{load_definitions, load_product, load_rate_table, Frequency, ProductDefinition, Sex};
 
 const TERM: &str = include_str!("../../../products/term_life.star");
@@ -665,7 +665,11 @@ fn discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net
             ]),
         ]),"#,
     );
-    let held: BTreeMap<String, String> = [("staff".to_string(), String::new())].into();
+    let held = [Held {
+        code: "staff".to_string(),
+        tier: String::new(),
+        life: None,
+    }];
     let state = |lives, frequency| PricingState {
         covers: 2,
         lives,
@@ -726,8 +730,14 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
             discount("loyal", "Loyalty", "discount_loyalty", percent_off("50"), max_annual = "300.00"),
             discount("retain", "Retention", "discount_retention", percent_off("40")),
         ]"#;
-    let tier = |t: &str| -> BTreeMap<String, String> { [("wellness".to_string(), t.to_string())].into() };
-    let run = |p: &ProductDefinition, held: &BTreeMap<String, String>| {
+    let tier = |t: &str| {
+        vec![Held {
+            code: "wellness".to_string(),
+            tier: t.to_string(),
+            life: None,
+        }]
+    };
+    let run = |p: &ProductDefinition, held: &Vec<Held>| {
         let state = PricingState {
             covers: 2,
             lives: 1,
@@ -756,6 +766,39 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
     let bill = run(&floored, &tier("2"));
     assert_eq!(lines(&bill), vec![("wellness", 100_00), ("loyal", 200_00)]);
     assert_eq!(bill.by_cover["life"].minor, 700_00);
+
+    // A tier is per life: held by one of two lives on the cover, it reduces that life's
+    // premium only, and a tier held by nobody on the policy reduces nothing.
+    let only = with_discounts(r#"discounts(chain = [discount("wellness", "Wellness", "discount_wellness", by_tier({"2": "10"}), entitled("wellness"))]),"#);
+    let line = |life: &str, annual: &str| {
+        let line = Line {
+            cover: "life".to_string(),
+            life: life.to_string(),
+        };
+        (line, dec(annual).unwrap())
+    };
+    let couple: BTreeMap<Line, Dec> = [line("life-1", "1000"), line("life-2", "600")].into();
+    let by_life = |held: &[Held]| {
+        let state = PricingState {
+            covers: 1,
+            lives: 2,
+            frequency: Frequency::Yearly,
+            entitlements: held,
+        };
+        modal_premium_by_line(&only, &couple, &state).unwrap()
+    };
+    let hers = Held {
+        code: "wellness".to_string(),
+        tier: "2".to_string(),
+        life: Some("life-2".to_string()),
+    };
+    let bill = by_life(std::slice::from_ref(&hers));
+    assert_eq!((lines(&bill), bill.by_cover["life"].minor), (vec![("wellness", 60_00)], 1_540_00));
+    let stranger = Held {
+        life: Some("life-9".to_string()),
+        ..hers
+    };
+    assert!(by_life(&[stranger]).discounts.is_empty());
 }
 
 /// Purpose: a discount that would increase the premium (a negative percentage or amount, or

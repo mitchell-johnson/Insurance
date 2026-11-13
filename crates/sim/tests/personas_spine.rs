@@ -316,8 +316,19 @@ fn a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owe
         life: LifeId("life-1".to_string()),
         sum_insured_minor: 0,
     }));
+    c.take_events();
     c.submit(0, "policy-servicing", give_up).unwrap();
     let left = -c.state(0).ledger.natural_balance(&given);
+    // The adjustment's event says how much of the discount went back with the credit.
+    let back: i64 = c
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e.event {
+            ic_core::Event::PremiumAdjusted { discounts, .. } => Some(discounts.iter().map(|d| d.amount_minor).sum()),
+            _ => None,
+        })
+        .expect("giving a cover up adjusts the premium billed");
+    assert_eq!(i128::from(back), left - i128::from(line.amount_minor));
     let half = i128::from(line.amount_minor) / 2;
     assert!(
         (left - half).abs() <= i128::from(line.amount_minor) / 100 + 1,

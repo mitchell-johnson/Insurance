@@ -127,12 +127,71 @@ fn adjust(ledger: &mut Ledger, catalog: &Catalog, before: &Policy, policy: &mut 
         "premium_adjusted",
     )? {
         ctx.emit(Event::PremiumAdjusted {
+            discounts: delta.discounts.clone(),
             policy: policy.id.clone(),
             receivable,
             life: life.clone(),
             effective,
             total_minor: delta.total(),
         });
+    }
+    Ok(())
+}
+
+/// Bill or hand back what a change that reaches back makes to premium
+/// already billed: for every billed period the window `from..until`
+/// touches, the difference between the period priced as the policy stood
+/// (`before`) and as it stands now, for the window's days in that period.
+/// Each adjustment is posted at its own value date.
+pub(crate) fn adjust_billed(
+    ledger: &mut Ledger,
+    catalog: &Catalog,
+    before: &Policy,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: &LifeId,
+    (from, until): (NaiveDate, Option<NaiveDate>),
+) -> Result<(), Reject> {
+    let Some(product) = catalog.product(&policy.product_hash).cloned() else {
+        return Ok(());
+    };
+    for n in 0..policy.periods_billed {
+        let (Some(start), Some(end)) = (
+            period_start(policy.inception, policy.frequency, n),
+            period_start(policy.inception, policy.frequency, n + 1),
+        ) else {
+            break;
+        };
+        let (first, last) = (from.max(start), until.map_or(end, |u| u.min(end)));
+        if first >= last {
+            continue;
+        }
+        let was = retail_premium_with(catalog, &product, before, start, &mut ctx.work, Layers::On(first))?;
+        let now = retail_premium_with(catalog, &product, policy, start, &mut ctx.work, Layers::On(first))?;
+        let days = (end - start).num_days().max(1) as i128;
+        let delta = Bill::from_modal(policy, &now)
+            .minus(&Bill::from_modal(policy, &was))
+            .scaled((last - first).num_days() as i128, days);
+        let raised = raise_receivable(
+            ledger,
+            policy,
+            ctx,
+            &delta,
+            ReceivableKind::Adjustment,
+            (first, last),
+            ctx.date,
+            "premium_adjusted",
+        )?;
+        if let Some(receivable) = raised {
+            ctx.emit(Event::PremiumAdjusted {
+                discounts: delta.discounts.clone(),
+                policy: policy.id.clone(),
+                receivable,
+                life: life.clone(),
+                effective: first,
+                total_minor: delta.total(),
+            });
+        }
     }
     Ok(())
 }
@@ -372,6 +431,7 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             "premium_adjusted",
         )? {
             ctx.emit(Event::PremiumAdjusted {
+                discounts: delta.discounts.clone(),
                 policy: id,
                 receivable,
                 life: spec.life,

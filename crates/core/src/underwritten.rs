@@ -277,6 +277,7 @@ fn adjust(
         "premium_adjusted",
     )? {
         ctx.emit(Event::PremiumAdjusted {
+            discounts: delta.discounts.clone(),
             policy: policy.id.clone(),
             receivable,
             life: life.clone(),

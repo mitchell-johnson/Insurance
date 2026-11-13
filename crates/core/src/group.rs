@@ -355,6 +355,7 @@ fn post_deltas(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut Ctx<'_>, life
     for (period, delta) in d.shown {
         if let Some(id) = raise_receivable(ledger, policy, ctx, &delta, ReceivableKind::Adjustment, period, ctx.date, "premium_adjusted")? {
             ctx.emit(Event::PremiumAdjusted {
+                discounts: delta.discounts.clone(),
                 policy: policy.id.clone(),
                 receivable: id,
                 life: life.clone(),

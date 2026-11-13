@@ -320,6 +320,10 @@ pub enum Event {
         life: LifeId,
         effective: NaiveDate,
         total_minor: i64,
+        /// The change to each discount on the premium adjusted: negative
+        /// where a credit hands back premium a discount had reduced.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        discounts: Vec<DiscountGiven>,
     },
     /// Member-level breakdown of one chunk of a scheme invoice.
     SchemeInvoiceChunk {
@@ -746,6 +750,19 @@ pub enum Event {
     OwnerHoldChanged {
         policy: PolicyId,
         held: bool,
+        reference: String,
+    },
+    /// What a life or the policy holds that a discount is given for changed
+    /// from a date: a tier awarded, changed or lost. A tier code only; the
+    /// data behind it stays with the module that judged it.
+    EntitlementChanged {
+        policy: PolicyId,
+        code: String,
+        tier: Option<String>,
+        life: Option<LifeId>,
+        held: bool,
+        from: NaiveDate,
+        until: Option<NaiveDate>,
         reference: String,
     },
     /// A nomination for a death benefit was recorded: a first one, a change

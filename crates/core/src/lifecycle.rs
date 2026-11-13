@@ -242,6 +242,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         interests: BTreeMap::new(),
         nominations: vec![],
         owner_hold: None,
+        entitlements: Vec::new(),
         continuation_of: cmd.continuation_of,
         payments: BTreeMap::new(),
         cessions: BTreeMap::new(),

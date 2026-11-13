@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use ic_money::{round_to_money, Dec, DecStr, Money, MoneyError};
 use serde::{Deserialize, Serialize};
 
-use crate::discount::{self, Discount, DiscountBasis, DiscountCondition, DiscountStep, Limits, PricingState};
+use crate::discount::{self, Discount, DiscountBasis, DiscountCondition, DiscountStep, Limits, Line, PricingState};
 use crate::{CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, RateTable, Sex, UnmatchedSexRating};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -165,17 +165,42 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
         covers: annual_by_cover.len() as u32,
         lives: 1,
         frequency,
-        entitlements: &BTreeMap::new(),
+        entitlements: &[],
     };
     modal_premium_with(product, annual_by_cover, &state)
 }
 
-/// Turn annual premiums per cover into one period's bill: the product's
-/// discounts in their defined order, the frequency's modal loading, then one
-/// rounding to cents per line at the product's rounding mode. Each discount
-/// that applied is its own line, and the last of them absorbs the rounding,
-/// so the premium before discounts less the lines is the net to the cent.
+/// One period's bill from annual premiums by cover, with every cover on one
+/// unnamed life: an entitlement reaches it only where the policy holds it.
 pub fn modal_premium_with(product: &ProductDefinition, annual_by_cover: &BTreeMap<String, Dec>, state: &PricingState<'_>) -> Result<ModalPremium, RatingError> {
+    let lines = annual_by_cover
+        .iter()
+        .map(|(cover, annual)| {
+            let line = Line {
+                cover: cover.clone(),
+                life: String::new(),
+            };
+            (line, *annual)
+        })
+        .collect();
+    modal_premium_by_line(product, &lines, state)
+}
+
+/// Turn annual premiums per cover and life into one period's bill: the
+/// product's discounts in their defined order, the frequency's modal
+/// loading, then one rounding to cents per line at the product's rounding
+/// mode. Each discount that applied is its own line, and the last of them
+/// absorbs the rounding, so the premium before discounts less the lines is
+/// the net to the cent.
+pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line, Dec>, state: &PricingState<'_>) -> Result<ModalPremium, RatingError> {
+    let by_cover = |lines: &BTreeMap<Line, Dec>| {
+        let mut out: BTreeMap<String, Dec> = BTreeMap::new();
+        for (line, amount) in lines {
+            *out.entry(line.cover.clone()).or_insert(Dec::from(0i64)) += *amount;
+        }
+        out
+    };
+    let annual_by_cover = &by_cover(annual);
     let frequency = state.frequency;
     let (fee_annual, loading) = product
         .features
@@ -224,7 +249,8 @@ pub fn modal_premium_with(product: &ProductDefinition, annual_by_cover: &BTreeMa
             _ => {}
         }
     }
-    let (net_annual, applied) = discount::apply(&chain, limits, annual_by_cover, state);
+    let (left, applied) = discount::apply(&chain, limits, annual, state);
+    let net_annual = by_cover(&left);
     let periods = Dec::from(frequency.periods_per_year());
     let modal = (Dec::from(1i64) + loading) / periods;
     let cur = product.currency;

@@ -1026,3 +1026,127 @@ fn a_rate_table_validation_is_recorded_against_the_content_it_was_run_on() {
     );
     assert_eq!(c.state(0).table_validations.len(), 2);
 }
+
+fn entitlement(policy: &PolicyId, code: &str, tier: Option<&str>, life: Option<&str>, held: bool, from: NaiveDate, reference: &str) -> Command {
+    Command::SetEntitlement(Box::new(ic_core::entitlement::SetEntitlement {
+        policy: policy.clone(),
+        code: code.to_string(),
+        tier: tier.map(str::to_string),
+        life: life.map(|l| LifeId(l.to_string())),
+        held,
+        from,
+        until: None,
+        reference: reference.to_string(),
+    }))
+}
+
+/// Purpose: matrix DSC-003, DSC-004, DSC-005 and DSC-009. A wellness tier is awarded to one of
+/// two lives by one command carrying a tier code and dates: dated for the next billing period
+/// it changes nothing already billed and the next bill carries the discount on that life's
+/// cover alone, as its own ledger line; a tier lost from a later period ends the discount
+/// there without clawing back what was given; a manual award arrives by the same command and
+/// records who awarded it and why; an award dated back inside a billed period hands back the
+/// discount for the days from that date in an adjustment posted at that date; and a code no
+/// discount of the product is given for, a life not on the policy, a tier on a loss and a
+/// caller that is not such a module are each refused.
+/// Why it matters: the programme's rules and the activity data live outside the core, so the
+/// one command is the whole contract. A tier that reached back when it was meant for next
+/// quarter would rebill customers; one that could not reach back when the programme's terms
+/// say so would leave them out of pocket; and a person who cannot take part must be able to
+/// hold the same discount, reportably, through a manual award.
+#[test]
+fn a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date() {
+    let mut c = cluster(1);
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", "code = \"term-life-well\"")
+        .replace(
+            "multi_cover_discount(min_covers = 2, percent = \"5\"),",
+            r#"discounts(chain = [discount("wellness", "Wellness", "discount_wellness", by_tier({"1": "5", "2": "10"}), entitled("wellness"))]),"#,
+        );
+    let product = load_product("term_life_well.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let mut issue = term_life(7, start(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+    issue.product_code = "term-life-well".to_string();
+    issue.lives.push(named_life("life-2", "party-partner", d(1990, 3, 10), Sex::Female, false));
+    let mut second = issue.covers[0].clone();
+    second.life = Some(LifeId("life-2".to_string()));
+    issue.covers.push(second);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let given = accounts::discounts_given("term-life-well", NZD).id;
+    let cost = |c: &Cluster| -c.state(0).ledger.natural_balance(&given);
+    let full = latest_bill(&c, &id);
+    let fee = 6_00;
+    let each = (full - fee) / 2;
+    let second_period = d(2027, 12, 15);
+
+    // Refused: not a module that awards entitlements, an unknown code, a stranger, a tier on a loss.
+    let award = entitlement(&id, "wellness", Some("2"), Some("life-2"), true, second_period, "quarter-2027Q4");
+    assert!(c.submit(0, "policy-servicing", award.clone()).is_err());
+    let refused = |c: &mut Cluster, command| code(c.submit(0, "wellness", command));
+    assert_eq!(
+        refused(&mut c, entitlement(&id, "loyalty", None, None, true, second_period, "r")),
+        "unknown_entitlement"
+    );
+    assert_eq!(
+        refused(&mut c, entitlement(&id, "wellness", Some("2"), Some("life-9"), true, second_period, "r")),
+        "unknown_life"
+    );
+    assert_eq!(
+        refused(&mut c, entitlement(&id, "wellness", Some("2"), Some("life-2"), false, second_period, "r")),
+        "invalid_entitlement"
+    );
+
+    // Awarded for the next period: nothing billed changes, and the next bill is 10% less on her cover.
+    c.submit(0, "wellness", award).unwrap();
+    assert_eq!((outstanding(&c, &id), cost(&c)), (full, 0));
+    assert!(events(&c)
+        .iter()
+        .any(|e| matches!(e, Event::EntitlementChanged { tier: Some(t), held: true, .. } if t == "2")));
+    pay(&mut c, &id, "r-1", full);
+    days(&mut c, 30);
+    let discounted = latest_bill(&c, &id);
+    let tenth = i128::from(full - discounted);
+    assert!((tenth - i128::from(each) / 10).abs() <= 1, "{tenth} of {each}");
+    assert_eq!(cost(&c), tenth, "the discount is its own ledger line");
+
+    // Lost from the third period: the third bill is whole again and nothing is clawed back.
+    let third_period = d(2028, 1, 15);
+    c.submit(
+        0,
+        "wellness",
+        entitlement(&id, "wellness", None, Some("life-2"), false, third_period, "below-threshold"),
+    )
+    .unwrap();
+    assert_eq!(cost(&c), tenth);
+    pay(&mut c, &id, "r-2", discounted);
+    days(&mut c, 31);
+    assert_eq!((latest_bill(&c, &id), cost(&c)), (full, tenth));
+
+    // A manual award, dated back ten days into the period already billed: tier one, 5%, for
+    // the 21 days left of the 31, posted at that date.
+    let today = c.business_date().unwrap();
+    assert_eq!(today, d(2028, 1, 15));
+    days(&mut c, 20);
+    let back = d(2028, 1, 25);
+    let manual = entitlement(&id, "wellness", Some("1"), Some("life-2"), true, back, "manual-award-cannot-take-part");
+    c.submit(0, "wellness", manual).unwrap();
+    let handed_back = cost(&c) - tenth;
+    let expected = i128::from(each) * 5 / 100 * 21 / 31;
+    assert!((handed_back - expected).abs() <= 2, "{handed_back} against {expected}");
+    let pol = &c.state(0).policies[&id];
+    let adjustment = pol
+        .receivables
+        .iter()
+        .find(|r| r.period_start == back)
+        .expect("an adjustment at its value date");
+    assert_eq!(i128::from(adjustment.total_minor), -handed_back);
+    let record = pol.entitlements.last().unwrap();
+    assert_eq!(
+        (record.source.as_str(), record.reference.as_str(), record.tier.as_str()),
+        ("wellness", "manual-award-cannot-take-part", "1")
+    );
+    assert_eq!(pol.entitlements.len(), 2, "the earlier tier is kept with its dates, not edited away");
+    assert_eq!(pol.entitlements[0].until, Some(third_period));
+    days(&mut c, 1);
+}
