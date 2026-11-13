@@ -1260,3 +1260,59 @@ fn premium_paused_in_hardship_earns_nothing_until_billing_resumes() {
     assert!(total(&w) > before, "and earns again");
     w.assert_reconciled();
 }
+
+/// Purpose: a correction between options that earlier commission cannot be scaled to is
+/// refused: here the wrong option paid no renewal at all, so there is no record of the premium
+/// the right option's renewal would apply to. A correction to a layer that does not exist, or
+/// was never written, is refused too.
+/// Why it matters: a correction that guessed the basis would post a number nobody can trace to
+/// a premium. Refusing it sends the difference to an adjustment, which a person works out and
+/// signs.
+#[test]
+fn a_correction_the_module_cannot_scale_is_refused() {
+    use ic_distribution::model::ScheduleOption;
+    let mut w = worked_example();
+    let mut alt = schedule();
+    alt.id = "alt".into();
+    alt.options = BTreeMap::from([
+        (
+            "initial-only".to_string(),
+            ScheduleOption {
+                initial_ppm: pct(100.0),
+                renewal_ppm: 0,
+                renewal_from_month: 0,
+            },
+        ),
+        (
+            "trail".to_string(),
+            ScheduleOption {
+                initial_ppm: 0,
+                renewal_ppm: pct(20.0),
+                renewal_from_month: 0,
+            },
+        ),
+    ]);
+    w.activate("alt", vec![Change::ActivateSchedule(alt)]).unwrap();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.send(
+        module("new-business"),
+        Command::WriteLayer(Box::new(WriteLayer {
+            policy: policy.clone(),
+            cover: "life".into(),
+            layer: 1,
+            writing: vec![(EngagementId::from("eng-a-one"), WHOLE)],
+            books: vec![(BookId::from("a-at-fap-one"), WHOLE)],
+            schedule: "alt".into(),
+            option: "initial-only".into(),
+            annual_premium_minor: 1_200_00,
+            replacement: false,
+        })),
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    let correct = |layer: String| vec![Change::CorrectTerms { layer, option: "trail".into() }];
+    assert_eq!(code(w.propose("c1", correct(layer(&policy, 1)))), "correction_needs_adjustment");
+    assert_eq!(code(w.propose("c2", correct(layer(&policy, 9)))), "unknown_layer");
+    let (unwritten, _) = w.issue(2, 500_000_00, None);
+    assert_eq!(code(w.propose("c3", correct(layer(&unwritten, 1)))), "layer_not_written");
+}

@@ -24,6 +24,22 @@ def by_age_sex_smoker(kind, rate_max):
         "change_block_factor": 3,
     }
 
+def per_life_by_age(rate_max):
+    return {
+        "kind": "annual_premium_per_life",
+        "version": 1,
+        "by_sex": False,
+        "by_smoker": False,
+        "ages": [0, 150],
+        "rate_min": "1",
+        "rate_max": rate_max,
+        "decimal_places": 2,
+        "rising_with_age": True,
+        "max_age_step": "2.5",
+        "change_review_pct": 10,
+        "change_block_factor": 3,
+    }
+
 TABLE_SCHEMAS = {
     "life-base": by_age_sex_smoker("mortality_per_mille", "1000"),
     "trauma-base": by_age_sex_smoker("morbidity_per_mille", "1000"),
@@ -38,6 +54,23 @@ TABLE_SCHEMAS = {
         "decimal_places": 2,
         "rising_with_age": True,
         "max_age_step": "2.5",
+        "change_review_pct": 10,
+        "change_block_factor": 3,
+    },
+    # The flexible health plan's benefit options: an annual premium per life by age band.
+    "flex-hospital": per_life_by_age("50000"),
+    "flex-specialist": per_life_by_age("50000"),
+    "flex-dental": per_life_by_age("5000"),
+    "flex-optical": per_life_by_age("5000"),
+    # A benefit with no premium of its own: its only rate is nil.
+    "no-premium": {
+        "kind": "nil_premium",
+        "version": 1,
+        "by_sex": False,
+        "by_smoker": False,
+        "rate_min": "0",
+        "rate_max": "0",
+        "decimal_places": 0,
         "change_review_pct": 10,
         "change_block_factor": 3,
     },

@@ -15,7 +15,8 @@ use std::sync::Arc;
 
 use flate2::write::ZlibEncoder;
 use flate2::Compression;
-use pdf_writer::types::{CidFontType, FontFlags, SystemInfo, UnicodeCmap};
+use pdf_writer::types::{ArtifactType, CidFontType, FontFlags, StructRole, SystemInfo, TabOrder, UnicodeCmap};
+use pdf_writer::writers::StructTreeRoot;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 use subsetter::GlyphRemapper;
 use ttf_parser::Face;
@@ -126,6 +127,19 @@ pub struct Letter<'a> {
     pub large_print: bool,
 }
 
+/// What a line is part of, as a screen reader is told.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// A line of the name and address block.
+    Address,
+    /// The document's title, its one heading.
+    Title,
+    /// The text of the document.
+    Paragraph,
+    /// The reference and page number at the foot: not read out.
+    Footer,
+}
+
 /// One line of text at a place on a page. `x` and `y` are the start of
 /// the baseline, in points from the bottom left corner.
 #[derive(Debug, Clone, PartialEq)]
@@ -135,6 +149,10 @@ pub struct Line {
     pub x: f32,
     pub y: f32,
     pub text: String,
+    pub role: Role,
+    /// The block the line belongs to: the lines a paragraph wraps into,
+    /// on one page or several, share one, and are read as one.
+    pub block: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -233,7 +251,7 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
     let mut y = PAGE_HEIGHT - MARGIN_TOP;
 
     // One line set below the last: move down, turn the page if it is full.
-    let set = |pages: &mut Vec<Page>, y: &mut f32, weight: Weight, size: f32, text: String| -> Result<(), PdfError> {
+    let set = |pages: &mut Vec<Page>, y: &mut f32, (role, block): (Role, usize), weight: Weight, size: f32, text: String| -> Result<(), PdfError> {
         *y -= size * LEADING;
         if *y < floor {
             if pages.len() == MAX_PAGES {
@@ -249,10 +267,14 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
                 x: MARGIN_SIDE,
                 y: *y,
                 text,
+                role,
+                block,
             });
         }
         Ok(())
     };
+    let mut blocks = 0..;
+    let mut block = |role: Role| (role, blocks.next().unwrap_or_default());
 
     let name = clean(letter.name);
     let address: Vec<String> = letter.address.iter().map(|l| clean(l)).filter(|l| !l.trim().is_empty()).collect();
@@ -261,8 +283,9 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
         for line in std::iter::once(name).filter(|n| !n.trim().is_empty()).chain(address) {
             // An address line is never wrapped into two by the page, but
             // one too long for it is.
+            let tag = block(Role::Address);
             for part in wrap(&regular, &line, sizes.body, measure)? {
-                set(&mut pages, &mut y, Weight::Regular, sizes.body, part)?;
+                set(&mut pages, &mut y, tag, Weight::Regular, sizes.body, part)?;
             }
         }
         y -= sizes.body * LEADING * 2.0;
@@ -270,8 +293,9 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
 
     let title = clean(letter.title);
     if !title.trim().is_empty() {
+        let tag = block(Role::Title);
         for part in wrap(&bold, &title, sizes.title, measure)? {
-            set(&mut pages, &mut y, Weight::Bold, sizes.title, part)?;
+            set(&mut pages, &mut y, tag, Weight::Bold, sizes.title, part)?;
         }
         y -= sizes.body * LEADING * 0.5;
     }
@@ -283,8 +307,9 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
             y -= sizes.body * LEADING;
             continue;
         }
+        let tag = block(Role::Paragraph);
         for part in wrap(&regular, &paragraph, sizes.body, measure)? {
-            set(&mut pages, &mut y, Weight::Regular, sizes.body, part)?;
+            set(&mut pages, &mut y, tag, Weight::Regular, sizes.body, part)?;
         }
     }
 
@@ -300,6 +325,8 @@ pub fn layout(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<Page>, PdfError>
             x: MARGIN_SIDE,
             y: FOOTER_BASELINE,
             text: footer,
+            role: Role::Footer,
+            block: usize::MAX,
         });
     }
     Ok(pages)
@@ -437,26 +464,48 @@ pub fn pdf(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<u8>, PdfError> {
 
     let mut next = Ref::new(1);
     let (catalog_id, tree_id, info_id) = (next.bump(), next.bump(), next.bump());
+    let (root_id, document_id, metadata_id) = (next.bump(), next.bump(), next.bump());
     let font_ids = [next.bump(), next.bump()];
     let mut out = Pdf::new();
 
+    // Each block read out is one structure element; its marked content
+    // may be on several pages.
+    let mut elements: BTreeMap<usize, (Role, Ref, Vec<(Ref, i32)>)> = BTreeMap::new();
     let mut page_ids = vec![];
+    let mut parents: Vec<Vec<Ref>> = vec![];
     let mut shown = [false, false];
     for page in &pages {
         let (page_id, content_id) = (next.bump(), next.bump());
         page_ids.push(page_id);
+        let mut marked = vec![];
         let mut content = Content::new();
         for line in &page.lines {
             let i = line.weight as usize;
             let bytes = used[i].encode(&faces[i].1, &line.text)?;
             shown[i] = true;
+            if line.role == Role::Footer {
+                content
+                    .begin_marked_content_with_properties(Name(b"Artifact"))
+                    .properties()
+                    .artifact()
+                    .kind(ArtifactType::Pagination);
+            } else {
+                let mcid = marked.len() as i32;
+                let element = elements.entry(line.block).or_insert_with(|| (line.role, next.bump(), vec![]));
+                element.2.push((page_id, mcid));
+                marked.push(element.1);
+                let tag = if line.role == Role::Title { Name(b"H1") } else { Name(b"P") };
+                content.begin_marked_content_with_properties(tag).properties().identify(mcid);
+            }
             content
                 .begin_text()
                 .set_font(resource(line.weight), line.size)
                 .next_line(line.x, line.y)
                 .show(Str(&bytes))
-                .end_text();
+                .end_text()
+                .end_marked_content();
         }
+        parents.push(marked);
         let packed = deflate(content.finish().as_slice());
         out.stream(content_id, &packed).filter(Filter::FlateDecode);
 
@@ -464,7 +513,9 @@ pub fn pdf(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<u8>, PdfError> {
         object
             .media_box(Rect::new(0.0, 0.0, PAGE_WIDTH, PAGE_HEIGHT))
             .parent(tree_id)
-            .contents(content_id);
+            .contents(content_id)
+            .struct_parents(parents.len() as i32 - 1)
+            .tab_order(TabOrder::StructureOrder);
         let mut resources = object.resources();
         let mut dict = resources.fonts();
         for (i, (weight, _)) in faces.iter().enumerate() {
@@ -480,14 +531,86 @@ pub fn pdf(letter: &Letter<'_>, fonts: &Fonts) -> Result<Vec<u8>, PdfError> {
         }
     }
 
+    // The structure tree, in reading order: the address, the title, the text.
+    for (role, id, marks) in elements.values() {
+        let mut element = out.struct_element(*id);
+        element
+            .kind(if *role == Role::Title { StructRole::H1 } else { StructRole::P })
+            .parent(document_id);
+        let mut children = element.children();
+        for (page, mcid) in marks {
+            children.marked_content_ref().page(*page).marked_content_id(*mcid);
+        }
+    }
+    let mut document = out.struct_element(document_id);
+    // The language is the catalog's, which every element inherits.
+    document.kind(StructRole::Document).parent(root_id);
+    let mut children = document.children();
+    for (_, id, _) in elements.values() {
+        children.struct_element(*id);
+    }
+    children.finish();
+    document.finish();
+    let mut parent_arrays = vec![];
+    for marked in &parents {
+        let id = next.bump();
+        out.indirect(id).array().items(marked.iter().copied());
+        parent_arrays.push(id);
+    }
+    let mut root = out.indirect(root_id).start::<StructTreeRoot>();
+    root.child(document_id);
+    let mut tree = root.parent_tree();
+    let mut nums = tree.nums();
+    for (n, id) in parent_arrays.iter().enumerate() {
+        nums.insert(n as i32, *id);
+    }
+    nums.finish();
+    tree.finish();
+    root.parent_tree_next_key(parents.len() as i32);
+    root.finish();
+
+    let title = clean(letter.title);
+    let metadata = xmp(&title, letter.language);
+    out.metadata(metadata_id, metadata.as_bytes());
+
     out.pages(tree_id).kids(page_ids.iter().copied()).count(page_ids.len() as i32);
     let mut catalog = out.catalog(catalog_id);
     catalog.pages(tree_id);
     if !letter.language.is_empty() {
         catalog.lang(TextStr(letter.language));
     }
+    catalog.pair(Name(b"StructTreeRoot"), root_id);
+    catalog.mark_info().marked(true);
+    catalog.metadata(metadata_id);
     catalog.viewer_preferences().display_doc_title(true);
     catalog.finish();
-    out.document_info(info_id).title(TextStr(&clean(letter.title)));
+    out.document_info(info_id).title(TextStr(&title));
     Ok(out.finish())
+}
+
+/// Text made safe to place in XML.
+fn xml(text: &str) -> String {
+    text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
+/// The document's XMP metadata: its title and language, and the claim that
+/// it follows PDF/UA-1, which assistive technology and checkers read.
+pub fn xmp(title: &str, language: &str) -> String {
+    let language = if language.is_empty() { "x-default" } else { language };
+    format!(
+        r#"<?xpacket begin="{bom}" id="W5M0MpCehiHzreSzNTczkc9d"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/">
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+<rdf:Description rdf:about="" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:pdfuaid="http://www.aiim.org/pdfua/ns/id/">
+<dc:title><rdf:Alt><rdf:li xml:lang="x-default">{title}</rdf:li></rdf:Alt></dc:title>
+<dc:language><rdf:Bag><rdf:li>{language}</rdf:li></rdf:Bag></dc:language>
+<pdfuaid:part>1</pdfuaid:part>
+</rdf:Description>
+</rdf:RDF>
+</x:xmpmeta>
+<?xpacket end="w"?>"#,
+        bom = '\u{feff}',
+        title = xml(title),
+        language = xml(language),
+    )
 }

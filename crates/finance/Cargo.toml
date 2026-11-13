@@ -35,6 +35,10 @@ futures = "0.3"
 name = "ic-finance-close"
 path = "src/bin/ic-finance-close.rs"
 
+[[bin]]
+name = "ic-finance-tables"
+path = "src/bin/ic-finance-tables.rs"
+
 [dev-dependencies]
 ic-sim.workspace = true
 proptest.workspace = true
