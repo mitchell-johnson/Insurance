@@ -1798,6 +1798,9 @@ async fn the_claims_console() {
         (StatusCode::OK, &json!(1), &json!("cl-1")),
         "{work}"
     );
+    // Investigation cases are answered for whoever signed in, gathered from every partition.
+    let (status, cases) = ask("sub-cl1", "cases").await;
+    assert_eq!((status, cases["rows"].is_array()), (StatusCode::OK, true), "{cases}");
     assert_eq!(ask("sub-cl1", "work?claim=c-404").await.0, StatusCode::NOT_FOUND);
     // The policy's claims as an adviser or employer would see them: status, never cause.
     let (status, policy) = ask("sub-cl1", "policy?policy=pol-c1").await;
