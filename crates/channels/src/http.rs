@@ -1476,6 +1476,79 @@ async fn replacement_standing(s: &AppState, session: &Session, purpose: &str) ->
     Ok(standing)
 }
 
+async fn commission_standing(s: &AppState, session: &Session, purpose: &str) -> Result<Value, Problem> {
+    let standing = s
+        .ask(Question::CommissionStaff {
+            staff: session.party.clone(),
+            at: session.at,
+            purpose: purpose.to_string(),
+        })
+        .await?;
+    if standing["view"] != true {
+        return Err(Problem::forbidden("your roles do not include the commission console"));
+    }
+    Ok(standing)
+}
+
+/// One of the commission console's questions. `me` answers from here:
+/// whether the person may open it and the roles they hold there.
+async fn commission_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let standing = commission_standing(&s, &session, "").await?;
+    if name == "me" {
+        return ok(json!({ "staff": session.party, "roles": standing["roles"] }));
+    }
+    let question = crate::commission::question(&name, &fields).map_err(Problem::bad_request)?;
+    let answer = s
+        .commission
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::NOT_FOUND, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// One person's command to the commission module, sent as them with the
+/// roles they hold and the purpose they gave. That module decides it with
+/// its own policy and records the decision.
+async fn commission_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let request: Value = parse(&body)?;
+    let purpose = request["purpose"].as_str().map(str::trim).unwrap_or_default();
+    let standing = commission_standing(&s, &session, purpose).await?;
+    if purpose.is_empty() {
+        return Err(Problem::bad_request("say why: the purpose is recorded with the decision"));
+    }
+    let command = request["command"].clone();
+    if crate::commission::console_command(&command).is_none() {
+        return Err(Problem::bad_request(
+            "that is not a command the console sends: workbench actions, replacement decisions and policy assignment have their own paths",
+        ));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let output = s
+        .commission
+        .tell(crate::commission::envelope(&key, standing["actor"].clone(), command))
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output["result"].get("Err") {
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
+            refused["message"].as_str().unwrap_or("the commission module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "duplicate": output["duplicate"], "events": output["result"]["Ok"] }))
+}
+
 /// Every replacement the commission module matched, and whether this person may decide a disputed one.
 async fn replacements(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.staff(&headers, &method, &uri, b"").await?;
@@ -2149,6 +2222,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/complaints/{question}", get(complaints_question))
         .route("/staff/v1/claims/commands", post(claims_command))
         .route("/staff/v1/replacements", get(replacements))
+        .route("/staff/v1/commission/commands", post(commission_command))
+        .route("/staff/v1/commission/{question}", get(commission_question))
         .route("/staff/v1/replacements/decide", post(replacement_decide))
         .route("/staff/v1/reinsurance/commands", post(reinsurance_command))
         .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
@@ -2174,6 +2249,7 @@ pub fn router(state: Shared) -> Router {
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))
+        .route("/commission", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMMISSION) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
         .route("/ui/config.json", get(ui_config))

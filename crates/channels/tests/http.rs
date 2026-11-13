@@ -122,6 +122,8 @@ fn portal() -> Portal {
         ("sub-aud", "aud-1"),
         ("sub-wbcon", "wb-con"),
         ("sub-rec", "rec-1"),
+        ("sub-dadmin", "da-1"),
+        ("sub-dview", "dv-1"),
     ] {
         w.dir(
             module("identity"),
@@ -209,6 +211,12 @@ fn portal() -> Portal {
                 template("ri-reader", &[ic_channels::reinsurance::actions::VIEW], &[DataClass::Financial]),
                 template("records", &[ic_channels::documents::actions::DOWNLOAD], &[DataClass::Ordinary]),
                 template(
+                    "distribution-admin",
+                    &[ic_channels::commission::actions::VIEW, ic_channels::commission::actions::STRUCTURE],
+                    &[DataClass::Ordinary],
+                ),
+                template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
+                template(
                     "conduct-officer",
                     &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
                     &[DataClass::Ordinary, DataClass::Financial],
@@ -256,6 +264,8 @@ fn portal() -> Portal {
         ("ri-view", "ri-reader"),
         ("wb-con", "conduct-officer"),
         ("rec-1", "records"),
+        ("da-1", "distribution-admin"),
+        ("dv-1", "commission-reader"),
     ] {
         w.send(
             staff("alice"),
@@ -834,7 +844,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 24);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 26);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -2865,4 +2875,70 @@ async fn an_employer_runs_the_scheme_membership() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: a member of staff whose templates give the commission module's distribution admin role opens the commission console,
+/// asks its questions with the fields each needs, and sends a structure command as themselves with a purpose, which the commission
+/// module's own policy allows; someone who may only look is refused by that module; and commands that have their own paths
+/// (workbench actions, replacement decisions, policy assignment), commands with no purpose and people with no commission action at
+/// all go no further than the portal.
+/// Why it matters: the commission module trusts the console to describe the person truly, and decides by the roles it is told. A
+/// console that let the page name the roles, or carried a workbench action round the two-person rule there, would let one person
+/// move money or change who is paid.
+#[tokio::test]
+async fn the_commission_console() {
+    let portal = &portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/commission/{rest}");
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, purpose: &'static str, command: Value| async move {
+        portal
+            .write("POST", who, "/staff/v1/commission/commands", json!({ "purpose": purpose, "command": command }))
+            .await
+    };
+
+    let (status, me) = ask("sub-dadmin", "me").await;
+    assert_eq!((status, &me["roles"]), (StatusCode::OK, &json!(["distribution_admin"])), "{me}");
+    assert_eq!(ask("sub-dview", "me").await.1["roles"], json!([]));
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+
+    // Questions, each with its fields.
+    let (status, answer) = ask("sub-dview", "status").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(ask("sub-dview", "statement?payee=adv-1").await.0, StatusCode::BAD_REQUEST, "which statement");
+    assert_eq!(ask("sub-dview", "statement?payee=adv-1&number=first").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(ask("sub-dview", "outbox").await.0, StatusCode::BAD_REQUEST, "the driver's, not people's");
+    assert_eq!(
+        ask("sub-dview", "statement?payee=adv-1&number=1").await.0,
+        StatusCode::NOT_FOUND,
+        "no statement cut yet"
+    );
+    let (status, held) = ask("sub-dview", "held_control?date=2027-11-01").await;
+    assert_eq!(status, StatusCode::OK, "{held}");
+    assert_eq!(ask("sub-dview", "case?id=nope").await.0, StatusCode::NOT_FOUND);
+
+    // The administrator adds an adviser, as themselves.
+    let add = json!({ "add_party": { "party": "adv-9", "kind": "adviser" } });
+    assert_eq!(tell("sub-dadmin", "", add.clone()).await.0, StatusCode::BAD_REQUEST, "no purpose");
+    let (status, done) = tell("sub-dadmin", "onboarding adviser 9", add.clone()).await;
+    assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
+    // Someone who may only look is refused by the commission module itself.
+    let other = json!({ "add_party": { "party": "adv-10", "kind": "adviser" } });
+    let (status, problem) = tell("sub-dview", "trying", other).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::FORBIDDEN, Some("not_authorised")),
+        "{problem}"
+    );
+    // Not the console's to send.
+    for command in [
+        json!({ "propose_action": {} }),
+        json!({ "decide_replacement": {} }),
+        json!({ "write_layer": {} }),
+        json!({ "a": {}, "b": {} }),
+    ] {
+        assert_eq!(tell("sub-dadmin", "x", command).await.0, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(tell("sub-gl1", "x", add).await.0, StatusCode::FORBIDDEN);
 }

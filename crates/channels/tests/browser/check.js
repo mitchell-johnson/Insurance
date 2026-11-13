@@ -229,6 +229,16 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "You decide disputed matches");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();
   } });
+  await visit(browser, "/commission", { subject: "sub-dadmin" }, { run: async (p) => {
+    await sees(p, "distribution admin");
+    await p.getByRole("button", { name: "Ask" }).click();
+    await p.locator("#answer pre").waitFor();
+    await p.fill("#cmd", JSON.stringify({ add_party: { party: "adv-77", kind: "adviser" } }));
+    await p.fill("#purpose", "onboarding");
+    await p.getByRole("button", { name: "Send" }).click();
+    await p.locator("#send-msg").getByText("Done.").waitFor();
+  } });
+  await visit(browser, "/commission", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/replacements", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/reinsurance", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/claims", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });

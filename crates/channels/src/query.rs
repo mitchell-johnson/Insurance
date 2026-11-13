@@ -144,6 +144,13 @@ pub enum Question {
         at: At,
         purpose: String,
     },
+    /// What a member of staff may do in the commission console, with the
+    /// commission module's description of them.
+    CommissionStaff {
+        staff: PartyId,
+        at: At,
+        purpose: String,
+    },
     /// Whether a member of staff may open the claims console.
     ClaimsStaff {
         staff: PartyId,
@@ -226,6 +233,7 @@ fn commission_staff(state: &ChannelState, party: &PartyId, at: At, purpose: &str
                 (workbench::actions::APPROVE_CONDUCT, "conduct_officer"),
             ]
             .into_iter()
+            .chain(crate::commission::ROLES)
             .filter(|(action, _)| t.actions.contains(*action))
             .map(|(_, role)| role)
             .collect();
@@ -476,6 +484,11 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             standing
         }
         Question::PricingStaff { staff, at } => crate::pricing::standing(&d.staff, &staff, at),
+        Question::CommissionStaff { staff, at, purpose } => {
+            let mut standing = crate::commission::standing(&d.staff, &staff, at);
+            standing["actor"] = commission_staff(state, &staff, at, &purpose);
+            standing
+        }
         Question::ReplacementStaff { staff, at, purpose } => {
             let mut standing = crate::replacements::standing(&d.staff, &staff, at);
             standing["actor"] = commission_staff(state, &staff, at, &purpose);

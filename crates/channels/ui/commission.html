@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Commission console</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Commission console</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<section><h2>Ask</h2><p class="muted">Advisers, payees, statements, cases and what is waiting. Dates are YYYY-MM-DD.</p>
+<form id="ask"><div class="row">
+<div><label for="q">Question</label><select id="q">
+<option value="status">Status</option><option value="open_tasks">Open tasks</option><option value="conduct_cases">Conduct cases</option><option value="relations">Relations</option><option value="history">Configuration history</option><option value="sweep_check">Sweep check</option>
+<option value="position">A party's position (party, as_at)</option><option value="proof_of_debt">Proof of debt (party, as_at)</option><option value="statement">A statement (payee, number)</option>
+<option value="held_control">Held control (date)</option><option value="month_end_blocks">Month-end blocks (date)</option><option value="clawback_exposure">Clawback exposure (date)</option><option value="aged_held">Aged held money (as_at)</option>
+<option value="action">A workbench action (id)</option><option value="case">A case (id)</option></select></div>
+<div><label for="f">Fields (name=value, separated by &amp;)</label><input id="f" size="40" placeholder="party=adv-1&amp;as_at=2027-11-30"></div>
+<button>Ask</button></div></form><div id="ask-msg" aria-live="polite"></div><div id="answer"></div></section>
+<section><h2>Send a command</h2><p class="muted">One command in the commission module's own JSON, for example <code>{"set_payment_hold": {...}}</code>. That module decides whether your roles allow it and records the decision with your purpose. Workbench actions, replacement decisions and policy assignment have their own pages.</p>
+<form id="send"><label for="cmd">Command</label><textarea id="cmd" rows="6" cols="70" required></textarea>
+<div class="row"><div><label for="purpose">Why (recorded with the decision)</label><input id="purpose" required size="40"></div><button>Send</button></div></form><div id="send-msg" aria-live="polite"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/commission";
+$("out").addEventListener("click", () => signOut(R));
+async function load() {
+  const me = await api(R, "GET", BASE + "/me");
+  $("me").textContent = `${me.staff}: ` + (me.roles.length ? me.roles.map((r) => r.replace(/_/g, " ")).join(", ") : "may look, holds no role that changes anything");
+}
+$("ask").addEventListener("submit", run($("ask-msg"), async () => {
+  const fields = $("f").value.trim();
+  const answer = await api(R, "GET", `${BASE}/${$("q").value}` + (fields ? "?" + new URLSearchParams(fields) : ""));
+  put($("answer"), h("pre", {}, JSON.stringify(answer, null, 1)));
+}));
+$("send").addEventListener("submit", run($("send-msg"), async () => {
+  let command;
+  try { command = JSON.parse($("cmd").value); } catch (e) { throw new Error("The command is not JSON: " + e.message); }
+  const done = await api(R, "POST", BASE + "/commands", { command, purpose: $("purpose").value });
+  return done.duplicate ? "Already done." : "Done.";
+}));
+signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>
