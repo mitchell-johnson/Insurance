@@ -440,6 +440,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             reference: "uw".into(),
         })),
         Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+            occupation_class: None,
             policy: p.clone(),
             cover: "life".into(),
             life: LifeId("l".into()),

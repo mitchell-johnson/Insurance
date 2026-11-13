@@ -538,6 +538,13 @@ pub enum InvestCommand {
         payout: String,
         payment: String,
     },
+    /// The bank refused a payout before it settled (a rejected file or
+    /// item). The payout is owed again and needs a new payment reference,
+    /// exactly as if the bank had sent it back after settling.
+    PayoutRejected {
+        policy: PolicyId,
+        payment: String,
+    },
     /// Record the legal direction that says to whom a held payout is paid:
     /// the Official Assignee, the owner, or whoever a court names. The
     /// direction is a vault reference. A payout the bank sent back while
@@ -592,6 +599,7 @@ impl InvestCommand {
             InvestCommand::PlaceOrder(_) | InvestCommand::CancelOrder { .. } => &["policy-servicing", "claims", "fees"],
             InvestCommand::RaisePayout { .. } | InvestCommand::ReinstructPayout { .. } => &["policy-servicing", "claims"],
             InvestCommand::Surrender { .. } | InvestCommand::CompleteSurrender { .. } | InvestCommand::DirectPayout { .. } => &["policy-servicing"],
+            InvestCommand::PayoutRejected { .. } => &["payments"],
             InvestCommand::ExecuteOrders { .. } | InvestCommand::ReplayOrders { .. } => &["unit-orders"],
         }
     }
@@ -606,6 +614,7 @@ impl InvestCommand {
             InvestCommand::RaisePayout { .. } => "raise_investment_payout",
             InvestCommand::ReinstructPayout { .. } => "reinstruct_investment_payout",
             InvestCommand::DirectPayout { .. } => "direct_investment_payout",
+            InvestCommand::PayoutRejected { .. } => "investment_payout_rejected",
             InvestCommand::Surrender { .. } => "surrender_units",
             InvestCommand::CompleteSurrender { .. } => "complete_surrender",
             InvestCommand::ExecuteOrders { .. } => "execute_unit_orders",
@@ -620,6 +629,7 @@ impl InvestCommand {
             | InvestCommand::RaisePayout { policy, .. }
             | InvestCommand::ReinstructPayout { policy, .. }
             | InvestCommand::DirectPayout { policy, .. }
+            | InvestCommand::PayoutRejected { policy, .. }
             | InvestCommand::Surrender { policy, .. }
             | InvestCommand::CompleteSurrender { policy, .. } => Some(policy),
             InvestCommand::PlaceOrder(order) => Some(&order.policy),
@@ -954,6 +964,33 @@ pub(crate) fn payout_returned(policy: &mut Policy, ctx: &mut Ctx<'_>, payment: &
             payment: payment.to_string(),
             amount_minor: record.amount_minor,
         }));
+    }
+}
+
+/// The bank refused a payout before it settled: the money never left
+/// benefit payable, so only the payout's state changes. Said again once it
+/// is already returned, it changes nothing.
+pub(crate) fn payout_rejected(policy: &mut Policy, ctx: &mut Ctx<'_>, payment: &str) -> Result<(), Reject> {
+    let id = policy.id.clone();
+    let Some((payout, record)) = owed_under(policy, payment) else {
+        return Err(bad(
+            "unknown_payout",
+            format!("{payment} is not the payment reference of a payout on this policy"),
+        ));
+    };
+    match record.state {
+        PayoutState::Returned => Ok(()),
+        PayoutState::Owed => {
+            record.state = PayoutState::Returned;
+            ctx.emit(crate::Event::Investment(InvestEvent::PayoutReturned {
+                policy: id,
+                payout: payout.clone(),
+                payment: payment.to_string(),
+                amount_minor: record.amount_minor,
+            }));
+            Ok(())
+        }
+        PayoutState::Settled | PayoutState::Held => Err(bad("payout_not_owed", format!("{payout} is not waiting for the bank"))),
     }
 }
 

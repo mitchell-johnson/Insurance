@@ -1016,7 +1016,8 @@ fn pay(c: &mut Cluster, policy: &PolicyId, payment: &str, minor: i64) -> Result<
     c.submit(0, "payments", settle)
 }
 
-/// Purpose: unit-linked money leaves through the policy's benefit payable. Cash no buy
+/// Purpose: unit-linked money leaves through the policy's benefit payable. A payout the
+/// bank refuses before settlement is owed again under a new reference, on payments' word only. Cash no buy
 /// order is counting on is raised from pending investment cash to the payable under a
 /// payout ID, once however often it is sent; the payments module can settle exactly that
 /// payout, for exactly that amount, under that ID and nothing else; a payment the bank
@@ -1149,6 +1150,28 @@ fn a_withdrawal_is_paid_through_benefit_payable() {
         InvestEvent::PayoutRaised { policyholder, .. } | InvestEvent::PayoutReinstructed { policyholder, .. } => *policyholder == owner,
         _ => true,
     }));
+
+    // The bank refuses the surrender payout before settlement: only payments may say so,
+    // and the payout is owed again under a new reference, the money still in benefit payable.
+    let rejected = |c: &mut Cluster, caller: &str, payment: &str| {
+        let command = InvestCommand::PayoutRejected {
+            policy: policy.clone(),
+            payment: payment.to_string(),
+        };
+        invest(c, caller, command)
+    };
+    assert_eq!(code(rejected(&mut c, "policy-servicing", "sur-1")), "caller_not_allowed");
+    assert_eq!(code(rejected(&mut c, "payments", "sur-none")), "unknown_payout");
+    rejected(&mut c, "payments", "sur-1").unwrap();
+    rejected(&mut c, "payments", "sur-1").unwrap();
+    assert_eq!((payable(&c), state_of(&c, "sur-1")), (4_500_00, PayoutState::Returned));
+    let returned = invest_events(&mut c);
+    assert_eq!(returned.iter().filter(|e| matches!(e, InvestEvent::PayoutReturned { .. })).count(), 1);
+    assert_eq!(code(pay(&mut c, &policy, "sur-1", 4_500_00)), "payment_not_instructed");
+    reinstruct(&mut c, "sur-1", "sur-1b").unwrap();
+    pay(&mut c, &policy, "sur-1b", 4_500_00).unwrap();
+    assert_eq!(code(rejected(&mut c, "payments", "sur-1b")), "payout_not_owed");
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }
 
 /// Purpose: a fund is authored as a Starlark file and loaded into the definition the
