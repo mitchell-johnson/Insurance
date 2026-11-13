@@ -44,6 +44,7 @@ struct Portal {
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
+    documents: Arc<common::documents::DocumentsDouble>,
 }
 
 fn healthy() -> RegionReport {
@@ -118,6 +119,7 @@ fn portal() -> Portal {
         ("sub-riview", "ri-view"),
         ("sub-aud", "aud-1"),
         ("sub-wbcon", "wb-con"),
+        ("sub-rec", "rec-1"),
     ] {
         w.dir(
             module("identity"),
@@ -203,6 +205,7 @@ fn portal() -> Portal {
                     &[DataClass::Financial],
                 ),
                 template("ri-reader", &[ic_channels::reinsurance::actions::VIEW], &[DataClass::Financial]),
+                template("records", &[ic_channels::documents::actions::DOWNLOAD], &[DataClass::Ordinary]),
                 template(
                     "conduct-officer",
                     &[workbench::actions::VIEW, workbench::actions::APPROVE_CONDUCT],
@@ -250,6 +253,7 @@ fn portal() -> Portal {
         ("ri-2", "ri-lead"),
         ("ri-view", "ri-reader"),
         ("wb-con", "conduct-officer"),
+        ("rec-1", "records"),
     ] {
         w.send(
             staff("alice"),
@@ -290,6 +294,7 @@ fn portal() -> Portal {
     let reinsurance = Arc::new(common::reinsurance::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
+    let documents = Arc::new(common::documents::DocumentsDouble::default());
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
         json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
@@ -313,6 +318,7 @@ fn portal() -> Portal {
         reinsurance: reinsurance.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
+        documents: Some(documents.clone()),
     }));
     Portal {
         app,
@@ -329,6 +335,7 @@ fn portal() -> Portal {
         master,
         commission,
         intake,
+        documents,
     }
 }
 
@@ -817,7 +824,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 23);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 24);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1356,6 +1363,7 @@ async fn the_unit_pricing_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1565,6 +1573,7 @@ async fn the_complaints_and_conduct_workbench() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1660,6 +1669,7 @@ async fn the_reinsurance_exceptions_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (path, body) in [
         ("/staff/v1/reinsurance/exceptions", None),
@@ -1869,6 +1879,7 @@ async fn the_claims_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -2041,6 +2052,7 @@ async fn the_finance_console() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),
@@ -2180,6 +2192,7 @@ async fn a_person_keeps_their_own_customer_record() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     let request = Request::builder()
         .uri("/app/v1/profile")
@@ -2234,6 +2247,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     for (method, body) in [
         ("GET", None),
@@ -2497,6 +2511,7 @@ async fn the_person_insured_signs_their_disclosure() {
         reinsurance: portal.reinsurance.clone(),
         master: None,
         intake: None,
+        documents: None,
     }));
     let request = Request::builder()
         .method("POST")
@@ -2504,6 +2519,96 @@ async fn the_person_insured_signs_their_disclosure() {
         .header("x-dev-subject", "sub-kiri")
         .header("idempotency-key", "k")
         .body(Body::from(answers.to_string()))
+        .unwrap();
+    assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: a customer downloads their own document as a PDF and gets 404 for anyone else's or for an ID that could not be one; a
+/// member of staff with `documents.download` downloads with a purpose, which is passed on, and is refused a clinical document; staff
+/// without the action or without a purpose get nothing; a destroyed document is 410; and a documents module that is down or not
+/// configured is 503.
+/// Why it matters: the documents module decides by the party or the staff member and purpose the portal names, so the portal must
+/// name only the person signed in, and must not hand back anything but the file it was given, with no caching.
+#[tokio::test]
+async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
+    let portal = portal();
+    let response = portal
+        .app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/app/v1/documents/doc-1/pdf")
+                .header("x-dev-subject", "sub-kiri")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["content-type"], "application/pdf");
+    assert_eq!(response.headers()["cache-control"], "no-store");
+    assert_eq!(response.headers()["content-disposition"], "attachment; filename=\"doc-1.pdf\"");
+    assert_eq!(response.into_body().collect().await.unwrap().to_bytes().as_ref(), b"%PDF-1.7 schedule");
+    assert_eq!(
+        portal.documents.asked.lock().unwrap()[0],
+        ("doc-1".to_string(), ic_channels::documents::Asker::Party(KIRI.to_string()))
+    );
+    for (who, path) in [("sub-adv", "doc-1"), ("sub-kiri", "doc-2"), ("sub-kiri", "..%2Fsecret"), ("sub-kiri", "a%20b")] {
+        assert_eq!(
+            portal.get(who, &format!("/app/v1/documents/{path}/pdf")).await.0,
+            StatusCode::NOT_FOUND,
+            "{who} {path}"
+        );
+    }
+    assert_eq!(portal.get("sub-kiri", "/app/v1/documents/doc-gone/pdf").await.0, StatusCode::GONE);
+    assert_eq!(portal.get("sub-kiri", "/app/v1/documents/doc-odd/pdf").await.0, StatusCode::BAD_GATEWAY);
+    assert_eq!(
+        portal.get("sub-kiri", "/app/v1/documents/doc-busy/pdf").await.0,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+
+    let (status, _) = portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf?purpose=complaint%20C-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        portal.documents.asked.lock().unwrap().last().unwrap().1,
+        ic_channels::documents::Asker::Staff {
+            actor: "rec-1".into(),
+            purpose: "complaint C-1".into()
+        }
+    );
+    assert_eq!(
+        portal.get("sub-rec", "/staff/v1/documents/doc-clinical/pdf?purpose=x").await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal.get("sub-rec", "/staff/v1/documents/doc-1/pdf?purpose=%20").await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(portal.get("sub-sue", "/staff/v1/documents/doc-1/pdf?purpose=x").await.0, StatusCode::FORBIDDEN);
+
+    let now = portal.now();
+    let bare = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: portal.commission.clone(),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+        intake: None,
+        documents: None,
+    }));
+    let request = Request::builder()
+        .uri("/app/v1/documents/doc-1/pdf")
+        .header("x-dev-subject", "sub-kiri")
+        .body(Body::empty())
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }

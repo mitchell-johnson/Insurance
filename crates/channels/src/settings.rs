@@ -54,6 +54,8 @@ pub struct PortalSettings {
     pub partitions: ic_ledger::PartitionId,
     /// The customer master's base URL and token scope, for self-service.
     pub master: Option<(String, String)>,
+    /// The documents module's base URL and token scope, for downloads.
+    pub documents: Option<(String, String)>,
     /// The underwriting intake's base URL and token scope, for signing disclosures.
     pub intake: Option<(String, String)>,
 }
@@ -87,6 +89,8 @@ impl PortalSettings {
     ///   (engagements, licences, held money) are carried to the channels;
     ///   default 15. `IC_PORTAL_CURRENCY`: the currency of those balances;
     ///   default `NZD`.
+    /// - `IC_DOCUMENTS_URL` and `IC_DOCUMENTS_SCOPE`: the documents service
+    ///   and the scope of its app registration, for PDF downloads.
     /// - `IC_UNDERWRITING_INTAKE_URL` and `IC_UNDERWRITING_INTAKE_SCOPE`: the
     ///   underwriting intake and the scope of its audience, for disclosures.
     /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master and
@@ -177,6 +181,7 @@ impl PortalSettings {
             ui,
             forward: Duration::from_secs(seconds("IC_PORTAL_FORWARD_SECS", 15)?),
             master: service(get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE"), "IC_CUSTOMERS")?,
+            documents: service(get("IC_DOCUMENTS_URL"), get("IC_DOCUMENTS_SCOPE"), "IC_DOCUMENTS")?,
             intake: service(get("IC_UNDERWRITING_INTAKE_URL"), get("IC_UNDERWRITING_INTAKE_SCOPE"), "IC_UNDERWRITING_INTAKE")?,
             partitions: match get("IC_PARTITIONS") {
                 None => ic_ledger::PARTITION_COUNT,
