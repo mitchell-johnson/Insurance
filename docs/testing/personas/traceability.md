@@ -468,7 +468,9 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-006 | full | `finance/tests/journals.rs::an_actuarial_journal_names_its_extract_and_is_signed_by_the_actuary` |
 | FIN-007 | full | `finance/tests/journals.rs::a_journal_dated_into_an_earlier_period_is_a_prior_period_item` |
 | FIN-008 | full | `finance/tests/mart.rs::a_rebuilt_mart_cuts_the_same_files`<br>`finance/tests/feed.rs::replaying_the_log_rebuilds_the_same_books` |
-| FIN-010 | part | `finance/tests/returns.rs::a_return_is_filed_from_a_closed_period_and_restated_as_a_new_version` |
+| FIN-009 | full | `finance/tests/mart.rs::the_mart_and_its_files_hold_ids_and_rating_facts_only` |
+| FIN-010 | full | `finance/tests/returns.rs::a_return_is_filed_from_a_closed_period_and_restated_as_a_new_version`<br>`finance/tests/returns.rs::a_changed_line_definition_is_a_new_mapping_version_from_a_period` |
+| FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract` |
 | FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines` |
