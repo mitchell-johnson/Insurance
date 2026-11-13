@@ -75,14 +75,12 @@ impl DistributionState {
             left -= take;
             let Some(old) = self.layers.get_mut(&k) else { continue };
             old.matched_away_minor += take;
-            let whole = take == old.sum_insured_minor;
             for (book, share) in old.books_on(on) {
                 *books.entry(book.clone()).or_insert(0) += (take as i128 * *share as i128 / WHOLE as i128) as i64;
             }
             replaced.push((k.clone(), take));
-            if whole {
-                continued.extend(self.continue_exposure(ctx, &k, key, &new, today));
-            }
+            let given = old.given_up.map_or(0, |(_, a)| a);
+            continued.extend(self.continue_exposure(ctx, &k, key, &new, today, (take, given)));
         }
         let matched_minor = new.sum_insured_minor - left;
         ctx.emit(Event::ReplacementMatched {
@@ -160,6 +158,8 @@ impl DistributionState {
                 || new.terms.is_none()
                 || new.indexation
                 || new.ended.is_some()
+                || new.given_up.is_some()
+                || self.policies.get(&new.policy).is_none_or(|p| p.ended.is_some())
                 || new.cover_type != old.cover_type
                 || new.start > on
                 || months_between(new.start, on) >= window
@@ -179,15 +179,10 @@ impl DistributionState {
             }
             free -= take;
             let Some(new) = self.layers.get(&new_key).cloned() else { continue };
-            let whole = take == old.sum_insured_minor;
             if let Some(o) = self.layers.get_mut(old_key) {
                 o.matched_away_minor += take;
             }
-            let continued = if whole {
-                self.continue_exposure(ctx, old_key, &new_key, &new, today)
-            } else {
-                vec![]
-            };
+            let continued = self.continue_exposure(ctx, old_key, &new_key, &new, today, (take, amount));
             self.take_back_initial(ctx, &new, take, today);
             let mut books: BTreeMap<BookId, i64> = BTreeMap::new();
             for (book, share) in old.books_on(on) {
@@ -292,31 +287,115 @@ impl DistributionState {
         );
     }
 
-    /// The whole of a layer given up was matched: the clawback raised when
-    /// it went is reversed, to the parties who bore it, and its exposure
-    /// items carry on under the new layer on their original clock.
-    pub(crate) fn continue_exposure(&mut self, ctx: &mut Ctx, old: &str, new_key: &str, new: &LayerRecord, today: NaiveDate) -> Vec<String> {
+    /// Cover given up was matched, in whole or in part. The clawback raised
+    /// when it went is reversed in the same proportion, to the parties who
+    /// bore it, and that share of its exposure items carries on under the
+    /// new layer on its original clock. The rest of the clawback stands: that
+    /// part of the cover really was given up. Returns the items carried on.
+    pub(crate) fn continue_exposure(
+        &mut self,
+        ctx: &mut Ctx,
+        old: &str,
+        new_key: &str,
+        new: &LayerRecord,
+        today: NaiveDate,
+        matched: (i64, i64),
+    ) -> Vec<String> {
+        let (take, of) = matched;
+        if take <= 0 || of <= 0 {
+            return vec![];
+        }
+        let whole = take >= of;
+        let share = |amount: i64| if whole { amount } else { (amount as i128 * take as i128 / of as i128) as i64 };
         let items: Vec<(String, String, i64)> = self
             .exposures
             .values()
             .filter(|e| e.layer == old)
             .filter_map(|e| e.last_clawback.as_ref().map(|(r, amount)| (e.id.clone(), r.clone(), *amount)))
             .collect();
-        let mut references: Vec<&String> = items.iter().map(|(_, r, _)| r).collect();
+        let mut references: Vec<String> = items.iter().map(|(_, r, _)| r.clone()).collect();
+        references.sort();
         references.dedup();
+        let cause = format!("carried:{}:{}", old.replace('/', "."), self.seq);
         for reference in references {
-            self.reverse_allocation(ctx, reference, &format!("carried:{}", old.replace('/', ".")), today, Some(old));
-        }
-        for (id, _, amount) in &items {
-            if let Some(e) = self.exposures.get_mut(id) {
-                e.open = true;
-                e.clawed_minor -= amount;
-                e.last_clawback = None;
-                e.policy = new.policy.clone();
-                e.layer = new_key.to_string();
+            if whole {
+                self.reverse_allocation(ctx, &reference, &cause, today, Some(old));
+                continue;
             }
+            let Some(clawback) = self.allocations.get(&reference).filter(|a| a.reversed_by.is_none()).cloned() else {
+                continue;
+            };
+            let lines: Vec<AllocLine> = clawback
+                .lines
+                .iter()
+                .filter(|l| l.layer.as_deref() == Some(old))
+                .map(|l| AllocLine {
+                    amount_minor: -share(l.amount_minor),
+                    ..l.clone()
+                })
+                .filter(|l| l.amount_minor != 0)
+                .collect();
+            if lines.is_empty() {
+                continue;
+            }
+            let reference = format!("cr:{cause}:{}", self.allocations.len());
+            ctx.emit(Event::CommissionReversed {
+                reference: reference.clone(),
+                reverses: clawback.reference.clone(),
+            });
+            let partition = self.policies.get(&clawback.policy).map_or(clawback.partition, |p| p.partition);
+            self.record_allocation(
+                ctx,
+                Allocation {
+                    reference,
+                    partition,
+                    policy: clawback.policy.clone(),
+                    kind: "commission_reversed".into(),
+                    cause: cause.clone(),
+                    date: today,
+                    lines,
+                    reverses: None,
+                    exposures: vec![],
+                    reversed_by: None,
+                },
+            );
         }
-        items.into_iter().map(|(id, _, _)| id).collect()
+        let mut carried = vec![];
+        for (id, _, clawed_back) in &items {
+            if whole {
+                if let Some(e) = self.exposures.get_mut(id) {
+                    e.open = true;
+                    e.clawed_minor -= clawed_back;
+                    e.last_clawback = None;
+                    e.policy = new.policy.clone();
+                    e.layer = new_key.to_string();
+                }
+                carried.push(id.clone());
+                continue;
+            }
+            // Split the item: the matched share runs on under the new layer,
+            // the rest stays closed with the clawback that stands.
+            let Some(e) = self.exposures.get(id).cloned() else { continue };
+            let (amount, clawed, back) = (share(e.amount_minor), share(e.clawed_minor), share(*clawed_back));
+            let part = Exposure {
+                id: format!("{id}>{new_key}"),
+                policy: new.policy.clone(),
+                layer: new_key.to_string(),
+                amount_minor: amount,
+                clawed_minor: clawed - back,
+                open: true,
+                last_clawback: None,
+                ..e
+            };
+            if let Some(x) = self.exposures.get_mut(id) {
+                x.amount_minor -= amount;
+                x.clawed_minor -= clawed;
+                x.last_clawback = Some((x.last_clawback.clone().map(|(r, _)| r).unwrap_or_default(), clawed_back - back));
+            }
+            carried.push(part.id.clone());
+            self.exposures.insert(part.id.clone(), part);
+        }
+        carried
     }
 
     fn matched_layer(&self, key: &str) -> Result<(&LayerRecord, &ReplacementMatch), Reject> {

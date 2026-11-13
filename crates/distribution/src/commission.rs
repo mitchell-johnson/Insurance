@@ -437,7 +437,7 @@ impl DistributionState {
         if let Some(p) = self.policies.get_mut(policy) {
             p.layers.push(key.clone());
         }
-        self.continue_exposure(ctx, old, &key, &new, date);
+        self.continue_exposure(ctx, old, &key, &new, date, (1, 1));
     }
 
     /// Where an amount for a payee goes on a day: paid, or held and why.
