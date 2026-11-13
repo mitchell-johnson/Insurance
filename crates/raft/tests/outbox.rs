@@ -289,6 +289,9 @@ async fn a_modules_core_commands_are_carried_and_their_outcomes_reported() {
     // The investment ledger answers through the same door as every other question.
     let nothing = cluster.client.investment(0, &ic_core::invest::Question::Executable).await.unwrap();
     assert_eq!(nothing, ic_core::invest::Reply::Executable(vec![]));
+    // So does the loadings question: this policy was issued on standard terms.
+    let loadings = cluster.client.loadings(0, None, 100, None).await.unwrap();
+    assert_eq!((loadings.rows.len(), loadings.next), (0, None));
 
     // Refused by the core, unroutable, routed by policy, and a repeat of an earlier command.
     let mut refused = Cluster::envelope("unknown-caller", open());

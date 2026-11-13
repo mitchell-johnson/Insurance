@@ -170,3 +170,8 @@ The underwriting module decides the remedy on an approved case; the core carries
 - The conversation the notes ask for before a vulnerable customer changes a beneficiary is decided by servicing, which knows the customer. The core cannot see the marker, so it does not enforce the pause; it keeps the conversation's reference where one was held. Not built: the servicing pause itself (hand-over item 10).
 - Claims reads the nominees for the event date through `cover_facts`, after interests.
 - `IssuePolicy.continuation_of { policy, life }` records the scheme membership a continuation policy carries on from. Only caller `group-admin` may set it. The scheme may be on another partition, so the core records the link and does not check the scheme; scheme administration is trusted for it.
+
+## Loadings are read by question, not published (13 Nov 2026)
+
+- Loadings stay off events. Finance reads them with the partition query `Loadings { after, limit, as_at }` (`ClusterClient::loadings`), which walks policies in ID order, at most 500 a page, and returns each loaded layer with its dates and its loadings as stored. Loadings add, so a layer's total is their sum.
+- Not built: a caller check on the query. Partition queries carry no caller today (a policy read by number already returns its loadings), so who may ask is decided by network policy and whatever stands in front of the node. A per-caller check on queries is an open item for the core.
