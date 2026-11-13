@@ -423,6 +423,10 @@ struct Scripted {
     /// What each partition reports as its in-transit net, and whether a
     /// transfer is in flight.
     in_transit: Vec<(&'static str, bool)>,
+    /// What each partition reports as its claims offsets in transit, and
+    /// whether a claims message is still on its way. Empty: a partition
+    /// that reports nothing.
+    offsets: Vec<(&'static str, bool)>,
     /// What every pass over the unit orders reports.
     units: UnitPass,
     unit_passes: AtomicU32,
@@ -454,6 +458,8 @@ impl Steps for Scripted {
             breaks: vec![],
             transfer_in_transit: net.to_string(),
             transfer_in_flight: in_flight,
+            claims_offset_in_transit: self.offsets.get(usize::from(step.partition)).map(|o| o.0.to_string()).unwrap_or_default(),
+            claims_message_in_flight: self.offsets.get(usize::from(step.partition)).is_some_and(|o| o.1),
         })
     }
 
@@ -485,6 +491,7 @@ async fn money_stranded_between_partitions_is_a_break_and_endless_work_is_stuck(
     let scripted = |unfinished, in_transit| Scripted {
         unfinished,
         in_transit,
+        offsets: vec![],
         units: UnitPass { progressed: false, left: 0 },
         unit_passes: AtomicU32::new(0),
         published: AtomicU32::new(0),
@@ -514,6 +521,26 @@ async fn money_stranded_between_partitions_is_a_break_and_endless_work_is_stuck(
     assert_eq!(stranded.breaks.len(), 1);
     assert_eq!(stranded.breaks[0].check, "transfer_in_transit");
     assert!(stranded.breaks[0].detail.contains("-5000"), "{}", stranded.breaks[0].detail);
+
+    // A claim on partition 1 kept 80.00 back for a debt held on partition 0, and the holder
+    // never took it in: a break when no claims message is on its way, expected while one is,
+    // and a total nobody can read is a break of its own.
+    let offsets = |script: Vec<(&'static str, bool)>| {
+        let mut steps = scripted(0, vec![("0", false), ("0", false)]);
+        steps.offsets = script;
+        steps
+    };
+    let lost = run_end_of_day(&offsets(vec![("0", false), ("-8000", false)]), &input).await.unwrap();
+    assert_eq!(lost.breaks.len(), 1);
+    assert_eq!(lost.breaks[0].check, "claims_offset_in_transit");
+    assert!(lost.breaks[0].detail.contains("-8000"), "{}", lost.breaks[0].detail);
+    let carried = run_end_of_day(&offsets(vec![("0", false), ("-8000", true)]), &input).await.unwrap();
+    assert_eq!(carried.breaks, vec![]);
+    let settled = run_end_of_day(&offsets(vec![("8000", false), ("-8000", false)]), &input).await.unwrap();
+    assert_eq!(settled.breaks, vec![]);
+    let garbled = run_end_of_day(&offsets(vec![("0", false), ("eighty", false)]), &input).await.unwrap();
+    assert_eq!(garbled.breaks.len(), 1);
+    assert!(garbled.breaks[0].detail.contains("partition 1"), "{}", garbled.breaks[0].detail);
 
     // The same position mid-transfer is expected.
     let mid_transfer = run_end_of_day(&scripted(0, vec![("-5000", true), ("0", false)]), &input).await.unwrap();

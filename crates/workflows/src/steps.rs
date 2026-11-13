@@ -235,6 +235,8 @@ impl<S: RootSigner, W: WormStore> Steps for LedgerSteps<S, W> {
             breaks: view.breaks,
             transfer_in_transit: view.transfer_in_transit,
             transfer_in_flight: view.transfer_in_flight,
+            claims_offset_in_transit: view.claims_offset_in_transit,
+            claims_message_in_flight: view.claims_message_in_flight,
         })
     }
 

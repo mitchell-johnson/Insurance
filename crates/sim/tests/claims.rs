@@ -2352,6 +2352,15 @@ fn an_offset_recovers_an_overpayment_held_on_another_partition() {
     let l1 = &c.state(1).ledger;
     assert_eq!(l1.natural_balance(&accounts::benefit_payable(&b, NZD).id), 900_00);
     assert_eq!((transit(&c, 0), transit(&c, 1)), (0, -100_00), "kept back and on its way");
+    // While the message is on its way the day's reconciliation expects the money in transit.
+    // Were the message lost, the same balances would be a break no single partition can see.
+    clean(&c);
+    let on_its_way: Vec<_> = c.nodes.get_mut(&1).unwrap().messages.drain(..).collect();
+    let lost = c.reconcile();
+    assert_eq!(lost.len(), 1, "{lost:?}");
+    assert_eq!(lost[0].check, "claims_offset_in_transit");
+    assert!(lost[0].detail.contains("-10000"), "{}", lost[0].detail);
+    c.nodes.get_mut(&1).unwrap().messages.extend(on_its_way);
 
     while c.messages_in_flight() > 0 {
         c.relay_messages(|_| ic_sim::Delivery::Deliver);

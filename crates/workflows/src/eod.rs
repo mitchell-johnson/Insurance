@@ -103,6 +103,12 @@ pub struct PartitionCheck {
     /// Net of the in-transit accounts, as a decimal string.
     pub transfer_in_transit: String,
     pub transfer_in_flight: bool,
+    /// Net of the claims offsets in transit, as a decimal string. Empty
+    /// from a worker that predates the check, and read as nothing.
+    #[serde(default)]
+    pub claims_offset_in_transit: String,
+    #[serde(default)]
+    pub claims_message_in_flight: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,10 +214,23 @@ pub async fn run_end_of_day<S: Steps>(steps: &S, input: &EndOfDayInput) -> Resul
     let mut breaks = Vec::new();
     let mut in_transit: i128 = 0;
     let mut in_flight = false;
+    let mut offsets: i128 = 0;
+    let mut offsets_carried = false;
     for partition in 0..input.partitions {
         let check = steps.reconcile(PartitionStep { partition, closing }).await.map_err(EndOfDayError::Step)?;
         breaks.extend(check.breaks);
         in_flight |= check.transfer_in_flight;
+        offsets_carried |= check.claims_message_in_flight;
+        match check.claims_offset_in_transit.as_str() {
+            "" => {}
+            net => match net.parse::<i128>() {
+                Ok(net) => offsets += net,
+                Err(_) => breaks.push(BreakView {
+                    check: "claims_offset_in_transit".to_string(),
+                    detail: format!("partition {partition} reported an unreadable total of claims offsets in transit"),
+                }),
+            },
+        }
         match check.transfer_in_transit.parse::<i128>() {
             Ok(net) => in_transit += net,
             Err(_) => breaks.push(BreakView {
@@ -224,6 +243,12 @@ pub async fn run_end_of_day<S: Steps>(steps: &S, input: &EndOfDayInput) -> Resul
         breaks.push(BreakView {
             check: "transfer_in_transit".to_string(),
             detail: format!("in-transit accounts net to {in_transit} with no transfer in flight"),
+        });
+    }
+    if offsets != 0 && !offsets_carried {
+        breaks.push(BreakView {
+            check: "claims_offset_in_transit".to_string(),
+            detail: format!("claims offsets in transit net to {offsets} with no claims message in flight"),
         });
     }
     let published = steps

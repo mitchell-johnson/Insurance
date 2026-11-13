@@ -295,6 +295,8 @@ impl Host {
     }
 
     pub(crate) fn view(&self, member: &Node) -> EndOfDayView {
+        // Asked before the state is read: both take the machine's lock.
+        let claims_message_in_flight = member.machine.pending_messages().iter().any(|m| m.body.is_claims());
         member.machine.read(|s| EndOfDayView {
             partition: member.partition,
             business_date: s.business_date,
@@ -310,6 +312,8 @@ impl Host {
                 .collect(),
             transfer_in_transit: recon::control_totals(s).transfer_in_transit.to_string(),
             transfer_in_flight: s.policies.values().any(Policy::is_frozen),
+            claims_offset_in_transit: recon::control_totals(s).claims_offset_in_transit.to_string(),
+            claims_message_in_flight,
         })
     }
 

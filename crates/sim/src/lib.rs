@@ -301,6 +301,16 @@ impl<L: OrderedLog> Cluster<L> {
                 detail: format!("in-transit accounts net to {in_transit} with no transfer in flight"),
             });
         }
+        // An offset kept back on one partition for a debt held on another
+        // nets to zero once the claims messages that carry it have arrived.
+        let offsets: i128 = self.nodes.values().map(|n| recon::control_totals(n.state()).claims_offset_in_transit).sum();
+        let carried = self.nodes.values().any(|n| n.messages.iter().any(|m| m.body.is_claims()));
+        if offsets != 0 && !carried {
+            breaks.push(Break {
+                check: "claims_offset_in_transit",
+                detail: format!("claims offsets in transit net to {offsets} with no claims message in flight"),
+            });
+        }
         breaks
     }
 }

@@ -789,6 +789,11 @@ pub enum MessageBody {
 impl MessageBody {
     /// The command the receiving partition applies, and the caller the
     /// relay delivers it as. One place, so every relay delivers alike.
+    /// A message between the claims held on two partitions.
+    pub fn is_claims(&self) -> bool {
+        matches!(self, MessageBody::Claims(_))
+    }
+
     pub fn into_delivery(self) -> (&'static str, crate::Command) {
         match self {
             MessageBody::TransferRecord(record) => ("transfer", crate::Command::LandTransfer { record }),

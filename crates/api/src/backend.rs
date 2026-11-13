@@ -161,6 +161,11 @@ impl Gateway {
         if in_transit != 0 && !views.iter().any(|v| v.transfer_in_flight) {
             breaks.push(json!({ "check": "transfer_in_transit", "detail": format!("in-transit accounts net to {in_transit} with no transfer in flight") }));
         }
+        // The same for money a claim kept back for a debt on another partition.
+        let offsets: i128 = views.iter().filter_map(|v| v.claims_offset_in_transit.parse::<i128>().ok()).sum();
+        if offsets != 0 && !views.iter().any(|v| v.claims_message_in_flight) {
+            breaks.push(json!({ "check": "claims_offset_in_transit", "detail": format!("claims offsets in transit net to {offsets} with no claims message in flight") }));
+        }
         Ok(Reconciliation {
             business_date: views.iter().filter_map(|v| v.business_date).min(),
             breaks,

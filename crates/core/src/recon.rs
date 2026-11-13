@@ -22,6 +22,9 @@ pub struct ControlTotals {
     pub policy_suspense_minor: i128,
     pub earned_premium_fine: i128,
     pub transfer_in_transit: i128,
+    /// Money a claim on one partition kept back for a debt held on another,
+    /// until the holder has taken it in.
+    pub claims_offset_in_transit: i128,
 }
 
 pub fn control_totals(state: &CoreState) -> ControlTotals {
@@ -31,6 +34,7 @@ pub fn control_totals(state: &CoreState) -> ControlTotals {
         policy_suspense_minor: -state.ledger.role_total(role::POLICY_SUSPENSE),
         earned_premium_fine: -state.ledger.role_total(role::EARNED_PREMIUM),
         transfer_in_transit: state.ledger.role_total(role::TRANSFER_IN_TRANSIT),
+        claims_offset_in_transit: state.ledger.role_total(role::CLAIMS_OFFSET_IN_TRANSIT),
     }
 }
 

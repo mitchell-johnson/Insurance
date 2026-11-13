@@ -49,6 +49,12 @@ pub struct EndOfDayView {
     pub transfer_in_transit: String,
     /// A policy is frozen mid-transfer on this partition.
     pub transfer_in_flight: bool,
+    /// Net of the claims offsets in transit, as a decimal string.
+    #[serde(default)]
+    pub claims_offset_in_transit: String,
+    /// A claims message from this partition has not been delivered yet.
+    #[serde(default)]
+    pub claims_message_in_flight: bool,
 }
 
 /// A run of a partition's events, as its leader holds them.
