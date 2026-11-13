@@ -4,6 +4,12 @@
 # write-once records container, and the event hub reinsurance operations
 # are alerted from. It holds no state.
 #
+# It also serves the API reinsurers read their own statements and listings
+# from (docs/reinsurance.md, "Reinsurers"), reached only through the ingress
+# controller, which terminates TLS. Each reinsurer signs in with its own
+# Entra client application; IC_REINSURANCE_API_CLIENTS maps each client ID
+# to the reinsurer it is.
+#
 # It runs under an identity of its own, which may write to that container,
 # send to that hub and read the cluster token. Set the values marked REPLACE
 # from the outputs of infra/reinsurance.bicep and infra/main.bicep.
@@ -76,6 +82,34 @@ spec:
             # reinsurers to collect.
             - name: IC_REINSURANCE_DROPS_ENDPOINT
               value: REPLACE-dropsBlobEndpoint
+            # The reinsurer API. Set, the other three are required. To serve
+            # no API, leave all four out with the ports, probes, Service
+            # and NetworkPolicy.
+            - name: IC_REINSURANCE_API_LISTEN
+              value: "0.0.0.0:8096"
+            - name: IC_ENTRA_TENANT
+              value: REPLACE-tenantId
+            - name: IC_REINSURANCE_API_AUDIENCE
+              value: REPLACE-reinsurer-api-app-id-uri
+            # <client id>=<reinsurer>, comma separated, one entry for each
+            # reinsurer's own app registration.
+            - name: IC_REINSURANCE_API_CLIENTS
+              value: REPLACE-reinsurer-clients
+          ports:
+            - name: http
+              containerPort: 8096
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 4
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
           resources:
             requests:
               cpu: 50m
@@ -108,3 +142,34 @@ spec:
   selector:
     matchLabels:
       app: ic-reinsurance
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-reinsurance-api
+spec:
+  selector:
+    app: ic-reinsurance
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# The reinsurer API hears from the ingress controller's namespace and from
+# nobody else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-reinsurance-api
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-reinsurance
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              insurance-core/ingress: "true"
+      ports:
+        - port: 8096
