@@ -62,6 +62,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PRD-007 | full | `finance/tests/dry_run.rs::a_proposed_table_is_priced_against_the_book_in_force`<br>`finance/tests/dry_run.rs::the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves` |
 | PRD-008 | part | `api/tests/api.rs::a_quote_prices_without_writing_anything` |
 | PRD-010 | full | `sim/tests/scenarios.rs::health_premium_splits_gst_to_the_tax_account`<br>`product/tests/products.rs::health_premium_carries_gst` |
+| PRD-011 | part | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched` |
 | PRD-012 | part | `product/tests/products.rs::rating_refuses_what_it_cannot_price` |
 
 ## BIL Billing and earning
@@ -295,7 +296,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
 | GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send`<br>`group/tests/excess.rs::the_employers_view_of_a_member_shows_cover_and_never_health` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
-| GRP-035 | full | `underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted` |
+| GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
 ## HLT Composable health product

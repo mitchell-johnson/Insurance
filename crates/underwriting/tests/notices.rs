@@ -53,6 +53,8 @@ async fn a_staff_notice_is_published_once_by_id_and_without_its_reasons() {
     let staff = Notices {
         staff: feed.clone(),
         letters: NoLetters,
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         clock: chrono::Utc::now,
     };
     let cases = [
@@ -85,8 +87,8 @@ async fn a_staff_notice_is_published_once_by_id_and_without_its_reasons() {
     assert!(feed.sent.lock().unwrap().iter().all(|(_, _, body)| !body.to_string().contains("reason")));
 }
 
-/// Purpose: a letter to a customer or an adviser, and an evidence request, are not published to
-/// the staff hub: they are parked with the reason that their receiver is missing. A hub that is
+/// Purpose: a letter to a customer or an adviser is not published to the staff hub: with no
+/// documents module it is parked with the reason that its receiver is missing. A hub that is
 /// busy or cannot be reached stops the pass as unavailable; a hub that is missing or refuses the
 /// driver's identity parks the notice with the status.
 /// Why it matters: a decline letter on the staff hub would show a customer's outcome to staff
@@ -100,6 +102,8 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
     let staff = Notices {
         staff: feed.clone(),
         letters: NoLetters,
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         clock: chrono::Utc::now,
     };
     for to in [Recipient::Party { party: "party-1".into() }, Recipient::Adviser { adviser: "a1".into() }] {
@@ -108,10 +112,6 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
             Ok(Some("correspondence is not connected to underwriting".into()))
         );
     }
-    assert_eq!(
-        staff.forward(2, &Effect::ChaseEvidence { request: "E1".into() }).await,
-        Ok(Some("no evidence provider is connected".into()))
-    );
     assert!(feed.sent.lock().unwrap().is_empty());
 
     let escalated = notice(Recipient::UnderwritingManager, NoticeKind::CaseEscalated);
@@ -122,6 +122,8 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
                 ..Feed::default()
             },
             letters: NoLetters,
+            evidence: Feed::default(),
+            delegates: Feed::default(),
             clock: chrono::Utc::now,
         };
         let answer = down.forward(3, &escalated).await;
@@ -137,6 +139,8 @@ async fn letters_are_parked_and_a_hub_that_is_down_is_tried_again() {
                 ..Feed::default()
             },
             letters: NoLetters,
+            evidence: Feed::default(),
+            delegates: Feed::default(),
             clock: chrono::Utc::now,
         };
         assert_eq!(
@@ -192,6 +196,8 @@ async fn a_letter_is_requested_from_documents_under_a_stable_request() {
     let notices = Notices {
         staff: Feed::default(),
         letters: documents.clone(),
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         clock: at_noon,
     };
     let declined = notice(Recipient::Party { party: "PTY-L1".into() }, NoticeKind::Declined);
@@ -207,6 +213,8 @@ async fn a_letter_is_requested_from_documents_under_a_stable_request() {
 
     let refusing = Notices {
         staff: Feed::default(),
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         letters: Documents {
             refuse: Some(("clinical_to_adviser", "not to an adviser")),
             ..Documents::default()
@@ -220,6 +228,8 @@ async fn a_letter_is_requested_from_documents_under_a_stable_request() {
     );
     let away = Notices {
         staff: Feed::default(),
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         letters: Documents {
             down: true,
             ..Documents::default()
@@ -230,6 +240,8 @@ async fn a_letter_is_requested_from_documents_under_a_stable_request() {
     let none = Notices {
         staff: Feed::default(),
         letters: NoLetters,
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         clock: at_noon,
     };
     assert_eq!(
@@ -272,6 +284,8 @@ async fn documents_accepts_every_letter_underwriting_sends() {
     let notices = Notices {
         staff: Feed::default(),
         letters: documents.clone(),
+        evidence: Feed::default(),
+        delegates: Feed::default(),
         clock: at_noon,
     };
     let to_party = [
@@ -300,4 +314,76 @@ async fn documents_accepts_every_letter_underwriting_sends() {
         "{parked:?}"
     );
     assert_eq!(documents.state.lock().unwrap().1, 16);
+}
+
+/// Purpose: an evidence order (request, chase, cancel) is published to the evidence hub under an
+/// ID from its outbox number, carrying the request and, for a new order, the kind and the
+/// party, and nothing else; a request for a delegate's file goes to the delegates hub; neither
+/// reaches the staff hub; and a hub that refuses the driver parks the order with its status.
+/// Why it matters: the provider's adapter acts on these orders, so a lost one leaves a case
+/// waiting for a report nobody asked for. The hubs are read by outside parties' adapters, so
+/// an order must not carry a proposal's reasons or answers.
+#[tokio::test]
+async fn evidence_orders_and_delegate_requests_go_to_their_own_hubs() {
+    use ic_underwriting::evidence::EvidenceKind;
+    use ic_underwriting::notices::order_id;
+    let (staff, evidence, delegates) = (Feed::default(), Feed::default(), Feed::default());
+    let notices = Notices {
+        staff: staff.clone(),
+        evidence: evidence.clone(),
+        delegates: delegates.clone(),
+        letters: NoLetters,
+        clock: chrono::Utc::now,
+    };
+    let orders = [
+        Effect::RequestEvidence {
+            request: "E1".into(),
+            kind: EvidenceKind::GpReport,
+            party: "PTY-1".into(),
+        },
+        Effect::ChaseEvidence { request: "E1".into() },
+        Effect::CancelEvidence { request: "E1".into() },
+    ];
+    for (seq, order) in (60..).zip(&orders) {
+        assert_eq!(notices.forward(seq, order).await, Ok(None));
+    }
+    assert_eq!(
+        evidence.sent.lock().unwrap().clone(),
+        vec![
+            (
+                order_id(60),
+                "evidence_request".into(),
+                json!({"order": "request", "request": "E1", "kind": "gp_report", "party": "PTY-1"})
+            ),
+            (order_id(61), "evidence_chase".into(), json!({"order": "chase", "request": "E1"})),
+            (order_id(62), "evidence_cancel".into(), json!({"order": "cancel", "request": "E1"})),
+        ]
+    );
+    let file = Effect::RequestDelegateFile {
+        proposal: "P1".into(),
+        life: "L1".into(),
+        delegate_ref: "D-9".into(),
+    };
+    assert_eq!(notices.forward(63, &file).await, Ok(None));
+    assert_eq!(
+        delegates.sent.lock().unwrap().clone(),
+        vec![(
+            order_id(63),
+            "delegate_file_request".into(),
+            json!({"proposal": "P1", "life": "L1", "delegate_ref": "D-9"})
+        )]
+    );
+    assert!(staff.sent.lock().unwrap().is_empty());
+
+    let refusing = Notices {
+        evidence: Feed {
+            down: Some(403),
+            ..Feed::default()
+        },
+        ..notices.clone()
+    };
+    assert_eq!(
+        refusing.forward(64, &orders[1]).await,
+        Ok(Some("the evidence hub refused the order: 403: no".into()))
+    );
 }

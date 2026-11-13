@@ -273,3 +273,70 @@ fn a_loading_moves_to_the_member_through_underwritings_reoffer() {
     assert_eq!(h.excess_layers("E004").len(), 2);
     assert_eq!(h.outcomes.len(), 2);
 }
+
+/// Purpose: a scheme taken over from a previous insurer brings its members across on the
+/// takeover terms: someone employed before the takeover joins although their waiting period
+/// has not run, someone who started on the day waits theirs out, someone not actively at work (who
+/// stays with the previous insurer) is refused by name of the rule, and an executive's cover
+/// above the automatic amount, no more than the previous insurer had accepted, is put in
+/// place by the real underwriting module on standard terms under the takeover reason code
+/// without the member being asked a single health question.
+/// Why it matters: an employer changes insurer on the promise that nobody loses cover they
+/// had. Asking a long-covered member for medical evidence breaks that promise, and taking
+/// on a member already off sick takes on a claim that belongs to the previous insurer.
+#[test]
+fn a_scheme_taken_over_keeps_members_cover_without_new_evidence() {
+    use ic_group::terms::TakeoverTerms;
+
+    let mut t = terms();
+    t.eligibility.waiting_days = 90;
+    t.eligibility.actively_at_work = true;
+    t.takeover = Some(TakeoverTerms {
+        previous_insurer: "Southern Mutual".into(),
+        effective: d(2027, 11, 1),
+        waive_waiting_period: true,
+        honour_excess_up_to_minor: Some(250_000_00),
+        reason_code: "takeover-2027".into(),
+    });
+    let mut h = Harness::new(t);
+    let with = |category: &str, salary, change: &dyn Fn(&mut ic_group::record::MemberAttrs)| {
+        let mut a = attrs(category, salary, "akl");
+        change(&mut a);
+        a
+    };
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", with("staff", 60_000_00, &|a| a.employment_start = Some(d(2027, 10, 20)))),
+            row(3, "E003", with("staff", 60_000_00, &|a| a.employment_start = Some(d(2027, 11, 1)))),
+            row(4, "E004", with("executive", 240_000_00, &|a| a.employment_start = Some(d(2027, 10, 20)))),
+            row(5, "E005", with("staff", 60_000_00, &|a| a.actively_at_work = Some(false))),
+        ],
+    );
+    assert_eq!(h.core_lives(), vec!["E001", "E002", "E004"]);
+    let refused: Vec<(Option<&str>, &str)> = h.scheme().files["f1"]
+        .rejected
+        .iter()
+        .map(|r| (r.employee_id.as_deref(), r.code.as_str()))
+        .collect();
+    assert_eq!(refused, vec![(Some("E005"), "not_actively_at_work")]);
+    // The new starter joins when their own waiting period has run.
+    let waiting: Vec<_> = h.scheme().scheduled.keys().map(|(date, _)| *date).collect();
+    assert_eq!(waiting, vec![d(2028, 1, 30)]);
+
+    // The executive's excess is within what the previous insurer had accepted.
+    let request = h.requests[0].clone();
+    assert_eq!((request.excess_minor, request.honour_without_evidence_minor), (210_000_00, Some(250_000_00)));
+    let key = format!("grp-uw:{SCHEME}:{}", request.case);
+    let mut w = uw::World::new();
+    let opened = deliver(&mut w, |at, today| underwriting_envelope(&key, at, today, &request).unwrap()).unwrap();
+    let life = w.p(&key).lives.values().next().unwrap();
+    assert!(life.disclosures.is_empty(), "the member is asked nothing");
+    assert!(life.decisions[0].reasons.contains("RC-0975") && life.decisions[0].all_standard());
+    w.automatic(&opened);
+    assert_eq!(carry_answers(&w, &mut h), 1);
+    assert_eq!(h.scheme().cases[&request.case].status, CaseStatus::Accepted);
+    assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
+}

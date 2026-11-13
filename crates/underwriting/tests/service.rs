@@ -52,6 +52,8 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
             sweep_page: 200,
             event_hubs: "https://hubs.example".into(),
             event_hub: "underwriting-notices".into(),
+            evidence_hub: "underwriting-evidence".into(),
+            delegates_hub: "underwriting-delegates".into(),
         }
     );
     let set = from(&[
