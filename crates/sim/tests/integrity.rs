@@ -243,6 +243,13 @@ fn the_chart_of_accounts_is_frozen() {
             role::LEVY_PAYABLE,
         ),
         (
+            accounts::withholding_tax_payable("rwt", NZD),
+            "int/withholding_tax_payable/rwt/NZD",
+            &minor,
+            AccountClass::Liability,
+            role::WITHHOLDING_TAX_PAYABLE,
+        ),
+        (
             accounts::lapse_write_off("term-life", NZD),
             "int/lapse_write_off/term-life/NZD",
             &fine,

@@ -53,6 +53,7 @@ CLOSE = close_config(
     tax = [
         tax_account("2200", "GST payable", ["gst"]),
         tax_account("2210", "Levies payable", ["levy"]),
+        tax_account("2220", "Withholding tax payable", ["withholding_rwt", "withholding_benefit"]),
     ],
     holidays = [
         # 2026 (from the first close this configuration serves)

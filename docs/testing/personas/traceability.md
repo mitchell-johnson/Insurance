@@ -176,7 +176,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
-| UW-020 | part | `underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
+| UW-020 | full | `underwriting/tests/driver.rs::a_change_of_occupation_reaches_the_core_with_the_new_class`<br>`underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
 | UW-021 | full | `underwriting/tests/special.rs::a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy`<br>`claims/tests/suite/decisions.rs::a_non_disclosure_review_holds_the_admission`<br>`sim/tests/nondisclosure.rs::an_avoidance_with_refund_undoes_every_premium_since_inception` |
 | UW-022 | full | `underwriting/tests/config.rs::question_sets_follow_the_disclosure_regime_of_the_contract_date` |
 | UW-023 | full | `underwriting/tests/libraries.rs::backtest_shows_how_a_rule_change_shifts_outcomes`<br>`underwriting/tests/config.rs::a_changed_rule_set_needs_its_backtest_and_its_references` |
