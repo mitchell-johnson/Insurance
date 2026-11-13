@@ -108,6 +108,11 @@ pub struct CoverFacts {
     /// shell declares one. Absent: the cover's limits count on their own.
     #[serde(default)]
     pub shared_counter: Option<String>,
+    /// Whether the policy's product waives premium while a benefit is paid
+    /// on this cover. Absent: the product does not say, and the owner reads
+    /// the wording.
+    #[serde(default)]
+    pub premium_waiver: Option<bool>,
 }
 
 /// The product setting `benefit_while_imprisoned`.
@@ -198,6 +203,11 @@ pub enum Instruction {
         /// core reverses it in its own entry and pays the rest.
         #[serde(default)]
         interest_declined_minor: i64,
+        /// Resident withholding tax on the interest paid, at the payee's
+        /// rate from the customer master: kept back in its own entry and
+        /// owed to the revenue authority.
+        #[serde(default)]
+        interest_withheld_minor: i64,
         /// Part of the payment kept back against an overpayment the payee
         /// owes: a provider's billing error recovered from its next run.
         #[serde(default)]
@@ -217,6 +227,10 @@ pub enum Instruction {
         payee: String,
         /// This was the last period: close the claim in the same step.
         close: bool,
+        /// Tax withheld from this period's benefit, where the benefit is
+        /// taxable in the payee's hands: kept back in its own entry.
+        #[serde(default)]
+        tax_withheld_minor: i64,
     },
     /// A payment failed or came back: the money returns to benefit payable.
     PaymentReturned { claim: String, policy: String, payment_ref: String },

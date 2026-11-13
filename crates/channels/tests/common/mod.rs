@@ -9,6 +9,7 @@ pub mod customers;
 pub mod documents;
 pub mod finance;
 pub mod group;
+pub mod group_module;
 pub mod intake;
 pub mod payments;
 pub mod pricing;

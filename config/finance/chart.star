@@ -37,6 +37,7 @@ CHART = chart(
         account("2120", "Claim reserves (case estimates)", "liability", control = True, roles = ["claim_reserve"]),
         account("2200", "GST payable", "liability", control = True, roles = ["gst_payable"]),
         account("2210", "Levies payable", "liability", control = True, roles = ["levy_payable"]),
+        account("2220", "Withholding tax payable", "liability", control = True, roles = ["withholding_tax_payable"]),
         account("2300", "Policyholder unit accounts", "liability", control = True, roles = ["unit_account"]),
         account("2310", "Fund cash positions", "liability", control = True, roles = ["fund_cash_position"]),
         account("2400", "Policy liabilities (actuarial)", "liability"),

@@ -190,6 +190,43 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
     await p.locator("#tb-out").getByText("6500").first().waitFor();
   } });
+  await visit(browser, "/payments", { subject: "sub-paycmp" }, { expectStatus: [409], run: async (p) => {
+    // Compliance sees the payer cases; clearing one that is not open is refused in plain words.
+    await p.locator("#aml").getByText("No open cases.").waitFor();
+    await p.fill("#aml-case", "c1"); await p.fill("#aml-note", "a parent pays");
+    await p.locator("#aml-form button").click();
+    await p.locator("#aml-msg").getByText(/case/i).waitFor();
+  } });
+  await visit(browser, "/group", { subject: "sub-grpview" }, { run: async (p) => {
+    // A reader sees the queue but is offered nothing to act with.
+    await p.locator("#ex").getByText("possible match").waitFor();
+    if (await p.locator("#rm-form").isVisible()) throw new Error("a reader was offered a decision");
+  } });
+  await visit(browser, "/group", { subject: "sub-grp1" }, { run: async (p) => {
+    // Staff decide the possible match, and try a mapping without storing it.
+    await p.locator("#ex").getByText("possible match").waitFor();
+    await p.fill("#rm-scheme", "harbour"); await p.fill("#rm-emp", "E002"); await p.fill("#rm-party", "party-x");
+    await p.locator("#rm-form button").click();
+    await p.locator("#rm-msg").getByText("Recorded.").waitFor();
+    await p.locator("#ex-form button").click();
+    await p.locator("#ex").getByText("Nothing is waiting.").waitFor();
+    await p.fill("#mp-scheme", "harbour");
+    await p.getByRole("button", { name: "Show the mappings in use" }).click();
+    await p.locator("#mp").getByText("harbour-freight").first().waitFor();
+    await p.fill("#mp-sample", "Emp No\nE001\nE003\n");
+    await p.locator("#mp-try").click();
+    await p.locator("#mp-msg").getByText("Nothing was stored.").waitFor();
+  } });
+  await visit(browser, "/finance", { subject: "sub-gllead" }, { expectStatus: [409], run: async (p) => {
+    // The lead sorts policies into accounting groups, and is told plainly why a cut-over total is refused.
+    await p.getByRole("tab", { name: "Aged items and set-up" }).click();
+    await p.locator("#ag-classify").click();
+    await sees(p, "Classified.");
+    await p.fill("#co-account", "1999"); await p.fill("#co-currency", "NZD");
+    await p.fill("#co-total", "100000"); await p.fill("#co-evidence", "legacy TB");
+    await p.locator("#co-send").click();
+    await sees(p, "not a migration control account");
+  } });
   await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
     await sees(p, "You act as cl-lead");
     await p.selectOption("#a-command", "notify");

@@ -47,6 +47,12 @@
 <section><h2>Collections held for a conversation</h2><div id="conv"></div></section>
 <section><h2>Region readiness</h2><div id="ready"></div></section>
 
+<section class="compliance" hidden><h2>Premium paid by someone else</h2><p class="muted">Cases where a premium came from someone other than the policy owner, oldest first. Clear one by naming the relationship recorded in the customer master, so it never fires again for that payer and owner; without one it is cleared for this month only.</p>
+<div id="aml"></div>
+<form id="aml-form"><div class="row"><div><label for="aml-case">Case</label><input id="aml-case" required></div>
+<div><label for="aml-rel">Relationship in the customer master, as party/id (optional)</label><input id="aml-rel"></div>
+<div><label for="aml-note">Why it is explained</label><input id="aml-note" required></div><button>Clear</button></div></form><div id="aml-msg" aria-live="polite"></div></section>
+
 <section id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
 <form id="raw-form"><textarea id="raw-cmd" rows="5" required></textarea><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
@@ -158,6 +164,16 @@ async function showRec() {
     (book.outstanding || []).length ? table(["Reference", "Amount", "Days"], book.outstanding.map((o) => [o.reference, money(o.amount_minor), o.age_days])) : h("p", { class: "muted" }, "Nothing."));
 }
 $("rec-form").addEventListener("submit", run($("rec-msg"), showRec));
+async function showPayerCases() {
+  const cases = await ask("payer_cases");
+  put($("aml"), cases.length ? table(["Case", "Detail"], cases.map((c) => [c.case, JSON.stringify(c.detail)])) : h("p", { class: "muted" }, "No open cases."));
+}
+$("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
+  const relationship = $("aml-rel").value.trim();
+  await send({ type: "clear_payer", case: $("aml-case").value.trim(), note: $("aml-note").value.trim(), ...(relationship ? { relationship } : {}) });
+  await showPayerCases();
+  return "Cleared.";
+}));
 $("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
 
 signIn(R).then(async () => {
@@ -165,6 +181,8 @@ signIn(R).then(async () => {
   $("me").textContent = `You are ${me.staff}: ${(me.roles || []).map(words).join(", ") || "view only"}.`;
   document.querySelectorAll(".maker").forEach((e) => { e.hidden = !has("maker"); });
   $("raw").hidden = !(me.roles || []).length;
+  document.querySelectorAll(".compliance").forEach((e) => { e.hidden = !has("compliance"); });
+  if (has("compliance")) await showPayerCases();
   await Promise.all([showWaiting(), showRuns(), showExceptions()]);
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});

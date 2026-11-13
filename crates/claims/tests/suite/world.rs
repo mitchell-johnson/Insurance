@@ -35,6 +35,7 @@ pub fn rules() -> Rules {
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,
+        DecisionKind::FuneralAdvance,
     ];
     Rules {
         version: 1,
@@ -240,6 +241,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         reduced_by: vec![],
         benefit_while_imprisoned: Default::default(),
         shared_counter: None,
+        premium_waiver: None,
     }
 }
 

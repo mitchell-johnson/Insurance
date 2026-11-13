@@ -5,8 +5,10 @@
 # box), ic-worker (the end-of-day worker) and ic-admin (the operator's
 # command). The deployment chooses the command.
 
-# --- build ------------------------------------------------------------------
-FROM rust:1.97-bookworm AS build
+# --- source -----------------------------------------------------------------
+# The toolchain and the source, shared by the build and the test stages, so
+# that running the tests does not first need the release build.
+FROM rust:1.97-bookworm AS source
 WORKDIR /src
 # clang for the Starlark and crypto builds. The Temporal SDK needs protoc and
 # the well-known .proto files, which Debian ships in libprotobuf-dev.
@@ -14,12 +16,21 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends clang protobuf-compiler libprotobuf-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
+# How many crates compile at once. Left empty, cargo uses every core, which
+# needs more memory than a laptop's Docker machine may have (7.7 GiB runs
+# out at eight jobs; three fit). Pass `--build-arg CARGO_BUILD_JOBS=3` there.
+ARG CARGO_BUILD_JOBS=
+
+# --- build ------------------------------------------------------------------
+FROM source AS build
+ARG CARGO_BUILD_JOBS
 # The profile the binaries are built in. `release` is what ships. CI's
 # failure drill passes `drill` (see Cargo.toml).
 ARG CARGO_PROFILE=release
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --profile "$CARGO_PROFILE" --workspace --locked \
+    if [ -n "$CARGO_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS; else unset CARGO_BUILD_JOBS; fi \
+    && cargo build --profile "$CARGO_PROFILE" --workspace --locked \
     && mkdir -p /out/bin /out/state/data /out/state/cold /out/state/roots \
     && find "target/$CARGO_PROFILE" -maxdepth 1 -type f -executable -name 'ic-*' -exec cp {} /out/bin/ \;
 
@@ -36,13 +47,15 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 # profile (thin LTO, one codegen unit) needs several gigabytes to link each
 # test binary, more than a laptop's Docker machine has, and the suite does
 # not depend on optimisation.
-FROM build AS test
+FROM source AS test
+ARG CARGO_BUILD_JOBS
 ARG IC_SKIP_TEMPORAL_TESTS=1
 ARG IC_TEST_TEMPORAL_ADDRESS=
 ENV IC_SKIP_TEMPORAL_TESTS=${IC_SKIP_TEMPORAL_TESTS}
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
     if [ -n "$IC_TEST_TEMPORAL_ADDRESS" ]; then export IC_TEST_TEMPORAL_ADDRESS; else unset IC_TEST_TEMPORAL_ADDRESS; fi \
+    && if [ -n "$CARGO_BUILD_JOBS" ]; then export CARGO_BUILD_JOBS; else unset CARGO_BUILD_JOBS; fi \
     && cargo fmt --all --check \
     && cargo clippy --workspace --all-targets --locked -- -D warnings \
     && cargo test --workspace --locked

@@ -473,6 +473,7 @@ fn a_layer_underwriting_rewrote_carries_its_commission_on() {
     let (a_co, fap_one) = (w.payable("a-co"), w.payable("fap-one"));
     let before = w.events.len();
     let command = CoreCommand::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+        occupation_class: None,
         policy: policy.clone(),
         cover: "life".into(),
         life: ic_core::LifeId("life-1".into()),
@@ -677,4 +678,89 @@ fn two_covers_given_up_one_after_the_other_are_matched_to_the_same_new_layer() {
     );
     assert_eq!(m.books.iter().map(|(_, a)| *a).sum::<i64>(), 700_000_00);
     w.assert_reconciled();
+}
+
+/// Purpose: finance's conduct measures are fed one fact for each replacement the module
+/// declares or matches, and one for each match a dispute overturns, dated the business day
+/// it happened, with the product and, for an overturn, the date of the match it undoes. The
+/// facts are asked for by date, oldest first, under IDs that never change, and the question
+/// travels as JSON in the shape the close driver sends it.
+/// Why it matters: the replacement rate on return line C9 is a regulatory figure. A fact
+/// counted twice or missed misstates it, and an overturn netted silently against the match
+/// would hide from the regulator how often the rule is wrong.
+#[test]
+fn every_replacement_and_overturn_is_a_conduct_fact_for_finance() {
+    let (mut w, old, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    cancel(&mut w, &old);
+    w.days(5);
+    let new = w.issue_for(2, PERSON, 500_000_00);
+    w.write(&new, "life", 1, "eng-b-two", "b-at-fap-two", 1_200_00).unwrap();
+    w.sync();
+    let matched_on = w.dist.layers[&layer_of(&new)].replacement.as_ref().unwrap().on;
+    assert_eq!(w.dist.today, Some(matched_on), "dated the business day it was matched");
+    let product = w.dist.policies[&new].product_code.clone();
+    let key = layer_of(&new);
+    let facts = |w: &World, from, to| ask(&w.dist, Question::ConductFacts { from, to }).unwrap();
+    assert_eq!(
+        facts(&w, matched_on, matched_on),
+        serde_json::json!([{
+            "id": format!("{key}/replacement:0"),
+            "measure": "replacement_written",
+            "date": matched_on,
+            "product": product,
+            "relates_to": null,
+        }])
+    );
+
+    w.days(3);
+    let command = Command::DisputeReplacement {
+        policy: new.clone(),
+        cover: "life".into(),
+        layer: 1,
+        reference: "d-1".into(),
+        adviser: None,
+    };
+    w.send(module("new-business"), command).unwrap();
+    let command = Command::DecideReplacement {
+        policy: new.clone(),
+        cover: "life".into(),
+        layer: 1,
+        replacement: false,
+    };
+    w.send(compliance(), command).unwrap();
+    let overturned_on = w.dist.today.unwrap();
+    let all = facts(&w, matched_on, overturned_on);
+    let rows = all.as_array().unwrap();
+    assert_eq!(rows.len(), 2, "the match and its overturn, never netted: {all}");
+    assert_eq!(rows[1]["id"], format!("{key}/overturned:1"));
+    assert_eq!(rows[1]["measure"], "replacement_overturned");
+    assert_eq!(rows[1]["date"], serde_json::json!(overturned_on));
+    assert_eq!(rows[1]["relates_to"], serde_json::json!(matched_on));
+    assert_eq!(facts(&w, overturned_on, overturned_on).as_array().unwrap().len(), 1, "asked by date");
+    assert_eq!(facts(&w, matched_on, overturned_on), all, "the same facts every time they are asked");
+
+    // A declared replacement is a fact too, once: writing the layer again is refused.
+    let declared = w.issue_for(3, "party-00000002", 300_000_00);
+    for attempt in 0..2 {
+        let command = Command::WriteLayer(Box::new(ic_distribution::state::WriteLayer {
+            policy: declared.clone(),
+            cover: "life".into(),
+            layer: 1,
+            writing: vec![(EngagementId::from("eng-a-one"), ic_distribution::rules::WHOLE)],
+            books: vec![(BookId::from("a-at-fap-one"), ic_distribution::rules::WHOLE)],
+            schedule: "standard".into(),
+            option: "upfront".into(),
+            annual_premium_minor: 900_00,
+            replacement: true,
+        }));
+        let sent = w.send(module("new-business"), command);
+        assert_eq!(sent.is_ok(), attempt == 0, "{sent:?}");
+    }
+    let today = w.dist.today.unwrap();
+    let wire: Question = serde_json::from_value(serde_json::json!({"conduct_facts": {"from": today, "to": today}})).unwrap();
+    let rows = ask(&w.dist, wire).unwrap();
+    let written: Vec<_> = rows.as_array().unwrap().iter().filter(|r| r["measure"] == "replacement_written").collect();
+    assert_eq!(written.len(), 1, "{rows}");
+    assert_eq!(written[0]["id"], format!("{}/replacement:0", layer_of(&declared)));
 }

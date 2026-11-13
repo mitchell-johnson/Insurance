@@ -91,6 +91,11 @@ impl DistributionState {
             replaced: replaced.iter().map(|(k, _)| k.clone()).collect(),
         });
         if let Some(l) = self.layers.get_mut(key) {
+            l.conduct.push(ConductRecord {
+                measure: ConductMeasure::ReplacementWritten,
+                date: today,
+                relates_to: None,
+            });
             l.replacement = Some(ReplacementMatch {
                 matched_minor,
                 reason,
@@ -188,6 +193,7 @@ impl DistributionState {
             for (book, share) in old.books_on(on) {
                 *books.entry(book.clone()).or_insert(0) += (take as i128 * *share as i128 / WHOLE as i128) as i64;
             }
+            let mut fresh = false;
             let m = match self.layers.get_mut(&new_key).and_then(|l| l.replacement.take().filter(|m| !m.overturned)) {
                 Some(mut m) => {
                     m.matched_minor += take;
@@ -201,19 +207,22 @@ impl DistributionState {
                     }
                     m
                 }
-                None => ReplacementMatch {
-                    matched_minor: take,
-                    reason,
-                    on: today,
-                    replaced: vec![(old_key.to_string(), take)],
-                    books: books.into_iter().collect(),
-                    continued,
-                    disputed: None,
-                    matched_initial: None,
-                    matched_exposures: vec![],
-                    overturned: false,
-                    initial_on_whole: false,
-                },
+                None => {
+                    fresh = true;
+                    ReplacementMatch {
+                        matched_minor: take,
+                        reason,
+                        on: today,
+                        replaced: vec![(old_key.to_string(), take)],
+                        books: books.into_iter().collect(),
+                        continued,
+                        disputed: None,
+                        matched_initial: None,
+                        matched_exposures: vec![],
+                        overturned: false,
+                        initial_on_whole: false,
+                    }
+                }
             };
             ctx.emit(Event::ReplacementMatched {
                 policy: new.policy.clone(),
@@ -223,6 +232,13 @@ impl DistributionState {
                 replaced: m.replaced.iter().map(|(k, _)| k.clone()).collect(),
             });
             if let Some(l) = self.layers.get_mut(&new_key) {
+                if fresh {
+                    l.conduct.push(ConductRecord {
+                        measure: ConductMeasure::ReplacementWritten,
+                        date: today,
+                        relates_to: None,
+                    });
+                }
                 l.replacement = Some(m);
             }
         }
@@ -538,10 +554,19 @@ impl DistributionState {
         // Decided for the adviser before the layer's own initial commission
         // was paid: that payment, still to come, is on the whole layer.
         let own_to_come = self.layers.get(key).is_some_and(|l| l.initial_paid.is_none());
-        if let Some(x) = self.layers.get_mut(key).and_then(|l| l.replacement.as_mut()) {
-            x.disputed = None;
-            x.overturned = !replacement;
-            x.initial_on_whole = !replacement && x.matched_initial.is_none() && own_to_come;
+        if let Some(l) = self.layers.get_mut(key) {
+            if !replacement {
+                l.conduct.push(ConductRecord {
+                    measure: ConductMeasure::ReplacementOverturned,
+                    date: today,
+                    relates_to: Some(m.on),
+                });
+            }
+            if let Some(x) = l.replacement.as_mut() {
+                x.disputed = None;
+                x.overturned = !replacement;
+                x.initial_on_whole = !replacement && x.matched_initial.is_none() && own_to_come;
+            }
         }
         ctx.emit(Event::ReplacementDecided {
             layer: key.to_string(),

@@ -355,8 +355,8 @@ impl Command {
             Command::DismissTrigger { .. } => &["documents"],
             Command::PlaceLegalHold { .. } | Command::ReleaseLegalHold { .. } => &["legal"],
             Command::ShredParty { .. } => &["privacy"],
-            Command::RequestLetter(_) => &["underwriting", "reinsurance", "group"],
-            Command::CancelLetterRequest { .. } => &["underwriting", "reinsurance", "group", "servicing"],
+            Command::RequestLetter(_) => &["underwriting", "reinsurance", "group", "claims"],
+            Command::CancelLetterRequest { .. } => &["underwriting", "reinsurance", "group", "claims", "servicing"],
             Command::AckDeleted { .. } => &["retention"],
         }
     }

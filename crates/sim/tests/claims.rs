@@ -43,6 +43,7 @@ fn rules() -> Rules {
         DecisionKind::Withdraw,
         DecisionKind::ReverseAdmission,
         DecisionKind::ExGratia,
+        DecisionKind::FuneralAdvance,
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,
@@ -78,6 +79,7 @@ fn rules() -> Rules {
         estate_simplified_max_minor: i64::MAX,
         pre_approval_days: 30,
         recurrence_days: 180,
+        funeral_advance_max_minor: 15_000_00,
         prepared_by: "config-ann".into(),
         approved_by: vec!["config-bob".into(), "config-cat".into()],
         ..Rules::default()
@@ -2505,5 +2507,107 @@ fn declined_late_interest_is_reversed_in_its_own_entry() {
     c.submit(0, "payments", settle(&id, "pay-1", 80_000_00)).unwrap();
     clean(&c);
     assert_eq!(money(&c, &id), (0, 0, 0));
+    days(&mut c, 2);
+}
+
+/// Purpose: the cover check on an income protection claim tells claims the cover's waiting
+/// period and what the product's wording does with the benefit in custody, for the shipped
+/// product (suspend) and for a product whose wording pays; a lump sum cover reports no
+/// waiting period.
+/// Why it matters: decision 5 in `docs/decisions.md` (CLM-040). Claims enforces both from
+/// these facts alone. If the core left them at their defaults, every income claim would be
+/// payable from the day of the event, and a product that pays in custody would be suspended.
+#[test]
+fn the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting() {
+    use claims::port::Imprisonment;
+    let mut c = cluster();
+    let pays = include_str!("../../../products/income_protection.star")
+        .replace("\"income-protection\"", "\"income-protection-pays\"")
+        .replace("\"suspend\"", "\"pay\"");
+    let product = Command::ActivateProduct {
+        product: Box::new(load_product("income_protection_pays.star", &pays).unwrap()),
+    };
+    c.activate_everywhere(product).unwrap();
+    let issue = |c: &mut Cluster, nth: usize, product: &str| {
+        let n = on_zero(c, nth);
+        let mut p = ic_sim::persona::income_protection(n, start(), d(1988, 5, 5), Sex::Female, false, 5_000_00, Frequency::Monthly);
+        p.product_code = product.to_string();
+        let id = p.policy.clone();
+        c.submit(0, "new-business", issue_command(p)).unwrap();
+        id
+    };
+    let suspended = issue(&mut c, 0, "income-protection");
+    let paid = issue(&mut c, 1, "income-protection-pays");
+    let life = term_life(
+        on_zero(&c, 2),
+        start(),
+        d(1988, 5, 5),
+        Sex::Female,
+        false,
+        300_000_00,
+        None,
+        Frequency::Monthly,
+        None,
+    );
+    let life_id = life.policy.clone();
+    c.submit(0, "new-business", issue_command(life)).unwrap();
+    days(&mut c, 5);
+    let event = c.business_date().unwrap();
+    let facts = |c: &mut Cluster, claim_id: &str, policy: &PolicyId, cover: &str, kind: ClaimType| {
+        ok(c, notification(claim_id, policy, cover, kind, event));
+        let assign = claims::Command::Assign {
+            claim: claim_id.into(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        };
+        ok(c, assign);
+        let check = claims::Command::CoverCheck {
+            claim: claim_id.into(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        };
+        ok(c, check);
+        let facts = claim(c, claim_id).cover_check.clone().unwrap().facts;
+        (facts.waiting_days, facts.benefit_while_imprisoned)
+    };
+    assert_eq!(
+        facts(&mut c, "clm-ip-1", &suspended, "income", ClaimType::IncomeProtection),
+        (28, Imprisonment::Suspend)
+    );
+    assert_eq!(facts(&mut c, "clm-ip-2", &paid, "income", ClaimType::IncomeProtection), (28, Imprisonment::Pay));
+    assert_eq!(facts(&mut c, "clm-ip-3", &life_id, "life", ClaimType::Death).0, 0);
+}
+
+/// Purpose: a funeral advance on a death claim moves the reserve into benefit payable without
+/// changing the claim's cost, is paid and settled while the claim is still open, and the
+/// admission that follows posts only the rest of the benefit and ends the policy.
+/// Why it matters: persona test CLM-004 through the real ledger. Two admissions on one claim must
+/// add up to the benefit once; an advance that left the reserve whole would overstate claims
+/// expense until the decision, and one that closed the claim in the core would refuse the rest.
+#[test]
+fn a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let died = c.business_date().unwrap().pred_opt().unwrap();
+    open_claim(&mut c, "clm-1", &id, "life", ClaimType::Death, died);
+    let (reserve, _, _) = money(&c, &id);
+    let expense = accounts::claims_incurred("term-life", "life", NZD);
+    let cost = c.state(0).ledger.natural_balance(&expense.id);
+    ok(&mut c, decide("clm-1", Request::FuneralAdvance { amount_minor: 10_000_00 }));
+    assert_eq!(money(&c, &id), (reserve - 10_000_00, 10_000_00, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id), cost, "the cost is unchanged");
+    verify_payee(&mut c, "clm-1");
+    ok(&mut c, pay("clm-1", "adv-1", 10_000_00, None));
+    c.submit(0, "payments", settle(&id, "adv-1", 10_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(claim(&c, "clm-1").status, Status::Open);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce, "the advance ends nothing");
+
+    ok(&mut c, decide("clm-1", admit(None, None, false)));
+    assert_eq!(money(&c, &id), (0, 490_000_00, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id), 500_000_00);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::Terminated);
+    assert_eq!(module_events(&c, "claim_admitted")[0]["admitted_minor"], "50000000");
     days(&mut c, 2);
 }

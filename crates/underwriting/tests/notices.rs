@@ -319,7 +319,8 @@ async fn documents_accepts_every_letter_underwriting_sends() {
 /// Purpose: an evidence order (request, chase, cancel) is published to the evidence hub under an
 /// ID from its outbox number, carrying the request and, for a new order, the kind and the
 /// party, and nothing else; a request for a delegate's file goes to the delegates hub; neither
-/// reaches the staff hub; and a hub that refuses the driver parks the order with its status.
+/// reaches the staff hub; a hub that refuses the driver parks the order with its status; and an
+/// effect meant for none of them is parked.
 /// Why it matters: the provider's adapter acts on these orders, so a lost one leaves a case
 /// waiting for a report nobody asked for. The hubs are read by outside parties' adapters, so
 /// an order must not carry a proposal's reasons or answers.
@@ -386,4 +387,10 @@ async fn evidence_orders_and_delegate_requests_go_to_their_own_hubs() {
         refusing.forward(64, &orders[1]).await,
         Ok(Some("the evidence hub refused the order: 403: no".into()))
     );
+    // An effect that is no notice, order or letter has nowhere to go here and is parked.
+    let other = Effect::ReleaseCapacity {
+        reservation: "R1".into(),
+        reason: "declined".into(),
+    };
+    assert!(notices.forward(65, &other).await.unwrap().is_some());
 }

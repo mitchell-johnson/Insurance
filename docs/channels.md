@@ -100,7 +100,7 @@ Every staff action is put to four questions, answered by Cedar policy in `config
 3. **How much**: is the amount within their authority profile, capped by the role's ceiling?
 4. **Why**: is there a purpose, such as the case they are working on?
 
-A refusal says which question failed, so the person knows what to ask for. Roles are templates; authority profiles are versioned; grants are requested and approved by someone else, expire, and are recertified. Break-glass access is time-limited and reviewed afterwards. An external entitlement source can feed all of this; when it cannot be reached, what people already hold runs to its end and nothing new is granted from it.
+A refusal says which question failed, so the person knows what to ask for. Roles are templates; authority profiles are versioned; grants are requested and approved by someone else, expire, and are recertified. Break-glass access is time-limited and reviewed afterwards. An external entitlement source can feed all of this; when it cannot be reached, what people already hold runs to its end and nothing new is granted from it. An entitlement the mapping does not name confers nothing and is listed in the alignment report (on `GET /staff/v1/admin`), with the member of staff every mapping must name to work its exceptions (`alignment_owner`).
 
 **Data classes.** A view is shaped to the classes of data the person's roles include. Health and claim detail are withheld from someone without that class, and the person is told that something was withheld, never what.
 
@@ -221,6 +221,9 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
 
+- **One owner.** The claim view names the owner; where the claims module marks a claimant for communication support it says so in a banner, because a change of owner then needs a handover note and a call.
+- **Proof of life is not sent from the app.** Claims takes `ConfirmAlive` from the caller `channels`, but the portal does not send it: it cannot check a liveness result the app reports, so the evidence would be the device's word. A liveness check the app runs is recorded by the identity provider in the customer master, which relays `ConfirmAlive` to every partition (`docs/customers.md`, "Proof of life"). Questions other services ask the claims module (the documents service's repayment letters) are answered 404 here.
+
 ## The reinsurance exceptions console
 
 `/reinsurance` shows the reinsurance module's open exceptions (`docs/reinsurance.md`) and what a person can do about each. That module is the source of truth: an exception closes itself once its cause is cured, so there is nothing to acknowledge. The portal reads the module itself, not the event hub the exceptions are also sent to.
@@ -264,13 +267,14 @@ Commands go under the caller `reinsurance-ops` on the latest business date any p
 | `payments.payees` | `payee_maintainer`: authorities and payee accounts. |
 | `payments.connectivity` | `connectivity_admin`: configuration and redirecting a route to the second bank; the only one who reads the configuration. |
 | `payments.legal`, `.reconciler`, `.treasury`, `.collections` | `legal`, `reconciler`, `treasury`, `collections` |
+| `payments.compliance` | `compliance`: cases of premium paid by someone other than the owner, and `clear_payer` |
 
 Only people's commands pass (`src/payments.rs`, `COMMANDS`); the banks' answers, screening, the customer's hold as the pump records it, the drill, the core's events, the outbox and pruning are the module's drivers' and are refused here. A held item reads as the customer's own hold (`customer_hold`, or `hold_unconfirmed`, which clears when the maker checks the run again).
 
 | Route | |
 |---|---|
 | `GET /staff/v1/payments/me` | Your roles there. |
-| `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`. A null answer is 404. |
+| `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`, and `payer_cases` and `payer_case?case=` (compliance only). A null answer is 404. |
 | `POST /staff/v1/payments/commands` | One command in that module's JSON (`{"type": ...}`), with an `Idempotency-Key`. Its events come back; a refusal is 403 (`not_permitted`, `role_conflict`, `same_person`, ...) or 409 with the module's code. |
 
 ## The underwriting console
@@ -298,7 +302,7 @@ Not sent from here: configuration, the driver's own commands (sweep, acknowledge
 
 ## The finance console
 
-`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, and retries a stalled feed.
+`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, records a migration account's cut-over total, and retries a stalled feed. An operator or the lead sorts unplaced policies into accounting groups.
 
 As with the other consoles, the portal service holds none of it. It passes the questions to the `finance` module on the nodes and sends each command as the person who gave it, under the caller `finance-console`:
 
@@ -313,12 +317,33 @@ As with the other consoles, the portal service holds none of it. It passes the q
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/finance/me` | Whether you may open the console, and your roles. |
-| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, with that question's fields as query parameters. |
+| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, `accounting_groups` (counts per group), `accounting_group` (one policy, with `policy` and `partition`; `null` while unplaced), with that question's fields as query parameters. |
 | `POST /staff/v1/finance/commands` | One of that module's commands in its own JSON, with an `Idempotency-Key`. Commands only its own services send (the configuration, the core's event feed, Merkle roots, extracts, conduct facts, and the check and aged item reports other modules make) are refused. |
 
-- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range.
+- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range. A cut-over total may likewise come as `total_minor`. A command with no fields, such as `classify_policies`, may be sent as its name alone.
 - **Who may.** The ledger checks every role itself and keeps maker and checker apart whatever roles one person holds. A refusal for want of a role comes back as `403 authority`, any other as `409` with its code, and `503 finance_unavailable` when it has no leader.
 - **Not on the page.** A chart of accounts, a close configuration and a return definition are proposed from their files through the command route; the page only approves them.
+
+## The group console
+
+`/group` is the staff screen for group scheme administration (`docs/group.md`): the exception queue across every scheme or one, a scheme's standing found by its ID or its policy, a membership file with its preview and refused rows, one member, and a scheme's file layouts. Staff confirm a held file, approve or withdraw one, let backdated changes through or drop them, decide a possible match, put back members removed in error, ask underwriting again for cover above the automatic amount, freeze, unfreeze or resume a scheme, set a mapping, and end a scheme; registering a scheme, amending its terms and agreeing a renewal take the terms as JSON.
+
+The group service holds all of it. The portal sends each command under the caller `group-admin` with the signed-in person as the actor, so its identity needs the group app's `group-admin` role beside `employer-portal` (`deploy/entra/group-app.sh`).
+
+| Staff action | What it allows |
+| --- | --- |
+| `group.view` | opens the console to read, and to try a mapping (nothing is stored) |
+| `group.admin` | the commands as well |
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/group/me` | Whether you may open the console, and act there. |
+| `GET /staff/v1/group/{question}` | `exceptions` (optional `scheme`), `scheme`, `invoices`, `mapping` (`scheme`), `file` (`scheme`, `file`), `member` (`scheme`, `employee`), `scheme_of` (`policy`). The outbox and the driver's work are not asked from here. |
+| `POST /staff/v1/group/commands` | One of `register_scheme`, `amend_terms`, `set_mapping`, `freeze`, `unfreeze`, `resume`, `confirm_held`, `decide_backdating`, `approve_file`, `withdraw_file`, `declare_pool`, `reinstate`, `request_excess_again`, `resolve_match`, `agree_renewal`, `terminate`, in the group module's JSON, with an `Idempotency-Key`. The driver's, a member's and other modules' commands are refused, and a file is received only by upload. |
+| `POST /staff/v1/group/schemes/{scheme}/mappings/try` | `{mapping, sample}`: what the sample would do read with that mapping. |
+
+- **Refusals.** The module's refusal comes back as `409` with its code, an unknown scheme or file as `404`. If the service refuses the portal itself (its token lacks `group-admin`), that is `502 role_not_held`, the portal's fault and not the person's; an unreachable service is `503`.
+- **Tests.** `tests/http.rs` `the_group_console` runs against the group module's own state machine and its own test harness (`tests/common/group_module.rs`), seeded with a possible match.
 
 ## Operations console and status page (addendum entry 6)
 

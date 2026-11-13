@@ -1260,6 +1260,93 @@ async fn group_command(State(s): State<Shared>, headers: HeaderMap, method: Meth
     grouped(s.group()?.command(&key, &session.party.0, command).await)
 }
 
+// --- the group console, for group administration staff ---
+
+impl AppState {
+    async fn group_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::GroupStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include group schemes"));
+        }
+        Ok((session, standing))
+    }
+
+    /// The standing of someone who may act in the group console.
+    async fn group_admin(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<Session, Problem> {
+        let (session, standing) = self.group_standing(headers, method, uri, body).await?;
+        if standing["admin"] != true {
+            return Err(Problem::forbidden("you may read group schemes but not act on them"));
+        }
+        Ok(session)
+    }
+}
+
+/// The group service's answer to staff. A refusal comes back as a problem
+/// with the service's code and words, as every console's refusals do: the
+/// module's own refusal as 409, and a refusal of the portal itself (its
+/// token does not carry `group-admin`) as the portal's fault, 502.
+fn group_staff_answer(answer: Result<crate::group::Answered, String>) -> Answer {
+    let (status, body) = answer.map_err(group_down)?;
+    let Some(error) = body.get("error").filter(|_| status >= 400) else {
+        return grouped(Ok((status, body)));
+    };
+    let code = error["code"].as_str().unwrap_or("refused");
+    let message = error["message"].as_str().unwrap_or("the group service refused it");
+    let status = match (status, code) {
+        (_, "role_not_held" | "caller_not_allowed" | "unauthorised") => StatusCode::BAD_GATEWAY,
+        (422, _) => StatusCode::CONFLICT,
+        (other, _) => StatusCode::from_u16(other).unwrap_or(StatusCode::BAD_GATEWAY),
+    };
+    Err(Problem::new(status, code, message))
+}
+
+/// A question to the group service, as staff: everything about a scheme
+/// the service answers, the open exceptions, and the scheme on a policy.
+async fn group_staff_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Answer {
+    let (_, standing) = s.group_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::group::staff_question(&name, |f| q.get(f).cloned()).map_err(Problem::bad_request)?;
+    group_staff_answer(s.group()?.ask(question).await)
+}
+
+/// A command to the group service as the member of staff signed in, under
+/// the caller `group-admin`. The service decides, and keeps uploader and
+/// approver apart where the scheme asks for it.
+async fn group_staff_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.group_admin(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let sent: Value = parse(&body)?;
+    crate::group::staff_command(&sent).map_err(Problem::bad_request)?;
+    group_staff_answer(s.group()?.staff_command(&key, &session.party.0, sent).await)
+}
+
+/// Try a mapping against a sample of the employer's file. Nothing is
+/// stored, so reading the console is enough.
+async fn group_try_mapping(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(scheme): Path<String>, body: Bytes) -> Answer {
+    s.group_standing(&headers, &method, &uri, &body).await?;
+    let scheme = crate::group::name(&scheme).ok_or_else(|| Problem::bad_request("a scheme is letters, digits, dots, dashes and underscores"))?;
+    let trial: Value = parse(&body)?;
+    if !(trial.get("mapping").is_some_and(Value::is_object) && trial.get("sample").is_some_and(Value::is_string)) {
+        return Err(Problem::bad_request("a trial is a mapping and a sample of the file"));
+    }
+    group_staff_answer(s.group()?.try_mapping(scheme, trial).await)
+}
+
 // --- the staff console ---
 
 async fn staff_me(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
@@ -2116,6 +2203,10 @@ async fn claims_question(
                 .collect();
             ok(json!({ "partitions": partitions }))
         }
+        // Questions other services ask (the documents service's repayment
+        // letters): `claims::question` never makes one, so none reaches here.
+        #[allow(unreachable_patterns)]
+        _ => Err(Problem::not_found()),
     }
 }
 
@@ -2550,6 +2641,9 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/commission/{question}", get(commission_question))
         .route("/staff/v1/replacements/decide", post(replacement_decide))
         .route("/staff/v1/payments/commands", post(payments_command))
+        .route("/staff/v1/group/commands", post(group_staff_command))
+        .route("/staff/v1/group/schemes/{scheme}/mappings/try", post(group_try_mapping))
+        .route("/staff/v1/group/{question}", get(group_staff_question))
         .route("/staff/v1/payments/{question}", get(payments_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))
         .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))
@@ -2578,6 +2672,7 @@ pub fn router(state: Shared) -> Router {
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
         .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
+        .route("/group", get(|State(s): State<Shared>| async move { page(&s, crate::ui::GROUP) }))
         .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))

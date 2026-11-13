@@ -98,7 +98,14 @@ pub(crate) fn retail_premium_with(
         }) {
             *work += 1;
             let life = policy.lives.get(&layer.life).ok_or_else(|| PremiumError::UnknownLife(layer.life.clone()))?;
-            let f = factors_on(life, period_start)?;
+            // Priced as the cover stands on a later day, the life is rated on
+            // what is known of it that day: a change of occupation reaches the
+            // days left of a period already billed.
+            let facts_on = match &layers {
+                Layers::On(day) => (*day).max(period_start),
+                _ => period_start,
+            };
+            let f = factors_on(life, facts_on)?;
             let dob = f.date_of_birth.ok_or_else(|| PremiumError::MissingFactor(life.id.clone(), "date_of_birth"))?;
             let age = match def.rating.premium_type {
                 PremiumType::Stepped | PremiumType::GroupUnitRate => age_on(dob, rated_on),

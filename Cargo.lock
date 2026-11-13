@@ -2130,6 +2130,7 @@ dependencies = [
  "ic-core",
  "ic-distribution",
  "ic-finance",
+ "ic-group",
  "ic-ledger",
  "ic-log",
  "ic-money",

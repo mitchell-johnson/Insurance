@@ -21,6 +21,18 @@ use serde_json::{json, Value};
 /// The caller name, and the app role the portal's token carries for it.
 pub const CALLER: &str = "employer-portal";
 
+/// The caller name for group administration staff, and the second app
+/// role the portal's token carries on the group app.
+pub const STAFF_CALLER: &str = "group-admin";
+
+/// Staff actions that open the group console.
+pub mod actions {
+    /// Read schemes, files, members, mappings and the exception queue.
+    pub const VIEW: &str = "group.view";
+    /// Act on them as group administration staff.
+    pub const ADMIN: &str = "group.admin";
+}
+
 /// The largest file the group service takes.
 pub const MAX_UPLOAD_BYTES: usize = 32 * 1024 * 1024;
 
@@ -37,6 +49,10 @@ pub trait Group: Send + Sync {
     fn command(&self, key: &str, actor: &str, command: Value) -> Asked<'_>;
     /// Ask a question.
     fn ask(&self, question: Value) -> Asked<'_>;
+    /// Send a command as group administration staff.
+    fn staff_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_>;
+    /// Try a mapping against a sample file, as staff. Nothing is stored.
+    fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_>;
 }
 
 /// The fields of a member an employer sees, as the group service names
@@ -137,6 +153,75 @@ pub fn command(scheme: &str, sent: &Value) -> Result<Value, String> {
     Ok(json!({ name: fields }))
 }
 
+/// The commands staff send from the console. The driver's, the member's
+/// and other modules' are never sent from here, and a file is received
+/// only by uploading it.
+pub const STAFF_COMMANDS: [&str; 16] = [
+    "register_scheme",
+    "amend_terms",
+    "set_mapping",
+    "freeze",
+    "unfreeze",
+    "resume",
+    "confirm_held",
+    "decide_backdating",
+    "approve_file",
+    "withdraw_file",
+    "declare_pool",
+    "reinstate",
+    "request_excess_again",
+    "resolve_match",
+    "agree_renewal",
+    "terminate",
+];
+
+/// Whether a member of staff may open the group console, and whether they
+/// may act there.
+pub fn standing(staff: &crate::staff::StaffState, party: &ic_core::PartyId, at: crate::staff::At) -> Value {
+    let admin = staff.holds_action(party, actions::ADMIN, at);
+    let view = admin || staff.holds_action(party, actions::VIEW, at);
+    json!({ "staff": party, "view": view, "admin": admin })
+}
+
+/// A question staff may ask, from its name and the query's fields: a
+/// scheme's standing, invoices or mapping, one file, one member, the
+/// scheme on a policy, or the open exceptions (all, or one scheme's). The
+/// outbox and the driver's work are the driver's alone.
+pub fn staff_question(name: &str, given: impl Fn(&str) -> Option<String>) -> Result<Value, String> {
+    let named = |field: &str| {
+        let value = given(field).ok_or_else(|| format!("{name} needs ?{field}="))?;
+        self::name(&value)
+            .map(str::to_string)
+            .ok_or_else(|| format!("{field} is letters, digits, dots, dashes and underscores"))
+    };
+    Ok(match name {
+        "exceptions" => match given("scheme").filter(|s| !s.is_empty()) {
+            Some(_) => json!({ "ask": "exceptions", "scheme": named("scheme")? }),
+            None => json!({ "ask": "exceptions" }),
+        },
+        "scheme" | "invoices" | "mapping" => json!({ "ask": name, "scheme": named("scheme")? }),
+        "file" => json!({ "ask": "file", "scheme": named("scheme")?, "file": named("file")? }),
+        "member" => json!({ "ask": "member", "scheme": named("scheme")?, "employee": named("employee")? }),
+        "scheme_of" => json!({ "ask": "scheme_of", "policy": named("policy")? }),
+        _ => return Err(format!("{name} is not a question the group console asks")),
+    })
+}
+
+/// The command staff sent, if it is one the console passes on: one object
+/// naming a command in [`STAFF_COMMANDS`].
+pub fn staff_command(sent: &Value) -> Result<&str, String> {
+    let name = sent
+        .as_object()
+        .filter(|o| o.len() == 1)
+        .and_then(|o| o.keys().next())
+        .ok_or("a command is one object naming the command")?;
+    STAFF_COMMANDS
+        .iter()
+        .find(|c| **c == name)
+        .copied()
+        .ok_or_else(|| format!("{name} is not a command staff send from the console"))
+}
+
 /// A scheme or file name as the group service takes it, or `None`.
 pub fn name(raw: &str) -> Option<&str> {
     (!raw.is_empty() && raw.len() <= 64 && raw.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && !raw.contains("..")).then_some(raw)
@@ -186,6 +271,17 @@ impl Group for Hosted {
 
     fn ask(&self, question: Value) -> Asked<'_> {
         let request = self.http.post(self.url("/v1/questions")).json(&question);
+        Box::pin(self.send(request))
+    }
+
+    fn staff_command(&self, key: &str, actor: &str, command: Value) -> Asked<'_> {
+        let body = json!({ "key": key, "caller": STAFF_CALLER, "actor": actor, "command": command });
+        let request = self.http.post(self.url("/v1/commands")).json(&body);
+        Box::pin(self.send(request))
+    }
+
+    fn try_mapping(&self, scheme: &str, trial: Value) -> Asked<'_> {
+        let request = self.http.post(self.url(&format!("/v1/schemes/{scheme}/mappings/try"))).json(&trial);
         Box::pin(self.send(request))
     }
 }

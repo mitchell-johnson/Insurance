@@ -50,6 +50,12 @@ pub enum ConductMeasure {
     PolicyLapsed,
     /// A lapsed policy put back in force. Counted from the core's events.
     PolicyReinstated,
+    /// New cover written in place of cover given up, declared or matched by
+    /// the commission rules, as the distribution module reports it.
+    ReplacementWritten,
+    /// A replacement match a dispute decided for the adviser: not a
+    /// replacement after all. Counted against the period of the match.
+    ReplacementOverturned,
 }
 
 impl ConductMeasure {
@@ -59,6 +65,7 @@ impl ConductMeasure {
             ConductMeasure::ComplaintReceived | ConductMeasure::ComplaintUpheld => "complaints",
             // Only the feed counts these; no caller may report them.
             ConductMeasure::PolicyLapsed | ConductMeasure::PolicyReinstated => "the core's events",
+            ConductMeasure::ReplacementWritten | ConductMeasure::ReplacementOverturned => "distribution",
             _ => "claims",
         }
     }
@@ -115,6 +122,12 @@ pub struct ConductReport {
     pub complaints_upheld: u64,
     pub lapsed: u64,
     pub reinstated: u64,
+    /// Cover written to replace cover given up.
+    #[serde(default)]
+    pub replacements: u64,
+    /// Replacement matches overturned in the period, by the period of the match.
+    #[serde(default)]
+    pub replacements_overturned: BTreeMap<PeriodId, u64>,
     /// Claims decisions made in the period and the days each took from
     /// registration, counted from the claims module's facts.
     pub accepted_turnaround: crate::mart::Turnaround,
@@ -280,7 +293,10 @@ impl FinanceState {
             if fact.measure.reporter() != caller {
                 return reject("caller", format!("{:?} is reported by {}, not {caller}", fact.measure, fact.measure.reporter()));
             }
-            let undoes = matches!(fact.measure, ConductMeasure::DeclineOverturned | ConductMeasure::AdmissionReversed);
+            let undoes = matches!(
+                fact.measure,
+                ConductMeasure::DeclineOverturned | ConductMeasure::AdmissionReversed | ConductMeasure::ReplacementOverturned
+            );
             if fact.id.is_empty() || undoes != fact.relates_to.is_some() || fact.relates_to.is_some_and(|earlier| earlier > fact.date) {
                 return reject(
                     "fact",
@@ -360,6 +376,8 @@ impl FinanceState {
                 ConductMeasure::ComplaintUpheld => report.complaints_upheld += n,
                 ConductMeasure::PolicyLapsed => report.lapsed += n,
                 ConductMeasure::PolicyReinstated => report.reinstated += n,
+                ConductMeasure::ReplacementWritten => report.replacements += n,
+                ConductMeasure::ReplacementOverturned => *report.replacements_overturned.entry(origin).or_insert(0) += n,
             }
         }
         report

@@ -185,6 +185,33 @@ pub enum Command {
     ClaimClosed {
         claim: String,
     },
+    /// The core issued a policy to its owner (`PolicyIssued`).
+    PolicyOwner {
+        policy: String,
+        owner: String,
+    },
+    /// The core applied a receipt to a policy (`ReceiptApplied`): check who
+    /// paid it (`aml.rs`).
+    PremiumApplied {
+        policy: String,
+        receipt: String,
+    },
+    /// Compliance closes a payer case, naming the customer master's record
+    /// of the payer's relationship to the owner when there is one.
+    ClearPayer {
+        case: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relationship: Option<String>,
+        note: String,
+    },
+    /// Whether the customer master confirmed a proposed clearance's
+    /// relationship links the payer and the owner.
+    ConfirmRelationship {
+        case: String,
+        confirmed: bool,
+        #[serde(default)]
+        reason: String,
+    },
     /// Claims changed an overpayment (`overpayment_*`), with what is still
     /// owed on it (`repay.rs`).
     OverpaymentChanged {
@@ -553,6 +580,13 @@ pub enum Event {
         party: String,
         held: bool,
     },
+    /// Premium was paid by someone other than the policy owner.
+    PayerCaseOpened {
+        case: String,
+    },
+    PayerCaseCleared {
+        case: String,
+    },
     /// Whether an insolvency interest stands against a policy owner changed.
     OwnerInsolvencyChanged {
         party: String,
@@ -644,6 +678,9 @@ pub struct PaymentsState {
     /// quotes (`repay.rs`).
     #[serde(default)]
     pub repayables: crate::repay::Repayables,
+    /// Who pays whose premium (`aml.rs`).
+    #[serde(default)]
+    pub payer_checks: crate::aml::PayerChecks,
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
@@ -754,6 +791,10 @@ impl PaymentsState {
                 reason,
             } => self.declare_incident(tx, incident, authorities, from, to, reason),
             Command::ClaimAdmitted { claim, amount_minor } => self.claim_admitted(tx, &claim, amount_minor),
+            Command::PolicyOwner { policy, owner } => self.policy_owner(tx, &policy, &owner),
+            Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
+            Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
+            Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
             Command::OverpaymentChanged {
                 claim,
                 overpayment,

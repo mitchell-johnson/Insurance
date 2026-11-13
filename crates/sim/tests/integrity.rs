@@ -243,6 +243,13 @@ fn the_chart_of_accounts_is_frozen() {
             role::LEVY_PAYABLE,
         ),
         (
+            accounts::withholding_tax_payable("rwt", NZD),
+            "int/withholding_tax_payable/rwt/NZD",
+            &minor,
+            AccountClass::Liability,
+            role::WITHHOLDING_TAX_PAYABLE,
+        ),
+        (
             accounts::lapse_write_off("term-life", NZD),
             "int/lapse_write_off/term-life/NZD",
             &fine,
@@ -440,6 +447,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             reference: "uw".into(),
         })),
         Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+            occupation_class: None,
             policy: p.clone(),
             cover: "life".into(),
             life: LifeId("l".into()),

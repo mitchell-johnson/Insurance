@@ -176,7 +176,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
-| UW-020 | part | `underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
+| UW-020 | full | `underwriting/tests/driver.rs::a_change_of_occupation_reaches_the_core_with_the_new_class`<br>`underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
 | UW-021 | full | `underwriting/tests/special.rs::a_non_disclosure_review_needs_untouched_seniors_and_two_for_a_remedy`<br>`claims/tests/suite/decisions.rs::a_non_disclosure_review_holds_the_admission`<br>`sim/tests/nondisclosure.rs::an_avoidance_with_refund_undoes_every_premium_since_inception` |
 | UW-022 | full | `underwriting/tests/config.rs::question_sets_follow_the_disclosure_regime_of_the_contract_date` |
 | UW-023 | full | `underwriting/tests/libraries.rs::backtest_shows_how_a_rule_change_shifts_outcomes`<br>`underwriting/tests/config.rs::a_changed_rule_set_needs_its_backtest_and_its_references` |
@@ -194,6 +194,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-001 | full | `claims/tests/suite/intake.rs::notification_opens_a_claim_with_a_reserve`<br>`claims/tests/suite/intake.rs::a_late_notified_death_prompts_a_register_check`<br>`customers/tests/api.rs::deaths_are_marked_and_retracted`<br>`customers/tests/lifecycle.rs::deaths_are_told_to_claims_on_every_partition` |
 | CLM-002 | part | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid` |
 | CLM-003 | part | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-004 | full | `claims/tests/suite/book.rs::a_funeral_advance_is_paid_early_and_counted_against_the_benefit`<br>`sim/tests/claims.rs::a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest` |
 | CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
@@ -228,8 +229,9 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-037 | full | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit`<br>`claims/tests/suite/book.rs::late_interest_is_offered_and_declined_only_by_an_informed_payee`<br>`sim/tests/claims.rs::declined_late_interest_is_reversed_in_its_own_entry` |
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | part | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death` |
-| CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release` |
+| CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release`<br>`product/tests/products.rs::income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting`<br>`sim/tests/claims.rs::the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting` |
 | CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
+| CLM-042 | full | `claims/tests/suite/intake.rs::a_communication_marker_gives_one_owner_a_said_handover_and_more_time` |
 
 ## RI Reinsurance
 
@@ -478,9 +480,9 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-012 | part | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
-| STF-016 | part | `channels/tests/staff.rs::external_source_drives_templates` |
+| STF-016 | full | `channels/tests/staff.rs::external_source_drives_templates` |
 | STF-017 | full | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness`<br>`channels/tests/staff.rs::builders_and_operators_hold_no_personal_class` |
-| STF-018 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |
+| STF-018 | full | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness`<br>`channels/tests/staff.rs::cover_and_uplift_grants`<br>`channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 
 ## PAY Payment runs and bank connectivity
 
@@ -519,8 +521,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
+<<<<<<< HEAD
+=======
+| FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
+| FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
+>>>>>>> origin/main
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
-| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
+| FIN-018 | full | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed`<br>`finance/tests/assessed_claim.rs::an_assessed_claim_admitted_paid_and_reversed_reaches_the_mart_and_the_books` |
 
 ## CFG Configuration operations and the actuary's interface
 

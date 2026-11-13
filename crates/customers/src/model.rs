@@ -275,6 +275,9 @@ relationships! {
     Partner => "partner", "party";
     Parent => "parent", "party";
     Staff => "staff", "party";
+    // Pays the premium on the target's policies: a company for its director,
+    // a parent for a child. Payments names it to clear a third-party payer.
+    PremiumPayer => "premium_payer", "party";
 }
 
 impl RelationshipKind {

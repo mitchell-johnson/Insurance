@@ -3,7 +3,7 @@
 
 use ic_claims::command::ReopenBasis;
 use ic_claims::model::{EndReason, OverpaymentCause, RecoveryStatus, RunStatus, TimerKind};
-use ic_claims::{Command, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
+use ic_claims::{ClaimType, Command, CoverFacts, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
 
 use crate::world::*;
 
@@ -1852,4 +1852,154 @@ fn reserve_admission_and_closing_name_the_cause_category() {
     let closed = w.core.noticed("claim_closed");
     let closed = closed.last().expect("closed");
     assert_eq!((closed["outcome"].as_str(), closed["cause_category"].as_str()), ("declined", "mental"));
+}
+
+/// Purpose: part of a death benefit can be advanced before the claim is decided, up to the
+/// rules' limit, and paid at once to the verified payee without closing the claim; the
+/// admission that follows counts the advance as part of the benefit, admits only the rest and
+/// cannot admit less than was advanced.
+/// Why it matters: persona test CLM-004. A family arranging a funeral in the first week cannot
+/// wait six weeks for the decision; an advance not counted against the final amount would pay
+/// the estate twice, and one that closed the claim would leave the rest of the benefit unpaid.
+#[test]
+fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.funeral_advance_max_minor = 15_000;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.ok(Command::Notify(Box::new(World::notification("c-1", "pol-1", "life", ClaimType::Death))));
+    w.ok(Command::Acknowledge {
+        claim: "c-1".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("c-1", "ana");
+    let advance = |amount_minor| Request::FuneralAdvance { amount_minor };
+    assert_eq!(w.undecided("c-1", "ana", advance(20_000), "R-OK"), "advance_limit");
+    w.open_claim("t-1");
+    assert_eq!(w.undecided("t-1", "ana", advance(1_000), "R-OK"), "not_open");
+
+    w.decided("c-1", "ana", advance(10_000), "R-OK");
+    let c = w.claim("c-1");
+    assert_eq!(
+        (c.status, c.advanced_minor, c.admitted_minor, c.payable_minor),
+        (Status::Open, 10_000, 10_000, 10_000)
+    );
+    assert!(w.core.instructions.iter().any(|i| matches!(
+        i,
+        Instruction::Admit {
+            amount_minor: 10_000,
+            release_reserve: false,
+            terminate: None,
+            ..
+        }
+    )));
+    assert_eq!(w.core.noticed("funeral_advance_admitted")[0]["amount_minor"], "10000");
+    w.verify_payee("c-1", "ana");
+    w.ok(pay("c-1", "ana", "adv-1", 10_000, None));
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Pay { close: false, .. })));
+    assert_eq!(w.claim("c-1").status, Status::Open, "the claim is still to be decided");
+    assert_eq!(w.undecided("c-1", "ana", advance(6_000), "R-OK"), "advance_limit");
+
+    w.assess("c-1", "CC-0001");
+    assert_eq!(w.undecided("c-1", "ana", World::admit_lump(Some(10_000)), "R-OK"), "below_advance");
+    w.decided("c-1", "ana", World::admit_lump(Some(200_000)), "R-OK");
+    let c = w.claim("c-1");
+    assert_eq!((c.status, c.admitted_minor, c.payable_minor), (Status::Admitted, 200_000, 190_000));
+    assert!(matches!(
+        w.core.instructions.iter().rev().find(|i| matches!(i, Instruction::Admit { .. })),
+        Some(Instruction::Admit {
+            amount_minor: 190_000,
+            release_reserve: true,
+            ..
+        })
+    ));
+    let admitted = w.core.noticed("claim_admitted");
+    let admitted = admitted.last().expect("admitted");
+    assert_eq!((admitted["admitted_minor"].as_str(), admitted["advanced_minor"].as_str()), ("200000", "10000"));
+}
+
+/// Purpose: a liveness check in the app or an identity check in the customer master meets every
+/// open proof of life on the person's benefits with its evidence, releasing a held benefit
+/// without a claims person; nothing open means nothing changes, and a confirmation must name
+/// its source and evidence.
+/// Why it matters: proof of life is asked of every person paid a benefit, most of whom can show
+/// it in the app in seconds. A person filing each one by hand delays the payment of someone who
+/// did what was asked.
+#[test]
+fn a_proof_of_life_is_met_by_the_app_or_the_customer_master() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.proof_of_life_months = 3;
+    r.proof_of_life_grace_days = 10;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.benefit_in_payment("ip-1");
+    let alive = |evidence: &str| Command::ConfirmAlive {
+        party: "party-life".into(),
+        source: "app_liveness".into(),
+        evidence_ref: evidence.into(),
+    };
+    // Nothing is open yet.
+    w.ok(alive("vault-live-0"));
+    assert!(w.core.noticed("proof_of_life_confirmed").is_empty());
+    w.on(d(2027, 6, 1));
+    w.ok(Command::DrainDue);
+    w.on(d(2027, 6, 11));
+    w.ok(Command::DrainDue);
+    assert!(w.claim("ip-1").held_for_proof_of_life());
+    assert_eq!(w.refused(alive("")), "invalid_confirmation");
+    w.ok(alive("vault-live-1"));
+    let c = w.claim("ip-1");
+    assert!(!c.held_for_proof_of_life());
+    let t = c.tasks.iter().find(|t| t.kind == TaskKind::ProofOfLife).expect("opened");
+    assert_eq!(
+        (t.outcome.as_deref(), t.vault_ref.as_deref(), t.completed_by.as_deref()),
+        (Some("confirmed:app_liveness"), Some("vault-live-1"), None)
+    );
+    assert_eq!(c.schedule.as_ref().expect("in payment").reviews_overdue, 0);
+    assert_eq!(w.core.noticed("proof_of_life_confirmed")[0]["source"], "app_liveness");
+}
+
+/// Purpose: where the product says the cover has no premium waiver, a waiver is refused beside a
+/// benefit and a waiver-only claim cannot be admitted; where the product says nothing, the
+/// owner's reading of the wording stands.
+/// Why it matters: a waiver paid on cover without it is claims money spent on premium the
+/// customer owed, found only at audit. The product record is the authority when it speaks.
+#[test]
+fn a_waiver_is_refused_where_the_product_has_none() {
+    let mut w = World::new();
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            premium_waiver: Some(false),
+            ..facts("income_protection")
+        },
+    );
+    w.benefit_in_payment("ip-1");
+    let start = Command::StartWaiver {
+        claim: "ip-1".into(),
+        from: d(2027, 3, 1),
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(start), "no_waiver_cover");
+
+    w.ok(Command::Notify(Box::new(World::notification("w-1", "pol-2", "ip", ClaimType::PremiumWaiver))));
+    w.assign("w-1", "ana");
+    w.assess("w-1", "CC-0002");
+    let admit = Request::Admit {
+        amount_minor: None,
+        periodic: Some(ic_claims::command::Periodic {
+            monthly_minor: 0,
+            first_period: d(2027, 3, 1),
+            end: d(2029, 3, 1),
+            expected_end: d(2028, 3, 1),
+        }),
+        exclusion_override: None,
+        exclusion_reviewed: false,
+        payer_deceased: false,
+    };
+    assert_eq!(w.undecided("w-1", "ana", admit, "R-OK"), "no_waiver_cover");
 }

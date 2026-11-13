@@ -33,12 +33,8 @@ jobs:
     name: format, lints, test documentation
     # The runner image (tools/ci/runner/Dockerfile) has clang, protoc and
     # the well-known .proto files the build needs.
-    # Long on purpose, 13 Nov 2026: each Mac mini runner keeps its own build
-    # output, and a runner's first build from nothing took over an hour
-    # (several seconds a crate). Once each runner has built once, bring this
-    # back to about three times a warm run.
     runs-on: [self-hosted, insurance-ci]
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       CARGO_TARGET_DIR: /data/target/checks
     steps:
@@ -59,12 +55,8 @@ jobs:
 
   test:
     name: tests and coverage
-    # Long on purpose, 13 Nov 2026: each Mac mini runner keeps its own build
-    # output, and a runner's first build from nothing took over an hour
-    # (several seconds a crate). Once each runner has built once, bring this
-    # back to about three times a warm run.
     runs-on: [self-hosted, insurance-ci]
-    timeout-minutes: 240
+    timeout-minutes: 60
     env:
       CARGO_TARGET_DIR: /data/target/test
       # The Mac's Docker machine has 20 GB for every job at once (the other
@@ -88,9 +80,9 @@ jobs:
       # one a killed run left behind is removed by the next run here.
       - name: Remove services left by an earlier run on this runner
         run: docker ps -aq --filter "label=insurance-ci.runner=$RUNNER_NAME" | xargs -r docker rm -f
-      # The servers publish no ports: the runner shares the Docker machine's
-      # network and reaches each container at its own address, so nothing is
-      # opened on the Mac or the LAN and runs never contend for a port.
+      # The servers publish no ports, so nothing is opened on the Mac or the
+      # LAN and runs never contend for a port. The runner shares the Docker
+      # machine's network and reaches Temporal at the container's address.
       - name: Start a Temporal server
         run: |
           name=ci-temporal-${{ github.run_id }}-${{ github.run_attempt }}
@@ -104,14 +96,18 @@ jobs:
           docker logs "$name"
           exit 1
       # The customer master's store tests: each test makes its own database.
+      # Its connector refuses a server without TLS anywhere but the loopback,
+      # so this one shares the Docker machine's network with the runner and
+      # listens on 127.0.0.1 only, at a port free when the job starts.
       - name: Start a PostgreSQL server
         run: |
           name=ci-postgres-${{ github.run_id }}-${{ github.run_attempt }}
-          docker run -d --name "$name" --label "insurance-ci.runner=$RUNNER_NAME" -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16 -c max_connections=300 -c fsync=off
-          ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$name")
-          echo "IC_TEST_POSTGRES_URL=host=$ip user=postgres dbname=postgres" >> "$GITHUB_ENV"
+          port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+          docker run -d --name "$name" --label "insurance-ci.runner=$RUNNER_NAME" --network host -e POSTGRES_HOST_AUTH_METHOD=trust \
+            postgres:16 -c listen_addresses=127.0.0.1 -c port="$port" -c max_connections=300 -c fsync=off
+          echo "IC_TEST_POSTGRES_URL=host=127.0.0.1 port=$port user=postgres dbname=postgres" >> "$GITHUB_ENV"
           for _ in $(seq 1 60); do
-            if docker exec "$name" pg_isready -U postgres -h 127.0.0.1 >/dev/null 2>&1; then exit 0; fi
+            if docker exec "$name" pg_isready -U postgres -h 127.0.0.1 -p "$port" >/dev/null 2>&1; then exit 0; fi
             sleep 1
           done
           docker logs "$name"

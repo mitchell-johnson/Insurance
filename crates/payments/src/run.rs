@@ -875,7 +875,10 @@ impl PaymentsState {
                             // A member's own money is set against that
                             // member's bills and nobody else's.
                             Some(life) => ic_core::Command::ApplyMemberReceipt { policy, life, receipt, amount },
-                            None => ic_core::Command::ApplyReceipt { policy, receipt, amount },
+                            None => {
+                                self.note_collection_payer(&n, settled_on);
+                                ic_core::Command::ApplyReceipt { policy, receipt, amount }
+                            }
                         };
                         ("cash-matching", command)
                     }

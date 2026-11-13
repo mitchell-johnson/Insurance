@@ -36,6 +36,7 @@ use crate::close::Outcome;
 use crate::mart::{DEFINITION_VERSION, EXPERIENCE, IN_FORCE, MOVEMENT};
 use crate::period::PeriodId;
 use crate::report::{ExtractPage, PeriodWork, Work};
+use crate::returns::{ConductFact, MAX_CONDUCT_FACTS};
 
 /// The check the driver reports for itself.
 pub const SUBLEDGER_CHECK: &str = "subledger_reconciliations";
@@ -77,6 +78,11 @@ pub enum Reports {
     Check(String),
     /// Aged items of a kind. The answer is the body of `ReportAgedItems`.
     Aged(String),
+    /// Conduct facts of the period, named for what they are. The answer is
+    /// an array of facts, sent on in batches as `RecordConductFacts`. Asked
+    /// on every pass while the period is open: a fact sent again is
+    /// counted once.
+    Conduct(String),
 }
 
 impl Reports {
@@ -84,6 +90,7 @@ impl Reports {
         match self {
             Reports::Check(id) => id.clone(),
             Reports::Aged(kind) => format!("aged:{kind}"),
+            Reports::Conduct(name) => format!("conduct:{name}"),
         }
     }
 }
@@ -114,6 +121,12 @@ pub fn distribution_sources() -> Vec<Source> {
             module: "distribution".to_string(),
             reports: Reports::Aged("held_balance".to_string()),
             question: |as_at| json!({ "aged_held": { "as_at": as_at } }),
+        },
+        Source {
+            caller: "distribution".to_string(),
+            module: "distribution".to_string(),
+            reports: Reports::Conduct("replacements".to_string()),
+            question: |as_at| json!({ "conduct_facts": { "from": PeriodId::of(as_at).start(), "to": as_at } }),
         },
     ]
 }
@@ -355,9 +368,13 @@ impl<B: Books, M: Modules, R: WormStore, X: WormStore> Driver<B, M, R, X> {
             let id = source.reports.check_id();
             let kind = match &source.reports {
                 Reports::Aged(kind) => Some(kind.as_str()),
-                Reports::Check(_) => None,
+                Reports::Check(_) | Reports::Conduct(_) => None,
             };
-            if !due(&id, kind) {
+            let wanted = match &source.reports {
+                Reports::Conduct(_) => !w.period.is_adjustment(),
+                _ => due(&id, kind),
+            };
+            if !wanted {
                 continue;
             }
             let answer = match self.modules.ask(&source.module, (source.question)(w.end)).await {
@@ -368,8 +385,8 @@ impl<B: Books, M: Modules, R: WormStore, X: WormStore> Driver<B, M, R, X> {
                 }
             };
             let key = format!("report:{}:{id}:{}", w.period, short(sha256(&[answer.to_string().as_bytes()])));
-            let command = match &source.reports {
-                Reports::Check(check) => {
+            let commands = match &source.reports {
+                Reports::Check(check) => vec![{
                     let a: CheckAnswer = decode(&id, answer)?;
                     FinCommand::ReportCheck {
                         period: w.period,
@@ -382,21 +399,35 @@ impl<B: Books, M: Modules, R: WormStore, X: WormStore> Driver<B, M, R, X> {
                         },
                         evidence: Some(format!("module {}", source.module)),
                     }
-                }
+                }],
                 Reports::Aged(kind) => {
                     let a: AgedAnswer = decode(&id, answer)?;
-                    FinCommand::ReportAgedItems {
+                    vec![FinCommand::ReportAgedItems {
                         kind: kind.clone(),
                         as_at: a.as_at,
                         items: a.items,
                         total_minor: a.total_minor,
                         count: a.count,
-                    }
+                    }]
+                }
+                Reports::Conduct(_) => {
+                    let facts: Vec<ConductFact> = decode(&id, answer)?;
+                    facts
+                        .chunks(MAX_CONDUCT_FACTS)
+                        .map(|batch| FinCommand::RecordConductFacts { facts: batch.to_vec() })
+                        .collect()
                 }
             };
-            match self.send(key, &source.caller, command).await? {
-                Ok(()) => pass.reports_sent.push(id),
-                Err(reject) => unanswered.push(format!("the ledger refused {id} from {}: {reject}", source.module)),
+            let mut refused = false;
+            for (n, command) in commands.into_iter().enumerate() {
+                if let Err(reject) = self.send(format!("{key}:{n}"), &source.caller, command).await? {
+                    unanswered.push(format!("the ledger refused {id} from {}: {reject}", source.module));
+                    refused = true;
+                }
+            }
+            // Conduct facts go on every pass, so they are not listed as reports.
+            if !refused && !matches!(source.reports, Reports::Conduct(_)) {
+                pass.reports_sent.push(id);
             }
         }
 
