@@ -135,9 +135,9 @@ jobs:
         run: |
           for template in infra/*.bicep; do
             echo "$template"
-            bicep build --file "$template" --stdout > /dev/null
+            bicep build "$template" --stdout > /dev/null
           done
       - name: Compile its parameters
-        run: bicep build-params --file infra/main.bicepparam --stdout > /dev/null
+        run: bicep build-params infra/main.bicepparam --stdout > /dev/null
       - name: Render the Kubernetes manifests
         run: kubectl kustomize deploy/k8s > /dev/null
