@@ -102,6 +102,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once`<br>`collections/tests/dunning.rs::paying_stops_the_sequence_and_a_new_spell_starts_it_afresh`<br>`collections/tests/dunning.rs::an_ended_policy_leaves_the_sequence` |
 | COL-019 | full | `collections/tests/queue.rs::the_queue_puts_what_is_about_to_lapse_and_matters_most_first`<br>`collections/tests/cases.rs::an_officer_does_not_read_health_in_a_hardship_note`<br>`collections/tests/dunning.rs::a_high_premium_is_called_earlier`<br>`collections/tests/dunning.rs::a_call_left_too_long_goes_to_the_team_lead` |
+| COL-024 | part | `payments/tests/incident.rs::failures_in_an_incident_are_not_held_against_the_payers` |
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-026 | full | `collections/tests/dunning.rs::a_customer_with_several_policies_gets_one_notice_and_one_task`<br>`collections/tests/dunning.rs::a_notice_already_taken_is_not_added_to` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
