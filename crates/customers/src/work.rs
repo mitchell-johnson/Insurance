@@ -123,11 +123,12 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
     }
     let partitions = core.partitions().await.map_err(|e| format!("the core's partitions: {e}"))?;
     let mut told = 0;
-    for (party, date, attempts) in waiting {
-        let failure = match crate::relay::send(core, partitions, &party, date, attempts).await {
+    for notice in waiting {
+        let party = &notice.party;
+        let failure = match crate::relay::send(core, partitions, &notice).await {
             Ok(()) => {
-                app.store.death_relayed(&party, date).await.map_err(|e| e.to_string())?;
-                tracing::info!(party = %party, "death told to claims");
+                app.store.death_relayed(&notice).await.map_err(|e| e.to_string())?;
+                tracing::info!(party = %party, retract = notice.retract, "death told to claims");
                 told += 1;
                 continue;
             }
@@ -135,7 +136,7 @@ pub async fn relay_deaths<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(ap
         };
         let (Failure::Refused(e) | Failure::Unreached(e)) = &failure;
         tracing::warn!(party = %party, error = %e, "claims not yet told of a death; will retry");
-        app.store.death_failed(&party, date, e).await.map_err(|e| e.to_string())?;
+        app.store.death_failed(&notice, e).await.map_err(|e| e.to_string())?;
         if matches!(failure, Failure::Unreached(_)) {
             break;
         }

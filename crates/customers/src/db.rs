@@ -19,6 +19,7 @@ pub const SCOPE_POSTGRES: &str = "https://ossrdbms-aad.database.windows.net/.def
 pub const MIGRATIONS: &[(i32, &str)] = &[
     (1, include_str!("../migrations/001_init.sql")),
     (2, include_str!("../migrations/002_death_relay.sql")),
+    (3, include_str!("../migrations/003_retractions.sql")),
 ];
 
 #[derive(Clone)]

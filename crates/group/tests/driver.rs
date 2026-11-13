@@ -816,17 +816,21 @@ E006,Fay,Tane,05/09/1992,staff,60000,akl,,021 555 0134\n";
     assert!(refused.contains("403") && !refused.contains("Walker"), "{refused}");
 }
 
-const KEY: &str = "service-key-0123456789abcdef0123456789";
+const GROUP_AUDIENCE: &str = "api://group-schemes";
 
-async fn served(d: Arc<Rig>) -> String {
+/// The service behind a stand-in Entra ID tenant, and that tenant's address.
+async fn served(d: Arc<Rig>) -> (String, String) {
+    let authority = customer_master::tenant().await;
+    let entra = ic_group::auth::Entra::new(&authority, customer_master::TENANT, GROUP_AUDIENCE);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(ic_group::service::serve(listener, ic_group::service::router(d, KEY), std::future::pending()));
-    base
+    tokio::spawn(ic_group::service::serve(listener, ic_group::service::router(d, entra), std::future::pending()));
+    (base, authority)
 }
 
-/// Purpose: the service's routes take an upload, a command and a question only with the
-/// service key; an upload is stored and quarantined under the uploader's name; a command
+/// Purpose: the service's routes take an upload, a command and a question only with an
+/// Entra ID token issued for this service, and only under a caller name the token carries
+/// as a role; an upload is stored and quarantined under the uploader's name; a command
 /// is applied on the core's business date under a key that cannot collide with the
 /// driver's; refusals come back with the module's own code; and nobody outside can send
 /// the driver's commands, read the outbox, or announce a file without uploading it.
@@ -836,7 +840,19 @@ async fn served(d: Arc<Rig>) -> String {
 #[tokio::test]
 async fn the_service_routes_admit_only_what_a_portal_may_do() {
     let d = Arc::new(rig());
-    let base = served(d.clone()).await;
+    let (base, authority) = served(d.clone()).await;
+    let token = |roles: &[&str]| customer_master::token_with(&authority, roles, GROUP_AUDIENCE);
+    // A service holding every caller name the routes take, so that what follows tests the
+    // routes' own rules; what a narrower token may do is tested at the end.
+    let all = token(&[
+        "group-admin",
+        "employer-portal",
+        "member-portal",
+        "underwriting",
+        "reinsurance",
+        "cash-matching",
+        "group-driver",
+    ]);
     let http = reqwest::Client::new();
     let post = |path: &str, key: Option<&str>, headers: &[(&str, &str)], body: Vec<u8>| {
         let mut r = http.post(format!("{base}{path}")).body(body);
@@ -856,29 +872,31 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
     let upload = "/v1/schemes/harbour/files/nov.csv";
     assert_eq!(http.get(format!("{base}/healthz")).send().await.unwrap().text().await.unwrap(), "ok");
 
-    // The key.
-    for key in [None, Some("wrong-key"), Some("")] {
+    // The token: missing, not a token, for another service, or from another tenant.
+    let elsewhere = customer_master::token_with(&authority, &["group-admin"], "api://customer-master");
+    let forged = customer_master::token_with("https://login.example.test", &["group-admin"], GROUP_AUDIENCE);
+    for key in [None, Some("wrong-key"), Some(""), Some(elsewhere.as_str()), Some(forged.as_str())] {
         assert_eq!(post(upload, key, &who, FILE.into()).await.0, 401);
         assert_eq!(post("/v1/commands", key, &[], b"{}".to_vec()).await.0, 401);
         assert_eq!(post("/v1/questions", key, &[], b"{}".to_vec()).await.0, 401);
     }
     // Uploads.
-    assert_eq!(post(upload, Some(KEY), &[], FILE.into()).await.1["error"]["code"], "missing_identity");
+    assert_eq!(post(upload, Some(all.as_str()), &[], FILE.into()).await.1["error"]["code"], "missing_identity");
     let member = [("x-ic-caller", "member-portal"), ("x-ic-actor", "party-9")];
-    assert_eq!(post(upload, Some(KEY), &member, FILE.into()).await.0, 403);
-    assert_eq!(post(upload, Some(KEY), &who, vec![]).await.1["error"]["code"], "empty_file");
+    assert_eq!(post(upload, Some(all.as_str()), &member, FILE.into()).await.0, 403);
+    assert_eq!(post(upload, Some(all.as_str()), &who, vec![]).await.1["error"]["code"], "empty_file");
     assert_eq!(
-        post("/v1/schemes/nowhere/files/a.csv", Some(KEY), &who, FILE.into()).await,
+        post("/v1/schemes/nowhere/files/a.csv", Some(all.as_str()), &who, FILE.into()).await,
         (
             422,
             serde_json::json!({"error": {"code": "unknown_scheme", "message": "scheme nowhere is not registered"}})
         )
     );
-    let (status, body) = post(upload, Some(KEY), &who, FILE.into()).await;
+    let (status, body) = post(upload, Some(all.as_str()), &who, FILE.into()).await;
     assert_eq!((status, body["status"].as_str()), (202, Some("quarantined")));
     assert_eq!(d.module.state.lock().unwrap().schemes[SCHEME].files["nov.csv"].uploaded_by, "admin-bo");
     d.files.down.set(true);
-    assert_eq!(post("/v1/schemes/harbour/files/dec.csv", Some(KEY), &who, FILE.into()).await.0, 503);
+    assert_eq!(post("/v1/schemes/harbour/files/dec.csv", Some(all.as_str()), &who, FILE.into()).await.0, 503);
     d.files.down.set(false);
 
     // Commands.
@@ -887,64 +905,145 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
     };
     let freeze = serde_json::json!({"freeze": {"scheme": SCHEME, "reason": "review"}});
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], b"not json".to_vec()).await.1["error"]["code"],
+        post("/v1/commands", Some(all.as_str()), &[], b"not json".to_vec()).await.1["error"]["code"],
         "invalid_command"
     );
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("group-driver", "k1", serde_json::json!("tick")))
-            .await
-            .0,
+        post(
+            "/v1/commands",
+            Some(all.as_str()),
+            &[],
+            command("group-driver", "k1", serde_json::json!("tick"))
+        )
+        .await
+        .0,
         403
     );
     let scan = serde_json::json!({"record_scan": {"scheme": SCHEME, "file": "nov.csv", "clean": true}});
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("group-admin", "k1", scan)).await.1["error"]["code"],
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k1", scan)).await.1["error"]["code"],
         "caller_not_allowed"
     );
     let receive = serde_json::json!({"receive_file": {"scheme": SCHEME, "file": "x.csv", "content_hash": "h"}});
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("employer-portal", "k1", receive)).await.1["error"]["code"],
+        post("/v1/commands", Some(all.as_str()), &[], command("employer-portal", "k1", receive)).await.1["error"]["code"],
         "use_upload"
     );
-    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "", freeze.clone())).await.0, 403);
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("group-admin", "k2", freeze.clone())).await,
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "", freeze.clone()))
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k2", freeze.clone())).await,
         (200, serde_json::json!({"applied": true, "duplicate": false}))
     );
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("group-admin", "k2", freeze)).await.1["duplicate"],
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k2", freeze)).await.1["duplicate"],
         true
     );
     let unfreeze = serde_json::json!({"unfreeze": {"scheme": "nowhere"}});
-    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k3", unfreeze)).await.0, 422);
+    assert_eq!(
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k3", unfreeze)).await.0,
+        422
+    );
     d.core.down.set(true);
     let again = serde_json::json!({"unfreeze": {"scheme": SCHEME}});
-    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again.clone())).await.0, 503);
+    assert_eq!(
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k4", again.clone()))
+            .await
+            .0,
+        503
+    );
     d.core.down.set(false);
     d.module.down.set(true);
-    assert_eq!(post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again.clone())).await.0, 503);
-    assert_eq!(post("/v1/questions", Some(KEY), &[], br#"{"ask":"files_to_read"}"#.to_vec()).await.0, 503);
+    assert_eq!(
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k4", again.clone()))
+            .await
+            .0,
+        503
+    );
+    assert_eq!(
+        post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"files_to_read"}"#.to_vec()).await.0,
+        503
+    );
     d.module.down.set(false);
     assert_eq!(
-        post("/v1/commands", Some(KEY), &[], command("group-admin", "k4", again)).await.0,
+        post("/v1/commands", Some(all.as_str()), &[], command("group-admin", "k4", again)).await.0,
         200,
         "the same key after a 503 is safe"
     );
 
     // Questions.
-    let (status, scheme) = post("/v1/questions", Some(KEY), &[], br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()).await;
+    let (status, scheme) = post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()).await;
     assert_eq!((status, scheme["open_file"].as_str(), scheme["frozen"].as_str()), (200, Some("nov.csv"), None));
     assert_eq!(
-        post("/v1/questions", Some(KEY), &[], br#"{"ask":"scheme","scheme":"nowhere"}"#.to_vec())
+        post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"scheme","scheme":"nowhere"}"#.to_vec())
             .await
             .0,
         404
     );
-    assert_eq!(post("/v1/questions", Some(KEY), &[], br#"{"ask":"outbox","limit":10}"#.to_vec()).await.0, 403);
     assert_eq!(
-        post("/v1/questions", Some(KEY), &[], br#"{"ask":"weather"}"#.to_vec()).await.1["error"]["code"],
+        post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"outbox","limit":10}"#.to_vec())
+            .await
+            .0,
+        403
+    );
+    assert_eq!(
+        post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"weather"}"#.to_vec()).await.1["error"]["code"],
         "invalid_question"
     );
+
+    // A token is good only for the caller names it carries.
+    let members_only = token(&["member-portal"]);
+    let as_staff = command("group-admin", "k9", serde_json::json!({"unfreeze": {"scheme": SCHEME}}));
+    assert_eq!(
+        post("/v1/commands", Some(members_only.as_str()), &[], as_staff.clone()).await.1["error"]["code"],
+        "role_not_held"
+    );
+    assert_eq!(
+        post(upload, Some(members_only.as_str()), &who, FILE.into()).await.1["error"]["code"],
+        "role_not_held"
+    );
+    assert_eq!(
+        post(
+            "/v1/questions",
+            Some(members_only.as_str()),
+            &[],
+            br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()
+        )
+        .await
+        .0,
+        200
+    );
+    // A service this one does not know, or one with no role at all, gets nothing.
+    let stranger = token(&["documents"]);
+    assert_eq!(
+        post(
+            "/v1/questions",
+            Some(stranger.as_str()),
+            &[],
+            br#"{"ask":"scheme","scheme":"harbour"}"#.to_vec()
+        )
+        .await
+        .0,
+        403
+    );
+    assert_eq!(post("/v1/commands", Some(token(&[]).as_str()), &[], as_staff.clone()).await.0, 401);
+
+    // When Entra ID's signing keys cannot be fetched nothing is known about the token, so
+    // the caller is told to try again and is not told it is refused.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let dark = format!("http://{}", listener.local_addr().unwrap());
+    let unreachable = ic_group::auth::Entra::new("http://127.0.0.1:1", customer_master::TENANT, GROUP_AUDIENCE);
+    tokio::spawn(ic_group::service::serve(
+        listener,
+        ic_group::service::router(d.clone(), unreachable),
+        std::future::pending(),
+    ));
+    let resp = http.post(format!("{dark}/v1/commands")).bearer_auth(&all).body(as_staff).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 503);
 }
 
 /// Purpose: the service loop keeps running passes until told to stop, whatever a pass
@@ -1073,11 +1172,11 @@ async fn the_customer_master_client_reads_every_answer() {
 }
 
 /// Purpose: the service refuses to start without its storage, event stream, customer
-/// master, or with a short salt or key, says which setting is wrong, takes the documented
+/// master, tenant or audience, or with a short salt, says which setting is wrong, takes the documented
 /// defaults for the rest, and never prints a secret.
 /// Why it matters: a service that started half-configured would accept uploads it cannot
-/// process. And the fingerprint salt and service key end up in logs if the configuration's
-/// debug form includes them.
+/// process, and one without its tenant or audience could not tell who is calling. And the
+/// fingerprint salt ends up in logs if the configuration's debug form includes it.
 #[test]
 fn the_service_configuration_is_checked_at_start() {
     use ic_group::service::Config;
@@ -1088,7 +1187,8 @@ fn the_service_configuration_is_checked_at_start() {
         ("IC_GROUP_CUSTOMER_MASTER", "https://customers.internal"),
         ("IC_GROUP_CUSTOMER_MASTER_SCOPE", "api://customers/.default"),
         ("IC_GROUP_FINGERPRINT_SALT", "salt-0123456789abcdef0123456789abcdef"),
-        ("IC_GROUP_API_KEY", KEY),
+        ("AZURE_TENANT_ID", "tenant-1"),
+        ("IC_GROUP_AUDIENCE", "api://group-schemes"),
     ]
     .into();
     let read = |vars: &BTreeMap<&str, &str>| {
@@ -1110,8 +1210,18 @@ fn the_service_configuration_is_checked_at_start() {
         ("group-quarantine", "group-events", "reinsurance")
     );
     assert_eq!((config.listen.as_str(), config.cycle_every), ("0.0.0.0:8080", Duration::from_secs(5)));
+    assert_eq!(
+        (config.tenant.as_str(), config.audience.as_str(), config.entra_authority.as_str()),
+        ("tenant-1", "api://group-schemes", "https://login.microsoftonline.com")
+    );
+    // The authority is the one workload identity names, unless this service is given its own.
+    let mut vars = full.clone();
+    vars.insert("AZURE_AUTHORITY_HOST", "https://login.microsoftonline.us/");
+    assert_eq!(read(&vars).unwrap().entra_authority, "https://login.microsoftonline.us/");
+    vars.insert("IC_GROUP_ENTRA_AUTHORITY", "https://login.partner.example");
+    assert_eq!(read(&vars).unwrap().entra_authority, "https://login.partner.example");
     let shown = format!("{config:?}");
-    assert!(shown.contains("node-1:7000") && !shown.contains("salt-0123") && !shown.contains(KEY), "{shown}");
+    assert!(shown.contains("node-1:7000") && !shown.contains("salt-0123"), "{shown}");
     for missing in full.keys() {
         let mut vars = full.clone();
         vars.insert(missing, "  ");
@@ -1119,7 +1229,6 @@ fn the_service_configuration_is_checked_at_start() {
     }
     for (key, value, says) in [
         ("IC_GROUP_FINGERPRINT_SALT", "short", "at least 32"),
-        ("IC_GROUP_API_KEY", "short", "at least 32"),
         ("IC_GROUP_CYCLE_SECONDS", "0", "above zero"),
         ("IC_GROUP_CYCLE_SECONDS", "soon", "above zero"),
     ] {
