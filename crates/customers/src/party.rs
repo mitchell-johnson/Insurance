@@ -160,6 +160,14 @@ pub enum Change {
 /// person screening, as against an identity check.
 pub const SCREENING_METHOD: &str = "screening";
 
+/// Identity check methods that see the living person (a liveness selfie,
+/// face to face, a video call). A passed one tells claims the person is
+/// alive; a database check or a death register search with no match does not.
+pub const LIVE_METHODS: [&str; 4] = ["document_and_selfie", "liveness", "in_person", "video_call"];
+
+/// How recent a check must be, when recorded, to count as proof of life.
+pub const PROOF_OF_LIFE_DAYS: i64 = 30;
+
 /// How recent the identity check behind a hold removal must be.
 pub const FRESH_VERIFICATION_HOURS: i64 = 24;
 

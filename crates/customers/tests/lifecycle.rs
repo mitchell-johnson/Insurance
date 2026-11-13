@@ -1069,3 +1069,70 @@ async fn a_spending_hold_is_told_to_the_core_policy_by_policy() {
     // The change due when P2's ownership ends is still waiting for its day.
     assert_eq!(w.sql("select 1 from owner_hold_relay where due_on = '2099-01-01'").await.unwrap(), 2);
 }
+
+/// Purpose: a passed identity check that sees the person (a liveness selfie, face to face)
+/// tells claims they are alive on every partition, retrying a partition that refuses; a
+/// database check, a failed check, an old check recorded late, and anyone recorded as dead
+/// tell claims nothing.
+/// Why it matters: a benefit in payment stops when proof of life is overdue, so a check the
+/// person already passed should complete it; but only a check that saw a living person
+/// proves life, or a dead person's benefit would carry on being paid.
+#[tokio::test]
+async fn an_identity_check_that_sees_the_person_proves_them_alive_to_claims() {
+    let w = world_or_skip!();
+    let me = w.person("Rangi", "Kerei", "1950-05-05", &[]).await;
+    let gone = w.person("Tui", "Kerei", "1951-06-06", &[]).await;
+    let check = |method: &str, outcome: &str, evidence: &str, at: chrono::DateTime<Utc>| {
+        json!({ "command": "record_verification", "method": method, "provider": "idv",
+                "outcome": outcome, "evidence_ref": evidence, "verified_at": at })
+    };
+    let now = Utc::now();
+    for c in [
+        check("database", "passed", "ev-db", now),
+        check("document_and_selfie", "failed", "ev-fail", now),
+        check("in_person", "passed", "ev-old", now - chrono::Duration::days(40)),
+        check("document_and_selfie", "passed", "ev-1", now),
+    ] {
+        let (status, out) = w.command(&me, "identity", c).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    w.command(&gone, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-01" }))
+        .await;
+    w.command(&gone, "identity", check("liveness", "passed", "ev-dead", now)).await;
+    assert_eq!(w.sql("select 1 from alive_relay").await.unwrap(), 1, "only the live, passed, recent check");
+
+    let core = common::FakeCore {
+        partitions: 2,
+        ..Default::default()
+    };
+    *core.refuse.lock().unwrap() = Some(1);
+    assert_eq!(work::relay_alive(&w.app, &core).await.unwrap(), 0);
+    assert_eq!(
+        w.sql("select 1 from alive_relay where attempts = 1 and last_error like 'partition 1 refused%'")
+            .await
+            .unwrap(),
+        1
+    );
+    *core.refuse.lock().unwrap() = None;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_alive(&w.app, &core).await.unwrap(), 1);
+    assert_eq!(work::relay_alive(&w.app, &core).await.unwrap(), 0, "told once");
+    let sent = core.proposed.lock().unwrap().clone();
+    assert_eq!(sent.iter().map(|(p, _, _)| *p).collect::<Vec<_>>(), vec![0, 1], "every partition");
+    assert!(
+        sent.iter().all(|(_, key, _)| key.starts_with("alive:") && key.ends_with(":1")),
+        "a new key per attempt"
+    );
+    match serde_json::from_value::<ic_core::Command>(sent[0].2.clone()).unwrap() {
+        ic_core::Command::Claims(c) => match *c {
+            ic_claims::Command::ConfirmAlive { party, source, evidence_ref } => {
+                assert_eq!(
+                    (party, source.as_str(), evidence_ref.as_str()),
+                    (me.clone(), "identity_document_and_selfie", "ev-1")
+                );
+            }
+            other => panic!("{other:?}"),
+        },
+        other => panic!("{other:?}"),
+    }
+}
