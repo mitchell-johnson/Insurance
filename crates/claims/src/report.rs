@@ -113,6 +113,11 @@ pub enum Question {
     /// A work queue's open claims.
     Queue {
         queue: Queue,
+        /// The person asking. A claim they may not work because of a
+        /// declared relationship or because they underwrote the life is
+        /// left out, so it is never offered to them. Absent: the whole queue.
+        #[serde(default)]
+        staff: Option<StaffId>,
     },
     /// The claims in payment as a portfolio. Carries cause analysis: for the
     /// claims module's own staff only.
@@ -124,6 +129,9 @@ pub enum Question {
     /// One claim as the people working it need it, without the clinical file.
     Work {
         claim: ClaimId,
+        /// The person asking: a claim they are conflicted on is not shown.
+        #[serde(default)]
+        staff: Option<StaffId>,
     },
     /// The claims on one policy as an adviser or an employer may see them:
     /// that each exists and where it is, never its cause or type. The caller
@@ -247,13 +255,27 @@ impl ClaimsState {
                     view: self.claimant_view(claim)?,
                 }))
             })),
-            Question::Queue { queue } => Reply::Queue(self.queue(*queue, today)),
+            Question::Queue { queue, staff } => Reply::Queue(
+                self.queue(*queue, today)
+                    .into_iter()
+                    .filter(|r| self.may_see(staff.as_deref(), &r.claim))
+                    .collect(),
+            ),
             Question::Book => Reply::Book(Box::new(self.book(today))),
             Question::Report => Reply::Report(Box::new(self.report())),
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
-            Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
+            Question::Work { claim, staff } => Reply::Work(self.work_view(claim).filter(|_| self.may_see(staff.as_deref(), claim)).map(Box::new)),
             Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
             Question::Cases { staff } => Reply::Cases(self.cases(staff)),
+        }
+    }
+
+    /// Whether someone may see a claim in a queue or its working view: not
+    /// if they are conflicted on it. Nobody named is the system asking.
+    fn may_see(&self, staff: Option<&str>, claim: &str) -> bool {
+        match (staff, self.claims.get(claim)) {
+            (Some(s), Some(c)) => !self.conflicted(s, c),
+            _ => true,
         }
     }
 

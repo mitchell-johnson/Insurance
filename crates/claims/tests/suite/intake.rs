@@ -937,3 +937,54 @@ fn a_death_with_no_certificate_is_registered_and_the_coroner_is_chased() {
     assert_eq!(w.core.noticed("evidence_overdue")[0]["evidence"], "coroner");
     assert_eq!(w.claim("c-sea").status, Status::Open, "the claim waits; it is not declined");
 }
+
+/// Purpose: a claim in a queue is never shown to someone with a declared relationship to anyone
+/// on it, or who underwrote the life: the queue they ask for leaves it out and its working view
+/// answers as if there were no such claim, while colleagues see it as usual.
+/// Why it matters: persona test CLM-033. A cousin working the queue a relative's claim lands in
+/// must not be offered it, and seeing that the claim exists is already a disclosure of health.
+#[test]
+fn a_claim_is_never_offered_to_a_relative_in_the_queue() {
+    use ic_claims::report::{Question, Reply};
+    let mut w = World::new();
+    notify(&mut w, "c-1", "pol-1", "trauma", ClaimType::Trauma);
+    let today = w.core.today;
+    let queue = |w: &World, staff: Option<&str>| match w.state.answer(
+        &Question::Queue {
+            queue: Queue::LumpSum,
+            staff: staff.map(str::to_string),
+        },
+        today,
+    ) {
+        Reply::Queue(rows) => rows.into_iter().map(|r| r.claim).collect::<Vec<_>>(),
+        other => panic!("a queue question gets a queue, not {other:?}"),
+    };
+    let work = |w: &World, staff: &str| {
+        matches!(
+            w.state.answer(
+                &Question::Work {
+                    claim: "c-1".into(),
+                    staff: Some(staff.into()),
+                },
+                today,
+            ),
+            Reply::Work(Some(_))
+        )
+    };
+    assert_eq!(queue(&w, Some("ana")), ["c-1"]);
+    assert_eq!(queue(&w, None), ["c-1"], "the whole queue for the system");
+    // rel declared a relationship with the policyholder; una underwrote the life.
+    for conflicted in ["rel", "una"] {
+        assert!(queue(&w, Some(conflicted)).is_empty(), "{conflicted} is shown the claim");
+        assert!(!work(&w, conflicted), "{conflicted} can open the claim");
+    }
+    assert!(work(&w, "ana"));
+    assert_eq!(
+        w.refused(Command::Assign {
+            claim: "c-1".into(),
+            to: "rel".into(),
+            actor: actor("rel")
+        }),
+        "conflict_of_interest"
+    );
+}
