@@ -1701,6 +1701,13 @@ fn a_benefit_is_suspended_in_custody_and_resumes_on_release() {
     assert_eq!((c.overpayments[0].amount_minor, c.overpayments[0].status), (1_500, RecoveryStatus::Held));
     assert!(!c.due.iter().any(|(_, d)| matches!(d, ic_claims::model::Due::Review(_))), "the reviews wait");
     assert_eq!(w.core.noticed("benefit_suspended")[0]["from"], "2027-04-16");
+    assert_eq!(
+        w.undecided("ip-1", "ana", suspend("vault-sentence"), "R-CUSTODY"),
+        "invalid_suspension",
+        "already suspended"
+    );
+    w.open_claim("c-9");
+    assert_eq!(w.undecided("c-9", "ana", suspend("vault-sentence"), "R-CUSTODY"), "not_in_payment");
 
     // May: the claim is in the run and nothing is paid for it.
     w.pay_run("run-3", d(2027, 5, 1));

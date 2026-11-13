@@ -725,7 +725,7 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
 
 ### Checks
 
-- The claims suite alone covers the crate at 98.18% of lines (`cargo llvm-cov -p ic-claims`); `port.rs` and `report.rs` are covered from the sim and API tests.
+- The claims suite alone covers the crate at about 97% of lines (`cargo llvm-cov -p ic-claims`, 13 November); moving a policy's claims (`state.rs`), `port.rs` and `report.rs` are covered from the sim and API tests, which the workspace gate counts.
 - The whole workspace suite passed locally before every push from this thread, the last at commit 71af93a. CI on main rarely completes because pushes arrive faster than a run; judge by the latest completed run.
 - Known weak spot outside claims' crates: `AbortTransfer` on the source is accepted while the transfer record may still be in flight to the target (reported to the core thread).
 

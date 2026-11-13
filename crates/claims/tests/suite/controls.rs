@@ -435,6 +435,43 @@ fn each_command_names_who_may_send_it() {
             "record_repayment",
             &["payments", "claims"],
         ),
+        (
+            Command::ConfirmAlive {
+                party: "p".into(),
+                source: "s".into(),
+                evidence_ref: "v".into(),
+            },
+            "confirm_alive",
+            &["channels", "customer-master"],
+        ),
+        (
+            Command::RecordRepaymentLetter {
+                claim: "c".into(),
+                overpayment: "o".into(),
+                request: "r".into(),
+            },
+            "record_repayment_letter",
+            &["documents"],
+        ),
+        (
+            Command::ReferForInvestigation {
+                case: "k".into(),
+                rule: "r".into(),
+                claims: vec![],
+            },
+            "refer_for_investigation",
+            &["compliance"],
+        ),
+        (
+            Command::OffsetReturned {
+                from: 1,
+                take_ref: "t".into(),
+                claim: "c".into(),
+                amount_minor: 1,
+            },
+            "offset_returned",
+            &["partition"],
+        ),
     ];
     for (command, name, callers) in cases {
         assert_eq!(command.name(), name);
