@@ -131,6 +131,11 @@ pub enum Question {
     PolicyStatus {
         policy: String,
     },
+    /// The restricted cases, for an investigator. The caller puts the
+    /// signed-in person here; anyone without the role is answered with none.
+    Cases {
+        staff: StaffId,
+    },
 }
 
 /// One claim for the staff working it: who has it, what is waiting and
@@ -224,6 +229,7 @@ pub enum Reply {
     Remittance(BTreeMap<String, (u32, i64)>),
     Work(Option<Box<WorkView>>),
     PolicyStatus(Vec<StatusView>),
+    Cases(Vec<crate::investigate::CaseView>),
 }
 
 impl ClaimsState {
@@ -243,6 +249,7 @@ impl ClaimsState {
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
             Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
             Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
+            Question::Cases { staff } => Reply::Cases(self.cases(staff)),
         }
     }
 

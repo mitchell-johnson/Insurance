@@ -49,6 +49,17 @@ pub(crate) fn overpaid_after(s: &Schedule, end: NaiveDate) -> i64 {
         .sum()
 }
 
+/// A payment held for a reason the person releasing it is not told.
+fn held_payment() -> Reject {
+    Reject::new("payment_held", "payment on this claim is held; ask a claims manager")
+}
+
+/// The key a provider's debts are held under among offset sources, apart
+/// from any person's.
+fn provider_key(provider: &str) -> String {
+    format!("provider:{provider}")
+}
+
 /// An overpayment being recovered by offset, and how much of it is left.
 struct OffsetSource {
     claim: String,
@@ -333,6 +344,9 @@ impl ClaimsState {
                 "your authority profile does not cover a payment of this size on this line",
             ));
         }
+        if claim.investigation.is_some() {
+            return Err(held_payment());
+        }
         let Some(payee) = claim.payee.as_ref().map(|p| p.party.clone()) else {
             return Err(Reject::new("payee_not_verified", "verify the payee before the first payment"));
         };
@@ -392,6 +406,7 @@ impl ClaimsState {
             payee: payee.clone(),
             close,
             interest_minor,
+            offset: None,
         })?;
         claim.payable_minor -= amount_minor;
         let mut period_end = None;
@@ -444,6 +459,9 @@ impl ClaimsState {
     pub(crate) fn pay_interest(&mut self, cx: &mut Cx<'_>, id: &str, payment_ref: String, party: &str, actor: &Actor) -> Result<(), Reject> {
         let mut claim = self.claim(id)?;
         self.owner(actor, &claim)?;
+        if claim.investigation.is_some() {
+            return Err(held_payment());
+        }
         let Some(at) = claim.interests.iter().position(|i| i.party == party && i.owed_minor > i.paid_minor) else {
             return Err(Reject::new("no_interest", "that party has no unpaid interest in this claim"));
         };
@@ -473,6 +491,7 @@ impl ClaimsState {
             payee: party.to_string(),
             close,
             interest_minor: 0,
+            offset: None,
         })?;
         claim.payable_minor -= amount_minor;
         claim.interests[at].paid_minor += amount_minor;
@@ -545,6 +564,7 @@ impl ClaimsState {
                 payee: provider.to_string(),
                 close,
                 interest_minor: 0,
+                offset: None,
             }
         } else {
             Instruction::HandlingCost {
@@ -715,22 +735,35 @@ impl ClaimsState {
         Ok(())
     }
 
-    /// Overpayments being recovered by offset, by the person who owes them.
+    /// Overpayments being recovered by offset, by who owes them: the life
+    /// insured, or for a provider's billing error the provider, under
+    /// [`provider_key`].
     fn offset_sources(&self) -> BTreeMap<String, Vec<OffsetSource>> {
         let mut by_party: BTreeMap<String, Vec<OffsetSource>> = BTreeMap::new();
         for c in self.offsetting.iter().filter_map(|id| self.claims.get(id)) {
-            let Some(party) = c.life_party.clone() else { continue };
+            let provider = c.health.as_ref().and_then(|h| h.provider.as_deref()).map(provider_key);
             for o in c
                 .overpayments
                 .iter()
                 .filter(|o| o.status == RecoveryStatus::Offset && o.outstanding_minor() > 0)
             {
-                by_party.entry(party.clone()).or_default().push(OffsetSource {
+                let owner = if o.cause == crate::model::OverpaymentCause::ProviderBilling {
+                    provider.clone()
+                } else {
+                    c.life_party.clone()
+                };
+                let Some(party) = owner else { continue };
+                by_party.entry(party).or_default().push(OffsetSource {
                     claim: c.id.clone(),
                     policy: c.policy.clone(),
                     overpayment: o.id.clone(),
                     left_minor: o.outstanding_minor(),
-                    pct: o.offset_pct.min(self.rules.max_offset_pct),
+                    // The cap protects a person's income, not a provider's billing.
+                    pct: if o.cause == crate::model::OverpaymentCause::ProviderBilling {
+                        o.offset_pct.min(100)
+                    } else {
+                        o.offset_pct.min(self.rules.max_offset_pct)
+                    },
                 });
             }
         }
@@ -750,7 +783,13 @@ impl ClaimsState {
         match kind {
             RunKind::Benefit => {
                 let mut sources = self.offset_sources();
-                for c in self.in_payment.iter().filter_map(|id| self.claims.get(id)).filter(|c| c.in_run.is_none()) {
+                // A claim in a restricted case waits without anyone being told why.
+                for c in self
+                    .in_payment
+                    .iter()
+                    .filter_map(|id| self.claims.get(id))
+                    .filter(|c| c.in_run.is_none() && c.investigation.is_none())
+                {
                     cx.core.work(1);
                     let Some(s) = c.schedule.as_ref() else { continue };
                     // A waiver pays nobody; an overdue proof of life holds the money where it is.
@@ -798,15 +837,38 @@ impl ClaimsState {
                 }
             }
             RunKind::Provider => {
-                for c in self.provider_payable.iter().filter_map(|id| self.claims.get(id)).take(MAX_RUN_ITEMS) {
+                let mut sources = self.offset_sources();
+                for c in self
+                    .provider_payable
+                    .iter()
+                    .filter_map(|id| self.claims.get(id))
+                    .filter(|c| c.investigation.is_none())
+                    .take(MAX_RUN_ITEMS)
+                {
                     cx.core.work(1);
                     let provider = c.health.as_ref().and_then(|h| h.provider.clone());
+                    let gross = c.benefit_payable_minor();
+                    // A provider's billing error comes back out of what it is paid next.
+                    let offset = provider
+                        .as_deref()
+                        .and_then(|p| sources.get_mut(&provider_key(p)))
+                        .and_then(|v| v.iter_mut().find(|o| o.left_minor > 0 && o.claim != c.id))
+                        .and_then(|o| {
+                            let take = (gross * i64::from(o.pct) / 100).min(o.left_minor);
+                            o.left_minor -= take;
+                            (take > 0).then(|| Offset {
+                                claim: o.claim.clone(),
+                                policy: o.policy.clone(),
+                                overpayment: o.overpayment.clone(),
+                                amount_minor: take,
+                            })
+                        });
                     items.push(RunItem {
                         claim: c.id.clone(),
                         period_start: benefit_date,
                         period_end: benefit_date,
-                        gross_minor: c.benefit_payable_minor(),
-                        offset: None,
+                        gross_minor: gross,
+                        offset,
                         payee: provider.unwrap_or_else(|| c.policyholder.clone()),
                     });
                 }
@@ -885,7 +947,11 @@ impl ClaimsState {
                 payee: item.payee.clone(),
                 close: true,
                 interest_minor: 0,
+                offset: item.offset.clone(),
             })?;
+            if let Some(o) = &item.offset {
+                self.take_offset(claim, o);
+            }
             claim.payments.push(Payment {
                 payment_ref: payment_ref.clone(),
                 amount_minor: item.gross_minor,

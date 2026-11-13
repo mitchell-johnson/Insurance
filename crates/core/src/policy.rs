@@ -546,6 +546,9 @@ pub struct Policy {
     /// Days the lapse clock stood still under a broken arrangement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arrears_pause: Option<crate::arrangement::ArrearsPause>,
+    /// The hardship override, the latest one granted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hardship: Option<crate::hardship::HardshipOverride>,
     /// A full surrender of a unit-linked policy that has been asked for.
     /// While it is set no new money goes in.
     #[serde(default, skip_serializing_if = "Option::is_none")]

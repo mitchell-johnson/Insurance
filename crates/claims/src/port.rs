@@ -121,6 +121,10 @@ pub enum Instruction {
         /// Interest for late payment, expensed now and paid with it.
         #[serde(default)]
         interest_minor: i64,
+        /// Part of the payment kept back against an overpayment the payee
+        /// owes: a provider's billing error recovered from its next run.
+        #[serde(default)]
+        offset: Option<Offset>,
     },
     /// One period of a benefit in payment: admitted and paid in one entry,
     /// less any agreed offset against an overpayment.

@@ -139,3 +139,18 @@ The underwriting module decides the remedy on an approved case; the core carries
 - **Broken** on the day after a missed instalment, or the day collections ends it (`EndArrangement`). The lapse clock then reads today less the days the arrangement ran, for as long as premium from before it is unpaid. A second broken arrangement adds its days to the first.
 - **Not handled**: an arrangement left open on a policy that is then cancelled stays recorded as active and is never looked at again.
 - **`ReceiptApplied` carries the statutory fund** the receipt's postings were stamped with, so payments can add receipts up by fund and move cash between the funds' bank accounts.
+
+## Hardship overrides (13 Nov 2026)
+
+- **A hardship override is a share of the premium for a dated period**: `GrantHardship { from, to, share_bps }` (caller `collections`), where a share of zero is a premium holiday. It starts today or later, never in the past, and runs at most two years. The application, assessment and decision are the collections module's; the core applies what was decided.
+- **Billed, and earned, at the share.** A period is billed with the days the override covers at its share and the rest in full. The days left of the period already billed are credited when it is granted. Because the receivable is what is earned, a paused premium earns nothing, and commission on premium received follows without a rule of its own.
+- **Cover carries on in full.** The notes allow a product to reduce cover during a holiday; no product declares that yet, so none does.
+- **Ending early charges forward only**: `EndHardship` brings the end to today, charges the rest of the period already billed back at the full premium, and bills in full from then on. Days behind it stay as billed. One ended before its first day never applies.
+- **One at a time**, and the latest is kept on the policy. Retail policies only: a scheme's premium is refused (`not_retail`).
+- **Not handled**: a cover reduced or increased during an override has its adjustment for the days left worked out at the full premium, so that one adjustment is too large by the override's reduction. A policy fee is reduced with the premium.
+
+## Rate table validation is recorded, not enforced (13 Nov 2026)
+
+- **The core records that a rate table version passed validation and does not gate activation on it.** `RecordRateTableValidation` (caller `config` or `finance`) stores the report hash, schema version and who ran it against the table's content hash, and publishes `RateTableValidated`. Finance, which runs the checks, turns a close check red for any table activated without a matching record. Agreed with finance: the core does not depend on the finance crate, and the shipped test configuration activates tables with no report.
+- **A record is tied to content.** One for a version that is active under another content hash is refused. A version can be validated before it is activated.
+- **Loadings stay off the event feed.** Finance asked for a layer's total loading on the published layer facts so its table dry run can price what is billed. Loadings imply health, so they are not published; a question answered to finance alone will give them instead (not built yet).

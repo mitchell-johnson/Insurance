@@ -216,6 +216,12 @@ pub enum GroupEvent {
         life: LifeId,
         in_place: bool,
     },
+    /// Underwriting offered a member the loading to pay themselves and it
+    /// was not taken up. Nothing changed; staff who asked for it are told.
+    LoadingMoveDeclined {
+        scheme: String,
+        case: u64,
+    },
     ExcessCoverEnded {
         scheme: String,
         case: u64,

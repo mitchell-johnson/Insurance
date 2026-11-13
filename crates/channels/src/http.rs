@@ -703,6 +703,11 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
     }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
     let signed = redeem(&s, &headers, &session, &action, new.signed).await?;
+    let routing = match &s.master {
+        Some(master) => Some(master.routing(&session.party).await),
+        None => None,
+    };
+    let route_to_person = crate::customers::route_to_person(routing);
     let result = s
         .propose(
             key(&headers, &session.party.0)?,
@@ -714,6 +719,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
                 module: new.module,
                 payload: new.payload,
                 signed,
+                route_to_person,
             },
         )
         .await?;
@@ -982,6 +988,7 @@ async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Me
             module: crate::replacements::DISPUTE_MODULE.to_string(),
             payload: payload.clone(),
             signed: false,
+            route_to_person: false,
         },
     )
     .await?;
@@ -1564,6 +1571,20 @@ async fn claims_question(
             let (partition, view) = found.ok_or_else(Problem::not_found)?;
             ok(json!({ "partition": partition, "view": view }))
         }
+        Q::Cases { .. } => {
+            // Restricted: the claims module answers investigators only, and
+            // the person is whoever signed in.
+            let question = Q::Cases {
+                staff: session.party.to_string(),
+            };
+            let mut rows: Vec<Value> = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::Cases(found) = reply {
+                    rows.extend(found.into_iter().map(|r| json!({ "partition": p, "case": r })));
+                }
+            }
+            ok(json!({ "rows": rows }))
+        }
         Q::PolicyStatus { .. } => {
             // A policy is on one partition, except for a moment while it moves.
             let mut rows: Vec<Value> = Vec::new();
@@ -1826,6 +1847,7 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
         module: new.module,
         payload: new.payload,
         signed: false,
+        route_to_person: false,
     };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
 }

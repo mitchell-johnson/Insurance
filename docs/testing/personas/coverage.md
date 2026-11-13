@@ -48,24 +48,24 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 
 | Area | Full | Part | None | Priority 1 not full |
 | --- | ---: | ---: | ---: | ---: |
-| POL Policy model and lifecycle | 6 | 7 | 2 | 6 |
-| LED Ledger mapping and invariants | 9 | 5 | 4 | 6 |
+| POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
+| LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
-| BIL Billing and earning | 6 | 4 | 5 | 5 |
-| COL Collection, cash matching, standing and dunning | 8 | 6 | 14 | 12 |
+| BIL Billing and earning | 6 | 5 | 4 | 5 |
+| COL Collection, cash matching, standing and dunning | 10 | 6 | 12 | 10 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 17 | 8 | 5 | 8 |
-| CLM Claims and claims operations | 17 | 14 | 11 | 14 |
+| UW Underwriting, underwriting operations and delegated authority | 17 | 9 | 4 | 8 |
+| CLM Claims and claims operations | 18 | 14 | 10 | 13 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
-| INV Unit pricing and the investment ledger | 11 | 3 | 11 | 3 |
-| GRP Group scheme administration | 19 | 9 | 12 | 4 |
+| INV Unit pricing and the investment ledger | 12 | 3 | 10 | 3 |
+| GRP Group scheme administration | 19 | 10 | 11 | 4 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 0 | 0 | 11 | 4 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
-| SVC Policy servicing | 3 | 5 | 18 | 6 |
+| SVC Policy servicing | 4 | 4 | 18 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 5 | 6 | 10 | 7 |
@@ -76,28 +76,26 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CFG Configuration operations and the actuary's interface | 6 | 0 | 8 | 2 |
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
-| MIG Migration | 2 | 2 | 14 | 10 |
-| **Total** | **216** | **124** | **237** | **156** |
+| MIG Migration | 2 | 3 | 13 | 10 |
+| **Total** | **224** | **127** | **226** | **149** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 25 | 29 | 15 |
-| B | 81 | 22 | 39 |
-| C | 108 | 71 | 167 |
-| D | 2 | 2 | 16 |
+| A | 29 | 30 | 10 |
+| B | 82 | 23 | 37 |
+| C | 111 | 71 | 164 |
+| D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
 
-- **POL** (1): POL-002
-- **LED** (2): LED-006, LED-012
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (7): COL-005, COL-012, COL-014, COL-018, COL-019, COL-023, COL-024
+- **COL** (5): COL-005, COL-012, COL-019, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030
-- **CLM** (4): CLM-015, CLM-025, CLM-026, CLM-029
+- **CLM** (3): CLM-025, CLM-026, CLM-029
 - **INV** (2): INV-018, INV-019
-- **GRP** (2): GRP-017, GRP-028
+- **GRP** (1): GRP-017
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
 - **HLT** (4): HLT-001, HLT-002, HLT-004, HLT-009
@@ -111,11 +109,11 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **FIN** (1): FIN-009
 - **CFG** (2): CFG-005, CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
-- **MIG** (8): MIG-001, MIG-003, MIG-007, MIG-008, MIG-009, MIG-012, MIG-014, MIG-017
+- **MIG** (7): MIG-001, MIG-003, MIG-007, MIG-009, MIG-012, MIG-014, MIG-017
 
 ### Priority 1 tests only partly built, by area
 
-- **POL** (5): POL-001, POL-003, POL-005, POL-007, POL-015
+- **POL** (5): POL-001, POL-002, POL-003, POL-005, POL-015
 - **LED** (4): LED-004, LED-007, LED-013, LED-016
 - **PRD** (2): PRD-003, PRD-005
 - **BIL** (3): BIL-001, BIL-002, BIL-013
@@ -127,16 +125,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (10): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-028, CLM-033, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
-- **GRP** (2): GRP-013, GRP-032
+- **GRP** (3): GRP-013, GRP-028, GRP-032
 - **JNT** (3): JNT-001, JNT-008, JNT-013
 - **ADV** (3): ADV-019, ADV-035, ADV-037
-- **SVC** (1): SVC-008
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
 - **VUL** (4): VUL-002, VUL-004, VUL-008, VUL-010
 - **STF** (4): STF-002, STF-012, STF-017, STF-018
 - **INC** (2): INC-003, INC-009
-- **MIG** (2): MIG-004, MIG-011
+- **MIG** (3): MIG-004, MIG-008, MIG-011
 
 ## Tests by type
 

@@ -257,6 +257,8 @@ fn an_overpayment_can_be_raised_by_hand_within_what_was_paid() {
         provider: Some("provider-9".into()),
         pre_approval_request: false,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     w.ok(Command::Notify(Box::new(n)));
     let raise = |id: &str, amount: i64, who: &str| Command::RaiseOverpayment {
