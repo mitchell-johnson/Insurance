@@ -9,6 +9,8 @@ use ic_product::{load_definitions, load_product, load_rate_table, Frequency, Sex
 const TERM: &str = include_str!("../../../products/term_life.star");
 const HEALTH: &str = include_str!("../../../products/health_plan.star");
 const GROUP: &str = include_str!("../../../products/group_life.star");
+const INVEST: &str = include_str!("../../../products/invest_plan.star");
+const NO_PREMIUM: &str = include_str!("../../../products/rates/no_premium.star");
 const LIFE_RATES: &str = include_str!("../../../products/rates/life_base.star");
 const TRAUMA_RATES: &str = include_str!("../../../products/rates/trauma_base.star");
 const HEALTH_RATES: &str = include_str!("../../../products/rates/health_base.star");
@@ -21,13 +23,24 @@ const DEFS: &str = include_str!("../../../products/definitions/library.star");
 /// loaded with features out of order, would stop new business on the first day.
 #[test]
 fn all_shipped_configuration_loads() {
-    for (f, s) in [("term_life.star", TERM), ("health_plan.star", HEALTH), ("group_life.star", GROUP)] {
+    for (f, s) in [
+        ("term_life.star", TERM),
+        ("health_plan.star", HEALTH),
+        ("group_life.star", GROUP),
+        ("invest_plan.star", INVEST),
+    ] {
         let p = load_product(f, s).unwrap();
         assert_eq!(p.content_hash.len(), 64);
         // features are sorted into the engine's order
         assert!(p.features.windows(2).all(|w| w[0].order() < w[1].order()));
     }
-    for (f, s) in [("life", LIFE_RATES), ("trauma", TRAUMA_RATES), ("health", HEALTH_RATES), ("group", GROUP_RATES)] {
+    for (f, s) in [
+        ("life", LIFE_RATES),
+        ("trauma", TRAUMA_RATES),
+        ("health", HEALTH_RATES),
+        ("group", GROUP_RATES),
+        ("none", NO_PREMIUM),
+    ] {
         load_rate_table(f, s).unwrap();
     }
     assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 7);

@@ -713,11 +713,17 @@ impl CoreState {
                 reference,
                 amount_minor,
             } => self.with_policy(&policy, true, |s, p| {
+                if amount_minor > 0 && invest::menu(&s.catalog, p).is_empty() {
+                    return Err(Reject::new("not_invested", "the policy's product has no investment account"));
+                }
                 invest::allocate_cash(&mut s.ledger, &mut s.investment, p, ctx, reference, amount_minor)
             }),
             InvestCommand::PlaceOrder(order) => {
                 let id = order.policy.clone();
-                self.with_policy(&id, true, |s, p| invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order))
+                self.with_policy(&id, true, |s, p| {
+                    invest::offered(&invest::menu(&s.catalog, p), &order)?;
+                    invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order)
+                })
             }
             InvestCommand::CancelOrder { order_id } => invest::cancel_order(&mut self.investment, ctx, &order_id),
             InvestCommand::RaisePayout {
