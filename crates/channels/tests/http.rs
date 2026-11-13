@@ -2852,7 +2852,8 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
 }
 
 /// Purpose: at handover between scheme administrators, the joiner is added by the leaver and sees the scheme at once; the joiner then
-/// removes the leaver, who loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
+/// removes the leaver, which itself tells the host to re-check the leaver's sessions now (the priority revocation), and the
+/// leaver loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
 /// before then is refused; and the last administrator cannot be removed by the scheme's own administrators.
 /// Why it matters: an administrator who has left must not keep seeing member data or make changes through a session still open, and
 /// the scheme must never be left with nobody to run it.
@@ -2868,7 +2869,25 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(admin("sub-hr", "hr-2", true).await.0, StatusCode::OK);
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1.as_array().unwrap().len(), 1);
-    assert_eq!(admin("sub-hr2", "hr-1", false).await.0, StatusCode::OK);
+    // The joiner removes the leaver; the removal itself tells the host to re-check the leaver's sessions now.
+    let now = portal.now();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_000,
+            ic_channels::Envelope {
+                key: "hr-1-leaves".into(),
+                at: now,
+                actor: party("hr-2"),
+                command: Command::Directory(DirectoryCommand::SetEmployerAdmin {
+                    policy: scheme.clone(),
+                    party: p("hr-1"),
+                    admin: false,
+                }),
+            },
+        );
+        assert!(output.result.unwrap().contains(&ic_channels::Effect::Revoked { party: p("hr-1") }));
+    });
     assert_eq!(portal.get("sub-hr", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(portal.get("sub-hr", &format!("/app/v1/policies/{scheme}")).await.0, StatusCode::NOT_FOUND);
     // The leaver can no longer act on the scheme, and the joiner cannot leave it with nobody.
@@ -2877,7 +2896,6 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("last_admin")));
 
     // The priority revocation: the leaver's sessions are closed, and an earlier token is refused.
-    let now = portal.now();
     portal.local.with(|state| {
         use ic_log::StateMachine;
         let output = state.apply(
