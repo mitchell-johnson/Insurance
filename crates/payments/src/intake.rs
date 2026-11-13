@@ -63,9 +63,6 @@ pub struct Waiting {
     /// claims is told the run's settled total once all of it has settled.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<String>,
-    /// The claims run's whole amount, when claims says it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub run_total_minor: Option<i64>,
     pub amount_minor: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payable: Option<PayableKind>,
@@ -102,7 +99,6 @@ impl PaymentsState {
         if let Some(run) = &waiting.run {
             let known = self.claims_runs.entry(run.clone()).or_default();
             known.outstanding.insert(waiting.payment.clone());
-            known.total_minor = known.total_minor.or(waiting.run_total_minor);
         }
         self.waiting.insert(waiting.payment.clone(), waiting);
         Ok(())
@@ -214,6 +210,18 @@ impl PaymentsState {
                 about: Some(About::Item(n.item.clone())),
             });
         }
+    }
+
+    /// Claims submitted a run: `submitted_minor` is the net total of what it
+    /// released, without the items the core refused (`run_submitted`). The
+    /// run is confirmed only once that much has settled. A run none of whose
+    /// payments are known here has nothing to confirm.
+    pub(crate) fn claims_run_submitted(&mut self, tx: &mut Tx<'_>, run: &str, submitted_minor: i64) -> Result<(), Reject> {
+        tx.need(Role::Service)?;
+        if let Some(known) = self.claims_runs.get_mut(run) {
+            known.total_minor = Some(submitted_minor);
+        }
+        Ok(())
     }
 
     /// A payment of a claims run settled (`settled_minor` is its amount) or
