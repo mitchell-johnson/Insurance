@@ -190,3 +190,42 @@ fn a_referred_case_is_opened_once_and_clearing_it_releases_the_claims() {
     w.pay_run("run-1", d(2027, 3, 1));
     assert_eq!(w.state.runs["run-1"].count, 1, "the held month is paid once cleared");
 }
+
+/// Purpose: a claim whose event falls within the rules' early-claim window of the cover
+/// starting opens a restricted case before anything is decided, a claim on older cover does
+/// not, and altered documents referred by compliance on the same claim keep it restricted
+/// until the last case is closed.
+/// Why it matters: persona test CLM-034. Claims soon after inception are the commonest sign of
+/// non-disclosure or fraud; a claim released when the first of two cases closes would let money
+/// leave while compliance is still looking at forged documents.
+#[test]
+fn a_claim_soon_after_inception_is_investigated_until_every_case_closes() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.early_claim_days = 90;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    let mut f = facts("trauma");
+    // The event on 20 February is three weeks after the cover started.
+    f.cover_start = Some(d(2027, 1, 30));
+    w.core.cover("pol-1", "trauma", f);
+    w.open_claim("c-1");
+    assert_eq!(w.claim("c-1").investigation.as_deref(), Some("investigation/c-1"));
+    assert!(cases(&w, "ana").is_empty(), "the assessor is not told");
+    assert_eq!(cases(&w, "ivy")[0].rule, "early_claim");
+
+    // Compliance finds the documents altered.
+    w.ok(Command::ReferForInvestigation {
+        case: "cmp-7".into(),
+        rule: "altered_documents".into(),
+        claims: vec!["c-1".into()],
+    });
+    w.ok(close("investigation/c-1", Outcome::Cleared, "ivy"));
+    assert_eq!(w.claim("c-1").investigation.as_deref(), Some("cmp-7"), "still held by the other case");
+    w.ok(close("cmp-7", Outcome::Cleared, "ivy"));
+    assert!(w.claim("c-1").investigation.is_none());
+
+    // Cover from 2025: no case.
+    w.ok(Command::Notify(Box::new(World::notification("c-2", "pol-1", "life", ClaimType::Death))));
+    assert!(w.claim("c-2").investigation.is_none());
+}
