@@ -235,6 +235,38 @@ impl ClaimsState {
         Ok(())
     }
 
+    /// A death recorded in error. A benefit it was going to end and that is
+    /// still running carries on as if nothing happened. A claim it closed
+    /// goes to a senior, who reopens it on the basis `DeathRetracted` and
+    /// decides what to do with the overpayment it raised: the money moved,
+    /// so a person decides.
+    pub(crate) fn retract_death(&mut self, cx: &mut Cx<'_>, party: &str, date_of_death: NaiveDate) -> Result<(), Reject> {
+        let end = plus_days(date_of_death, 1);
+        let ids: Vec<String> = self.by_party.get(party).into_iter().flatten().cloned().collect();
+        for id in ids {
+            let Some(mut claim) = self.claims.get(&id).cloned() else { continue };
+            let by_this_death = claim.schedule.as_ref().is_some_and(|s| s.ended == Some(EndReason::Death) && s.end == end);
+            if !by_this_death {
+                continue;
+            }
+            cx.core.work(1);
+            if claim.status == Status::InPayment {
+                if let Some(s) = claim.schedule.as_mut() {
+                    s.ended = None;
+                    s.end = s.benefit_end;
+                }
+                note(&mut claim, cx, None, format!("death_retracted:{date_of_death}"));
+                cx.notify("death_retracted", &id, &[("benefit", "restored".into())]);
+            } else {
+                open_task(&mut claim, cx, "senior-review/death-retracted", TaskKind::SeniorReview, None);
+                note(&mut claim, cx, None, format!("death_retracted:{date_of_death}"));
+                cx.notify("death_retracted", &id, &[("benefit", "to_review".into())]);
+            }
+            self.commit(claim);
+        }
+        Ok(())
+    }
+
     /// Record who is paid, once identity, account ownership and screening
     /// have passed. An estate needs proof of legal authority above the
     /// simplified limit.

@@ -1303,3 +1303,127 @@ fn an_overdue_proof_of_life_holds_the_benefit_until_it_is_filed() {
         d(2027, 9, 1)
     );
 }
+
+fn valuation(version: u32, part: u32, reserves: &[(&str, i64)]) -> ic_claims::config::Valuation {
+    ic_claims::config::Valuation {
+        version,
+        part,
+        as_at: d(2027, 3, 31),
+        basis: "dlr-2027".into(),
+        reserves: reserves.iter().map(|(c, r)| (c.to_string(), *r)).collect(),
+        prepared_by: "actuary-1".into(),
+        approved_by: vec!["actuary-2".into(), "cfo".into()],
+    }
+}
+
+/// Purpose: the appointed actuary's reserves for claims in payment are applied claim by claim
+/// in parts, each approved by two people other than its preparer; a part sent again is a no-op,
+/// the same part with other figures or an older valuation is refused, a claim held elsewhere is
+/// left for its own partition, and a claim not in payment keeps its case reserve and is named.
+/// Why it matters: the design makes the reserve for a claim in payment an actuarial figure, not
+/// the first estimate made at notification. It drives the balance sheet and the reinsurance
+/// recoveries, so it must come only from an approved valuation and never be applied twice.
+#[test]
+fn the_actuarys_valuation_sets_the_reserve_for_claims_in_payment() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.open_claim("c-1");
+    let apply = |v: ic_claims::config::Valuation| Command::ApplyValuation { valuation: Box::new(v) };
+    let mut unapproved = valuation(1, 1, &[("ip-1", 90_000)]);
+    unapproved.approved_by = vec!["actuary-1".into(), "cfo".into()];
+    assert_eq!(w.refused(apply(unapproved)), "dual_approval");
+    assert_eq!(w.refused(apply(valuation(1, 1, &[("ip-1", -1)]))), "invalid_valuation");
+    assert_eq!(w.refused(apply(valuation(1, 1, &[]))), "invalid_valuation");
+    let too_many: Vec<(String, i64)> = (0..=ic_claims::config::MAX_VALUATION_PART).map(|i| (format!("c-{i}"), 1)).collect();
+    let refs: Vec<(&str, i64)> = too_many.iter().map(|(c, r)| (c.as_str(), *r)).collect();
+    assert_eq!(w.refused(apply(valuation(1, 1, &refs))), "invalid_valuation");
+    w.core.refuse_next = 1;
+    assert_eq!(w.refused(apply(valuation(1, 1, &[("ip-1", 90_000)]))), "ledger");
+
+    w.ok(apply(valuation(1, 1, &[("ip-1", 90_000), ("c-1", 5), ("elsewhere", 7)])));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::SetReserve { amount_minor: 90_000, reason, .. }) if reason == "valuation:1:dlr-2027"
+    ));
+    assert_eq!(w.claim("ip-1").reserve_minor, 90_000);
+    assert!(w.claim("c-1").reserve_minor != 5, "a claim not in payment keeps its case reserve");
+    let applied = w.core.noticed("valuation_applied")[0].clone();
+    assert_eq!((applied["applied"].as_str(), applied["not_in_payment"].as_str()), ("1", "c-1"));
+    assert_eq!(w.core.noticed("claim_reserve_changed").last().expect("published")["valuation"], "1");
+    // No senior review for the actuary's own figure, however far it moved.
+    assert!(!w.claim("ip-1").tasks.iter().any(|t| t.id.starts_with("senior-review/reserve")));
+
+    let sent = w.core.instructions.len();
+    w.ok(apply(valuation(1, 1, &[("ip-1", 90_000), ("c-1", 5), ("elsewhere", 7)])));
+    assert_eq!(w.core.instructions.len(), sent, "a part sent again changes nothing");
+    assert_eq!(w.refused(apply(valuation(1, 1, &[("ip-1", 80_000)]))), "config_conflict");
+    w.ok(apply(valuation(2, 1, &[("ip-1", 85_000)])));
+    assert_eq!(w.claim("ip-1").reserve_minor, 85_000);
+    assert_eq!(w.refused(apply(valuation(1, 2, &[("ip-1", 1)]))), "config_conflict");
+}
+
+/// Purpose: a death recorded in error and then withdrawn restores a benefit it had not yet
+/// finished ending, sends a claim it closed to a senior, and only then lets that claim be
+/// reopened on the basis that the death was retracted, carrying on from the last period paid;
+/// a death that never ended a claim, or a different date, changes nothing.
+/// Why it matters: death register feeds and people make mistakes. A living claimant whose
+/// income stopped because of a wrong record must get it back with the months they missed, and
+/// that must not be a way to reopen any closed claim without a reason on file.
+#[test]
+fn a_retracted_death_gives_the_benefit_back() {
+    let died = |on: chrono::NaiveDate| Command::RecordDeath {
+        party: "party-life".into(),
+        date_of_death: on,
+    };
+    let undo = |on: chrono::NaiveDate| Command::RetractDeath {
+        party: "party-life".into(),
+        date_of_death: on,
+    };
+    // Not yet past the death date in payment: the benefit simply runs on.
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.on(d(2027, 4, 15));
+    w.ok(died(d(2027, 4, 10)));
+    let s = w.claim("ip-1").schedule.clone().expect("in payment");
+    assert_eq!((s.end, s.ended), (d(2027, 4, 11), Some(EndReason::Death)));
+    w.ok(undo(d(2027, 3, 1)));
+    assert_eq!(
+        w.claim("ip-1").schedule.as_ref().expect("in payment").ended,
+        Some(EndReason::Death),
+        "another date is another death"
+    );
+    w.ok(undo(d(2027, 4, 10)));
+    let c = w.claim("ip-1");
+    let s = c.schedule.as_ref().expect("in payment");
+    assert_eq!((c.status, s.end, s.ended), (Status::InPayment, d(2029, 3, 1), None));
+    assert_eq!(w.core.noticed("death_retracted")[0]["benefit"], "restored");
+
+    // A death that closed the claim: a senior reopens it, and the missed months are paid.
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.on(d(2027, 4, 20));
+    let reopen = |who: &str| Command::Reopen {
+        claim: "ip-1".into(),
+        basis: ReopenBasis::DeathRetracted,
+        reserve_minor: 20_000,
+        actor: actor(who),
+    };
+    w.ok(died(d(2027, 3, 31)));
+    assert_eq!(w.claim("ip-1").status, Status::Ended);
+    assert_eq!(w.refused(reopen("sam")), "death_not_retracted");
+    w.ok(undo(d(2027, 3, 31)));
+    let c = w.claim("ip-1");
+    assert!(c.tasks.iter().any(|t| t.id == "senior-review/death-retracted"));
+    assert_eq!(w.core.noticed("death_retracted")[0]["benefit"], "to_review");
+    w.ok(reopen("sam"));
+    let c = w.claim("ip-1");
+    let s = c.schedule.as_ref().expect("in payment");
+    assert_eq!(
+        (c.status, s.ended, s.end, s.next_period),
+        (Status::InPayment, None, d(2029, 3, 1), d(2027, 4, 1))
+    );
+    w.pay_run("run-2", d(2027, 4, 1));
+    assert_eq!(w.state.runs["run-2"].count, 1, "April, missed while the claim was closed");
+}

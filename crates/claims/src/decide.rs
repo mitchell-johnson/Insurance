@@ -669,6 +669,11 @@ impl ClaimsState {
         if recurrence && !(in_window && claim.schedule.is_some()) {
             return refuse("recurrence_window", "the claim is not an ended benefit inside the recurrence window");
         }
+        let undeath = basis == ReopenBasis::DeathRetracted;
+        let ended_by_death = claim.status == Status::Ended && claim.schedule.as_ref().is_some_and(|s| s.ended == Some(crate::EndReason::Death));
+        if undeath && !(ended_by_death && claim.history.iter().any(|h| h.action.starts_with("death_retracted:"))) {
+            return refuse("death_not_retracted", "the claim was not ended by a death that has since been retracted");
+        }
         cx.core.execute(Instruction::Reopen {
             claim: id.to_string(),
             policy: claim.policy.clone(),
@@ -677,13 +682,16 @@ impl ClaimsState {
         claim.reserve_minor = reserve_minor;
         claim.closed_on = None;
         claim.owner = Some(actor.staff.clone());
-        match claim.schedule.as_mut().filter(|_| recurrence) {
+        match claim.schedule.as_mut().filter(|_| recurrence || undeath) {
             Some(s) => {
                 // The same condition, back inside the window: the same claim
-                // carries on, with no new waiting period.
+                // carries on, with no new waiting period. After a retracted
+                // death it carries on from the last period paid, so the gap is paid.
                 s.ended = None;
                 s.end = s.benefit_end;
-                s.next_period = cx.today;
+                if recurrence {
+                    s.next_period = cx.today;
+                }
                 s.case_manager = Some(actor.staff.clone());
                 claim.status = Status::InPayment;
             }

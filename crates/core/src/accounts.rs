@@ -42,6 +42,8 @@ pub mod role {
     pub const AVOIDANCE_PREMIUM_RETAINED: &str = "avoidance_premium_retained";
     pub const ROUNDING: &str = "rounding";
     pub const TRANSFER_IN_TRANSIT: &str = "transfer_in_transit";
+    /// Claims money on its way between two partitions.
+    pub const CLAIMS_OFFSET_IN_TRANSIT: &str = "claims_offset_in_transit";
     pub const FUND_UNIT_POSITION: &str = "fund_unit_position";
     pub const FUND_CASH_POSITION: &str = "fund_cash_position";
     /// What a unit pricing error cost the insurer to put right.
@@ -287,6 +289,17 @@ pub fn transfer_in_transit(unit: &AccountUnit) -> Account {
         AccountUnit::Units(f) => format!("int/transfer_in_transit/units/{}", f.0),
     };
     acct(name, unit.clone(), AccountClass::Asset, role::TRANSFER_IN_TRANSIT)
+}
+/// Money withheld from a benefit on one partition for an overpayment owed on
+/// another, until the partition owed it has taken it up. Across the insurer
+/// it nets to the offsets still on their way.
+pub fn claims_offset_in_transit(c: Currency) -> Account {
+    acct(
+        format!("int/claims_offset_in_transit/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::CLAIMS_OFFSET_IN_TRANSIT,
+    )
 }
 pub fn fund_unit_position(fund: &FundId) -> Account {
     acct(

@@ -694,8 +694,33 @@ pub struct OutboundMessage {
 #[serde(rename_all = "snake_case")]
 pub enum MessageBody {
     TransferRecord(Box<TransferRecord>),
-    TransferLanded { policy: PolicyId, transfer_id: String },
-    TransferRejected { policy: PolicyId, transfer_id: String, reason: String },
+    TransferLanded {
+        policy: PolicyId,
+        transfer_id: String,
+    },
+    TransferRejected {
+        policy: PolicyId,
+        transfer_id: String,
+        reason: String,
+    },
+    /// A claims command one partition sends another, for work on one person
+    /// whose claims sit on both: an overpayment on one recovered from a
+    /// benefit on the other. The relay delivers it as caller `partition`, so
+    /// only a command the claims module allows that caller is applied.
+    Claims(Box<ic_claims::Command>),
+}
+
+impl MessageBody {
+    /// The command the receiving partition applies, and the caller the
+    /// relay delivers it as. One place, so every relay delivers alike.
+    pub fn into_delivery(self) -> (&'static str, crate::Command) {
+        match self {
+            MessageBody::TransferRecord(record) => ("transfer", crate::Command::LandTransfer { record }),
+            MessageBody::TransferLanded { policy, transfer_id } => ("transfer", crate::Command::CompleteTransfer { policy, transfer_id }),
+            MessageBody::TransferRejected { policy, transfer_id, .. } => ("transfer", crate::Command::AbortTransfer { policy, transfer_id }),
+            MessageBody::Claims(command) => ("partition", crate::Command::Claims(command)),
+        }
+    }
 }
 
 fn is_zero(n: &i64) -> bool {

@@ -272,6 +272,13 @@ fn the_chart_of_accounts_is_frozen() {
             role::TRANSFER_IN_TRANSIT,
         ),
         (
+            accounts::claims_offset_in_transit(NZD),
+            "int/claims_offset_in_transit/NZD",
+            &minor,
+            AccountClass::Asset,
+            role::CLAIMS_OFFSET_IN_TRANSIT,
+        ),
+        (
             accounts::fund_unit_position(&fund),
             "int/fund_position/growth/units",
             &units,
