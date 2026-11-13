@@ -476,13 +476,15 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | DOC-001 | full | `documents/tests/render.rs::rendering_is_deterministic`<br>`documents/tests/driver.rs::verification_detects_a_changed_document` |
-| DOC-002 | part | `documents/tests/templates.rs::every_product_version_and_language_needs_a_passing_case` |
+| DOC-002 | full | `documents/tests/templates.rs::every_product_version_and_language_needs_a_passing_case`<br>`documents/tests/languages.rs::a_translation_is_rendered_from_the_same_data_and_says_what_controls` |
 | DOC-003 | part | `documents/tests/templates.rs::submission_checks_structure_readability_and_translations`<br>`documents/tests/render.rs::reading_grade_ranks_plain_words_below_dense_ones` |
 | DOC-004 | full | `documents/tests/render.rs::a_missing_or_mistyped_value_fails_the_render`<br>`documents/tests/templates.rs::a_failing_rendering_run_blocks_activation_and_is_reported` |
 | DOC-005 | full | `documents/tests/delivery.rs::proven_delivery_starts_the_notice_clock`<br>`documents/tests/delivery.rs::a_bounced_notice_falls_back_to_post_and_is_deemed_delivered` |
+| DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
+| DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
 | DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master` |
-| DOC-010 | part | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them` |
+| DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration
 

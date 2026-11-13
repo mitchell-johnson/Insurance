@@ -598,6 +598,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             effective: cx.today,
             covers,
             employer_may_see_loading,
+            member_pays_loading: p.member_pays_loading(),
         },
     });
     Ok(())

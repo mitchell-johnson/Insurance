@@ -38,6 +38,30 @@ pub enum TemplateStatus {
     Disabled,
 }
 
+/// Where a shared part (a clause) is used: the register a change to it is
+/// judged against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartUsage {
+    pub part: String,
+    /// The newest registered version, if any is.
+    pub latest: Option<u32>,
+    /// Each template version that is not disabled and uses the part.
+    pub templates: Vec<PartUse>,
+    /// Every product version whose documents use the part.
+    pub products: BTreeSet<crate::template::ProductBinding>,
+    /// The product versions whose current template still uses an older
+    /// version than the latest: the ones a change has yet to reach.
+    pub behind: BTreeSet<crate::template::ProductBinding>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PartUse {
+    pub template: TemplateRef,
+    pub status: TemplateStatus,
+    pub part_version: u32,
+    pub products: Vec<crate::template::ProductBinding>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RenderingRun {
     pub at: DateTime<Utc>,
@@ -318,6 +342,48 @@ impl DocumentsState {
                 };
             }
         }
+    }
+
+    /// Where a part is used, and which products a new version has not yet
+    /// reached. A template counts once its newest version that is not
+    /// disabled is considered: an older version it replaced does not hold a
+    /// product behind.
+    pub fn part_usage(&self, part: &str) -> PartUsage {
+        let latest = self.parts.keys().filter(|r| r.id == part).map(|r| r.version).max();
+        let mut usage = PartUsage {
+            part: part.to_string(),
+            latest,
+            templates: vec![],
+            products: BTreeSet::new(),
+            behind: BTreeSet::new(),
+        };
+        let mut newest: BTreeMap<&str, (u32, u32)> = BTreeMap::new();
+        for (r, record) in &self.templates {
+            if record.status == TemplateStatus::Disabled {
+                continue;
+            }
+            let Some(used) = record.template.parts.iter().find(|p| p.id == part) else {
+                continue;
+            };
+            usage.templates.push(PartUse {
+                template: r.clone(),
+                status: record.status,
+                part_version: used.version,
+                products: record.template.products.clone(),
+            });
+            usage.products.extend(record.template.products.iter().cloned());
+            let entry = newest.entry(r.id.as_str()).or_insert((r.version, used.version));
+            if r.version >= entry.0 {
+                *entry = (r.version, used.version);
+            }
+        }
+        for (id, (version, part_version)) in newest {
+            if latest.is_some_and(|l| part_version < l) {
+                let r = TemplateRef { id: id.to_string(), version };
+                usage.behind.extend(self.templates[&r].template.products.iter().cloned());
+            }
+        }
+        usage
     }
 
     /// The requested letters still to issue, oldest first.

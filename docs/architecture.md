@@ -335,7 +335,7 @@ Letters the complaints register owes, on the branch `claude/project-thread-3jubf
 ### Not built
 
 - **Letter wording.** The three templates above, and every other template, are content for legal, product and compliance to write and approve; until a template is active its letters are left for people and the pass logs it.
-- **Letters other modules ask for.** Built 2026-11-13 (`requested_letters.rs`, `Command::RequestLetter`, agreed with underwriting and reinsurance): kinds and templates in `model::REQUESTED_KINDS`, contract in `docs/documents.md`. Not done: the wording of every template, and the callers' driver sides (theirs). Question for Mitchell: how a reinsurer gets the statement listing (personal data; not by email).
+- **Letters other modules ask for.** Built 2026-11-13 (`requested_letters.rs`, `Command::RequestLetter`, agreed with underwriting and reinsurance): kinds and templates in `model::REQUESTED_KINDS`, contract in `docs/documents.md`. Not done: the wording of every template, and the callers' driver sides (theirs). Decided by Mitchell: listings go by SFTP and an API in the reinsurance service, never by email.
 - **Document download.** Built 2026-11-13: `GET /v1/documents/{id}/pdf` (`service.rs`, `auth.rs`), Entra roles `portal` (with `x-ic-party`, owner or recipient only, else 404) and `staff` (with `x-ic-actor`, `x-ic-purpose`, never clinical). Not done: the Entra app registration, and the portal calling it.
 - **Typeface.** `IC_DOCUMENTS_FONT_REGULAR` / `IC_DOCUMENTS_FONT_BOLD` set the insurer's TrueType faces (checked at start); the faces themselves are the insurer's to supply. Scripts outside the face go as text without a PDF. PDFs are not tagged (PDF/UA).
 - **Audio and braille** are recorded and passed to the print house; not produced here.
@@ -520,7 +520,8 @@ Owned by the thread "Build underwriting and new business". The full module descr
 3. Staff notices go to the `underwriting-notices` event hub; letters go to documents as `request_letter` (agreed 13 Nov; both sides on main, pinned by a contract test against the real documents state machine in `tests/notices.rs`). Still parked: evidence requests and delegate file requests.
 4. The disclosure intake `ic-underwriting-intake` is built (seals signed answers in the clinical store and submits them; `deploy/k8s/underwriting-intake.yaml`). Still to do: deploy `infra/underwriting.bicep` (bring it into `infra/main.bicep`; the driver needs its notices hub), have the portal call the intake with the life's device signature, and a staff console page for `POST /v1/disclosures/open` (an underwriter reading a disclosure, logged by the module first).
 5. Profiles naming each underwriter's party (supported, none set yet), portal pages that render the progress rows underwriting now publishes (kinds `proposal`, `proposal_life`; portal work), and an interim cover product.
-6. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
+6. A scheme member's loading can move to them (`reoffer_excess_terms`, agreed with group 13 Nov, both sides on main). Not yet: reinsurance is not told the layer number changed when the replacement layer is written.
+7. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
 
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.
 

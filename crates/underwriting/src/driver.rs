@@ -698,6 +698,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 entry: Entry::GroupExcess { .. },
                 covers,
                 employer_may_see_loading,
+                member_pays_loading,
                 ..
             } => {
                 let (Some((scheme, case)), [cover]) = (excess_case(proposal), covers.as_slice()) else {
@@ -708,9 +709,17 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     loadings: cover.loadings.clone(),
                     exclusions: cover.exclusions.clone(),
                     member_consents_to_itemising: *employer_may_see_loading,
-                    member_pays_loading: false,
+                    member_pays_loading: *member_pays_loading,
                 };
                 self.excess_decision(key, scheme, case, decision).await?
+            }
+            // Only an expiry or a decline ends an offer, and either way the
+            // terms in place stand: group administration hears it once.
+            Effect::ReofferEnded { key, proposal, .. } => {
+                let Some((scheme, case)) = excess_case(proposal) else {
+                    return Ok(Step::Park("not a proposal group administration opened".to_string()));
+                };
+                self.excess_decision(key, scheme, case, ExcessDecision::ReofferDeclined).await?
             }
             Effect::ProposalEnded {
                 key,
