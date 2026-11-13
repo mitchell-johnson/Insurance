@@ -362,6 +362,9 @@ pub struct InterestDue {
     pub owed_minor: i64,
     /// Released to them and not returned.
     pub paid_minor: i64,
+    /// Owed as a nominated beneficiary's share, not as a lender's interest.
+    #[serde(default)]
+    pub nominated: bool,
 }
 
 /// One paid period of a benefit in payment.
