@@ -48,6 +48,8 @@ path = "src/bin/ic-underwriting-intake.rs"
 ic-sim.workspace = true
 # For the progress rows' contract test only: the driver sends that module JSON.
 ic-channels = { path = "../channels" }
+# For the letters' contract test only: the driver sends that module JSON.
+ic-documents = { path = "../documents" }
 # Tokens for the intake's HTTP tests.
 jsonwebtoken.workspace = true
 rsa = "0.9"

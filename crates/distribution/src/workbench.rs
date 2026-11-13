@@ -340,6 +340,13 @@ impl DistributionState {
     /// The proof of debt extract for a party.
     pub fn proof_of_debt(&self, party: &PartyId, as_at: NaiveDate) -> ProofOfDebt {
         let mut by: BTreeMap<(String, PartyLedger), (i64, Vec<String>)> = BTreeMap::new();
+        // History let go of is carried as one line per account, sorted
+        // first; its detail is in the core's ledger.
+        if let Some(folded) = self.history.brought_forward.get(party) {
+            for (ledger, amount) in folded.iter().filter(|(l, _)| **l != PartyLedger::Clearing) {
+                by.insert(("0000-brought-forward".to_string(), *ledger), (*amount, vec!["brought-forward".to_string()]));
+            }
+        }
         for m in self
             .movements
             .iter()
