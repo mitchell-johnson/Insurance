@@ -367,10 +367,84 @@ pub struct Scheme {
     pub oldest_unpaid_due: Option<NaiveDate>,
     pub short_payments: u32,
     pub joiners_suspended: bool,
+    /// A split under way: no files are taken until it is done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub splitting: Option<Splitting>,
+}
+
+/// A split of a scheme the core is working through, part by part.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Splitting {
+    pub into: String,
+    pub new_policy: PolicyId,
+    pub employer: PartyId,
+    pub effective: NaiveDate,
+    pub terms: SchemeTerms,
+    pub members: u32,
+    pub moved: u32,
 }
 
 impl Scheme {
+    /// A scheme with no members, files or money yet.
+    pub(crate) fn new(
+        id: String,
+        policy: PolicyId,
+        group: GroupId,
+        employer: PartyId,
+        inception: NaiveDate,
+        product: ProductDefinition,
+        terms: SchemeTerms,
+    ) -> Self {
+        Scheme {
+            id,
+            policy,
+            group,
+            employer,
+            inception,
+            product,
+            terms,
+            terms_version: 1,
+            mapping: None,
+            second_mapping: None,
+            status: SchemeStatus::Active,
+            blocked: None,
+            frozen: None,
+            membership: Membership::default(),
+            files: BTreeMap::new(),
+            open_file: None,
+            queue: VecDeque::new(),
+            scheduled: BTreeMap::new(),
+            next_item: 0,
+            in_flight: None,
+            chunk_limit: ic_core::machine::MAX_MEMBERSHIP_CHUNK,
+            waiting: false,
+            core_seq: 0,
+            cases: BTreeMap::new(),
+            possible: BTreeMap::new(),
+            offers: BTreeMap::new(),
+            pools: BTreeMap::new(),
+            declaration_due: None,
+            absence_leaves: BTreeSet::new(),
+            renewal: None,
+            building: None,
+            pending_adjustments: BTreeMap::new(),
+            pending_loading_adjustments_minor: 0,
+            invoices: VecDeque::new(),
+            outstanding_minor: 0,
+            oldest_unpaid_due: None,
+            short_payments: 0,
+            joiners_suspended: false,
+            splitting: None,
+        }
+    }
+
     pub fn can_take_files(&self) -> Result<(), Reject> {
+        if let Some(split) = &self.splitting {
+            return Err(Reject::new(
+                "scheme_splitting",
+                format!("members are moving to scheme {}; send files when the split is done", split.into),
+            ));
+        }
         if let Some(reason) = &self.frozen {
             return Err(Reject::new("scheme_frozen", format!("files are on hold: {reason}")));
         }
@@ -455,7 +529,7 @@ pub(crate) fn compare(s: &Scheme, today: NaiveDate, kind: FileKind, file_date: N
 /// The commission module's layer for each of a scheme's covers driven by
 /// member data, written by its broker. Every such cover needs an expected
 /// premium, and nothing else may be named.
-fn broker_layers(
+pub(crate) fn broker_layers(
     scheme: &str,
     policy: &PolicyId,
     product: &ProductDefinition,
@@ -888,67 +962,36 @@ impl GroupState {
             .then(|| terms.scheme_year_start.checked_add_days(Days::new(u64::from(terms.declaration_due_days))))
             .flatten();
         let pools: BTreeMap<String, NaiveDate> = pools.into_iter().map(|p| (p, inception)).collect();
+        let brokered = match &terms.broker {
+            Some(broker) => broker_layers(&id, &policy, &product, broker)?,
+            None => Vec::new(),
+        };
+        let mut scheme = Scheme::new(id, policy, group, employer, inception, product, terms);
+        scheme.membership = membership;
+        scheme.pools = pools;
+        scheme.declaration_due = declaration_due;
+        self.open_scheme(scheme, brokered);
+        Ok(())
+    }
+
+    /// Announce a new scheme to the modules that keep their own view of it
+    /// and start holding it.
+    pub(crate) fn open_scheme(&mut self, scheme: Scheme, brokered: Vec<(String, crate::event::CommissionLayer)>) {
         self.emit(GroupEvent::SchemeRegistered {
-            scheme: id.clone(),
-            policy: policy.clone(),
-            terms_version: 1,
+            scheme: scheme.id.clone(),
+            policy: scheme.policy.clone(),
+            terms_version: scheme.terms_version,
         });
         self.notify_reinsurance(ReinsuranceNotice::SetSchemeTerms {
-            policy: policy.clone(),
-            excess_path: terms.excess_path,
-            sites: terms.sites.clone(),
+            policy: scheme.policy.clone(),
+            excess_path: scheme.terms.excess_path,
+            sites: scheme.terms.sites.clone(),
         });
-        if let Some(broker) = &terms.broker {
-            let covers = broker_layers(&id, &policy, &product, broker)?;
-            for (key, layer) in covers {
-                self.send(Outbound::Commission { key, layer });
-            }
+        for (key, layer) in brokered {
+            self.send(Outbound::Commission { key, layer });
         }
-        self.by_policy.insert(policy.clone(), id.clone());
-        self.schemes.insert(
-            id.clone(),
-            Scheme {
-                id,
-                policy,
-                group,
-                employer,
-                inception,
-                product,
-                terms,
-                terms_version: 1,
-                mapping: None,
-                second_mapping: None,
-                status: SchemeStatus::Active,
-                blocked: None,
-                frozen: None,
-                membership,
-                files: BTreeMap::new(),
-                open_file: None,
-                queue: VecDeque::new(),
-                scheduled: BTreeMap::new(),
-                next_item: 0,
-                in_flight: None,
-                chunk_limit: ic_core::machine::MAX_MEMBERSHIP_CHUNK,
-                waiting: false,
-                core_seq: 0,
-                cases: BTreeMap::new(),
-                possible: BTreeMap::new(),
-                offers: BTreeMap::new(),
-                pools,
-                declaration_due,
-                absence_leaves: BTreeSet::new(),
-                renewal: None,
-                building: None,
-                pending_adjustments: BTreeMap::new(),
-                pending_loading_adjustments_minor: 0,
-                invoices: VecDeque::new(),
-                outstanding_minor: 0,
-                oldest_unpaid_due: None,
-                short_payments: 0,
-                joiners_suspended: false,
-            },
-        );
-        Ok(())
+        self.by_policy.insert(scheme.policy.clone(), scheme.id.clone());
+        self.schemes.insert(scheme.id.clone(), scheme);
     }
 
     fn receive_file(&mut self, s: &mut Scheme, actor: &str, today: NaiveDate, file: String, content_hash: String) -> Result<(), Reject> {

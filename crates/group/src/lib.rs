@@ -19,6 +19,7 @@ pub mod mapping;
 pub mod model;
 pub mod record;
 pub mod service;
+pub mod split;
 pub mod state;
 pub mod terms;
 pub mod work;

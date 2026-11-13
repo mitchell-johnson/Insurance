@@ -284,6 +284,24 @@ pub enum GroupCommand {
         effective: NaiveDate,
         reason: String,
     },
+    /// Move some of a scheme's members to a new scheme from the first day
+    /// of a billing period: part of the employer is sold or demerged. The
+    /// members go with their history, the date they joined and their
+    /// underwritten cover; they do not leave. The new scheme has its own
+    /// terms and employer and starts with the old scheme's file layouts.
+    SplitScheme {
+        scheme: String,
+        /// The new scheme's ID in this module.
+        into: String,
+        /// The new scheme policy's ID and number in the core.
+        new_policy: PolicyId,
+        new_number: String,
+        /// The employer of the new scheme: the buyer, or the part demerged.
+        employer: PartyId,
+        effective: NaiveDate,
+        employee_ids: Vec<String>,
+        terms: Box<SchemeTerms>,
+    },
 
     // --- money ---
     RecordShortPayment {
@@ -347,7 +365,8 @@ impl GroupCommand {
             | RequestExcessAgain { .. }
             | ResolveMatch { .. }
             | AgreeRenewal { .. }
-            | Terminate { .. } => &[STAFF],
+            | Terminate { .. }
+            | SplitScheme { .. } => &[STAFF],
             ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } => &[EMPLOYER, STAFF],
             RecordScan { .. }
             | RefuseFile { .. }
