@@ -256,12 +256,88 @@ async fn get_messages(State(bank): State<FakeBank>, Query(q): Query<After>, head
     say(StatusCode::OK, json!(messages))
 }
 
+/// Connections the bank takes only once the TLS handshake, with a client
+/// certificate it trusts, has succeeded. A caller that fails it is dropped,
+/// as a bank's front end drops it.
+struct TlsListener {
+    tcp: tokio::net::TcpListener,
+    acceptor: tokio_rustls::TlsAcceptor,
+}
+
+impl axum::serve::Listener for TlsListener {
+    type Io = tokio_rustls::server::TlsStream<tokio::net::TcpStream>;
+    type Addr = std::net::SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let Ok((stream, addr)) = self.tcp.accept().await else { continue };
+            if let Ok(tls) = self.acceptor.accept(stream).await {
+                return (tls, addr);
+            }
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        self.tcp.local_addr()
+    }
+}
+
+/// The certificates a bank speaking mutual TLS holds, in PEM: its own
+/// certificate and key, and the authority whose client certificates it
+/// accepts.
+pub struct BankTls<'a> {
+    pub certificate: &'a str,
+    pub key: &'a str,
+    pub client_authority: &'a str,
+}
+
+fn invalid(e: impl std::fmt::Display) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
+}
+
+impl BankTls<'_> {
+    fn acceptor(&self) -> std::io::Result<tokio_rustls::TlsAcceptor> {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in CertificateDer::pem_slice_iter(self.client_authority.as_bytes()) {
+            roots.add(cert.map_err(invalid)?).map_err(invalid)?;
+        }
+        let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider.clone())
+            .build()
+            .map_err(invalid)?;
+        let chain = CertificateDer::pem_slice_iter(self.certificate.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(invalid)?;
+        let key = PrivateKeyDer::from_pem_slice(self.key.as_bytes()).map_err(invalid)?;
+        let config = rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(invalid)?
+            .with_client_cert_verifier(verifier)
+            .with_single_cert(chain, key)
+            .map_err(invalid)?;
+        Ok(tokio_rustls::TlsAcceptor::from(Arc::new(config)))
+    }
+}
+
 impl FakeBank {
     /// Start a bank on a free local port. It accepts the tokens given.
     pub async fn start(tokens: &[&str]) -> std::io::Result<Self> {
+        Self::serve(tokens, None).await
+    }
+
+    /// Start a bank that speaks HTTPS and takes only callers presenting a
+    /// client certificate from the authority given.
+    pub async fn start_tls(tokens: &[&str], tls: BankTls<'_>) -> std::io::Result<Self> {
+        Self::serve(tokens, Some(tls.acceptor()?)).await
+    }
+
+    async fn serve(tokens: &[&str], tls: Option<tokio_rustls::TlsAcceptor>) -> std::io::Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let scheme = if tls.is_some() { "https" } else { "http" };
         let bank = Self {
-            url: format!("http://{}", listener.local_addr()?),
+            url: format!("{scheme}://{}", listener.local_addr()?),
             inner: Arc::new(Mutex::new(Inner {
                 tokens: tokens.iter().map(|t| t.to_string()).collect(),
                 ..Inner::default()
@@ -273,9 +349,19 @@ impl FakeBank {
             .route("/batches/{id}", get(get_held))
             .route("/messages", get(get_messages))
             .with_state(bank.clone());
-        tokio::spawn(async move {
-            let _ = axum::serve(listener, app).await;
-        });
+        match tls {
+            None => {
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                });
+            }
+            Some(acceptor) => {
+                let listener = TlsListener { tcp: listener, acceptor };
+                tokio::spawn(async move {
+                    let _ = axum::serve(listener, app).await;
+                });
+            }
+        }
         Ok(bank)
     }
 

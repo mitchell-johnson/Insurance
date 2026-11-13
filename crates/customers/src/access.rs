@@ -145,7 +145,8 @@ mod tests {
     }
 
     /// Purpose: the documents service reading for notices gets names and contact details,
-    /// and nothing else; asking for another purpose gets nothing.
+    /// and nothing else; asking for another purpose gets nothing; the vulnerability marker
+    /// is read only by the person themself and trained support staff.
     /// Why it matters: purpose limits what a service sees; a notice run must never receive
     /// IRD numbers or dates of birth, and an undeclared purpose must release nothing.
     #[test]
@@ -158,12 +159,20 @@ mod tests {
         assert!(access.readable(&ask("unknown", "notices"), Field::ALL).is_empty());
         let payee = access.readable(&ask("payments", "payee_verification"), Field::ALL);
         assert_eq!(payee, vec![Field::GivenName, Field::MiddleNames, Field::FamilyName, Field::OrganisationName]);
-        // Nobody reads the vulnerability marker as a field, break glass included.
+        // The vulnerability marker is read only by the person themself in the app and by
+        // trained support staff; nobody else, break glass included.
         for caller in ["staff", "claims", "compliance", "break-glass", "portal"] {
-            for purpose in ["servicing", "claims", "due_diligence", "break_glass", "self_service"] {
-                let mut a = ask(caller, purpose);
-                a.self_access = true;
-                assert!(!access.readable(&a, &[Field::Vulnerability]).contains(&Field::Vulnerability));
+            for purpose in ["servicing", "claims", "due_diligence", "break_glass", "self_service", "vulnerability_support"] {
+                for me in [false, true] {
+                    let mut a = ask(caller, purpose);
+                    a.self_access = me;
+                    let allowed = (caller == "portal" && purpose == "self_service" && me) || (caller == "staff" && purpose == "vulnerability_support");
+                    assert_eq!(
+                        access.readable(&a, &[Field::Vulnerability]).contains(&Field::Vulnerability),
+                        allowed,
+                        "{caller} {purpose} {me}"
+                    );
+                }
             }
         }
     }
