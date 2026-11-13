@@ -105,8 +105,13 @@ pub struct RelationshipRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub id: String,
+    /// `duplicate` (candidates to merge or dismiss) or `consider_marker`
+    /// (a trained person decides whether the party needs a marker).
+    pub kind: String,
     pub party: PartyId,
     pub candidates: Vec<PartyId>,
+    /// For a prompt: what the concern was about.
+    pub reason: Option<String>,
     pub status: String,
     pub created_at: DateTime<Utc>,
 }
@@ -606,6 +611,16 @@ impl<W: KeyWrapper> Store<W> {
         if let (true, Some(date)) = (retracted, died_on.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<NaiveDate>().ok())) {
             self.queue_death(&tx, id, date, true, now).await?;
         }
+        for r in &written {
+            if let EventBody::ConcernRaised { about, .. } = &r.body {
+                tx.execute(
+                    "insert into reviews (id, party_id, candidates, status, created_at, kind, reason) values ($1, $2, '{}', 'open', $3, 'consider_marker', $4)",
+                    &[&format!("rev_{}", uuid::Uuid::new_v4().simple()), &id.0, &now, about],
+                )
+                .await
+                .map_err(db)?;
+            }
+        }
         let outcome = Outcome {
             party: id.clone(),
             version: loaded.party.version,
@@ -670,7 +685,7 @@ impl<W: KeyWrapper> Store<W> {
     async fn close_review(&self, tx: &Transaction<'_>, review: &str, status: &str, who: &Who, now: DateTime<Utc>) -> Result<()> {
         let n = tx
             .execute(
-                "update reviews set status = $2, resolved_at = $3, resolved_by = $4 where id = $1 and status = 'open'",
+                "update reviews set status = $2, resolved_at = $3, resolved_by = $4 where id = $1 and status = 'open' and (kind = 'duplicate' or $2 = 'dismissed')",
                 &[&review, &status, &now, &who.actor],
             )
             .await
@@ -693,7 +708,7 @@ impl<W: KeyWrapper> Store<W> {
         let client = self.client().await?;
         let rows = client
             .query(
-                "select id, party_id, candidates, status, created_at from reviews where status = 'open' order by created_at limit $1",
+                "select id, party_id, candidates, status, created_at, kind, reason from reviews where status = 'open' order by created_at limit $1",
                 &[&limit],
             )
             .await
@@ -702,8 +717,10 @@ impl<W: KeyWrapper> Store<W> {
             .iter()
             .map(|r| Review {
                 id: r.get(0),
+                kind: r.get(5),
                 party: PartyId(r.get(1)),
                 candidates: r.get::<_, Vec<String>>(2).into_iter().map(PartyId).collect(),
+                reason: r.get(6),
                 status: r.get(3),
                 created_at: r.get(4),
             })

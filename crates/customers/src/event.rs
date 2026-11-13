@@ -65,6 +65,12 @@ pub enum EventBody {
     HoldReleased {
         reference: String,
     },
+    /// Someone other than the person told the insurer they are worried
+    /// about them. Recorded as who raised it and what about, nothing more.
+    ConcernRaised {
+        from: String,
+        about: String,
+    },
     /// The party's key was destroyed. Written in the clear, with no payload.
     Shredded,
 }
@@ -91,6 +97,7 @@ impl EventBody {
             EventBody::Released { .. } => "released",
             EventBody::HoldPlaced { .. } => "hold_placed",
             EventBody::HoldReleased { .. } => "hold_released",
+            EventBody::ConcernRaised { .. } => "concern_raised",
             EventBody::Shredded => "shredded",
         }
     }
