@@ -113,9 +113,9 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
 /// core's reply with the layers it wrote. A group excess answer for a case group administration
 /// does not know is refused by that module and parked with its reason. The channel module
 /// takes the proposal's progress rows under this module's name. The daily sweep runs
-/// once for the day. With no node to reach the pass stops as unavailable. The process itself
-/// reads collections' list of lapsed policies through the core in either shape it may come in;
-/// refuses to start without its settings, runs its cycles and stops when told; and the shipped
+/// once for the day. With no node to reach the pass stops as unavailable. The driver reads
+/// collections' list of lapsed policies through the core in either shape it may come in. The
+/// process itself refuses to start without its settings, runs its cycles and stops when told; and the shipped
 /// binary does the same from its environment and exits cleanly on SIGTERM.
 /// Why it matters: every other driver test runs the modules in the test's own process. This is
 /// the deployed arrangement, and the one that fails if a wire format, a module name or a caller
