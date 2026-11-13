@@ -221,6 +221,11 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::rel
                 Ok(_) => {}
                 Err(e) => tracing::warn!(error = %e, "opening marker reviews failed; will retry"),
             }
+            match app.store.end_spending_holds(Utc::now()).await {
+                Ok(n) if n > 0 => tracing::info!(ended = n, "spending holds ended after cooling-off"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "ending spending holds failed; will retry"),
+            }
             match sweep(app, 500).await {
                 Ok(n) if n > 0 => tracing::info!(erased = n, "retention sweep"),
                 Ok(_) => {}
@@ -252,7 +257,9 @@ pub async fn start(
     let index = crate::crypto::IndexKey::new(config.index_key.as_bytes())?;
     let next = config.next_index_key.as_ref().map(|k| crate::crypto::IndexKey::new(k.as_bytes())).transpose()?;
     let app = std::sync::Arc::new(App {
-        store: crate::store::Store::new(pool, keys, index).with_next_index(next)?,
+        store: crate::store::Store::new(pool, keys, index)
+            .with_next_index(next)?
+            .with_hold_cooling_off(chrono::Duration::days(i64::try_from(config.hold_cooling_off_days).unwrap_or(7))),
         access: crate::access::Access::shipped(),
         auth: crate::auth::Entra::new(&config.authority, &config.tenant, &config.audience),
         register: crate::retention::Register::new(ic_azure::blob::BlobContainer::new(
