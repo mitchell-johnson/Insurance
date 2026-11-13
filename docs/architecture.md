@@ -360,7 +360,7 @@ The one place the insurer knows who a person or organisation is. The core and ev
 
 **Not built yet.**
 
-- Marker review dates (VUL-017): nothing yet raises a review task when `review_on` arrives; the sweep in `work.rs` is the place. Bereavement prompts on a joint policy (VUL-015) need claims or the death relay to open a `consider_marker` prompt for the surviving owner.
+- Marker review dates (VUL-017) are built: `marker_reviews` holds only the date, and each sweep opens one `consider_marker` prompt (reason `review_date`). The outcome screen (renew, change, remove) is the portal's. Bereavement prompts on a joint policy (VUL-015) need claims or the death relay to open a `consider_marker` prompt for the surviving owner.
 - Relationship changes into the channels directory. `docs/channels.md` expects the customer master to send `BindSubject`, `RecordOwnership`, `RecordAssignment` and `RecordDependant` (children with their age of control). The events are on `customer-events` with IDs and kinds but not values; a relay like `relay.rs` reading relationship rows (or a `channels_relay` table written in `store.change`) and proposing those commands is the plan. Seam owner: "Build portal and app services" (channels crate).
 - Changing the blind-index key: needs a command that decrypts every party's facts and rebuilds `blind_index`. `Store::reindex` exists for one party; a batch over all parties under the new key, then swapping the key, is the missing part.
 - Locking the erasure register's immutability policy in prod: a deliberate, irreversible step for a person once the retention period (default 10 years) is agreed.

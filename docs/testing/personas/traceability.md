@@ -360,6 +360,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 
 ## CMP Complaints and disputes
