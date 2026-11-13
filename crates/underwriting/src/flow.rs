@@ -614,6 +614,7 @@ pub(crate) fn issue(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
             expected_product_hash: p.quote.product_hash.clone(),
             migrated: p.migrated,
             command: Box::new(IssuePolicy {
+                continuation_of: None,
                 policy: p.policy.clone(),
                 number: p.policy_number.clone(),
                 group: p.group.clone(),
@@ -647,6 +648,7 @@ pub(crate) fn interim(cfg: &Config, p: &mut Proposal, cx: &mut Cx) {
     let policy = ic_core::PolicyId::from(format!("{}-interim", p.policy).as_str());
     let lives = p.lives.values();
     let command = IssuePolicy {
+        continuation_of: None,
         policy: policy.clone(),
         number: format!("{}-I", p.policy_number),
         group: p.group.clone(),
