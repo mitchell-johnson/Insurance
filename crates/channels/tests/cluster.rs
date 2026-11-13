@@ -176,6 +176,7 @@ async fn the_portal_service_on_real_nodes() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
 
     // The identity service binds Kiri's sign-in, through the service, as a module.
@@ -314,6 +315,7 @@ async fn the_portal_service_on_real_nodes() {
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
+        documents: None,
     }));
     let (status, problem) = call(&impatient, "GET", "/app/v1/me", &kiri, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable")));

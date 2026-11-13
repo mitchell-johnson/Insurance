@@ -6,6 +6,7 @@ pub mod claims;
 pub mod commission;
 pub mod complaints;
 pub mod customers;
+pub mod documents;
 pub mod finance;
 pub mod intake;
 pub mod pricing;
