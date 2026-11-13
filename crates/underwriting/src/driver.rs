@@ -643,9 +643,10 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             } => {
                 let increase = matches!(entry, Entry::Increase { .. });
                 let what = if increase { "increase" } else { "alteration" };
-                let Some(group) = self.group_of(proposal).await? else {
+                let Some(held) = self.proposal(proposal).await? else {
                     return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
                 };
+                let group = held.group.clone();
                 let mut layers = Vec::new();
                 let mut refused = None;
                 for cover in covers {
@@ -667,8 +668,10 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     } else {
                         // The cover keeps its sum insured: an alteration changes the terms
                         // on what the life already holds.
+                        // A change of occupation reaches the core as the life's new class too,
+                        // so the rewritten layers are rated on it.
                         ic_core::Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
-                            occupation_class: None,
+                            occupation_class: held.lives.get(life).and_then(|f| f.factors.occupation_class.clone()),
                             policy: policy.clone(),
                             cover: cover.code.clone(),
                             life: life.clone(),
