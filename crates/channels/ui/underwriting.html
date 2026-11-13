@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Underwriting</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Underwriting</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+
+<section><h2>Queues</h2>
+<form id="q-form"><div class="row"><div><label for="q-name">Queue</label><select id="q-name">
+<option value="medical">Medical</option><option value="financial">Financial</option><option value="occupational">Occupational</option>
+<option value="tele_interview">Tele-interview</option><option value="senior_review">Senior review</option><option value="reinsurer_liaison">Reinsurer liaison</option>
+</select></div><button>Show</button></div></form>
+<div id="q-msg" aria-live="polite"></div><div id="queue"></div></section>
+
+<section><h2>Work a case</h2>
+<p class="muted">Everything you send is recorded as yours. The underwriting module checks your grade, accreditation, limits and any conflict.</p>
+<div class="row"><div><label for="c-case">Case</label><input id="c-case" placeholder="P1/L1/c1"></div>
+<div><label for="c-what">Action</label><select id="c-what">
+<option value="propose">Propose a decision</option><option value="evidence">Ask for evidence</option><option value="opinion">Ask another underwriter's opinion</option>
+<option value="record_opinion">Record your opinion</option><option value="countersign">Countersign a decision</option><option value="hand_over">Hand the case over</option>
+<option value="move">Move the case to another queue</option><option value="release">Release documents to the reinsurer</option>
+</select></div></div>
+<form id="c-form"><div class="row" id="c-fields"></div><p><button>Send</button></p></form>
+<div id="c-msg" aria-live="polite"></div></section>
+
+<section><h2>A proposal</h2>
+<form id="p-form"><div class="row"><div><label for="p-id">Proposal</label><input id="p-id" required></div><button>Open</button>
+<button class="quiet" type="button" id="p-retry">Send the issue again</button></div></form>
+<div id="p-msg" aria-live="polite"></div><div id="proposal"></div>
+<h3>Read a life's disclosures</h3>
+<p class="muted">Each reading is recorded with its purpose before anything is opened.</p>
+<form id="d-form"><div class="row"><div><label for="d-life">Life</label><input id="d-life" required></div>
+<div><label for="d-purpose">Purpose</label><input id="d-purpose" required></div><button>Read</button></div></form>
+<div id="d-msg" aria-live="polite"></div><div id="disclosures"></div></section>
+
+<section><h2>A conflict of interest</h2>
+<form id="x-form"><div class="row"><div><label for="x-party">Person you are connected to</label><input id="x-party" required></div><button>Declare</button></div></form>
+<div id="x-msg" aria-live="polite"></div></section>
+
+<section id="senior" hidden><h2>Non-disclosure remedy</h2>
+<p class="banner warn">A remedy changes or ends someone's cover. You prepare it, and a second senior signs it before it is sent.</p>
+<form id="n-form"><div class="row">
+<div><label for="n-review">Review</label><input id="n-review" required placeholder="ndr/CLM-1/L1"></div>
+<div><label for="n-outcome">Outcome</label><select id="n-outcome"><option value="no_action">No action</option><option value="vary">Vary the terms</option><option value="avoid">Avoid the policy</option></select></div>
+<div><label for="n-reasons">Reason codes</label><input id="n-reasons" required placeholder="RC-0980"></div>
+<div><label for="n-cover">Cover varied</label><input id="n-cover" placeholder="life"></div>
+<div><label for="n-loading">Loading %</label><input id="n-loading" type="number" min="0"></div>
+<div><label for="n-premium">On avoidance</label><select id="n-premium"><option value="">Not an avoidance</option><option value="refund">Refund premiums</option><option value="retain">Keep premiums</option></select></div>
+</div><p><button>Prepare</button></p></form>
+<div id="n-msg" aria-live="polite"></div>
+<h3>Peer review</h3>
+<form id="r-form"><div class="row"><div><label for="r-period">Period</label><input id="r-period" required placeholder="2026-11"></div>
+<div><label for="r-from">From</label><input id="r-from" type="date" required></div><div><label for="r-to">To</label><input id="r-to" type="date" required></div><button>Draw a sample</button></div></form>
+<form id="f-form"><div class="row"><div><label for="f-decision">Decision</label><input id="f-decision" required></div>
+<div><label for="f-agrees">Finding</label><select id="f-agrees"><option value="true">Agree</option><option value="false">Disagree</option></select></div>
+<div><label for="f-reasons">Reason codes</label><input id="f-reasons"></div><button>Record</button></div></form>
+<div id="r-msg" aria-live="polite"></div></section>
+
+<section><h2>Waiting for a second senior</h2><div id="w-msg" aria-live="polite"></div><div id="pending"></div></section>
+<section><h2>Parked effects</h2><p class="muted">Things the module could not deliver. Put one back once its cause is fixed.</p><div id="e-msg" aria-live="polite"></div><div id="parked"></div></section>
+<section><h2>Report</h2>
+<form id="m-form"><div class="row"><div><label for="m-from">From</label><input id="m-from" type="date" required></div><div><label for="m-to">To</label><input id="m-to" type="date" required></div><button>Show</button></div></form>
+<div id="m-msg" aria-live="polite"></div><div id="report"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/underwriting/";
+let me = {};
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+const codes = (s) => String(s || "").split(/[\s,]+/).filter(Boolean);
+const iso = (date, end) => new Date(date + (end ? "T23:59:59Z" : "T00:00:00Z")).toISOString();
+const done = (answer) => answer.prepared ? "Prepared. A second senior signs it before it is sent." : answer.duplicate ? "Already done." : "Done.";
+
+// Each case action: its fields [key, label, kind, options] and how the command is made from them.
+const EVIDENCE = ["gp_report", "specialist_report", "blood_test", "medical_exam", "alternative_medical_history", "previous_insurer", "financial_statement"];
+const QUEUES = ["medical", "financial", "occupational", "tele_interview", "senior_review", "reinsurer_liaison"];
+const TYPES = ["tele_interview", "medical_evidence", "financial_evidence", "referral", "reinsurer_referral", "decline_review", "countersign", "non_disclosure_review"];
+const ACTIONS = {
+  propose: [[["cover", "Cover", "text"], ["outcome", "Outcome", "select", ["accept", "decline", "defer"]], ["loading", "Loading %", "number"],
+    ["exclusion", "Exclusion code", "text"], ["revised", "Sum accepted, if less", "number"], ["until", "Deferred until", "date"], ["reasons", "Reason codes", "text"], ["notes", "Notes reference", "text"]],
+    (f, c) => {
+      const outcome = f.outcome === "accept"
+        ? { outcome: "accept", loading_percent: Number(f.loading || 0), exclusions: f.exclusion ? [{ code: f.exclusion, from: me.today }] : [], revised_sum_insured_minor: f.revised ? Math.round(Number(f.revised) * 100) : null }
+        : f.outcome === "defer" ? { outcome: "defer", until: f.until } : { outcome: "decline" };
+      return { propose_decision: { case: c, terms: [{ cover: f.cover, outcome }], reasons: codes(f.reasons), withheld_reasons: [], notes_ref: f.notes || null, evidence: [] } };
+    }],
+  evidence: [[["kinds", "Evidence", "multi", EVIDENCE]], (f, c) => ({ request_evidence: { case: c, kinds: f.kinds } })],
+  opinion: [[["of", "Underwriter asked", "text"]], (f, c) => ({ ask_opinion: { case: c, of: f.of } })],
+  record_opinion: [[["vault_ref", "Where your opinion is filed", "text"]], (f, c) => ({ record_opinion: { case: c, vault_ref: f.vault_ref } })],
+  countersign: [[["agree", "Your answer", "select", ["true", "false"]], ["reasons", "Reason codes", "text"]],
+    (f, c) => ({ countersign: { case: c, agree: f.agree === "true", reasons: codes(f.reasons), withheld_reasons: [] } })],
+  hand_over: [[["to", "Hand to", "text"]], (f, c) => ({ hand_over: { case: c, to: f.to } })],
+  move: [[["queue", "Queue", "select", QUEUES], ["case_type", "Case type", "select", TYPES], ["reasons", "Why", "text"]],
+    (f, c) => ({ move_case: { case: c, queue: f.queue, case_type: f.case_type, reasons: codes(f.reasons) } })],
+  release: [[["treaty", "Treaty", "text"], ["documents", "Document references", "text"]], (f, c) => ({ release_to_reinsurer: { case: c, treaty: f.treaty, documents: codes(f.documents) } })],
+};
+function field([key, label, kind, options]) {
+  const id = "cf-" + key;
+  if (kind === "select") return h("div", {}, h("label", { for: id }, label), h("select", { id }, options.map((o) => h("option", { value: o }, words(o)))));
+  if (kind === "multi") return h("fieldset", {}, h("legend", {}, label), options.map((o) => h("label", {}, h("input", { type: "checkbox", name: id, value: o }), " " + words(o))));
+  return h("div", {}, h("label", { for: id }, label), h("input", { id, type: kind }));
+}
+function value([key, , kind]) {
+  if (kind === "multi") return [...document.querySelectorAll(`input[name="cf-${key}"]:checked`)].map((i) => i.value);
+  return $("cf-" + key).value.trim();
+}
+function showAction() { put($("c-fields"), ACTIONS[$("c-what").value][0].map(field)); }
+$("c-what").addEventListener("change", showAction);
+$("c-form").addEventListener("submit", run($("c-msg"), async () => {
+  const [spec, build] = ACTIONS[$("c-what").value];
+  const fields = Object.fromEntries(spec.map((s) => [s[0], value(s)]));
+  const answer = await send(build(fields, $("c-case").value.trim()));
+  await refresh();
+  return done(answer);
+}));
+
+function take(c) {
+  return run($("q-msg"), async () => {
+    await send({ take_case: { case: c } });
+    $("c-case").value = c;
+    await showQueue();
+    return `You hold ${c}.`;
+  });
+}
+async function showQueue() {
+  const items = await ask("queue", { queue: $("q-name").value });
+  put($("queue"), items.length ? table(["Case", "Proposal", "Life", "Type", "Held by", "Why", ""], items.map((i) => [i.case, i.proposal, i.life, words(i.case_type), i.owner || "",
+    (i.reasons || []).join(", "), i.owner ? "" : h("button", { class: "quiet", type: "button", on: { click: take(i.case) } }, "Take")])) : h("p", { class: "muted" }, "Nothing is waiting in this queue."));
+}
+$("q-form").addEventListener("submit", run($("q-msg"), showQueue));
+
+$("p-form").addEventListener("submit", run($("p-msg"), async () => {
+  const p = await ask("proposal", { proposal: $("p-id").value.trim() });
+  const lives = Object.entries(p.lives || {});
+  put($("proposal"), h("p", {}, `${p.id}: ${words(p.status)}, policy ${p.policy_number}, ${p.product_code}, received ${p.received_on}, expires ${p.expires_on}.`),
+    table(["Life", "Stage", "Cases", "Decisions"], lives.map(([life, f]) => [life, words(f.stage), (f.cases || []).map((c) => `${c.id} (${words(c.status || c.case_type)})`).join(", "),
+      (f.decisions || []).map((d) => `${d.reference} ${words(d.status)}`).join(", ")])));
+}));
+$("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
+$("d-form").addEventListener("submit", run($("d-msg"), async () => {
+  const records = await api(R, "POST", BASE + "disclosures", { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), purpose: $("d-purpose").value.trim() });
+  put($("disclosures"), records.length ? records.map((r) => h("details", {}, h("summary", {}, `${r.submitted_at} (${r.hash})`), h("pre", {}, JSON.stringify(r.answers || r, null, 2))))
+    : h("p", { class: "muted" }, "This life has made no disclosure."));
+}));
+$("x-form").addEventListener("submit", run($("x-msg"), async () => done(await send({ declare_conflict: { party: $("x-party").value.trim() } }))));
+
+$("n-form").addEventListener("submit", run($("n-msg"), async () => {
+  const outcome = $("n-outcome").value;
+  const varied = outcome === "vary" ? [{ cover: $("n-cover").value.trim(), outcome: { outcome: "accept", loading_percent: Number($("n-loading").value || 0), exclusions: [] } }] : [];
+  const answer = await send({ record_non_disclosure_outcome: { review: $("n-review").value.trim(), outcome, reasons: codes($("n-reasons").value), varied_terms: varied, premium: $("n-premium").value || null } });
+  await refresh();
+  return done(answer);
+}));
+$("r-form").addEventListener("submit", run($("r-msg"), async () => {
+  const seed = crypto.getRandomValues(new Uint32Array(1))[0];
+  const answer = await send({ draw_peer_review_sample: { period: $("r-period").value.trim(), from: iso($("r-from").value), to: iso($("r-to").value, true), seed } });
+  const drawn = (answer.events || []).flatMap((e) => Object.values(e)).flatMap((e) => e.decisions || []);
+  return drawn.length ? `Drawn for review: ${drawn.join(", ")}.` : done(answer);
+}));
+$("f-form").addEventListener("submit", run($("r-msg"), async () => done(await send({ record_peer_finding: { decision: $("f-decision").value.trim(), agrees: $("f-agrees").value === "true", reasons: codes($("f-reasons").value) } }))));
+
+$("m-form").addEventListener("submit", run($("m-msg"), async () => {
+  const r = await ask("report", { from: iso($("m-from").value), to: iso($("m-to").value, true) });
+  const average = r.decisions ? (r.turnaround_hours / r.decisions).toFixed(1) : "-";
+  put($("report"), table(["Decisions", "Straight through", "Peer reviewed", "Peer disagreed", "Evidence cost", "Average hours to decide"],
+    [[r.decisions, r.straight_through, r.peer_reviewed, r.peer_disagreed, (r.evidence_cost_minor / 100).toFixed(2), average]]),
+    table(["Outcome", "Count"], Object.entries(r.by_outcome || {}).map(([k, v]) => [words(k), v])));
+}));
+
+function decide(verb, id) {
+  return run($("w-msg"), async () => { await api(R, "POST", BASE + verb + "/" + encodeURIComponent(id)); await refresh(); return verb === "sign" ? "Signed and sent." : "Withdrawn."; });
+}
+function requeue(effect) {
+  return run($("e-msg"), async () => { await send({ requeue_effect: { effect } }); await refresh(); return `Effect ${effect} is back in the outbox.`; });
+}
+async function refresh() {
+  me = await ask("me");
+  const pending = me.pending || [];
+  put($("pending"), pending.length ? table(["Prepared", "By", "Remedy", "Reasons", ""], pending.map((p) => [p.id, p.by, cell(p.command), p.reason,
+    p.by === me.staff ? h("button", { class: "quiet", type: "button", on: { click: decide("withdraw", p.id) } }, "Withdraw")
+      : me.senior ? h("button", { class: "quiet", type: "button", on: { click: decide("sign", p.id) } }, "Sign and send") : ""]))
+    : h("p", { class: "muted" }, "Nothing is waiting."));
+  const parked = await ask("parked");
+  put($("parked"), parked.length ? table(["Effect", "What", "Why", ""], parked.map(([n, effect, why]) => [n, cell(effect), why,
+    h("button", { class: "quiet", type: "button", on: { click: requeue(n) } }, "Try again")])) : h("p", { class: "muted" }, "Nothing is parked."));
+}
+signIn(R).then(async () => {
+  await refresh();
+  const load = await ask("workload");
+  $("senior").hidden = !me.senior;
+  $("me").textContent = `You are ${me.staff}${me.senior ? ", a senior underwriter" : ""}. You hold ${load} open case${load === 1 ? "" : "s"}. Commands are made on ${me.today || "today's date"}.`;
+  showAction();
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>

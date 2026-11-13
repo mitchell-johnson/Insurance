@@ -137,6 +137,13 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// Whether a member of staff may open the underwriting console, as a
+    /// senior or not, with the non-disclosure remedies waiting for a second
+    /// senior.
+    UnderwritingStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// What a member of staff may do with replacement matches, and how the
     /// commission module should see them when they decide one.
     ReplacementStaff {
@@ -479,6 +486,14 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             let mut standing = crate::reinsurance::standing(&d.staff, &staff, at);
             if standing["view"] == true {
                 standing["pending"] = json!(d.countersign.waiting(crate::reinsurance::MODULE));
+            }
+            standing["today"] = json!(d.today);
+            standing
+        }
+        Question::UnderwritingStaff { staff, at } => {
+            let mut standing = crate::underwriting::standing(&d.staff, &staff, at);
+            if standing["view"] == true {
+                standing["pending"] = json!(d.countersign.waiting(crate::underwriting::MODULE));
             }
             standing["today"] = json!(d.today);
             standing

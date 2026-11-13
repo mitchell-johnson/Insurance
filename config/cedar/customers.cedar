@@ -5,7 +5,7 @@
 //            Action::"<command>" on Command::"<command>",
 //            Action::"match" | "search" | "relationships" | "export" | "routing"
 //            | "merge" | "unmerge" | "reviews" | "audit" | "operate" | "authority"
-//            | "spending_hold"
+//            | "spending_hold" | "due_diligence"
 //            on Party::"party".
 // Context:   purpose (declared by the caller and logged), self (the person the
 //            caller acts for is this party), actor_roles (the kinds of
@@ -175,6 +175,14 @@ when {
 permit(principal == Service::"staff", action == Action::"place_spending_hold", resource is Command);
 permit(principal == Service::"legal", action == Action::"override_spending_hold", resource is Command);
 forbid(principal, action == Action::"end_spending_hold", resource);
+
+// Whether due diligence on a party (and on an organisation's trustees,
+// directors and beneficial owners) is complete before it owns a policy.
+permit(principal, action == Action::"due_diligence", resource)
+when {
+    [Service::"new-business", Service::"underwriting", Service::"policy-servicing", Service::"staff",
+     Service::"compliance", Service::"payments"].contains(principal)
+};
 
 // Whether a person's own spending hold stands: for everyone who pays money
 // out or changes where it goes, and for the person.

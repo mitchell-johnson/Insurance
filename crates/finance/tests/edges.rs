@@ -535,3 +535,95 @@ fn a_rate_table_activated_without_a_validation_shows_at_the_close() {
     assert_eq!(may.len(), 1, "{may:?}");
     assert!(may[0].starts_with("rate table life_base version 4 (bbb)"), "{}", may[0]);
 }
+
+/// Purpose: in March the core bills health premiums with $15.00 of GST and a $2.00 levy,
+/// each under its own posting type. In April something credits GST payable under the
+/// posting type `premium`, and the levy account moves with no posting type at all.
+/// March's reconciliation shows each account's movement by posting type and product,
+/// nothing unexplained and the check green; April's names both stray postings and the
+/// check is red and blocks. A tax account missing from
+/// the chart is reported, a declaration with no posting types is refused, and the
+/// adjustment period has nothing to reconcile.
+/// Why it matters: tax accounts are paid over to someone else on a return. A posting that
+/// reaches one by a route nobody expected is either tax not collected from the customer
+/// or money owed that no return will include, and it is found now or by the authority.
+#[test]
+fn tax_accounts_reconcile_to_the_posting_types_that_may_move_them() {
+    let typed = |role: &str, class: AccountClass, minor: i128, posting_type: &str| {
+        let mut l = line(role, class, AccountUnit::Minor(NZD), minor, Some("SF2-health"));
+        l.dims.posting_type = Some(posting_type.to_string());
+        l.dims.product = Some("health".to_string());
+        l
+    };
+    let mut s = Stream::open(d(2028, 3, 28));
+    s.entry(vec![
+        typed("premium_receivable", AccountClass::Asset, 117_00, "premium"),
+        typed("unearned_premium", AccountClass::Liability, -100_00, "premium"),
+        typed("gst_payable", AccountClass::Liability, -15_00, "gst"),
+        typed("levy_payable", AccountClass::Liability, -2_00, "levy"),
+    ]);
+    while s.date < d(2028, 4, 10) {
+        s.close();
+    }
+    s.entry(vec![
+        typed("premium_receivable", AccountClass::Asset, 3_00, "premium"),
+        typed("gst_payable", AccountClass::Liability, -3_00, "premium"),
+    ]);
+    s.entry(vec![
+        line("premium_receivable", AccountClass::Asset, AccountUnit::Minor(NZD), 1_00, Some("SF2-health")),
+        line("levy_payable", AccountClass::Liability, AccountUnit::Minor(NZD), -1_00, Some("SF2-health")),
+    ]);
+    while s.date < d(2028, 5, 2) {
+        s.close();
+    }
+    let mut b = Books::ready(1);
+    b.feed(&s.events).unwrap();
+    let (mar, apr) = (period(2028, 3), period(2028, 4));
+
+    let check = "tax_posting_types";
+    assert_eq!(status(&b, mar, check), CheckStatus::Green);
+    let march = ic_finance::host::answer(&b.state, serde_json::json!({"q": "tax_reconciliation", "period": "2028-03"})).unwrap();
+    let gst = &march["accounts"][0];
+    assert_eq!((gst["account"].as_str(), gst["name"].as_str()), (Some("2200"), Some("GST payable")));
+    assert_eq!(gst["movement"], serde_json::json!(-15_00 * FINE_PER_MINOR));
+    let lines: Vec<(Option<&str>, Option<&str>, i128)> = gst["lines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|l| {
+            (
+                l["posting_type"].as_str(),
+                l["product"].as_str(),
+                serde_json::from_value(l["movement"].clone()).unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(lines, [(Some("gst"), Some("health"), -15_00 * FINE_PER_MINOR)]);
+    assert_eq!(march["accounts"][1]["movement"], serde_json::json!(-2_00 * FINE_PER_MINOR));
+    assert!(march["unexplained"].as_array().unwrap().is_empty());
+
+    let CheckStatus::Red { items } = status(&b, apr, check) else {
+        panic!("a stray posting to GST payable was not noticed")
+    };
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert!(
+        items[0].starts_with(&format!("2200 GST payable moved by {} ", -3_00 * FINE_PER_MINOR)) && items[0].contains("under posting type premium"),
+        "{}",
+        items[0]
+    );
+    assert!(
+        items[1].starts_with("2210 Levies payable") && items[1].contains("under no posting type"),
+        "{}",
+        items[1]
+    );
+    assert!(b.state.blockers(apr).iter().any(|c| c.id == check));
+    assert!(b.state.tax_reconciliation(apr.adjustment()).accounts.is_empty());
+
+    let mut config = close_config();
+    config.version += 1;
+    config.tax[1].account = "2299".to_string();
+    b.activate_close(config.clone());
+    assert_eq!(b.state.tax_reconciliation(mar).unexplained, ["tax account 2299 is not in the chart"]);
+    config.tax[0].posting_types.clear();
+    assert!(config.validate().is_err());
+}
