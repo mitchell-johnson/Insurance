@@ -33,7 +33,7 @@ Callers are services, each with its own workload identity. A caller presents an 
 - `POST /v1/schemes/{scheme}/files/{file}` with the file as the body and `x-ic-caller` (`employer-portal` or `group-admin`) and `x-ic-actor`. The bytes are stored in quarantine before the module hears of the file. 202 on success. Limit 32 MB.
 - `POST /v1/commands` with `{key, caller, actor, command}`. The business date is the core's. The driver's commands and `receive_file` are not accepted here.
 - `POST /v1/questions` with a question. The outbox is not served.
-- `GET /healthz`.
+- `GET /healthz` (the process is up), `GET /readyz` (the cluster answers; the readiness probe) and `GET /metrics` (Prometheus text: `ic_group_passes_total`, `ic_group_passes_failed_total`, `ic_group_steps_total`, and the gauge `ic_group_waiting`, the steps the last pass could not take). None needs a token. Alert on `ic_group_waiting` staying above zero and on failed passes rising.
 
 422 carries the module's reject code. 503 means nothing is known to have happened: send the same request again with the same key.
 
