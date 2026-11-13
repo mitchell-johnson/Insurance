@@ -2203,3 +2203,162 @@ fn a_continuation_policy_carries_its_scheme_membership_to_the_claim() {
     let from = claim(&c, "clm-1").continued_from.clone().unwrap();
     assert_eq!((from.policy.as_str(), from.life.as_str()), ("scheme-1", "member-7"));
 }
+
+/// Purpose: an overpayment in offset on partition 0 is recovered from the same person's
+/// benefit on partition 1. The paying partition keeps the money back into offset in transit,
+/// the relay carries it over, the holding partition takes it out of transit against the
+/// receivable, and offset in transit nets to nothing across the two, with no breaks on either.
+/// Why it matters: a person's policies can sit on different partitions. The money crosses
+/// between two ledgers that never share a step, so each half has to balance on its own and the
+/// two halves have to meet.
+#[test]
+fn an_offset_recovers_an_overpayment_held_on_another_partition() {
+    let mut c = cluster();
+    let mut r = rules();
+    r.version += 1;
+    r.partitions = 2;
+    c.activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(r) })).unwrap();
+    let n = on_zero(&c, 0);
+    let a = policy(&mut c, 0, true);
+    // The same person's policy, on partition 1.
+    let m = (1..).find(|m| c.partition_of(&GroupId(format!("grp-{m:08}"))) == 1).unwrap();
+    let mut issue = term_life(
+        m,
+        start(),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        Some(100_000_00),
+        Frequency::Monthly,
+        None,
+    );
+    issue.lives[0].kind = ic_core::LifeKind::Named {
+        party: ic_core::PartyId(format!("party-{n:08}")),
+    };
+    let b = issue.policy.clone();
+    c.submit(1, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: b.clone(),
+        receipt: "r-b".into(),
+        amount: Money::new(2_000_00, NZD),
+    };
+    c.submit(1, "cash-matching", receipt).unwrap();
+    days(&mut c, 5);
+    let first = c.business_date().unwrap();
+
+    // Partition 0: 500 overpaid on clm-a, recovered by offset at 10%.
+    open_claim(&mut c, "clm-a", &a, "trauma", ClaimType::IncomeProtection, first);
+    ok(&mut c, decide("clm-a", admit(None, Some(benefit(2_000_00, first)), false)));
+    verify_payee(&mut c, "clm-a");
+    pay_run(&mut c, "run-1", first);
+    let income = claims::Command::DeclareIncome {
+        claim: "clm-a".into(),
+        from: first,
+        other_income_minor: 500_00,
+        actor: actor("sam"),
+    };
+    ok(&mut c, income);
+    let op = claim(&c, "clm-a").overpayments[0].id.clone();
+    let offset = Request::RecoveryStatus {
+        overpayment: op,
+        status: RecoveryStatus::Offset,
+        offset_pct: 10,
+        instalment_minor: 0,
+    };
+    ok(&mut c, decide("clm-a", offset));
+    let end = Request::EndBenefit {
+        end: first.checked_add_months(chrono::Months::new(1)).unwrap(),
+        reason: EndReason::Recovered,
+    };
+    ok(&mut c, decide("clm-a", end));
+    while c.messages_in_flight() > 0 {
+        c.relay_messages(|_| ic_sim::Delivery::Deliver);
+    }
+    assert!(!c.state(1).claims.remote_offsets.is_empty(), "partition 1 knows of the debt");
+
+    // Partition 1: the same person's benefit, paid with 10% kept back.
+    let on_one = |c: &mut Cluster, command: claims::Command| {
+        let name = command.name();
+        if let Err(e) = c.submit(1, "claims", wrap(command)) {
+            panic!("{name} was refused on partition 1: {e}");
+        }
+        clean(c);
+    };
+    on_one(&mut c, notification("clm-b", &b, "trauma", ClaimType::IncomeProtection, first));
+    on_one(
+        &mut c,
+        claims::Command::Acknowledge {
+            claim: "clm-b".into(),
+            delivery_ref: "delivered".into(),
+        },
+    );
+    on_one(
+        &mut c,
+        claims::Command::Assign {
+            claim: "clm-b".into(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        },
+    );
+    on_one(
+        &mut c,
+        claims::Command::RecordCause {
+            claim: "clm-b".into(),
+            cause_code: "CC-0001".into(),
+            actor: actor("sam"),
+        },
+    );
+    on_one(
+        &mut c,
+        claims::Command::CoverCheck {
+            claim: "clm-b".into(),
+            relied_on: vec!["in_force".into()],
+            actor: actor("sam"),
+        },
+    );
+    on_one(&mut c, decide("clm-b", admit(None, Some(benefit(1_000_00, first)), false)));
+    on_one(
+        &mut c,
+        claims::Command::VerifyPayee {
+            claim: "clm-b".into(),
+            party: "party-claimant".into(),
+            kind: PayeeKind::Policyholder,
+            account_ref: "acct-1".into(),
+            name_check_ref: "name-1".into(),
+            screening_ref: "screen-1".into(),
+            authority_doc: None,
+            actor: actor("sam"),
+        },
+    );
+    on_one(
+        &mut c,
+        claims::Command::PrepareRun {
+            run: "run-b".into(),
+            kind: RunKind::Benefit,
+            benefit_date: first,
+            actor: actor("sue"),
+        },
+    );
+    on_one(
+        &mut c,
+        claims::Command::ApproveRun {
+            run: "run-b".into(),
+            actor: actor("sam"),
+        },
+    );
+
+    let transit = |c: &Cluster, p: u16| c.state(p).ledger.natural_balance(&accounts::claims_offset_in_transit(NZD).id);
+    let l1 = &c.state(1).ledger;
+    assert_eq!(l1.natural_balance(&accounts::benefit_payable(&b, NZD).id), 900_00);
+    assert_eq!((transit(&c, 0), transit(&c, 1)), (0, -100_00), "kept back and on its way");
+
+    while c.messages_in_flight() > 0 {
+        c.relay_messages(|_| ic_sim::Delivery::Deliver);
+    }
+    assert_eq!(money(&c, &a).2, 400_00);
+    assert_eq!(claim(&c, "clm-a").overpayments[0].recovered_minor, 100_00);
+    assert_eq!((transit(&c, 0), transit(&c, 1)), (100_00, -100_00), "taken up: the two halves meet");
+    clean(&c);
+    days(&mut c, 2);
+}

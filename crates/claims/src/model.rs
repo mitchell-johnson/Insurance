@@ -480,6 +480,18 @@ pub struct Overpayment {
     pub instalment_minor: i64,
     /// Every status it has held, with the decision that set it.
     pub history: Vec<(NaiveDate, RecoveryStatus, u32)>,
+    /// How many times its position has been shared with other partitions.
+    #[serde(default)]
+    pub shared_seq: u64,
+    /// The position last shared: outstanding, offset share and what has
+    /// been received from other partitions in all. Nothing is sent again
+    /// until one of them changes.
+    #[serde(default)]
+    pub shared: Option<(i64, u32, i64)>,
+    /// Offsets taken by other partitions and dealt with here, applied or
+    /// returned, by partition: what each has been told is settled.
+    #[serde(default)]
+    pub remote_received: BTreeMap<u16, i64>,
 }
 
 impl Overpayment {

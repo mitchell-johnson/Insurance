@@ -424,6 +424,39 @@ pub enum Command {
         party: String,
         date_of_death: NaiveDate,
     },
+    /// From another partition: the position of an overpayment held there and
+    /// being recovered by offset, for the same person's benefits here. A
+    /// later `seq` replaces an earlier one; an older one changes nothing.
+    OffsetSource {
+        from: u16,
+        claim: String,
+        policy: String,
+        overpayment: String,
+        party: String,
+        outstanding_minor: i64,
+        pct: u32,
+        seq: u64,
+        /// What the sender has dealt with of what this partition took.
+        settled_minor: i64,
+    },
+    /// From another partition: it kept `amount_minor` back from a benefit
+    /// (`paid_claim`, payment `take_ref`) against an overpayment held here.
+    OffsetTaken {
+        from: u16,
+        take_ref: String,
+        paid_claim: String,
+        claim: String,
+        overpayment: String,
+        amount_minor: i64,
+    },
+    /// From another partition: part of an offset taken here was more than
+    /// was still owed there, and is the claimant's again.
+    OffsetReturned {
+        from: u16,
+        take_ref: String,
+        claim: String,
+        amount_minor: i64,
+    },
     /// A restricted case over claims, from the compliance module's rules.
     ReferForInvestigation {
         case: String,
@@ -459,6 +492,7 @@ impl Command {
             Command::RecordDeath { .. } | Command::RetractDeath { .. } => &["claims", "customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
             Command::ReferForInvestigation { .. } => &["compliance"],
+            Command::OffsetSource { .. } | Command::OffsetTaken { .. } | Command::OffsetReturned { .. } => &["partition"],
             _ => &["claims"],
         }
     }
@@ -501,6 +535,9 @@ impl Command {
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
             Command::ReferForInvestigation { .. } => "refer_for_investigation",
+            Command::OffsetSource { .. } => "offset_source",
+            Command::OffsetTaken { .. } => "offset_taken",
+            Command::OffsetReturned { .. } => "offset_returned",
             Command::CloseInvestigation { .. } => "close_investigation",
             Command::RetractDeath { .. } => "retract_death",
             Command::LoadMigrated { .. } => "load_migrated",

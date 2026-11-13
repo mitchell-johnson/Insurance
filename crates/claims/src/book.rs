@@ -79,6 +79,8 @@ struct OffsetSource {
     overpayment: String,
     left_minor: i64,
     pct: u32,
+    /// Held on another partition.
+    partition: Option<u16>,
 }
 
 impl ClaimsState {
@@ -776,7 +778,26 @@ impl ClaimsState {
                     } else {
                         o.offset_pct.min(self.rules.max_offset_pct)
                     },
+                    partition: None,
                 });
+            }
+        }
+        // Then what this person owes on other partitions, after what is owed here.
+        let parties: Vec<String> = self.remote_offsets.values().map(|r| r.party.clone()).collect();
+        for party in parties.into_iter().collect::<BTreeSet<_>>() {
+            let remote: Vec<OffsetSource> = self
+                .remote_sources(&party)
+                .map(|r| OffsetSource {
+                    claim: r.claim.clone(),
+                    policy: r.policy.clone(),
+                    overpayment: r.overpayment.clone(),
+                    left_minor: r.available_minor(),
+                    pct: r.pct.min(self.rules.max_offset_pct),
+                    partition: Some(r.from),
+                })
+                .collect();
+            if !remote.is_empty() {
+                by_party.entry(party).or_default().extend(remote);
             }
         }
         by_party
@@ -834,6 +855,7 @@ impl ClaimsState {
                                 policy: o.policy.clone(),
                                 overpayment: o.overpayment.clone(),
                                 amount_minor: take,
+                                partition: o.partition,
                             })
                         });
                         items.push(RunItem {
@@ -873,6 +895,7 @@ impl ClaimsState {
                                 policy: o.policy.clone(),
                                 overpayment: o.overpayment.clone(),
                                 amount_minor: take,
+                                partition: o.partition,
                             })
                         });
                     items.push(RunItem {
@@ -1003,8 +1026,13 @@ impl ClaimsState {
                 })?;
             }
             claim.reserve_minor -= claim.reserve_minor.min(item.gross_minor);
-            if let Some(o) = &item.offset {
-                self.take_offset(claim, o);
+            match &item.offset {
+                Some(o) if o.partition.is_some() => {
+                    let life = claim.life_party.clone();
+                    self.take_remote(cx, &claim.id, life.as_deref(), o, &payment_ref);
+                }
+                Some(o) => self.take_offset(claim, o),
+                None => {}
             }
             if let Some(s) = claim.schedule.as_mut() {
                 let other_income_minor = period_income(s, item.period_start, item.period_end);

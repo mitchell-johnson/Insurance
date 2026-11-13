@@ -250,6 +250,11 @@ pub struct Rules {
     pub review_grace_days: u32,
     /// The largest share of a benefit that may be offset against an overpayment.
     pub max_offset_pct: u32,
+    /// How many partitions the deployment has. An overpayment being offset
+    /// is shared with every other partition, so the same person's benefits
+    /// there can recover it. Zero or one: there is no other partition.
+    #[serde(default)]
+    pub partitions: u16,
     /// Percentage of decisions of each kind sampled for peer review.
     #[serde(default)]
     pub sample_pct: BTreeMap<DecisionKind, u32>,
