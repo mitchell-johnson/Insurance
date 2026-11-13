@@ -36,6 +36,7 @@ pub mod report;
 pub mod returns;
 pub mod service;
 pub mod tables;
+pub mod temporal;
 
 pub use books::{FinApplied, FinCommand, FinEnvelope, FinEvent, FinanceState};
 pub use chart::Chart;
