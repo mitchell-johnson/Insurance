@@ -1084,6 +1084,8 @@ fn the_real_claims_module_feeds_the_experience_extract() {
             provider: Some("provider-7".into()),
             pre_approval_request: false,
             settles_pre_approval: None,
+            service_code: None,
+            service_date: None,
         }),
         underwriters: vec![],
         catastrophe_event: None,

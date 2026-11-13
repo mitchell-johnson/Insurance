@@ -161,6 +161,7 @@ impl ClaimsState {
             waiver_from: None,
             interests: vec![],
             migrated: false,
+            investigation: None,
             in_run: None,
             decisions: vec![],
             pending: None,
@@ -201,7 +202,10 @@ impl ClaimsState {
         }
 
         let periodic = claim.claim_type.periodic();
-        let straight = self.straight_through(&claim, &facts);
+        // A case opened by the billing rule takes the claim out of the
+        // rules' hands without saying so: it waits for a person like any other.
+        let held = self.screen_billing(cx, &mut claim);
+        let straight = self.straight_through(&claim, &facts).filter(|_| !held);
         let pre_approval = claim.health.as_ref().is_some_and(|h| h.pre_approval_request);
         let reserved = |claim: &Claim, gross: i64| {
             vec![

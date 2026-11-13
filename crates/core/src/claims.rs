@@ -277,8 +277,9 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             payee,
             close,
             interest_minor,
+            offset,
             ..
-        } => pay(&mut s.ledger, p, ctx, &claim, payment_ref, amount_minor, payee, close, interest_minor),
+        } => pay(s, p, ctx, &claim, payment_ref, amount_minor, payee, close, interest_minor, offset),
         Instruction::PayBenefit {
             claim,
             payment_ref,
@@ -492,7 +493,7 @@ fn instruct(policy: &mut Policy, claim: &str, payment_ref: String, amount: i64, 
 /// last payment the claim closes and any reserve left is released.
 #[allow(clippy::too_many_arguments)]
 fn pay(
-    ledger: &mut Ledger,
+    state: &mut CoreState,
     policy: &mut Policy,
     ctx: &mut Ctx<'_>,
     claim: &str,
@@ -501,13 +502,17 @@ fn pay(
     payee: String,
     close: bool,
     interest: i64,
+    offset: Option<Offset>,
 ) -> Result<(), Reject> {
     let record = known(policy, claim)?;
     let free = record.payable_minor - record.instructed_minor;
-    if interest < 0 || amount <= 0 || amount > free || record.payments.contains_key(&payment_ref) || (close && amount != free) {
-        return invalid("a payment is new, positive and within what is admitted and not yet released");
+    let taken = offset.as_ref().map_or(0, |o| o.amount_minor);
+    if interest < 0 || amount <= 0 || amount > free || !(0..=amount).contains(&taken) || record.payments.contains_key(&payment_ref) || (close && amount != free)
+    {
+        return invalid("a payment is new, positive and within what is admitted and not yet released, with an offset no larger than it");
     }
     let c = policy.currency;
+    let other = offset_policy(state, policy, offset.as_ref())?;
     let reserve = if close { record.reserve_minor } else { 0 };
     let (expense, d) = incurred(policy, &record.cover, "claim_closed");
     let mut set = PostingSet::new();
@@ -518,22 +523,66 @@ fn pay(
     let late = dims(policy, None, "claim_late_interest");
     set.debit(accounts::claim_interest(&policy.product_code, c), i128::from(interest), late.clone());
     set.credit(accounts::benefit_payable(&policy.id, c), i128::from(interest), late);
+    // What is kept back is no longer owed to the payee: it pays down what
+    // the payee owes on another claim.
+    if let Some(o) = &offset {
+        let kept = dims(policy, None, "claim_offset");
+        set.debit(accounts::benefit_payable(&policy.id, c), i128::from(taken), kept.clone());
+        set.credit(accounts::claim_recovery_receivable(&PolicyId(o.policy.clone()), c), i128::from(taken), kept);
+    }
+    let kind = match (interest > 0, taken > 0) {
+        (true, _) => "claim_late_interest",
+        (false, true) => "claim_offset",
+        (false, false) => "claim_reserve_released",
+    };
     post(
-        ledger,
+        &mut state.ledger,
         policy,
         ctx,
-        if interest > 0 { "claim_late_interest" } else { "claim_reserve_released" },
+        kind,
         set,
         claim,
         &[("payment_ref", payment_ref.clone()), ("payee", payee), ("interest_minor", interest.to_string())],
     )?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= reserve;
-        record.payable_minor += interest;
+        record.payable_minor += interest - taken;
         record.open = !close;
     }
-    instruct(policy, claim, payment_ref, amount + interest, false);
+    instruct(policy, claim, payment_ref, amount - taken + interest, false);
+    reduce_receivable(state, policy, other, offset.as_ref());
     Ok(())
+}
+
+/// Where the overpayment an offset recovers is held, when it is on another
+/// policy of this partition, after checking it has that much outstanding.
+fn offset_policy(state: &CoreState, policy: &Policy, offset: Option<&Offset>) -> Result<Option<PolicyId>, Reject> {
+    let Some(o) = offset else { return Ok(None) };
+    let other = Some(PolicyId(o.policy.clone())).filter(|id| *id != policy.id);
+    let owed = match &other {
+        Some(id) => state
+            .policies
+            .get(id)
+            .filter(|p| p.currency == policy.currency && !p.is_frozen())
+            .and_then(|p| p.claims.get(&o.claim)),
+        None => policy.claims.get(&o.claim),
+    };
+    if owed.is_none_or(|l| l.receivable_minor < o.amount_minor) {
+        return Err(Reject::new("offset", "the overpayment does not have that much outstanding on this partition"));
+    }
+    Ok(other)
+}
+
+/// Count an offset against the receivable it recovers.
+fn reduce_receivable(state: &mut CoreState, policy: &mut Policy, other: Option<PolicyId>, offset: Option<&Offset>) {
+    let Some(o) = offset else { return };
+    let owing = match other {
+        Some(id) => state.policies.get_mut(&id).and_then(|p| p.claims.get_mut(&o.claim)),
+        None => policy.claims.get_mut(&o.claim),
+    };
+    if let Some(l) = owing {
+        l.receivable_minor -= o.amount_minor;
+    }
 }
 
 /// One period of a benefit in payment, in one entry: drawn from the reserve
@@ -560,20 +609,7 @@ fn pay_benefit(
     let c = policy.currency;
     // The overpayment an offset recovers may be on another policy of the
     // same person on this partition.
-    let other = offset.as_ref().map(|o| PolicyId(o.policy.clone())).filter(|id| *id != policy.id);
-    if let Some(o) = &offset {
-        let owed = match &other {
-            Some(id) => state
-                .policies
-                .get(id)
-                .filter(|p| p.currency == c && !p.is_frozen())
-                .and_then(|p| p.claims.get(&o.claim)),
-            None => policy.claims.get(&o.claim),
-        };
-        if owed.is_none_or(|l| l.receivable_minor < o.amount_minor) {
-            return Err(Reject::new("offset", "the overpayment does not have that much outstanding on this partition"));
-        }
-    }
+    let other = offset_policy(state, policy, offset.as_ref())?;
     let drawn = record.reserve_minor.min(gross);
     let released = if close { record.reserve_minor - drawn } else { 0 };
     let (expense, d) = incurred(policy, &record.cover, "benefit_paid");
@@ -597,15 +633,7 @@ fn pay_benefit(
         record.open = !close;
     }
     instruct(policy, claim, payment_ref, gross - taken, false);
-    if let Some(o) = &offset {
-        let owing = match other {
-            Some(id) => state.policies.get_mut(&id).and_then(|p| p.claims.get_mut(&o.claim)),
-            None => policy.claims.get_mut(&o.claim),
-        };
-        if let Some(l) = owing {
-            l.receivable_minor -= o.amount_minor;
-        }
-    }
+    reduce_receivable(state, policy, other, offset.as_ref());
     Ok(())
 }
 

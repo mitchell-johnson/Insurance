@@ -52,7 +52,8 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
 }
 
 /// Purpose: each of the three calls goes to the master's route for the person signed in, with the portal's token, the purpose the
-/// master's policy keys on, the person as both party and actor, and on a change the version and idempotency key.
+/// master's policy keys on, the person as both party and actor, and on a change the version and idempotency key; routing is
+/// asked under `self_service` too.
 /// Why it matters: the master decides what the portal may see by these headers alone; a wrong purpose or party would either be
 /// refused or, worse, read as someone else.
 #[tokio::test]
@@ -70,6 +71,7 @@ async fn the_master_is_asked_about_the_person_signed_in() {
         200
     );
     assert_eq!(master.export(&kiri).await.unwrap().0, 200);
+    assert_eq!(master.routing(&kiri).await.unwrap(), (200, json!({ "ok": "/v1/parties/party-1/routing" })));
 
     let seen = seen.lock().unwrap();
     let routes: Vec<_> = seen.iter().map(|(m, p, _)| format!("{m} {p}")).collect();
@@ -80,6 +82,7 @@ async fn the_master_is_asked_about_the_person_signed_in() {
             "POST /v1/parties/party-1/commands",
             "POST /v1/parties/party-1/commands",
             "GET /v1/parties/party-1/export?purpose=subject_access",
+            "GET /v1/parties/party-1/routing",
         ]
     );
     for (_, _, headers) in seen.iter() {
@@ -97,7 +100,7 @@ async fn the_master_is_asked_about_the_person_signed_in() {
 
 /// Purpose: a party ID cannot steer the request elsewhere on the master; a 503 is an error to retry; a body that is not JSON is
 /// read as null with its status; an unreachable master is an error; and the portal's own check lets through only the two commands
-/// a person sends about themselves.
+/// a person sends about themselves; and a request goes to a person first when the master says so or cannot say.
 /// Why it matters: party IDs come from the directory, but the URL is built from them, so a stray `/` or `?` must not reach another
 /// route; and the app must be able to tell "try again" from "refused".
 #[tokio::test]
@@ -120,4 +123,12 @@ async fn the_client_reads_every_kind_of_answer() {
         .unwrap_err()
         .contains("not something you change yourself"));
     assert!(check(&json!({})).unwrap_err().contains("names itself"));
+
+    // Whether a request goes to a person first: as the master says; to a person when it cannot say; not with no master.
+    use ic_channels::customers::route_to_person;
+    assert!(route_to_person(Some(Ok((200, json!({ "route_to_person": true }))))));
+    assert!(!route_to_person(Some(Ok((200, json!({ "route_to_person": false }))))));
+    assert!(route_to_person(Some(Ok((403, json!({}))))));
+    assert!(route_to_person(Some(Err("down".into()))));
+    assert!(!route_to_person(None));
 }

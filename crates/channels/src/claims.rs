@@ -127,6 +127,8 @@ pub fn question(name: &str, field: impl Fn(&str) -> Option<String>) -> Result<Qu
         "claim" => Question::Claim { claim: needs("claim")? },
         "work" => Question::Work { claim: needs("claim")? },
         "policy" => Question::PolicyStatus { policy: needs("policy")? },
+        // Who is asking is filled in from the session, never from the page.
+        "cases" => Question::Cases { staff: String::new() },
         "book" => Question::Book,
         "report" => Question::Report,
         "remittance" => Question::Remittance { run: needs("run")? },
