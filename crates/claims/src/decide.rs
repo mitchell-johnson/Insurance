@@ -178,6 +178,11 @@ impl ClaimsState {
                         if amount <= 0 || amount > cap {
                             return refuse("amount_exceeds_cover", "the amount is more than the cover pays for this event");
                         }
+                        if amount <= claim.advanced_minor {
+                            return refuse("below_advance", "the benefit admitted is not more than was already advanced on it");
+                        }
+                        // The advance is already admitted and paid out of this benefit.
+                        let amount = amount - claim.advanced_minor;
                         plan.amount_minor = amount;
                         if facts.standing.as_deref() == Some("in_grace") {
                             // A claim in grace is payable less the premium owing.
@@ -286,6 +291,23 @@ impl ClaimsState {
                 plan.overpaid_minor = (claim.paid_minor(false) - already).max(0);
                 plan.amount_minor = claim.admitted_minor.max(plan.overpaid_minor);
             }
+            Request::FuneralAdvance { amount_minor } => {
+                if claim.claim_type != ClaimType::Death || claim.status != Status::Open {
+                    return refuse("not_open", "an advance is made on an open death claim, before it is decided");
+                }
+                let room = self.rules.funeral_advance_max_minor - claim.advanced_minor;
+                if *amount_minor <= 0 || *amount_minor > room {
+                    return refuse("advance_limit", "the advance is more than the rules allow before a decision");
+                }
+                if claim
+                    .cover_check
+                    .as_ref()
+                    .is_some_and(|c| !c.facts.in_force || *amount_minor > c.facts.sum_insured_minor)
+                {
+                    return refuse("cover_not_confirmed", "the cover check found no cover for this advance");
+                }
+                plan.amount_minor = *amount_minor;
+            }
             Request::ExGratia { amount_minor, payment_ref } => {
                 if *amount_minor <= 0 || claim.payee.is_none() {
                     return refuse("payee_not_verified", "an ex gratia payment needs an amount and a verified payee");
@@ -381,12 +403,14 @@ impl ClaimsState {
             _ if !profile.lines.contains(&claim.line()) => false,
             Request::Reserve { .. } => amount <= profile.max_reserve_minor,
             Request::Admit { exclusion_override, .. } => {
-                amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0)
+                // Measured against the whole benefit, the advance with it.
+                amount + claim.advanced_minor <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0)
                     && (exclusion_override.is_none() || profile.may_override_exclusion)
             }
             Request::Decline => profile.may_decline,
             Request::ReverseAdmission { .. } => profile.may_reverse_admission && profile.senior,
             Request::ExGratia { .. } => amount <= profile.max_ex_gratia_minor,
+            Request::FuneralAdvance { .. } => amount <= profile.max_admission_minor.get(&claim.claim_type).copied().unwrap_or(0),
             Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } => true,
         }
     }
@@ -396,7 +420,7 @@ impl ClaimsState {
         let amount = plan.amount_minor;
         let two_signatures = match request {
             Request::Decline | Request::ReverseAdmission { .. } => true,
-            Request::Admit { .. } => amount >= self.rules.two_signature_admission_minor,
+            Request::Admit { .. } => amount + claim.advanced_minor >= self.rules.two_signature_admission_minor,
             Request::ExGratia { .. } => amount >= self.rules.two_signature_ex_gratia_minor,
             Request::WriteOff { .. } => amount >= self.rules.two_signature_write_off_minor,
             _ => false,
@@ -535,7 +559,7 @@ impl ClaimsState {
             crate::overpay::publish(cx, "overpayment_raised", claim, &o, &[("amount_minor", o.amount_minor.to_string())]);
             claim.overpayments.push(o);
         }
-        cx.notify("claim_closed", &claim.id, &[("outcome", status.code().to_string())]);
+        cx.lifecycle(&self.rules, "claim_closed", claim, &[("outcome", status.code().to_string())]);
         Ok(())
     }
 
@@ -622,9 +646,10 @@ impl ClaimsState {
                     );
                 } else if let Some(terms) = periodic {
                     self.start_benefit(claim, cx, terms);
-                    cx.notify(
+                    cx.lifecycle(
+                        &self.rules,
                         "claim_admitted",
-                        &id,
+                        claim,
                         &[("admitted_minor", "0".into()), ("monthly_minor", terms.monthly_minor.to_string())],
                     );
                 } else {
@@ -643,6 +668,7 @@ impl ClaimsState {
                     claim.payable_minor += plan.amount_minor - plan.deduct_minor - plan.loan_minor;
                     claim.loan_repaid_minor += plan.loan_minor;
                     claim.reserve_minor = 0;
+                    let advanced = claim.advanced_minor;
                     for due in &plan.interests {
                         let basis = if due.nominated { "nomination" } else { "interest" };
                         cx.notify(
@@ -660,16 +686,45 @@ impl ClaimsState {
                         self.use_health(cx, claim, priced, plan.amount_minor);
                     }
                     self.start_timer(claim, TimerKind::Payment, cx.today);
-                    cx.notify(
+                    cx.lifecycle(
+                        &self.rules,
                         "claim_admitted",
-                        &id,
+                        claim,
                         &[
-                            ("admitted_minor", plan.amount_minor.to_string()),
+                            // The whole benefit: what was advanced was part of it.
+                            ("admitted_minor", (plan.amount_minor + advanced).to_string()),
+                            ("advanced_minor", advanced.to_string()),
                             ("loan_repaid_minor", plan.loan_minor.to_string()),
                         ],
                     );
                 }
                 Self::meet_timer(claim, TimerKind::Decision, cx.today);
+            }
+            Request::FuneralAdvance { amount_minor } => {
+                // The reserve falls by what is advanced, so the claim's cost is unchanged.
+                let reserve = (claim.reserve_minor - amount_minor).max(0);
+                cx.core.execute(Instruction::SetReserve {
+                    claim: id.clone(),
+                    policy: policy.clone(),
+                    cover: cover.clone(),
+                    amount_minor: reserve,
+                    reason: "funeral_advance".into(),
+                })?;
+                cx.core.execute(Instruction::Admit {
+                    claim: id.clone(),
+                    policy,
+                    cover,
+                    amount_minor: *amount_minor,
+                    release_reserve: false,
+                    deduct_premium_minor: 0,
+                    terminate: None,
+                    repay_loan_minor: 0,
+                })?;
+                claim.reserve_minor = reserve;
+                claim.admitted_minor += amount_minor;
+                claim.payable_minor += amount_minor;
+                claim.advanced_minor += amount_minor;
+                cx.notify("funeral_advance_admitted", &id, &[("amount_minor", amount_minor.to_string())]);
             }
             Request::Decline => self.close(cx, claim, Status::Declined, None)?,
             Request::Withdraw => self.close(cx, claim, Status::Withdrawn, None)?,

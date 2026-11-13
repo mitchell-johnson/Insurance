@@ -260,3 +260,95 @@ fn persistent_short_payment_suspends_joiners_until_paid() {
     );
     assert!(h.core_lives().contains(&"E007".to_string()));
 }
+
+/// The scheme's own rates for Harbour Freight, split by occupation class: an executive
+/// in class 4 (on the wharf) costs twice one in an office.
+fn rates_by_class(h: &mut Harness) {
+    let source = format!(
+        r#"RATE_TABLE = rate_table(
+    id = "group-life-standard",
+    version = 2,
+    effective_from = "2027-01-01",
+    scope = ["{}"],
+    rows = [
+        rate("2.90", category = "executive", occupation_class = "4"),
+        rate("1.45", category = "executive"),
+        rate("1.10", category = "staff"),
+    ],
+)"#,
+        h.group.0
+    );
+    let table = ic_product::load_rate_table("harbour_rates.star", &source).unwrap();
+    h.c.activate_everywhere(ic_core::Command::ActivateRateTable { table: Box::new(table) }).unwrap();
+}
+
+fn director(class: &str, group: &str) -> ic_group::record::MemberAttrs {
+    let mut a = attrs("executive", 150_000_00, group);
+    a.occupation_class = Some(class.to_string());
+    a
+}
+
+/// Purpose: named directors in different occupation classes are each priced by the core
+/// on their own class, the invoice shows a line for each category and class that adds up
+/// to the billing-group schedule, and a director moving class is a change like any other:
+/// the next invoice prices them on the new class.
+/// Why it matters: GRP-033. A scheme rated by class that billed everyone on the office
+/// rate would undercharge the hazardous roles the reinsurer priced, and an employer who
+/// cannot see which class each charge is for cannot check it against its own records.
+#[test]
+fn directors_in_different_occupation_classes_each_have_their_own_invoice_line() {
+    let mut h = Harness::new(terms());
+    rates_by_class(&mut h);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "D001", director("1", "akl")),
+            row(3, "D002", director("4", "akl")),
+        ],
+    );
+    let held = |h: &Harness, id: &str| h.scheme().membership.active(id).unwrap().attrs.occupation_class.clone();
+    assert_eq!(held(&h, "D002").as_deref(), Some("4"));
+    h.days(31);
+    let invoice = h.scheme().invoices.back().unwrap().clone();
+    let lines: Vec<_> = invoice
+        .by_class
+        .iter()
+        .map(|l| (l.category.as_str(), l.occupation_class.as_deref(), l.members, l.total_minor))
+        .collect();
+    // 600,000 of cover each: 72.50 a month on the general executive rate, 145.00 in class 4.
+    assert_eq!(
+        lines,
+        vec![
+            ("executive", Some("1"), 1, 72_50),
+            ("executive", Some("4"), 1, 145_00),
+            ("staff", None, 1, 11_00),
+        ]
+    );
+    assert_eq!(
+        invoice.by_class.iter().map(|l| l.total_minor).sum::<i64>(),
+        invoice.by_group.values().map(|g| g.total_minor).sum::<i64>()
+    );
+    let view = ic_group::answer(&h.g, serde_json::json!({"ask": "member", "scheme": SCHEME, "employee": "D002"})).unwrap();
+    assert_eq!(view["occupation_class"], "4");
+
+    // D001 moves out to the wharf. The file says only the class; nothing else changes.
+    let today = h.today();
+    let moved = ic_group::record::MemberAttrs {
+        occupation_class: Some("4".to_string()),
+        ..Default::default()
+    };
+    h.apply("f2", FileKind::Changes, vec![change(1, "D001", RowChange::Change, today, moved)]);
+    assert_eq!(held(&h, "D001").as_deref(), Some("4"));
+    assert_eq!(h.scheme().membership.active("D001").unwrap().attrs.salary_minor, Some(150_000_00));
+    h.pay(h.owed());
+    h.days(31);
+    let invoice = h.scheme().invoices.back().unwrap();
+    let lines: Vec<_> = invoice
+        .by_class
+        .iter()
+        .map(|l| (l.category.as_str(), l.occupation_class.as_deref(), l.members, l.total_minor))
+        .collect();
+    assert_eq!(lines, vec![("executive", Some("4"), 2, 290_00), ("staff", None, 1, 11_00)]);
+}

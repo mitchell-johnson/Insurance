@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use ic_channels::classes::DataClass;
-use ic_channels::directory::{DirectoryCommand, LicenceStatus};
+use ic_channels::directory::{DirectoryCommand, LicenceStatus, StructureLink};
 use ic_channels::feed::Row;
 use ic_channels::identity::{proof_message, Enrolment, IdentityCommand};
 use ic_channels::query::{answer, ask, module_spec, DeviceProof, Question, MODULE, STALE_AFTER_SECS};
@@ -616,4 +616,53 @@ fn the_hosted_module_follows_events_and_survives_a_snapshot() {
     let direct = ic_channels::query::react(&events[0]);
     assert_eq!(direct[0].key, format!("event:{}", events[0].id));
     assert_eq!(direct[0].actor, module(EVENT_RELAY));
+}
+
+/// Purpose: an advice provider sees each adviser engaged with it today and the policies they service, a group sees the same
+/// through every provider linked under it on the date, and nobody else sees any of it; each policy is a summary as its
+/// adviser sees it, with no health facts, rows or claims.
+/// Why it matters: persona row ADV-035. A provider answers for its advisers' advice and a group for its providers, so each
+/// needs the book under it; a link to a group that has ended, or a provider that is not the adviser's, must show nothing.
+#[test]
+fn a_provider_and_its_group_see_the_book_under_them() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    w.engage("e1", "adv-1", "fap-1", None).unwrap();
+    w.dir(
+        party(KIRI),
+        DirectoryCommand::GrantAdviserAuthority {
+            policy: pol.clone(),
+            adviser: p("adv-1"),
+            engagement: "e1".into(),
+        },
+    )
+    .unwrap();
+    let link = |child: &str, parent: &str, to| DirectoryCommand::RecordStructure {
+        child: p(child),
+        link: StructureLink {
+            parent: p(parent),
+            from: d(2025, 1, 1),
+            to,
+        },
+    };
+    w.dir(module("distribution"), link("fap-1", "group-1", None)).unwrap();
+    let at = w.at;
+    let practice = |w: &World, who: &str| ask(&w.ch, Question::Practice { party: p(who), at });
+
+    let fap = practice(&w, "fap-1");
+    assert_eq!((&fap["policies"], &fap["advisers"][0]["adviser"]), (&json!(1), &json!("adv-1")), "{fap}");
+    let summary = &fap["advisers"][0]["policies"][0];
+    assert_eq!(summary["policy"], json!(pol));
+    assert!(
+        summary.get("rows").is_none() && !summary.to_string().contains("health"),
+        "a summary only: {summary}"
+    );
+    assert_eq!(practice(&w, "group-1")["policies"], json!(1), "the group through the provider");
+    assert_eq!(practice(&w, "fap-2")["advisers"], json!([]), "another provider sees nothing");
+    assert_eq!(practice(&w, "adv-1")["advisers"], json!([]), "an adviser is not a provider");
+
+    // The group's link ended last year: it no longer sees the provider's book.
+    w.dir(module("distribution"), link("fap-1", "group-1", Some(d(2026, 1, 1)))).unwrap();
+    assert_eq!(practice(&w, "group-1")["advisers"], json!([]));
+    assert_eq!(practice(&w, "fap-1")["policies"], json!(1));
 }

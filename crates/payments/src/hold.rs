@@ -60,14 +60,6 @@ impl PaymentsState {
         self.customer_holds.get(party).is_some_and(|h| h.held)
     }
 
-    /// Refuses a change to the party's payout accounts while a hold stands.
-    pub(crate) fn refuse_if_held(&self, party: &str) -> Result<(), Reject> {
-        if self.held(party) {
-            return Err(Reject::new(HELD, format!("{party} has a hold on money going out")));
-        }
-        Ok(())
-    }
-
     /// The party an item pays.
     fn party_paid(&self, counterparty: &Counterparty) -> Option<&str> {
         match counterparty {
@@ -87,6 +79,9 @@ impl PaymentsState {
         let record = self.customer_holds.get(party);
         if record.is_some_and(|r| r.held) {
             return Some(HELD);
+        }
+        if self.insolvent(party, now.date()) {
+            return Some(crate::insolvency::INSOLVENT);
         }
         let limit = Duration::minutes(i64::from(fresh?));
         record.is_none_or(|r| now - r.checked_at > limit).then_some(UNCONFIRMED)

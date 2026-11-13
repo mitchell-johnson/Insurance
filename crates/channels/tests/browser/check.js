@@ -297,6 +297,10 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.locator("#party").getByText("p1").first().waitFor();
   } });
   await visit(browser, "/payments", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/adviser", { subject: "sub-fap" }, { run: async (p) => {
+    await sees(p, "Advisers under you");
+    await p.locator("#practice").getByText("adv-1").waitFor();
+  } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();

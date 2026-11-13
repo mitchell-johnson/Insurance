@@ -425,7 +425,8 @@ impl ClaimsState {
                 "a returned benefit period is paid again for exactly what came back",
             ));
         }
-        let close = claim.payable_minor == amount_minor && claim.cost_payable_minor == 0 && claim.status != Status::InPayment;
+        // Only an admitted lump sum closes when paid: an advance on an open claim leaves it open.
+        let close = claim.payable_minor == amount_minor && claim.cost_payable_minor == 0 && claim.status == Status::Admitted;
         // A payment that came back is sent again as it was: its interest is
         // part of what came back, and the delay since is not the insurer's.
         let came_back = |p: &&Payment| p.returned && p.cost_item.is_none() && !p.ex_gratia;
@@ -492,11 +493,11 @@ impl ClaimsState {
             false,
             interest_minor + carried - declined,
         );
-        if close && claim.status == Status::Admitted {
+        if close {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         self.commit(claim);
         Ok(())
@@ -565,7 +566,7 @@ impl ClaimsState {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         self.commit(claim);
         Ok(())
@@ -637,7 +638,7 @@ impl ClaimsState {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         claim.payments.push(Payment {
             payment_ref: payment_ref.clone(),
@@ -1115,7 +1116,7 @@ impl ClaimsState {
         if closed {
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", &claim.id, &[("outcome", claim.status.code().to_string())]);
+            cx.lifecycle(&self.rules, "claim_closed", claim, &[("outcome", claim.status.code().to_string())]);
         }
         Ok(())
     }

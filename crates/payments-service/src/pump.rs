@@ -351,6 +351,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     reference,
                     payer_account,
                     received_on,
+                    payer_policy,
                     ..
                 } => {
                     let payment = IncomingPayment {
@@ -360,7 +361,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                         payer_account,
                         received_on,
                     };
-                    self.core.match_receipt(payment).await
+                    self.core.match_receipt_from(payment, payer_policy).await
                 }
                 Instruction::Notify { to, subject, detail } => self.notifier.notify(to, &subject, &detail).await.map(|()| None),
             };

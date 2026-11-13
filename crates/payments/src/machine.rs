@@ -100,6 +100,16 @@ pub enum Command {
         party: String,
         held: bool,
     },
+    /// The core recorded an insolvency interest naming `owner` as the
+    /// policy owner (`InterestEvent::Recorded`, kind insolvency), or released
+    /// one with effect from `released`.
+    RecordInsolvency {
+        owner: String,
+        policy: String,
+        interest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        released: Option<NaiveDate>,
+    },
 
     // --- accounts that may be paid ---
     RegisterPayee {
@@ -174,6 +184,14 @@ pub enum Command {
     /// Claims closed a claim (`claim_closed`): nothing more is forecast.
     ClaimClosed {
         claim: String,
+    },
+    /// Claims changed an overpayment (`overpayment_*`), with what is still
+    /// owed on it (`repay.rs`).
+    OverpaymentChanged {
+        claim: String,
+        overpayment: String,
+        policy: String,
+        outstanding_minor: i64,
     },
     /// Someone holding a notice's role closes it with what they did.
     CloseNotice {
@@ -535,6 +553,11 @@ pub enum Event {
         party: String,
         held: bool,
     },
+    /// Whether an insolvency interest stands against a policy owner changed.
+    OwnerInsolvencyChanged {
+        party: String,
+        insolvent: bool,
+    },
     DrillStarted {
         drill: Id,
         region: String,
@@ -617,6 +640,13 @@ pub struct PaymentsState {
     /// money going out (SVC-022).
     #[serde(default)]
     pub customer_holds: BTreeMap<String, crate::hold::HoldRecord>,
+    /// Claim overpayments still owed, under the reference a repayment
+    /// quotes (`repay.rs`).
+    #[serde(default)]
+    pub repayables: crate::repay::Repayables,
+    /// Policy owners with insolvency interests recorded by the core.
+    #[serde(default)]
+    pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
     /// Work for the drivers, in order. Removed when its result is recorded.
@@ -710,6 +740,12 @@ impl PaymentsState {
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
             Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::RecordInsolvency {
+                owner,
+                policy,
+                interest,
+                released,
+            } => self.record_insolvency(tx, &owner, &policy, &interest, released),
             Command::DeclareIncident {
                 incident,
                 authorities,
@@ -718,6 +754,12 @@ impl PaymentsState {
                 reason,
             } => self.declare_incident(tx, incident, authorities, from, to, reason),
             Command::ClaimAdmitted { claim, amount_minor } => self.claim_admitted(tx, &claim, amount_minor),
+            Command::OverpaymentChanged {
+                claim,
+                overpayment,
+                policy,
+                outstanding_minor,
+            } => self.overpayment_changed(tx, &claim, &overpayment, &policy, outstanding_minor),
             Command::ClaimClosed { claim } => {
                 tx.need(Role::Service)?;
                 self.claim_left_forecast(&claim);

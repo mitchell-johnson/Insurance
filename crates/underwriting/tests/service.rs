@@ -220,7 +220,11 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     let mut swept = None;
     let (pass, sweep) = carrier.cycle(&mut swept, config.sweep_page).await;
     let pass = pass.unwrap();
-    assert_eq!(sweep.unwrap().unwrap().pages, 1);
+    let sweep = sweep.unwrap().unwrap();
+    assert_eq!(sweep.pages, 1);
+    // Collections is not hosted on this node: the day's sweep stands and says why no
+    // reinstatements were looked for.
+    assert!(sweep.reinstatements_unavailable.is_some(), "{sweep:?}");
     assert_eq!(swept, Some(clock().date_naive()));
 
     let proposal: Option<Proposal> = serde_json::from_value(cluster.ask(Query::Proposal { proposal: "P1".into() }).await.unwrap()).unwrap();

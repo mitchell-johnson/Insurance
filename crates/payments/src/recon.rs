@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use chrono::NaiveDate;
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
+use crate::model::{About, AuthorityStatus, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
+use ic_core::PolicyId;
 
 /// The outbox key prefix for money a reinsurer paid in.
 const RECEIVED_FROM_REINSURER: &str = "reinsurance-received-";
@@ -101,6 +102,7 @@ impl PaymentsState {
             let id = format!("{account}-{date}-{}", line.id);
             let expected = self.books.get_mut(account).and_then(|b| b.expected.remove(&line.reference));
             let reinsurer = (line.amount_minor > 0).then(|| reinsurer_statement(&line.reference)).flatten();
+            let repayment = (line.amount_minor > 0).then(|| self.repayables.named_by(&line.reference).cloned()).flatten();
             match expected {
                 Some(e) if e.amount_minor == line.amount_minor => {
                     matched += 1;
@@ -134,6 +136,31 @@ impl PaymentsState {
                         about: Some(About::Exception(id)),
                     });
                 }
+                // Someone paid back a claim overpayment, quoting the
+                // reference they were given. Claims records it; more than
+                // is owed waits for a person.
+                None if repayment.is_some() => {
+                    self.open_exception(
+                        tx,
+                        id.clone(),
+                        exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
+                    );
+                    if let Some(owed) = repayment.filter(|o| line.amount_minor <= o.outstanding_minor) {
+                        self.push_outbox(OutboxEntry {
+                            key: format!("{}{id}", crate::repay::REPAID),
+                            instruction: Instruction::CoreAt {
+                                policy: PolicyId::from(owed.policy.as_str()),
+                                caller: "payments".to_string(),
+                                command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::RecordRepayment {
+                                    claim: owed.claim,
+                                    overpayment: owed.overpayment,
+                                    amount_minor: line.amount_minor,
+                                }))),
+                            },
+                            about: Some(About::Exception(id)),
+                        });
+                    }
+                }
                 None if line.amount_minor > 0 && purpose == Purpose::PremiumCollection => {
                     // A customer paid by direct credit. Cash matching decides
                     // whose it is; until it does, the money is unidentified.
@@ -155,6 +182,7 @@ impl PaymentsState {
                             currency,
                             reference: line.reference.clone(),
                             payer_account: line.payer_account.clone(),
+                            payer_policy: line.payer_account.as_deref().and_then(|a| self.payer_policy(a)),
                             received_on: date,
                         },
                         about: Some(About::Exception(id)),
@@ -231,6 +259,8 @@ impl PaymentsState {
             (Some(About::Exception(id)), None) => {
                 let resolution = if done.key.starts_with(RECEIVED_FROM_REINSURER) {
                     "recorded by reinsurance against its statement"
+                } else if done.key.starts_with(crate::repay::REPAID) {
+                    "recorded by claims against its overpayment"
                 } else {
                     "applied by cash matching"
                 };
@@ -333,5 +363,26 @@ impl PaymentsState {
             })
             .collect();
         serde_json::json!({ "kind": "unidentified_receipts", "as_at": as_at, "items": items, "total_minor": total, "count": count })
+    }
+}
+
+/// An account number as banks write it variously: letters and digits only.
+fn account_digits(number: &str) -> String {
+    number.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
+impl PaymentsState {
+    /// The policy whose live authority draws on this account, when exactly
+    /// one policy's does. Several policies on one account are not guessed
+    /// between.
+    pub(crate) fn payer_policy(&self, account: &str) -> Option<PolicyId> {
+        let wanted = account_digits(account);
+        let mut policies = self
+            .authorities
+            .values()
+            .filter(|a| a.status != AuthorityStatus::Cancelled && !wanted.is_empty() && account_digits(&a.account.number) == wanted)
+            .map(|a| &a.policy);
+        let first = policies.next()?.clone();
+        policies.all(|p| *p == first).then_some(first)
     }
 }

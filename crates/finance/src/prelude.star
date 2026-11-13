@@ -48,5 +48,11 @@ def tax_account(account, name, posting_types):
     """A tax or levy account and the posting types the core may move it with."""
     return {"account": account, "name": name, "posting_types": posting_types}
 
-def close_config(version, checks, aged = [], holidays = [], migration_control = [], tax = []):
-    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control, "tax": tax}
+def accounting_group(product, portfolio, profitability = "other"):
+    """The portfolio a product's policies are placed in at issue, and the
+    profitability band the appointed actuary set for its new business:
+    "onerous", "no_significant_risk" or "other"."""
+    return {"product": product, "portfolio": portfolio, "profitability": profitability}
+
+def close_config(version, checks, aged = [], holidays = [], migration_control = [], tax = [], grouping = []):
+    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control, "tax": tax, "grouping": grouping}

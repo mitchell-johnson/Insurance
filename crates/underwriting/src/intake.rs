@@ -55,6 +55,11 @@ impl UnderwritingState {
         if cx.caller == "collections" && !matches!(open.entry, crate::model::Entry::Reinstatement { .. }) {
             return reject("entry", "collections opens a proposal only to reinstate a lapsed policy");
         }
+        // A replacement keeps the cover in force and adds to it: it is more
+        // cover on that policy, and it is advice, so an adviser gives it.
+        if open.replacement && (!matches!(open.entry, crate::model::Entry::Increase { .. }) || open.adviser.is_none()) {
+            return reject("replacement", "a replacement is advised more cover on a policy in force");
+        }
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");
@@ -111,6 +116,7 @@ impl UnderwritingState {
             migrated: migration,
             issue_attempts: 0,
             reoffers: vec![],
+            replacement: open.replacement,
         };
         cx.event(Event::ProposalReceived {
             proposal: p.id.clone(),
@@ -142,6 +148,9 @@ pub(crate) fn consent(
     open_only(p)?;
     let proposal = p.id.clone();
     if !granted {
+        if kind == ConsentKind::ReplacementDisclosure && life_ref(p, life)?.stage != Stage::AwaitingDisclosure {
+            return reject("too_late", "the application was made on the replacement disclosure");
+        }
         if kind == ConsentKind::AdviserAccess {
             flow::end_adviser_access(p, life, AccessEnd::ConsentWithdrawn, cx);
         }
@@ -172,6 +181,15 @@ pub(crate) fn consent(
             let msg = message("consent", &[&proposal.0, &life.0, "employer_sees_loading"]);
             if !signed.as_ref().is_some_and(|s| s.verifies(&msg)) {
                 return reject("signature", "consent to the employer seeing a loading needs the member's signed step");
+            }
+        }
+        if kind == ConsentKind::ReplacementDisclosure {
+            if !p.replacement {
+                return reject("replacement", "the proposal is not a replacement");
+            }
+            let msg = message("consent", &[&proposal.0, &life.0, "replacement_disclosure"]);
+            if !signed.as_ref().is_some_and(|s| s.verifies(&msg)) {
+                return reject("signature", "the replacement disclosure is confirmed with the life's signed step");
             }
         }
         let f = life_mut(p, life)?;
@@ -309,6 +327,9 @@ pub(crate) fn accept_disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &m
 pub(crate) fn disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &mut Cx, d: SubmitDisclosure) -> Result<(), Reject> {
     if life_ref(p, &d.life)?.stage != Stage::AwaitingDisclosure {
         return reject("not_awaiting_disclosure", "the life's disclosure is not awaited");
+    }
+    if p.replacement && !life_ref(p, &d.life)?.consented(ConsentKind::ReplacementDisclosure) {
+        return reject("replacement_disclosure", "the life has not confirmed the replacement disclosure");
     }
     accept_disclosure(st, p, cx, &d, "disclosure")?;
     flow::route(&st.config, p, &d.life, cx, false)

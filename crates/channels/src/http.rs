@@ -516,6 +516,51 @@ async fn disclosure_submit(
     intake_answer(s.intake()?.submit(request).await)
 }
 
+/// What the life signs to give a consent on a proposal: the exact bytes,
+/// base64. Only the life on the proposal may ask.
+async fn consent_to_sign(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life, kind)): Path<(String, String, String)>,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    s.signer(&session, &proposal, &life).await?;
+    if !crate::disclosures::CONSENTS.contains(&kind.as_str()) {
+        return Err(Problem::not_found());
+    }
+    let message = base64::engine::general_purpose::STANDARD.encode(crate::disclosures::consent_message(&proposal, &life, &kind));
+    ok(json!({ "message": message, "signed": crate::disclosures::SIGNED_CONSENTS.contains(&kind.as_str()) }))
+}
+
+/// The life gives or withdraws a consent on their proposal, from a device
+/// they enrolled; one that needs their signed step carries the device's
+/// signature. The underwriting module records it, and checks the signature
+/// again.
+async fn consent_record(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life, kind)): Path<(String, String, String)>,
+    body: Bytes,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let Some(device) = session.device.clone() else {
+        return Err(device_required("giving or withdrawing a consent"));
+    };
+    let idempotency = key(&headers, &session.party.0)?;
+    let public_key = s
+        .signer(&session, &proposal, &life)
+        .await?
+        .ok_or_else(|| device_required("giving or withdrawing a consent"))?;
+    let command = crate::disclosures::consent(&proposal, &life, &kind, &parse(&body)?, Some((&device, &public_key)))
+        .map_err(|e| Problem::new(StatusCode::BAD_REQUEST, "bad_consent", e))?;
+    s.to_underwriting(crate::underwriting::app_envelope(&format!("app:{idempotency}"), session.at, command))
+        .await
+}
+
 /// A document's PDF as the documents module gave it: the file on 200,
 /// that module's refusal otherwise (404 for one that is not the asker's,
 /// 403 for a clinical one to staff, 410 for one destroyed).
@@ -918,6 +963,17 @@ async fn book(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: 
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::Book {
         adviser: session.party,
+        at: session.at,
+    })
+    .await?)
+}
+
+/// What an advice provider or a group sees of the advisers under it and
+/// the policies they service. Empty for anyone who is neither.
+async fn practice(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    ok(s.ask(Question::Practice {
+        party: session.party,
         at: session.at,
     })
     .await?)
@@ -2448,6 +2504,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/documents/{id}/pdf", get(staff_document))
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", post(disclosure_to_sign))
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures", post(disclosure_submit))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", post(consent_record))
+        .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", get(consent_to_sign))
         .route("/app/v1/sync", get(sync))
         .route("/app/v1/policies/{policy}", get(policy))
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))
@@ -2462,6 +2520,7 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/devices/{device}", delete(revoke_device))
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
+        .route("/adviser/v1/practice", get(practice))
         .route("/adviser/v1/replacements", get(adviser_replacements))
         .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))

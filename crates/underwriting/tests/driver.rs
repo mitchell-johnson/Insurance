@@ -20,7 +20,7 @@ use ic_sim::Cluster;
 use ic_underwriting::command::{Applied, Command, Effect, Envelope, Reject};
 use ic_underwriting::config::{InterimSettings, Settings};
 use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
-use ic_underwriting::model::{Entry, ProposalStatus, Stage};
+use ic_underwriting::model::{ConsentKind, Entry, ProposalStatus, Stage};
 use ic_underwriting::progress::ProgressRow;
 use ic_underwriting::reinstatement::reinstatement_proposal;
 use ic_underwriting::service::channels_envelope;
@@ -91,6 +91,8 @@ impl Reinsurer for Reinsurance {
 struct Ledger {
     cluster: Arc<Mutex<Cluster>>,
     down: Arc<Mutex<bool>>,
+    /// What collections lists as waiting for underwriting.
+    lapsed: Arc<Mutex<Vec<PolicyId>>>,
 }
 
 impl Core for Ledger {
@@ -103,6 +105,20 @@ impl Core for Ledger {
             refused: applied.result.err().map(|r| Refusal::new(&r.code, r.message)),
             events: applied.events.into_iter().map(|e| e.event).collect(),
         })
+    }
+
+    async fn lapsed_for_underwriting(&self) -> Result<Vec<ic_core::policy::Policy>, DriverError> {
+        if *self.down.lock().unwrap() {
+            return Err(DriverError::Unavailable("collections did not answer".into()));
+        }
+        let cluster = self.cluster.lock().unwrap();
+        Ok(self
+            .lapsed
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|p| cluster.state(0).policies.get(p).cloned())
+            .collect())
     }
 }
 
@@ -217,6 +233,7 @@ fn bench<F: Forward + Clone>(forward: F) -> Bench<F> {
     let ledger = Ledger {
         cluster: Arc::new(Mutex::new(cluster)),
         down: Arc::default(),
+        lapsed: Arc::default(),
     };
     let group = Group::default();
     let portal = Portal::default();
@@ -661,6 +678,73 @@ async fn an_accepted_increase_becomes_a_layer_on_the_policy_in_force() {
     );
 }
 
+/// Purpose: a customer's new adviser replaces their cover and tops it up. The application is
+/// the increase alone, advised as a replacement: once the customer confirms the replacement
+/// disclosure, only the increase is underwritten and the core writes it as a second layer on the
+/// same cover. The cover in force is untouched: same layer, same start, so no gap and no new
+/// waiting period, and the customer holds one cover with one sum insured.
+/// Why it matters: a replacement written as a cancellation and a new policy would leave the
+/// customer uncovered between the two, restart their waiting periods and underwrite what was
+/// already accepted (ADV-027).
+#[tokio::test]
+async fn a_replacement_with_a_top_up_underwrites_only_the_increase_on_the_same_cover() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    let first = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        cluster.state(0).policies[&policy].covers["life"].layers[0].clone()
+    };
+
+    let hash = b.product_hash.clone();
+    b.module.with(|w| {
+        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 200_000_00)], true);
+        open.quote.product_hash = hash;
+        open.entry = Entry::Increase { policy: policy.clone() };
+        open.policy = policy.clone();
+        open.policy_number = number.clone();
+        open.group = group.clone();
+        open.replacement = true;
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        let confirm = w.ok(
+            "new-business",
+            Command::RecordConsent {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                kind: ConsentKind::ReplacementDisclosure,
+                granted: true,
+                signed: Some(signed("consent", &["P2", "L1", "replacement_disclosure"])),
+            },
+        );
+        assert!(!confirm.events.is_empty());
+        let disclosed = w.disclose("P2", "L1", &clean());
+        let sums: Vec<i64> = disclosed
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::ReserveCapacity { sum_insured_minor, .. } => Some(*sum_insured_minor),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sums, vec![200_000_00], "only the increase is underwritten and placed");
+    });
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("P2"), ProposalStatus::Issued { .. }), "{:?}", b.status("P2"));
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let held = &cluster.state(0).policies[&policy];
+    assert_eq!(held.covers.keys().collect::<Vec<_>>(), vec!["life"], "one cover");
+    let cover = &held.covers["life"];
+    assert_eq!(cover.layers[0], first, "the cover in force is untouched: no gap, no new waiting period");
+    assert_eq!(cover.layers[1].origin, ic_core::LayerOrigin::Increase);
+    assert_eq!(cover.sum_insured_on(cover.layers[1].start), 700_000_00, "one sum insured");
+    assert!(cluster.reconcile().is_empty());
+}
+
 /// Purpose: a change of terms on cover already in force goes through underwriting and reaches
 /// the core as the same cover rewritten: the old layer ends, a new one carries the decided
 /// loading with the same sum insured and origin, and the proposal ends issued. A proposal that
@@ -795,6 +879,61 @@ async fn a_reinstatement_decision_is_recorded_against_the_lapse() {
         (1, "life", "0.50")
     );
     assert!(b.reinsurance.module.state().reservation("P2/L1/life/1").is_none());
+}
+
+/// Purpose: collections lists the lapsed policies whose reinstatement the core refused for want
+/// of underwriting. The day's sweep opens a reinstatement proposal for each, as collections,
+/// from the policy as the core holds it; a policy already opened is not opened again, one that
+/// is no longer lapsed is reported and skipped, and when collections cannot be asked the sweep
+/// still stands and says why.
+/// Why it matters: a customer who has paid their arrears is waiting on a decision nobody has
+/// started. Without this step the core's refusal sits on a collections task until a person
+/// re-keys the application.
+#[tokio::test]
+async fn the_daily_sweep_opens_a_reinstatement_for_each_lapse_collections_lists() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let lapsed = b.module.with(|w| w.p("P1").policy.clone());
+    *b.ledger.lapsed.lock().unwrap() = vec![lapsed.clone()];
+    // Listed while still in force: nothing to reinstate.
+    let early = b.driver.sweep(10).await.unwrap();
+    assert_eq!((early.reinstatements, early.not_reinstated.len()), (0, 1));
+    assert_eq!(early.not_reinstated[0].0, lapsed);
+    {
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        for _ in 0..95 {
+            cluster.end_of_day().unwrap();
+        }
+        assert_eq!(cluster.state(0).policies[&lapsed].status, PolicyStatus::Lapsed);
+    }
+
+    let swept = b.driver.sweep(10).await.unwrap();
+    assert_eq!(
+        (swept.reinstatements, swept.not_reinstated.len(), swept.reinstatements_unavailable.clone()),
+        (1, 0, None)
+    );
+    let id = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        reinstatement_proposal(&cluster.state(0).policies[&lapsed], start()).unwrap().proposal
+    };
+    let opened = b.module.with(|w| {
+        let p = w.p(&id.0);
+        (p.channel.clone(), p.status.clone(), p.entry.clone())
+    });
+    assert_eq!(
+        opened,
+        ("collections".to_string(), ProposalStatus::Open, Entry::Reinstatement { policy: lapsed.clone() })
+    );
+
+    // Asked again, nothing new is opened.
+    let again = b.driver.sweep(10).await.unwrap();
+    assert_eq!(again.reinstatements, 0);
+    // Collections out of reach: the sweep stands and says so.
+    *b.ledger.down.lock().unwrap() = true;
+    let unreachable = b.driver.sweep(10).await.unwrap();
+    assert!(unreachable.reinstatements_unavailable.unwrap().contains("collections did not answer"));
 }
 
 /// Purpose: a non-disclosure review that ends in avoidance reaches the core: claims opens the
