@@ -230,3 +230,72 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     assert_eq!(notices, 1, "said once, not every morning");
     assert!(h.scheme().absence_leaves.is_empty());
 }
+
+/// Purpose: a part-timer whose hours cross the scheme's minimum from week to week is
+/// covered exactly while she qualifies. The week her hours fall short her cover ends in
+/// the core from that date and she is offered continuation like any leaver; the week
+/// they rise again she rejoins from that date as a new life; and a change that keeps her
+/// above the minimum is only a change. Her colleagues are untouched throughout.
+/// Why it matters: eligibility is a term of the policy. Cover that stayed on through the
+/// short weeks would be cover the scheme was not priced for and a claim would be argued
+/// over; cover that did not come back would leave a working member uninsured while her
+/// employer believes she is covered.
+#[test]
+fn cover_follows_a_member_whose_hours_cross_the_minimum() {
+    let mut t = terms();
+    t.eligibility.min_hours_hundredths = Some(2000);
+    let mut h = Harness::new(t);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", attrs("staff", 60_000_00, "wlg")),
+            row(3, "E003", attrs("staff", 90_000_00, "akl")),
+        ],
+    );
+    assert_eq!(h.core_lives().len(), 3);
+    let with_hours = |hundredths: u32| {
+        let mut a = attrs("staff", 60_000_00, "wlg");
+        a.hours_hundredths = Some(hundredths);
+        a
+    };
+
+    // Week one: still enough hours. A change, nothing more.
+    h.days(7);
+    let today = h.today();
+    h.apply("w1", FileKind::Changes, vec![change(1, "E002", RowChange::Change, today, with_hours(2500))]);
+    assert_eq!(h.core_lives().len(), 3);
+
+    // Week two: below the minimum. Cover ends that day and she may continue it herself.
+    h.days(7);
+    let short_from = h.today();
+    h.apply(
+        "w2",
+        FileKind::Changes,
+        vec![change(1, "E002", RowChange::Change, short_from, with_hours(1500))],
+    );
+    assert!(h.scheme().membership.active("E002").is_none());
+    assert_eq!(h.core_lives(), vec!["E001".to_string(), "E003".to_string()]);
+    assert!(h.scheme().offers.values().any(|o| o.employee_id == "E002" && o.status == OfferStatus::Open));
+    assert_eq!(h.scheme().files["w2"].rejected, vec![]);
+
+    // Week three: enough hours again. She joins from that day; while she was out a change
+    // for her is refused, because she is not a member.
+    h.days(7);
+    let back_from = h.today();
+    h.apply(
+        "w3a",
+        FileKind::Changes,
+        vec![change(1, "E002", RowChange::Change, back_from, with_hours(3000))],
+    );
+    assert_eq!(h.scheme().files["w3a"].rejected[0].code, "unknown_member");
+    h.apply("w3b", FileKind::Changes, vec![change(1, "E002", RowChange::Join, back_from, with_hours(3000))]);
+    let again = h.scheme().membership.active("E002").expect("she is a member again");
+    assert_eq!(again.joined, back_from);
+    assert_eq!(h.core_lives().len(), 3);
+    // The days in between are not covered: the first life ended and a new one began.
+    let lives = &h.c.state(h.p).policies[&h.policy].lives;
+    let hers: Vec<_> = lives.values().filter(|l| l.id.0.starts_with("E002")).map(|l| (l.joined, l.left)).collect();
+    assert_eq!(hers, vec![(d(2027, 11, 1), Some(short_from)), (back_from, None)]);
+}

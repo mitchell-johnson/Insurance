@@ -250,22 +250,27 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-005 | full | `sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 | GRP-006 | full | `group/tests/intake.rs::approval_needs_a_second_person_and_staff_for_deep_backdating`<br>`group/src/diff.rs::dates_are_held_to_the_backdating_limits` |
 | GRP-007 | full | `group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
+| GRP-008 | full | `group/src/diff.rs::cover_follows_hours_across_the_minimum`<br>`group/tests/leavers.rs::cover_follows_a_member_whose_hours_cross_the_minimum` |
 | GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back` |
 | GRP-010 | full | `group/tests/excess.rs::a_loading_is_itemised_to_the_employer_only_with_the_members_consent`<br>`sim/tests/group_cover.rs::a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed` |
-| GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading` |
+| GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading`<br>`group/tests/excess.rs::staff_are_told_when_leavers_leave_too_few_members_in_the_total` |
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
+| GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
-| GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme` |
+| GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
 | GRP-020 | part | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole` |
 | GRP-021 | full | `group/tests/year.rs::agreed_terms_take_effect_on_the_renewal_date` |
 | GRP-022 | full | `group/tests/year.rs::without_an_agreement_the_scheme_runs_on_old_rates_and_then_ends`<br>`group/tests/year.rs::a_rate_guarantee_rolls_the_year_without_an_agreement` |
 | GRP-023 | full | `group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy`<br>`group/tests/leavers.rs::an_option_not_taken_up_expires` |
 | GRP-024 | part | `group/src/model.rs::membership_follows_a_member_through_every_change`<br>`group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 | GRP-025 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
+| GRP-026 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
+| GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
+| GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
 ## JNT Joint lives, ownership, assignments and dependants
 

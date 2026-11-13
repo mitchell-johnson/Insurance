@@ -82,11 +82,19 @@ impl DiffContext<'_> {
         })
     }
 
-    fn join(&self, row: &MemberRow) -> Result<Proposed, Ineligible> {
+    fn join(&self, view: &Membership, row: &MemberRow) -> Result<Proposed, Ineligible> {
         if self.terms.basis == MemberBasis::Named && row.fingerprint.is_none() {
             return Err(("missing_value", "name"));
         }
-        let effective = self.join_date(row);
+        // Someone coming back served their waiting period long ago: without
+        // a stated date they rejoin from the file's date, not from the day
+        // that first waiting period ended.
+        let rejoining = view.has_left(&row.employee_id);
+        let effective = if rejoining && row.effective.is_none() {
+            self.file_date
+        } else {
+            self.join_date(row)
+        };
         let mut attrs = row.attrs.clone();
         if attrs.billing_group.is_none() {
             attrs.billing_group = Some(self.terms.default_billing_group().to_string());
@@ -118,6 +126,15 @@ impl DiffContext<'_> {
             return Err(("before_joining", "effective"));
         }
         let attrs = held.attrs.merged(&row.attrs);
+        // Eligibility is judged on the date of each change, not only on
+        // joining: a member whose hours fall below the scheme's minimum is
+        // no longer eligible, and cover ends as it does for a leaver.
+        let min_hours = self.terms.eligibility.min_hours_hundredths;
+        if min_hours.is_some_and(|min| attrs.hours_hundredths.is_some_and(|hours| hours < min)) {
+            let mut ended = self.leave(view, row.row, employee_id, effective)?;
+            ended.fields = vec!["hours".to_string()];
+            return Ok(Some(ended));
+        }
         check_attrs(self.terms, self.product, &attrs)?;
         Ok(Some(Proposed {
             row: row.row,
@@ -239,7 +256,7 @@ fn derive_full(ctx: &DiffContext<'_>, view: &Membership, rows: &[MemberRow]) -> 
             present.insert(from);
             ctx.rekey(view, row, from)
         } else {
-            ctx.join(row).map(|j| {
+            ctx.join(view, row).map(|j| {
                 joiners.push(j);
                 vec![]
             })
@@ -312,7 +329,7 @@ fn derive_changes(ctx: &DiffContext<'_>, view: &Membership, rows: &[MemberRow]) 
                 if view.active(&row.employee_id).is_some() {
                     Err(("already_member", "employee_id"))
                 } else {
-                    ctx.join(row).and_then(|j| {
+                    ctx.join(&view, row).and_then(|j| {
                         let twin = j.fingerprint.as_deref().and_then(|p| fingerprints(&view).get(p).map(|o| (*o).to_string()));
                         match twin {
                             Some(other) => {
@@ -656,6 +673,61 @@ mod tests {
         let out = derive(&ctx, &m, FileKind::Full, &[]);
         assert_eq!(rejects(&out), vec![(Some("E1"), "before_joining")]);
         assert_eq!(out.rejected[0].row, 0);
+    }
+
+    /// Purpose: eligibility is judged on the date of every change and not only on joining. A
+    /// member whose hours fall below the scheme's minimum has cover ended from that date, as a
+    /// leaver's is, with the reason shown as the field; a member whose hours change but stay
+    /// above it is an ordinary change; and when the first works enough hours again they rejoin
+    /// from the file's date, not from the day their first waiting period ended years before.
+    /// Why it matters: a scheme priced for staff working a minimum number of hours would
+    /// otherwise go on covering, and billing for, people who no longer qualify, and a claim
+    /// from one would be declined after premiums were taken. And a rejoiner dated back to the
+    /// scheme's start would be given months of cover nobody intended.
+    #[test]
+    fn cover_follows_hours_across_the_minimum() {
+        let mut f = Fixture::new();
+        f.terms.eligibility.min_hours_hundredths = Some(2000);
+        f.terms.eligibility.waiting_days = 10;
+        let hours = |n: u32, id: &str, hundredths: u32, on: NaiveDate| {
+            let mut row = event(n, id, RowChange::Change, Some(on));
+            row.attrs.hours_hundredths = Some(hundredths);
+            row
+        };
+        let rows = vec![hours(1, "E1", 1500, d(2027, 12, 3)), hours(2, "E2", 2500, d(2027, 12, 3))];
+        let out = derive(&f.ctx(), &view(), FileKind::Changes, &rows);
+        assert!(out.rejected.is_empty(), "{:?}", out.rejected);
+        assert_eq!(
+            summary(&out),
+            vec![("E1".to_string(), "leave", d(2027, 12, 3)), ("E2".to_string(), "change", d(2027, 12, 3))]
+        );
+        assert_eq!(out.changes[0].fields, vec!["hours"], "the preview says why");
+        assert_eq!(out.changes[1].fields, vec!["hours"]);
+
+        // The same in a full file, from the file's date.
+        let mut short = row(1, "E1", Some("a"));
+        short.attrs.hours_hundredths = Some(1500);
+        let full = vec![short, row(2, "E2", Some("b")), row(3, "E3", None)];
+        let out = derive(&f.ctx(), &view(), FileKind::Full, &full);
+        assert_eq!(summary(&out), vec![("E1".to_string(), "leave", d(2027, 12, 1))]);
+
+        // Back above the minimum in a later full file: a joiner again, from that file's date.
+        let mut after = view();
+        assert!(after.apply(&out.changes[0], None));
+        let mut ctx = f.ctx();
+        ctx.today = d(2028, 1, 5);
+        ctx.file_date = d(2028, 1, 1);
+        let mut back = row(1, "E1", Some("a"));
+        back.attrs.employment_start = Some(d(2020, 2, 1));
+        let full = vec![back, row(2, "E2", Some("b")), row(3, "E3", None)];
+        let out = derive(&ctx, &after, FileKind::Full, &full);
+        assert!(
+            out.rejected.is_empty() && out.ambiguities.is_empty(),
+            "{:?} {:?}",
+            out.rejected,
+            out.ambiguities
+        );
+        assert_eq!(summary(&out), vec![("E1".to_string(), "join", d(2028, 1, 1))]);
     }
 
     /// Purpose: a change file's rows are applied in order, each seeing the ones before it: a hire
