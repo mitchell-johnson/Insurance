@@ -896,17 +896,15 @@ impl GroupState {
     /// with the same terms, the member paying, is written from today, and
     /// the old one ends from the same day once the new one is there. If
     /// the core refuses the new layer the old one stays as it was.
-    fn replace_with_member_paying(&mut self, s: &mut Scheme, case: u64, decision: ExcessDecision) -> Result<(), Reject> {
-        let ExcessDecision::Accepted {
-            sum_insured_minor,
-            loadings,
-            exclusions,
-            ..
-        } = decision
-        else {
-            return Ok(());
-        };
-        let Some(old) = s.cases.get(&case).cloned() else { return Ok(()) };
+    fn replace_with_member_paying(
+        &mut self,
+        s: &mut Scheme,
+        old: ExcessCase,
+        sum_insured_minor: i64,
+        loadings: Vec<ic_money::DecStr>,
+        exclusions: Vec<String>,
+    ) -> Result<(), Reject> {
+        let case = old.id;
         if sum_insured_minor <= 0 || sum_insured_minor > old.accepted_minor {
             return Err(Reject::new(
                 "invalid_amount",
@@ -974,15 +972,25 @@ impl GroupState {
         let in_place = s
             .cases
             .get(&case)
-            .is_some_and(|c| c.status == CaseStatus::Accepted && c.layer.is_some() && c.end_from.is_none());
-        match &decision {
-            ExcessDecision::ReofferDeclined if in_place => {
+            .filter(|c| c.status == CaseStatus::Accepted && c.layer.is_some() && c.end_from.is_none())
+            .cloned();
+        let decision = match (in_place, decision) {
+            (Some(_), ExcessDecision::ReofferDeclined) => {
                 self.emit(GroupEvent::LoadingMoveDeclined { scheme: s.id.clone(), case });
                 return Ok(());
             }
-            ExcessDecision::Accepted { member_pays_loading: true, .. } if in_place => return self.replace_with_member_paying(s, case, decision),
-            _ => {}
-        }
+            (
+                Some(old),
+                ExcessDecision::Accepted {
+                    sum_insured_minor,
+                    loadings,
+                    exclusions,
+                    member_pays_loading: true,
+                    ..
+                },
+            ) => return self.replace_with_member_paying(s, old, sum_insured_minor, loadings, exclusions),
+            (_, decision) => decision,
+        };
         let c = s
             .cases
             .get_mut(&case)

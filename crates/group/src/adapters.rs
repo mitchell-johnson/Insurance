@@ -224,7 +224,8 @@ fn case_of(proposal: &str) -> Option<(String, u64)> {
 /// One of underwriting's effects as an answer to a request of this
 /// module's, or `None` when it is something else. Terms are accepted cover
 /// with its loadings and exclusions; a proposal that ended without terms
-/// was declined, or was not proceeded with.
+/// was declined, or was not proceeded with; an offer to move a loading to
+/// the member that ended leaves the cover in place as it was.
 ///
 /// The member's consent to the employer seeing a loading is underwriting's
 /// `employer_may_see_loading`, recorded there by the member's signed step.
@@ -241,6 +242,10 @@ pub fn excess_answer(effect: &Value) -> Option<ExcessAnswer> {
             member_pays_loading: body["member_pays_loading"].as_bool().unwrap_or(false),
         };
         (body, decision)
+    } else if let Some(body) = effect.get("reoffer_ended") {
+        // The member declined to take a loading over, or the offer ran out:
+        // the terms in place stand. The proposal's name says whose it is.
+        (body, ExcessDecision::ReofferDeclined)
     } else {
         let body = effect.get("proposal_ended").filter(|b| group_excess(b))?;
         let decision = match body["outcome"].as_str()? {
