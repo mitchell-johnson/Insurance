@@ -181,7 +181,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-023 | full | `underwriting/tests/libraries.rs::backtest_shows_how_a_rule_change_shifts_outcomes`<br>`underwriting/tests/config.rs::a_changed_rule_set_needs_its_backtest_and_its_references` |
 | UW-024 | full | `underwriting/tests/special.rs::peer_review_samples_decisions_for_a_senior_who_never_touched_them` |
 | UW-025 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
-| UW-026 | part | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
+| UW-026 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
 | UW-029 | part | `underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
@@ -506,7 +506,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
 | FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract` |
-| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines` |
+| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
 
 ## CFG Configuration operations and the actuary's interface
 

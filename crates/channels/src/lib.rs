@@ -33,6 +33,7 @@ pub mod group;
 pub mod http;
 pub mod identity;
 pub mod ops;
+pub mod payments;
 pub mod pricing;
 pub mod query;
 pub mod reinsurance;

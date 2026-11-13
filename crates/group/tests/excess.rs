@@ -519,11 +519,14 @@ fn staff_are_told_when_leavers_leave_too_few_members_in_the_total() {
 
 /// Purpose: a member who pays their own loading and stops paying loses that cover when
 /// the core lapses it: the case ends, the employer hears only that the cover is no longer
-/// in place, and the member's automatic cover and the scheme itself carry on.
+/// in place, and the member's automatic cover and the scheme itself carry on. When the
+/// member later asks for the cover back, staff ask underwriting again, and the cover it
+/// accepts is in place from that day.
 /// Why it matters: the module would otherwise go on showing underwritten cover the core
 /// has ended, and a claim would be assessed against cover that is not there. And a
 /// member's own arrears must never put their colleagues' cover, or their own automatic
-/// cover, at risk.
+/// cover, at risk. Without a way back, a lapsed member would wait for a pay rise to be
+/// asked again.
 #[test]
 fn a_member_who_stops_paying_their_loading_loses_only_that_cover() {
     let mut t = terms();
@@ -548,6 +551,28 @@ fn a_member_who_stops_paying_their_loading_loses_only_that_cover() {
     assert!(h.scheme().membership.active("E004").is_some(), "still a member, on automatic cover");
     assert_eq!(h.scheme().status, ic_group::state::SchemeStatus::Active);
     assert!(h.core_lives().contains(&"E004".to_string()));
+
+    // Later the member asks for the cover back. Staff ask underwriting again: a new request
+    // from today, not from when the member joined; asked twice, the second is refused.
+    let again = |h: &mut Harness, id: &str, reason: &str| {
+        h.staff(GroupCommand::RequestExcessAgain {
+            scheme: SCHEME.into(),
+            employee_id: id.into(),
+            reason: reason.into(),
+        })
+    };
+    assert_eq!(code(again(&mut h, "E004", " ")), "missing_value");
+    assert_eq!(code(again(&mut h, "E999", "asked by phone")), "unknown_member");
+    assert_eq!(code(again(&mut h, "E001", "asked by phone")), "nothing_to_ask");
+    let asked = h.today();
+    let before = h.requests.len();
+    again(&mut h, "E004", "member asked for the cover back and set up a direct debit").unwrap();
+    let request = h.requests[before].clone();
+    assert_eq!((request.excess_minor, request.effective), (210_000_00, asked));
+    assert_eq!(code(again(&mut h, "E004", "asked again")), "case_open");
+    h.underwriting(request.case, accept(210_000_00, Some("0.5"), false)).unwrap();
+    assert_eq!(h.excess_layers("E004").last(), Some(&(210_000_00, None)));
+    assert_eq!(status(&h, request.case), CaseStatus::Accepted);
 }
 
 /// Purpose: a member who pays the loading that is theirs to pay keeps the cover, month

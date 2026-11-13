@@ -75,7 +75,7 @@ fn excluded(code: &str) -> CoverTerms {
 /// life's decision, marked as delegated with the authority version, and the capacity step still
 /// runs on our side. Outside it (above the per-life ceiling, terms the authority does not
 /// allow, a date out of tolerance, the wrong rule version, no consent reference, another
-/// product, no authority in force, or the aggregate exhausted) nothing is bound: the reason is
+/// product, no authority in force, an exclusion code not in our list, or the aggregate exhausted) nothing is bound: the reason is
 /// returned and the life goes to our own queue. A repeated reference is refused outright.
 /// Why it matters: the ceilings exist so that a systematic error in a delegate's system cannot
 /// bind the insurer to risk it cannot cede. Every branch here is one way that could happen.
@@ -128,6 +128,9 @@ fn a_delegated_decision_is_bound_only_inside_its_authority() {
         outcome: CoverOutcome::Defer { until: d(2027, 6, 1) }
     }])
     .contains("outside the authority"));
+    // A code our lists do not hold cannot bind us either: rejected with
+    // its reason, and the life comes to our queue like any other.
+    assert!(rejected(&mut w, "RX", 100_000_00, &|d| d.terms = vec![excluded("EX-7777")]).contains("EX-7777"));
     let open = w.open_command("R10", &["L1"], &[("L1", "trauma", "trauma", 50_000_00)], false);
     w.ok("new-business", Command::OpenProposal(Box::new(open)));
     let out = send(&mut w, delegated("R10", "REF-R10", vec![standard("trauma")])).unwrap();
@@ -151,13 +154,6 @@ fn a_delegated_decision_is_bound_only_inside_its_authority() {
     );
     assert_eq!(
         w.err("delegate-api", Command::DelegatedDecision(Box::new(delegated("P1", "REF-1", vec![])))),
-        "terms"
-    );
-    assert_eq!(
-        w.err(
-            "delegate-api",
-            Command::DelegatedDecision(Box::new(delegated("P1", "REF-1", vec![excluded("EX-7777")])))
-        ),
         "terms"
     );
     assert_eq!(

@@ -137,6 +137,12 @@ pub enum Question {
         staff: PartyId,
         at: At,
     },
+    /// Whether a member of staff may open the payments console, and the
+    /// roles they hold in the payments module.
+    PaymentsStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// Whether a member of staff may open the underwriting console, as a
     /// senior or not, with the non-disclosure remedies waiting for a second
     /// senior.
@@ -490,6 +496,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             standing["today"] = json!(d.today);
             standing
         }
+        Question::PaymentsStaff { staff, at } => crate::payments::standing(&d.staff, &staff, at),
         Question::UnderwritingStaff { staff, at } => {
             let mut standing = crate::underwriting::standing(&d.staff, &staff, at);
             if standing["view"] == true {

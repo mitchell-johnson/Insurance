@@ -1439,6 +1439,30 @@ impl GroupState {
                 st.pump(s);
                 Ok(())
             }),
+            RequestExcessAgain { scheme, employee_id, reason } => self.with_scheme(&scheme, |st, s| {
+                if reason.trim().is_empty() {
+                    return Err(Reject::new("missing_value", "say why underwriting is asked again"));
+                }
+                let member = s
+                    .membership
+                    .active(&employee_id)
+                    .cloned()
+                    .ok_or_else(|| Reject::new("unknown_member", format!("{employee_id} is not a member")))?;
+                let open = |c: &ExcessCase| c.employee_id == employee_id && matches!(c.status, CaseStatus::Requested | CaseStatus::Writing);
+                if s.cases.values().any(open) {
+                    return Err(Reject::new("case_open", format!("underwriting is already deciding for {employee_id}")));
+                }
+                let before = s.cases.len();
+                // Cover asked again starts from today, not from when the member joined.
+                st.excess_check(s, &employee_id, today.max(member.joined), None);
+                if s.cases.len() == before {
+                    return Err(Reject::new(
+                        "nothing_to_ask",
+                        format!("{employee_id} holds all the cover the formula gives, or none above the automatic amount"),
+                    ));
+                }
+                Ok(())
+            }),
             ResolveMatch { scheme, employee_id, decision } => self.with_scheme(&scheme, |st, s| {
                 let candidates = s
                     .possible

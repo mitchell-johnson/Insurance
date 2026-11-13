@@ -199,6 +199,15 @@ pub enum GroupCommand {
         employee_ids: Vec<String>,
         reason: String,
     },
+    /// Ask underwriting again for a member's cover above the automatic
+    /// amount, at the member's request: after cover they paid for lapsed,
+    /// or after a decline once their circumstances changed. Underwriting
+    /// decides, with its own rules on reinstating without evidence.
+    RequestExcessAgain {
+        scheme: String,
+        employee_id: String,
+        reason: String,
+    },
 
     // --- people ---
     ResolveMatch {
@@ -313,6 +322,7 @@ impl GroupCommand {
             | ConfirmHeld { .. }
             | DecideBackdating { .. }
             | Reinstate { .. }
+            | RequestExcessAgain { .. }
             | ResolveMatch { .. }
             | AgreeRenewal { .. }
             | Terminate { .. } => &[STAFF],
