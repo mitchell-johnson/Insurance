@@ -1155,3 +1155,42 @@ async fn a_guardian_gets_a_report_of_their_actions() {
     let (status, _) = w.get("/v1/actors/n%2Fbody/actions", "privacy", "audit").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+/// Purpose: gender is kept as the person tells it, in any words (here "takatāpui" and
+/// "non-binary"), apart from anything used to rate cover: it is read back exactly, a
+/// change is history like any other fact, an over-long value is refused, and it plays
+/// no part in finding or matching the person. Decision 1 in docs/decisions.md
+/// (persona row PRD-011, whose rating side is underwriting's).
+/// Why it matters: nobody should have to pick a category that is not theirs to be
+/// insured, and a gender recorded for respect must never leak into price or identity
+/// matching.
+#[tokio::test]
+async fn gender_is_recorded_in_the_persons_words_and_never_matched() {
+    let w = world_or_skip!();
+    let p = w.person("Tama", "Rewi", "1988-08-08", &[("gender", json!("takatāpui"))]).await;
+    let (status, record) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    assert_eq!(record["facts"]["gender"]["value"], "takatāpui");
+    let id = ic_customers::model::PartyId(p.clone());
+    let before = ic_customers::matching::party_keys(&w.app.store.load(&id).await.unwrap().unwrap(), w.app.store.index_key());
+    let (status, out) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [{ "field": "gender", "value": "non-binary" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let after = ic_customers::matching::party_keys(&w.app.store.load(&id).await.unwrap().unwrap(), w.app.store.index_key());
+    assert_eq!(before, after, "gender is not an index or matching key");
+    let (_, record) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert_eq!(record["facts"]["gender"]["value"], "non-binary");
+    let (status, _) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [{ "field": "gender", "value": "x".repeat(101) }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

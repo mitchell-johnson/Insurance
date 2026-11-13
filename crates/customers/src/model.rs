@@ -132,6 +132,9 @@ fields! {
     PreferredName => "preferred_name", Identity;
     DateOfBirth => "date_of_birth", Identity;
     DateOfDeath => "date_of_death", Identity;
+    // What the person tells us, in their words. Never a rating factor:
+    // the rating sex factor is underwriting's, kept apart (docs/decisions.md).
+    Gender => "gender", Identity;
     Email => "email", Contact;
     MobilePhone => "mobile_phone", Contact;
     PostalAddress => "postal_address", Contact;

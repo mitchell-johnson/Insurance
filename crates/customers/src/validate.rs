@@ -152,6 +152,7 @@ fn countries(value: &Value) -> Result<Value, Problem> {
 pub fn normalise(field: Field, value: &Value) -> Result<Value, Problem> {
     match field {
         Field::GivenName | Field::MiddleNames | Field::FamilyName | Field::PreferredName => Ok(Value::String(text(value, 200)?)),
+        Field::Gender => Ok(Value::String(text(value, 100)?)),
         Field::DateOfBirth | Field::DateOfDeath => Ok(Value::String(date(value)?.to_string())),
         Field::Email => Ok(Value::String(email(value.as_str().ok_or("must be text")?)?)),
         Field::MobilePhone => Ok(Value::String(phone(value.as_str().ok_or("must be text")?)?)),
