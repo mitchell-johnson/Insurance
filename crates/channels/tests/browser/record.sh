@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Record the persona demonstrations: every journey the browser check walks,
-# captioned, one MP4 per persona journey, with an index.
+# Record the persona demonstrations (tests/browser/demo.js): one captioned
+# MP4 per persona, with an index.
 #
 #   crates/channels/tests/browser/record.sh OUT_DIR
 #
@@ -19,7 +19,7 @@ until grep -q "^policy" "$log"; do
   sleep 2
 done
 policy=$(grep "^policy" "$log" | head -1 | awk '{print $2}')
-VIDEO="$raw" POLICY="$policy" node "$here/check.js"
+VIDEO="$raw" POLICY="$policy" node "$here/demo.js"
 index="$out/index.md"
 printf '# Persona demonstrations\n\nRecorded %s from the seeded portal. Each video is one persona doing one journey.\n\n| Video | Persona | What they do |\n| --- | --- | --- |\n' "$(date -u +%Y-%m-%d)" >"$index"
 for clip in "$raw"/*/; do

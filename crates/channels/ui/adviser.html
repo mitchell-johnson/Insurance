@@ -1,22 +1,22 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Adviser portal</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Adviser portal</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div><div id="readonly"></div>
-<section><h2>Your engagements</h2><div id="engagements"></div></section>
-<section><h2>Held from you</h2><div id="held"></div></section>
-<section><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Adviser portal · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="partner" data-page="adviser" data-realm="customers">
+<main data-views="Your book,Commission,Engagements"><header class="page"><div><h1>Adviser portal</h1><p>Your book, your commission and anything held from you.</p></div></header><div id="msg" aria-live="polite"></div><div id="readonly"></div>
+<section data-view="Engagements"><h2>Your engagements</h2><div id="engagements"></div></section>
+<section data-view="Commission"><h2>Held from you</h2><div id="held"></div></section>
+<section data-view="Commission"><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
   <form id="dispute" hidden><div class="row"><div><label for="d-reason">Why it was not a replacement</label><input id="d-reason" maxlength="500" required></div><button>Dispute</button> <button class="quiet" type="button" id="d-cancel">Cancel</button></div></form><div id="d-msg" aria-live="polite"></div></section>
-<section><h2>Your commission statements</h2><p class="muted">What was paid to you, line by line, with totals by what earned it: base commission, each override level and fees.</p>
+<section data-view="Commission"><h2>Your commission statements</h2><p class="muted">What was paid to you, line by line, with totals by what earned it: base commission, each override level and fees.</p>
 <form id="st-form"><div class="row"><div><label for="st-number">Statement number</label><input id="st-number" type="number" min="1" required></div><button>Show</button></div></form>
 <div id="st-msg" aria-live="polite"></div><div id="statement"></div></section>
-<section><h2>Your book</h2><div id="book"></div></section>
-<section id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div></section>
-<section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
+<section data-view="Your book"><h2>Your book</h2><div id="book"></div></section>
+<section data-view="Your book" id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div></section>
+<section data-view="Your book" id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
   <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
   <p class="muted">The customer approves in their app with their device. Nothing changes until they do.</p></form><div id="change-msg" aria-live="polite"></div></section>
-<section><h2>Requests you have made</h2><div id="requests"></div></section></main>
+<section data-view="Your book"><h2>Requests you have made</h2><div id="requests"></div></section></main>
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
@@ -24,7 +24,6 @@ const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "customers";
 let current = null;
-$("out").addEventListener("click", () => signOut(R));
 const standing = (s) => s.state === "active" ? "Active" : s.state === "ended" ? "Ended" : `Read-only since ${s.since}: licence of ${s.licence_of} is ${s.status}`;
 async function open(policy, canTransact) {
   const view = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(policy.policy));

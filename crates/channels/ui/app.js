@@ -12,22 +12,67 @@ const portal = (() => {
       else if (v === true) el.setAttribute(k, "");
       else if (v !== false && v != null) el.setAttribute(k, v);
     }
-    for (const c of children.flat()) if (c != null) el.append(c.nodeType ? c : document.createTextNode(String(c)));
+    for (const c of children.flat(Infinity)) if (c != null && c !== false) el.append(c.nodeType ? c : document.createTextNode(String(c)));
     return el;
   }
   function clear(el) { while (el.firstChild) el.removeChild(el.firstChild); return el; }
   // Replace an element's content. Unlike append, it leaves out anything null.
-  function put(el, ...children) { clear(el).append(...children.flat().filter((c) => c != null)); return el; }
+  function put(el, ...children) { clear(el).append(...children.flat(Infinity).filter((c) => c != null && c !== false)); return el; }
   function money(minor, currency) {
     const n = Number(minor) / 100;
     try { return new Intl.NumberFormat(undefined, { style: "currency", currency: currency || "NZD" }).format(n); } catch { return n.toFixed(2) + " " + (currency || ""); }
   }
-  function table(headers, rows) {
-    return h("div", { class: "scroll" }, h("table", {},
-      h("thead", {}, h("tr", {}, headers.map((t) => h("th", { scope: "col" }, t)))),
-      h("tbody", {}, rows.length ? rows.map((r) => h("tr", {}, r.map((c) => (c && c.nodeType ? h("td", {}, c) : h("td", { class: typeof c === "number" ? "num" : null }, c == null ? "" : c)))))
-        : h("tr", {}, h("td", { colspan: headers.length, class: "muted" }, "Nothing to show.")))));
+  // An icon, drawn here so that no image is ever fetched.
+  const ICONS = {
+    user: "M12 12a4 4 0 100-8 4 4 0 000 8zM4 20a8 8 0 0116 0", shield: "M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6zM9 12l2 2 4-4",
+    clipboard: "M9 4h6v3H9zM7 5H5v16h14V5h-2M9 12h6M9 16h4", users: "M9 11a3.5 3.5 0 100-7 3.5 3.5 0 000 7zM2.5 20a6.5 6.5 0 0113 0M16 4.3a3.5 3.5 0 010 6.4M18 14.5a6.5 6.5 0 013.5 5.5",
+    message: "M4 5h16v11H9l-5 4z", card: "M3 6h18v12H3zM3 10h18M7 15h3", ledger: "M5 3h14v18H5zM9 8h6M9 12h6M9 16h3", chart: "M4 20V4M4 20h16M8 16l4-5 3 3 4-6",
+    percent: "M19 5L5 19M7.5 9a2 2 0 100-4 2 2 0 000 4zM16.5 19a2 2 0 100-4 2 2 0 000 4z", swap: "M7 7h13l-3-3M17 17H4l3 3", layers: "M12 3l9 5-9 5-9-5zM3 13l9 5 9-5",
+    server: "M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01", pulse: "M3 12h4l3-7 4 14 3-7h4", menu: "M4 6h16M4 12h16M4 18h16",
+    sun: "M12 16a4 4 0 100-8 4 4 0 000 8zM12 2v2M12 20v2M4 12H2M22 12h-2M5 5l1.5 1.5M17.5 17.5L19 19M5 19l1.5-1.5M17.5 6.5L19 5", moon: "M20 14.5A8 8 0 019.5 4a8 8 0 1010.5 10.5z",
+    out: "M9 4H5v16h4M15 8l4 4-4 4M19 12H9", ok: "M20 6L9 17l-5-5", warn: "M12 4l9 16H3zM12 10v4M12 17h.01", bad: "M12 21a9 9 0 100-18 9 9 0 000 18zM9 9l6 6M15 9l-6 6",
+    info: "M12 21a9 9 0 100-18 9 9 0 000 18zM12 11v5M12 8h.01", lock: "M6 11h12v9H6zM8 11V8a4 4 0 018 0v3", briefcase: "M3 8h18v12H3zM9 8V5h6v3M3 13h18",
+    building: "M4 21V5l8-2v18M12 9h8v12M8 8h.01M8 12h.01M8 16h.01M16 13h.01M16 17h.01M3 21h18",
+  };
+  const SVG = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs, ...children) {
+    const el = document.createElementNS(SVG, tag);
+    for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+    el.append(...children);
+    return el;
   }
+  const icon = (name) => svg("svg", { class: "icon", viewBox: "0 0 24 24", "aria-hidden": "true" }, svg("path", { d: ICONS[name] || ICONS.info }));
+
+  // A state in words, with a tone when the words carry one. Colour is never the only sign:
+  // the words stay, and each tone has its own dot shape.
+  function tone(value) {
+    const s = String(value).toLowerCase();
+    if (/\b(fail|declin|reject|refus|denied|error|blocked|overdue|breach|red\b|lapsed|cancel|suspend|avoid|abandon|stalled|unavailable|no\b|down\b|not )/.test(s)) return "bad";
+    if (/\b(wait|pending|await|held|hold|review|prepared|requested|proposed|due\b|read.only|amber|partial|disputed|in progress|draft|unlinked|referred|needs|degraded|checking)/.test(s)) return "warn";
+    if (/\b(ok|active|approved|paid|complete|completed|posted|in force|green|yes|accepted|settled|done|released|stands|healthy|signed|published|sent|cleared|granted|resolved|ready|agreed|allowed|in place|on cover|met|checked)\b/.test(s)) return "ok";
+    return "";
+  }
+  const pill = (value, kind) => h("span", { class: "pill " + (kind === undefined ? tone(value) : kind) }, value);
+  const STATE = /^(status|state|standing|result|outcome|allowed|health)$/i;
+  const FIGURE = /^-?([A-Z]{0,3}[$€£])?\d[\d,]*(\.\d+)?%?$/;
+  const empty = (words) => h("p", { class: "empty" }, words || "Nothing to show.");
+  function table(headers, rows) {
+    // A column of figures lines up on the right, heading and all.
+    const figures = headers.map((_, i) => rows.length > 0 && rows.every((r) => r[i] == null || r[i] === "" || typeof r[i] === "number" || (typeof r[i] === "string" && FIGURE.test(r[i]))) && rows.some((r) => r[i] != null && r[i] !== ""));
+    const cell = (c, i) => {
+      if (c && c.nodeType) return h("td", {}, c);
+      if (Array.isArray(c)) return h("td", {}, c);
+      const words = c == null ? "" : String(c);
+      if (words && words.length <= 28 && STATE.test(String(headers[i]))) return h("td", {}, pill(words));
+      return h("td", { class: figures[i] ? "num" : null }, words);
+    };
+    return h("div", { class: "scroll" }, h("table", {},
+      h("thead", {}, h("tr", {}, headers.map((t, i) => h("th", { scope: "col", class: figures[i] ? "num" : null }, t)))),
+      h("tbody", {}, rows.length ? rows.map((r) => h("tr", {}, r.map(cell)))
+        : h("tr", {}, h("td", { colspan: headers.length, class: "empty" }, "Nothing to show.")))));
+  }
+  // The few figures a page leads with: [label, value, tone, note].
+  const stats = (items) => h("div", { class: "stats" }, items.map(([label, value, kind, note]) => h("div", { class: "stat " + (kind || "") }, h("span", {}, label), h("strong", {}, value), note ? h("small", {}, note) : null)));
   // A value from the service in words a person reads: keys as phrases, amounts
   // in minor units as money, yes and no for flags, nested records as lists.
   const phrase = (k) => String(k).replace(/_minor$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
@@ -35,6 +80,8 @@ const portal = (() => {
     if (v == null) return "–";
     if (typeof v === "boolean") return v ? "yes" : "no";
     if (typeof v === "number" && /_minor$/.test(key || "")) return money(v);
+    // A moment kept as seconds since 1970 reads as a date and time.
+    if (typeof v === "number" && v > 1e9 && v < 1e11 && /^(at|submitted|granted|issued|expires|since|.*_at)$/.test(key || "")) return new Date(v * 1000).toLocaleString();
     if (Array.isArray(v)) return v.map((x) => text(x)).join(", ");
     if (typeof v === "object") return Object.entries(v).map(([k, x]) => `${phrase(k)}: ${text(x, k)}`).join("; ");
     // An enumeration value (in_force) reads as words; identifiers stay as they are.
@@ -52,16 +99,42 @@ const portal = (() => {
     }
     const entries = Object.entries(v);
     if (!entries.length) return h("span", { class: "muted" }, "None.");
-    return h("dl", { class: "details" }, entries.flatMap(([k, x]) => [h("dt", {}, phrase(k)), h("dd", {}, x && typeof x === "object" ? details(x, k) : text(x, k))]));
+    return h("dl", { class: "details" }, entries.flatMap(([k, x]) => [h("dt", {}, phrase(k)), h("dd", {}, x && typeof x === "object" ? details(x, k) : STATE.test(k) && typeof x === "string" && x.length <= 28 ? pill(text(x, k)) : text(x, k))]));
   }
   // A page that could not load. Refused outright, it shows nothing else:
   // forms the person may not use are only noise.
   function refuse(e) {
-    const out = document.getElementById("msg");
-    say(out, "bad", String(e.message).replace(/^./, (c) => c.toUpperCase()));
-    if (e.status === 403) for (const el of document.querySelectorAll("main > *")) if (el !== out) el.hidden = true;
+    const words = String(e.message).replace(/^./, (c) => c.toUpperCase());
+    if (e.status !== 403) return say(document.getElementById("msg"), "bad", words);
+    const realm = document.body.dataset.realm;
+    gate(h("section", { class: "gate refused" }, icon("lock"), h("h2", {}, "This page is not open to you"),
+      banner("bad", words),
+      h("p", { class: "muted" }, "If you need it for your work, ask a staff administrator for the role. Nothing you did here was recorded against you."),
+      h("div", { class: "actions" }, h("a", { href: "/" }, "All portals"), realm ? h("button", { class: "quiet", type: "button", on: { click: () => signOut(realm) } }, "Sign in as someone else") : null)));
   }
-  function say(el, kind, text) { put(el, h("div", { class: "banner " + kind, role: kind === "bad" ? "alert" : "status" }, text)); }
+  // What stands in front of a page: sign-in on a laptop, or a refusal. The page behind it is not shown.
+  function gate(card) {
+    const main = document.querySelector("main");
+    for (const old of main.querySelectorAll(".gate")) old.remove();
+    document.body.classList.toggle("gated", !!card);
+    if (card) main.append(card);
+  }
+  const banner = (kind, words) => h("div", { class: "banner " + kind, role: kind === "bad" ? "alert" : "status" }, icon(kind || "info"), h("span", {}, words));
+  function say(el, kind, text) { put(el, banner(kind, text)); }
+  // A question that must be answered before an action goes ahead. Resolves to the
+  // answer (or true when nothing is asked for), or null when the person backs out.
+  function ask({ title, text, label, confirm, danger }) {
+    return new Promise((resolve) => {
+      const input = label ? h("input", { id: "ask-input", required: true, maxlength: 500, autocomplete: "off" }) : null;
+      let answer = null;
+      const box = h("dialog", { "aria-labelledby": "ask-title" }, h("form", { on: { submit: (ev) => { ev.preventDefault(); answer = input ? input.value.trim() : true; box.close(); } } },
+        h("h2", { id: "ask-title" }, title), text ? h("p", {}, text) : null, input ? [h("label", { for: "ask-input" }, label), input] : null,
+        h("div", { class: "actions" }, h("button", { type: "button", class: "quiet", on: { click: () => box.close() } }, "Cancel"), h("button", { class: danger ? "danger" : null }, confirm || "Continue"))));
+      box.addEventListener("close", () => { box.remove(); resolve(answer); });
+      document.body.append(box);
+      box.showModal();
+    });
+  }
 
   async function loadConfig() {
     if (!config) config = await (await fetch("/ui/config.json")).json();
@@ -76,14 +149,19 @@ const portal = (() => {
     if (cfg.mode === "dev") {
       const key = "dev:" + realm;
       if (!store.getItem(key)) {
-        const subject = window.prompt("Development sign-in. Subject:");
-        if (!subject) throw new Error("Sign-in cancelled.");
-        store.setItem(key, JSON.stringify({ subject, roles: window.prompt("Roles (comma separated, optional):") || "" }));
+        // A laptop has no identity provider: the person says who they are. Never offered in production.
+        await new Promise((resolve) => gate(h("section", { class: "gate" }, h("h2", {}, "Sign in"),
+          h("p", { class: "muted" }, "This is a development copy. Say who you are; in production you sign in with your organisation's account."),
+          h("form", { id: "dev-sign-in", on: { submit: (ev) => { ev.preventDefault(); store.setItem(key, JSON.stringify({ subject: ev.target.elements.subject.value.trim(), roles: ev.target.elements.roles.value.trim() })); resolve(); } } },
+            h("div", {}, h("label", { for: "dev-subject" }, "Subject"), h("input", { id: "dev-subject", name: "subject", required: true, autocomplete: "off" })),
+            h("div", {}, h("label", { for: "dev-roles" }, "Roles (comma separated, optional)"), h("input", { id: "dev-roles", name: "roles", autocomplete: "off" })),
+            h("button", {}, "Sign in")))));
+        gate(null);
       }
-      return;
+      return entered(realm);
     }
     const idp = cfg[realm];
-    if (store.getItem("token:" + realm)) return;
+    if (store.getItem("token:" + realm)) return entered(realm);
     const params = new URLSearchParams(window.location.search);
     const redirect = window.location.origin + window.location.pathname;
     const base = `${idp.authority}/${idp.tenant}/oauth2/v2.0`;
@@ -94,7 +172,7 @@ const portal = (() => {
       if (!res.ok) throw new Error("Sign-in failed.");
       store.setItem("token:" + realm, (await res.json()).access_token);
       window.history.replaceState({}, "", redirect);
-      return;
+      return entered(realm);
     }
     const verifier = b64url(crypto.getRandomValues(new Uint8Array(48)));
     const state = b64url(crypto.getRandomValues(new Uint8Array(16)));
@@ -147,12 +225,119 @@ const portal = (() => {
       h("button", { class: "quiet", on: { click: run(out, () => download(realm, "/app/v1/documents/" + encodeURIComponent(r.body.document) + "/pdf", r.body.document + ".pdf")) } }, "Download")]));
   }
   // Run an action from a button or form, showing its outcome in `out`.
+  // While it runs its button shows that it is working and takes no second press.
   function run(out, fn) {
     return async (ev) => {
-      if (ev) ev.preventDefault();
+      if (ev && ev.preventDefault) ev.preventDefault();
+      const target = ev && (ev.submitter || ev.currentTarget);
+      const button = target && target.tagName === "BUTTON" ? target : null;
+      if (button && button.getAttribute("aria-busy") === "true") return;
+      if (button) button.setAttribute("aria-busy", "true");
       try { const done = await fn(); if (typeof done === "string") say(out, "ok", done); }
       catch (e) { say(out, "bad", e.message); }
+      finally { if (button) button.removeAttribute("aria-busy"); }
     };
   }
-  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents };
+
+  // ---- The frame around every page: navigation, who is signed in, theme, and the page's views.
+  // [path, name, icon, what it is for]
+  const PARTNERS = [["adviser", "Adviser portal", "briefcase", "Your book, your standing, and anything held from you."], ["employer", "Employer portal", "building", "Your scheme, its members and its administrators."]];
+  const NAV = [
+    ["Customers", [["staff", "Staff console", "user", "Policies, customer requests, your access and the held balance workbench."], ["claims", "Claims console", "shield", "Work queues, a claim, and acting on it as yourself."],
+      ["underwriting", "Underwriting", "clipboard", "Queues, cases and decisions, disclosures, non-disclosure remedies and peer review."], ["group", "Group schemes", "users", "The exception queue, schemes, files, members, possible matches and file layouts."],
+      ["complaints", "Complaints and conduct", "message", "The register, timers, referrals and conduct cases."]]],
+    ["Money", [["payments", "Payments", "card", "Runs, payments waiting, payees, refunds and reconciliation."], ["finance", "Finance console", "ledger", "The month-end close, checks, journals and sign-off."],
+      ["pricing", "Unit pricing console", "chart", "Valuations, price checks, approval, publication and price errors."], ["commission", "Commission console", "percent", "Advisers, engagements, payees, rules, statements and cases."],
+      ["replacements", "Replacement matches", "swap", "Cover rewritten soon after cover was given up, and disputed matches to decide."], ["reinsurance", "Reinsurance exceptions", "layers", "Cessions, notices and settlements that need a person."]]],
+    ["Platform", [["ops", "Operations console", "server", "Regions and leaders."], ["status", "Service status", "pulse", "Whether everything is working, in plain words."]]],
+  ];
+  const mark = () => svg("svg", { class: "mark", viewBox: "0 0 30 30", "aria-hidden": "true" }, svg("rect", { class: "a", width: 30, height: 30, rx: 8 }), svg("path", { class: "b", d: "M15 6.5l7 2.6v5.2c0 4-2.8 7.3-7 8.7-4.2-1.4-7-4.7-7-8.7V9.1z" }), svg("circle", { class: "c", cx: 15, cy: 14.5, r: 2.6 }));
+  const local = (fn) => { try { return fn(window.localStorage); } catch { return null; } };
+  const dark = () => { const set = document.documentElement.dataset.theme; return set ? set === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches; };
+  function themeButton() {
+    const button = h("button", { type: "button", on: { click: () => { const to = dark() ? "light" : "dark"; document.documentElement.dataset.theme = to; local((s) => s.setItem("theme", to)); paint(); } } });
+    const paint = () => { put(button, icon(dark() ? "sun" : "moon"), h("span", { class: "label" }, dark() ? "Light" : "Dark")); button.setAttribute("aria-label", dark() ? "Use the light theme" : "Use the dark theme"); };
+    paint();
+    return button;
+  }
+  const who = h("div", { class: "who", hidden: true });
+  // Shown once someone is signed in: their name where the token carries one, else their subject.
+  function entered(realm) {
+    let name = "";
+    try {
+      const dev = JSON.parse(store.getItem("dev:" + realm) || "null");
+      if (dev) name = dev.subject;
+      else { const claims = JSON.parse(atob(store.getItem("token:" + realm).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))); name = claims.name || claims.preferred_username || ""; }
+    } catch { name = ""; }
+    if (name) { put(who, h("span", { class: "avatar", "aria-hidden": "true" }, name.replace(/^sub-/, "").slice(0, 2)), h("div", {}, h("strong", {}, name), h("span", {}, realm === "workforce" ? "Staff" : "Partner"))); who.hidden = false; }
+    if (window.location.hash.length > 1) view(window.location.hash.slice(1));
+  }
+
+  // Views: a page's cards grouped under tabs, one group on screen at a time.
+  // A card joins a view with data-view="Name"; a page hears changes with onView.
+  const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+  const listeners = [];
+  let tabs = null;
+  const parts = () => [...document.querySelectorAll("main > [data-view]")];
+  function view(key) {
+    if (!tabs) return;
+    const tab = [...tabs.children].find((t) => t.dataset.key === key && !t.hidden);
+    if (!tab) return;
+    const was = tabs.querySelector('[aria-selected="true"]');
+    for (const t of tabs.children) { t.setAttribute("aria-selected", String(t === tab)); t.tabIndex = t === tab ? 0 : -1; }
+    for (const p of parts()) p.classList.toggle("off", slug(p.dataset.view) !== key);
+    window.history.replaceState(null, "", "#" + key);
+    if (was !== tab) for (const fn of listeners) fn(key);
+  }
+  function views() {
+    const all = parts();
+    if (!all.length) return;
+    const order = document.querySelector("main").dataset.views;
+    const names = order ? order.split(",") : [...new Set(all.map((p) => p.dataset.view))];
+    tabs = h("div", { class: "tabs", role: "tablist", "aria-label": "Sections of this page" }, names.map((n) => h("button", { type: "button", role: "tab", "data-key": slug(n), "aria-selected": "false", on: { click: () => view(slug(n)) } }, n)));
+    tabs.addEventListener("keydown", (ev) => {
+      if (ev.key !== "ArrowRight" && ev.key !== "ArrowLeft") return;
+      const open = [...tabs.children].filter((t) => !t.hidden), at = open.indexOf(document.activeElement);
+      const next = open[(at + (ev.key === "ArrowRight" ? 1 : open.length - 1)) % open.length];
+      next.focus(); next.click();
+    });
+    all[0].before(tabs);
+    // A tab whose every card is hidden from this person is not offered.
+    const sync = () => { for (const t of tabs.children) { const none = all.filter((p) => slug(p.dataset.view) === t.dataset.key).every((p) => p.hidden); if (t.hidden !== none) t.hidden = none; } };
+    new MutationObserver(sync).observe(document.querySelector("main"), { attributes: true, attributeFilter: ["hidden"], subtree: true });
+    sync();
+    const first = [...tabs.children].find((t) => !t.hidden) || tabs.firstChild;
+    first.setAttribute("aria-selected", "true");
+    for (const p of all) p.classList.toggle("off", slug(p.dataset.view) !== first.dataset.key);
+  }
+  function frame() {
+    const body = document.body, kind = body.dataset.shell, main = document.querySelector("main");
+    if (!kind || !main) return;
+    const realm = body.dataset.realm, here = body.dataset.page;
+    main.id = "content"; main.tabIndex = -1;
+    const brand = (href) => h("a", { class: "brand", href }, mark(), h("span", {}, "Insurance Core"));
+    const out = realm ? h("button", { type: "button", id: "out", on: { click: () => signOut(realm) } }, icon("out"), h("span", { class: "label" }, "Sign out")) : null;
+    const app = h("div", { class: "app" + (kind === "workforce" ? "" : " top") });
+    const skip = h("a", { class: "skip", href: "#content" }, "Skip to the page");
+    if (kind === "workforce") {
+      const link = ([path, name, pic]) => h("a", { href: "/" + path, "aria-current": path === here ? "page" : null }, icon(pic), name);
+      const side = h("aside", { class: "side", id: "side" }, brand("/"),
+        h("nav", { "aria-label": "Consoles" }, NAV.map(([group, items]) => [h("h2", {}, group), items.map(link)])),
+        h("div", { class: "side-foot" }, who, h("div", { class: "tools" }, themeButton(), out)));
+      const menu = h("button", { type: "button", "aria-label": "Menu", "aria-controls": "side", on: { click: () => app.classList.toggle("open") } }, icon("menu"));
+      const scrim = h("button", { type: "button", class: "scrim", "aria-label": "Close the menu", on: { click: () => app.classList.remove("open") } });
+      app.append(side, scrim, h("div", { class: "work" }, h("div", { class: "bar" }, menu, brand("/")), main));
+    } else {
+      app.append(h("div", { class: "bar" }, brand(kind === "public" ? "/" : "/" + here), who, themeButton(), out), main);
+    }
+    body.prepend(skip, app);
+    views();
+  }
+  // The front page's cards, from the same list as the navigation.
+  function launcher(el) {
+    const card = ([path, name, pic, about]) => h("a", { href: "/" + path }, h("span", { class: "tile" }, icon(pic)), h("span", {}, h("strong", {}, name), h("span", {}, about)));
+    put(el, [["Partners", PARTNERS], ...NAV].map(([group, items]) => [h("h2", { class: "group" }, group), h("div", { class: "launch" }, items.map(card))]));
+  }
+  frame();
+  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents, icon, pill, stats, empty, ask, view, onView: (fn) => listeners.push(fn), launcher };
 })();

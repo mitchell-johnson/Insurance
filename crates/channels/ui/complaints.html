@@ -1,12 +1,9 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Complaints and conduct workbench</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Complaints and conduct workbench</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Your seats</h2><p id="seats" class="muted"></p></section>
-<nav class="tabs" role="tablist" aria-label="Sections">
-<button role="tab" data-tab="record" aria-selected="true">Record a complaint</button><button role="tab" data-tab="queue" aria-selected="false">Queue</button><button role="tab" data-tab="register" aria-selected="false">Register and report</button><button role="tab" data-tab="conduct" aria-selected="false">Conduct cases</button></nav>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Complaints and conduct workbench · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="complaints" data-realm="workforce">
+<main><header class="page"><div><h1>Complaints and conduct workbench</h1><p>The register, timers, referrals and conduct cases.</p></div><p id="seats" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 
-<div data-panel="record">
+<div data-view="Record a complaint">
 <section><h2>Record a complaint</h2><p class="muted">Record it wherever you hear it, about anything. The complainant's own words go in the document vault; give the document's reference here.</p>
 <form id="intake"><div class="row">
 <div><label for="i-id">Complaint reference</label><input id="i-id" required></div>
@@ -20,18 +17,18 @@
 <div><label for="i-adjust">Adjustments needed (comma separated)</label><input id="i-adjust"></div>
 <button>Record</button></div></form><div id="intake-msg" aria-live="polite"></div></section></div>
 
-<div data-panel="queue" hidden>
+<div data-view="Queue">
 <section><h2>Open complaints</h2><p class="muted">Vulnerable complainants first, then the nearest deadline.</p><div id="queue"></div></section>
 <section><h2>Open a complaint</h2><form id="open"><div class="row"><div><label for="o-id">Complaint reference</label><input id="o-id" required></div><button>Open</button><button type="button" class="quiet" id="subject">Complainant's own record</button></div></form><div id="open-msg" aria-live="polite"></div>
-<div id="file" hidden><h2 id="file-title"></h2><div id="file-timers"></div><pre id="file-raw"></pre></div></section>
+<div id="file" hidden><h2 id="file-title"></h2><div id="file-timers"></div><div id="file-raw"></div></div></section>
 <section><h2>Act</h2><form id="act"><div class="row"><div><label for="a-seat">Acting as</label><select id="a-seat"></select></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p><p class="muted">A handler's authority and training, and the authority of whoever authorises a remediation, come from the staff records. You cannot type them.</p></form><div id="act-msg" aria-live="polite"></div></section></div>
 
-<div data-panel="register" hidden>
-<section><h2>Register and report</h2><form id="period"><div class="row"><div><label for="p-from">From</label><input id="p-from" type="date" required></div><div><label for="p-to">To</label><input id="p-to" type="date" required></div><button>Show</button></div></form><div id="period-msg" aria-live="polite"></div><div id="register"></div><pre id="report"></pre></section>
+<div data-view="Register and report">
+<section><h2>Register and report</h2><form id="period"><div class="row"><div><label for="p-from">From</label><input id="p-from" type="date" required></div><div><label for="p-to">To</label><input id="p-to" type="date" required></div><button>Show</button></div></form><div id="period-msg" aria-live="polite"></div><div id="register"></div><div id="report"></div></section>
 <section><h2>A customer's complaints</h2><form id="of"><div class="row"><div><label for="of-party">Customer reference</label><input id="of-party" required></div><button>Find</button></div></form><div id="of-out"></div></section></div>
 
-<div data-panel="conduct" hidden>
-<section><h2>Open conduct cases</h2><p class="muted">Open to the conduct function and legal only. Act on a case from the Queue tab, as conduct or legal.</p><div id="cases"></div><div id="case-msg" aria-live="polite"></div><div id="case" hidden><h2 id="case-title"></h2><div id="case-summary"></div><pre id="case-raw"></pre></div></section></div>
+<div data-view="Conduct cases">
+<section><h2>Open conduct cases</h2><p class="muted">Open to the conduct function and legal only. Act on a case from the Queue tab, as conduct or legal.</p><div id="cases"></div><div id="case-msg" aria-live="polite"></div><div id="case" hidden><h2 id="case-title"></h2><div id="case-summary"></div><div id="case-raw"></div></div></section></div>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -40,7 +37,6 @@ const { h, put, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/complaints/";
 let me = { seats: [] };
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (seat, command) => api(R, "POST", BASE + "commands", { as: seat, command });
@@ -128,7 +124,7 @@ async function open(id) {
   const [file, timers] = await Promise.all([ask("complaint", { id }), ask("running", { id })]);
   $("o-id").value = id; $("file").hidden = false; $("file-title").textContent = `${id}: ${words(file.status)}`;
   put($("file-timers"), table(["Timer", "Due"], (timers || []).map(([timer, due]) => [words(typeof timer === "string" ? timer : JSON.stringify(timer)), due])));
-  $("file-raw").textContent = JSON.stringify(file, null, 2);
+  portal.put($("file-raw"), portal.details(file));
 }
 async function queue() {
   const rows = await ask("queue");
@@ -137,7 +133,7 @@ async function queue() {
     h("button", { class: "quiet", on: { click: run($("open-msg"), () => open(q.complaint)) } }, "Open")])));
 }
 $("open").addEventListener("submit", run($("open-msg"), () => open($("o-id").value)));
-$("subject").addEventListener("click", run($("open-msg"), async () => { $("file").hidden = false; $("file-title").textContent = "The complainant's own record"; put($("file-timers")); $("file-raw").textContent = JSON.stringify(await ask("subject_record", { id: $("o-id").value }), null, 2); }));
+$("subject").addEventListener("click", run($("open-msg"), async () => { $("file").hidden = false; $("file-title").textContent = "The complainant's own record"; put($("file-timers")); portal.put($("file-raw"), portal.details(await ask("subject_record", { id: $("o-id").value }))); }));
 
 $("intake").addEventListener("submit", run($("intake-msg"), async () => {
   await send("intake", { record_complaint: { complaint: $("i-id").value, channel: $("i-channel").value, complainant: $("i-who").value, complainant_kind: $("i-kind").value, links: { policies: list($("i-policies").value) },
@@ -148,7 +144,7 @@ $("intake").addEventListener("submit", run($("intake-msg"), async () => {
 $("period").addEventListener("submit", run($("period-msg"), async () => {
   const span = { from: $("p-from").value, to: $("p-to").value }, [rows, report] = await Promise.all([ask("register", span), ask("report", span)]);
   put($("register"), table(["Complaint", "Received", "Heard by", "About", "Status", "Outcome", "Days to acknowledge", "Days to decide", "Closed"], rows.map((r) => [r.complaint, r.received_on, words(r.channel), words(r.process), words(typeof r.status === "string" ? r.status : Object.keys(r.status)[0]), words(r.outcome), r.days_to_acknowledge, r.days_to_decide, r.closed_on || ""])));
-  $("report").textContent = JSON.stringify(report, null, 2);
+  portal.put($("report"), portal.details(report));
 }));
 $("of").addEventListener("submit", run($("period-msg"), async () => { const ids = await ask("complaints_of", { party: $("of-party").value }); put($("of-out"), table(["Complaint"], ids.map((id) => [id]))); }));
 
@@ -157,16 +153,12 @@ async function conduct() {
   put($("cases"), table(["Case", ""], ids.map((id) => [id, h("button", { class: "quiet", on: { click: run($("case-msg"), async () => {
     const c = await ask("conduct_case", { id }); $("case").hidden = false; $("case-title").textContent = `${c.id}: ${words(typeof c.kind === "string" ? c.kind : Object.keys(c.kind)[0])}`;
     put($("case-summary"), h("p", {}, `Owner ${c.owner}. Opened ${c.opened_on}. ${Object.keys(c.customers).length} customer(s), ${c.policies.length} policy(ies), population ${c.population_complete ? "complete" : "not complete"}. ${Object.keys(c.sample).length} file(s) sampled.`));
-    $("case-raw").textContent = JSON.stringify(c, null, 2);
+    portal.put($("case-raw"), portal.details(c));
   }) } }, "Open")])));
 }
 
-const loaders = { record: async () => {}, queue: async () => { if (has("complaints") || has("legal") || has("conduct")) await queue(); }, register: async () => {}, conduct: async () => { if (has("conduct") || has("legal")) await conduct(); else say($("case-msg"), "bad", "Conduct cases are open to the conduct function and legal only."); } };
-document.querySelectorAll("[role=tab]").forEach((tab) => tab.addEventListener("click", () => {
-  document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
-  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
-  run($("msg"), loaders[tab.dataset.tab])();
-}));
+const loaders = { "record-a-complaint": async () => {}, "queue": async () => { if (has("complaints") || has("legal") || has("conduct")) await queue(); }, "register-and-report": async () => {}, "conduct-cases": async () => { if (has("conduct") || has("legal")) await conduct(); else say($("case-msg"), "bad", "Conduct cases are open to the conduct function and legal only."); } };
+portal.onView((key) => run($("msg"), loaders[key] || (async () => {}))());
 signIn(R).then(async () => {
   me = await ask("me");
   $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;

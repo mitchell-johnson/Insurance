@@ -1,16 +1,15 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Claims console</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Claims console</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
-<section><h2>Work queue</h2><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
-<section><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required></div><button>Show</button></div></form><div id="c-msg" aria-live="polite"></div>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Claims console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="claims" data-realm="workforce">
+<main><header class="page"><div><h1>Claims console</h1><p>Work queues, a claim, and acting on it as yourself.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<section data-view="Queue"><h2>Work queue</h2><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
+<section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required></div><button>Show</button></div></form><div id="c-msg" aria-live="polite"></div>
 <div id="claim" hidden><h2 id="c-title"></h2><div id="c-summary"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div></div></section>
-<section><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
+<section data-view="Claim"><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
 <p class="muted">You act as yourself: the claims module records you and your purpose, and your authority there decides what you may do. A decision above your limits waits for a second signature.</p></form><div id="act-msg" aria-live="polite"></div></section>
-<section><h2>Investigations</h2><p class="muted">Restricted cases referred for investigation, shown only to investigators: the claims on each case and the same service billed on other partitions.</p>
+<section data-view="Investigations"><h2>Investigations</h2><p class="muted">Restricted cases referred for investigation, shown only to investigators: the claims on each case and the same service billed on other partitions.</p>
 <button type="button" id="inv-show">Show my cases</button><div id="inv-msg" aria-live="polite"></div><div id="inv"></div></section>
-<section><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition (for a run)</label><input id="b-part" type="number" min="0"></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><pre id="b-out"></pre></section>
+<section data-view="Reports"><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition (for a run)</label><input id="b-part" type="number" min="0"></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><div id="b-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -18,7 +17,6 @@
 const { h, put, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/claims/";
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (body) => api(R, "POST", BASE + "commands", body);
@@ -128,7 +126,7 @@ put($("q-name"), QUEUES.map((q) => h("option", { value: q }, words(q))));
 $("books").addEventListener("submit", run($("b-msg"), async () => {
   const what = $("b-what").value;
   const answer = what === "remittance" ? await ask("remittance", { run: $("b-run").value, partition: $("b-part").value }) : await ask(what);
-  $("b-out").textContent = JSON.stringify(answer, null, 2);
+  portal.put($("b-out"), portal.details(answer));
 }));
 $("inv-show").addEventListener("click", run($("inv-msg"), async () => {
   const { rows } = await ask("cases");

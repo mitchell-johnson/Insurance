@@ -2780,6 +2780,11 @@ pub fn router(state: Shared) -> Router {
         .route("/commission", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMMISSION) }))
         .route("/ui/app.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::SCRIPT) }))
         .route("/ui/app.css", get(|| async { asset("text/css; charset=utf-8", crate::ui::STYLE) }))
+        .route("/ui/theme.js", get(|| async { asset("text/javascript; charset=utf-8", crate::ui::THEME) }))
+        .route(
+            "/ui/inter.woff2",
+            get(|| async { hardened(([("content-type", "font/woff2"), ("cache-control", "public, max-age=604800")], crate::ui::FONT).into_response()) }),
+        )
         .route("/ui/config.json", get(ui_config))
         .with_state(state)
 }

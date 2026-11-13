@@ -3,7 +3,8 @@
 //! exactly the scripts shipped here.
 //!
 //! The pages load nothing from elsewhere. Each is one HTML file with one
-//! inline script, plus the shared `/ui/app.js` and `/ui/app.css`.
+//! inline script, plus the shared `/ui/app.js`, `/ui/theme.js`, `/ui/app.css`
+//! and the typeface. `docs/design-system.md` describes how they are built.
 
 use base64::Engine;
 use serde::Serialize;
@@ -27,6 +28,10 @@ pub const COMMISSION: &str = include_str!("../ui/commission.html");
 pub const STATUS: &str = include_str!("../ui/status.html");
 pub const SCRIPT: &str = include_str!("../ui/app.js");
 pub const STYLE: &str = include_str!("../ui/app.css");
+/// Sets a chosen theme before the page is drawn.
+pub const THEME: &str = include_str!("../ui/theme.js");
+/// Inter, the typeface of every page (SIL Open Font License, `ui/inter-LICENSE.txt`), served from here so nothing loads from elsewhere.
+pub const FONT: &[u8] = include_bytes!("../ui/inter.woff2");
 
 /// Where one population signs in from a browser: the single-page
 /// application registered in its tenant.
@@ -91,7 +96,7 @@ impl UiConfig {
             }
         }
         format!(
-            "default-src 'none'; script-src {}; style-src 'self'; connect-src {}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "default-src 'none'; script-src {}; style-src 'self'; font-src 'self'; connect-src {}; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
             scripts.join(" "),
             connect.join(" ")
         )
