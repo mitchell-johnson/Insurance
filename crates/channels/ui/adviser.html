@@ -4,6 +4,8 @@
 <main><div id="msg" aria-live="polite"></div><div id="readonly"></div>
 <section><h2>Your engagements</h2><div id="engagements"></div></section>
 <section><h2>Held from you</h2><div id="held"></div></section>
+<section><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
+  <form id="dispute" hidden><div class="row"><div><label for="d-reason">Why it was not a replacement</label><input id="d-reason" maxlength="500" required></div><button>Dispute</button> <button class="quiet" type="button" id="d-cancel">Cancel</button></div></form><div id="d-msg" aria-live="polite"></div></section>
 <section><h2>Your book</h2><div id="book"></div></section>
 <section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
@@ -39,9 +41,22 @@ async function load() {
     totals.length ? table(["Period", "Book", "Amount", "Why it is held", "Since"], book.held.entries.map((e) => [e.period || "", e.book || "", money(e.amount_minor, e.currency), String(e.reason || "").replace(/_/g, " "), e.since])) : null);
   put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.ended ? `Ended (${String(p.status).replace(/_/g, " ")})` : String(p.status).replace(/_/g, " "), p.engagement,
     h("button", { class: "quiet", on: { click: run($("msg"), () => open(p, p.can_transact)) } }, "Open")])));
+  const matches = await api(R, "GET", "/adviser/v1/replacements");
+  put($("matches"), matches.length ? table(["Layer", "Matched", "Sum insured", "Reason", "On", "State", ""], matches.map((m) => [m.layer, money(m.matched_minor), money(m.sum_insured_minor), String(m.reason).replace(/_/g, " "), m.on,
+    m.overturned ? "Decided: new business" : m.disputed ? "Disputed, waiting for a decision" : "Stands",
+    !m.disputed && !m.overturned ? h("button", { class: "quiet", type: "button", on: { click: () => { disputing = m.layer; $("dispute").hidden = false; $("d-reason").focus(); } } }, "Dispute") : ""]))
+    : h("p", { class: "muted" }, "None of your business has been treated as a replacement."));
   const requests = await api(R, "GET", "/app/v1/requests");
   put($("requests"), table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, r.policy || "", r.kind, String(r.status).replace(/_/g, " ")])));
 }
+let disputing = null;
+$("d-cancel").addEventListener("click", () => { $("dispute").hidden = true; });
+$("dispute").addEventListener("submit", run($("d-msg"), async () => {
+  await api(R, "POST", "/adviser/v1/replacements/dispute", { layer: disputing, reason: $("d-reason").value });
+  $("dispute").hidden = true; $("d-reason").value = "";
+  await load();
+  return "Disputed. The commission on the matched amount is held until the conduct officer decides.";
+}));
 $("change").addEventListener("submit", run($("change-msg"), async () => {
   await api(R, "POST", "/app/v1/requests", { id: crypto.randomUUID(), policy: current, kind: $("kind").value, module: "policy-servicing", payload: { note: $("note").value } });
   await load();

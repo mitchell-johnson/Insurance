@@ -12,8 +12,8 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::model::{Proposal, VersionRef};
-use crate::questions::{Answer, AnswerProblem};
-use crate::rules::{Assessment, RuleInput};
+use crate::questions::{Answer, AnswerProblem, QuestionSet};
+use crate::rules::{Assessment, RuleInput, RuleSet};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PrepareError {
@@ -64,6 +64,25 @@ pub fn age_on(date_of_birth: NaiveDate, on: NaiveDate) -> u32 {
     years.max(0) as u32
 }
 
+/// The rule set and question set a proposal's disclosures are made
+/// against: those in force for its product on its contract date.
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct Basis {
+    pub rule_set: RuleSet,
+    pub question_set: QuestionSet,
+}
+
+impl Basis {
+    pub fn for_proposal(config: &Config, proposal: &Proposal) -> Option<Basis> {
+        let rules = config.rule_set_on(&proposal.product_code, proposal.received_on)?;
+        let questions = config.question_set_on(&rules.question_set, proposal.received_on)?;
+        Some(Basis {
+            rule_set: rules.clone(),
+            question_set: questions.clone(),
+        })
+    }
+}
+
 /// Check the answers, build the record and run the rules for each cover on
 /// the life. `complete` is false for a supplement such as confirmed
 /// interview answers, which need not answer every question.
@@ -75,9 +94,22 @@ pub fn prepare_disclosure(
     adviser_entered: &BTreeSet<String>,
     complete: bool,
 ) -> Result<Prepared, PrepareError> {
+    let basis = Basis::for_proposal(config, proposal).ok_or(PrepareError::NoRules)?;
+    prepare_with(&basis, proposal, life, answers, adviser_entered, complete)
+}
+
+/// As [`prepare_disclosure`], against a basis read from the module
+/// (`Query::DisclosureBasis`), for a process that holds no configuration.
+pub fn prepare_with(
+    basis: &Basis,
+    proposal: &Proposal,
+    life: &LifeId,
+    answers: &BTreeMap<String, (u32, Answer)>,
+    adviser_entered: &BTreeSet<String>,
+    complete: bool,
+) -> Result<Prepared, PrepareError> {
     let file = proposal.lives.get(life).ok_or_else(|| PrepareError::UnknownLife(life.clone()))?;
-    let rules = config.rule_set_on(&proposal.product_code, proposal.received_on).ok_or(PrepareError::NoRules)?;
-    let questions = config.question_set_on(&rules.question_set, proposal.received_on).ok_or(PrepareError::NoRules)?;
+    let (rules, questions) = (&basis.rule_set, &basis.question_set);
     let problems = questions.check(answers, complete);
     if !problems.is_empty() {
         return Err(PrepareError::Answers(problems));
