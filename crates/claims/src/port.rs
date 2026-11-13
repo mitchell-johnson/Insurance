@@ -80,6 +80,26 @@ pub struct CoverFacts {
     /// under a leaver's continuation option.
     #[serde(default)]
     pub continuation_of: Option<Continuation>,
+    /// Days from the event before benefit is payable, for a benefit in
+    /// payment. Zero: no waiting period.
+    #[serde(default)]
+    pub waiting_days: u32,
+    /// A loan against the policy, with its interest, outstanding today. It
+    /// is repaid out of a death benefit before anyone else is paid.
+    #[serde(default)]
+    pub policy_loan_minor: i64,
+    /// Every life this cover is written on, where it pays once on the first
+    /// event to any of them. Empty: a single-life cover.
+    #[serde(default)]
+    pub joint_lives: Vec<String>,
+    /// Covers on the same policy and life whose lump sums reduce this one,
+    /// such as trauma cover accelerated from life cover.
+    #[serde(default)]
+    pub reduced_by: Vec<String>,
+    /// The excess the life chose on a cover that offers a choice. It
+    /// replaces the excess in the claims rules' health schedule.
+    #[serde(default)]
+    pub chosen_excess_minor: Option<i64>,
 }
 
 /// The scheme and member a continuation policy carries on from.
@@ -132,6 +152,10 @@ pub enum Instruction {
         deduct_premium_minor: i64,
         /// A death claim: end the policy as at the event date, in the same step.
         terminate: Option<Termination>,
+        /// A policy loan repaid from the benefit, in the same entry: from
+        /// benefit payable to the loan.
+        #[serde(default)]
+        repay_loan_minor: i64,
     },
     /// Release a payment from benefit payable to the payments module, and
     /// close the claim if that was the last of it.

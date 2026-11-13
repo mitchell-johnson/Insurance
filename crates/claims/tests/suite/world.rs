@@ -232,6 +232,11 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         interests: vec![],
         nominations: vec![],
         continuation_of: None,
+        waiting_days: 0,
+        policy_loan_minor: 0,
+        joint_lives: vec![],
+        reduced_by: vec![],
+        chosen_excess_minor: None,
     }
 }
 

@@ -2,6 +2,7 @@
 
 mod book;
 mod controls;
+mod covers;
 mod decisions;
 mod intake;
 mod investigate;
