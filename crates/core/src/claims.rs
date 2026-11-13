@@ -232,7 +232,14 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
                 .map(|m| m.sum_insured_minor),
             _ => None,
         };
-        sum_insured = amount.unwrap_or(0);
+        // Cover above the automatic amount is paid only where underwriting
+        // accepted it and it was written as its own layer.
+        let excess: i64 = at_event
+            .iter()
+            .filter(|l| l.origin == LayerOrigin::UnderwrittenExcess)
+            .map(|l| l.sum_insured_minor)
+            .sum();
+        sum_insured = amount.map_or(0, |a| a + excess);
         covered = amount.is_some();
     }
     let mut exclusions: Vec<String> = at_event.iter().flat_map(|l| l.exclusions.iter().cloned()).collect();
