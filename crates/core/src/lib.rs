@@ -16,6 +16,7 @@ pub mod ids;
 pub mod interest;
 pub mod invest;
 pub mod machine;
+pub mod nomination;
 pub mod payments;
 pub mod policy;
 pub mod premium;

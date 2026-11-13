@@ -1537,7 +1537,11 @@ async fn claims_question(
         return ok(json!({ "staff": session.party, "partitions": s.claims.count() }));
     }
     let field = |f: &str| fields.get(f).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-    let question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
+    let mut question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
+    // A claim this person is conflicted on is never shown to them in a queue or a working view.
+    if let Q::Queue { staff, .. } | Q::Work { staff, .. } = &mut question {
+        *staff = Some(session.party.to_string());
+    }
     match question {
         Q::Claim { claim } => {
             let (partition, row) = s.find_claim(&claim).await?;

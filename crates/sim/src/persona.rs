@@ -77,6 +77,7 @@ pub fn member(member_ref: &str, dob: NaiveDate, category: &str, salary_minor: i6
 /// allocated to funds on the product's menu.
 pub fn invest_plan(n: u64, inception: NaiveDate, dob: NaiveDate, sex: Sex) -> IssuePolicy {
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("KIP{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -128,6 +129,7 @@ pub fn term_life(
         });
     }
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("KTL{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -159,6 +161,7 @@ pub fn health_family(n: u64, inception: NaiveDate, dobs: &[NaiveDate], frequency
         })
         .collect();
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("EVH{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -194,6 +197,7 @@ pub fn health_flex(n: u64, inception: NaiveDate, people: &[(NaiveDate, &[&str])]
         })
         .collect();
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("FLX{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -210,6 +214,7 @@ pub fn health_flex(n: u64, inception: NaiveDate, people: &[(NaiveDate, &[&str])]
 /// A group life scheme with its first members.
 pub fn group_scheme(n: u64, inception: NaiveDate, first_members: Vec<LifeSpec>) -> IssuePolicy {
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("WPL{n:08}"),
         group: GroupId(format!("grp-{n:08}")),

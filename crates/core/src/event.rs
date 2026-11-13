@@ -729,6 +729,19 @@ pub enum Event {
     /// released.
     Interest(crate::interest::InterestEvent),
 
+    /// A nomination for a death benefit was recorded: a first one, a change
+    /// or a removal (no nominees). Parties are opaque IDs.
+    NominationRecorded {
+        policy: PolicyId,
+        nomination: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        life: Option<LifeId>,
+        nominees: Vec<crate::nomination::Nominee>,
+        effective_from: NaiveDate,
+        /// Servicing held a conversation with the owner before the change.
+        conversation_held: bool,
+    },
+
     /// A balanced entry on counterparty accounts. Carries the lines, so the
     /// module that keeps each party's position builds it from this alone.
     CounterpartyPosted {

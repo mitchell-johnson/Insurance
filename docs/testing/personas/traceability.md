@@ -206,14 +206,14 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
-| CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history` |
+| CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
-| CLM-029 | part | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death` |
+| CLM-029 | full | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death`<br>`sim/tests/claims.rs::a_death_benefit_goes_to_whoever_was_nominated_on_the_date_of_death` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
 | CLM-031 | full | `claims/tests/suite/decisions.rs::a_closed_claim_reopens_under_independent_review` |
 | CLM-032 | full | `claims/tests/suite/decisions.rs::a_reserve_beyond_authority_is_borrowed_and_a_sharp_move_is_reviewed`<br>`claims/tests/suite/decisions.rs::a_large_admission_waits_for_a_second_signature` |
-| CLM-033 | part | `claims/tests/suite/intake.rs::a_claim_is_offered_only_to_someone_who_may_work_it` |
+| CLM-033 | full | `claims/tests/suite/intake.rs::a_claim_is_offered_only_to_someone_who_may_work_it`<br>`claims/tests/suite/intake.rs::a_claim_is_never_offered_to_a_relative_in_the_queue` |
 | CLM-035 | full | `claims/tests/suite/book.rs::a_returned_payment_is_owed_again`<br>`payments/tests/intake.rs::claims_is_told_when_the_bank_refuses_a_released_payment` |
 | CLM-036 | full | `claims/tests/suite/decisions.rs::ex_gratia_is_decided_and_paid_apart_from_the_contract` |
 | CLM-037 | part | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit` |

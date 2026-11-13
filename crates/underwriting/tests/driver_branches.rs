@@ -201,6 +201,7 @@ fn factors() -> Effect {
 
 fn issue_command() -> Box<IssuePolicy> {
     Box::new(IssuePolicy {
+        continuation_of: None,
         policy: "POL-1".into(),
         number: "N-1".into(),
         group: GroupId::from("grp-1"),

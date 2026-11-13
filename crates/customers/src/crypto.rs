@@ -99,7 +99,7 @@ pub fn seal(key: &DataKey, party: &str, seq: u64, payload: &serde_json::Value) -
     let mut nonce = [0u8; NONCE_BYTES];
     rand::rngs::OsRng.fill_bytes(&mut nonce);
     // A 32-byte key always makes a cipher, and encryption cannot fail.
-    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).unwrap_or_else(|_| unreachable!("a data key is 32 bytes"));
+    let cipher = Aes256Gcm::new_from_slice(key.as_ref()).expect("a data key is 32 bytes");
     let body = cipher
         .encrypt(
             Nonce::from_slice(&nonce),
@@ -108,7 +108,7 @@ pub fn seal(key: &DataKey, party: &str, seq: u64, payload: &serde_json::Value) -
                 aad: &context(party, seq),
             },
         )
-        .unwrap_or_else(|_| unreachable!("AES-GCM encryption of an in-memory buffer cannot fail"));
+        .expect("AES-GCM encryption of an in-memory buffer cannot fail");
     Envelope {
         ciphertext: [nonce.as_slice(), &body].concat(),
         commitment,
@@ -161,7 +161,7 @@ impl IndexKey {
     /// The blind index of a normalised value of one kind. The kind is bound
     /// in, so an email and an IRD number never share an index.
     pub fn digest(&self, kind: &str, value: &str) -> Vec<u8> {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.0).unwrap_or_else(|_| unreachable!("HMAC takes a key of any length"));
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.0).expect("HMAC takes a key of any length");
         mac.update(b"ic.customers.index.v1\0");
         mac.update(kind.as_bytes());
         mac.update(&[0]);
