@@ -672,3 +672,170 @@ fn a_wrong_commission_option_found_a_year_later_is_corrected_from_the_start() {
     assert_eq!(expense(&w) - before, expense(&level) - level_before, "the next premium earns at the level rate");
     w.assert_reconciled();
 }
+
+/// Purpose: (ADV-007, ADV-045) FAP One leaves dealer group Old for dealer group New. The change
+/// is one approved change set: the relation moves on a date and New's override fragment is
+/// activated once. Books that existed at the change keep following Old's fragment, so Old keeps
+/// its override on them; a book created afterwards follows New's fragment, and Old receives
+/// nothing on it.
+/// Why it matters: an aggregator's override on existing business is what it negotiated when the
+/// provider joined. Moving it automatically would take Old's income; leaving new books on Old's
+/// fragment would pay Old for business written after the provider left.
+#[test]
+fn a_provider_changing_aggregator_keeps_the_old_override_on_existing_books_only() {
+    let mut w = worked_example();
+    let today = w.today();
+    w.add_party("group-new", PartyKind::Group);
+    let under_old = ic_distribution::structure::Relation {
+        child: party("fap-one"),
+        parent: party("group-old"),
+        kind: ic_distribution::structure::RelationKind::Under,
+        from: d(2020, 1, 1),
+        to: None,
+    };
+    w.send(admin(), Command::Relate(under_old)).unwrap();
+    w.payee("group-new");
+    w.account("group-new", "acct-group-new");
+    let override_for = |group: &str, fragment: &str, from| ic_distribution::rules::Fragment {
+        id: ic_distribution::FragmentId::from(fragment),
+        version: 1,
+        effective_from: from,
+        lines: vec![Line {
+            component: Component::Override("group".into()),
+            share: Share::RateOnPremium(pct(2.0)),
+            ..base(group, Share::OfRemainder(1), false)
+        }],
+        liability: vec![],
+    };
+    let rule_with = |book: &str, version, fragment: &str, from| ic_distribution::rules::Rule {
+        fragments: vec![ic_distribution::FragmentId::from(fragment)],
+        ..rule(
+            book,
+            version,
+            from,
+            vec![
+                base("a-co", Share::OfRemainder(pct(75.0)), true),
+                base("fap-one", Share::OfRemainder(pct(25.0)), false),
+            ],
+            vec![liable("fap-one")],
+        )
+    };
+    w.activate(
+        "old-group",
+        vec![
+            Change::ActivateFragment(override_for("group-old", "old-override", today)),
+            Change::ActivateRule(rule_with("a-at-fap-one", 2, "old-override", today)),
+        ],
+    )
+    .unwrap();
+    let (existing, _) = w.issue(1, 500_000_00, None);
+    w.write(&existing, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&existing, "e1");
+
+    w.days(10);
+    let change = w.today();
+    w.activate(
+        "fap-one-joins-new",
+        vec![
+            Change::EndRelation {
+                child: party("fap-one"),
+                parent: party("group-old"),
+                kind: ic_distribution::structure::RelationKind::Under,
+                on: change,
+            },
+            Change::Relate(ic_distribution::structure::Relation {
+                child: party("fap-one"),
+                parent: party("group-new"),
+                kind: ic_distribution::structure::RelationKind::Under,
+                from: change,
+                to: None,
+            }),
+            Change::ActivateFragment(override_for("group-new", "new-override", change)),
+            Change::CreateBook {
+                id: BookId::from("a-at-fap-one-2"),
+                name: "A at FAP One, written after the change".into(),
+                engagement: Some(EngagementId::from("eng-a-one")),
+                owner: Some(party("fap-one")),
+                house: false,
+            },
+            Change::ActivateRule(rule_with("a-at-fap-one-2", 1, "new-override", change)),
+        ],
+    )
+    .unwrap();
+    let (later, _) = w.issue(2, 500_000_00, None);
+    w.write(&later, "life", 1, "eng-a-one", "a-at-fap-one-2", 1_200_00).unwrap();
+    w.days(21);
+    let before = w.events.len();
+    w.pay(&existing, "e2");
+    w.pay(&later, "l1");
+    let override_on = |p: &PolicyId| -> BTreeMap<String, i64> {
+        let mut out = BTreeMap::new();
+        for e in &w.events[before..] {
+            if let Event::CommissionEarned { reference, .. } = e {
+                for l in w.dist.allocations[reference]
+                    .lines
+                    .iter()
+                    .filter(|l| l.layer.as_deref() == Some(layer(p, 1).as_str()))
+                {
+                    if matches!(l.component, Some(Component::Override(_))) {
+                        *out.entry(l.payee.0.clone()).or_insert(0) += l.amount_minor;
+                    }
+                }
+            }
+        }
+        out
+    };
+    let on_existing = override_on(&existing);
+    let on_later = override_on(&later);
+    assert!(
+        on_existing.get("group-old").is_some_and(|v| *v > 0) && !on_existing.contains_key("group-new"),
+        "{on_existing:?}"
+    );
+    assert!(
+        on_later.get("group-new").is_some_and(|v| *v > 0) && !on_later.contains_key("group-old"),
+        "{on_later:?}"
+    );
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-040) a retired adviser receives a tail through a line in their own name. The
+/// adviser dies; the engagement had already ended, and the agreement says the entitlement
+/// passes to the estate. A new version of the rule from the date of death names the estate:
+/// renewal before the death stays with the adviser, renewal after it goes to the estate, and
+/// nothing else in the book changes.
+/// Why it matters: a death must not stop money the agreement says is owed, nor keep paying a
+/// person who has died into an account nobody may operate.
+#[test]
+fn a_retired_advisers_tail_passes_to_the_estate_from_the_date_of_death() {
+    let mut w = worked_example();
+    w.add_party("estate-a", PartyKind::Counterparty);
+    w.payee("estate-a");
+    w.account("estate-a", "acct-estate-a");
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    let death = w.today();
+    w.activate(
+        "estate",
+        vec![Change::ActivateRule(rule(
+            "a-at-fap-one",
+            2,
+            death,
+            vec![
+                base("estate-a", Share::OfRemainder(pct(75.0)), true),
+                base("fap-one", Share::OfRemainder(pct(25.0)), false),
+            ],
+            vec![liable("fap-one")],
+        ))],
+    )
+    .unwrap();
+    let a_before = w.payable("a-co");
+    let before = w.events.len();
+    w.pay(&policy, "r2");
+    let paid = on_layer(&w, before, &layer(&policy, 1));
+    assert!(paid.contains_key(&("estate-a".into(), CommissionType::Renewal)), "{paid:?}");
+    assert!(!paid.contains_key(&("a-co".into(), CommissionType::Renewal)));
+    assert_eq!(w.payable("a-co"), a_before, "what the adviser earned before stays theirs");
+    w.assert_reconciled();
+}

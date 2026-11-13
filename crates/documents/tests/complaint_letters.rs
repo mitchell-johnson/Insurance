@@ -9,7 +9,9 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use ic_complaints::command::Intake;
-use ic_complaints::model::{Category, ComplainantKind, ConductKind, Contact as Told, IntakeChannel, LetterDue, LetterKind, Links, Process, Representative};
+use ic_complaints::model::{
+    Category, ComplainantKind, ConductKind, Contact as Told, IntakeChannel, LetterDue, LetterKind, Links, OutcomeKind, Process, Representative,
+};
 use ic_complaints::module::Query;
 use ic_complaints::{Applied, Command as Cmd, Envelope as Env, Timers};
 use ic_core::PartyId;
@@ -43,6 +45,8 @@ struct Shaky {
     inner: LocalComplaints,
     fail_next_command: Arc<Mutex<bool>>,
     fixed: Arc<Mutex<Option<Value>>>,
+    /// Refuse the question about outcomes waiting for delivery.
+    outcomes_down: Arc<Mutex<bool>>,
 }
 
 impl Complaints for Shaky {
@@ -54,6 +58,9 @@ impl Complaints for Shaky {
     }
 
     async fn ask(&self, query: Query) -> Result<Value, DriverError> {
+        if matches!(query, Query::OutcomesAwaitingDelivery { .. }) && *self.outcomes_down.lock().unwrap() {
+            return Err(DriverError::Unavailable("no leader".into()));
+        }
         let fixed = self.fixed.lock().unwrap().clone();
         match (&query, fixed) {
             (Query::LettersDue { .. }, Some(fixed)) => Ok(fixed),
@@ -70,10 +77,11 @@ struct World {
 
 const ACK: &str = "Dear {{name}}. We got your complaint {{reference}} on {{date|date}}. We will write by {{due|date}}.";
 const DEADLOCK: &str = "Dear {{name}}. We could not agree on complaint {{reference}}. You can take it to the scheme.";
+const UPDATE: &str = "Dear {{name}}. This is update {{number}} on complaint {{reference}}. We will write again by {{due|date}}.";
 const LICENCE: &str = "Dear {{name}}. The licence of your adviser was {{status}} on {{effective|date}}.";
 
 fn letter_data() -> Value {
-    json!({ "name": "Aroha", "reference": "c1", "date": "2027-11-15", "due": "2027-11-20", "status": "revoked", "effective": "2027-11-12" })
+    json!({ "name": "Aroha", "reference": "c1", "date": "2027-11-15", "due": "2027-11-20", "status": "revoked", "effective": "2027-11-12", "number": "1" })
 }
 
 fn timers() -> Timers {
@@ -161,6 +169,7 @@ impl World {
             ("complaint-acknowledgement", DocumentKind::GeneralCorrespondence, ACK),
             ("complaint-deadlock-notice", DocumentKind::DeadlockNotice, DEADLOCK),
             ("licence-event-notice", DocumentKind::GeneralCorrespondence, LICENCE),
+            ("complaint-update", DocumentKind::GeneralCorrespondence, UPDATE),
         ])
         .await
     }
@@ -182,6 +191,44 @@ impl World {
             .await
             .unwrap();
         assert_eq!(applied.result, Ok(()));
+    }
+
+    /// The scheduler's tick, `days` after the world's day.
+    async fn tick(&self, days: i64) {
+        let at = self.now + chrono::Duration::days(days);
+        let applied = self
+            .issuer
+            .complaints
+            .inner
+            .propose(Env {
+                key: format!("tick-{days}"),
+                caller: "scheduler".into(),
+                actor: "scheduler".into(),
+                at,
+                command: Cmd::Tick,
+            })
+            .await
+            .unwrap();
+        assert_eq!(applied.result, Ok(()));
+    }
+
+    /// Hand complaint `id` to the lead and decide it, with `document` as the
+    /// written outcome.
+    async fn decide(&self, id: &str, document: &str) {
+        let assign = Cmd::Assign {
+            complaint: id.into(),
+            handler: "lead".into(),
+            authority: 3,
+            trained_for_vulnerability: true,
+        };
+        self.complaints("complaints", assign).await;
+        let decide = Cmd::Decide {
+            complaint: id.into(),
+            outcome: OutcomeKind::NotUpheld,
+            reason_codes: vec!["policy_terms".into()],
+            document: Some(document.into()),
+        };
+        self.complaints("complaints", decide).await;
     }
 
     fn today(&self) -> NaiveDate {
@@ -537,4 +584,120 @@ async fn the_step_runs_until_stopped() {
     assert_eq!((seen[0].issued, seen[0].left), (1, 1));
     assert_eq!((seen[1].issued, seen[1].left), (0, 1));
     assert!(driver.document("complaint-ack:c1").await.is_ok());
+}
+
+/// Purpose: a progress update goes when the update timer reaches its
+/// warning and nobody has written, numbered and recorded on the complaint;
+/// it is not sent before the warning, not sent twice, and the same update
+/// recorded again is refused.
+/// Why it matters: complainants must hear how their complaint is going at
+/// the interval the rules set. Missing one is a breach the regulator counts;
+/// sending one early or twice is noise, and counting one twice would hide
+/// the next missed update.
+#[tokio::test]
+async fn a_progress_update_goes_when_its_timer_warns() {
+    let w = World::all().await;
+    w.complaints("intake", intake("c1", "aroha")).await;
+    assert_eq!(w.issuer.pass().await.issued, 1, "the acknowledgement goes first");
+
+    // Updates are every ten days with two days' warning.
+    w.tick(7).await;
+    assert_eq!(w.issuer.pass().await, LetterPass::default());
+    w.tick(8).await;
+    let pass = w.issuer.pass().await;
+    assert_eq!((pass.issued, pass.left, pass.errors), (1, 0, vec![]));
+    let due = w.today() + chrono::Duration::days(10);
+    assert_eq!(
+        w.text("complaint-update:c1:1").await,
+        format!(
+            "Dear Aroha Ngata. This is update 1 on complaint c1. We will write again by {}.",
+            due.format("%-d %B %Y")
+        )
+    );
+    let complaint = w.issuer.complaints.inner.read(|s| s.complaints["c1"].clone());
+    // The register's day is the latest it has seen: the tick's.
+    assert_eq!(complaint.updates, vec![w.today() + chrono::Duration::days(8)]);
+    assert_eq!(complaint.update_documents, vec!["complaint-update:c1:1".to_string()]);
+    assert_eq!(w.issuer.pass().await, LetterPass::default());
+
+    let again = w
+        .issuer
+        .complaints
+        .inner
+        .propose(Env {
+            key: "again".into(),
+            caller: "documents".into(),
+            actor: "documents-service".into(),
+            at: w.now,
+            command: Cmd::RecordUpdate {
+                complaint: "c1".into(),
+                document: "complaint-update:c1:1".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(again.result.unwrap_err().code, "already_recorded");
+}
+
+/// Purpose: a written outcome is recorded as delivered once every addressee
+/// has it, on the day the last did; one still on its way waits, one that
+/// cannot be delivered or cannot be found is reported and left, and an
+/// outage of the register is reported without stopping the letters.
+/// Why it matters: the complaint cannot close, and the time to go to the
+/// scheme does not start, until the outcome is proven delivered. A handler
+/// should not have to copy that date from one module to another, and a
+/// false proof would cut short the complainant's right to escalate.
+#[tokio::test]
+async fn a_written_outcome_is_proven_from_its_deliveries() {
+    let w = World::all().await;
+    w.driver.directory.set("rua", Channel::Email, "Rua Kahu", "rua@example.nz");
+    w.complaints("intake", intake("c1", "aroha")).await;
+    w.complaints("intake", intake("c2", "rua")).await;
+    w.complaints("intake", intake("c3", "aroha")).await;
+    assert_eq!(w.issuer.pass().await.issued, 3);
+    // The acknowledgements stand in for the written outcomes.
+    w.decide("c1", "complaint-ack:c1").await;
+    w.decide("c2", "complaint-ack:c2").await;
+    w.decide("c3", "nowhere").await;
+
+    let pass = w.issuer.pass().await;
+    assert_eq!(pass.reported, 0, "nothing is delivered yet");
+    assert_eq!(pass.errors.len(), 1, "{:?}", pass.errors);
+    assert!(pass.errors[0].starts_with("nowhere: "), "{:?}", pass.errors);
+
+    w.driver.deliver().await.unwrap();
+    use ic_documents::channels::DeliveryReport;
+    use ic_documents::model::AttemptOutcome;
+    let delivered = DeliveryReport {
+        provider_reference: "ref-complaint-ack:c1".into(),
+        outcome: AttemptOutcome::Delivered,
+    };
+    assert!(w.driver.report(delivered).await.unwrap());
+    let failed = DeliveryReport {
+        provider_reference: "ref-complaint-ack:c2".into(),
+        outcome: AttemptOutcome::Failed {
+            reason: "no such mailbox".into(),
+        },
+    };
+    assert!(w.driver.report(failed).await.unwrap());
+    w.driver.deliver().await.unwrap();
+
+    *w.issuer.complaints.outcomes_down.lock().unwrap() = true;
+    let pass = w.issuer.pass().await;
+    assert!(pass.errors[0].starts_with("outcomes awaiting delivery: "), "{:?}", pass.errors);
+    *w.issuer.complaints.outcomes_down.lock().unwrap() = false;
+
+    let pass = w.issuer.pass().await;
+    assert_eq!(pass.reported, 1, "{:?}", pass.errors);
+    assert!(
+        pass.errors
+            .iter()
+            .any(|e| e == "complaint-ack:c2: the outcome of c2 could not be delivered; left for the handler"),
+        "{:?}",
+        pass.errors
+    );
+    let delivered_on = w.issuer.complaints.inner.read(|s| s.complaints["c1"].outcome.clone().unwrap().delivered_on);
+    assert_eq!(delivered_on, Some(w.today()));
+    let pass = w.issuer.pass().await;
+    assert_eq!(pass.reported, 0, "proof is recorded once");
 }

@@ -457,6 +457,7 @@ impl ComplaintsState {
             acknowledged_on: intake.acknowledged_on,
             acknowledgement: None,
             updates: vec![],
+            update_documents: vec![],
             awaiting: None,
             outcome: None,
             remediation: vec![],
@@ -606,7 +607,11 @@ impl ComplaintsState {
         if document.is_empty() {
             return reject("invalid", "an update is a document sent to the complainant");
         }
+        if c.update_documents.contains(&document) {
+            return reject("already_recorded", "that update is already recorded");
+        }
         c.updates.push(today);
+        c.update_documents.push(document);
         // The next update's timer starts fresh.
         c.escalated.remove(&Timer::Update);
         ctx.events.push(Event::ComplainantUpdated { complaint: id.to_string() });
@@ -1058,6 +1063,17 @@ impl ComplaintsState {
             if let Some(d) = c.deadlock.as_ref().filter(|d| d.notice.is_none()) {
                 due.push(letter(LetterKind::DeadlockNotice, d.on, None));
             }
+            // An update is owed once its timer warns and nobody has written.
+            // Until the complaint is acknowledged the acknowledgement is owed
+            // instead.
+            if c.acknowledged_on.is_some() && c.escalated.contains_key(&Timer::Update) {
+                if let Some((_, by)) = self.running(c).into_iter().find(|(t, _)| *t == Timer::Update) {
+                    let number = (c.updates.len() + 1).to_string();
+                    let mut update = letter(LetterKind::Update, c.received_on, Some(by));
+                    update.detail.insert("number".into(), number);
+                    due.push(update);
+                }
+            }
             if due.len() >= limit {
                 due.truncate(limit);
                 return due;
@@ -1086,6 +1102,22 @@ impl ComplaintsState {
             }
         }
         due
+    }
+
+    /// Written outcomes sent and not yet proven delivered, at most `limit`.
+    pub fn outcomes_awaiting_delivery(&self, limit: usize) -> Vec<OutcomeAwaitingDelivery> {
+        let complaints = self.open.iter().filter_map(|id| self.complaints.get(id));
+        complaints
+            .filter_map(|c| {
+                let o = c.outcome.as_ref().filter(|o| o.delivered_on.is_none())?;
+                Some(OutcomeAwaitingDelivery {
+                    complaint: c.id.clone(),
+                    document: o.document.clone()?,
+                    decided_on: o.decided_on,
+                })
+            })
+            .take(limit)
+            .collect()
     }
 
     /// The timers running on a complaint: each with its due date.
