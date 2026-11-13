@@ -256,6 +256,7 @@ fn an_adviser_moves_with_the_book_and_the_previous_provider_keeps_a_tail() {
             liability: vec![liable("fap-two")],
             fragments: vec![],
             tail: Some((party("fap-one"), pct(25.0), None)),
+            examples: vec![],
         }],
     };
     let changes = w.dist.plan_move(&request).unwrap();
@@ -307,6 +308,7 @@ fn a_move_needs_a_release_and_a_staying_book_gets_a_new_servicing_adviser() {
             liability: vec![],
             fragments: vec![],
             tail: None,
+            examples: vec![],
         }],
     };
     assert_eq!(code(w.dist.plan_move(&request)), "release_required");
@@ -325,6 +327,7 @@ fn a_move_needs_a_release_and_a_staying_book_gets_a_new_servicing_adviser() {
         liability: vec![],
         fragments: vec![],
         tail: None,
+        examples: vec![],
     }];
     assert_eq!(code(w.dist.plan_move(&request)), "unknown_book");
     request.from_engagement = EngagementId::from("ghost");
@@ -821,7 +824,7 @@ fn replaying_the_log_reaches_the_same_state_and_the_state_round_trips() {
     w.licence("fap-one", ic_distribution::structure::LicenceState::Suspended, start()).unwrap();
     w.days(31);
     w.pay(&policy, "r2");
-    let mut replica = ic_distribution::DistributionState::default();
+    let mut replica = ic_distribution::DistributionState::new(w.dist.settings.clone());
     for (index, envelope) in &w.log {
         use ic_log::StateMachine;
         replica.apply(*index, envelope.clone());
