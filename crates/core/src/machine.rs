@@ -603,6 +603,7 @@ impl CoreState {
                 amount_minor,
                 value_date,
                 reference,
+                bank_account,
             } => match policy {
                 // The entry touches no policy account, so a policy that is
                 // moving, or has moved, does not stop it: the money is owed
@@ -619,6 +620,7 @@ impl CoreState {
                         amount_minor,
                         value_date,
                         &reference,
+                        bank_account.as_deref(),
                     )
                 }),
                 None => reinsurance::post(
@@ -632,6 +634,7 @@ impl CoreState {
                     amount_minor,
                     value_date,
                     &reference,
+                    bank_account.as_deref(),
                 ),
             },
             Command::BeginTransfer {
@@ -710,11 +713,17 @@ impl CoreState {
                 reference,
                 amount_minor,
             } => self.with_policy(&policy, true, |s, p| {
+                if amount_minor > 0 && invest::menu(&s.catalog, p).is_empty() {
+                    return Err(Reject::new("not_invested", "the policy's product has no investment account"));
+                }
                 invest::allocate_cash(&mut s.ledger, &mut s.investment, p, ctx, reference, amount_minor)
             }),
             InvestCommand::PlaceOrder(order) => {
                 let id = order.policy.clone();
-                self.with_policy(&id, true, |s, p| invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order))
+                self.with_policy(&id, true, |s, p| {
+                    invest::offered(&invest::menu(&s.catalog, p), &order)?;
+                    invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order)
+                })
             }
             InvestCommand::CancelOrder { order_id } => invest::cancel_order(&mut self.investment, ctx, &order_id),
             InvestCommand::RaisePayout {

@@ -17,6 +17,8 @@ ic-azure.workspace = true
 ic-ledger.workspace = true
 ic-reinsurance = { path = "../reinsurance" }
 ic-group = { path = "../group" }
+ic-api = { path = "../api" }
+axum.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -28,6 +30,7 @@ cedar-policy.workspace = true
 rand.workspace = true
 base64.workspace = true
 ed25519-dalek = "2"
+ring = "0.17"
 aes-gcm = "0.10"
 tokio.workspace = true
 tracing.workspace = true
@@ -37,10 +40,19 @@ tracing-subscriber.workspace = true
 name = "ic-underwriting"
 path = "src/bin/ic-underwriting.rs"
 
+[[bin]]
+name = "ic-underwriting-intake"
+path = "src/bin/ic-underwriting-intake.rs"
+
 [dev-dependencies]
 ic-sim.workspace = true
 # For the progress rows' contract test only: the driver sends that module JSON.
 ic-channels = { path = "../channels" }
+# Tokens for the intake's HTTP tests.
+jsonwebtoken.workspace = true
+rsa = "0.9"
+tower.workspace = true
+http-body-util.workspace = true
 
 [lints]
 workspace = true

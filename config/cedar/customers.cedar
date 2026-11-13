@@ -35,8 +35,8 @@ when {
      Service::"underwriting", Service::"new-business", Service::"complaints", Service::"reinsurance"].contains(principal)
 };
 
-// Whether a request should go to a person first (a vulnerability marker).
-// Answers yes or no; the marker itself is never shown.
+// Whether a request should go to a person first (a vulnerability marker),
+// and what to do differently. The marker's kind is a field read, below.
 permit(principal, action == Action::"routing", resource)
 when {
     [Service::"portal", Service::"staff", Service::"claims", Service::"policy-servicing", Service::"complaints"].contains(principal)
@@ -105,6 +105,15 @@ when {
     context.purpose == "self_service" && context.self &&
     ["identity", "contact", "tax", "organisation"].contains(resource.class)
 };
+
+// A marked person sees their own marker in the app: what was recorded and
+// what the insurer does differently.
+permit(principal == Service::"portal", action == Action::"read", resource)
+when { context.purpose == "self_service" && context.self && resource.name == "vulnerability" };
+
+// Staff trained in vulnerability support, reviewing or acting on a marker.
+permit(principal == Service::"staff", action == Action::"read", resource)
+when { context.purpose == "vulnerability_support" && resource.name == "vulnerability" };
 
 // An adviser reading a client they advise on a policy.
 permit(principal == Service::"portal", action == Action::"read", resource)

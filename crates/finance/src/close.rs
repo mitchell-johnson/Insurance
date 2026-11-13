@@ -19,13 +19,14 @@ use crate::config::{content_hash, eval, ConfigError};
 use crate::period::PeriodId;
 
 /// The checks the finance ledger works out from its own state.
-pub const AUTOMATIC_CHECKS: [&str; 6] = [
+pub const AUTOMATIC_CHECKS: [&str; 7] = [
     CONTROL_CHECK,
     VALUATION_EXTRACTS,
     UNAPPROVED_JOURNALS,
     ACTUARIAL_JOURNALS,
     TRIAL_BALANCE,
     FUND_BALANCE,
+    MIGRATION_CONTROL,
 ];
 pub const CONTROL_CHECK: &str = "control_check";
 pub const VALUATION_EXTRACTS: &str = "valuation_extracts";
@@ -33,6 +34,7 @@ pub const UNAPPROVED_JOURNALS: &str = "unapproved_journals";
 pub const ACTUARIAL_JOURNALS: &str = "actuarial_journals";
 pub const TRIAL_BALANCE: &str = "trial_balance";
 pub const FUND_BALANCE: &str = "fund_balance";
+pub const MIGRATION_CONTROL: &str = "migration_control";
 
 /// The extract kinds a period needs before it can close.
 pub const REQUIRED_EXTRACTS: [&str; 2] = ["in_force", "movement"];
@@ -91,6 +93,10 @@ pub struct CloseConfig {
     pub checks: Vec<CheckDecl>,
     #[serde(default)]
     pub aged: Vec<AgedDecl>,
+    /// The codes of the accounts a migration posts its other side to. Each
+    /// moves in the period the old system is loaded and must then stay still.
+    #[serde(default)]
+    pub migration_control: Vec<String>,
     /// Public holidays as observed (a holiday that falls on a weekend is
     /// listed on the weekday it is taken). Step due dates skip them.
     #[serde(default)]
@@ -398,6 +404,7 @@ impl FinanceState {
                 }
             }
             FUND_BALANCE => self.imbalances(period, true),
+            MIGRATION_CONTROL => self.migration_moves(period),
             // The only other automatic check: the declarations were validated when loaded.
             _ => self.imbalances(period, false),
         };
@@ -466,6 +473,35 @@ impl FinanceState {
 
     /// The books must net to zero in every currency and every fund's units:
     /// as a whole, and within each statutory fund.
+    /// A migration control account takes the other side of what the old
+    /// system is loaded with. The first period it moves in is the cutover;
+    /// a movement in any later period means something was loaded, or
+    /// reversed, after the balances were agreed with the old system.
+    fn migration_moves(&self, period: PeriodId) -> Vec<String> {
+        let mut items = Vec::new();
+        let accounts = self.close_config.as_ref().map(|c| c.migration_control.as_slice()).unwrap_or_default();
+        for code in accounts {
+            let Some(account) = self.chart.as_ref().and_then(|c| c.account(code)) else {
+                items.push(format!("migration control account {code} is not in the chart"));
+                continue;
+            };
+            let through = || self.turnover.iter().filter(|((_, account, _), amount)| account == code && **amount != 0);
+            let Some(cutover) = through().map(|((p, _, _), _)| *p).min() else {
+                continue;
+            };
+            if period <= cutover {
+                continue;
+            }
+            for ((_, _, unit), amount) in through().filter(|((p, _, _), _)| *p == period) {
+                items.push(format!(
+                    "{code} {} had {amount} posted through it in {unit:?} in {period}; it was loaded in {cutover} and should be still",
+                    account.name
+                ));
+            }
+        }
+        items
+    }
+
     fn imbalances(&self, period: PeriodId, by_fund: bool) -> Vec<String> {
         let mut nets: std::collections::BTreeMap<(Option<String>, ic_ledger::BalanceFamily), i128> = Default::default();
         for row in self.trial_balance(period, None) {

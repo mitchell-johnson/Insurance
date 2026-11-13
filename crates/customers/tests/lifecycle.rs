@@ -512,12 +512,13 @@ async fn a_repeated_creation_makes_one_party() {
 
 /// Purpose: every death recorded here is told to claims on every core partition, as
 /// `RecordDeath` with a key per party, date and partition; a refusal or an unreachable
-/// cluster keeps it with the reason for the next pass; a repeat writes nothing new; a death
-/// retracted before it was told is never sent; erasing the party removes what is waiting.
+/// cluster keeps it with the reason for the next pass; a repeat writes nothing new; a
+/// retraction goes the same way as `RetractDeath` for the date that was recorded, and
+/// replaces a death not yet told; erasing the party removes what is waiting.
 /// Why it matters: claims stops benefits in payment from the day after a death on
 /// whichever partition each claim sits. A death that never reached one partition would
-/// keep paying a dead person; a retracted one sent anyway would stop a living person's
-/// income, and claims has no command to undo it.
+/// keep paying a dead person; a retraction that never reached one would leave a living
+/// person's income stopped.
 #[tokio::test]
 async fn deaths_are_told_to_claims_on_every_partition() {
     let w = world_or_skip!();
@@ -554,13 +555,27 @@ async fn deaths_are_told_to_claims_on_every_partition() {
         assert_eq!(key, &format!("death:{p}:2026-10-01:{partition}:2"), "the third attempt has its own key");
         assert_eq!(command, &json!({ "claims": { "record_death": { "party": p, "date_of_death": "2026-10-01" } } }));
     }
-    // Retracted before it was told: never sent.
+    // Retracted after it was told: the retraction follows, for the recorded date.
+    let retract = json!({ "command": "retract_death", "reason": "wrong person" });
+    w.command(&p, "claims", retract.clone()).await;
+    core.proposed.lock().unwrap().clear();
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 1);
+    let sent = core.proposed.lock().unwrap().clone();
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[0].1, format!("retraction:{p}:2026-10-01:0:0"));
+    assert_eq!(
+        sent[0].2,
+        json!({ "claims": { "retract_death": { "party": p, "date_of_death": "2026-10-01" } } })
+    );
+    // Retracted before the death was told: only the retraction goes, which claims
+    // accepts where it never heard of the death.
     let q = w.person("Ora", "Tonu", "1941-01-01", &[]).await;
     w.command(&q, "staff", mark("2026-10-02")).await;
-    w.command(&q, "staff", json!({ "command": "retract_death", "reason": "wrong person" })).await;
+    w.command(&q, "staff", retract).await;
     core.proposed.lock().unwrap().clear();
-    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 0);
-    assert!(core.proposed.lock().unwrap().is_empty());
+    assert_eq!(work::relay_deaths(&w.app, &core).await.unwrap(), 1);
+    let sent = core.proposed.lock().unwrap().clone();
+    assert!(sent.iter().all(|(_, k, _)| k.starts_with(&format!("retraction:{q}:2026-10-02:"))), "{sent:?}");
     // Erased while waiting: nothing left to send.
     w.command(&q, "staff", mark("2026-10-03")).await;
     w.sql(&format!("delete from death_relay where party_id <> '{q}'")).await.unwrap();

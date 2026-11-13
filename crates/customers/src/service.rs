@@ -255,8 +255,10 @@ async fn read<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Pa
     let ask = app.ask_about(&ctx, &resolved).await?;
     let now = Utc::now();
     let facts = party.facts(q.as_of.unwrap_or(now.date_naive()), q.known_at.unwrap_or(now));
-    let held: Vec<Field> = facts.keys().copied().filter(|f| *f != Field::Vulnerability).collect();
     let released = app.access.readable(&ask, Field::ALL);
+    // A marker the caller may not see is left out without a trace: not
+    // masked, not listed as withheld.
+    let held: Vec<Field> = facts.keys().copied().filter(|f| *f != Field::Vulnerability || released.contains(f)).collect();
     if released.is_empty() {
         return Err(app.deny(&ctx, Some(&resolved), "read").await);
     }
@@ -436,9 +438,22 @@ async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
     if !app.access.allows(&app.ask(&ctx), "routing") {
         return Err(app.deny(&ctx, Some(&resolved), "routing").await);
     }
-    let route = party.current(Field::Vulnerability, Utc::now()) == Some(Value::Bool(true));
-    app.audit(&ctx, Some(&resolved), "routing", vec![], "allow").await?;
-    Ok((StatusCode::OK, Json(json!({ "party": resolved, "route_to_person": route }))))
+    let marker = party.current(Field::Vulnerability, Utc::now()).filter(Value::is_object);
+    let mut answer = json!({ "party": resolved, "route_to_person": marker.is_some() });
+    let mut fields = vec![];
+    if let Some(m) = &marker {
+        // What to do differently is for anyone serving the person; the kind
+        // only for those the policy lets read the marker.
+        answer["adjustments"] = m["adjustments"].clone();
+        answer["review_on"] = m["review_on"].clone();
+        let ask = app.ask_about(&ctx, &resolved).await?;
+        if !app.access.readable(&ask, &[Field::Vulnerability]).is_empty() {
+            answer["kind"] = m["kind"].clone();
+            fields.push(Field::Vulnerability.as_str().to_string());
+        }
+    }
+    app.audit(&ctx, Some(&resolved), "routing", fields, "allow").await?;
+    Ok((StatusCode::OK, Json(answer)))
 }
 
 async fn export<W: KeyWrapper, S: WormStore>(

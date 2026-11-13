@@ -10,7 +10,7 @@ use ic_core::{Command, PartyId, PolicyId, Reject};
 use ic_money::{Currency::NZD, Money};
 use ic_product::{Frequency, Sex};
 use ic_sim::config::shipped_activations;
-use ic_sim::persona::{issue_command, term_life};
+use ic_sim::persona::{invest_plan, issue_command, term_life};
 use ic_sim::Cluster;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -79,8 +79,8 @@ fn cancel(c: &mut Cluster, caller: &str, policy: &PolicyId) -> Result<(), Reject
     c.submit(0, caller, Command::CancelPolicy { policy: policy.clone() })
 }
 
-/// One partition, two term life policies; the first holds NZD 1,000 in
-/// pending investment cash to withdraw.
+/// One partition, a unit-linked policy holding NZD 1,000 in pending
+/// investment cash to withdraw, and a term life policy.
 fn book() -> (Cluster, PolicyId, PolicyId) {
     let mut c = Cluster::in_memory(1, 23);
     c.open(start()).unwrap();
@@ -89,7 +89,11 @@ fn book() -> (Cluster, PolicyId, PolicyId) {
     }
     let mut ids = Vec::new();
     for n in 1..=2 {
-        let issue = term_life(n, start(), d(1988, 2, 20), Sex::Female, false, 400_000_00, None, Frequency::Monthly, None);
+        // The first is unit-linked, so that it has value to take out.
+        let issue = match n {
+            1 => invest_plan(n, start(), d(1988, 2, 20), Sex::Female),
+            _ => term_life(n, start(), d(1988, 2, 20), Sex::Female, false, 400_000_00, None, Frequency::Monthly, None),
+        };
         ids.push(issue.policy.clone());
         c.submit(0, "new-business", issue_command(issue)).unwrap();
     }

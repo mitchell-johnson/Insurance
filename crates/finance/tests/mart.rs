@@ -334,8 +334,12 @@ fn member_cover(life: &str, sum: i64) -> MemberCover {
 /// premium adjustments, a transfer out and a transfer in, a terminating claim), closing a
 /// business day after each. After every day the in-force book equals everything that has
 /// moved, each day's movement reconciles to the day before, and the totals are the ones
-/// worked out by hand.
-/// Why it matters: the simulator's ordinary months exercise only a few of these events.
+/// worked out by hand. Then the mart's history is trimmed at each day in turn, after all
+/// the events and part way through them: every extract from the cut day on is the same
+/// file to the byte, anything earlier is refused, and the mart is smaller.
+/// Why it matters: the mart lives in replicated state and would otherwise grow for ever;
+/// trimming is only safe if no file that can still be cut changes by a byte.
+/// The simulator's ordinary months exercise only a few of these events.
 /// Each one changes the sum insured the actuary reserves for, and one handled wrongly
 /// would put the book and its movements out by an amount nobody would look for.
 #[test]
@@ -708,6 +712,69 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
     assert_eq!(ages("in_force").last().map(String::as_str), Some("40"));
     let lapsed_days = mart.experience(day(6), day(7)).unwrap();
     assert!(rows(&lapsed_days).iter().all(|r| r["product"] != "term-life"));
+
+    // Trimming. Whatever day the history is cut at, and whether it is cut after all the
+    // events or part way through them, every extract from that day on is the same file.
+    let through = mart.closed_through().unwrap();
+    let same = |trimmed: &Mart, cut: u32| {
+        let mut n = day(cut);
+        while n <= through {
+            let files = |m: &Mart| {
+                let (book, moved, lived, one) = (
+                    m.in_force(n).unwrap(),
+                    m.movement(day(cut), n).unwrap(),
+                    m.experience(day(cut), n).unwrap(),
+                    m.movement(n, n).unwrap(),
+                );
+                assert!(
+                    book.reconciled && moved.reconciled && lived.reconciled && one.reconciled,
+                    "cut at {cut}, as at {n}"
+                );
+                [book.bytes(), moved.bytes(), lived.bytes(), one.bytes()]
+            };
+            assert_eq!(files(trimmed), files(&mart), "cut at {cut}, as at {n}");
+            n = n.succ_opt().unwrap();
+        }
+    };
+    let size = |m: &Mart| serde_json::to_vec(m).unwrap().len();
+    for cut in 2..=10 {
+        let mut after = mart.clone();
+        after.trim(day(cut));
+        same(&after, cut);
+        assert!(size(&after) < size(&mart));
+        let gone = MartError::Trimmed {
+            date: day(cut - 1),
+            kept_from: day(cut),
+        };
+        assert_eq!(after.in_force(day(cut - 1)).unwrap_err(), gone);
+        assert_eq!(after.movement(day(cut - 1), through).unwrap_err(), gone);
+        assert_eq!(after.experience(day(cut - 1), through).unwrap_err(), gone);
+        // Trimming to an earlier day afterwards gives nothing back and takes nothing more.
+        let before = after.clone();
+        after.trim(day(1));
+        assert_eq!(after, before);
+
+        // Cut part way through: the events of the cut day and later arrive after the trim.
+        let mut during = Mart::new(1);
+        let mut cut_done = false;
+        for e in &s.events {
+            if !cut_done && e.business_date > day(cut) {
+                during.trim(day(cut));
+                cut_done = true;
+            }
+            during.apply(e).unwrap();
+        }
+        assert_eq!(during.kept_from(), Some(day(cut)).filter(|_| cut_done));
+        if cut_done {
+            same(&during, cut);
+        }
+    }
+    // Two cuts, one after the other, are the later cut.
+    let (mut twice, mut once) = (mart.clone(), mart.clone());
+    twice.trim(day(4));
+    twice.trim(day(7));
+    once.trim(day(7));
+    assert_eq!(twice, once);
 }
 
 /// Purpose: a scheme is issued with one member, a second joins the next day with her
@@ -1117,4 +1184,44 @@ fn an_avoided_policy_leaves_the_book_and_a_refund_takes_its_premium_back() {
     assert!(kinds("pol-retain").iter().all(|(kind, premium)| kind == "avoided" && premium == "0"));
     // Over the whole life of the two policies: 120 billed, 60 given back.
     assert_eq!(total(&mart.movement(day(1), day(3)).unwrap(), "premium_minor"), 60);
+}
+
+/// Purpose: a policy issued in November 2027 is run for fourteen months with every month
+/// closed in turn. Until the thirteenth close nothing is trimmed. Closing December 2028
+/// lets go of everything before December 2027: November 2027's extracts can no longer be
+/// cut and the refusal says the stored files are the record, while December 2027's
+/// in-force extract is still the file it was when first cut, and the current month's
+/// extracts reconcile.
+/// Why it matters: the mart is part of the ledger's replicated state. Without a rule that
+/// runs by itself it grows with every movement for the life of the insurer, and every
+/// snapshot and every node restart grows with it.
+#[test]
+fn closing_a_period_lets_go_of_history_more_than_a_year_behind_it() {
+    let start = d(2027, 11, 15);
+    let mut w = World::new(1, start);
+    let (p, id) = w.issue(1, start);
+    w.pay(p, &id, "r1", 20 * MONTHLY);
+    let ask = |w: &World, kind: &str, period: ic_finance::PeriodId| {
+        ic_finance::host::answer(&w.books.state, serde_json::json!({ "q": "extract", "kind": kind, "period": period }))
+    };
+    let mut december = None;
+    let mut month = period(2027, 11);
+    while month <= period(2028, 12) {
+        let next = ic_finance::PeriodId::of(month.end().succ_opt().unwrap());
+        w.until(next.start() + chrono::Days::new(2));
+        if month == period(2027, 12) {
+            december = Some(ask(&w, IN_FORCE, month).unwrap()["content_hash"].clone());
+        }
+        assert_eq!(w.books.state.mart.kept_from().filter(|k| *k > start), None, "trimmed before {month} closed");
+        w.close(month);
+        month = next;
+    }
+    assert_eq!(w.books.state.mart.kept_from(), Some(d(2027, 12, 1)));
+    let gone = ask(&w, IN_FORCE, period(2027, 11)).unwrap_err();
+    assert!(gone.contains("keeps history from 2027-12-01") && gone.contains("already stored"), "{gone}");
+    assert!(ask(&w, MOVEMENT, period(2027, 11)).is_err());
+    assert_eq!(ask(&w, IN_FORCE, period(2027, 12)).unwrap()["content_hash"], december.unwrap());
+    for kind in [IN_FORCE, MOVEMENT, EXPERIENCE] {
+        assert_eq!(ask(&w, kind, period(2028, 12)).unwrap()["reconciled"], serde_json::json!(true), "{kind}");
+    }
 }

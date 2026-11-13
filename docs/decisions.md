@@ -16,6 +16,16 @@ Traffic between the API, the workers and the ledger nodes is HTTP carrying the c
 
 Three ledger nodes across the zones of New Zealand North survive the loss of a zone. Surviving the loss of the region needs voters in two more regions (five voters across three regions keeps a majority after losing any one). The software supports it: nodes are addressed by name and membership is changed with `ic-admin members`. The infrastructure for it is not written, and it means policy data leaving New Zealand, which is a decision for the insurer and its regulator.
 
+### Questions the persona tests raised that the design does not answer
+
+The persona test pack (`docs/testing/personas/`) holds a test open on purpose for each of these until the insurer decides:
+
+1. How sex is captured as a rating factor for a life whose recorded sex is neither option a rate table holds (`PRD-011`).
+2. Whether a payee may decline late-payment interest on a claim, and how that posts (`CLM-037`).
+3. Whether a customer may set their own hold on refunds and surrenders, with a cooling-off before it can be removed (`SVC-022`).
+4. How an insolvency official's claim on a policy's surrender value is recorded and enforced in a bankruptcy (`JNT-029`).
+5. How imprisonment affects an income protection claim in payment (`CLM-040`).
+
 ## Known gaps
 
 ### Callers have roles but no relationships
@@ -111,3 +121,10 @@ The underwriting module decides the remedy on an approved case; the core carries
 - **`AvoidPolicy { policy, case, premium }`** on a retail policy in force: status `Avoided`, every layer ends on the day it started, `PolicyAvoided` is emitted. With `refund`, every premium billed since inception is undone (earned, unearned, GST and levies, including receivables long since pruned from state, whose totals are kept in `policy.pruned`) and what was paid goes to policy suspense; it is paid out by the ordinary suspense refund, not automatically. With `retain`, nothing goes back: premium paid but not yet earned goes to the account role `avoidance_premium_retained`, tax collected stays collected and what was owed is written off. The design notes give no rule for which applies and ask for legal review, so the case carries the choice.
 - **`VaryForNonDisclosure { policy, case, terms }`**: every layer the life has on the cover reads as written on the varied terms from its start; `policy.variations` keeps what each was written on; nothing already billed is billed again and later periods price on the new terms. `TermsVaried` names the layers and not the terms.
 - **Limits**: neither applies to a scheme (`not_retail`). An avoidance is refused while a benefit is owed on the policy (`claim_in_payment`), while it holds units (`policy_invested`), or if any of its billing was closed earlier (`avoidance_needs_review`). Benefits already paid are not recovered by the core; that is a claims case. An avoidance cannot be set aside by a command: a court order restoring the policy would be worked by hand. Policies whose receivables were pruned before `policy.pruned` existed would under-refund; there are none, since nothing is in production.
+
+## The unit-linked product and its fund menu (13 Nov 2026)
+
+- **A unit-linked policy is a policy with an investment account cover.** The shipped one is `invest-plan`. Its cover is rated from a table whose rate is zero, so the billing, earning and arrears features run and find nothing to do. What the owner pays in is a contribution: a receipt into suspense, then cash set aside for investment, then buy orders. It is never premium and is never earned.
+- **Money goes only into a fund on the product's menu.** Setting cash aside and buying are refused on a policy whose product has no investment account, and a buy or a switch into a fund off the menu is refused. Before this a term life policy could hold units.
+- **Selling is never held to the menu**, so a fund taken off a later product version can still be left. A fee rebate may go back into the fund the fee came from, on the menu or not.
+- **The menu is the product version the policy is on.** A new version with a different menu applies to a policy when the policy moves to that version, like any other product term.

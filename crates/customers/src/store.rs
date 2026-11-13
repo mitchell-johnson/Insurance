@@ -21,7 +21,7 @@ use crate::db::Pool;
 use crate::event::{chain_hash, EventBody, PublicEvent, Recorded, GENESIS};
 use crate::keys::KeyRing;
 use crate::matching;
-use crate::model::{PartyId, PartyKind, Relationship, Target};
+use crate::model::{Field, PartyId, PartyKind, Relationship, Target};
 use crate::party::{self, reject, Change, FactInput, Party, Reject};
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -61,6 +61,15 @@ pub struct Who {
 }
 
 /// What a command did.
+/// A death, or its retraction, waiting to be told to claims.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeathNotice {
+    pub party: PartyId,
+    pub date_of_death: NaiveDate,
+    pub retract: bool,
+    pub attempts: i32,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     pub party: PartyId,
@@ -584,21 +593,18 @@ impl<W: KeyWrapper> Store<W> {
                 return Err(StoreError::Refused(reject("not_found", format!("no party {other}"))));
             }
         }
+        // The date a retraction withdraws is the one recorded before it.
+        let died_on = loaded.party.current(Field::DateOfDeath, now);
         let written = self.append(&tx, &mut loaded, bodies, who, now).await?;
-        // Claims is told of every death, whoever recorded it; a death
-        // retracted before it was told is never sent.
+        // Claims is told of every death and every retraction, whoever
+        // recorded it, in the order they happened.
         let died = written.iter().any(|r| matches!(r.body, EventBody::Deceased { .. }));
         let retracted = written.iter().any(|r| matches!(r.body, EventBody::DeathRetracted { .. }));
         if let (true, Change::MarkDeceased { date_of_death }) = (died, change) {
-            tx.execute(
-                "insert into death_relay (party_id, date_of_death, recorded_at) values ($1, $2, $3) on conflict do nothing",
-                &[&id.0, date_of_death, &now],
-            )
-            .await
-            .map_err(db)?;
+            self.queue_death(&tx, id, *date_of_death, false, now).await?;
         }
-        if retracted {
-            tx.execute("delete from death_relay where party_id = $1", &[&id.0]).await.map_err(db)?;
+        if let (true, Some(date)) = (retracted, died_on.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<NaiveDate>().ok())) {
+            self.queue_death(&tx, id, date, true, now).await?;
         }
         let outcome = Outcome {
             party: id.clone(),
@@ -833,38 +839,64 @@ impl<W: KeyWrapper> Store<W> {
             .collect()
     }
 
-    /// Deaths not yet told to claims on every partition, oldest first, with
-    /// the attempts made so far.
-    pub async fn deaths_to_relay(&self, limit: i64) -> Result<Vec<(PartyId, NaiveDate, i32)>> {
+    /// Queue a death, or its retraction, for claims. A newer notice about
+    /// the same death replaces one not yet sent.
+    async fn queue_death(&self, tx: &Transaction<'_>, id: &PartyId, date: NaiveDate, retract: bool, now: DateTime<Utc>) -> Result<()> {
+        tx.execute("delete from death_relay where party_id = $1 and date_of_death = $2", &[&id.0, &date])
+            .await
+            .map_err(db)?;
+        tx.execute(
+            "insert into death_relay (party_id, date_of_death, retract, recorded_at) values ($1, $2, $3, $4)",
+            &[&id.0, &date, &retract, &now],
+        )
+        .await
+        .map_err(db)?;
+        Ok(())
+    }
+
+    /// Deaths and retractions not yet told to claims on every partition,
+    /// in the order they happened, with the attempts made so far.
+    pub async fn deaths_to_relay(&self, limit: i64) -> Result<Vec<DeathNotice>> {
         let client = self.client().await?;
         let rows = client
             .query(
-                "select party_id, date_of_death, attempts from death_relay order by recorded_at, party_id limit $1",
+                "select party_id, date_of_death, retract, attempts from death_relay order by id limit $1",
                 &[&limit],
             )
             .await
             .map_err(db)?;
-        Ok(rows.iter().map(|r| (PartyId(r.get(0)), r.get(1), r.get(2))).collect())
+        Ok(rows
+            .iter()
+            .map(|r| DeathNotice {
+                party: PartyId(r.get(0)),
+                date_of_death: r.get(1),
+                retract: r.get(2),
+                attempts: r.get(3),
+            })
+            .collect())
     }
 
-    /// A death every partition has accepted: nothing more to send.
-    pub async fn death_relayed(&self, party: &PartyId, date: NaiveDate) -> Result<()> {
+    /// A notice every partition has accepted: nothing more to send.
+    pub async fn death_relayed(&self, n: &DeathNotice) -> Result<()> {
         let client = self.client().await?;
         client
-            .execute("delete from death_relay where party_id = $1 and date_of_death = $2", &[&party.0, &date])
+            .execute(
+                "delete from death_relay where party_id = $1 and date_of_death = $2 and retract = $3",
+                &[&n.party.0, &n.date_of_death, &n.retract],
+            )
             .await
             .map_err(db)?;
         Ok(())
     }
 
-    /// A death not yet accepted everywhere: kept, with the reason, to be
+    /// A notice not yet accepted everywhere: kept, with the reason, to be
     /// tried again.
-    pub async fn death_failed(&self, party: &PartyId, date: NaiveDate, error: &str) -> Result<()> {
+    pub async fn death_failed(&self, n: &DeathNotice, error: &str) -> Result<()> {
         let client = self.client().await?;
         client
             .execute(
-                "update death_relay set attempts = attempts + 1, last_error = $3 where party_id = $1 and date_of_death = $2",
-                &[&party.0, &date, &error],
+                "update death_relay set attempts = attempts + 1, last_error = $4 where party_id = $1 and date_of_death = $2 and retract = $3",
+                &[&n.party.0, &n.date_of_death, &n.retract, &error],
             )
             .await
             .map_err(db)?;

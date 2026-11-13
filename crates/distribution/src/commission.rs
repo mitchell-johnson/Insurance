@@ -297,6 +297,19 @@ impl DistributionState {
                 _ => {}
             },
             CoreEvent::PolicyReinstated { policy } => self.reinstated(ctx, &policy, &cause, date),
+            // The person behind a scheme member's life, as soon as it is
+            // known: what the replacement rule matches lives by.
+            CoreEvent::MemberJoined {
+                policy,
+                life,
+                party: Some(party),
+                ..
+            }
+            | CoreEvent::MemberIdentified { policy, life, party } => {
+                if let Some(p) = self.policies.get_mut(&policy) {
+                    p.lives.insert(life.0, party);
+                }
+            }
             CoreEvent::TransferLanded { policy, .. } => {
                 // Layers, books and exposure items travel with the policy.
                 // Payable accounts exist per payee on every partition, so
@@ -424,7 +437,7 @@ impl DistributionState {
         if let Some(p) = self.policies.get_mut(policy) {
             p.layers.push(key.clone());
         }
-        self.continue_exposure(ctx, old, &key, &new, date);
+        self.continue_exposure(ctx, old, &key, &new, date, (1, 1));
     }
 
     /// Where an amount for a payee goes on a day: paid, or held and why.

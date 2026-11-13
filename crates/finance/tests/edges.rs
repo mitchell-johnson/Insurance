@@ -404,3 +404,69 @@ fn commands_are_refused_from_the_wrong_service_or_before_setup() {
     assert_eq!(bare.code("commission", None, report), "check");
     assert_eq!(bare.code("collections", None, aged(vec![])), "aged");
 }
+
+/// Purpose: a migration loads the old system's outstanding claims in March, with the
+/// other side in the claims migration control account, and loads a little more two days
+/// later in the same month. March's check is green: that is the cutover. In April a
+/// further load of 5.00 and its reversal reach the account; the balance is back where it
+/// was, and April's check is red all the same, naming the account, the month it was
+/// loaded in and the 10.00 that passed through. May, with nothing, is green. An account
+/// the configuration names that the chart does not have is reported, not ignored.
+/// Why it matters: the control account's balance is agreed with the old system once, at
+/// cutover. Anything through it afterwards is a record loaded or backed out behind that
+/// agreement, and a net of nil is exactly what such a correction looks like.
+#[test]
+fn a_migration_control_account_must_stay_still_after_cutover() {
+    let load = |s: &mut Stream, minor: i128| {
+        s.entry(vec![
+            line(
+                "claims_migration_control",
+                AccountClass::Asset,
+                AccountUnit::Minor(NZD),
+                minor,
+                Some("SF1-life"),
+            ),
+            line("claim_reserve", AccountClass::Liability, AccountUnit::Minor(NZD), -minor, Some("SF1-life")),
+        ]);
+    };
+    let mut s = Stream::open(d(2028, 3, 28));
+    load(&mut s, 900_00);
+    s.close();
+    s.close();
+    load(&mut s, 100_00);
+    while s.date < d(2028, 4, 10) {
+        s.close();
+    }
+    load(&mut s, 5_00);
+    load(&mut s, -5_00);
+    while s.date < d(2028, 6, 2) {
+        s.close();
+    }
+    let mut b = Books::ready(1);
+    b.feed(&s.events).unwrap();
+
+    let check = "migration_control";
+    assert_eq!(status(&b, period(2028, 3), check), CheckStatus::Green);
+    let CheckStatus::Red { items } = status(&b, period(2028, 4), check) else {
+        panic!("a load after cutover was not noticed")
+    };
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(
+        items[0].starts_with(&format!("1430 Claims migration control had {} posted through it ", 10_00 * FINE_PER_MINOR))
+            && items[0].contains("loaded in 2028-03"),
+        "{}",
+        items[0]
+    );
+    assert_eq!(status(&b, period(2028, 5), check), CheckStatus::Green);
+    // The reinsurance account has never moved: nothing to say about it.
+    assert!(b.state.blockers(period(2028, 5)).iter().all(|c| c.id != check));
+
+    let mut config = close_config();
+    config.version += 1;
+    config.migration_control.push("1499".to_string());
+    b.activate_close(config);
+    let CheckStatus::Red { items } = status(&b, period(2028, 5), check) else {
+        panic!("an account that is not in the chart was ignored")
+    };
+    assert_eq!(items, ["migration control account 1499 is not in the chart"]);
+}

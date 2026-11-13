@@ -158,6 +158,11 @@ pub enum Query {
     Proposal {
         proposal: ProposalId,
     },
+    /// The rule set and question set the proposal's disclosures are made
+    /// against, or null when none is in force for it.
+    DisclosureBasis {
+        proposal: ProposalId,
+    },
     TermsOn {
         policy: PolicyId,
         life: LifeId,
@@ -199,6 +204,9 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
     let json = |v: Result<serde_json::Value, serde_json::Error>| v.map_err(|e| e.to_string());
     match serde_json::from_value(query).map_err(|e| e.to_string())? {
         Query::Proposal { proposal } => json(serde_json::to_value(state.proposal(&proposal))),
+        Query::DisclosureBasis { proposal } => json(serde_json::to_value(
+            state.proposal(&proposal).and_then(|p| crate::prepare::Basis::for_proposal(&state.config, p)),
+        )),
         Query::TermsOn { policy, life, cover } => json(serde_json::to_value(state.terms_on(&policy, &life, &cover))),
         Query::UnderwritersOf { policy, life } => json(serde_json::to_value(state.underwriters_of(&policy, &life))),
         Query::Queue { queue, now } => json(serde_json::to_value(state.queue(queue, now))),

@@ -55,6 +55,8 @@ pub enum MartError {
     NotClosed { partition: PartitionId, date: NaiveDate },
     #[error("a period runs from its first day to its last: {from} is after {to}")]
     Range { from: NaiveDate, to: NaiveDate },
+    #[error("the mart keeps history from {kept_from}; {date} is before that, and its extracts are the files already stored")]
+    Trimmed { date: NaiveDate, kept_from: NaiveDate },
 }
 
 /// One cover on one life, with the business dates the mart knew it between.
@@ -371,6 +373,12 @@ pub struct Mart {
     /// Admissions and reversals in the order they were decided.
     #[serde(default)]
     admissions: Vec<Admission>,
+    /// The first date history is still held for, once any has been trimmed.
+    #[serde(default)]
+    kept_from: Option<NaiveDate>,
+    /// Everything that moved before `kept_from`, added up.
+    #[serde(default)]
+    carried: Totals,
 }
 
 /// Money held for a policy: what the core owes back or has yet to apply.
@@ -382,7 +390,7 @@ pub struct Held {
 }
 
 /// The in-force book's totals: policies, covers and sum insured.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Totals {
     policies: i128,
     covers: i128,
@@ -484,6 +492,8 @@ impl Mart {
             suspense: BTreeMap::new(),
             known_claims: BTreeMap::new(),
             admissions: Vec::new(),
+            kept_from: None,
+            carried: Totals::default(),
         }
     }
 
@@ -974,8 +984,54 @@ impl Mart {
         });
     }
 
-    /// An extract is cut only as at a date every partition has closed.
+    /// Let go of the history before `before`. Extracts from that date on
+    /// are cut exactly as they were; nothing earlier can be cut again. What
+    /// goes: movements, claims and admissions recorded before the date, covers
+    /// recorded as ended before it, and all but the last status and the
+    /// last factors known going into it. A policy's row itself stays, so a
+    /// reinstatement or an unwind years later still finds it.
+    pub fn trim(&mut self, before: NaiveDate) {
+        let Some(last) = before.pred_opt().filter(|_| self.kept_from.is_none_or(|kept| kept < before)) else {
+            return;
+        };
+        let gone = self.moved(None, last);
+        self.carried.policies += gone.policies;
+        self.carried.covers += gone.covers;
+        self.carried.sum_insured_minor += gone.sum_insured_minor;
+        self.movements.retain(|m| m.business_date >= before);
+        self.claims.retain(|c| c.business_date >= before);
+        self.admissions.retain(|a| a.business_date >= before);
+        // Keep the entry in force going into `before`, and everything after it.
+        fn latest<T>(dated: &mut Vec<(NaiveDate, T)>, last: NaiveDate) {
+            let known = dated.iter().take_while(|(on, _)| *on <= last).count();
+            dated.drain(..known.saturating_sub(1));
+        }
+        for row in self.policies.values_mut() {
+            row.spans.retain(|s| s.known_to.is_none_or(|to| to >= before));
+            latest(&mut row.statuses, last);
+            for dated in row.lives.values_mut() {
+                latest(dated, last);
+            }
+        }
+        self.kept_from = Some(before);
+    }
+
+    /// The first date history is still held for, if any has been trimmed.
+    pub fn kept_from(&self) -> Option<NaiveDate> {
+        self.kept_from
+    }
+
+    fn kept(&self, date: NaiveDate) -> Result<(), MartError> {
+        match self.kept_from {
+            Some(kept_from) if date < kept_from => Err(MartError::Trimmed { date, kept_from }),
+            _ => Ok(()),
+        }
+    }
+
+    /// An extract is cut only as at a date every partition has closed, and
+    /// only where the history behind it is still held.
     fn closed(&self, date: NaiveDate) -> Result<(), MartError> {
+        self.kept(date)?;
         let behind = |p: &PartitionId| self.feeds.get(p).and_then(|f| f.closed).is_none_or(|c| c < date);
         match (0..self.partitions.max(1)).find(behind) {
             Some(partition) => Err(MartError::NotClosed { partition, date }),
@@ -1057,7 +1113,10 @@ impl Mart {
         }
         let totals = self.totals_at(as_at);
         // The book as at the date is everything that has moved up to it.
-        let moved = self.moved(None, as_at);
+        let mut moved = self.moved(None, as_at);
+        moved.policies += self.carried.policies;
+        moved.covers += self.carried.covers;
+        moved.sum_insured_minor += self.carried.sum_insured_minor;
         Ok(Extract {
             kind: IN_FORCE,
             from: None,
@@ -1104,6 +1163,7 @@ impl Mart {
         if from > to {
             return Err(MartError::Range { from, to });
         }
+        self.kept(from)?;
         self.closed(to)?;
         let mut rows: Vec<&Movement> = self.in_period(Some(from), to).collect();
         // Stable: movements of one policy on one day keep the order they happened in.
@@ -1157,6 +1217,7 @@ impl Mart {
         if from > to {
             return Err(MartError::Range { from, to });
         }
+        self.kept(from)?;
         self.closed(to)?;
         #[derive(Default)]
         struct Cell {
