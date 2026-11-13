@@ -23,23 +23,47 @@ pub(crate) fn period_gross(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i6
     let income = s.income.range(..=start).next_back().map_or(0, |(_, v)| *v);
     let monthly = (s.monthly_minor - income).max(0);
     let full = plus_months(start, 1);
-    if end >= full {
+    let gross = if end >= full {
         monthly
     } else {
         monthly * (end - start).num_days() / (full - start).num_days().max(1)
+    };
+    // Days in custody after sentence are not paid for.
+    let span = (end - start).num_days();
+    let suspended = s.suspended_days(start, end);
+    if suspended == 0 || span <= 0 {
+        gross
+    } else {
+        gross * (span - suspended).max(0) / span
     }
+}
+
+/// What replaying the paid periods under `after` instead of `before` comes
+/// to: paid too much, and paid too little.
+pub(crate) fn replay(before: &Schedule, after: &Schedule) -> (i64, i64) {
+    let paid = || before.periods.iter().filter(|(_, p)| !p.returned);
+    let change = |start: &NaiveDate, p: &Period| period_gross(before, *start, p.end) - period_gross(after, *start, p.end);
+    (
+        paid().map(|(s, p)| change(s, p).max(0)).sum(),
+        paid().map(|(s, p)| (-change(s, p)).max(0)).sum(),
+    )
 }
 
 /// The other income taken off one period's benefit: the full benefit for
 /// the period less what is paid for it.
 pub(crate) fn period_income(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i64 {
-    let full = plus_months(start, 1);
-    let whole = if end >= full {
-        s.monthly_minor
-    } else {
-        s.monthly_minor * (end - start).num_days() / (full - start).num_days().max(1)
+    // Days in custody are no benefit at all, not other income: this is the
+    // part of the benefit the declared income takes, before any suspension.
+    let income = s.income.range(..=start).next_back().map_or(0, |(_, v)| *v);
+    let prorate = |monthly: i64| {
+        let full = plus_months(start, 1);
+        if end >= full {
+            monthly
+        } else {
+            monthly * (end - start).num_days() / (full - start).num_days().max(1)
+        }
     };
-    (whole - period_gross(s, start, end)).max(0)
+    (prorate(s.monthly_minor) - prorate((s.monthly_minor - income).max(0))).max(0)
 }
 
 /// What was paid for days on or after `end`: the replay of the paid periods
@@ -114,6 +138,7 @@ impl ClaimsState {
             benefit_end: terms.end,
             ended: None,
             arrears_minor: 0,
+            suspended: BTreeMap::new(),
         });
         claim.status = Status::InPayment;
         if claim.queue == crate::Queue::IncomeProtectionNew {

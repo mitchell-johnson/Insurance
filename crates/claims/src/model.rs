@@ -148,6 +148,9 @@ pub enum DecisionKind {
     EndBenefit,
     RecoveryStatus,
     WriteOff,
+    /// No benefit while the life is in custody after sentence. Never a decline.
+    SuspendBenefit,
+    ResumeBenefit,
 }
 
 /// What a second signer must be.
@@ -425,6 +428,26 @@ pub struct Schedule {
     /// the next benefit, through the same prepared and approved run.
     #[serde(default)]
     pub arrears_minor: i64,
+    /// Days no benefit is payable for while the life is in custody: from
+    /// the first such day to the first day after it (`NaiveDate::MAX` while
+    /// the suspension is open).
+    #[serde(default)]
+    pub suspended: BTreeMap<NaiveDate, NaiveDate>,
+}
+
+impl Schedule {
+    /// The suspension still open, by the day it began.
+    pub fn open_suspension(&self) -> Option<NaiveDate> {
+        self.suspended.iter().find(|(_, until)| **until == NaiveDate::MAX).map(|(from, _)| *from)
+    }
+
+    /// Days in `[start, end)` on which the benefit is suspended.
+    pub fn suspended_days(&self, start: NaiveDate, end: NaiveDate) -> i64 {
+        self.suspended
+            .iter()
+            .map(|(from, until)| ((*until).min(end) - (*from).max(start)).num_days().max(0))
+            .sum()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

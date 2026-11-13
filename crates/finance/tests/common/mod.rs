@@ -164,12 +164,35 @@ pub struct World {
     pub record_roots: bool,
 }
 
+/// The shipped activations as the deployment makes them: each rate table's
+/// passed validation recorded just before the table is activated.
+pub fn shipped() -> Vec<ic_core::Command> {
+    let schemas = ic_finance::tables::load_schemas("tables.star", include_str!("../../../../config/finance/tables.star")).unwrap();
+    let manifest = ic_finance::tables::Manifest {
+        model: "shipped-synthetic-basis".to_string(),
+        model_version: "1".to_string(),
+        basis_report: "docs/products.md".to_string(),
+        author: "engineering".to_string(),
+    };
+    let mut out = Vec::new();
+    for command in shipped_activations().unwrap() {
+        if let ic_core::Command::ActivateRateTable { table } = &command {
+            let record = ic_finance::tables::validate(table, &schemas[&table.id], &manifest, None)
+                .record("test")
+                .unwrap();
+            out.push(ic_core::Command::RecordRateTableValidation(Box::new(record)));
+        }
+        out.push(command);
+    }
+    out
+}
+
 impl World {
     /// A core of `partitions` opened on `start` with the shipped products.
     pub fn new(partitions: PartitionId, start: NaiveDate) -> Self {
         let mut core = Cluster::in_memory(partitions, 11);
         core.open(start).unwrap();
-        for cmd in shipped_activations().unwrap() {
+        for cmd in shipped() {
             core.activate_everywhere(cmd).unwrap();
         }
         Self {
