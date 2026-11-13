@@ -232,6 +232,26 @@ async fn the_portal_service_on_real_nodes() {
         assert!(unreachable.propose(0, ic_channels::claims::envelope("k".into(), command)).await.is_err());
     }
 
+    // The consoles' reach into another module on the nodes: a module these nodes do not host refuses, and nodes that
+    // cannot be reached are an error, for a question and for a command alike.
+    {
+        use ic_channels::forward::{Hosted as Module, Source};
+        let nowhere = Module {
+            client: nodes.client.clone(),
+            module: "no-such-module",
+            patience: Duration::from_secs(5),
+        };
+        assert!(nowhere.ask(json!("status")).await.is_err());
+        assert!(nowhere.tell(json!({ "key": "k" })).await.is_err());
+        let unreachable = Module {
+            client: ClusterClient::new(vec![format!("127.0.0.1:{}", free_port())]).with_attempt_timeout(Duration::from_millis(200)),
+            module: "distribution",
+            patience: Duration::from_millis(300),
+        };
+        assert!(unreachable.ask(json!("status")).await.is_err());
+        assert!(unreachable.tell(json!({ "key": "k" })).await.is_err());
+    }
+
     // The heartbeat: the module is current, so the gateway says so and the data is fresh.
     assert!(module_current(&nodes.client).await);
     assert!(beat(channel.as_ref(), &nodes.client, wall_clock()).await);
