@@ -423,6 +423,8 @@ Tests are in `crates/distribution/tests/` (`commission`, `config`, `edges`, `hos
 
 Volume-based overrides are not built on purpose: the design notes leave them out.
 
+Built on 13 November 2026 to close the adviser rows of the persona matrix (all distribution rows are now traced in docs/testing/personas/traceability.md; ADV-027 and 028 are underwriting's, ADV-031 and 035 the portal's, and both have been asked): an adviser's book refuses a layer that adviser did not write (`book_not_writers`); `CorrectTerms` corrects a wrongly keyed commission option from the layer's start; scheme cover earns broker commission on a layer per scheme cover (`{policy}/{cover}/0`), which group administration writes, and a broking firm may engage advisers; and a licence event raises a `needs_servicing_adviser` task per policy, which `SetServicing` settles. Group administration has been asked to send `WriteLayer` when a scheme has a broker.
+
 Also built since this section was first written: a policy avoided for non-disclosure (`PolicyStatus::Avoided`, from the core's `AvoidPolicy`) has every line of commission on it reversed and any clawback given back (`policy_avoided` in `commission.rs`).
 
 ### Open questions for Mitchell
