@@ -850,6 +850,15 @@ impl<W: KeyWrapper> Store<W> {
         let died_on = loaded.party.current(Field::DateOfDeath, now);
         let held_before = loaded.party.spending_hold.is_some();
         let written = self.append(&tx, &mut loaded, bodies, who, now).await?;
+        // Claims hears of an identity check that saw the person alive.
+        for (source, evidence) in crate::relay::proofs_of_life(&loaded.party, &written, now) {
+            tx.execute(
+                "insert into alive_relay (party_id, source, evidence_ref, recorded_at) values ($1, $2, $3, $4)",
+                &[&id.0, &source, &evidence, &now],
+            )
+            .await
+            .map_err(db)?;
+        }
         // The core hears of the person's own hold, policy by policy.
         for h in crate::relay::owner_hold_changes(&loaded.party, &written, held_before, now.date_naive()) {
             tx.execute(
@@ -1235,6 +1244,34 @@ impl<W: KeyWrapper> Store<W> {
         Ok(rows.iter().map(|r| (r.get(0), PartyId(r.get(1)), r.get(2), r.get(3))).collect())
     }
 
+    /// Proofs of life waiting for claims: (row, party, source, evidence, attempts).
+    pub async fn alive_to_relay(&self, limit: i64) -> Result<Vec<(i64, PartyId, String, String, i32)>> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "select id, party_id, source, evidence_ref, attempts from alive_relay order by id limit $1",
+                &[&limit],
+            )
+            .await
+            .map_err(db)?;
+        Ok(rows.iter().map(|r| (r.get(0), PartyId(r.get(1)), r.get(2), r.get(3), r.get(4))).collect())
+    }
+
+    /// A proof of life accepted everywhere, or failed with the reason.
+    pub async fn alive_done(&self, row: i64, failed: Option<&str>) -> Result<()> {
+        let client = self.client().await?;
+        match failed {
+            None => client.execute("delete from alive_relay where id = $1", &[&row]).await,
+            Some(e) => {
+                client
+                    .execute("update alive_relay set attempts = attempts + 1, last_error = $2 where id = $1", &[&row, &e])
+                    .await
+            }
+        }
+        .map_err(db)?;
+        Ok(())
+    }
+
     /// Hold changes due by `today`, in order.
     pub async fn owner_holds_to_relay(&self, today: NaiveDate, limit: i64) -> Result<Vec<OwnerHoldNotice>> {
         let client = self.client().await?;
@@ -1516,6 +1553,7 @@ impl<W: KeyWrapper> Store<W> {
             "delete from index_state where party_id = $1",
             "delete from spending_hold_removals where party_id = $1",
             "delete from owner_hold_relay where party_id = $1",
+            "delete from alive_relay where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
             "update parties set shredded_at = $2 where id = $1",

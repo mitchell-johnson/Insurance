@@ -174,6 +174,36 @@ pub async fn relay_directory<W: KeyWrapper, S: WormStore, D: crate::relay::Direc
     Ok(told)
 }
 
+/// Tell claims of identity checks that saw a person alive, so any open
+/// proof of life on their benefits completes. Each goes to every partition,
+/// like a death, and stays with the reason until every partition accepts.
+/// Returns the number told.
+pub async fn relay_alive<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(app: &App<W, S>, core: &C) -> Result<usize, String> {
+    let waiting = app.store.alive_to_relay(100).await.map_err(crate::text)?;
+    if waiting.is_empty() {
+        return Ok(0);
+    }
+    let partitions = core.partitions().await?;
+    let mut told = 0;
+    for (row, party, source, evidence, attempts) in waiting {
+        let command = crate::relay::confirm_alive(&party, &source, &evidence);
+        let mut failed = None;
+        for partition in 0..partitions {
+            match core.propose(partition, &format!("alive:{row}:{partition}:{attempts}"), &command).await {
+                Ok(None) => {}
+                Ok(Some(code)) => failed = Some(format!("partition {partition} refused: {code}")),
+                Err(e) => failed = Some(format!("partition {partition}: {e}")),
+            }
+        }
+        app.store.alive_done(row, failed.as_deref()).await.map_err(crate::text)?;
+        match failed {
+            None => told += 1,
+            Some(e) => tracing::warn!(party = %party, error = %e, "claims not yet told a person is alive; will retry"),
+        }
+    }
+    Ok(told)
+}
+
 /// How long a hold change waits for a partition to hold its policy (one
 /// still being issued, say) before it is given up and logged.
 pub const OWNER_HOLD_WAIT_DAYS: i64 = 7;
@@ -265,6 +295,9 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core + crate::rel
             }
             if let Err(e) = relay_directory(app, core).await {
                 tracing::warn!(error = %e, "relaying to the channels directory failed; will retry");
+            }
+            if let Err(e) = relay_alive(app, core).await {
+                tracing::warn!(error = %e, "telling claims of proofs of life failed; will retry");
             }
             if let Err(e) = relay_owner_holds(app, core, Utc::now()).await {
                 tracing::warn!(error = %e, "telling the core of spending holds failed; will retry");
