@@ -141,6 +141,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("sub-paypm", "pay-pm"),
         ("sub-paybad", "pay-bad"),
         ("sub-payview", "pay-view"),
+        ("sub-paycmp", "pay-cmp"),
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
     ] {
@@ -250,6 +251,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
                     &[DataClass::Financial],
                 ),
                 template("payments-reader", &[ic_channels::payments::actions::VIEW], &[DataClass::Financial]),
+                template("payments-compliance", &[ic_channels::payments::actions::COMPLIANCE], &[DataClass::Financial]),
                 template("group-admin", &[ic_channels::group::actions::ADMIN], &[DataClass::Ordinary]),
                 template("group-reader", &[ic_channels::group::actions::VIEW], &[DataClass::Ordinary]),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
@@ -312,6 +314,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("pay-pm", "payee-maintainer"),
         ("pay-bad", "payments-conflicted"),
         ("pay-view", "payments-reader"),
+        ("pay-cmp", "payments-compliance"),
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
     ] {
@@ -936,7 +939,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 37);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 38);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);

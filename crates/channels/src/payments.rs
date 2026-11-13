@@ -36,10 +36,12 @@ pub mod actions {
     pub const RECONCILER: &str = "payments.reconciler";
     pub const TREASURY: &str = "payments.treasury";
     pub const COLLECTIONS: &str = "payments.collections";
+    /// Works anti-money-laundering cases of premium paid by someone other than the owner.
+    pub const COMPLIANCE: &str = "payments.compliance";
 }
 
 /// Each staff action that gives a role there, and the role.
-pub const ROLES: [(&str, &str); 8] = [
+pub const ROLES: [(&str, &str); 9] = [
     (actions::MAKER, "maker"),
     (actions::APPROVER, "approver"),
     (actions::PAYEES, "payee_maintainer"),
@@ -48,11 +50,12 @@ pub const ROLES: [(&str, &str); 8] = [
     (actions::RECONCILER, "reconciler"),
     (actions::TREASURY, "treasury"),
     (actions::COLLECTIONS, "collections"),
+    (actions::COMPLIANCE, "compliance"),
 ];
 
 /// The commands a person may send. That module decides whether this
 /// person's roles allow it.
-pub const COMMANDS: [&str; 27] = [
+pub const COMMANDS: [&str; 28] = [
     "activate_config",
     "create_authority",
     "suspend_authority",
@@ -80,12 +83,13 @@ pub const COMMANDS: [&str; 27] = [
     "release_refund",
     "assign_exception",
     "resolve_exception",
+    "clear_payer",
 ];
 
 /// The questions the console may put, with their fields. `reconciliation`
 /// and `readiness` are asked as of today; the outbox, messages read and the
 /// trail are the drivers'.
-const QUESTIONS: [(&str, &[&str]); 21] = [
+const QUESTIONS: [(&str, &[&str]); 23] = [
     ("open_runs", &[]),
     ("open_exceptions", &[]),
     ("party", &["party"]),
@@ -107,12 +111,18 @@ const QUESTIONS: [(&str, &[&str]); 21] = [
     ("aged_unidentified_receipts", &["as_at"]),
     ("reconciliation", &["account"]),
     ("readiness", &[]),
+    ("payer_cases", &[]),
+    ("payer_case", &["case"]),
 ];
 
 /// Questions whose answers carry bank account details: only for someone
 /// who holds a role there, never a reader. The configuration is the
 /// connectivity administrator's alone.
 const DETAILED: [&str; 3] = ["authority", "payee", "refund"];
+
+/// Questions about money-laundering cases: who paid whose premium. Only
+/// compliance sees them.
+const COMPLIANCE_ONLY: [&str; 2] = ["payer_cases", "payer_case"];
 
 /// Whether a member of staff may open the console, and the roles they hold there.
 pub fn standing(staff: &StaffState, party: &PartyId, at: At) -> Value {
@@ -150,6 +160,9 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>, roles: &[String],
     };
     if DETAILED.contains(&name) && roles.is_empty() {
         return Err(format!("{name} shows bank details, which a reader does not see"));
+    }
+    if COMPLIANCE_ONLY.contains(&name) && !roles.iter().any(|r| r == "compliance") {
+        return Err(format!("{name} is compliance's"));
     }
     let mut out = Map::new();
     out.insert("q".to_string(), json!(name));
