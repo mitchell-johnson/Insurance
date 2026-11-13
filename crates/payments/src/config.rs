@@ -168,6 +168,20 @@ impl Config {
         (format, ordering.filter(|_| !format.is_own()))
     }
 
+    /// The first value date a channel still takes work for at `now`: today
+    /// before its cutoff, otherwise the next business day.
+    pub fn next_window(&self, channel: &str, now: chrono::NaiveDateTime) -> NaiveDate {
+        let cutoff = self.channels.get(channel).map(|c| c.cutoff);
+        let mut next = now.date();
+        if cutoff.is_none_or(|c| now.time() > c) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        while !self.is_business_day(next) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        next
+    }
+
     pub fn is_business_day(&self, date: NaiveDate) -> bool {
         !matches!(date.weekday(), Weekday::Sat | Weekday::Sun) && !self.rules.holidays.contains(&date)
     }

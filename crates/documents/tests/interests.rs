@@ -30,6 +30,7 @@ fn recorded(seq: u64, on: NaiveDate, interest: &str, who: &str, from: NaiveDate)
         seq,
         on,
         CoreEvent::Interest(InterestEvent::Recorded {
+            kind: Default::default(),
             policy: policy("pol-1"),
             interest: interest.into(),
             party: party(who),

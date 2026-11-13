@@ -455,3 +455,73 @@ fn excess_levels_price_a_cover_and_bad_ones_are_refused() {
         assert!(err.contains("excess option"), "{to}: {err}");
     }
 }
+
+/// Purpose: a life whose rating sex is not recorded, as for a life who is neither male nor
+/// female, is priced on a sex-rated table at the lower of the female and male rates for the
+/// life's other facts by default, and at the stated blend where the product says so. A life
+/// whose sex is recorded keeps its own row, a table that does not rate by sex is unaffected,
+/// an age the table does not hold is still refused, and a blend outside 0 to 1 does not load.
+/// Why it matters: decision 1 in `docs/decisions.md` (persona test PRD-011). Before this the
+/// life could not be priced at all, so the only way to issue the policy was to record a sex
+/// that is not the person's. The lower rate is the one that cannot be unfair to the customer.
+#[test]
+fn a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate() {
+    use ic_product::rating::RatingError;
+    use ic_product::UnmatchedSexRating;
+    let life = load_rate_table("life", LIFE_RATES).unwrap();
+    let factors = |age, sex| RatingFactors {
+        age,
+        sex,
+        smoker: Some(false),
+        ..RatingFactors::default()
+    };
+    let p = load_product("term_life.star", TERM).unwrap();
+    let cover = p.cover("life").unwrap();
+    assert_eq!(cover.rating.unmatched_sex_rating, UnmatchedSexRating::LowerOf);
+    let price = |cover, sex| cover_premium(cover, &life, &factors(40, sex), 500_000_00).unwrap();
+    let (female, male) = (price(cover, Some(Sex::Female)), price(cover, Some(Sex::Male)));
+    assert_ne!(female, male, "the shipped life table rates by sex");
+    assert_eq!(price(cover, None), female.min(male));
+
+    let blended = load_product(
+        "term_life.star",
+        &TERM.replace("stepped(\"life-base\")", "stepped(\"life-base\", unmatched_sex_rating = blended(\"0.25\"))"),
+    )
+    .unwrap();
+    let cover = blended.cover("life").unwrap();
+    let quarter = ic_money::dec("0.25").unwrap();
+    assert_eq!(price(cover, None), female * quarter + male * (ic_money::dec("1").unwrap() - quarter));
+    assert_eq!(price(cover, Some(Sex::Male)), male, "a recorded sex keeps its own row");
+
+    // No row for the age under either sex: still no rate, never half a guess.
+    assert!(matches!(
+        cover_premium(cover, &life, &factors(5, None), 500_000_00),
+        Err(RatingError::NoRate { .. })
+    ));
+
+    // A table that does not rate by sex prices the life from its own row.
+    let health = load_product("health_plan.star", HEALTH).unwrap();
+    let rates = load_rate_table("health", HEALTH_RATES).unwrap();
+    let hospital = health.covers.first().unwrap();
+    let with = |sex| {
+        cover_premium(
+            hospital,
+            &rates,
+            &RatingFactors {
+                excess_option: None,
+                ..factors(40, sex)
+            },
+            0,
+        )
+        .unwrap()
+    };
+    assert_eq!(with(None), with(Some(Sex::Female)));
+
+    for share in ["1.5", "-0.1"] {
+        let bad = TERM.replace(
+            "stepped(\"life-base\")",
+            &format!("stepped(\"life-base\", unmatched_sex_rating = blended(\"{share}\"))"),
+        );
+        assert!(load_product("term_life.star", &bad).is_err(), "{share}");
+    }
+}

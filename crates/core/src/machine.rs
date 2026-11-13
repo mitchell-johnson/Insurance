@@ -907,6 +907,13 @@ impl CoreState {
             InvestCommand::ReinstructPayout { policy, payout, payment } => {
                 self.with_policy(&policy, true, |_, p| invest::reinstruct_payout(p, ctx, &payout, payment))
             }
+            InvestCommand::DirectPayout {
+                policy,
+                payout,
+                payee,
+                payment,
+                direction,
+            } => self.with_policy(&policy, true, |_, p| invest::direct_payout(p, ctx, &payout, payee, payment, direction)),
             InvestCommand::ExecuteOrders { fund, pricing_date, limit } => {
                 invest::execute_orders(&mut self.ledger, &mut self.investment, &self.policies, ctx, &fund, pricing_date, limit)
             }

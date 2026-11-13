@@ -50,18 +50,18 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | --- | ---: | ---: | ---: | ---: |
 | POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
-| PRD Products, rating and quotes | 6 | 5 | 1 | 2 |
+| PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
 | COL Collection, cash matching, standing and dunning | 13 | 7 | 8 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 6 | 11 | 2 | 8 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 18 | 9 | 3 | 8 |
+| UW Underwriting, underwriting operations and delegated authority | 21 | 8 | 1 | 6 |
 | CLM Claims and claims operations | 25 | 10 | 7 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 23 | 8 | 9 | 3 |
-| JNT Joint lives, ownership, assignments and dependants | 1 | 9 | 21 | 15 |
+| JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 41 | 1 | 3 | 3 |
 | HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
-| PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
+| PAY Payment runs and bank connectivity | 13 | 0 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **277** | **129** | **171** | **127** |
+| **Total** | **283** | **126** | **168** | **125** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 89 | 28 | 25 |
-| C | 157 | 68 | 121 |
+| B | 91 | 27 | 24 |
+| C | 161 | 66 | 119 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -92,7 +92,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **COL** (3): COL-005, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (1): AUD-012
-- **UW** (2): UW-012, UW-030
+- **UW** (1): UW-030
 - **INV** (2): INV-018, INV-019
 - **GRP** (1): GRP-017
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
@@ -117,7 +117,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **XFR** (1): XFR-004
 - **AUD** (7): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-011, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
-- **UW** (6): UW-002, UW-003, UW-006, UW-014, UW-026, UW-029
+- **UW** (5): UW-002, UW-003, UW-006, UW-014, UW-029
 - **CLM** (7): CLM-002, CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028

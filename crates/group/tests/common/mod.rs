@@ -84,6 +84,7 @@ pub fn terms() -> SchemeTerms {
         excess_loading: ExcessLoading::EmployerTotal,
         excess_loading_min_count: 0,
         suspend_joiners_after_short_payments: Some(2),
+        broker: None,
     }
 }
 
@@ -288,6 +289,19 @@ impl Harness {
         r
     }
 
+    /// The layers waiting for the commission module, with their outbox
+    /// entry and key.
+    pub fn commission_layers(&self) -> Vec<(u64, String, ic_group::event::CommissionLayer)> {
+        self.g
+            .outbox
+            .iter()
+            .filter_map(|(id, o)| match o {
+                Outbound::Commission { key, layer } => Some((*id, key.clone(), layer.clone())),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn driver(&mut self, command: GroupCommand) -> Result<(), Reject> {
         self.send_as(caller::DRIVER, "driver", command)
     }
@@ -296,7 +310,15 @@ impl Harness {
     /// core's answers, and feed the core's events back. Returns whether
     /// anything was done.
     pub fn step(&mut self) -> bool {
-        let pending: Vec<(u64, Outbound)> = self.g.outbox.iter().map(|(id, o)| (*id, o.clone())).collect();
+        // Layers for the commission module stay in the outbox for the test
+        // to deliver or refuse (`commission_layers`).
+        let pending: Vec<(u64, Outbound)> = self
+            .g
+            .outbox
+            .iter()
+            .filter(|(_, o)| !matches!(o, Outbound::Commission { .. }))
+            .map(|(id, o)| (*id, o.clone()))
+            .collect();
         let mut acked = vec![];
         let mut did = false;
         for (id, out) in pending {
@@ -334,6 +356,7 @@ impl Harness {
                     self.withdrawals.push(request_key);
                     acked.push(id);
                 }
+                Outbound::Commission { .. } => {}
                 Outbound::ResolveParties { file, employee_ids, .. } => {
                     self.to_resolve.push((file, employee_ids));
                     acked.push(id);

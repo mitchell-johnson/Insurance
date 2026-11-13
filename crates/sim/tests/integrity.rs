@@ -598,6 +598,13 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             detail: Default::default(),
         })),
         Command::Investment(Box::new(ic_core::invest::InvestCommand::CancelOrder { order_id: "o-1".into() })),
+        Command::Investment(Box::new(ic_core::invest::InvestCommand::DirectPayout {
+            policy: p.clone(),
+            payout: "wd-1".into(),
+            payee: ic_core::PartyId("party-oa".into()),
+            payment: "wd-1".into(),
+            direction: "vault/dir-1".into(),
+        })),
         Command::Interest(Box::new(ic_core::interest::InterestCommand::Release {
             policy: p.clone(),
             interest: "int-1".into(),

@@ -209,3 +209,33 @@ fn the_binary_fails_loudly() {
     let (ok, stderr) = run(&["open", "2027-11-15"], &unreachable);
     assert!(!ok && stderr.contains("no ledger node answered"), "{stderr}");
 }
+
+/// Purpose: the shipped configuration that `ic-admin activate-shipped` proposes records each
+/// rate table's validation, made by finance's own suite against `config/finance/tables.star`,
+/// immediately before the table is activated, for exactly the content activated, and every
+/// shipped table passes.
+/// Why it matters: finance's close blocks on an active table with no validation record. A
+/// deployment that activated the shipped tables without one would fail its first close, and
+/// a table that no longer passes its schema must stop the deployment, not go live.
+#[test]
+fn every_shipped_rate_table_is_validated_before_it_is_activated() {
+    use ic_core::Command;
+    let commands = ic_api::admin::shipped_with_validations().unwrap();
+    let mut tables = 0;
+    for (at, command) in commands.iter().enumerate() {
+        if let Command::ActivateRateTable { table } = command {
+            tables += 1;
+            let Some(Command::RecordRateTableValidation(record)) = at.checked_sub(1).map(|i| &commands[i]) else {
+                panic!("{} is not preceded by its validation", table.id);
+            };
+            assert_eq!(
+                (&record.id, record.version, &record.content_hash),
+                (&table.id, table.version, &table.content_hash)
+            );
+            assert_eq!(record.by, ic_api::admin::SHIPPED_VALIDATOR);
+        }
+    }
+    assert!(tables >= 8, "{tables}");
+    let validations = commands.iter().filter(|c| matches!(c, Command::RecordRateTableValidation(_))).count();
+    assert_eq!(validations, tables);
+}

@@ -9,7 +9,7 @@ use starlark::environment::{Globals, Module};
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
 
-use crate::{Benefit, Definition, Feature, PremiumType, ProductDefinition, RateTable};
+use crate::{Benefit, Definition, Feature, PremiumType, ProductDefinition, RateTable, UnmatchedSexRating};
 
 const PRELUDE: &str = include_str!("prelude.star");
 const FUND_PRELUDE: &str = include_str!("fund_prelude.star");
@@ -106,6 +106,11 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
         }
         if c.rating.premium_type == PremiumType::GroupUnitRate && c.categories.is_empty() {
             return Err(invalid(file, format!("cover {}: group unit rates need benefit categories", c.code)));
+        }
+        if let UnmatchedSexRating::Blended { female_share } = &c.rating.unmatched_sex_rating {
+            if female_share.get() < Dec::from(0i64) || female_share.get() > Dec::from(1i64) {
+                return Err(invalid(file, format!("cover {}: the blended share is a fraction between 0 and 1", c.code)));
+            }
         }
         if let Some(g) = &c.gst_rate {
             if g.get() < Dec::from(0i64) || g.get() >= Dec::from(1i64) {

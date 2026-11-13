@@ -285,6 +285,12 @@ pub enum GroupCommand {
     ObserveCore {
         event: Box<CoreEvent>,
     },
+    /// The commission module refused a scheme's broker for good: the entry
+    /// leaves the outbox and staff are told.
+    CommissionRefused {
+        key: String,
+        code: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -311,9 +317,15 @@ impl GroupCommand {
             | AgreeRenewal { .. }
             | Terminate { .. } => &[STAFF],
             ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } => &[EMPLOYER, STAFF],
-            RecordScan { .. } | RefuseFile { .. } | SubmitRows { .. } | PartiesResolved { .. } | CoreResult { .. } | ObserveCore { .. } | Ack { .. } | Tick => {
-                &[DRIVER]
-            }
+            RecordScan { .. }
+            | RefuseFile { .. }
+            | SubmitRows { .. }
+            | PartiesResolved { .. }
+            | CoreResult { .. }
+            | CommissionRefused { .. }
+            | ObserveCore { .. }
+            | Ack { .. }
+            | Tick => &[DRIVER],
             SelfRegister { .. } | TakeUpContinuation { .. } => &[MEMBER],
             // The driver carries the underwriting module's answer from its outbox.
             RecordExcessDecision { .. } => &[UNDERWRITING, DRIVER],

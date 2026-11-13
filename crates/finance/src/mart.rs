@@ -33,6 +33,9 @@ use ic_ledger::{sha256, AccountUnit, Hash32, PartitionId};
 use ic_product::Sex;
 use serde::{Deserialize, Serialize};
 
+use crate::period::PeriodId;
+use crate::returns::ConductMeasure;
+
 use crate::books::ExtractRecord;
 
 /// Version of the extract layouts below. A change to a column is a new version.
@@ -343,6 +346,12 @@ struct EndingClaim {
     category: String,
 }
 
+impl KnownClaim {
+    fn product(&self) -> Option<String> {
+        Some(self.product_code.clone()).filter(|p| !p.is_empty())
+    }
+}
+
 /// A claim the claims module has registered: the rating cell it falls in,
 /// fixed when it was registered, and what has been admitted on it so far.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -356,6 +365,15 @@ struct KnownClaim {
     occupation_class: String,
     #[serde(default)]
     category: String,
+    /// The business date the claims module registered it.
+    #[serde(default)]
+    registered_on: Option<NaiveDate>,
+    /// When the standing admission was made.
+    #[serde(default)]
+    admitted_on: Option<NaiveDate>,
+    /// When it was declined, while the decline stands.
+    #[serde(default)]
+    declined_on: Option<NaiveDate>,
     /// Whether an admission is standing.
     admitted: bool,
     admitted_minor: i64,
@@ -407,6 +425,21 @@ pub struct Mart {
     /// Everything that moved before `kept_from`, added up.
     #[serde(default)]
     carried: Totals,
+    /// Conduct measures worked out from the feed: claims decisions from the
+    /// claims module's facts, lapses and reinstatements from the core's.
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) conduct: BTreeMap<crate::returns::ConductKey, u64>,
+    /// Days from registration to decision, by the period of the decision.
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) turnaround: BTreeMap<(PeriodId, ConductMeasure, Option<String>), Turnaround>,
+}
+
+/// How long decisions of one kind took in a period.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Turnaround {
+    pub decisions: u64,
+    pub total_days: u64,
+    pub max_days: u64,
 }
 
 /// Money held for a policy: what the core owes back or has yet to apply.
@@ -522,6 +555,25 @@ impl Mart {
             admissions: Vec::new(),
             kept_from: None,
             carried: Totals::default(),
+            conduct: BTreeMap::new(),
+            turnaround: BTreeMap::new(),
+        }
+    }
+
+    /// Count one conduct fact the feed carries.
+    fn count(&mut self, date: NaiveDate, measure: ConductMeasure, product: Option<String>, relates_to: Option<NaiveDate>) {
+        let key = crate::returns::ConductKey::new(PeriodId::of(date), measure, product, relates_to.map(PeriodId::of));
+        *self.conduct.entry(key).or_insert(0) += 1;
+    }
+
+    /// Count a claims decision and the days it took from registration.
+    fn decision(&mut self, date: NaiveDate, measure: ConductMeasure, product: Option<String>, registered: Option<NaiveDate>) {
+        self.count(date, measure, product.clone(), None);
+        if let Some(days) = registered.and_then(|r| u64::try_from((date - r).num_days()).ok()) {
+            let t = self.turnaround.entry((PeriodId::of(date), measure, product)).or_default();
+            t.decisions += 1;
+            t.total_days += days;
+            t.max_days = t.max_days.max(days);
         }
     }
 
@@ -653,7 +705,20 @@ impl Mart {
                 }
                 self.arrive(partition, policy, row, date, None, "transfer_in");
             }
-            Event::PolicyStatusChanged { policy, to, .. } => {
+            Event::PolicyStatusChanged { policy, from, to } => {
+                let measure = match (from, to) {
+                    (_, PolicyStatus::Lapsed) => Some(ConductMeasure::PolicyLapsed),
+                    (PolicyStatus::Lapsed, PolicyStatus::InForce) => Some(ConductMeasure::PolicyReinstated),
+                    _ => None,
+                };
+                if let Some(measure) = measure {
+                    let product = self
+                        .policies
+                        .get(&(partition, policy.clone()))
+                        .map(|r| r.product_code.clone())
+                        .filter(|p| !p.is_empty());
+                    self.count(date, measure, product, None);
+                }
                 let kind = match to {
                     PolicyStatus::Transferred => "transfer_out".to_string(),
                     other => status_name(*other),
@@ -864,12 +929,18 @@ impl Mart {
                     smoker: factors.smoker,
                     occupation_class: factors.class(),
                     category: factors.category(),
+                    registered_on: Some(date),
                     ..KnownClaim::default()
                 };
                 self.known_claims.insert(key, known);
             }
             "claim_admitted" => {
-                let known = self.known_claims.entry(key).or_default();
+                let known = self.known_claims.entry(key.clone()).or_default();
+                let decided = (!known.admitted).then(|| (known.product(), known.registered_on));
+                if !known.admitted {
+                    known.admitted_on = Some(date);
+                    known.declined_on = None;
+                }
                 let (admitted_minor, monthly_minor) = (amount("admitted_minor"), amount("monthly_minor"));
                 self.admissions.push(Admission {
                     business_date: date,
@@ -882,6 +953,24 @@ impl Mart {
                 known.admitted = true;
                 known.admitted_minor = known.admitted_minor.saturating_add(admitted_minor);
                 known.monthly_minor = known.monthly_minor.saturating_add(monthly_minor);
+                if let Some((product, registered)) = decided {
+                    self.decision(date, ConductMeasure::ClaimAccepted, product, registered);
+                }
+            }
+            "claim_closed" if text("outcome").is_some_and(|o| o == "declined") => {
+                let known = self.known_claims.entry(key).or_default();
+                known.declined_on = Some(date);
+                let (product, registered) = (known.product(), known.registered_on);
+                self.decision(date, ConductMeasure::ClaimDeclined, product, registered);
+            }
+            // A decline overturned on review or by the dispute scheme.
+            "claim_reopened" if text("basis").is_some_and(|b| b == "InternalReview" || b == "DisputeScheme") => {
+                if let Some(known) = self.known_claims.get_mut(&key) {
+                    if let Some(declined) = known.declined_on.take() {
+                        let product = known.product();
+                        self.count(date, ConductMeasure::DeclineOverturned, product, Some(declined));
+                    }
+                }
             }
             "admission_reversed" => {
                 if let Some(known) = self.known_claims.get_mut(&key).filter(|k| k.admitted) {
@@ -894,6 +983,8 @@ impl Mart {
                         monthly_minor: -known.monthly_minor,
                     });
                     (known.admitted, known.admitted_minor, known.monthly_minor) = (false, 0, 0);
+                    let (product, admitted) = (known.product(), known.admitted_on.take());
+                    self.count(date, ConductMeasure::AdmissionReversed, product, admitted);
                 }
             }
             _ => {}

@@ -15,6 +15,7 @@ ic-product.workspace = true
 ic-readmodel.workspace = true
 ic-cashmatch.workspace = true
 ic-sim.workspace = true
+ic-finance = { path = "../finance" }
 ic-azure.workspace = true
 ic-raft.workspace = true
 futures = "0.3"

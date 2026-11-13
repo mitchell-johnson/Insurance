@@ -164,6 +164,11 @@ pub enum Command {
         notice: String,
         delivered: bool,
     },
+    /// The customer asks for their lapsed policy back, having paid what it
+    /// owes into suspense. The core decides; a refusal is a task.
+    RequestReinstatement {
+        policy: PolicyId,
+    },
     /// What the core made of a posting.
     RecordCoreOutcome {
         posting: String,
@@ -189,6 +194,7 @@ impl Command {
             Command::RecordNoticeSent { .. } => "record_notice_sent",
             Command::RecordNoticeDelivery { .. } => "record_notice_delivery",
             Command::RecordCoreOutcome { .. } => "record_core_outcome",
+            Command::RequestReinstatement { .. } => "request_reinstatement",
         }
     }
 
@@ -200,7 +206,7 @@ impl Command {
             Command::RecordCoreOutcome { .. } => (CORE_OUTBOX, &[]),
             Command::RecordNoticeSent { .. } | Command::RecordNoticeDelivery { .. } => (DELIVERY, &[]),
             Command::SetSequence { .. } => (STAFF, &[Role::Configuration]),
-            Command::RecordOutcome { .. } | Command::ProposeArrangement { .. } | Command::EndArrangement { .. } => {
+            Command::RecordOutcome { .. } | Command::ProposeArrangement { .. } | Command::EndArrangement { .. } | Command::RequestReinstatement { .. } => {
                 (STAFF, &[Role::Collections, Role::TeamLead])
             }
             Command::ApplyHardship { .. } => (STAFF, &[Role::Collections, Role::Hardship]),
@@ -424,6 +430,7 @@ impl CollectionsState {
             ),
             Command::DecideHardship { case, approve, note } => self.decide_hardship(&case, approve, note, ctx),
             Command::EndHardship { case } => self.end_hardship(&case, ctx),
+            Command::RequestReinstatement { policy } => self.request_reinstatement(policy, ctx),
             Command::RecordNoticeSent { notice } => self.notice_sent(&notice),
             Command::RecordNoticeDelivery { notice, delivered } => self.notice_delivery(&notice, delivered, ctx),
             Command::RecordCoreOutcome {

@@ -82,6 +82,22 @@ pub enum ExceptionKind {
     /// Fewer members than the scheme's minimum are left in the employer's
     /// one total of loadings, so the total may show whose loading it is.
     LoadingTotalTooSmall,
+    /// The commission module would not record the scheme's broker on a
+    /// cover, so that cover earns no commission until someone acts.
+    BrokerNotRecorded,
+}
+
+/// A scheme cover as the commission module's `write_layer`: its one layer,
+/// numbered 0, written by the scheme's broker into the broker's book.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommissionLayer {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub engagement: String,
+    pub book: String,
+    pub schedule: String,
+    pub option: String,
+    pub annual_premium_minor: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +111,12 @@ pub enum GroupEvent {
     TermsAmended {
         scheme: String,
         terms_version: u32,
+    },
+    /// The commission module refused the scheme's broker on a cover.
+    BrokerNotRecorded {
+        scheme: String,
+        cover: String,
+        code: String,
     },
     MappingSet {
         scheme: String,
@@ -370,6 +392,12 @@ pub enum IssueOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outbound {
+    /// Tell the commission module who placed a scheme cover, so that the
+    /// premium the scheme pays for it earns the broker's commission.
+    Commission {
+        key: String,
+        layer: CommissionLayer,
+    },
     /// Send to the core as `group-admin`, to the partition of `group`, and
     /// report the answer with `CoreResult`.
     Core {

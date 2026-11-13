@@ -1745,6 +1745,7 @@ fn a_lender_recorded_on_the_policy_is_paid_before_the_claimant() {
     days(&mut c, 20);
     let today = c.business_date().unwrap();
     let assignment = ic_core::interest::InterestCommand::Record {
+        kind: Default::default(),
         policy: id.clone(),
         interest: "int-1".into(),
         party: ic_core::PartyId("party-bank".into()),

@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
 use crate::csv::{self, CsvError};
-use crate::event::{GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{FileToRead, Question};
 use crate::mapping::{FileMapping, Mapped, MappingError};
 use crate::record::MemberIdentity;
@@ -72,6 +72,10 @@ pub trait Peers: Send + Sync {
     /// `after`, oldest first.
     fn underwriting_answers(&self, after: u64, max: usize) -> impl Future<Output = Result<Answers, String>> + Send;
     fn publish(&self, seq: u64, date: NaiveDate, event: &GroupEvent) -> impl Future<Output = Result<(), String>> + Send;
+    /// Write a scheme cover's layer in the commission module. `Ok(None)`
+    /// is written (now or before); `Ok(Some(code))` is a refusal a person
+    /// must put right; `Err` is to try again.
+    fn commission(&self, key: &str, layer: &CommissionLayer) -> impl Future<Output = Result<Option<String>, String>> + Send;
 }
 
 /// One answer from underwriting to a request of this module's.
@@ -324,6 +328,19 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                             pass.done += 1;
                             continue;
                         }
+                        Err(e) => Err(e),
+                    },
+                    Outbound::Commission { key, layer } => match self.peers.commission(key, layer).await {
+                        Ok(Some(code)) => {
+                            // A refusal that waiting will not change: the entry
+                            // leaves the outbox and staff are told.
+                            self.send(format!("commission-refused:{key}"), GroupCommand::CommissionRefused { key: key.clone(), code })
+                                .await?
+                                .map_err(DriverError::Refused)?;
+                            pass.done += 1;
+                            continue;
+                        }
+                        Ok(None) => Ok(()),
                         Err(e) => Err(e),
                     },
                     Outbound::Reinsurance { key, notice } => self.peers.reinsurance(key, today, notice).await,

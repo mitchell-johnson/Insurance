@@ -62,7 +62,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PRD-007 | full | `finance/tests/dry_run.rs::a_proposed_table_is_priced_against_the_book_in_force`<br>`finance/tests/dry_run.rs::the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves` |
 | PRD-008 | part | `api/tests/api.rs::a_quote_prices_without_writing_anything` |
 | PRD-010 | full | `sim/tests/scenarios.rs::health_premium_splits_gst_to_the_tax_account`<br>`product/tests/products.rs::health_premium_carries_gst` |
-| PRD-011 | part | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched`<br>`reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate` |
+| PRD-011 | full | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched`<br>`reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate`<br>`product/tests/products.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate`<br>`sim/tests/personas_spine.rs::a_life_with_no_recorded_sex_is_issued_at_the_lower_premium` |
 | PRD-012 | part | `product/tests/products.rs::rating_refuses_what_it_cannot_price` |
 
 ## BIL Billing and earning
@@ -167,10 +167,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-009 | full | `reinsurance/tests/capacity.rs::two_proposals_on_one_life_see_each_other`<br>`reinsurance/tests/accumulation.rs::arrival_order_does_not_change_the_cessions` |
 | UW-010 | full | `underwriting/tests/libraries.rs::a_case_tracks_ownership_escalation_and_priority`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
+| UW-012 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
 | UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
 | UW-014 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
 | UW-016 | part | `underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
+| UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
 | UW-020 | part | `underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
@@ -179,7 +181,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-023 | full | `underwriting/tests/libraries.rs::backtest_shows_how_a_rule_change_shifts_outcomes`<br>`underwriting/tests/config.rs::a_changed_rule_set_needs_its_backtest_and_its_references` |
 | UW-024 | full | `underwriting/tests/special.rs::peer_review_samples_decisions_for_a_senior_who_never_touched_them` |
 | UW-025 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
-| UW-026 | part | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
+| UW-026 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
 | UW-029 | part | `underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
@@ -324,6 +326,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
@@ -483,7 +486,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PAY-010 | full | `payments/tests/sweep.rs::money_applied_to_another_fund_is_moved_to_its_account`<br>`payments/tests/sweep.rs::a_reversal_or_a_returned_sweep_is_owed_the_right_way`<br>`payments/tests/sweep.rs::a_matched_direct_credit_is_followed_too` |
 | PAY-011 | full | `payments/tests/runs.rs::a_collection_run_draws_on_active_authorities`<br>`payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | PAY-012 | full | `payments/tests/refunds.rs::a_refund_goes_back_to_the_account_it_came_from` |
-| PAY-014 | part | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected` |
+| PAY-014 | full | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected`<br>`payments/tests/runs.rs::a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known` |
 
 ## FIN Finance close, statutory funds and regulatory reporting
 
@@ -503,7 +506,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
 | FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract` |
-| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines` |
+| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
 
 ## CFG Configuration operations and the actuary's interface
 
@@ -542,10 +545,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
 | DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
-<<<<<<< HEAD
-=======
 | DOC-009 | full | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it`<br>`customers/tests/api.rs::a_contact_point_can_be_chosen_for_one_relationship` |
->>>>>>> origin/main
 | DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration
