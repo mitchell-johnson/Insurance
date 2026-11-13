@@ -73,6 +73,12 @@ pub struct OpenProposal {
     /// applicant keeps the terms and the time they were given.
     #[serde(default)]
     pub legacy_received_on: Option<NaiveDate>,
+    /// The adviser is replacing cover the customer holds with this
+    /// application: more cover on a policy in force, advised by an adviser
+    /// the customer has appointed. Nothing is underwritten until each life
+    /// has confirmed the replacement disclosure with a signed step.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub replacement: bool,
 }
 
 /// How a record was signed.
