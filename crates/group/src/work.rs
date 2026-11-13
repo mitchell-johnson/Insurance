@@ -597,6 +597,7 @@ impl GroupState {
                                 party,
                                 product_code: c.product_code,
                                 cover: c.cover,
+                                cover_type: c.cover_type,
                                 date_of_birth: attrs.date_of_birth,
                                 sex: attrs.sex,
                                 smoker: attrs.smoker,
@@ -1705,9 +1706,18 @@ impl GroupState {
                     return Err(Reject::new("no_automatic_cover", "the leaver had no automatic cover to continue"));
                 }
                 let excess_minor = sum_insured_minor - sum_insured_minor.min(automatic_minor);
+                // The scheme cover the underwritten amount was on.
+                let cover_type = s
+                    .cases
+                    .values()
+                    .filter(|c| c.life == o.life && c.ended_by_leave)
+                    .find_map(|c| s.product.cover(&c.cover))
+                    .map(|def| def.cover_type.trim_start_matches("group_").to_string())
+                    .unwrap_or_default();
                 let continued = (excess_minor > 0).then(|| ContinuedExcess {
                     amount_minor: excess_minor,
                     cover: cover.clone(),
+                    cover_type,
                     product_code: product_code.clone(),
                     status: ContinuedStatus::Waiting,
                 });

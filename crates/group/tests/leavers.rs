@@ -511,6 +511,7 @@ fn a_leaver_continues_underwritten_cover_only_where_the_scheme_allows_it() {
     assert_eq!(asked.policy, PolicyId("pol-cont-2".into()));
     assert_eq!(asked.inception, o.left);
     assert_eq!(asked.earlier, o.earlier);
+    assert_eq!(asked.cover_type, "life", "the scheme's group_life, as underwriting matches it");
 
     let record = |h: &mut Harness, outcome: &str| {
         let r = h.send_as(
