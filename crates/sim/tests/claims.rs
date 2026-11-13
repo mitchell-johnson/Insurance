@@ -2004,3 +2004,202 @@ fn a_valuation_sets_the_reserve_of_a_claim_in_payment_on_the_ledger() {
     assert_eq!(money(&c, &id), (57_000_00, 0, 0), "the period is drawn from the actuary's reserve");
     days(&mut c, 2);
 }
+
+fn nominate(policy: &PolicyId, id: &str, shares: &[(&str, u32)], effective_from: NaiveDate, conversation: Option<&str>) -> Command {
+    Command::Nominate(Box::new(ic_core::nomination::Nominate {
+        policy: policy.clone(),
+        nomination: id.to_string(),
+        life: None,
+        nominees: shares
+            .iter()
+            .map(|(party, share_pct)| ic_core::nomination::Nominee {
+                party: ic_core::PartyId(party.to_string()),
+                share_pct: *share_pct,
+            })
+            .collect(),
+        effective_from,
+        form: format!("vault/form-{id}"),
+        conversation: conversation.map(str::to_string),
+    }))
+}
+
+/// Purpose: a nomination is recorded with the date it takes effect and the date it was
+/// recorded, a change is a new nomination and never an edit, and a death claim shares what it
+/// pays among the people nominated on the date of death. The record still answers who was
+/// nominated on an earlier date, and who the record named as it stood on an earlier day,
+/// after a correction dated back before both. A nomination whose shares do not add up, that
+/// names a person twice, is dated in the future or comes from a module other than servicing
+/// is refused, and a repeat of one already recorded changes nothing.
+/// Why it matters: an owner who replaced an ex-partner with their children three months
+/// before dying must have the children paid, and a death found out about late must be paid to
+/// whoever was nominated on the day it happened. Paying the wrong person a death benefit is
+/// money the insurer pays twice, to a family already in distress.
+#[test]
+fn a_death_benefit_goes_to_whoever_was_nominated_on_the_date_of_death() {
+    use ic_core::nomination::{in_force, nominees};
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    let serve = |c: &mut Cluster, command: Command| c.submit(0, "policy-servicing", command);
+    days(&mut c, 10);
+    let day_10 = c.business_date().unwrap();
+    let tomorrow = day_10.succ_opt().unwrap();
+
+    assert_eq!(
+        code(c.submit(0, "claims", nominate(&id, "nom-1", &[("party-ex", 100)], day_10, None))),
+        "caller_not_allowed"
+    );
+    for (shares, effective) in [
+        (&[("party-ex", 60), ("party-kid-a", 30)][..], day_10),
+        (&[("party-ex", 50), ("party-ex", 50)][..], day_10),
+        (&[("party-ex", 100), ("party-kid-a", 0)][..], day_10),
+        (&[("party-ex", 100)][..], tomorrow),
+        (&[("party-ex", 100)][..], start().pred_opt().unwrap()),
+        (&[][..], day_10),
+    ] {
+        assert_eq!(
+            code(serve(&mut c, nominate(&id, "nom-1", shares, effective, None))),
+            "invalid_nomination",
+            "{shares:?} {effective}"
+        );
+    }
+    let mut on_stranger = nominate(&id, "nom-1", &[("party-ex", 100)], day_10, None);
+    if let Command::Nominate(n) = &mut on_stranger {
+        n.life = Some(ic_core::LifeId("nobody".into()));
+    }
+    assert_eq!(code(serve(&mut c, on_stranger)), "invalid_nomination");
+    assert!(c.state(0).policies[&id].nominations.is_empty(), "a refusal records nothing");
+
+    serve(&mut c, nominate(&id, "nom-1", &[("party-ex", 100)], day_10, None)).unwrap();
+    days(&mut c, 20);
+    let day_30 = c.business_date().unwrap();
+    let children = [("party-kid-a", 60), ("party-kid-b", 40)];
+    c.take_events();
+    serve(&mut c, nominate(&id, "nom-2", &children, day_30, Some("case/conv-9"))).unwrap();
+    serve(&mut c, nominate(&id, "nom-2", &children, day_30, Some("case/conv-9"))).unwrap();
+    assert_eq!(
+        code(serve(&mut c, nominate(&id, "nom-2", &[("party-ex", 100)], day_30, None))),
+        "duplicate_nomination"
+    );
+    let recorded: Vec<Event> = c
+        .take_events()
+        .into_iter()
+        .map(|e| e.event)
+        .filter(|e| matches!(e, Event::NominationRecorded { .. }))
+        .collect();
+    assert_eq!(recorded.len(), 1, "the repeat and the refusal publish nothing");
+    assert!(
+        matches!(&recorded[0], Event::NominationRecorded { nomination, conversation_held: true, nominees, .. } if nomination == "nom-2" && nominees.len() == 2)
+    );
+
+    // A correction found later: a sibling was nominated from day 5, before either of the others.
+    days(&mut c, 5);
+    let day_5 = start().checked_add_days(chrono::Days::new(5)).unwrap();
+    serve(&mut c, nominate(&id, "nom-0", &[("party-sibling", 100)], day_5, None)).unwrap();
+    let p = &c.state(0).policies[&id];
+    let named = |on: NaiveDate| nominees(p, None, on).iter().map(|n| n.party.0.as_str()).collect::<Vec<_>>();
+    assert!(named(start()).is_empty());
+    assert_eq!(named(day_5), ["party-sibling"]);
+    assert_eq!(named(day_10), ["party-ex"]);
+    assert_eq!(named(day_30.pred_opt().unwrap()), ["party-ex"]);
+    assert_eq!(named(day_30), ["party-kid-a", "party-kid-b"]);
+    // As the record stood on day 10 and on day 30, before the correction was known.
+    assert!(in_force(p, None, day_5, Some(day_30)).is_none());
+    assert_eq!(in_force(p, None, day_30, Some(day_10)).unwrap().id, "nom-1");
+    assert_eq!(in_force(p, None, day_30, Some(day_30)).unwrap().id, "nom-2");
+    assert_eq!(p.nominations.len(), 3, "nothing is edited or removed");
+
+    days(&mut c, 15);
+    let died = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "life", ClaimType::Death, died);
+    let facts = claim(&c, "clm-1").cover_check.clone().unwrap().facts;
+    assert_eq!(facts.nominations.iter().map(|n| (n.party.as_str(), n.share_pct)).collect::<Vec<_>>(), children);
+    ok(&mut c, decide("clm-1", admit(None, None, false)));
+    let due = claim(&c, "clm-1").interests.clone();
+    let pool: i64 = due.iter().map(|i| i.owed_minor).sum();
+    assert_eq!(pool, 500_000_00);
+    assert_eq!(
+        due.iter().map(|i| (i.party.as_str(), i.owed_minor, i.nominated)).collect::<Vec<_>>(),
+        [("party-kid-a", 300_000_00, true), ("party-kid-b", 200_000_00, true)]
+    );
+    clean(&c);
+}
+
+/// Purpose: taking a nomination away is itself recorded, as a nomination that names nobody
+/// from its effective date; it is refused where there is nothing to take away; and a
+/// nomination made for one life governs that life only while the policy-wide one governs
+/// the rest.
+/// Why it matters: an owner who withdraws a nomination expects the benefit to go to the
+/// estate from that day, and the earlier nomination must still be readable for a death
+/// before it. Deleting the record instead would lose who was entitled on the earlier date.
+#[test]
+fn a_nomination_can_be_taken_away_and_made_for_one_life() {
+    use ic_core::nomination::{in_force, nominees};
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    let serve = |c: &mut Cluster, command: Command| c.submit(0, "policy-servicing", command);
+    days(&mut c, 3);
+    let day_3 = c.business_date().unwrap();
+    assert_eq!(code(serve(&mut c, nominate(&id, "nom-x", &[], day_3, None))), "invalid_nomination");
+    serve(&mut c, nominate(&id, "nom-1", &[("party-a", 100)], day_3, None)).unwrap();
+    let life = c.state(0).policies[&id].lives.keys().next().unwrap().clone();
+    let mut for_life = nominate(&id, "nom-life", &[("party-b", 100)], day_3, None);
+    if let Command::Nominate(n) = &mut for_life {
+        n.life = Some(life.clone());
+    }
+    serve(&mut c, for_life).unwrap();
+    days(&mut c, 4);
+    let day_7 = c.business_date().unwrap();
+    serve(&mut c, nominate(&id, "nom-2", &[], day_7, None)).unwrap();
+    let p = &c.state(0).policies[&id];
+    assert_eq!(nominees(p, None, day_3)[0].party.0, "party-a");
+    assert!(nominees(p, None, day_7).is_empty());
+    assert_eq!(in_force(p, None, day_7, None).unwrap().id, "nom-2", "the removal is the record in force");
+    assert_eq!(nominees(p, Some(&life), day_7)[0].party.0, "party-b", "the life's own nomination still stands");
+}
+
+/// Purpose: a policy issued under a leaver's continuation option records the scheme policy
+/// and member it carries on from, only scheme administration may say so, and a claim on the
+/// policy carries the link.
+/// Why it matters: a claim on a continuation policy is assessed with the scheme's claims
+/// history and reinsurance in view. If new business could set the link, or the claim lost it,
+/// the assessor would treat a continued member as a stranger, or a stranger as continued.
+#[test]
+fn a_continuation_policy_carries_its_scheme_membership_to_the_claim() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let mut issue = term_life(
+        n,
+        start(),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        Some(100_000_00),
+        Frequency::Monthly,
+        None,
+    );
+    let id = issue.policy.clone();
+    let link = |policy: &str, life: &str| {
+        Some(ic_core::command::ContinuationOf {
+            policy: PolicyId(policy.into()),
+            life: ic_core::LifeId(life.into()),
+        })
+    };
+    issue.continuation_of = link("scheme-1", "member-7");
+    assert_eq!(code(c.submit(0, "new-business", issue_command(issue.clone()))), "continuation");
+    let mut of_itself = issue.clone();
+    of_itself.continuation_of = link(&id.0, "member-7");
+    assert_eq!(code(c.submit(0, "group-admin", issue_command(of_itself))), "continuation");
+    let mut no_member = issue.clone();
+    no_member.continuation_of = link("scheme-1", "");
+    assert_eq!(code(c.submit(0, "group-admin", issue_command(no_member))), "continuation");
+    assert!(!c.state(0).policies.contains_key(&id));
+
+    c.submit(0, "group-admin", issue_command(issue)).unwrap();
+    assert_eq!(c.state(0).policies[&id].continuation_of, link("scheme-1", "member-7"));
+    days(&mut c, 2);
+    let today = c.business_date().unwrap();
+    ok(&mut c, notification("clm-1", &id, "trauma", ClaimType::Trauma, today));
+    let from = claim(&c, "clm-1").continued_from.clone().unwrap();
+    assert_eq!((from.policy.as_str(), from.life.as_str()), ("scheme-1", "member-7"));
+}

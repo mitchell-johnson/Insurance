@@ -199,6 +199,10 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         policyholder: p.policyholder.0.clone(),
         product_code: p.product_code.clone(),
         product_version: p.product_hash.clone(),
+        continuation_of: p.continuation_of.as_ref().map(|c| ic_claims::port::Continuation {
+            policy: c.policy.to_string(),
+            life: c.life.to_string(),
+        }),
         ..CoverFacts::default()
     };
     // A claim is registered even where the cover is not on the policy: the
@@ -255,6 +259,14 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         priority: i.priority,
     });
     facts.interests = standing_interests.collect();
+    // Then whoever was nominated on the event date, as the record knows it now.
+    facts.nominations = crate::nomination::nominees(p, life_id.as_ref(), on)
+        .iter()
+        .map(|n| ic_claims::port::Nominee {
+            party: n.party.to_string(),
+            share_pct: n.share_pct,
+        })
+        .collect();
     Ok(facts)
 }
 

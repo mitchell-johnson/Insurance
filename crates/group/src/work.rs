@@ -1564,6 +1564,7 @@ impl GroupState {
                 // scheme cover ended, on the product's standard terms.
                 let life = LifeId("L1".to_string());
                 let issue = IssuePolicy {
+                    continuation_of: None,
                     policy: policy.clone(),
                     number,
                     group: group.clone(),
