@@ -16,13 +16,19 @@ use serde_json::Value;
 
 type Asked<'a> = Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'a>>;
 
-pub struct CommissionModule(pub Mutex<(DistributionState, u64)>, pub Mutex<Option<Value>>);
+pub struct CommissionModule(pub Mutex<(DistributionState, u64)>, pub Mutex<Option<Value>>, pub Mutex<Vec<Value>>);
 
 impl CommissionModule {
     /// Answer `replacement_matches` with these rows, in the shape the
     /// module gives, in place of its own (which has none here).
     pub fn matches(&self, rows: Value) {
         *self.1.lock().unwrap() = Some(rows);
+    }
+
+    /// The disputes the module was sent while it answered from scripted
+    /// matches.
+    pub fn disputes(&self) -> Vec<Value> {
+        self.2.lock().unwrap().clone()
     }
 }
 
@@ -51,7 +57,7 @@ pub fn seeded() -> CommissionModule {
         },
     );
     assert_eq!(applied.result, Ok(()), "the business date opens");
-    CommissionModule(Mutex::new((state, 1)), Mutex::new(None))
+    CommissionModule(Mutex::new((state, 1)), Mutex::new(None), Mutex::new(Vec::new()))
 }
 
 impl Source for CommissionModule {
@@ -64,6 +70,25 @@ impl Source for CommissionModule {
     }
 
     fn tell(&self, envelope: Value) -> Asked<'_> {
+        // With scripted matches, a dispute is answered as the module would: accepted once per layer, then refused.
+        if self.1.lock().unwrap().is_some() && envelope["command"].get("dispute_replacement").is_some() {
+            let mut sent = self.2.lock().unwrap();
+            let again = sent.iter().any(|e| e["key"] == envelope["key"]);
+            let layer_twice = sent.iter().any(|e| {
+                e["command"]["dispute_replacement"]["layer"] == envelope["command"]["dispute_replacement"]["layer"]
+                    && e["command"]["dispute_replacement"]["policy"] == envelope["command"]["dispute_replacement"]["policy"]
+                    && e["key"] != envelope["key"]
+            });
+            if !again {
+                sent.push(envelope);
+            }
+            let result = if layer_twice {
+                serde_json::json!({ "Err": { "code": "already_disputed", "message": "that match is already disputed" } })
+            } else {
+                serde_json::json!({ "Ok": null })
+            };
+            return Box::pin(async move { Ok(serde_json::json!({ "result": result, "duplicate": again })) });
+        }
         let applied = (|| {
             let envelope: Envelope = serde_json::from_value(envelope).map_err(|e| format!("{REFUSED}not a command of this module: {e}"))?;
             let mut held = self.0.lock().unwrap();
