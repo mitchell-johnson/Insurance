@@ -100,6 +100,22 @@ pub struct CoverFacts {
     /// such as trauma cover accelerated from life cover.
     #[serde(default)]
     pub reduced_by: Vec<String>,
+    /// What the product's wording does with an income benefit while the
+    /// life is in custody after sentence.
+    #[serde(default)]
+    pub benefit_while_imprisoned: Imprisonment,
+}
+
+/// The product setting `benefit_while_imprisoned`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Imprisonment {
+    /// No benefit for whole days in custody after sentence; the claim, the
+    /// waiver and the cover carry on.
+    #[default]
+    Suspend,
+    /// The benefit is paid as usual.
+    Pay,
 }
 
 /// The scheme and member a continuation policy carries on from.

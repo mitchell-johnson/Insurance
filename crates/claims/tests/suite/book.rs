@@ -1646,3 +1646,81 @@ fn late_interest_is_offered_and_declined_only_by_an_informed_payee() {
         "no_decline"
     );
 }
+
+/// Purpose: an income benefit is suspended for the days the life is in custody after sentence,
+/// by a decision with its own reason code that needs the evidence and a recorded conversation;
+/// days already paid become an overpayment held as a fact; the claim stays in payment with
+/// nothing paid for those days; the review plan waits; and on release the benefit resumes the
+/// next day with no new waiting period. A product whose wording pays in custody refuses it.
+/// Why it matters: persona test CLM-040 and decision 5 of 13 November. The benefit replaces
+/// income lost to disability, not to imprisonment, but the person must leave custody still
+/// insured and still on claim, never declined.
+#[test]
+fn a_benefit_is_suspended_in_custody_and_resumes_on_release() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.on(d(2027, 4, 1));
+    w.pay_run("run-2", d(2027, 4, 1));
+    let review = w
+        .claim("ip-1")
+        .schedule
+        .as_ref()
+        .expect("in payment")
+        .reviews
+        .values()
+        .min()
+        .copied()
+        .expect("a review");
+    w.on(d(2027, 5, 3));
+    let suspend = |evidence: &str| Request::SuspendBenefit {
+        from: d(2027, 4, 16),
+        evidence: evidence.into(),
+    };
+    assert_eq!(w.undecided("ip-1", "ana", suspend("vault-sentence"), "R-OK"), "unknown_reason");
+    assert_eq!(w.undecided("ip-1", "ana", suspend("vault-sentence"), "R-CUSTODY"), "conversation_required");
+    w.conversation("ip-1", "talk-custody");
+    assert_eq!(w.undecided("ip-1", "ana", suspend(""), "R-CUSTODY"), "evidence_required");
+    w.decided("ip-1", "ana", suspend("vault-sentence"), "R-CUSTODY");
+    let c = w.claim("ip-1");
+    assert_eq!(c.status, Status::InPayment, "never a decline");
+    // April 16 to 30 was paid and is owed back: 15 of April's 30 days.
+    assert_eq!((c.overpayments[0].amount_minor, c.overpayments[0].status), (1_500, RecoveryStatus::Held));
+    assert!(!c.due.iter().any(|(_, d)| matches!(d, ic_claims::model::Due::Review(_))), "the reviews wait");
+    assert_eq!(w.core.noticed("benefit_suspended")[0]["from"], "2027-04-16");
+
+    // May: the claim is in the run and nothing is paid for it.
+    w.pay_run("run-3", d(2027, 5, 1));
+    let s = w.claim("ip-1").schedule.clone().expect("in payment");
+    assert_eq!((s.periods[&d(2027, 5, 1)].gross_minor, s.next_period), (0, d(2027, 6, 1)));
+    let resume = |from| Request::ResumeBenefit { from };
+    assert_eq!(w.undecided("ip-1", "ana", resume(d(2027, 4, 10)), "R-CUSTODY"), "not_suspended");
+
+    // Released on 10 June: payable again from the 11th, the reviews 56 days later than planned.
+    w.on(d(2027, 6, 20));
+    w.decided("ip-1", "ana", resume(d(2027, 6, 11)), "R-CUSTODY");
+    let s = w.claim("ip-1").schedule.clone().expect("in payment");
+    assert_eq!(s.reviews.values().min().copied(), review.checked_add_days(chrono::Days::new(56)));
+    w.on(d(2027, 7, 1));
+    w.pay_run("run-4", d(2027, 6, 1));
+    // June: 20 of 30 days, 2,000.
+    assert_eq!(
+        w.claim("ip-1").schedule.as_ref().expect("in payment").periods[&d(2027, 6, 1)].gross_minor,
+        2_000
+    );
+
+    // A product that pays in custody: no suspension.
+    let mut w = World::new();
+    w.core.cover(
+        "pol-2",
+        "ip",
+        ic_claims::port::CoverFacts {
+            sum_insured_minor: 4_000,
+            benefit_while_imprisoned: ic_claims::port::Imprisonment::Pay,
+            ..facts("income_protection")
+        },
+    );
+    w.benefit_in_payment("ip-1");
+    w.conversation("ip-1", "talk-custody");
+    assert_eq!(w.undecided("ip-1", "ana", suspend("vault-sentence"), "R-CUSTODY"), "paid_in_custody");
+}
