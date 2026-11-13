@@ -5,6 +5,7 @@
 use std::future::Future;
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use ic_azure::blob::WormStore;
 use ic_core::invest::{Question, Reply};
 use ic_core::Reject;
@@ -115,6 +116,36 @@ pub struct ClusterModules {
 impl ClusterModules {
     pub fn new(client: ClusterClient, partitions: PartitionId) -> Self {
         Self { client, partitions }
+    }
+
+    /// The underwriting loadings on every layer in force on `as_at`, read
+    /// from each partition's core a page of policies at a time, to put on a
+    /// table dry run's request. They imply health: pass them on and keep
+    /// nothing.
+    pub async fn loadings(&self, as_at: NaiveDate) -> Result<Vec<crate::tables::LayerLoading>, DriverError> {
+        let mut found = Vec::new();
+        for partition in 0..self.partitions {
+            let mut after = None;
+            loop {
+                let page = self
+                    .client
+                    .loadings(partition, after, ic_core::loadings::MAX_PAGE, Some(as_at))
+                    .await
+                    .map_err(|e| DriverError::Unavailable(e.to_string()))?;
+                found.extend(page.rows.into_iter().map(|r| crate::tables::LayerLoading {
+                    partition,
+                    policy: r.policy.to_string(),
+                    cover: r.cover,
+                    layer: r.layer,
+                    loadings: r.loadings,
+                }));
+                after = page.next;
+                if after.is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(found)
     }
 
     /// The core keeps a policy's money on its partition, so a question to

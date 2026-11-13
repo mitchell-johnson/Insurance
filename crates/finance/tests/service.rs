@@ -198,6 +198,8 @@ async fn against_a_real_node(temporal: Option<&str>) {
         assert!(tries < 600, "the closed day did not reach the ledger");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
+    // Nothing on this book was underwritten with a loading: every page of every partition is read and empty.
+    assert_eq!(modules.loadings(day).await.unwrap(), vec![]);
 
     // The core's publisher: the day's signed root, in Blob Storage.
     let fake = FakeAzure::start().await;
