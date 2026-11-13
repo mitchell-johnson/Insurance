@@ -320,7 +320,10 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
     );
     assert_eq!(h.ask(question(Question::AgedHeld { as_at: today }))["items"][0]["action"], json!("vault-doc-7"));
     assert_eq!(h.ask(question(Question::Action { id: "hold-1".into() }))["state"], json!("completed"));
-    assert_eq!(h.ask(question(Question::OpenTasks)).as_array().unwrap().len(), 1, "the review");
+    let open = h.ask(question(Question::OpenTasks));
+    let kinds: Vec<&str> = open.as_array().unwrap().iter().filter_map(|t| t["kind"].as_str()).collect();
+    assert_eq!(kinds.len(), 2, "the review, and a new servicing adviser for the policy: {kinds:?}");
+    assert!(kinds.contains(&"needs_servicing_adviser"));
     assert_eq!(h.ask(question(Question::SweepCheck)), json!({ "green": true, "items": [] }));
     assert!(h.ask(question(Question::ProofOfDebt {
         party: party("fap-one"),

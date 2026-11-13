@@ -1247,6 +1247,20 @@ impl DistributionState {
                 }
             }
             self.move_paid_to_held(ctx, record.effective);
+            // Each customer serviced through the engagements reached needs
+            // a new servicing adviser: one task per policy.
+            for policy in &policies {
+                self.task(
+                    ctx,
+                    "needs_servicing_adviser",
+                    &policy.0,
+                    today,
+                    format!(
+                        "{party}'s licence is {:?} from {}: appoint a new servicing adviser and tell the customer",
+                        record.state, record.effective
+                    ),
+                );
+            }
             let case = format!("conduct-{}-{}", party, record.effective);
             if !self.cases.contains_key(&case) {
                 self.cases.insert(
