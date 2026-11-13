@@ -152,6 +152,11 @@ pub fn seeded() -> ClaimsCore {
 }
 
 impl ClaimsCore {
+    /// Put one more policy's life cover on a partition's stand-in core.
+    pub fn cover(&self, partition: usize, policy: &str) {
+        self.0.lock().unwrap()[partition].core.cover(policy, "life", facts("life"));
+    }
+
     /// What one partition's stand-in core has been asked to do.
     pub fn instructions(&self, partition: usize) -> usize {
         self.0.lock().unwrap()[partition].core.instructions.len()

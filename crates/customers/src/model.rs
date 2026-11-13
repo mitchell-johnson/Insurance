@@ -264,11 +264,44 @@ relationships! {
     Employee => "employee", "party";
     Attorney => "attorney", "party";
     Guardian => "guardian", "party";
+    AuthorisedRepresentative => "authorised_representative", "party";
     Executor => "executor", "party";
     Partner => "partner", "party";
     Parent => "parent", "party";
     Staff => "staff", "party";
 }
+
+impl RelationshipKind {
+    /// Kinds by which one person acts for another, within a scope.
+    pub fn represents(self) -> bool {
+        matches!(
+            self,
+            RelationshipKind::Attorney | RelationshipKind::Guardian | RelationshipKind::AuthorisedRepresentative
+        )
+    }
+}
+
+/// What a representative may be authorised to do for someone.
+pub const REPRESENTATIVE_SCOPES: [&str; 11] = [
+    "view",
+    "pay_premiums",
+    "change_payment_method",
+    "change_contact_details",
+    "change_bank_details",
+    "change_cover",
+    "change_beneficiary",
+    "surrender",
+    "claim",
+    "complain",
+    "all",
+];
+
+/// On what footing a representative acts.
+pub const REPRESENTATIVE_BASES: [&str; 3] = ["enduring_power_of_attorney", "court_order", "written_authority"];
+
+/// Acts that move money or who receives it. A representative doing one of
+/// these for their own benefit goes to a person first.
+pub const SELF_BENEFIT_ACTS: [&str; 4] = ["change_beneficiary", "change_bank_details", "surrender", "claim"];
 
 impl fmt::Display for RelationshipKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -121,7 +121,19 @@ pub enum Change {
     ReleaseHold {
         reference: String,
     },
+    /// A third party's concern about the person: a family member, a friend,
+    /// a professional. It opens a prompt for a trained person to consider a
+    /// marker; nothing about the person is told to whoever raised it.
+    RecordConcern {
+        from: String,
+        about: String,
+    },
 }
+
+/// Who may raise a concern about someone.
+pub const CONCERN_FROM: [&str; 6] = ["family", "friend", "carer", "professional", "staff", "other"];
+/// What a concern may be about.
+pub const CONCERN_ABOUT: [&str; 6] = ["financial_abuse", "capacity", "wellbeing", "bereavement", "coercion", "other"];
 
 impl Change {
     /// The name authorisation and audit use.
@@ -141,6 +153,7 @@ impl Change {
             Change::AssignGroup { .. } => "assign_group",
             Change::PlaceHold { .. } => "place_hold",
             Change::ReleaseHold { .. } => "release_hold",
+            Change::RecordConcern { .. } => "record_concern",
         }
     }
 }
@@ -287,6 +300,7 @@ impl Party {
             EventBody::HoldReleased { reference } => {
                 self.holds.remove(reference);
             }
+            EventBody::ConcernRaised { .. } => {}
             EventBody::Shredded => {
                 let id = std::mem::take(&mut self.id);
                 *self = Party {
@@ -473,6 +487,30 @@ impl Party {
                 if serde_json::to_vec(attributes).map_or(0, |b| b.len()) > 4_096 {
                     return Err(reject("invalid", "relationship attributes are limited to 4 KB"));
                 }
+                if kind.represents() {
+                    let listed = |key: &str, allowed: &[&str]| -> Result<(), Reject> {
+                        let values: Vec<&str> = match attributes.get(key) {
+                            Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
+                            Some(Value::String(v)) => vec![v.as_str()],
+                            _ => vec![],
+                        };
+                        if values.is_empty() || values.iter().any(|v| !allowed.contains(v)) {
+                            return Err(reject("invalid", format!("a representative needs {key} from {}", allowed.join(", "))));
+                        }
+                        Ok(())
+                    };
+                    listed("scope", &crate::model::REPRESENTATIVE_SCOPES)?;
+                    listed("basis", &crate::model::REPRESENTATIVE_BASES)?;
+                    if attributes.get("scope").is_some_and(|v| !v.is_array()) {
+                        return Err(reject("invalid", "scope is a list"));
+                    }
+                    match attributes.get("document").and_then(Value::as_str) {
+                        Some(d) => {
+                            token("the document reference", d)?;
+                        }
+                        None => return Err(reject("invalid", "a representative needs the document that gives the authority")),
+                    }
+                }
                 if *kind == RelationshipKind::Dependant {
                     let controls = attributes.get("controls_from").and_then(|v| validate::date(v).ok());
                     if controls.is_none() {
@@ -656,6 +694,19 @@ impl Party {
                 } else {
                     return Err(reject("not_found", format!("no hold {reference}")));
                 }
+            }
+            Change::RecordConcern { from, about } => {
+                let pick = |what: &str, v: &str, allowed: &[&str]| {
+                    if allowed.contains(&v) {
+                        Ok(v.to_string())
+                    } else {
+                        Err(reject("invalid", format!("{what} is one of {}", allowed.join(", "))))
+                    }
+                };
+                events.push(EventBody::ConcernRaised {
+                    from: pick("from", from, &CONCERN_FROM)?,
+                    about: pick("about", about, &CONCERN_ABOUT)?,
+                });
             }
         }
         Ok(events)

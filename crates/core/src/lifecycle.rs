@@ -198,6 +198,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         notices: BTreeMap::new(),
         cancellation: None,
         avoidance: None,
+        surrender: None,
         variations: Vec::new(),
         pruned: Default::default(),
         migrated: cmd.migrated,

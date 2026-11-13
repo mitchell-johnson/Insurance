@@ -381,11 +381,11 @@ async fn relationships_scope_advisers_and_employers() {
     assert_eq!(first.relationship.as_ref().unwrap().id, "adv-P1");
     // Relationships to parties need the other party to exist.
     let (status, _) = w
-        .command(&client, "staff", add("att", "attorney", json!({ "kind": "party", "id": "pty_nobody" })))
+        .command(&client, "staff", add("att", "partner", json!({ "kind": "party", "id": "pty_nobody" })))
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (status, _) = w
-        .command(&client, "staff", add("att", "attorney", json!({ "kind": "party", "id": adviser })))
+        .command(&client, "staff", add("att", "partner", json!({ "kind": "party", "id": adviser })))
         .await;
     assert_eq!(status, StatusCode::OK);
 }
@@ -822,4 +822,140 @@ async fn an_identity_outage_is_retryable() {
     };
     let (status, _) = elsewhere.get("/v1/reviews", "staff", "servicing").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: a family member's worry about a customer is recorded as a third-party concern,
+/// who raised it and what about and nothing more; the answer to the staff member says
+/// nothing about the person; and it opens a prompt for a trained person to consider a
+/// marker, which can be dismissed but never merged. Values outside the lists are refused.
+/// Why it matters: a daughter worried about her father (matrix VUL-006), or children asking
+/// to limit their parents' withdrawals (VUL-004), have no authority over the policy; the
+/// insurer must listen without disclosing anything, and a person, not a rule, decides on a
+/// marker.
+#[tokio::test]
+async fn a_third_party_concern_opens_a_prompt_and_discloses_nothing() {
+    let w = world_or_skip!();
+    let p = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let concern = json!({ "command": "record_concern", "from": "family", "about": "financial_abuse" });
+    let (status, out) = w.command(&p, "staff", concern.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["concern_raised"]));
+    assert_eq!(out.as_object().unwrap().len(), 3, "party, version and events only: {out}");
+    let (status, _) = w
+        .command(&p, "claims", json!({ "command": "record_concern", "from": "carer", "about": "capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = w.command(&p, "documents", concern).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for bad in [
+        json!({ "command": "record_concern", "from": "neighbour's cousin", "about": "wellbeing" }),
+        json!({ "command": "record_concern", "from": "family", "about": "he has dementia" }),
+    ] {
+        let (status, _) = w.command(&p, "staff", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
+    let prompts: Vec<&Value> = r["reviews"].as_array().unwrap().iter().filter(|r| r["kind"] == "consider_marker").collect();
+    assert_eq!(prompts.len(), 2, "{r}");
+    assert_eq!(prompts[0]["party"], p);
+    assert_eq!(prompts[0]["reason"], "financial_abuse");
+    let id = prompts[0]["id"].as_str().unwrap();
+    let other = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": other, "review": id })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a prompt is not a duplicate review");
+    let (status, _) = w.post(&format!("/v1/reviews/{id}/dismiss"), "staff", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+/// Purpose: a representative (an attorney under an activated enduring power, a welfare
+/// guardian under a court order, someone holding a written authority) is a relationship
+/// that needs its basis, document and scope; the authority question then allows an act
+/// within scope while the authority is in force, refuses before it starts, after it ends,
+/// outside its scope or with no authority at all, and routes to a person an act that would
+/// benefit the representative; each answer names the actor in the audit.
+/// Why it matters: an attorney acting the day before activation (matrix VUL-009), a
+/// partner limited to paying premiums changing the bank account (VUL-013), or an attorney
+/// making herself the beneficiary (VUL-010) must each be stopped, while authority properly
+/// given works for its dated period (VUL-008, VUL-014).
+#[tokio::test]
+async fn representatives_act_only_within_their_authority() {
+    let w = world_or_skip!();
+    let donor = w.person("Beverley", "Ngata", "1941-02-02", &[]).await;
+    let attorney = w.person("Fiona", "Ngata", "1970-07-07", &[]).await;
+    let partner = w.person("Sam", "Ngata", "1969-06-06", &[]).await;
+    let stranger = w.person("Kim", "Other", "1980-01-01", &[]).await;
+    let add = |id: &str, kind: &str, from: &str, to: Option<&str>, scope: Value, basis: &str| {
+        json!({ "command": "add_relationship", "id": id, "kind": kind,
+                "target": { "kind": "party", "id": donor }, "valid_from": from, "valid_to": to,
+                "attributes": { "basis": basis, "document": "doc_123", "scope": scope } })
+    };
+    // Each representative needs a basis, a document and a scope from the lists.
+    for bad in [
+        json!({ "command": "add_relationship", "id": "r0", "kind": "attorney", "target": { "kind": "party", "id": donor }, "valid_from": "2026-03-01" }),
+        add("r0", "attorney", "2026-03-01", None, json!(["everything"]), "enduring_power_of_attorney"),
+        add("r0", "attorney", "2026-03-01", None, json!("view"), "enduring_power_of_attorney"),
+        add("r0", "attorney", "2026-03-01", None, json!(["view"]), "a handshake"),
+    ] {
+        let (status, _) = w.command(&attorney, "staff", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let epa = add(
+        "epa-1",
+        "attorney",
+        "2026-03-01",
+        None,
+        json!(["view", "change_payment_method", "change_beneficiary"]),
+        "enduring_power_of_attorney",
+    );
+    let (status, out) = w.command(&attorney, "staff", epa).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let limited = add(
+        "auth-1",
+        "authorised_representative",
+        "2026-01-01",
+        Some("2026-07-01"),
+        json!(["pay_premiums"]),
+        "written_authority",
+    );
+    let (status, out) = w.command(&partner, "staff", limited).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let ask =
+        |actor: &str, act: &str, on: &str, benefits: bool| format!("/v1/parties/{donor}/authority?actor={actor}&act={act}&on={on}&benefits_actor={benefits}");
+    let world = &w;
+    let decide = |path: String| async move {
+        let (status, out) = world.get(&path, "policy-servicing", "servicing").await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        (out["decision"].as_str().unwrap().to_string(), out["reason"].as_str().unwrap().to_string(), out)
+    };
+    // The day before activation: refused. From activation: within scope.
+    assert_eq!(decide(ask(&attorney, "change_payment_method", "2026-02-28", false)).await.1, "no_authority");
+    let (d, _, out) = decide(ask(&attorney, "change_payment_method", "2026-03-01", false)).await;
+    assert_eq!(d, "allow");
+    assert_eq!(out["relationship"]["basis"], "enduring_power_of_attorney");
+    assert_eq!(out["relationship"]["document"], "doc_123");
+    // Making herself the beneficiary: to a person first.
+    assert_eq!(decide(ask(&attorney, "change_beneficiary", "2026-04-01", true)).await.0, "route");
+    assert_eq!(decide(ask(&attorney, "change_beneficiary", "2026-04-01", false)).await.0, "allow");
+    assert_eq!(decide(ask(&attorney, "surrender", "2026-04-01", false)).await.1, "outside_scope");
+    // Limited to premiums, for its dated period.
+    assert_eq!(decide(ask(&partner, "pay_premiums", "2026-06-30", false)).await.0, "allow");
+    assert_eq!(decide(ask(&partner, "change_bank_details", "2026-06-30", false)).await.1, "outside_scope");
+    assert_eq!(decide(ask(&partner, "change_cover", "2026-06-30", false)).await.0, "refuse");
+    assert_eq!(decide(ask(&partner, "pay_premiums", "2026-07-01", false)).await.1, "no_authority");
+    assert_eq!(decide(ask(&stranger, "view", "2026-04-01", false)).await.1, "no_authority");
+    // Malformed questions and callers the policy does not name.
+    for bad in [
+        ask(&attorney, "all", "2026-04-01", false),
+        ask(&attorney, "fly", "2026-04-01", false),
+        ask("n%2Fbody", "view", "2026-04-01", false),
+    ] {
+        let (status, _) = w.get(&bad, "policy-servicing", "servicing").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    let (status, _) = w.get(&ask(&attorney, "view", "2026-04-01", false), "documents", "notices").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Every answer is in the audit, with the actor.
+    let (_, trail) = w.get(&format!("/v1/parties/{donor}/audit"), "privacy", "audit").await;
+    let lines = trail["audit"].to_string();
+    assert!(lines.contains(&format!("authority:{attorney}:change_beneficiary:route")), "{lines}");
 }

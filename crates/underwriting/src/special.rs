@@ -496,6 +496,42 @@ impl UnderwritingState {
     /// Open the underwriting file to a claims assessor: the decision, its
     /// terms and versions, and where the disclosures are. Logged with the
     /// claim as its purpose. Never to someone who underwrote the life.
+    /// An underwriter reads a life's disclosures: someone accredited for the
+    /// product with no relationship to anyone on it, who holds or has worked
+    /// a case on the life, or a senior. The access is an event before any
+    /// record is read.
+    pub(crate) fn open_disclosures(&mut self, cx: &mut Cx, proposal: &ProposalId, life: &LifeId, underwriter: &str, purpose: &str) -> Result<(), Reject> {
+        if purpose.trim().is_empty() {
+            return reject("purpose", "a disclosure is opened for a stated purpose");
+        }
+        let p = self
+            .proposals
+            .get(proposal)
+            .ok_or_else(|| Reject::new("unknown_proposal", format!("no proposal {proposal}")))?;
+        self.require(p, life, underwriter, CaseAction::Work, &no_subject(p), false)?;
+        let f = life_ref(p, life)?;
+        let on_it = f
+            .cases
+            .iter()
+            .any(|c| c.owner.as_deref() == Some(underwriter) || c.touched_by.contains(underwriter));
+        if !on_it && !self.profile(underwriter)?.senior {
+            return reject("not_authorised", format!("{underwriter} has no case on this life"));
+        }
+        if f.disclosures.is_empty() {
+            return reject("no_disclosure", "the life has given no disclosure");
+        }
+        cx.event(Event::FileAccessed {
+            who: underwriter.to_string(),
+            role: "underwriter".to_string(),
+            purpose: purpose.to_string(),
+            proposal: proposal.clone(),
+            life: Some(life.clone()),
+            documents: f.disclosures.iter().map(|d| d.vault_ref.clone()).collect(),
+        });
+        cx.out.view = Some(View::Disclosures(f.disclosures.clone()));
+        Ok(())
+    }
+
     pub(crate) fn open_file_for_claim(&mut self, cx: &mut Cx, claim_ref: &str, policy: &PolicyId, life: &LifeId, assessor: &str) -> Result<(), Reject> {
         if claim_ref.is_empty() || assessor.is_empty() {
             return reject("purpose", "a file is opened for a named claim by a named assessor");
