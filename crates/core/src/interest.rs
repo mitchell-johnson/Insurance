@@ -180,6 +180,10 @@ pub enum InterestEvent {
         interest: String,
         #[serde(default)]
         kind: InterestKind,
+        /// The policy's owner, whose requests the interest restricts. Absent
+        /// only on events written before it was carried.
+        #[serde(default)]
+        owner: Option<PartyId>,
         party: PartyId,
         notice_received: NaiveDate,
         extent_minor: Option<i64>,
@@ -201,6 +205,10 @@ pub enum InterestEvent {
     Released {
         policy: PolicyId,
         interest: String,
+        #[serde(default)]
+        kind: InterestKind,
+        #[serde(default)]
+        owner: Option<PartyId>,
         party: PartyId,
         effective: NaiveDate,
     },
@@ -270,6 +278,7 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
                 policy: policy.id.clone(),
                 interest: interest.clone(),
                 kind,
+                owner: Some(policy.policyholder.clone()),
                 party: record.party.clone(),
                 notice_received,
                 extent_minor,
@@ -305,6 +314,7 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
             ..
         } => {
             let id = policy.id.clone();
+            let owner = Some(policy.policyholder.clone());
             let today = ctx.date;
             let Some(record) = policy.interests.get_mut(&interest) else {
                 return Err(bad("unknown_interest", format!("{interest} is not recorded on this policy")));
@@ -332,6 +342,8 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
             ctx.emit(Event::Interest(InterestEvent::Released {
                 policy: id,
                 interest,
+                kind: record.kind,
+                owner,
                 party: record.party.clone(),
                 effective,
             }));

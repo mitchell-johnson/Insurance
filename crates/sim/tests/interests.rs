@@ -320,6 +320,10 @@ fn a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction() {
     for policy in [&invested, &term] {
         interest(&mut c, insolvency(policy, None)).unwrap();
     }
+    // Payments keeps payee records by party, so the event names the bankrupt owner.
+    let owner = c.state(0).policies[&term].policyholder.clone();
+    assert!(interest_events(&mut c).iter().any(|e| matches!(e,
+        InterestEvent::Recorded { kind: InterestKind::Insolvency, owner: Some(o), .. } if *o == owner)));
     let s = c.state(0);
     let standing = ranked(&s.policies[&term], start());
     assert_eq!(
@@ -404,10 +408,100 @@ fn a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction() {
 
     // Released on discharge: the owner is paid in the usual way, and nothing is held.
     release(&mut c, &invested, "oa-1", start(), "vault/discharge-1").unwrap();
+    assert!(interest_events(&mut c).iter().any(|e| matches!(
+        e,
+        InterestEvent::Released {
+            kind: InterestKind::Insolvency,
+            owner: Some(_),
+            ..
+        }
+    )));
     payout(&mut c, &invested, "wd-2", PayoutReason::Withdrawal).unwrap();
     assert_eq!(c.state(0).policies[&invested].payouts["wd-2"].state, PayoutState::Owed);
     assert_eq!(
         code(direct(&mut c, "policy-servicing", &invested, "wd-2", "party-oa", "wd-2", "vault/dir-1")),
         "payout_not_held"
     );
+}
+
+/// Purpose: matrix SVC-022. Once the customer master says the owner's own hold stands on a
+/// policy, the core refuses a withdrawal, a surrender and a refund of a credit balance,
+/// from staff as from anyone, while cover carries on, premiums can still be received and a
+/// payout the insurer owes for its own pricing error is still raised. Only the customer
+/// master can say the hold has ended, after which the owner's requests go through again.
+/// Why it matters: decision 3 in `docs/decisions.md`. The hold is a protection a person
+/// asks for against their own worst hour or against a scammer on the phone. Payments stops
+/// the money at the bank, but a surrender that has already sold the units cannot be put
+/// back, so the request itself must be refused where it would start.
+#[test]
+fn an_owners_own_hold_stops_value_leaving_until_the_master_ends_it() {
+    use ic_core::owner_hold::SetOwnerHold;
+    let (mut c, invested, _) = book();
+    let hold = |c: &mut Cluster, caller: &str, held: bool, reference: &str| {
+        let command = SetOwnerHold {
+            policy: invested.clone(),
+            held,
+            reference: reference.to_string(),
+        };
+        c.submit(0, caller, Command::SetOwnerHold(Box::new(command)))
+    };
+    let refund = |c: &mut Cluster, with_claim: Option<&str>| {
+        let command = Command::RefundSuspense {
+            policy: invested.clone(),
+            amount: Money::new(10_00, NZD),
+            with_claim: with_claim.map(str::to_string),
+        };
+        c.submit(0, "policy-servicing", command)
+    };
+    let surrender = |c: &mut Cluster| {
+        let command = InvestCommand::Surrender {
+            policy: invested.clone(),
+            surrender: "sur-1".to_string(),
+            pricing_dates: Default::default(),
+        };
+        c.submit(0, "policy-servicing", Command::Investment(Box::new(command)))
+    };
+    // Staff cannot place or lift it, and it needs the master's reference.
+    assert_eq!(code(hold(&mut c, "policy-servicing", true, "hold-1")), "caller_not_allowed");
+    assert_eq!(code(hold(&mut c, "customer-master", true, "a bad night")), "invalid_hold");
+    c.take_events();
+    hold(&mut c, "customer-master", true, "hold-1").unwrap();
+    hold(&mut c, "customer-master", true, "hold-1").unwrap();
+    let changes = |c: &mut Cluster| -> Vec<bool> {
+        c.take_events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                Event::OwnerHoldChanged { held, .. } => Some(held),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(changes(&mut c), vec![true], "said twice, recorded once");
+    assert_eq!(
+        c.state(0).policies[&invested].owner_hold.as_ref().map(|h| (h.reference.as_str(), h.since)),
+        Some(("hold-1", start()))
+    );
+
+    assert_eq!(code(payout(&mut c, &invested, "wd-1", PayoutReason::Withdrawal)), "customer_hold");
+    assert_eq!(code(surrender(&mut c)), "customer_hold");
+    assert_eq!(code(refund(&mut c, None)), "customer_hold");
+    assert_eq!(code(hold(&mut c, "policy-servicing", false, "hold-1-lifted")), "caller_not_allowed");
+    // What is not the owner taking value out carries on.
+    payout(&mut c, &invested, "fix-1", PayoutReason::PriceRemediation).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: invested.clone(),
+        receipt: "r2".to_string(),
+        amount: Money::new(50_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    assert_eq!(c.state(0).policies[&invested].status, ic_core::PolicyStatus::InForce);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // The master says the cooling-off has run out: the owner's requests go through.
+    hold(&mut c, "customer-master", false, "hold-1-ended").unwrap();
+    assert_eq!(changes(&mut c), vec![false]);
+    assert!(c.state(0).policies[&invested].owner_hold.is_none());
+    payout(&mut c, &invested, "wd-1", PayoutReason::Withdrawal).unwrap();
+    refund(&mut c, None).unwrap();
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }

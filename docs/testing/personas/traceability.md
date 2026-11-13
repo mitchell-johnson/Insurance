@@ -209,7 +209,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-017 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/book.rs::other_income_shows_as_its_own_figure_on_each_benefit_line` |
 | CLM-018 | full | `claims/tests/suite/book.rs::a_late_income_declaration_does_not_stop_the_benefit` |
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
-| CLM-020 | part | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
+| CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
@@ -396,7 +396,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-017 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
-| SVC-022 | part | `payments/tests/hold.rs::only_the_service_records_what_the_master_says`<br>`payments/tests/hold.rs::a_hold_stops_value_leaving_and_nothing_else`<br>`payments/tests/hold.rs::a_refund_is_value_going_out_and_a_claim_is_not`<br>`payments/tests/hold.rs::a_hold_heard_after_the_item_joined_holds_it_at_the_check`<br>`payments/tests/hold.rs::a_payout_waits_for_a_recent_answer_where_one_is_required`<br>`payments/tests/hold.rs::the_pump_watches_every_party_money_is_about_to_go_to`<br>`payments-service/tests/pump.rs::the_pump_hears_a_customers_own_hold_from_the_customer_master`<br>`customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
+| SVC-022 | part | `payments/tests/hold.rs::only_the_service_records_what_the_master_says`<br>`payments/tests/hold.rs::a_hold_stops_value_leaving_and_nothing_else`<br>`payments/tests/hold.rs::a_refund_is_value_going_out_and_a_claim_is_not`<br>`payments/tests/hold.rs::a_hold_heard_after_the_item_joined_holds_it_at_the_check`<br>`payments/tests/hold.rs::a_payout_waits_for_a_recent_answer_where_one_is_required`<br>`payments/tests/hold.rs::the_pump_watches_every_party_money_is_about_to_go_to`<br>`payments-service/tests/pump.rs::the_pump_hears_a_customers_own_hold_from_the_customer_master`<br>`customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off`<br>`sim/tests/interests.rs::an_owners_own_hold_stops_value_leaving_until_the_master_ends_it` |
 | SVC-025 | part | `distribution/tests/replacement.rs::cover_given_up_after_new_cover_was_written_is_matched_looking_back` |
 
 ## ANV The anniversary window

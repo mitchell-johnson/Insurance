@@ -31,6 +31,7 @@ fn recorded(seq: u64, on: NaiveDate, interest: &str, who: &str, from: NaiveDate)
         on,
         CoreEvent::Interest(InterestEvent::Recorded {
             kind: Default::default(),
+            owner: Some(party("owner-1")),
             policy: policy("pol-1"),
             interest: interest.into(),
             party: party(who),
@@ -46,6 +47,8 @@ fn released(seq: u64, on: NaiveDate, interest: &str, who: &str, effective: Naive
         seq,
         on,
         CoreEvent::Interest(InterestEvent::Released {
+            kind: Default::default(),
+            owner: Some(party("owner-1")),
             policy: policy("pol-1"),
             interest: interest.into(),
             party: party(who),

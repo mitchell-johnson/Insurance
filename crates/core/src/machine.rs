@@ -509,7 +509,7 @@ impl CoreState {
             Command::VaryForNonDisclosure { policy, case, terms } => self.with_policy(&policy, true, |_, p| nondisclosure::vary(p, ctx, case, terms)),
             Command::ApproveReinstatement(spec) => {
                 let policy = spec.policy.clone();
-                self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx.date, *spec))
+                self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx, *spec))
             }
             Command::AlterUnderwrittenTerms(spec) => {
                 let policy = spec.policy.clone();
@@ -580,7 +580,13 @@ impl CoreState {
                 self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
             }
             Command::RefundSuspense { policy, amount, with_claim } => {
-                self.with_policy(&policy, true, |s, p| cash::refund_suspense(&mut s.ledger, p, ctx, amount, with_claim))
+                self.with_policy(&policy, true, |s, p| {
+                    // A refund alongside a claim is the insurer settling up, not the owner asking.
+                    if with_claim.is_none() {
+                        crate::owner_hold::permit(p)?;
+                    }
+                    cash::refund_suspense(&mut s.ledger, p, ctx, amount, with_claim)
+                })
             }
             Command::UnwindAfter {
                 policy,
@@ -744,6 +750,10 @@ impl CoreState {
                 let id = command.policy.clone();
                 self.with_policy(&id, true, |_, p| crate::nomination::apply(p, ctx, *command))
             }
+            Command::SetOwnerHold(command) => {
+                let id = command.policy.clone();
+                self.with_policy(&id, true, |_, p| crate::owner_hold::apply(p, ctx, *command))
+            }
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);
@@ -825,6 +835,7 @@ impl CoreState {
                     crate::invest::PayoutReason::PriceRemediation => None,
                 };
                 if let Some(action) = restricted {
+                    crate::owner_hold::permit(p)?;
                     interest::permit(p, ctx.date, action)?;
                 }
                 invest::raise_payout(&mut s.ledger, &mut s.investment, p, ctx, payout, amount_minor, reason)?;
@@ -844,6 +855,7 @@ impl CoreState {
                 // A repeat of the surrender already asked for needs no new consent.
                 let fresh = p.surrender.is_none();
                 if fresh {
+                    crate::owner_hold::permit(p)?;
                     interest::permit(p, ctx.date, RestrictedAction::Surrender)?;
                 }
                 invest::begin_surrender(&s.ledger, &mut s.investment, p, ctx, surrender, &pricing_dates)?;

@@ -555,6 +555,16 @@ fn a_benefit_ends_closes_and_can_recur() {
         reserve_minor: 20_000,
         actor: actor(who),
     };
+    // A recurrence inside the window serves no new waiting period, whatever the cover's is.
+    w.core.cover(
+        "pol-2",
+        "ip",
+        ic_claims::port::CoverFacts {
+            sum_insured_minor: 4_000,
+            waiting_days: 91,
+            ..facts("income_protection")
+        },
+    );
     w.on(d(2027, 6, 1));
     w.ok(recur("ben"));
     let c = w.claim("ip-1");
