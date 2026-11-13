@@ -672,6 +672,7 @@ Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a 
 - The holiday list in `close.star` is New Zealand national holidays for 2026 to 2028, with no regional anniversary day. Is New Zealand right, and which region's day applies? Someone must add each new year.
 - The chart's account codes, the close's due days and aged thresholds, and the shipped return (`config/finance/returns/insurer_quarterly.star`) are placeholders for finance and compliance to replace with the real chart and the regulator's template.
 - The rate tables under `products/rates/` are synthetic.
+- For the appointed actuary: the portfolios and profitability bands under `grouping` in `close.star` (placeholders: one portfolio per line of business, every product "other"); the five-claim floor for the claims by cause extract (`CAUSE_MIN_CELL`); and the age basis for experience (item 5).
 
 ## Area: claims operations (`ic-claims`): state and handover
 
