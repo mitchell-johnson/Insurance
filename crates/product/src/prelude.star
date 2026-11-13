@@ -114,10 +114,18 @@ def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False)
 def multi_cover_discount(min_covers, percent):
     return {"kind": "multi_cover_discount", "min_covers": min_covers, "percent": percent}
 
-def discounts(chain, max_total_percent = None, min_net_annual = None):
+def discounts(chain, max_total_percent = None, min_net_annual = None, override_single_approver_percent = None,
+              override_max_percent = None):
     """The product's discounts in order. Each entry is a discount, additive([...]) or best_of([...])."""
     steps = [s if s.get("kind") in ["additive", "best_of"] else {"kind": "one", "discount": s} for s in chain]
-    return {"kind": "discounts", "chain": steps, "max_total_percent": max_total_percent, "min_net_annual": min_net_annual}
+    return {
+        "kind": "discounts",
+        "chain": steps,
+        "max_total_percent": max_total_percent,
+        "min_net_annual": min_net_annual,
+        "override_single_approver_percent": override_single_approver_percent,
+        "override_max_percent": override_max_percent,
+    }
 
 def discount(code, name, posting_type, basis, condition = None, covers = [], max_annual = None):
     return {

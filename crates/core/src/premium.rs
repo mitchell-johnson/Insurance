@@ -139,15 +139,15 @@ pub(crate) fn retail_premium_with(
     // What of the policy's state the product's discounts are judged on.
     // Entitlements are read as held on the period's first day, or on the
     // later day the cover is priced as it stands on.
-    let held = crate::entitlement::held_on(
-        policy,
-        match layers {
-            Layers::On(day) => day.max(period_start),
-            _ => period_start,
-        },
-    );
+    let read_on = match layers {
+        Layers::On(day) => day.max(period_start),
+        _ => period_start,
+    };
+    let held = crate::entitlement::held_on(policy, read_on);
+    let overrides = crate::discount_override::in_force_on(policy, read_on);
     let covers: std::collections::BTreeSet<&str> = annual.keys().map(|l| l.cover.as_str()).collect();
     let state = PricingState {
+        overrides: &overrides,
         covers: covers.len() as u32,
         lives: lives.len() as u32,
         frequency: policy.frequency,

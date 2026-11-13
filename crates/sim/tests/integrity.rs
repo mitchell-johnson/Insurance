@@ -640,6 +640,20 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             held: true,
             reference: "hold-1".into(),
         })),
+        Command::SetDiscountOverride(Box::new(ic_core::discount_override::SetDiscountOverride {
+            policy: p.clone(),
+            terms: ic_core::discount_override::DiscountOverride {
+                id: "ovr-1".into(),
+                percent: ic_money::DecStr::parse("10").unwrap(),
+                covers: vec!["life".into()],
+                life: None,
+                reason: "retention".into(),
+                from: d(2027, 11, 15),
+                until: d(2028, 11, 15),
+                approver: "staff-1".into(),
+                second_approver: Some("staff-2".into()),
+            },
+        })),
         Command::SetEntitlement(Box::new(ic_core::entitlement::SetEntitlement {
             policy: p.clone(),
             code: "wellness".into(),
@@ -672,7 +686,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 51, "{names:?}");
+    assert_eq!(names.len(), 52, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

@@ -302,6 +302,15 @@ pub enum Feature {
         /// The least the net annual premium can be, in major currency units.
         #[serde(default)]
         min_net_annual: Option<DecStr>,
+        /// The largest approved override, as a percentage, that one
+        /// approver can give. Above it a second approver is needed.
+        /// Absent: every override needs two.
+        #[serde(default)]
+        override_single_approver_percent: Option<DecStr>,
+        /// The largest approved override anyone can give, as a percentage.
+        /// Absent: the product allows no overrides.
+        #[serde(default)]
+        override_max_percent: Option<DecStr>,
     },
     CoolingOff {
         days: u32,

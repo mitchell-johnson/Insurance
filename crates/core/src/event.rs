@@ -765,6 +765,18 @@ pub enum Event {
         until: Option<NaiveDate>,
         reference: String,
     },
+    /// An approved discount was given on a policy, or its end brought
+    /// forward: reported with its size, reason and approvers.
+    DiscountOverrideSet {
+        policy: PolicyId,
+        id: String,
+        percent: ic_money::DecStr,
+        reason: String,
+        from: NaiveDate,
+        until: NaiveDate,
+        approver: String,
+        second_approver: Option<String>,
+    },
     /// A nomination for a death benefit was recorded: a first one, a change
     /// or a removal (no nominees). Parties are opaque IDs.
     NominationRecorded {

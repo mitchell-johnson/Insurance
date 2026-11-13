@@ -333,8 +333,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | DSC-003 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
 | DSC-004 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date`<br>`documents/tests/required_documents.rs::a_lost_discount_is_noticed_before_the_bill_it_raises` |
 | DSC-005 | part | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-006 | full | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
 | DSC-007 | full | `product/tests/products.rs::a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount` |
 | DSC-009 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-010 | part | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
 | DSC-011 | full | `product/tests/products.rs::a_discount_that_could_raise_the_premium_or_cannot_be_explained_does_not_load` |
 
 ## JNT Joint lives, ownership, assignments and dependants

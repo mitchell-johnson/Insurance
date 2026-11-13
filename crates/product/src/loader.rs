@@ -202,10 +202,13 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 chain,
                 max_total_percent,
                 min_net_annual,
+                override_single_approver_percent,
+                override_max_percent,
             } => {
                 let pct = |p: &ic_money::DecStr| p.get() >= Dec::from(0i64) && p.get() <= Dec::from(100i64);
                 let amount = |a: &ic_money::DecStr| a.get() >= Dec::from(0i64);
-                if !max_total_percent.as_ref().is_none_or(pct) || !min_net_annual.as_ref().is_none_or(amount) {
+                let limits_ok = override_single_approver_percent.as_ref().is_none_or(pct) && override_max_percent.as_ref().is_none_or(pct);
+                if !limits_ok || !max_total_percent.as_ref().is_none_or(pct) || !min_net_annual.as_ref().is_none_or(amount) {
                     return Err(invalid(file, "the cap on all discounts is a percentage and the floor is not negative"));
                 }
                 let mut codes = BTreeSet::new();

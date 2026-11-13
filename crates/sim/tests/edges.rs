@@ -1150,3 +1150,136 @@ fn a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date()
     assert_eq!(pol.entitlements[0].until, Some(third_period));
     days(&mut c, 1);
 }
+
+fn override_of(policy: &PolicyId, id: &str, percent: &str, until: NaiveDate, second: Option<&str>) -> Command {
+    Command::SetDiscountOverride(Box::new(ic_core::discount_override::SetDiscountOverride {
+        policy: policy.clone(),
+        terms: ic_core::discount_override::DiscountOverride {
+            id: id.to_string(),
+            percent: ic_money::DecStr::parse(percent).unwrap(),
+            covers: vec![],
+            life: None,
+            reason: "retention".to_string(),
+            from: d(2027, 12, 15),
+            until,
+            approver: "officer-1".to_string(),
+            second_approver: second.map(str::to_string),
+        },
+    }))
+}
+
+/// Purpose: matrix DSC-006 and DSC-010. A retention discount is an approved override with a
+/// reason code and a date range: within the product's limit for one approver it is given on
+/// one approval; above that limit it is refused until a second, different approver is named;
+/// above the product's most it is refused whoever approves; and a product that sets no limit
+/// allows none. Once given it is its own line on each bill whose period starts inside its
+/// dates, it is reported on the event feed with its size, reason and approvers, it is still
+/// on the policy after a lapse, one dated today reaches the period already billed, and the one
+/// change allowed to it afterwards is an earlier end, which bills the days after it again.
+/// Why it matters: a one-off discount is where pricing discipline leaks. The limits make a
+/// large one a two-person decision, the dates stop it running for ever, and the record lets
+/// the insurer show who was given what and why. A lapse that silently dropped it would
+/// rebill a customer more than they were promised when they came back.
+#[test]
+fn a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates() {
+    let mut c = cluster(1);
+    // The shipped product sets no limit, so it allows no overrides.
+    let plain = standard(&mut c, 1);
+    let end = d(2028, 3, 15);
+    assert_eq!(
+        code(c.submit(0, "collections", override_of(&plain, "ovr-0", "5", end, None))),
+        "overrides_not_offered"
+    );
+
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", "code = \"term-life-ovr\"")
+        .replace(
+            "multi_cover_discount(min_covers = 2, percent = \"5\"),",
+            "discounts(chain = [], override_single_approver_percent = \"10\", override_max_percent = \"25\"),",
+        );
+    let product = load_product("term_life_ovr.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let mut issue = term_life(8, start(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+    issue.product_code = "term-life-ovr".to_string();
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let full = latest_bill(&c, &id);
+    let premium = full - 6_00;
+
+    let refused = |c: &mut Cluster, command| code(c.submit(0, "collections", command));
+    assert_eq!(refused(&mut c, override_of(&id, "ovr-1", "20", end, None)), "second_approver_required");
+    assert_eq!(
+        refused(&mut c, override_of(&id, "ovr-1", "20", end, Some("officer-1"))),
+        "second_approver_required"
+    );
+    assert_eq!(refused(&mut c, override_of(&id, "ovr-1", "30", end, Some("manager-1"))), "override_too_large");
+    assert_eq!(refused(&mut c, override_of(&id, "ovr-1", "0", end, Some("manager-1"))), "override_too_large");
+    assert_eq!(
+        refused(&mut c, override_of(&id, "ovr-1", "20", d(2027, 12, 15), Some("manager-1"))),
+        "invalid_override"
+    );
+    assert!(
+        c.submit(0, "wellness", override_of(&id, "ovr-1", "5", end, None)).is_err(),
+        "not a caller that gives overrides"
+    );
+    assert!(c.state(0).policies[&id].discount_overrides.is_empty());
+
+    // Twenty per cent from the second period to 15 March, on two approvals.
+    c.submit(0, "collections", override_of(&id, "ovr-1", "20", end, Some("manager-1"))).unwrap();
+    assert!(events(&c).iter().any(|e| matches!(e,
+        Event::DiscountOverrideSet { reason, approver, second_approver: Some(second), .. }
+            if reason == "retention" && approver == "officer-1" && second == "manager-1")));
+    assert_eq!(outstanding(&c, &id), full, "dated for the next period, it changes nothing billed");
+    assert_eq!(
+        refused(&mut c, override_of(&id, "ovr-1", "20", d(2028, 6, 15), Some("manager-1"))),
+        "override_exists"
+    );
+    assert_eq!(refused(&mut c, override_of(&id, "ovr-1", "15", end, Some("manager-1"))), "override_exists");
+
+    pay(&mut c, &id, "r-1", full);
+    days(&mut c, 30);
+    let discounted = latest_bill(&c, &id);
+    assert!(
+        (i128::from(full - discounted) - i128::from(premium) / 5).abs() <= 1,
+        "{discounted} against {full}"
+    );
+    let given = accounts::discounts_given("term-life-ovr", NZD).id;
+    assert_eq!(-c.state(0).ledger.natural_balance(&given), i128::from(full - discounted));
+
+    // Unpaid, the policy lapses, and the override is still on it for a reinstatement to find.
+    days(&mut c, 95);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::Lapsed);
+    assert_eq!(c.state(0).policies[&id].discount_overrides.len(), 1, "a lapse does not take the override away");
+
+    // An override dated today reaches the period already billed.
+    let today = c.business_date().unwrap();
+    assert!(today > end, "by now its own end date has passed");
+    let other = {
+        let mut issue = term_life(9, today, d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+        issue.product_code = "term-life-ovr".to_string();
+        let other = issue.policy.clone();
+        c.submit(0, "new-business", issue_command(issue)).unwrap();
+        other
+    };
+    let mut short = override_of(&other, "ovr-2", "10", d(2029, 1, 1), None);
+    if let Command::SetDiscountOverride(o) = &mut short {
+        o.terms.from = today;
+    }
+    let whole = latest_bill(&c, &other);
+    c.submit(0, "collections", short.clone()).unwrap();
+    let after = outstanding(&c, &other);
+    assert!(after < whole, "dated today, it reaches the period already billed");
+    // Ten days on its end date is brought forward to that day: the ten days are kept and
+    // the rest of the period already billed is billed again.
+    pay(&mut c, &other, "r-o", after);
+    days(&mut c, 10);
+    let stop = c.business_date().unwrap();
+    if let Command::SetDiscountOverride(o) = &mut short {
+        o.terms.until = stop;
+    }
+    c.submit(0, "collections", short).unwrap();
+    let billed_again = outstanding(&c, &other);
+    assert!(0 < billed_again && billed_again < whole - after, "{billed_again} of {}", whole - after);
+    assert_eq!(c.state(0).policies[&other].discount_overrides[0].until, stop);
+    days(&mut c, 1);
+}

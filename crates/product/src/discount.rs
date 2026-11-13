@@ -120,6 +120,18 @@ pub struct PricingState<'a> {
     pub lives: u32,
     pub frequency: Frequency,
     pub entitlements: &'a [Held],
+    /// Approved overrides in force: each runs after the product's own
+    /// chain, on what it left, and is held to the same cap and floor.
+    pub overrides: &'a [Override],
+}
+
+/// An approved, per-policy discount in force on the day a period is priced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Override {
+    /// Its code, name, posting type, covers and percentage or amount.
+    pub discount: Discount,
+    /// The one life whose cover it reduces. Absent: every life's.
+    pub life: Option<String>,
 }
 
 /// A discount that applied, with what it took off each line's annual premium.
@@ -163,8 +175,8 @@ enum Rate {
 /// A discount's rate on one line, where the line is in its scope and its
 /// condition holds there. An entitlement held by a life reaches that life's
 /// lines only; one held by the policy reaches them all.
-fn rate(d: &Discount, state: &PricingState<'_>, line: &Line) -> Option<Rate> {
-    if !(d.covers.is_empty() || d.covers.contains(&line.cover)) {
+fn rate(d: &Discount, state: &PricingState<'_>, line: &Line, only: Option<&String>) -> Option<Rate> {
+    if !(d.covers.is_empty() || d.covers.contains(&line.cover)) || only.is_some_and(|life| life != &line.life) {
         return None;
     }
     let held = |code: &String| {
@@ -199,7 +211,18 @@ fn rate(d: &Discount, state: &PricingState<'_>, line: &Line) -> Option<Rate> {
 /// than is left on a line, and never more in all than the discount's own
 /// cap. `None` where it reaches no line.
 fn reduction(d: &Discount, state: &PricingState<'_>, of: &BTreeMap<Line, Dec>, left: &BTreeMap<Line, Dec>) -> Option<BTreeMap<Line, Dec>> {
-    let rates: Vec<(&Line, &Dec, Rate)> = left.iter().filter_map(|(line, v)| rate(d, state, line).map(|r| (line, v, r))).collect();
+    reduction_for(d, state, of, left, None)
+}
+
+/// The same, for a discount that reaches the lines of one life only.
+fn reduction_for(
+    d: &Discount,
+    state: &PricingState<'_>,
+    of: &BTreeMap<Line, Dec>,
+    left: &BTreeMap<Line, Dec>,
+    only: Option<&String>,
+) -> Option<BTreeMap<Line, Dec>> {
+    let rates: Vec<(&Line, &Dec, Rate)> = left.iter().filter_map(|(line, v)| rate(d, state, line, only).map(|r| (line, v, r))).collect();
     if rates.is_empty() {
         return None;
     }
@@ -277,6 +300,12 @@ pub fn apply(chain: &[DiscountStep], limits: Limits<'_>, base: &BTreeMap<Line, D
                     out.push(applied(d, taken));
                 }
             }
+        }
+    }
+    for o in state.overrides {
+        if let Some(taken) = reduction_for(&o.discount, state, &left, &left, o.life.as_ref()) {
+            take(&mut left, &taken);
+            out.push(applied(&o.discount, taken));
         }
     }
     // The cap on the total and the floor under the net, taken back from the

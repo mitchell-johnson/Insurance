@@ -166,6 +166,7 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
         lives: 1,
         frequency,
         entitlements: &[],
+        overrides: &[],
     };
     modal_premium_with(product, annual_by_cover, &state)
 }
@@ -239,6 +240,7 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
                 chain: steps,
                 max_total_percent,
                 min_net_annual,
+                ..
             } => {
                 chain.extend(steps.iter().cloned());
                 limits = Limits {

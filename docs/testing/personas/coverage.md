@@ -64,7 +64,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 44 | 1 | 0 | 1 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
-| DSC Discounts and pricing components | 7 | 1 | 3 | 1 |
+| DSC Discounts and pricing components | 8 | 2 | 1 | 1 |
 | SVC Policy servicing | 5 | 5 | 16 | 5 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **335** | **100** | **142** | **105** |
+| **Total** | **336** | **101** | **140** | **105** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 33 | 26 | 10 |
 | B | 107 | 19 | 16 |
-| C | 193 | 52 | 101 |
+| C | 194 | 53 | 99 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
