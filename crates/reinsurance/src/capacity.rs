@@ -34,6 +34,12 @@ pub struct CapacityRequest {
     /// treaty's exclusions.
     #[serde(default)]
     pub risk_codes: Vec<String>,
+    /// For an excess over a scheme's retention: the reference of the
+    /// module's `RequireUnderwrittenExcess` notice
+    /// (`UWX/<cover key>/<amount>`), so a person can find the reservation
+    /// underwriting it ([`Reinsurance::excess_underwriting`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_reference: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -376,6 +382,16 @@ impl Reinsurance {
 
     /// The capacity answer for a reservation, as things stand now. `None`
     /// once the reservation has been released or its cover has arrived.
+    /// The reservations underwriting the excess a `RequireUnderwrittenExcess`
+    /// notice named, oldest key first, with where each has got to.
+    pub fn excess_underwriting(&self, reference: &str) -> Vec<(String, ReservationStatus)> {
+        self.reservations
+            .iter()
+            .filter(|(_, r)| r.request.excess_reference.as_deref() == Some(reference))
+            .map(|(key, r)| (key.clone(), r.status.clone()))
+            .collect()
+    }
+
     pub fn capacity(&self, id: &str) -> Option<CapacityAnswer> {
         let r = self.reservations.get(id)?;
         let key = reservation_risk_key(id, &r.request.cover_code);

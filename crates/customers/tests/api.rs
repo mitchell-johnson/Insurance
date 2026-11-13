@@ -962,3 +962,235 @@ async fn representatives_act_only_within_their_authority() {
     let lines = trail["audit"].to_string();
     assert!(lines.contains(&format!("authority:{attorney}:change_beneficiary:route")), "{lines}");
 }
+
+/// Purpose: a death opens a prompt for a person to consider a bereavement marker for
+/// whoever is left (the other owner of a joint policy, and a partner recorded either way),
+/// never a marker itself; an ended co-ownership, an unrelated owner and the person who
+/// died get no prompt, and a second death record does not open a second prompt while one
+/// is open. Persona row VUL-015.
+/// Why it matters: a bereaved joint owner is often vulnerable at exactly the moment the
+/// insurer contacts them about the claim, and a marker set without a person's judgement
+/// would label someone who never asked for it.
+#[tokio::test]
+async fn a_death_prompts_a_person_to_consider_the_bereaved() {
+    let w = world_or_skip!();
+    let died = w.person("Wiremu", "Kingi", "1950-01-01", &[]).await;
+    let joint = w.person("Mere", "Kingi", "1952-02-02", &[]).await;
+    let partner = w.person("Aroha", "Kingi", "1955-03-03", &[]).await;
+    let former = w.person("Rangi", "Kingi", "1951-04-04", &[]).await;
+    let stranger = w.person("Sam", "Other", "1960-05-05", &[]).await;
+    let own = |id: &str, policy: &str, to: Option<&str>| {
+        json!({ "command": "add_relationship", "id": id, "kind": "owner", "target": { "kind": "policy", "id": policy },
+                "valid_from": "2020-01-01", "valid_to": to })
+    };
+    for (who, rel) in [
+        (&died, own("o1", "JP1", None)),
+        (&joint, own("o2", "JP1", None)),
+        (&former, own("o3", "JP1", Some("2021-01-01"))),
+        (&stranger, own("o4", "P9", None)),
+        (
+            &partner,
+            json!({ "command": "add_relationship", "id": "pt", "kind": "partner",
+                    "target": { "kind": "party", "id": died }, "valid_from": "2020-01-01" }),
+        ),
+    ] {
+        let (status, out) = w.command(who, "staff", rel).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let (status, out) = w
+        .command(&died, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-01" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let prompted = || async {
+        let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
+        let mut out: Vec<(String, String)> = r["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] == "consider_marker")
+            .map(|r| (r["party"].as_str().unwrap().to_string(), r["reason"].as_str().unwrap().to_string()))
+            .collect();
+        out.sort();
+        out
+    };
+    let mut expected = vec![(joint.clone(), "bereavement".to_string()), (partner.clone(), "bereavement".to_string())];
+    expected.sort();
+    assert_eq!(prompted().await, expected);
+    // No marker is set by the prompt.
+    let (_, record) = w.get(&format!("/v1/parties/{joint}"), "staff", "vulnerability_support").await;
+    assert!(record["facts"].get("vulnerability").is_none(), "{record}");
+    // Withdrawn and recorded again: still one prompt each while it is open.
+    let (status, _) = w.command(&died, "claims", json!({ "command": "retract_death", "reason": "wrong date" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = w
+        .command(&died, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-02" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(prompted().await, expected);
+}
+
+/// Purpose: when someone questions whether a person can make their own decisions, every
+/// representative's act is routed to a person (reason `capacity_in_question`) whatever
+/// their authority says, before or after it is activated, while someone with no
+/// authority is still refused; other services go on reading the record; only legal
+/// settles the question, with an outcome from the list, and then authority applies as
+/// before. Persona row VUL-018.
+/// Why it matters: an attorney acting on a power whose trigger is disputed, or before
+/// legal has looked, can move money the person never agreed to; stopping cover or claims
+/// while the question is open would harm the person instead.
+#[tokio::test]
+async fn a_capacity_question_pauses_representatives() {
+    let w = world_or_skip!();
+    let donor = w.person("Beverley", "Ngata", "1941-02-02", &[]).await;
+    let attorney = w.person("Fiona", "Ngata", "1970-07-07", &[]).await;
+    let stranger = w.person("Kim", "Other", "1980-01-01", &[]).await;
+    let epa = json!({ "command": "add_relationship", "id": "epa", "kind": "attorney",
+        "target": { "kind": "party", "id": donor }, "valid_from": "2026-03-01",
+        "attributes": { "basis": "enduring_power_of_attorney", "document": "doc_9", "scope": ["change_payment_method"] } });
+    let (status, out) = w.command(&attorney, "staff", epa).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let decide = |actor: String, on: &'static str| {
+        let w = &w;
+        let path = format!("/v1/parties/{donor}/authority?actor={actor}&act=change_payment_method&on={on}");
+        async move {
+            let (status, out) = w.get(&path, "policy-servicing", "servicing").await;
+            assert_eq!(status, StatusCode::OK, "{out}");
+            (out["decision"].as_str().unwrap().to_string(), out["reason"].as_str().unwrap().to_string())
+        }
+    };
+    assert_eq!(decide(attorney.clone(), "2026-04-01").await, ("allow".into(), "within_scope".into()));
+    // Documents cannot raise it; staff can, once.
+    let (status, _) = w.command(&donor, "documents", json!({ "command": "question_capacity" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, out) = w.command(&donor, "staff", json!({ "command": "question_capacity" })).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["capacity_questioned"]));
+    let (_, out) = w.command(&donor, "claims", json!({ "command": "question_capacity" })).await;
+    assert_eq!(out["events"], json!([]), "asked again, nothing new");
+    for on in ["2026-02-01", "2026-04-01"] {
+        assert_eq!(decide(attorney.clone(), on).await, ("route".into(), "capacity_in_question".into()), "{on}");
+    }
+    assert_eq!(decide(stranger.clone(), "2026-04-01").await, ("refuse".into(), "no_authority".into()));
+    // Cover and claims go on: documents still reach the person.
+    let (status, _) = w
+        .get(
+            &format!("/v1/parties/{donor}/contact-points?purpose=notices&channel=post"),
+            "documents",
+            "notices",
+        )
+        .await;
+    assert_ne!(status, StatusCode::FORBIDDEN);
+    // Only legal settles it, with an outcome from the list.
+    let (status, _) = w
+        .command(&donor, "staff", json!({ "command": "settle_capacity", "outcome": "lacks_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = w.command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "unsure" })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, out) = w
+        .command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "lacks_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(decide(attorney.clone(), "2026-04-01").await, ("allow".into(), "within_scope".into()));
+    let (status, _) = w
+        .command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "has_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing open to settle");
+}
+
+/// Purpose: a welfare guardian's actions under a court order are limited to its scope,
+/// and privacy can produce a dated report of everything the guardian did as the actor
+/// and every authority question asked about them, across the people they act for; no
+/// one else can read it. Persona row VUL-011.
+/// Why it matters: a guardian must be able to account to the court and the family for
+/// every action taken, and the insurer must be able to show it acted only within the
+/// order.
+#[tokio::test]
+async fn a_guardian_gets_a_report_of_their_actions() {
+    let w = world_or_skip!();
+    let michael = w.person("Michael", "Hohaia", "1990-01-01", &[]).await;
+    let guardian = w.person("Huia", "Hohaia", "1962-02-02", &[]).await;
+    let order = json!({ "command": "add_relationship", "id": "wg", "kind": "guardian",
+        "target": { "kind": "party", "id": michael }, "valid_from": "2026-01-01",
+        "attributes": { "basis": "court_order", "document": "doc_order", "scope": ["view", "change_contact_details"] } });
+    let (status, out) = w.command(&guardian, "staff", order).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // A change she sends as the actor, through servicing.
+    let (status, out) = w
+        .send(Call {
+            method: "POST",
+            path: format!("/v1/parties/{michael}/commands"),
+            role: "staff",
+            purpose: None,
+            body: Some(json!({ "command": "record", "facts": [{ "field": "email", "value": "michael@example.nz" }] })),
+            headers: vec![("x-ic-actor", guardian.clone())],
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // Within the order's scope, and outside it.
+    for (act, decision) in [("change_contact_details", "allow"), ("surrender", "refuse")] {
+        let (_, out) = w
+            .get(
+                &format!("/v1/parties/{michael}/authority?actor={guardian}&act={act}&on=2026-06-01"),
+                "policy-servicing",
+                "servicing",
+            )
+            .await;
+        assert_eq!(out["decision"], decision, "{act}");
+    }
+    let (status, report) = w.get(&format!("/v1/actors/{guardian}/actions"), "privacy", "audit").await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let actions: Vec<String> = report["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["line"]["action"].as_str().unwrap().to_string())
+        .collect();
+    assert!(actions.contains(&"record".to_string()), "{actions:?}");
+    assert!(actions.contains(&format!("authority:{guardian}:change_contact_details:allow")), "{actions:?}");
+    assert!(actions.contains(&format!("authority:{guardian}:surrender:refuse")), "{actions:?}");
+    assert!(report["actions"].as_array().unwrap().iter().all(|a| a["at"].is_string()), "every line is dated");
+    let (status, _) = w.get(&format!("/v1/actors/{guardian}/actions"), "staff", "audit").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = w.get("/v1/actors/n%2Fbody/actions", "privacy", "audit").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+/// Purpose: gender is kept as the person tells it, in any words (here "takatāpui" and
+/// "non-binary"), apart from anything used to rate cover: it is read back exactly, a
+/// change is history like any other fact, an over-long value is refused, and it plays
+/// no part in finding or matching the person. Decision 1 in docs/decisions.md
+/// (persona row PRD-011, whose rating side is underwriting's).
+/// Why it matters: nobody should have to pick a category that is not theirs to be
+/// insured, and a gender recorded for respect must never leak into price or identity
+/// matching.
+#[tokio::test]
+async fn gender_is_recorded_in_the_persons_words_and_never_matched() {
+    let w = world_or_skip!();
+    let p = w.person("Tama", "Rewi", "1988-08-08", &[("gender", json!("takatāpui"))]).await;
+    let (status, record) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert_eq!(status, StatusCode::OK, "{record}");
+    assert_eq!(record["facts"]["gender"]["value"], "takatāpui");
+    let id = ic_customers::model::PartyId(p.clone());
+    let before = ic_customers::matching::party_keys(&w.app.store.load(&id).await.unwrap().unwrap(), w.app.store.index_key());
+    let (status, out) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [{ "field": "gender", "value": "non-binary" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let after = ic_customers::matching::party_keys(&w.app.store.load(&id).await.unwrap().unwrap(), w.app.store.index_key());
+    assert_eq!(before, after, "gender is not an index or matching key");
+    let (_, record) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
+    assert_eq!(record["facts"]["gender"]["value"], "non-binary");
+    let (status, _) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [{ "field": "gender", "value": "x".repeat(101) }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}

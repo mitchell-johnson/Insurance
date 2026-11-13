@@ -50,13 +50,7 @@ The library was chosen for awkward lives, and the insurance histories lean into 
 
 ## Design gaps the personas exposed
 
-These are stories the design notes do not yet answer. Each has a test that is held open on purpose.
-
-1. **Sex as a rating factor for a non-binary life** (P49, `PRD-011`).
-2. **Whether a payee may decline late-payment interest**, and how that posts (P12, `CLM-037`).
-3. **A customer-set hold on refunds and surrenders** with a cooling-off on removal. The design has a staff-recorded vulnerability pause but nothing the customer sets (P52, `SVC-022`).
-4. **Bankruptcy**: how an insolvency official's claim on a surrender value is recorded and enforced (N5, `JNT-029`).
-5. **Imprisonment** and its effect on an income protection claim (N6, `CLM-040`).
+Five stories asked things the design notes did not answer. Mitchell delegated them on 13 Nov 2026 and they are decided, with reasons, in `docs/decisions.md` under "Five questions the persona tests raised": rating a non-binary life (`PRD-011`), declining late-payment interest (`CLM-037`), a customer-set hold on money going out (`SVC-022`), bankruptcy (`JNT-029`) and imprisonment during an income protection claim (`CLM-040`). Their matrix rows now state the decided behaviour.
 
 Four more are assumptions made here that the design should confirm:
 

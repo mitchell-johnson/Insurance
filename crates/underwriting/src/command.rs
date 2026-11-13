@@ -570,7 +570,7 @@ impl Command {
             | ActivateDelegatedAuthority { .. } => &["config"],
             // Group administration opens a proposal only for a member's cover
             // above the automatic acceptance limit, and may withdraw it.
-            OpenProposal(_) => &["new-business", "migration", "group-admin"],
+            OpenProposal(_) => &["new-business", "migration", "group-admin", "collections"],
             SubmitDisclosure(_) => &["new-business", "migration"],
             Withdraw { .. } => &["new-business", "group-admin"],
             RecordConsent { .. } | PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => {

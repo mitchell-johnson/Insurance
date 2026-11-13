@@ -182,6 +182,16 @@ pub struct Call<'a> {
 }
 
 impl World {
+    /// Another store on the same database and Key Vault, under other index
+    /// keys: the service as it runs while its index key is being changed.
+    pub async fn store_with(&self, current: &str, next: Option<&str>) -> Store<KeyVaultWrapper> {
+        let pool = db::open(self.db.connector.clone(), 4).await.unwrap();
+        let ring = KeyRing::new(KeyVaultWrapper::new(&self.azure.base, "customers-kek", AzureCredential::static_token(TOKEN)));
+        Store::new(pool, ring, IndexKey::new(current.as_bytes()).unwrap())
+            .with_next_index(next.map(|k| IndexKey::new(k.as_bytes()).unwrap()))
+            .unwrap()
+    }
+
     pub fn token(&self, role: &str) -> String {
         token_with(&self.authority, &[role], AUDIENCE)
     }

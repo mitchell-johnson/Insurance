@@ -71,6 +71,13 @@ pub enum EventBody {
         from: String,
         about: String,
     },
+    /// Whether the person can make their own decisions has been put in
+    /// question. Representatives' acts wait for it to be settled.
+    CapacityQuestioned,
+    /// The question is settled: `has_capacity` or `lacks_capacity`.
+    CapacitySettled {
+        outcome: String,
+    },
     /// The party's key was destroyed. Written in the clear, with no payload.
     Shredded,
 }
@@ -98,6 +105,8 @@ impl EventBody {
             EventBody::HoldPlaced { .. } => "hold_placed",
             EventBody::HoldReleased { .. } => "hold_released",
             EventBody::ConcernRaised { .. } => "concern_raised",
+            EventBody::CapacityQuestioned => "capacity_questioned",
+            EventBody::CapacitySettled { .. } => "capacity_settled",
             EventBody::Shredded => "shredded",
         }
     }
@@ -119,7 +128,12 @@ impl EventBody {
     pub fn is_priority(&self) -> bool {
         matches!(
             self,
-            EventBody::RelationshipEnded { .. } | EventBody::Deceased { .. } | EventBody::MergedInto { .. } | EventBody::Unmerged { .. } | EventBody::Shredded
+            EventBody::RelationshipEnded { .. }
+                | EventBody::Deceased { .. }
+                | EventBody::CapacityQuestioned
+                | EventBody::MergedInto { .. }
+                | EventBody::Unmerged { .. }
+                | EventBody::Shredded
         ) || matches!(self, EventBody::ConsentSet(c) if !c.granted)
     }
 }
