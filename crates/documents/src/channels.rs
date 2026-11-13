@@ -118,10 +118,13 @@ impl ContactDirectory for HttpDirectory {
     }
 }
 
-/// A directory held in memory, for the insurance in a box and tests.
+/// A directory held in memory, for the insurance in a box and tests. Like
+/// the customer master, a contact point chosen for a relationship is used
+/// for it, and the party's own otherwise.
 #[derive(Clone, Default)]
 pub struct MemoryDirectory {
     contacts: Arc<Mutex<BTreeMap<(String, Channel), Contact>>>,
+    for_relationship: Arc<Mutex<BTreeMap<(String, String, Channel), Contact>>>,
     down: Arc<Mutex<bool>>,
 }
 
@@ -142,6 +145,14 @@ impl MemoryDirectory {
         self.set_contact(party, channel, contact);
     }
 
+    /// The contact point the party chose for one relationship.
+    pub fn set_for(&self, party: &str, relationship: &str, channel: Channel, contact: Contact) {
+        self.for_relationship
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert((party.to_string(), relationship.to_string(), channel), contact);
+    }
+
     pub fn remove(&self, party: &str, channel: Channel) {
         self.contacts
             .lock()
@@ -155,9 +166,20 @@ impl MemoryDirectory {
 }
 
 impl ContactDirectory for MemoryDirectory {
-    async fn contact(&self, party: &PartyId, _relationship: Option<&str>, channel: Channel) -> Result<Option<Contact>, DirectoryError> {
+    async fn contact(&self, party: &PartyId, relationship: Option<&str>, channel: Channel) -> Result<Option<Contact>, DirectoryError> {
         if *self.down.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
             return Err(DirectoryError::Unavailable("the directory is down".into()));
+        }
+        if let Some(relationship) = relationship {
+            let chosen = self
+                .for_relationship
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .get(&(party.to_string(), relationship.to_string(), channel))
+                .cloned();
+            if chosen.is_some() {
+                return Ok(chosen);
+            }
         }
         Ok(self
             .contacts

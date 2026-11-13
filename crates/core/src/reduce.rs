@@ -54,10 +54,13 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
         .filter(|l| l.life == spec.life && l.in_force_on(effective))
         .map(|l| l.sum_insured_minor)
         .sum();
-    if held == 0 {
+    // A cover priced per life has no sum insured, so it is the layers that
+    // say whether the life holds it.
+    let holds = cover.layers.iter().any(|l| l.life == spec.life && l.in_force_on(effective));
+    if !holds {
         return Err(Reject::new("unknown_life", format!("life {} has no {} cover in force", spec.life, spec.cover)));
     }
-    if spec.sum_insured_minor < 0 || spec.sum_insured_minor >= held {
+    if spec.sum_insured_minor < 0 || (spec.sum_insured_minor > 0 && spec.sum_insured_minor >= held) {
         return Err(Reject::new(
             "not_a_reduction",
             "the amount to keep is zero or more and below the cover in force",
@@ -76,6 +79,19 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
         if !other {
             return Err(Reject::new("last_cover", "this is the only cover on the policy; cancel the policy instead"));
         }
+        // What the life would be left holding must still be a set the
+        // product allows: a cover others depend on is not dropped first.
+        let left: std::collections::BTreeSet<&str> = policy
+            .covers
+            .iter()
+            .filter(|(code, c)| {
+                *code != &spec.cover && c.status == CoverStatus::InForce && c.layers.iter().any(|l| l.in_force_on(effective) && l.life == spec.life)
+            })
+            .map(|(code, _)| code.as_str())
+            .collect();
+        product
+            .check_composition(&left)
+            .map_err(|e| Reject::new("composition", format!("without {}: {e}", spec.cover)))?;
     }
 
     // As for an increase: the days between the last bill and today cannot be
@@ -104,7 +120,8 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
             .collect();
         order.sort_by_key(|&i| std::cmp::Reverse((cover.layers[i].start, cover.layers[i].id)));
         for i in order {
-            if cut == 0 {
+            // Giving the cover up ends every layer, whatever its amount.
+            if cut == 0 && spec.sum_insured_minor > 0 {
                 break;
             }
             let old = cover.layers[i].clone();

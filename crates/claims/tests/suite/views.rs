@@ -107,6 +107,8 @@ fn the_report_counts_decisions_and_service() {
         provider: None,
         pre_approval_request: false,
         settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
     });
     w.ok(Command::Notify(Box::new(n)));
     w.open_claim("c-1");
@@ -374,4 +376,47 @@ fn a_company_owned_income_claim_pays_the_company_and_is_about_the_life() {
     death.claimant = Some("party-estate".into());
     w.ok(Command::Notify(Box::new(death)));
     assert_eq!(w.claim("c-death").subject_party(), "party-estate");
+}
+
+/// Purpose: a claim on a policy issued under a leaver's continuation option is assessed on that
+/// policy, and carries the scheme policy and member it continues: in the reserve event that
+/// reinsurance reads, and in the assessor's view with the member's claims on the scheme.
+/// Why it matters: persona test CLM-026. The continuation cover was underwritten as the scheme's,
+/// so its claims history and its reinsurance belong with the scheme; assessed as a new policy, an
+/// earlier scheme claim for the same condition is invisible and the claim is ceded to no treaty.
+#[test]
+fn a_continuation_policy_claim_carries_the_scheme_history() {
+    use ic_claims::port::{Continuation, CoverFacts};
+    let mut w = World::new();
+    // An earlier claim on the scheme, for the member who has since left.
+    w.ok(Command::Notify(Box::new(World::notification("c-scheme", "pol-1", "trauma", ClaimType::Trauma))));
+    let from = Continuation {
+        policy: "pol-1".into(),
+        life: "life-1".into(),
+    };
+    w.core.cover(
+        "pol-2",
+        "trauma",
+        CoverFacts {
+            continuation_of: Some(from.clone()),
+            ..facts("trauma")
+        },
+    );
+    w.ok(Command::Notify(Box::new(World::notification("c-cont", "pol-2", "trauma", ClaimType::Trauma))));
+    let c = w.claim("c-cont");
+    assert_eq!((c.policy.as_str(), c.continued_from.as_ref()), ("pol-2", Some(&from)));
+    let reserved = w.core.noticed("claim_reserved");
+    let last = reserved.last().expect("reserved");
+    assert_eq!(
+        (last["continued_from_policy"].as_str(), last["continued_from_life"].as_str()),
+        ("pol-1", "life-1")
+    );
+    assert_eq!(reserved[0]["continued_from_policy"], "", "an ordinary claim names none");
+    let view = w.state.work_view("c-cont").expect("a view");
+    assert_eq!(view.continued_from, Some(from));
+    assert_eq!(
+        view.scheme_claims,
+        vec![("c-scheme".to_string(), ClaimType::Trauma, Status::Open, d(2027, 2, 20))]
+    );
+    assert!(w.state.work_view("c-scheme").expect("a view").scheme_claims.is_empty());
 }

@@ -64,6 +64,12 @@ pub struct ClaimsState {
     pub provider_payable: BTreeSet<ClaimId>,
     /// Claims with an overpayment being recovered by offset.
     pub offsetting: BTreeSet<ClaimId>,
+    /// Health claims by the service billed: date, provider, service code.
+    #[serde(default)]
+    pub billed: BTreeSet<(NaiveDate, String, String, ClaimId)>,
+    /// Restricted investigations, by case.
+    #[serde(default)]
+    pub investigations: BTreeMap<String, crate::investigate::Investigation>,
     pub owned: BTreeMap<StaffId, BTreeSet<ClaimId>>,
 }
 
@@ -376,6 +382,8 @@ impl ClaimsState {
             Command::ExclusionControl { after } => self.exclusion_control(cx, after),
             Command::RecordDeath { party, date_of_death } => self.record_death(cx, &party, date_of_death),
             Command::RetractDeath { party, date_of_death } => self.retract_death(cx, &party, date_of_death),
+            Command::ReferForInvestigation { case, rule, claims } => self.refer(cx, case, rule, "compliance", claims),
+            Command::CloseInvestigation { case, outcome, actor } => self.close_case(cx, &case, outcome, &actor),
             Command::Reinsurance(notice) => self.reinsurance(cx, notice),
             Command::NonDisclosureOutcome { claim, review_ref, outcome } => self.non_disclosure_outcome(cx, &claim, &review_ref, outcome),
             Command::DrainDue => {
@@ -539,6 +547,9 @@ impl ClaimsState {
             .iter()
             .any(|o| o.status == crate::RecoveryStatus::Offset && o.outstanding_minor() > 0);
         toggle(&mut self.offsetting, c.id.clone(), add && offsetting);
+        if let Some((date, provider, code)) = crate::investigate::billed(c) {
+            toggle(&mut self.billed, (date, provider, code, c.id.clone()), add);
+        }
         if let (Some(owner), true) = (&c.owner, c.status.is_open()) {
             toggle(self.owned.entry(owner.clone()).or_default(), c.id.clone(), add);
         }

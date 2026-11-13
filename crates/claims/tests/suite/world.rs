@@ -187,6 +187,7 @@ pub fn authority() -> AuthorityBook {
     people.insert("cody".into(), staff("reviewer", &[Role::ConductOfficer], &[]));
     people.insert("lex".into(), staff("reviewer", &[Role::Legal], &[]));
     people.insert("rec".into(), staff("reviewer", &[Role::Assessor], &[Queue::Recoveries]));
+    people.insert("ivy".into(), staff("reviewer", &[Role::Investigator], &[]));
     if let Some(s) = people.get_mut("ben") {
         s.vulnerable_trained = true;
     }
@@ -229,6 +230,8 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         product_code: "LIFE".into(),
         product_version: "hash-1".into(),
         interests: vec![],
+        nominations: vec![],
+        continuation_of: None,
     }
 }
 

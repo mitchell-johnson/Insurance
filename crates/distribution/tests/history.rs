@@ -6,6 +6,7 @@ use common::*;
 use ic_core::Command as CoreCommand;
 use ic_distribution::host::{ask, Question};
 use ic_distribution::state::Settings;
+use ic_distribution::Command;
 
 fn short_history() -> Settings {
     Settings {
@@ -35,6 +36,15 @@ fn old_settled_history_is_let_go_of_and_every_balance_still_agrees() {
     w.sync();
     w.cut("a-co").unwrap();
     let movements_cut = w.dist.payees[&party("a-co")].statement_cut;
+    w.send(
+        finance(),
+        Command::AttachDocument {
+            party: party("fap-one"),
+            kind: "correspondence".into(),
+            document_ref: "old-letter".into(),
+        },
+    )
+    .unwrap();
     let as_at = w.today();
     let live_allocations: Vec<String> = w.dist.allocations.values().filter(|a| a.policy == live).map(|a| a.reference.clone()).collect();
 
@@ -61,6 +71,8 @@ fn old_settled_history_is_let_go_of_and_every_balance_still_agrees() {
         "movements on a statement before the cutoff were folded"
     );
     assert!(h.brought_forward.contains_key(&party("a-co")));
+    assert!(!w.dist.documents.contains_key(&party("fap-one")), "an old document record goes");
+    assert!(h.last_run.contains_key("documents"));
     w.assert_reconciled();
     let answer = ask(&w.dist, Question::History).unwrap();
     assert_eq!(answer["compacted_before"], serde_json::json!(w.dist.history.compacted_before));

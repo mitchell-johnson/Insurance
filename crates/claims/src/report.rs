@@ -131,6 +131,11 @@ pub enum Question {
     PolicyStatus {
         policy: String,
     },
+    /// The restricted cases, for an investigator. The caller puts the
+    /// signed-in person here; anyone without the role is answered with none.
+    Cases {
+        staff: StaffId,
+    },
 }
 
 /// One claim for the staff working it: who has it, what is waiting and
@@ -170,6 +175,10 @@ pub struct WorkView {
     /// Service timers: due, met and how far escalated.
     pub timers: BTreeMap<TimerKind, (NaiveDate, Option<NaiveDate>, u8)>,
     pub waiver_from: Option<NaiveDate>,
+    /// On a continuation policy, the scheme it carries on from and the
+    /// member's claims there: ID, type, status and event date.
+    pub continued_from: Option<crate::port::Continuation>,
+    pub scheme_claims: Vec<(ClaimId, ClaimType, Status, NaiveDate)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,6 +233,7 @@ pub enum Reply {
     Remittance(BTreeMap<String, (u32, i64)>),
     Work(Option<Box<WorkView>>),
     PolicyStatus(Vec<StatusView>),
+    Cases(Vec<crate::investigate::CaseView>),
 }
 
 impl ClaimsState {
@@ -243,6 +253,7 @@ impl ClaimsState {
             Question::Remittance { run } => Reply::Remittance(self.remittance(run)),
             Question::Work { claim } => Reply::Work(self.work_view(claim).map(Box::new)),
             Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
+            Question::Cases { staff } => Reply::Cases(self.cases(staff)),
         }
     }
 
@@ -300,6 +311,21 @@ impl ClaimsState {
             overpayments: c.overpayments.iter().map(|o| (o.id.clone(), o.outstanding_minor(), o.status)).collect(),
             timers: c.timers.iter().map(|(k, t)| (*k, (t.due, t.met_on, t.escalated))).collect(),
             waiver_from: c.waiver_from,
+            continued_from: c.continued_from.clone(),
+            scheme_claims: c
+                .continued_from
+                .as_ref()
+                .map(|from| {
+                    self.by_policy
+                        .get(&from.policy)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|id| self.claims.get(id))
+                        .filter(|s| s.life.as_deref() == Some(from.life.as_str()))
+                        .map(|s| (s.id.clone(), s.claim_type, s.status, s.event_date))
+                        .collect()
+                })
+                .unwrap_or_default(),
         })
     }
 

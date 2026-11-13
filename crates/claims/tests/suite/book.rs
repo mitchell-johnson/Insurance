@@ -1475,3 +1475,74 @@ fn a_late_income_declaration_does_not_stop_the_benefit() {
         })
     ));
 }
+
+/// Purpose: a death benefit goes to the nomination the record gives as in force on the date of
+/// death, in its shares and after any lender, with anything not nominated left for the estate;
+/// someone nominated before (an ex-partner replaced three months earlier) has nothing to be paid,
+/// and a nomination whose shares are wrong stops the admission.
+/// Why it matters: persona test CLM-029. Paying the nomination that stood when the claim was made,
+/// or one replaced before the death, pays the wrong people with money the insurer then owes the
+/// right ones; reading it from the record by the date of death is what makes the answer certain.
+#[test]
+fn a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death() {
+    use ic_claims::port::{CoverFacts, Interest, Nominee};
+    let nominee = |party: &str, share_pct: u32| Nominee {
+        party: party.into(),
+        share_pct,
+    };
+    let death = |w: &mut World, id: &str, nominations: Vec<Nominee>| {
+        w.core.cover(
+            "pol-1",
+            "life",
+            CoverFacts {
+                interests: vec![Interest {
+                    party: "bank".into(),
+                    extent_minor: Some(100_000),
+                    priority: 1,
+                }],
+                nominations,
+                ..facts("life")
+            },
+        );
+        w.ok(Command::Notify(Box::new(World::notification(id, "pol-1", "life", ic_claims::ClaimType::Death))));
+        w.assign(id, "ana");
+        w.assess(id, "CC-0001");
+    };
+    let mut w = World::new();
+    // As the record knows it now, the children replaced the ex-partner before the death.
+    death(&mut w, "c-1", vec![nominee("child-1", 50), nominee("child-2", 30)]);
+    w.decided("c-1", "ana", World::admit_lump(Some(300_001)), "R-OK");
+    w.approved("c-1", "sam");
+    let due: Vec<_> = w.claim("c-1").interests.iter().map(|i| (i.party.as_str(), i.owed_minor, i.nominated)).collect();
+    assert_eq!(due, vec![("bank", 100_000, false), ("child-1", 100_000, true), ("child-2", 60_000, true)]);
+    let bases: Vec<_> = w.core.noticed("interest_to_be_paid").iter().map(|n| n["basis"].clone()).collect();
+    assert_eq!(bases, ["interest", "nomination", "nomination"]);
+    let to = |payment: &str, party: &str| Command::PayInterest {
+        claim: "c-1".into(),
+        payment_ref: payment.into(),
+        party: party.into(),
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(to("n-1", "ex-partner")), "no_interest", "a replaced nomination pays nothing");
+    assert_eq!(w.refused(to("n-1", "child-1")), "interest_priority", "the lender first");
+    w.ok(to("i-1", "bank"));
+    w.ok(to("n-1", "child-1"));
+    w.ok(to("n-2", "child-2"));
+    // The 20% nobody was nominated for, 40,001, is the estate's.
+    assert_eq!(w.claim("c-1").interests_unpaid_minor(), 0);
+    assert_eq!(w.claim("c-1").benefit_payable_minor(), 40_001);
+
+    // Whole shares: the cent the split leaves goes to the last nominee.
+    let mut w = World::new();
+    death(&mut w, "c-2", vec![nominee("child-1", 50), nominee("child-2", 50)]);
+    w.decided("c-2", "ana", World::admit_lump(Some(300_001)), "R-OK");
+    w.approved("c-2", "sam");
+    let owed: Vec<i64> = w.claim("c-2").interests.iter().map(|i| i.owed_minor).collect();
+    assert_eq!(owed, vec![100_000, 100_000, 100_001]);
+
+    // Shares over 100% are a record to correct, not a payment to guess at.
+    let mut w = World::new();
+    death(&mut w, "c-3", vec![nominee("child-1", 60), nominee("child-2", 60)]);
+    let refused = w.decide("c-3", "ana", World::admit_lump(Some(300_000)), "R-OK").expect_err("refused");
+    assert_eq!(refused.code, "invalid_nomination");
+}

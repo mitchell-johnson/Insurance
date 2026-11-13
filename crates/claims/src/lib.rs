@@ -24,6 +24,7 @@
 
 pub mod command;
 pub mod config;
+pub mod investigate;
 pub mod model;
 pub mod port;
 pub mod report;

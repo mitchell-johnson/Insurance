@@ -93,12 +93,16 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried` |
 | COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
-| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies` |
-| COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
+| COL-012 | full | `collections/tests/sequence.rs::mandatory_notices_cannot_be_configured_away`<br>`collections/tests/dunning.rs::each_step_is_an_event_with_its_notice_or_task` |
+| COL-013 | part | `collections/tests/cases.rs::an_outcome_drives_the_next_step` |
+| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies`<br>`collections/tests/cases.rs::hardship_is_applied_for_decided_by_another_and_ended_early` |
+| COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood`<br>`collections/tests/cases.rs::an_arrangement_holds_the_sequence_and_a_break_resumes_the_clock` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
-| COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once` |
+| COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once`<br>`collections/tests/dunning.rs::paying_stops_the_sequence_and_a_new_spell_starts_it_afresh` |
+| COL-019 | full | `collections/tests/queue.rs::the_queue_puts_what_is_about_to_lapse_and_matters_most_first`<br>`collections/tests/cases.rs::an_officer_does_not_read_health_in_a_hardship_note` |
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
+| COL-026 | full | `collections/tests/dunning.rs::a_customer_with_several_policies_gets_one_notice_and_one_task` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
 ## XFR Policy transfer between groups
@@ -192,6 +196,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | part | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits` |
+| CLM-015 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-016 | part | `claims/tests/suite/book.rs::a_benefit_run_is_prepared_by_one_person_and_approved_by_another`<br>`claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
 | CLM-017 | part | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
 | CLM-018 | full | `claims/tests/suite/book.rs::a_late_income_declaration_does_not_stop_the_benefit` |
@@ -200,8 +205,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
+| CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
+| CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-029 | part | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
 | CLM-031 | full | `claims/tests/suite/decisions.rs::a_closed_claim_reopens_under_independent_review` |
 | CLM-032 | full | `claims/tests/suite/decisions.rs::a_reserve_beyond_authority_is_borrowed_and_a_sharp_move_is_reviewed`<br>`claims/tests/suite/decisions.rs::a_large_admission_waits_for_a_second_signature` |
@@ -265,7 +273,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-006 | full | `group/tests/intake.rs::approval_needs_a_second_person_and_staff_for_deep_backdating`<br>`group/src/diff.rs::dates_are_held_to_the_backdating_limits` |
 | GRP-007 | full | `group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-008 | full | `group/src/diff.rs::cover_follows_hours_across_the_minimum`<br>`group/tests/leavers.rs::cover_follows_a_member_whose_hours_cross_the_minimum` |
-| GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back` |
+| GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back`<br>`sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer` |
 | GRP-010 | full | `group/tests/excess.rs::a_loading_is_itemised_to_the_employer_only_with_the_members_consent`<br>`sim/tests/group_cover.rs::a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed` |
 | GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading`<br>`group/tests/excess.rs::staff_are_told_when_leavers_leave_too_few_members_in_the_total` |
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
@@ -286,6 +294,14 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
+
+## HLT Composable health product
+
+| Matrix | Status | Built tests |
+| --- | --- | --- |
+| HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
+| HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
+| HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 
 ## JNT Joint lives, ownership, assignments and dependants
 
@@ -474,13 +490,15 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | DOC-001 | full | `documents/tests/render.rs::rendering_is_deterministic`<br>`documents/tests/driver.rs::verification_detects_a_changed_document` |
-| DOC-002 | part | `documents/tests/templates.rs::every_product_version_and_language_needs_a_passing_case` |
+| DOC-002 | full | `documents/tests/templates.rs::every_product_version_and_language_needs_a_passing_case`<br>`documents/tests/languages.rs::a_translation_is_rendered_from_the_same_data_and_says_what_controls` |
 | DOC-003 | part | `documents/tests/templates.rs::submission_checks_structure_readability_and_translations`<br>`documents/tests/render.rs::reading_grade_ranks_plain_words_below_dense_ones` |
 | DOC-004 | full | `documents/tests/render.rs::a_missing_or_mistyped_value_fails_the_render`<br>`documents/tests/templates.rs::a_failing_rendering_run_blocks_activation_and_is_reported` |
 | DOC-005 | full | `documents/tests/delivery.rs::proven_delivery_starts_the_notice_clock`<br>`documents/tests/delivery.rs::a_bounced_notice_falls_back_to_post_and_is_deemed_delivered` |
+| DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
+| DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
 | DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master` |
-| DOC-010 | part | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them` |
+| DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration
 

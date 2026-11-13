@@ -161,6 +161,8 @@ impl ClaimsState {
             waiver_from: None,
             interests: vec![],
             migrated: false,
+            investigation: None,
+            continued_from: facts.continuation_of.clone(),
             in_run: None,
             decisions: vec![],
             pending: None,
@@ -201,7 +203,10 @@ impl ClaimsState {
         }
 
         let periodic = claim.claim_type.periodic();
-        let straight = self.straight_through(&claim, &facts);
+        // A case opened by the billing rule takes the claim out of the
+        // rules' hands without saying so: it waits for a person like any other.
+        let held = self.screen_billing(cx, &mut claim);
+        let straight = self.straight_through(&claim, &facts).filter(|_| !held);
         let pre_approval = claim.health.as_ref().is_some_and(|h| h.pre_approval_request);
         let reserved = |claim: &Claim, gross: i64| {
             vec![
@@ -213,6 +218,12 @@ impl ClaimsState {
                 ("gross_reserve_minor", gross.to_string()),
                 ("periodic", periodic.to_string()),
                 ("catastrophe_event", claim.catastrophe_event.clone().unwrap_or_default()),
+                // A continuation policy's claim stays with the scheme's treaty history.
+                (
+                    "continued_from_policy",
+                    claim.continued_from.as_ref().map(|c| c.policy.clone()).unwrap_or_default(),
+                ),
+                ("continued_from_life", claim.continued_from.as_ref().map(|c| c.life.clone()).unwrap_or_default()),
             ]
         };
         match (straight, pre_approval) {

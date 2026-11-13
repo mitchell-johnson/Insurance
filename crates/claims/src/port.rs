@@ -71,6 +71,30 @@ pub struct CoverFacts {
     /// lender or an assignee, who is paid before the owner.
     #[serde(default)]
     pub interests: Vec<Interest>,
+    /// The nomination in force on the event date as the record knows it
+    /// now: who is to receive the death benefit and in what shares. Paid
+    /// after any interest, before the estate.
+    #[serde(default)]
+    pub nominations: Vec<Nominee>,
+    /// The scheme membership this policy continues, where it was issued
+    /// under a leaver's continuation option.
+    #[serde(default)]
+    pub continuation_of: Option<Continuation>,
+}
+
+/// The scheme and member a continuation policy carries on from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Continuation {
+    pub policy: String,
+    pub life: String,
+}
+
+/// A person nominated to receive a share of a death benefit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nominee {
+    pub party: String,
+    /// Their share of what is left after interests, in whole percent.
+    pub share_pct: u32,
 }
 
 /// A recorded interest in a policy's proceeds.
@@ -121,6 +145,10 @@ pub enum Instruction {
         /// Interest for late payment, expensed now and paid with it.
         #[serde(default)]
         interest_minor: i64,
+        /// Part of the payment kept back against an overpayment the payee
+        /// owes: a provider's billing error recovered from its next run.
+        #[serde(default)]
+        offset: Option<Offset>,
     },
     /// One period of a benefit in payment: admitted and paid in one entry,
     /// less any agreed offset against an overpayment.
