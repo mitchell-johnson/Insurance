@@ -9,7 +9,8 @@ const LIFE: &str = include_str!("../../../products/rates/life_base.star");
 const TRAUMA: &str = include_str!("../../../products/rates/trauma_base.star");
 const HEALTH: &str = include_str!("../../../products/rates/health_base.star");
 const GROUP: &str = include_str!("../../../products/rates/group_life_standard.star");
-const SHIPPED_OTHERS: [(&str, &str); 5] = [
+const SHIPPED_OTHERS: [(&str, &str); 6] = [
+    ("income_base.star", include_str!("../../../products/rates/income_base.star")),
     ("no_premium.star", include_str!("../../../products/rates/no_premium.star")),
     ("flex_hospital.star", include_str!("../../../products/rates/flex_hospital.star")),
     ("flex_specialist.star", include_str!("../../../products/rates/flex_specialist.star")),

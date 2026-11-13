@@ -112,6 +112,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "authority" => found(state.authorities.get(text(&question, "authority")?)),
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
+        "payer_cases" => Ok(json_cases(state.open_payer_cases())),
+        "payer_case" => found(state.payer_checks.cases.get(text(&question, "case")?)),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
@@ -180,17 +182,35 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             policy: policy.clone(),
             claim: claim.clone(),
         },
-        // Which fund each dollar of a receipt went to, so cash can follow it
-        // between the funds' bank accounts (PAY-010).
         ic_core::Event::ReceiptApplied {
+            policy,
             receipt,
             allocated_minor,
-            fund: Some(fund),
+            fund,
             ..
-        } => crate::Command::ReceiptFunded {
-            receipt: receipt.clone(),
-            fund: fund.clone(),
-            amount_minor: *allocated_minor,
+        } => {
+            // Who paid it (FIN-015), and which fund each dollar went to, so
+            // cash can follow it between the funds' bank accounts (PAY-010).
+            let mut both = vec![envelope(
+                format!("core-{}-payer", record.id),
+                crate::Command::PremiumApplied {
+                    policy: policy.to_string(),
+                    receipt: receipt.clone(),
+                },
+            )];
+            if let Some(fund) = fund {
+                let funded = crate::Command::ReceiptFunded {
+                    receipt: receipt.clone(),
+                    fund: fund.clone(),
+                    amount_minor: *allocated_minor,
+                };
+                both.insert(0, envelope(format!("core-{}", record.id), funded));
+            }
+            return both;
+        }
+        ic_core::Event::PolicyIssued { policy, policyholder, .. } => crate::Command::PolicyOwner {
+            policy: policy.to_string(),
+            owner: policyholder.to_string(),
         },
         ic_core::Event::ReceiptReversed { receipt, amount_minor, .. } => crate::Command::ReceiptUnfunded {
             receipt: receipt.clone(),
@@ -291,9 +311,13 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         }) => insolvency(owner, policy, interest, Some(*effective)),
         _ => return Vec::new(),
     };
-    vec![crate::Envelope {
-        // The event's ID, so an event offered twice is taken in once.
-        key: format!("core-{}", record.id),
+    // The event's ID, so an event offered twice is taken in once.
+    vec![envelope(format!("core-{}", record.id), command)]
+}
+
+fn envelope(key: String, command: crate::Command) -> crate::Envelope {
+    crate::Envelope {
+        key,
         actor: crate::Actor {
             id: "core-events".to_string(),
             roles: [crate::Role::Service].into(),
@@ -303,7 +327,7 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         // backwards, so the epoch leaves it exactly where it was.
         at: chrono::DateTime::UNIX_EPOCH.naive_utc(),
         command,
-    }]
+    }
 }
 
 fn insolvency(owner: &ic_core::PartyId, policy: &ic_core::PolicyId, interest: &str, released: Option<chrono::NaiveDate>) -> crate::Command {
@@ -313,4 +337,8 @@ fn insolvency(owner: &ic_core::PartyId, policy: &ic_core::PolicyId, interest: &s
         interest: interest.to_string(),
         released,
     }
+}
+
+fn json_cases(cases: Vec<(&String, &crate::aml::PayerCase)>) -> Value {
+    Value::Array(cases.into_iter().map(|(key, case)| serde_json::json!({"case": key, "detail": case})).collect())
 }

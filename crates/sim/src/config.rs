@@ -6,7 +6,8 @@ use ic_core::Command;
 use ic_money::DecStr;
 use ic_product::{load_definitions, load_product, load_rate_table, LoadError};
 
-const PRODUCTS: [(&str, &str); 6] = [
+const PRODUCTS: [(&str, &str); 7] = [
+    ("income_protection.star", include_str!("../../../products/income_protection.star")),
     ("term_life.star", include_str!("../../../products/term_life.star")),
     ("interim_accident.star", include_str!("../../../products/interim_accident.star")),
     ("health_plan.star", include_str!("../../../products/health_plan.star")),
@@ -14,7 +15,8 @@ const PRODUCTS: [(&str, &str); 6] = [
     ("invest_plan.star", include_str!("../../../products/invest_plan.star")),
     ("health_flex.star", include_str!("../../../products/health_flex.star")),
 ];
-const RATES: [(&str, &str); 9] = [
+const RATES: [(&str, &str); 10] = [
+    ("rates/income_base.star", include_str!("../../../products/rates/income_base.star")),
     ("rates/life_base.star", include_str!("../../../products/rates/life_base.star")),
     ("rates/trauma_base.star", include_str!("../../../products/rates/trauma_base.star")),
     ("rates/health_base.star", include_str!("../../../products/rates/health_base.star")),

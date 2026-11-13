@@ -98,6 +98,24 @@ pub fn invest_plan(n: u64, inception: NaiveDate, dob: NaiveDate, sex: Sex) -> Is
     }
 }
 
+/// A retail income protection policy on one life. The sum insured is the
+/// monthly benefit.
+pub fn income_protection(
+    n: u64,
+    inception: NaiveDate,
+    dob: NaiveDate,
+    sex: Sex,
+    smoker: bool,
+    monthly_benefit_minor: i64,
+    frequency: Frequency,
+) -> IssuePolicy {
+    let mut p = term_life(n, inception, dob, sex, smoker, monthly_benefit_minor, None, frequency, None);
+    p.number = format!("KIP{n:08}");
+    p.product_code = "income-protection".to_string();
+    p.covers[0].code = "income".to_string();
+    p
+}
+
 /// A retail term life policy on one life, with optional trauma cover.
 #[allow(clippy::too_many_arguments)]
 pub fn term_life(

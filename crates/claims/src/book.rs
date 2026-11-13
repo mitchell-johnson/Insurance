@@ -170,6 +170,9 @@ impl ClaimsState {
         if claim.waiver_from.is_some() {
             return Err(Reject::new("waiver_exists", "premiums are already being waived on this claim"));
         }
+        if claim.cover_check.as_ref().and_then(|c| c.facts.premium_waiver) == Some(false) {
+            return Err(Reject::new("no_waiver_cover", "the product does not waive premium beside this benefit"));
+        }
         claim.waiver_from = Some(from);
         self.waive(cx, &claim)?;
         claim.due.insert((plus_days(cx.today, 1), Due::Waiver));
@@ -280,6 +283,46 @@ impl ClaimsState {
             if late && open_task(&mut claim, cx, "death-register-cadence", TaskKind::DeathRegisterCadence, None) {
                 cx.notify("death_register_cadence_check", &id, &[]);
             }
+            self.commit(claim);
+        }
+        Ok(())
+    }
+
+    /// A person has shown they are alive through the app or the customer
+    /// master. Each open proof of life on a benefit in payment to them is met
+    /// with that evidence, as if the owner had filed it; a held benefit is
+    /// paid again from the next run. Nothing open: nothing to do.
+    pub(crate) fn confirm_alive(&mut self, cx: &mut Cx<'_>, party: &str, source: &str, evidence_ref: String) -> Result<(), Reject> {
+        if party.is_empty() || source.is_empty() || evidence_ref.is_empty() {
+            return Err(Reject::new(
+                "invalid_confirmation",
+                "a confirmation names the person, its source and its evidence",
+            ));
+        }
+        let ids: Vec<String> = self.by_party.get(party).into_iter().flatten().cloned().collect();
+        for id in ids {
+            let Some(mut claim) = self.claims.get(&id).filter(|c| c.status == Status::InPayment).cloned() else {
+                continue;
+            };
+            let open: Vec<String> = claim
+                .tasks
+                .iter()
+                .filter(|t| t.kind == TaskKind::ProofOfLife && t.completed_on.is_none())
+                .map(|t| t.id.clone())
+                .collect();
+            if open.is_empty() {
+                continue;
+            }
+            cx.core.work(1);
+            for task in open {
+                let outcome = format!("confirmed:{source}");
+                let was_overdue = crate::intake::finish_task(&mut claim, &task, cx.today, None, outcome, vec![], Some(evidence_ref.clone()), 0);
+                if let (true, Some(s)) = (was_overdue, claim.schedule.as_mut()) {
+                    s.reviews_overdue = s.reviews_overdue.saturating_sub(1);
+                }
+                note(&mut claim, cx, None, format!("task_completed:{task}:{source}"));
+            }
+            cx.notify("proof_of_life_confirmed", &id, &[("source", source.to_string())]);
             self.commit(claim);
         }
         Ok(())

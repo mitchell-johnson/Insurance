@@ -221,6 +221,19 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         facts.cover_start = Some(first.max(c.start));
     }
     // The excess level the life held the cover at on the event date.
+    // An income benefit's waiting period and what its wording does in custody.
+    if let Some(ic_product::Benefit::MonthlyBenefit {
+        waiting_days,
+        benefit_while_imprisoned,
+        ..
+    }) = product.and_then(|pr| pr.cover(cover)).map(|def| &def.benefit)
+    {
+        facts.waiting_days = *waiting_days;
+        facts.benefit_while_imprisoned = match benefit_while_imprisoned {
+            ic_product::WhileImprisoned::Suspend => ic_claims::port::Imprisonment::Suspend,
+            ic_product::WhileImprisoned::Pay => ic_claims::port::Imprisonment::Pay,
+        };
+    }
     facts.chosen_excess_minor = at_event
         .iter()
         .find_map(|l| l.excess_option.as_deref())

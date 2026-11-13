@@ -10,6 +10,8 @@ const TERM: &str = include_str!("../../../products/term_life.star");
 const HEALTH: &str = include_str!("../../../products/health_plan.star");
 const GROUP: &str = include_str!("../../../products/group_life.star");
 const INVEST: &str = include_str!("../../../products/invest_plan.star");
+const INCOME: &str = include_str!("../../../products/income_protection.star");
+const INCOME_RATES: &str = include_str!("../../../products/rates/income_base.star");
 const INTERIM: &str = include_str!("../../../products/interim_accident.star");
 const NO_PREMIUM: &str = include_str!("../../../products/rates/no_premium.star");
 const FLEX: &str = include_str!("../../../products/health_flex.star");
@@ -38,6 +40,7 @@ fn all_shipped_configuration_loads() {
         ("invest_plan.star", INVEST),
         ("health_flex.star", FLEX),
         ("interim_accident.star", INTERIM),
+        ("income_protection.star", INCOME),
     ] {
         let p = load_product(f, s).unwrap();
         assert_eq!(p.content_hash.len(), 64);
@@ -50,13 +53,14 @@ fn all_shipped_configuration_loads() {
         ("health", HEALTH_RATES),
         ("group", GROUP_RATES),
         ("none", NO_PREMIUM),
+        ("income", INCOME_RATES),
     ] {
         load_rate_table(f, s).unwrap();
     }
     for source in FLEX_RATES {
         load_rate_table("flex", source).unwrap();
     }
-    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 8);
+    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 9);
 }
 
 /// Purpose: a product's content hash changes when a rate in it changes and is the same for the same
@@ -524,4 +528,45 @@ fn a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate() {
         );
         assert!(load_product("term_life.star", &bad).is_err(), "{share}");
     }
+}
+
+/// Purpose: the shipped income protection product prices a monthly benefit per thousand of
+/// that benefit from its own table, exactly; its cover has a 28-day waiting period, pays for
+/// up to 60 months and suspends the benefit in custody; and a product may say `pay` instead,
+/// while any other word does not load.
+/// Why it matters: decision 5 in `docs/decisions.md` (persona test CLM-040) makes custody a
+/// matter of the product's wording. Claims acts on this setting and the waiting period, so a
+/// product that loaded with a misspelt setting would silently pay or suspend the wrong way.
+#[test]
+fn income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting() {
+    use ic_product::{Benefit, WhileImprisoned};
+    let p = load_product("income_protection.star", INCOME).unwrap();
+    let rates = load_rate_table("income", INCOME_RATES).unwrap();
+    let cover = p.cover("income").unwrap();
+    assert_eq!(
+        cover.benefit,
+        Benefit::MonthlyBenefit {
+            waiting_days: 28,
+            benefit_months: 60,
+            benefit_while_imprisoned: WhileImprisoned::Suspend,
+        }
+    );
+    // Female non-smoker aged 20: 72.0000 per thousand of a 5,000 monthly benefit.
+    let f = RatingFactors {
+        age: 20,
+        sex: Some(Sex::Female),
+        smoker: Some(false),
+        ..RatingFactors::default()
+    };
+    assert_eq!(cover_premium(cover, &rates, &f, 5_000_00).unwrap(), ic_money::dec("360").unwrap());
+
+    let pays = load_product("income_protection.star", &INCOME.replace("\"suspend\"", "\"pay\"")).unwrap();
+    assert!(matches!(
+        pays.cover("income").unwrap().benefit,
+        Benefit::MonthlyBenefit {
+            benefit_while_imprisoned: WhileImprisoned::Pay,
+            ..
+        }
+    ));
+    assert!(load_product("income_protection.star", &INCOME.replace("\"suspend\"", "\"sometimes\"")).is_err());
 }

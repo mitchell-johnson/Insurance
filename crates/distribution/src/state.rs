@@ -887,6 +887,30 @@ impl DistributionState {
         self.outbox.retain(|_, r| r != reference);
     }
 
+    /// The conduct facts dated from `from` to `to` inclusive, oldest first,
+    /// in the shape finance's `RecordConductFacts` takes: an opaque ID, the
+    /// measure, the date, the product and, for an overturn, the date of the
+    /// match it undoes.
+    pub fn conduct_facts(&self, from: NaiveDate, to: NaiveDate) -> Vec<serde_json::Value> {
+        let mut facts: Vec<(NaiveDate, String, serde_json::Value)> = Vec::new();
+        for (key, layer) in &self.layers {
+            let product = self.policies.get(&layer.policy).map(|p| p.product_code.clone());
+            for (n, c) in layer.conduct.iter().enumerate().filter(|(_, c)| c.date >= from && c.date <= to) {
+                let id = c.id(key, n);
+                let fact = serde_json::json!({
+                    "id": id,
+                    "measure": c.measure,
+                    "date": c.date,
+                    "product": product,
+                    "relates_to": c.relates_to,
+                });
+                facts.push((c.date, id, fact));
+            }
+        }
+        facts.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        facts.into_iter().map(|(_, _, f)| f).collect()
+    }
+
     /// Postings asked of the core and not yet confirmed: what a driver that
     /// lost its outbox sends again.
     pub fn unconfirmed(&self) -> Vec<(PartitionId, CounterpartyPosting)> {
