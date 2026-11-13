@@ -16,6 +16,7 @@
 //! - [`host`]: what a ledger node needs to host the module, and its questions.
 
 pub mod authority;
+pub mod history;
 pub mod host;
 pub mod model;
 pub mod rules;
