@@ -1663,6 +1663,26 @@ impl GroupState {
                 Ok(())
             }),
             CoreResult { key, error } => self.core_result(&key, error),
+            CommissionRefused { key, code } => {
+                let found = self
+                    .outbox
+                    .iter()
+                    .find_map(|(id, o)| matches!(o, Outbound::Commission { key: k, .. } if *k == key).then_some(*id));
+                // Already settled: nothing more to do.
+                let Some(id) = found else { return Ok(()) };
+                let Some(Outbound::Commission { layer, .. }) = self.outbox.remove(&id) else {
+                    return Ok(());
+                };
+                if let Some(scheme) = self.by_policy.get(&layer.policy).cloned() {
+                    self.raise(&scheme, ExceptionKind::BrokerNotRecorded, &layer.cover);
+                    self.emit(GroupEvent::BrokerNotRecorded {
+                        scheme,
+                        cover: layer.cover,
+                        code,
+                    });
+                }
+                Ok(())
+            }
             ObserveCore { event } => self.observe(*event),
             Ack { ids } => {
                 for id in ids {

@@ -2,6 +2,8 @@
 //! they are data on the scheme, set when it is established and amended by
 //! command with an effective date.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -169,6 +171,26 @@ pub struct SchemeTerms {
     /// joiners until it has paid in full. Existing members are not touched.
     #[serde(default)]
     pub suspend_joiners_after_short_payments: Option<u32>,
+    /// The broker who placed the scheme, for commission. Absent on a scheme
+    /// placed direct, which earns no commission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub broker: Option<SchemeBroker>,
+}
+
+/// The broker who placed a scheme, as the commission module knows them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchemeBroker {
+    /// The broker's engagement with the insurer.
+    pub engagement: String,
+    /// The book the scheme's commission is earned in.
+    pub book: String,
+    /// The commission schedule and option agreed for the scheme.
+    pub schedule: String,
+    pub option: String,
+    /// The scheme's expected annual premium for each cover driven by
+    /// member data, by cover code: what initial commission is worked from.
+    pub expected_annual_premium_minor: BTreeMap<String, i64>,
 }
 
 /// The core's own backdating limit: nothing can be dated further back.
@@ -194,6 +216,14 @@ impl SchemeTerms {
         codes.dedup();
         if codes.len() != self.billing_groups.len() || codes.iter().any(|c| c.is_empty()) {
             return Err("billing group codes must be unique and not empty".to_string());
+        }
+        if let Some(b) = &self.broker {
+            if [&b.engagement, &b.book, &b.schedule, &b.option].iter().any(|v| v.trim().is_empty()) {
+                return Err("a broker needs an engagement, a book, a schedule and an option".to_string());
+            }
+            if b.expected_annual_premium_minor.is_empty() || b.expected_annual_premium_minor.values().any(|m| *m <= 0) {
+                return Err("a broker's expected annual premium is positive for each cover".to_string());
+            }
         }
         if self.eligibility.min_age.zip(self.eligibility.max_age).is_some_and(|(lo, hi)| lo >= hi) {
             return Err("the minimum age must be below the maximum age".to_string());
@@ -290,6 +320,7 @@ pub(crate) mod tests {
             excess_loading: ExcessLoading::EmployerTotal,
             excess_loading_min_count: 0,
             suspend_joiners_after_short_payments: Some(3),
+            broker: None,
         }
     }
 
