@@ -17,6 +17,7 @@ use crate::authority::{AuthorityProfile, CaseAction, Standing, Subject};
 use crate::command::{Applied, Command, Effect, Envelope, Event, LicenceStatus, Reject};
 use crate::config::Config;
 use crate::model::{AdviserRef, LifeFile, Proposal, ProposalId};
+use crate::progress::{self, Pending, ProgressRow};
 
 /// How many results are kept to answer a repeated key with. A repeat of an
 /// older key is still recognised and changes nothing; it is answered with an
@@ -94,6 +95,18 @@ pub struct UnderwritingState {
     /// number it had in the outbox.
     #[serde(default)]
     pub(crate) parked: BTreeMap<u64, (Effect, String)>,
+    /// The progress rows last published for each open proposal.
+    #[serde(default)]
+    pub(crate) progress: BTreeMap<ProposalId, Vec<ProgressRow>>,
+    /// Proposals whose rows differ from those last published, each with
+    /// the version it was marked under.
+    #[serde(default)]
+    pub(crate) progress_pending: BTreeMap<ProposalId, u64>,
+    #[serde(default)]
+    pub(crate) progress_version: u64,
+    /// Proposals the command being applied stored. Empty between commands.
+    #[serde(skip)]
+    touched: BTreeSet<ProposalId>,
 }
 
 /// What a handler works with: the time the driver read, and what to hand back.
@@ -152,7 +165,11 @@ impl StateMachine for UnderwritingState {
             caller: envelope.caller,
             out: Applied::default(),
         };
-        self.dispatch(&mut cx, envelope.command)?;
+        self.touched.clear();
+        let dispatched = self.dispatch(&mut cx, envelope.command);
+        let touched = std::mem::take(&mut self.touched);
+        dispatched?;
+        self.mark_progress(touched);
         for effect in &cx.out.effects {
             self.outbox_last += 1;
             self.outbox.insert(self.outbox_last, effect.clone());
@@ -259,9 +276,57 @@ impl UnderwritingState {
         self.with(&id, cx, |st, p, cx| f(st, p, &life, cx))
     }
 
+    /// Mark for publishing each proposal whose rows are not those last published.
+    fn mark_progress(&mut self, touched: BTreeSet<ProposalId>) {
+        for id in touched {
+            let Some(p) = self.proposals.get(&id) else { continue };
+            let current = progress::rows(p);
+            if self.progress.get(&id) == Some(&current) {
+                self.progress_pending.remove(&id);
+                continue;
+            }
+            self.progress_version += 1;
+            self.progress_pending.insert(id, self.progress_version);
+        }
+    }
+
+    /// Proposals waiting to be published, at most `max`, with their rows.
+    pub fn progress_pending(&self, max: usize) -> Vec<Pending> {
+        self.progress_pending
+            .iter()
+            .filter_map(|(id, version)| {
+                Some(Pending {
+                    proposal: id.clone(),
+                    version: *version,
+                    rows: progress::rows(self.proposals.get(id)?),
+                })
+            })
+            .take(max)
+            .collect()
+    }
+
+    /// The driver published a proposal's rows at `version`. A later version
+    /// stays pending; an ended proposal is no longer remembered.
+    fn progress_published(&mut self, proposal: ProposalId, version: u64) -> Result<(), Reject> {
+        if self.progress_pending.get(&proposal) != Some(&version) {
+            return Ok(());
+        }
+        self.progress_pending.remove(&proposal);
+        match self.proposals.get(&proposal) {
+            Some(p) if p.status.is_open() => {
+                self.progress.insert(proposal, progress::rows(p));
+            }
+            _ => {
+                self.progress.remove(&proposal);
+            }
+        }
+        Ok(())
+    }
+
     /// Keep a proposal and bring every index into line with it.
     pub(crate) fn store(&mut self, p: Proposal) {
         let id = p.id.clone();
+        self.touched.insert(id.clone());
         let open = p.status.is_open();
         if open {
             self.open.insert(id.clone());
@@ -520,6 +585,7 @@ impl UnderwritingState {
             Sweep { after, max } => self.sweep(cx, after, max),
             AcknowledgeEffects { through } => self.acknowledge_effects(through),
             ParkEffect { effect, reason } => self.park_effect(effect, reason),
+            ProgressPublished { proposal, version } => self.progress_published(proposal, version),
             RequeueEffect { effect, by } => self.requeue_effect(cx, effect, &by),
             LicenceChanged {
                 subject,

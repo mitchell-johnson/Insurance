@@ -458,6 +458,12 @@ pub enum Command {
         effect: u64,
         reason: String,
     },
+    /// The driver published a proposal's progress rows as they stood at
+    /// `version` (`Query::Progress`).
+    ProgressPublished {
+        proposal: ProposalId,
+        version: u64,
+    },
     /// Put a parked effect back in the outbox, at the end, to be tried again.
     RequeueEffect {
         effect: u64,
@@ -572,7 +578,7 @@ impl Command {
             CapacityAnswered { .. } | FacultativeTermsRecorded { .. } => &["reinsurance"],
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
-            AcknowledgeEffects { .. } | ParkEffect { .. } => &["effects-driver"],
+            AcknowledgeEffects { .. } | ParkEffect { .. } | ProgressPublished { .. } => &["effects-driver"],
             RequeueEffect { .. } => &["underwriting-console"],
             LicenceChanged { .. } => &["adviser-licensing"],
             OpenFileForClaim { .. } | OpenNonDisclosureReview { .. } => &["claims"],
