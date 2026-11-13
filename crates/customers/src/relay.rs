@@ -3,7 +3,8 @@
 //! sits, so every death recorded here goes to every partition as
 //! `RecordDeath` from caller `customer-master`. A partition with no claim
 //! for the person accepts it and does nothing; the same death again is a
-//! no-op, so the relay is at least once.
+//! no-op, so the relay is at least once. A death withdrawn here goes the
+//! same way as `RetractDeath`, for the date that was recorded.
 
 use std::future::Future;
 use std::sync::Mutex;
@@ -13,6 +14,7 @@ use chrono::NaiveDate;
 use ic_raft::{ClusterAuth, ClusterClient};
 
 use crate::model::PartyId;
+use crate::store::DeathNotice;
 
 /// The caller name claims accepts `RecordDeath` from.
 pub const CALLER: &str = "customer-master";
@@ -34,12 +36,22 @@ pub fn record_death(party: &PartyId, date_of_death: NaiveDate) -> ic_core::Comma
     }))
 }
 
+/// The claims command withdrawing a death recorded in error, for the date
+/// that was recorded.
+pub fn retract_death(party: &PartyId, date_of_death: NaiveDate) -> ic_core::Command {
+    ic_core::Command::Claims(Box::new(ic_claims::Command::RetractDeath {
+        party: party.0.clone(),
+        date_of_death,
+    }))
+}
+
 /// The idempotency key of one attempt at a death on one partition. The
 /// core remembers a refusal under its key, so each attempt has its own;
 /// claims treats the same death again as nothing new, so a second attempt
 /// after an answer that was lost does no harm.
-pub fn key(party: &PartyId, date_of_death: NaiveDate, partition: u16, attempt: i32) -> String {
-    format!("death:{party}:{date_of_death}:{partition}:{attempt}")
+pub fn key(party: &PartyId, date_of_death: NaiveDate, retract: bool, partition: u16, attempt: i32) -> String {
+    let what = if retract { "retraction" } else { "death" };
+    format!("{what}:{party}:{date_of_death}:{partition}:{attempt}")
 }
 
 /// Why a death was not accepted everywhere.
@@ -51,11 +63,24 @@ pub enum Failure {
     Unreached(String),
 }
 
-/// Send one death to each of `partitions`.
-pub async fn send<C: Core>(core: &C, partitions: u16, party: &PartyId, date_of_death: NaiveDate, attempt: i32) -> Result<(), Failure> {
-    let command = record_death(party, date_of_death);
+/// Send one death, or its retraction, to each of `partitions`.
+pub async fn send<C: Core>(core: &C, partitions: u16, notice: &DeathNotice) -> Result<(), Failure> {
+    let DeathNotice {
+        party,
+        date_of_death,
+        retract,
+        attempts,
+    } = notice;
+    let command = if *retract {
+        retract_death(party, *date_of_death)
+    } else {
+        record_death(party, *date_of_death)
+    };
     for partition in 0..partitions {
-        match core.propose(partition, &key(party, date_of_death, partition, attempt), &command).await {
+        match core
+            .propose(partition, &key(party, *date_of_death, *retract, partition, *attempts), &command)
+            .await
+        {
             Ok(None) => {}
             Ok(Some(code)) => return Err(Failure::Refused(format!("partition {partition} refused: {code}"))),
             Err(e) => return Err(Failure::Unreached(format!("partition {partition}: {e}"))),

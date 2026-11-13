@@ -42,4 +42,6 @@ pub use host::module_spec;
 pub use machine::UnderwritingState;
 pub use special::{answer, Query};
 pub mod clinical;
+pub mod disclosures;
+pub mod intake_service;
 pub mod prepare;

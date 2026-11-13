@@ -10,15 +10,17 @@ This folder turns the persona library into a stress test for the insurance core.
 | `test-matrix-1-spine.md` | Tests for the policy model, ledger, products, billing, collection, policy transfer, audience scoping and resilience |
 | `test-matrix-2-lines.md` | Tests for underwriting, claims, reinsurance, unit pricing, group schemes, joint lives and ownership, commission, composable health and discounts |
 | `test-matrix-3-operations.md` | Tests for servicing, the anniversary window, annuities, vulnerable customers, complaints, staff access, payment runs, finance close, configuration, incident runbooks, documents and migration |
-| `test-matrix.csv` | Generated. All 577 tests as one sheet for filtering |
-| `coverage.md` | Generated. Tests by area and phase, by type, and the tests behind every persona, story and situation |
+| `traceability.md` | Hand-maintained. For each matrix test, the built tests under `crates/` that carry it out, marked full or part |
+| `test-matrix.csv` | Generated. All 577 tests as one sheet for filtering, with how far each is built |
+| `coverage.md` | Generated. Tests by area and phase, how far the built suite reaches, the priority 1 gaps by area, and the tests behind every persona, story and situation |
 
 ## How the pieces link
 
 - A **persona** has an ID from the library (P, B, S) or from the added cast (D distribution, R reinsurers, E employers, N gap personas, ST staff, and TPA, PR, FA, BK for the delegate, providers, fund administrator and banks).
 - A **story** is `US-<persona>-<n>`.
 - A **test** is `<AREA>-<nnn>`, names the story it proves and the personas it runs on, and carries a type, a build phase and a priority.
-- `tools/persona_matrix.py` checks every link and fails if a persona has no story or no test, a story has no test, or a situation is not exercised. Run it after any edit: `python3 tools/persona_matrix.py`. Use `--check` in CI.
+- `traceability.md` maps a matrix test to the built tests that carry it out, as `file::test` paths under `crates/`.
+- `tools/persona_matrix.py` checks every link and fails if a persona has no story or no test, a story has no test, a situation is not exercised, or the traceability names a matrix ID or a built test that does not exist. Run it after any edit: `python3 tools/persona_matrix.py`. CI runs it with `--check` on every push.
 
 ## What to run when
 
@@ -63,9 +65,15 @@ Four more are assumptions made here that the design should confirm:
 8. **A court order freezing a policy** during a separation. The design relies on signing rules, which `JNT-003` tests, and does not model an order.
 9. **Minimum age to own a policy**, and what a 16 or 17 year old may do alone.
 
+## How far the build reaches
+
+Read the "Built so far" section of `coverage.md`. On 13 Nov 2026 the built suite carried out 199 of the 577 tests in full and 119 in part; 166 priority 1 tests were not yet fully built. Most of the unbuilt ones are features not yet written rather than tests missing for features that exist: composable health and discounts (HLT, DSC), joint lives and ownership changes (JNT), vulnerable customers and representatives (VUL), surrender, maturity and loans (SVC), annuities (ANN), most of the dunning sequence (COL), the incident runbooks (INC) and migration cohorts (MIG). `coverage.md` lists them by area.
+
+**When you write a test that carries out a matrix row, add a line for it to `traceability.md`.** A row marked full is a claim that the built tests check everything the matrix row expects; mark it part when they check some of it.
+
 ## Limits of this pack
 
-- Expected results come from the design notes. They have not been run against code: when this was written the repository held only the initial commit, and the first build was still on an unpushed branch.
+- Expected results come from the design notes. Where a built test and the matrix disagree, the design notes and `docs/decisions.md` decide which is wrong.
 - Dollar amounts, retentions, limits and day counts are fixtures chosen to make the arithmetic checkable. They are not product decisions.
 - The tests are specifications. Turning each into an executable scenario with exact postings is the next step, starting with the 69 in Phase A.
 - All names are invented.
