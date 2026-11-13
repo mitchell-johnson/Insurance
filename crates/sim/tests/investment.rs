@@ -630,6 +630,11 @@ fn funds_and_prices_are_immutable_once_active() {
     assert!(seen
         .iter()
         .any(|e| matches!(e, InvestEvent::UnitPriceActivated { price_id, pending_orders: 1, .. } if price_id == "p-1")));
+    // The event carries the price, so a follower can value a holding without asking.
+    assert!(seen.iter().any(
+        |e| matches!(e, InvestEvent::UnitPriceActivated { price_id, sell: Some(sell), buy: Some(_), mid: Some(_), .. }
+            if price_id == "p-3" && sell.as_str() == "2.6000")
+    ));
     assert!(seen.iter().any(|e| matches!(e, InvestEvent::FundActivated { version: 3, .. })));
     assert!(c.state(0).investment.price("p-1").is_some());
 }

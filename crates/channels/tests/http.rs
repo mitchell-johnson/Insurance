@@ -144,6 +144,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("sub-paycmp", "pay-cmp"),
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
+        ("sub-hcs", "hcs-1"),
     ] {
         w.dir(
             module("identity"),
@@ -188,6 +189,11 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
                 template(
                     "service",
                     &["policy.view", ic_channels::state::assisted::ENTER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
+                template(
+                    "hardship",
+                    &["policy.view", staff_actions::VULNERABILITY_KIND],
                     &[DataClass::Ordinary, DataClass::Personal],
                 ),
                 template(
@@ -330,6 +336,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("pay-cmp", "payments-compliance"),
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
+        ("hcs-1", "hardship"),
     ] {
         w.send(
             staff("alice"),
@@ -952,7 +959,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 38);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 39);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -2912,6 +2919,35 @@ async fn an_employer_administrator_hands_over_at_noon() {
     let old = [("x-dev-subject", "sub-hr".to_string()), ("x-dev-issued", (now - 5).to_string())];
     let (status, problem) = portal.send("GET", "/employer/v1/schemes", &old, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("session_revoked")));
+}
+
+/// Purpose: staff who open a policy whose owner the customer master says to serve with care see the adjustments in effect and when
+/// they are reviewed, under no label; only a specialist whose role needs it sees why; nothing is shown for anyone else; and when the
+/// master cannot answer, staff are told it is unknown.
+/// Why it matters: an officer who cannot see that a customer needs plain language or more time will not give it. Showing every
+/// officer why (bereavement, illness, financial abuse) would spread the most private fact held about the person to people who
+/// do not need it.
+#[tokio::test]
+async fn staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why() {
+    let portal = portal();
+    let open = |who: &'static str| {
+        let path = format!("/staff/v1/policies/{}?case=case-v", portal.retail);
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let (status, view) = open("sub-sue").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(view.get("approach").is_none() && view.get("may_see_kind").is_none(), "{view}");
+
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
+    let officer = open("sub-sue").await.1;
+    assert_eq!(officer["approach"], json!({ "adjustments": ["plain_language"], "review_on": null }));
+    let specialist = open("sub-hcs").await.1;
+    assert_eq!(specialist["approach"]["kind"], "bereavement");
+    assert_eq!(specialist["approach"]["adjustments"], json!(["plain_language"]));
+
+    portal.master.down.store(true, Ordering::SeqCst);
+    assert_eq!(open("sub-sue").await.1["approach"], json!({ "unavailable": true }));
 }
 
 /// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module

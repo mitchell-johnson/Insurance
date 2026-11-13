@@ -2441,11 +2441,36 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
             at: session.at,
         })
         .await?;
-    let view = s.logged(view).await?;
+    let mut view = s.logged(view).await?;
     if view["found"] != true {
         return Err(Problem::not_found());
     }
+    let may_see_kind = view.as_object_mut().and_then(|v| v.remove("may_see_kind")) == Some(Value::Bool(true));
+    let holder = view["policyholder"].as_str().map(PartyId::from);
+    if let (Some(master), Some(holder)) = (&s.master, holder) {
+        if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
+            view["approach"] = approach;
+        }
+    }
     ok(view)
+}
+
+/// How to serve the policyholder, for staff who opened their policy: the
+/// adjustments in effect and when they are next reviewed, with no label; why
+/// only for those whose role needs it. Nothing when nothing is in effect; a
+/// master that cannot answer says so, so staff take care rather than assume.
+fn approach(routing: Result<crate::customers::Answered, String>, may_see_kind: bool) -> Option<Value> {
+    match routing {
+        Ok((200, body)) if body["route_to_person"] == true => {
+            let mut approach = json!({ "adjustments": body["adjustments"], "review_on": body["review_on"] });
+            if may_see_kind && !body["kind"].is_null() {
+                approach["kind"] = body["kind"].clone();
+            }
+            Some(approach)
+        }
+        Ok((200, _)) => None,
+        _ => Some(json!({ "unavailable": true })),
+    }
 }
 
 /// Staff access commands: request, approve and revoke grants, break-glass,

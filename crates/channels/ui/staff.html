@@ -7,7 +7,7 @@
 
 <div data-panel="policy">
 <section><h2>Look up a policy</h2><form id="lookup"><div class="row"><div><label for="pol">Policy ID</label><input id="pol" required></div><div><label for="case">Case or task you are working on</label><input id="case" required></div><div><label for="scope">Queue or team (optional)</label><input id="scope" placeholder="queue:claims-life"></div><button>Open</button></div></form><div id="lookup-msg" aria-live="polite"></div></section>
-<section id="pol-view" hidden><h2>Policy</h2><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
+<section id="pol-view" hidden><h2>Policy</h2><div id="approach"></div><div id="withheld"></div><div id="pol-rows"></div><h2>Advisers</h2><div id="pol-advisers"></div>
 <h2>Make a request for the customer</h2><form id="for-customer"><div class="row"><div><label for="ckind">Change</label><select id="ckind"><option value="change_frequency">Change payment frequency</option><option value="decline_indexation">Decline indexation</option><option value="cancel_policy">Cancel policy</option></select></div><div><label for="cnote">Details</label><input id="cnote"></div><div><label for="creason">Why (recorded with your name and the case)</label><input id="creason" required></div><div><label for="ceffective">Effective from (optional)</label><input id="ceffective" type="date"></div><div><label for="camount">Amount it moves, in dollars (optional)</label><input id="camount" type="number" min="0" step="0.01"></div><button>Send to customer's app</button></div><p class="muted">The customer approves it in their app. You cannot approve it for them. A change above your limit, or dated in the past, goes to a second member of staff first.</p></form><div id="cust-msg" aria-live="polite"></div></section></div>
 <section><h2>Be the second person on a colleague's change</h2><p class="muted">A change a colleague entered for a customer that is above their limit, or dated in the past, needs you to agree it before it goes to the customer.</p><form id="second"><div class="row"><div><label for="second-id">Request</label><input id="second-id" required></div><button>Agree it</button></div></form><div id="second-msg" aria-live="polite"></div></section>
 
@@ -51,6 +51,11 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
   const q = new URLSearchParams({ case: $("case").value }); if ($("scope").value) q.set("scope", $("scope").value);
   const view = await api(R, "GET", `/staff/v1/policies/${encodeURIComponent($("pol").value)}?${q}`);
   policy = $("pol").value; $("pol-view").hidden = false; clear($("lookup-msg"));
+  // How to serve the policyholder: adjustments only, never a label; why only for a role that needs it.
+  const a = view.approach;
+  put($("approach"), !a ? null : a.unavailable
+    ? h("div", { class: "banner warn" }, "Whether this customer needs anything done differently could not be checked. Take care, and check again before any change.")
+    : h("div", { class: "banner" }, `Serve this customer with: ${a.adjustments.map(words).join(", ") || "care"}.` + (a.review_on ? ` Reviewed ${a.review_on}.` : "") + (a.kind ? ` Reason: ${words(a.kind)}.` : "")));
   put($("withheld"), view.withheld ? h("div", { class: "banner warn" }, `${view.withheld} item(s) are withheld because your role does not include that class of data.`) : null);
   put($("pol-rows"), table(["What", "About", "Details"], view.rows.map((r) => [r.kind + (r.sensitive ? " (sensitive)" : ""), r.subject || "", h("pre", {}, JSON.stringify(r.body, null, 1))])));
   put($("pol-advisers"), table(["Adviser", "Standing"], view.advisers.map((a) => [a.adviser, a.standing.state === "read_only" ? `Read-only since ${a.standing.since} (${words(a.standing.status)} licence of ${a.standing.licence_of})` : words(a.standing.state)])));

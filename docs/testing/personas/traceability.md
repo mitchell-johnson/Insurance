@@ -123,7 +123,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| AUD-001 | part | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
+| AUD-001 | full | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::a_member_of_a_large_scheme_holds_their_own_cover_only`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
 | AUD-002 | part | `readmodel/src/scope.rs::policyholder_sees_policy_but_not_another_adults_health_facts`<br>`channels/tests/journeys.rs::family_privacy_and_consent` |
 | AUD-003 | part | `channels/tests/journeys.rs::family_privacy_and_consent`<br>`channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
@@ -429,7 +429,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
-| VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
+| VUL-002 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person`<br>`channels/tests/http.rs::staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why` |
 | VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |

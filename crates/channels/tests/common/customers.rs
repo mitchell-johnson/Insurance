@@ -148,7 +148,11 @@ impl Master for MasterDouble {
             })?;
             let to_person = self.vulnerable.lock().unwrap().contains(&party.0);
             let adjustments = if to_person { json!(["plain_language"]) } else { json!([]) };
-            Ok((200, json!({ "route_to_person": to_person, "adjustments": adjustments, "review_on": null })))
+            let mut answer = json!({ "route_to_person": to_person, "adjustments": adjustments, "review_on": null });
+            if to_person {
+                answer["kind"] = json!("bereavement");
+            }
+            Ok((200, answer))
         })
     }
 
