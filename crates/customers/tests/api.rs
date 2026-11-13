@@ -1028,3 +1028,72 @@ async fn a_death_prompts_a_person_to_consider_the_bereaved() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(prompted().await, expected);
 }
+
+/// Purpose: when someone questions whether a person can make their own decisions, every
+/// representative's act is routed to a person (reason `capacity_in_question`) whatever
+/// their authority says, before or after it is activated, while someone with no
+/// authority is still refused; other services go on reading the record; only legal
+/// settles the question, with an outcome from the list, and then authority applies as
+/// before. Persona row VUL-018.
+/// Why it matters: an attorney acting on a power whose trigger is disputed, or before
+/// legal has looked, can move money the person never agreed to; stopping cover or claims
+/// while the question is open would harm the person instead.
+#[tokio::test]
+async fn a_capacity_question_pauses_representatives() {
+    let w = world_or_skip!();
+    let donor = w.person("Beverley", "Ngata", "1941-02-02", &[]).await;
+    let attorney = w.person("Fiona", "Ngata", "1970-07-07", &[]).await;
+    let stranger = w.person("Kim", "Other", "1980-01-01", &[]).await;
+    let epa = json!({ "command": "add_relationship", "id": "epa", "kind": "attorney",
+        "target": { "kind": "party", "id": donor }, "valid_from": "2026-03-01",
+        "attributes": { "basis": "enduring_power_of_attorney", "document": "doc_9", "scope": ["change_payment_method"] } });
+    let (status, out) = w.command(&attorney, "staff", epa).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let decide = |actor: String, on: &'static str| {
+        let w = &w;
+        let path = format!("/v1/parties/{donor}/authority?actor={actor}&act=change_payment_method&on={on}");
+        async move {
+            let (status, out) = w.get(&path, "policy-servicing", "servicing").await;
+            assert_eq!(status, StatusCode::OK, "{out}");
+            (out["decision"].as_str().unwrap().to_string(), out["reason"].as_str().unwrap().to_string())
+        }
+    };
+    assert_eq!(decide(attorney.clone(), "2026-04-01").await, ("allow".into(), "within_scope".into()));
+    // Documents cannot raise it; staff can, once.
+    let (status, _) = w.command(&donor, "documents", json!({ "command": "question_capacity" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, out) = w.command(&donor, "staff", json!({ "command": "question_capacity" })).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["capacity_questioned"]));
+    let (_, out) = w.command(&donor, "claims", json!({ "command": "question_capacity" })).await;
+    assert_eq!(out["events"], json!([]), "asked again, nothing new");
+    for on in ["2026-02-01", "2026-04-01"] {
+        assert_eq!(decide(attorney.clone(), on).await, ("route".into(), "capacity_in_question".into()), "{on}");
+    }
+    assert_eq!(decide(stranger.clone(), "2026-04-01").await, ("refuse".into(), "no_authority".into()));
+    // Cover and claims go on: documents still reach the person.
+    let (status, _) = w
+        .get(
+            &format!("/v1/parties/{donor}/contact-points?purpose=notices&channel=post"),
+            "documents",
+            "notices",
+        )
+        .await;
+    assert_ne!(status, StatusCode::FORBIDDEN);
+    // Only legal settles it, with an outcome from the list.
+    let (status, _) = w
+        .command(&donor, "staff", json!({ "command": "settle_capacity", "outcome": "lacks_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = w.command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "unsure" })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, out) = w
+        .command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "lacks_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(decide(attorney.clone(), "2026-04-01").await, ("allow".into(), "within_scope".into()));
+    let (status, _) = w
+        .command(&donor, "legal", json!({ "command": "settle_capacity", "outcome": "has_capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing open to settle");
+}

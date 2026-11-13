@@ -489,21 +489,24 @@ async fn authority<W: KeyWrapper, S: WormStore>(
     if !PartyId::plausible(&q.actor) {
         return Err(refused(StatusCode::BAD_REQUEST, "invalid", "actor is a party ID"));
     }
-    let (resolved, _) = app.find(&id).await?;
+    let (resolved, party) = app.find(&id).await?;
     if !app.access.allows(&app.ask(&ctx), "authority") {
         return Err(app.deny(&ctx, Some(&resolved), "authority").await);
     }
     let on = q.on.unwrap_or_else(|| Utc::now().date_naive());
     let target = Target::Party(resolved.clone());
-    let held: Vec<_> = app
+    // Every representative relationship the actor has to the party that has
+    // not ended, including one not yet activated.
+    let named: Vec<_> = app
         .store
         .relationships_of(&PartyId(q.actor.clone()))
         .await
         .map_err(failed)?
         .into_iter()
         .map(|r| r.relationship)
-        .filter(|r| r.kind.represents() && r.target == target && r.in_force(on))
+        .filter(|r| r.kind.represents() && r.target == target && r.valid_to.is_none_or(|to| to > on))
         .collect();
+    let held: Vec<_> = named.iter().filter(|r| r.in_force(on)).cloned().collect();
     let covers = |r: &&crate::model::Relationship| {
         r.attributes
             .get("scope")
@@ -511,6 +514,9 @@ async fn authority<W: KeyWrapper, S: WormStore>(
             .is_some_and(|s| s.iter().any(|v| v == q.act.as_str() || v == "all"))
     };
     let (decision, reason, by) = match held.iter().find(covers) {
+        // While capacity is in question no representative acts; the
+        // question goes to a person (legal), whatever the authority says.
+        _ if party.capacity_in_question && !named.is_empty() => ("route", "capacity_in_question", named.iter().find(covers).or(named.first())),
         Some(r) if q.benefits_actor && crate::model::SELF_BENEFIT_ACTS.contains(&q.act.as_str()) => ("route", "benefits_representative", Some(r)),
         Some(r) => ("allow", "within_scope", Some(r)),
         None if held.is_empty() => ("refuse", "no_authority", None),
