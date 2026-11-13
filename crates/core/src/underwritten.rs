@@ -17,7 +17,7 @@ use ic_product::schedule::period_start;
 use crate::billing::{raise_receivable, Bill};
 use crate::cash;
 use crate::catalog::Catalog;
-use crate::command::{AlteredTerms, ReinstatementTerms, UnderwrittenLayer};
+use crate::command::{AddedCover, AlteredTerms, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
 use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
@@ -104,6 +104,112 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
 
     if let (Some(period), Some(without)) = (billed, without) {
         let with = retail_premium_with(catalog, &product, policy, period.0, &mut ctx.work, Layers::With(&spec.cover, id))?;
+        adjust(ledger, policy, ctx, &spec.life, effective, period, &with, &without)?;
+    }
+    Ok(())
+}
+
+/// Give a life a cover it does not hold, from today. The cover joins the
+/// policy if nobody on it had it. The product's combination rules are
+/// checked on what the life would hold, and the days left of a period
+/// already billed are billed for the new cover at once, at the price the
+/// whole policy has with it less the price it had without, so a discount
+/// the new cover earns or changes is in the difference.
+pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: AddedCover) -> Result<(), Reject> {
+    if policy.status != PolicyStatus::InForce {
+        return Err(Reject::new("not_in_force", "cover can only be added to a policy in force"));
+    }
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?
+        .clone();
+    let unknown_cover = || Reject::new("unknown_cover", format!("the product does not offer {} as a cover priced per life", spec.cover));
+    let def = product
+        .cover(&spec.cover)
+        .filter(|d| d.rating.premium_type != ic_product::PremiumType::GroupUnitRate)
+        .ok_or_else(unknown_cover)?;
+    let effective = ctx.date.max(policy.inception);
+    if !policy.lives.get(&spec.life).is_some_and(|l| l.in_force_on(effective)) {
+        return Err(Reject::new("unknown_life", format!("life {} is not on the policy", spec.life)));
+    }
+    if spec.sum_insured_minor < 0 || spec.loadings.iter().any(|l| l.get().is_negative()) {
+        return Err(Reject::new("invalid_cover", "a sum insured and a loading cannot be negative"));
+    }
+    ic_product::rating::check_sum_insured(def, spec.sum_insured_minor).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.cover)))?;
+    let holds = |policy: &Policy, code: &str| {
+        policy
+            .covers
+            .get(code)
+            .is_some_and(|c| c.status == CoverStatus::InForce && c.layers.iter().any(|l| l.life == spec.life && l.in_force_on(effective)))
+    };
+    if holds(policy, &spec.cover) {
+        return Err(Reject::new("cover_held", format!("life {} already holds {}", spec.life, spec.cover)));
+    }
+    if policy.covers.get(&spec.cover).is_some_and(|c| c.status != CoverStatus::InForce) {
+        return Err(Reject::new("cover_ended", format!("{} has ended on this policy", spec.cover)));
+    }
+    let mut held: std::collections::BTreeSet<&str> = policy.covers.keys().map(String::as_str).filter(|code| holds(policy, code)).collect();
+    held.insert(&spec.cover);
+    product
+        .check_composition(&held)
+        .map_err(|e| Reject::new("composition", format!("life {}: {e}", spec.life)))?;
+    let mut bindings = Vec::new();
+    if !policy.covers.contains_key(&spec.cover) {
+        for id in &def.definitions {
+            let bound = catalog
+                .bind_definition(id, effective)
+                .ok_or_else(|| Reject::new("unknown_definition", format!("definition {id} has no version in force on {effective}")))?;
+            bindings.push(bound);
+        }
+    }
+
+    let billed = billed_period(policy, effective)?;
+    let without = match billed {
+        // Every layer in force today counts, so cover added earlier in the
+        // same period is in both prices and only this cover is in the difference.
+        Some((start, _)) => Some(retail_premium_with(catalog, &product, policy, start, &mut ctx.work, Layers::On(effective))?),
+        None => None,
+    };
+
+    let cover = policy.covers.entry(spec.cover.clone()).or_insert_with(|| crate::policy::Cover {
+        code: def.code.clone(),
+        cover_type: def.cover_type.clone(),
+        status: CoverStatus::InForce,
+        start: effective,
+        definitions: bindings,
+        layers: vec![],
+        formula_driven: false,
+    });
+    let cover_type = cover.cover_type.clone();
+    let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+    cover.layers.push(Layer {
+        id,
+        life: spec.life.clone(),
+        start: effective,
+        end: None,
+        sum_insured_minor: spec.sum_insured_minor,
+        origin: LayerOrigin::Increase,
+        loadings: spec.loadings,
+        exclusions: spec.exclusions,
+        loading_itemised: false,
+        rated_from: None,
+        member_pays: MemberPays::Nothing,
+    });
+    ctx.emit(Event::LayerAdded {
+        policy: policy.id.clone(),
+        layer: LayerInfo {
+            cover: spec.cover.clone(),
+            cover_type,
+            layer: id,
+            life: spec.life.clone(),
+            sum_insured_minor: spec.sum_insured_minor,
+            start: effective,
+        },
+        origin: LayerOrigin::Increase,
+        continues: None,
+    });
+    if let (Some(period), Some(without)) = (billed, without) {
+        let with = retail_premium_with(catalog, &product, policy, period.0, &mut ctx.work, Layers::On(effective))?;
         adjust(ledger, policy, ctx, &spec.life, effective, period, &with, &without)?;
     }
     Ok(())

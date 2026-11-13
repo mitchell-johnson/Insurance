@@ -63,7 +63,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | GRP Group scheme administration | 19 | 10 | 11 | 4 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
-| HLT Composable health product | 2 | 1 | 8 | 2 |
+| HLT Composable health product | 2 | 3 | 6 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 4 | 18 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
@@ -77,12 +77,12 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **234** | **128** | **215** | **140** |
+| **Total** | **234** | **130** | **213** | **140** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 85 | 24 | 33 |
+| B | 85 | 26 | 31 |
 | C | 118 | 71 | 157 |
 | D | 2 | 3 | 15 |
 

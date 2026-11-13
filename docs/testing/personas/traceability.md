@@ -301,6 +301,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
 | HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
+| HLT-003 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
+| HLT-006 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 
 ## JNT Joint lives, ownership, assignments and dependants
