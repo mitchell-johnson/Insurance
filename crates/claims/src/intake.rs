@@ -162,6 +162,7 @@ impl ClaimsState {
             interests: vec![],
             migrated: false,
             investigation: None,
+            continued_from: facts.continuation_of.clone(),
             in_run: None,
             decisions: vec![],
             pending: None,
@@ -217,6 +218,12 @@ impl ClaimsState {
                 ("gross_reserve_minor", gross.to_string()),
                 ("periodic", periodic.to_string()),
                 ("catastrophe_event", claim.catastrophe_event.clone().unwrap_or_default()),
+                // A continuation policy's claim stays with the scheme's treaty history.
+                (
+                    "continued_from_policy",
+                    claim.continued_from.as_ref().map(|c| c.policy.clone()).unwrap_or_default(),
+                ),
+                ("continued_from_life", claim.continued_from.as_ref().map(|c| c.life.clone()).unwrap_or_default()),
             ]
         };
         match (straight, pre_approval) {
