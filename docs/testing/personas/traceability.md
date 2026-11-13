@@ -320,6 +320,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-009 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |
 | JNT-011 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases`<br>`documents/tests/interests.rs::a_released_or_future_interest_is_owed_nothing` |
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
+| JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
+| JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
+| JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
+| JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
 ## ADV Advisers and commission
 

@@ -61,7 +61,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 21 | 9 | 10 | 3 |
-| JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
+| JNT Joint lives, ownership, assignments and dependants | 1 | 9 | 21 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **246** | **132** | **199** | **136** |
+| **Total** | **246** | **136** | **195** | **136** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 86 | 29 | 27 |
-| C | 129 | 70 | 147 |
+| C | 129 | 74 | 143 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -95,7 +95,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **UW** (2): UW-012, UW-030
 - **INV** (2): INV-018, INV-019
 - **GRP** (1): GRP-017
-- **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
+- **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
 - **HLT** (2): HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
@@ -122,7 +122,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (9): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028
-- **JNT** (3): JNT-001, JNT-008, JNT-013
+- **JNT** (5): JNT-001, JNT-008, JNT-013, JNT-023, JNT-030
 - **ADV** (3): ADV-019, ADV-035, ADV-037
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
