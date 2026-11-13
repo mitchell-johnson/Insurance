@@ -85,6 +85,9 @@ def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False)
 def multi_cover_discount(min_covers, percent):
     return {"kind": "multi_cover_discount", "min_covers": min_covers, "percent": percent}
 
+def composition(core = [], requires = {}, exclusive = []):
+    return {"kind": "composition", "core": core, "requires": requires, "exclusive": exclusive}
+
 def cooling_off(days):
     return {"kind": "cooling_off", "days": days}
 

@@ -123,9 +123,14 @@ pub fn question(name: &str, field: impl Fn(&str) -> Option<String>) -> Result<Qu
     Ok(match name {
         "queue" => Question::Queue {
             queue: serde_json::from_value(json!(needs("queue")?)).map_err(|_| "there is no such queue".to_string())?,
+            // Who is asking is filled in from the session, never from the page.
+            staff: None,
         },
         "claim" => Question::Claim { claim: needs("claim")? },
-        "work" => Question::Work { claim: needs("claim")? },
+        "work" => Question::Work {
+            claim: needs("claim")?,
+            staff: None,
+        },
         "policy" => Question::PolicyStatus { policy: needs("policy")? },
         // Who is asking is filled in from the session, never from the page.
         "cases" => Question::Cases { staff: String::new() },

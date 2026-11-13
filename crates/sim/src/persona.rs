@@ -77,6 +77,7 @@ pub fn member(member_ref: &str, dob: NaiveDate, category: &str, salary_minor: i6
 /// allocated to funds on the product's menu.
 pub fn invest_plan(n: u64, inception: NaiveDate, dob: NaiveDate, sex: Sex) -> IssuePolicy {
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("KIP{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -128,6 +129,7 @@ pub fn term_life(
         });
     }
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("KTL{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -159,6 +161,7 @@ pub fn health_family(n: u64, inception: NaiveDate, dobs: &[NaiveDate], frequency
         })
         .collect();
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("EVH{n:08}"),
         group: GroupId(format!("grp-{n:08}")),
@@ -172,9 +175,46 @@ pub fn health_family(n: u64, inception: NaiveDate, dobs: &[NaiveDate], frequency
     }
 }
 
+/// A mix-and-match health policy: each person is a life with the covers
+/// chosen for them, which need not be the same from one person to the next.
+pub fn health_flex(n: u64, inception: NaiveDate, people: &[(NaiveDate, &[&str])], frequency: Frequency) -> IssuePolicy {
+    let lives: Vec<LifeSpec> = people
+        .iter()
+        .enumerate()
+        .map(|(i, (dob, _))| named_life(&format!("life-{}", i + 1), &format!("party-{n:08}-{}", i + 1), *dob, Sex::Female, false))
+        .collect();
+    let covers = lives
+        .iter()
+        .zip(people)
+        .flat_map(|(l, (_, chosen))| {
+            chosen.iter().map(|code| CoverSpec {
+                code: code.to_string(),
+                life: Some(l.id.clone()),
+                sum_insured_minor: 0,
+                loadings: vec![],
+                exclusions: vec![],
+            })
+        })
+        .collect();
+    IssuePolicy {
+        continuation_of: None,
+        policy: PolicyId(format!("pol-{n:08}")),
+        number: format!("FLX{n:08}"),
+        group: GroupId(format!("grp-{n:08}")),
+        policyholder: PartyId(format!("party-{n:08}-1")),
+        product_code: "health-flex".to_string(),
+        inception,
+        frequency,
+        lives,
+        covers,
+        migrated: false,
+    }
+}
+
 /// A group life scheme with its first members.
 pub fn group_scheme(n: u64, inception: NaiveDate, first_members: Vec<LifeSpec>) -> IssuePolicy {
     IssuePolicy {
+        continuation_of: None,
         policy: PolicyId(format!("pol-{n:08}")),
         number: format!("WPL{n:08}"),
         group: GroupId(format!("grp-{n:08}")),

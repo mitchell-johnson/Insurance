@@ -39,6 +39,11 @@ pub enum StoreError {
     Integrity(String),
 }
 
+/// Stored data that did not read back as written.
+fn integrity(e: impl std::fmt::Display) -> StoreError {
+    StoreError::Integrity(e.to_string())
+}
+
 impl From<Reject> for StoreError {
     fn from(r: Reject) -> Self {
         StoreError::Refused(r)
@@ -257,11 +262,13 @@ impl<W: KeyWrapper> Store<W> {
             let caller: String = r.get(3);
             let commitment: Vec<u8> = r.get(4);
             let ciphertext: Option<Vec<u8>> = r.get(5);
-            let seq = u64::try_from(seq).map_err(|_| StoreError::Integrity("negative sequence".into()))?;
+            let seq = u64::try_from(seq).map_err(integrity)?;
             match (&key, ciphertext) {
                 (Some(key), Some(ct)) => {
-                    let payload = crypto::open(key, &id.0, seq, &ct, &commitment).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
-                    let rec = serde_json::from_value::<Recorded>(payload).map_err(|e| StoreError::Integrity(format!("{id} event {seq}: {e}")))?;
+                    let rec = crypto::open(key, &id.0, seq, &ct, &commitment)
+                        .map_err(crate::text)
+                        .and_then(|payload| serde_json::from_value::<Recorded>(payload).map_err(crate::text))
+                        .map_err(|e| integrity(format!("{id} event {seq}: {e}")))?;
                     records.push(rec);
                 }
                 // Erased: only the tombstone means anything.
@@ -345,7 +352,7 @@ impl<W: KeyWrapper> Store<W> {
             let (ciphertext, commitment) = match (&rec.body, &loaded.key) {
                 (EventBody::Shredded, _) => (None, vec![0u8; 32]),
                 (_, Some(key)) => {
-                    let payload = serde_json::to_value(&rec).map_err(|e| StoreError::Integrity(e.to_string()))?;
+                    let payload = serde_json::to_value(&rec).map_err(integrity)?;
                     let env = crypto::seal(key, &id.0, seq, &payload);
                     (Some(env.ciphertext), env.commitment.to_vec())
                 }
@@ -379,7 +386,7 @@ impl<W: KeyWrapper> Store<W> {
             loaded.party.apply(&rec);
             self.project(tx, &id, &rec).await?;
             let public = PublicEvent::of(&id, &rec, ended.as_ref());
-            let body = serde_json::to_value(&public).map_err(|e| StoreError::Integrity(e.to_string()))?;
+            let body = serde_json::to_value(&public).map_err(integrity)?;
             tx.execute(
                 "insert into outbox (party_id, seq, priority, body, created_at) values ($1, $2, $3, $4, $5)",
                 &[&id.0, &version_i64(seq), &public.priority, &body, &now],
@@ -508,7 +515,7 @@ impl<W: KeyWrapper> Store<W> {
         let tx = client.transaction().await.map_err(db)?;
         if let Some(idem) = idem {
             if let Some(answer) = self.remembered(&tx, idem).await? {
-                return serde_json::from_value(answer).map_err(|e| StoreError::Integrity(e.to_string()));
+                return serde_json::from_value(answer).map_err(integrity);
             }
         }
         let (key, wrapped) = self.keys.issue(&id).await.map_err(StoreError::Unavailable)?;
@@ -572,7 +579,7 @@ impl<W: KeyWrapper> Store<W> {
         let tx = client.transaction().await.map_err(db)?;
         if let Some(idem) = idem {
             if let Some(answer) = self.remembered(&tx, idem).await? {
-                return serde_json::from_value(answer).map_err(|e| StoreError::Integrity(e.to_string()));
+                return serde_json::from_value(answer).map_err(integrity);
             }
         }
         let mut loaded = self.load_with(&tx, id, true).await?.ok_or_else(|| reject("not_found", "no such party"))?;
@@ -644,7 +651,7 @@ impl<W: KeyWrapper> Store<W> {
                 _ => None,
             };
             if let Some(command) = command {
-                let command = serde_json::to_value(&command).map_err(|e| StoreError::Integrity(e.to_string()))?;
+                let command = serde_json::to_value(&command).map_err(integrity)?;
                 tx.execute(
                     "insert into directory_relay (party_id, command, recorded_at) values ($1, $2, $3)",
                     &[&id.0, &command, &now],
@@ -680,7 +687,7 @@ impl<W: KeyWrapper> Store<W> {
     async fn load_pair(&self, tx: &Transaction<'_>, a: &PartyId, b: &PartyId) -> Result<(Loaded, Loaded)> {
         let missing = |id: &PartyId| StoreError::Refused(reject("not_found", format!("no party {id}")));
         let (first, second) = if a < b { (a, b) } else { (b, a) };
-        let l1 = self.load_with(tx, first, true).await?.ok_or_else(|| missing(first))?;
+        let l1 = self.load_with(tx, first, true).await?.ok_or(missing(first))?;
         let l2 = self.load_with(tx, second, true).await?.ok_or_else(|| missing(second))?;
         Ok(if a < b { (l1, l2) } else { (l2, l1) })
     }
@@ -891,9 +898,7 @@ impl<W: KeyWrapper> Store<W> {
         rows.iter()
             .map(|r| {
                 let body: Value = r.get(1);
-                serde_json::from_value(body)
-                    .map(|e| (r.get(0), e))
-                    .map_err(|e| StoreError::Integrity(e.to_string()))
+                serde_json::from_value(body).map(|e| (r.get(0), e)).map_err(integrity)
             })
             .collect()
     }
@@ -1220,15 +1225,12 @@ fn row_to_relationship(r: &tokio_postgres::Row) -> Result<RelationshipRow> {
         party: PartyId(r.get(0)),
         relationship: Relationship {
             id: r.get(1),
-            kind: crate::model::RelationshipKind::parse(&kind).ok_or_else(|| bad("kind"))?,
-            target: Target::from_parts(&target_kind, &target_id).ok_or_else(|| bad("target"))?,
+            kind: crate::model::RelationshipKind::parse(&kind).ok_or(bad("kind"))?,
+            target: Target::from_parts(&target_kind, &target_id).ok_or(bad("target"))?,
             valid_from: r.get(5),
             valid_to: r.get(6),
             recorded_at: r.get(7),
-            attributes: match attributes {
-                Value::Object(m) => m,
-                _ => serde_json::Map::new(),
-            },
+            attributes: attributes.as_object().cloned().unwrap_or_default(),
         },
     })
 }

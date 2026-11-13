@@ -574,6 +574,14 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// Every nomination for a death benefit ever recorded, in the order
+    /// recorded. Nothing is edited or removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub nominations: Vec<crate::nomination::Nomination>,
+    /// The scheme membership this policy carries on from, where it was
+    /// issued under a leaver's continuation option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_of: Option<crate::command::ContinuationOf>,
     /// Payments settled from a payable, by payment ID, so a payment the
     /// bank sends back can be reversed exactly.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

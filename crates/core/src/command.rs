@@ -65,6 +65,20 @@ pub struct IssuePolicy {
     /// may say so, and it must.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub migrated: bool,
+    /// The scheme membership this policy carries on from, where a leaver
+    /// took up the continuation option. Only scheme administration may say
+    /// so. Claims links the scheme's history to a claim on this policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation_of: Option<ContinuationOf>,
+}
+
+/// The scheme policy and member a continuation policy carries on from. The
+/// scheme may be on another partition, so the core records it and does not
+/// look it up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuationOf {
+    pub policy: PolicyId,
+    pub life: LifeId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -444,6 +458,8 @@ pub enum Command {
     /// A lender's or assignee's interest in a policy: recorded, consented
     /// for, released.
     Interest(Box<crate::interest::InterestCommand>),
+    /// Record a nomination for a death benefit, a change to one or its removal.
+    Nominate(Box<crate::nomination::Nominate>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -571,6 +587,7 @@ impl Command {
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
             Command::Interest(command) => command.allowed_callers(),
+            Command::Nominate(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
             Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
@@ -629,6 +646,7 @@ impl Command {
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",
             Command::Interest(_) => "interest",
+            Command::Nominate(_) => "nominate",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",

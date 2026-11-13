@@ -178,6 +178,16 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             });
         }
     }
+    for life in lives.keys() {
+        let held: std::collections::BTreeSet<&str> = covers
+            .iter()
+            .filter(|(_, c)| c.layers.iter().any(|l| &l.life == life))
+            .map(|(code, _)| code.as_str())
+            .collect();
+        product
+            .check_composition(&held)
+            .map_err(|e| Reject::new("composition", format!("life {life}: {e}")))?;
+    }
     let policy = Policy {
         id: cmd.policy.clone(),
         number: cmd.number,
@@ -223,6 +233,8 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),
+        nominations: vec![],
+        continuation_of: cmd.continuation_of,
         payments: BTreeMap::new(),
         cessions: BTreeMap::new(),
     };
@@ -251,6 +263,22 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         return Err(Reject::new(
             "migrated",
             "a migrated policy is issued by the migration load, and the migration load issues nothing else",
+        ));
+    }
+    if cmd.continuation_of.is_some() && ctx.caller != "group-admin" {
+        return Err(Reject::new(
+            "continuation",
+            "only scheme administration says a policy carries on from a scheme membership",
+        ));
+    }
+    if cmd
+        .continuation_of
+        .as_ref()
+        .is_some_and(|c| c.policy == cmd.policy || c.policy.0.is_empty() || c.life.0.is_empty())
+    {
+        return Err(Reject::new(
+            "continuation",
+            "a continuation names the scheme policy and the member it carries on from",
         ));
     }
     let (mut policy, product) = build_policy(&state.catalog, cmd, ctx.date, ctx.index)?;

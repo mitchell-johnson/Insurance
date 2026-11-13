@@ -199,12 +199,27 @@ pub enum Feature {
     CoolingOff {
         days: u32,
     },
+    /// The rules for combining covers on a mix-and-match product. They hold
+    /// for each life's own set of covers, so a family policy can give each
+    /// life a different set.
+    Composition {
+        /// A life with any cover holds at least one of these.
+        #[serde(default)]
+        core: Vec<String>,
+        /// A cover and the covers the same life must also hold to have it.
+        #[serde(default)]
+        requires: BTreeMap<String, Vec<String>>,
+        /// Sets of covers of which a life holds at most one.
+        #[serde(default)]
+        exclusive: Vec<Vec<String>>,
+    },
 }
 
 impl Feature {
     /// The defined order features run in.
     pub fn order(&self) -> u8 {
         match self {
+            Feature::Composition { .. } => 5,
             Feature::MultiCoverDiscount { .. } => 10,
             Feature::Indexation { .. } => 20,
             Feature::Billing { .. } => 30,
@@ -243,6 +258,36 @@ pub struct ArrearsRules {
 }
 
 impl ProductDefinition {
+    /// Whether one life may hold exactly this set of covers under the
+    /// product's composition rules. A product that declares none allows any
+    /// set, and a life with no covers breaks no rule.
+    pub fn check_composition(&self, held: &std::collections::BTreeSet<&str>) -> Result<(), String> {
+        let Some((core, requires, exclusive)) = self.features.iter().find_map(|f| match f {
+            Feature::Composition { core, requires, exclusive } => Some((core, requires, exclusive)),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        if held.is_empty() {
+            return Ok(());
+        }
+        if !core.is_empty() && !core.iter().any(|c| held.contains(c.as_str())) {
+            return Err(format!("at least one of {} is held", core.join(", ")));
+        }
+        for (cover, needed) in requires {
+            if let Some(missing) = needed.iter().find(|n| held.contains(cover.as_str()) && !held.contains(n.as_str())) {
+                return Err(format!("{cover} is held only with {missing}"));
+            }
+        }
+        for set in exclusive {
+            let chosen: Vec<&str> = set.iter().map(String::as_str).filter(|c| held.contains(c)).collect();
+            if chosen.len() > 1 {
+                return Err(format!("only one of {} is held", chosen.join(", ")));
+            }
+        }
+        Ok(())
+    }
+
     pub fn cover(&self, code: &str) -> Option<&CoverDefinition> {
         self.covers.iter().find(|c| c.code == code)
     }

@@ -162,3 +162,114 @@ fn a_request_that_ends_without_cover_is_closed_on_both_sides() {
     assert!(h.saw(|e| matches!(e, GroupEvent::ExcessCoverDecided { in_place: false, .. })));
     assert!(h.excess_layers("E004").is_empty());
 }
+
+/// Purpose: a loading moves from the employer to the member with the real underwriting
+/// module: cover accepted with a loading is in place with the employer paying; staff ask
+/// underwriting to offer the member the loading; a member who declines keeps the cover as
+/// it was and the scheme publishes that; a member who then accepts gets a replacement
+/// layer on which they pay the loading, the old layer ends the same day, and underwriting,
+/// told of the new layer under the original request, is issued again without confirming
+/// reinsurance capacity a second time.
+/// Why it matters: each side was built against the other's description of its messages. A
+/// key or field one side reads differently would leave the member's signed agreement
+/// unanswered, with the loading still on the employer's invoice where a small scheme lets
+/// the employer work out whose health it reflects.
+#[test]
+fn a_loading_moves_to_the_member_through_underwritings_reoffer() {
+    use ic_core::policy::MemberPays;
+    use ic_underwriting::command::OfferResponse;
+    use ic_underwriting::model::ProposalStatus;
+
+    let (mut h, request) = scheme_with_a_request();
+    let key = format!("grp-uw:{SCHEME}:{}", request.case);
+    let cover = request.cover.to_string();
+    let mut w = uw::World::new();
+    let payers = |h: &Harness| -> Vec<MemberPays> {
+        h.c.state(h.p).policies[&h.policy]
+            .covers
+            .values()
+            .flat_map(|c| c.layers.iter())
+            .filter(|l| l.life == life("E004") && l.origin == ic_core::LayerOrigin::UnderwrittenExcess)
+            .map(|l| l.member_pays)
+            .collect()
+    };
+    let reoffer = |w: &mut uw::World, reason: &str| {
+        w.ok(
+            "group-admin",
+            Uw::ReofferExcessTerms {
+                proposal: key.as_str().into(),
+                reason: reason.into(),
+            },
+        )
+    };
+    let answer = |w: &mut uw::World, response: OfferResponse| {
+        let offer = w.p(&key).open_reoffer().expect("an open offer").id.clone();
+        let signed = uw::signed("offer", &[&key, "E004", &offer, response.key()]);
+        w.ok(
+            "new-business",
+            Uw::RespondToOffer {
+                proposal: key.as_str().into(),
+                life: "E004".into(),
+                offer,
+                response,
+                signed,
+            },
+        )
+    };
+
+    // Accepted with a loading by an underwriter, agreed by the member, written by the core.
+    deliver(&mut w, |at, today| underwriting_envelope(&key, at, today, &request).unwrap()).unwrap();
+    w.disclose(&key, "E004", &uw::yes("heart_condition"));
+    let case = w.take(&key, "E004", "amy");
+    let proposed = w.propose(&case, "amy", vec![uw::accept(&cover, 50, None)]).unwrap();
+    w.automatic(&proposed);
+    w.respond(&key, "E004", OfferResponse::Accept);
+    assert_eq!(carry_answers(&w, &mut h), 1);
+    assert_eq!(payers(&h), vec![MemberPays::Nothing], "the employer pays the loading in its total");
+    let (request_key, outcome) = h.outcomes[0].clone();
+    deliver(&mut w, |at, today| {
+        underwriting_outcome(&format!("{key}/excess-issued"), at, today, &request_key, &outcome)
+    })
+    .unwrap();
+    assert!(matches!(w.p(&key).status, ProposalStatus::Issued { .. }));
+
+    // Offered and declined: the cover stands and the scheme says so.
+    reoffer(&mut w, "too few members with underwritten cover for a total");
+    assert!(answer(&mut w, OfferResponse::Decline)
+        .effects
+        .iter()
+        .any(|e| matches!(e, Effect::ReofferEnded { .. })));
+    carry_answers(&w, &mut h);
+    assert!(h.saw(|e| matches!(e, GroupEvent::LoadingMoveDeclined { case, .. } if *case == request.case)));
+    assert_eq!(payers(&h), vec![MemberPays::Nothing]);
+    assert_eq!(h.outcomes.len(), 1);
+
+    // Offered again and accepted: a replacement layer, the member paying.
+    reoffer(&mut w, "asked again after a call with the member");
+    answer(&mut w, OfferResponse::Accept);
+    assert_eq!(w.p(&key).status, ProposalStatus::Issuing);
+    let moved = h.today();
+    carry_answers(&w, &mut h);
+    assert_eq!(payers(&h), vec![MemberPays::Nothing, MemberPays::Loading]);
+    assert_eq!(h.excess_layers("E004"), vec![(request.excess_minor, Some(moved)), (request.excess_minor, None)]);
+    assert_eq!(h.scheme().cases[&request.case].status, CaseStatus::Ended);
+
+    // Underwriting hears of the new layer under the request it knows.
+    assert_eq!(h.outcomes.len(), 2);
+    let (request_key, outcome) = h.outcomes[1].clone();
+    assert_eq!(request_key, key);
+    let written = deliver(&mut w, |at, today| {
+        underwriting_outcome(&format!("{key}/excess-issued/2"), at, today, &request_key, &outcome)
+    })
+    .unwrap();
+    assert!(matches!(w.p(&key).status, ProposalStatus::Issued { .. }));
+    assert!(
+        !written.effects.iter().any(|e| matches!(e, Effect::ConfirmCapacity { .. })),
+        "{:?}",
+        written.effects
+    );
+    // Carried again, every answer is settled and nothing more is written.
+    carry_answers(&w, &mut h);
+    assert_eq!(h.excess_layers("E004").len(), 2);
+    assert_eq!(h.outcomes.len(), 2);
+}

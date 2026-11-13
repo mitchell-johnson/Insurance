@@ -287,7 +287,13 @@ fn the_working_view_shows_the_work_and_not_the_clinical_file() {
     assert_eq!((waiting.proposer.as_str(), waiting.still_needed, waiting.signed.len()), ("ana", 1, 0));
     assert!(w.state.work_view("nope").is_none());
     assert!(matches!(
-        w.state.answer(&ic_claims::report::Question::Work { claim: "ip-1".into() }, d(2027, 3, 1)),
+        w.state.answer(
+            &ic_claims::report::Question::Work {
+                claim: "ip-1".into(),
+                staff: None,
+            },
+            d(2027, 3, 1)
+        ),
         ic_claims::report::Reply::Work(Some(_))
     ));
 }

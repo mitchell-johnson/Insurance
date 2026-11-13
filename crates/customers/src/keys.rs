@@ -68,7 +68,7 @@ impl<W: KeyWrapper> KeyRing<W> {
                 .await
                 .map_err(|e| format!("Key Vault could not unwrap a key: {e}"))?,
         );
-        let key = crypto::key_from(&bytes).map_err(|e| e.to_string())?;
+        let key = crypto::key_from(&bytes).map_err(crate::text)?;
         self.remember(party, &key);
         Ok(key)
     }

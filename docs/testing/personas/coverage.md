@@ -57,13 +57,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 17 | 9 | 4 | 8 |
-| CLM Claims and claims operations | 19 | 16 | 7 | 12 |
+| CLM Claims and claims operations | 22 | 13 | 7 | 9 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
 | INV Unit pricing and the investment ledger | 12 | 3 | 10 | 3 |
 | GRP Group scheme administration | 19 | 10 | 11 | 4 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
-| HLT Composable health product | 0 | 0 | 11 | 4 |
+| HLT Composable health product | 2 | 1 | 8 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 4 | 18 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **228** | **130** | **219** | **146** |
+| **Total** | **233** | **128** | **216** | **141** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 83 | 23 | 36 |
-| C | 114 | 74 | 158 |
+| B | 85 | 24 | 33 |
+| C | 117 | 71 | 158 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -97,7 +97,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **GRP** (1): GRP-017
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
-- **HLT** (4): HLT-001, HLT-002, HLT-004, HLT-009
+- **HLT** (2): HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (3): ANV-001, ANV-006, ANV-014
@@ -121,7 +121,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **AUD** (7): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-011, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (6): UW-002, UW-003, UW-006, UW-014, UW-026, UW-029
-- **CLM** (12): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-026, CLM-028, CLM-029, CLM-033, CLM-039
+- **CLM** (9): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-026, CLM-028, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
 - **GRP** (3): GRP-013, GRP-028, GRP-032
