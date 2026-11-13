@@ -705,3 +705,53 @@ fn a_large_admitted_claim_is_flagged_and_forecast() {
     );
     assert!(answer(&desk.state, json!({"q": "funding_forecast", "from": "2027-11-15"})).is_err());
 }
+
+/// Purpose: when the bank refuses a unit-linked payout before it settles,
+/// the core's investment ledger is told that exact payment was rejected, at
+/// the policy's partition, and the spent reference stops waiting.
+/// Why it matters: the core holds the payout as owed under that reference
+/// until it hears. Without this a refused surrender stays "with the bank"
+/// in the ledger and servicing is never prompted to instruct it again.
+#[test]
+fn the_core_is_told_when_the_bank_refuses_a_payout() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    let raised: ic_core::EventRecord = serde_json::from_value(json!({"id": "3-90", "partition": 3, "seq": 90, "business_date": "2027-11-15", "log_index": 950, "event": {"investment": {"payout_raised": {"policy": "pol-1", "policyholder": "party-p1", "payout": "po-1", "amount_minor": 12_345_00, "reason": "surrender"}}}})).unwrap();
+    for (index, envelope) in react(&raised).into_iter().enumerate() {
+        desk.state.apply(5000 + index as u64, envelope).unwrap();
+    }
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.ok(
+        &mia(),
+        Command::TakeWaiting {
+            run: "r1".to_string(),
+            payments: ["po-1".to_string()].into(),
+            payees: [("po-1".to_string(), "p1".to_string())].into(),
+        },
+    );
+    let submission = desk.approve("r1");
+    desk.deliver(&submission);
+    desk.ok(
+        &svc(),
+        Command::RecordAcknowledgement {
+            submission,
+            refused: None,
+            rejected: [("po-1".to_string(), "account_closed".to_string())].into(),
+        },
+    );
+    let told: Vec<_> = desk.state.outbox.values().filter(|e| e.key == "payout-rejected-po-1").collect();
+    assert_eq!(told.len(), 1, "{:?}", desk.state.outbox);
+    assert_eq!(
+        told[0].instruction,
+        Instruction::CoreAt {
+            policy: policy("pol-1"),
+            caller: "payments".to_string(),
+            command: Box::new(ic_core::Command::Investment(Box::new(ic_core::invest::InvestCommand::PayoutRejected {
+                policy: policy("pol-1"),
+                payment: "po-1".to_string(),
+            }))),
+        }
+    );
+    assert!(!desk.state.outbox.values().any(|e| e.key.starts_with("claim-payment-failed-")));
+    assert!(desk.state.waiting.is_empty());
+}
