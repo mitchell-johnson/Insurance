@@ -95,3 +95,62 @@ fn a_party_is_shown_without_its_account_numbers() {
     }
     assert!(answer(&desk.state, json!({"q": "party"})).is_err());
 }
+
+/// A collection run whose file the channel took after the cutoff: makers
+/// are told it went for a later day.
+fn deferred_collection(desk: &mut Desk, run: &str, day: chrono::NaiveDate) {
+    desk.at(day.and_hms_opt(9, 0, 0).unwrap());
+    desk.prepare(run, ic_payments::model::RunType::Collection, day);
+    desk.add(run, vec![collect(&format!("{run}-c1"), "a1", "pol-1", 150_00)]);
+    let s = desk.approve(run);
+    desk.at(day.and_hms_opt(20, 0, 0).unwrap());
+    desk.deliver(&s);
+}
+
+/// Purpose: a notice the module raises is kept for its role until someone
+/// holding that role closes it with what they did; nobody else can close
+/// it, a closed one is not reopened, and closed ones are forgotten after
+/// the keeping period.
+/// Why it matters: a deferred file, a large payment or a refused posting
+/// needs a person. If the only trace is a log line, the work depends on
+/// someone happening to read the log.
+#[test]
+fn notices_wait_for_someone_with_the_role() {
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    deferred_collection(&mut desk, "d1", d(2027, 11, 19));
+    let open = ask(&desk, json!({"q": "notices", "role": "maker"}));
+    assert_eq!(open[0][1]["subject"], "submission_deferred");
+    let id = open[0][0].as_u64().unwrap();
+    assert_eq!(ask(&desk, json!({"q": "notices", "role": "approver"})), json!([]));
+    assert!(answer(&desk.state, json!({"q": "notices"})).unwrap_err().contains("role"));
+    let close = |action: &str| Command::CloseNotice {
+        notice: id,
+        action: action.to_string(),
+    };
+    assert_eq!(desk.code(&ari(), close("seen")), "not_permitted");
+    assert_eq!(desk.code(&mia(), close(" ")), "action_required");
+    assert_eq!(
+        desk.code(
+            &mia(),
+            Command::CloseNotice {
+                notice: 999,
+                action: "x".into()
+            }
+        ),
+        "unknown_notice"
+    );
+    desk.ok(&mia(), close("customers told; no fees charged"));
+    assert_eq!(desk.code(&mia(), close("again")), "notice_closed");
+    assert_eq!(ask(&desk, json!({"q": "notices", "role": "maker"})), json!([]));
+    assert!(desk.state.notices.items.contains_key(&id));
+
+    // Once a closed notice is older than the keeping period, the next
+    // notice raised forgets it.
+    if let Some(closed) = desk.state.notices.items.get_mut(&id).and_then(|n| n.closed.as_mut()) {
+        closed.1 -= chrono::Duration::days(ic_payments::notices::KEEP_CLOSED_DAYS);
+    }
+    deferred_collection(&mut desk, "d2", d(2027, 11, 26));
+    assert!(!desk.state.notices.items.contains_key(&id));
+    assert_eq!(ask(&desk, json!({"q": "notices", "role": "maker"})).as_array().unwrap().len(), 1);
+}
