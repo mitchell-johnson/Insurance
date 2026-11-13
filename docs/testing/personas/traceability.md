@@ -324,6 +324,15 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | HLT-009 | full | `claims/tests/suite/covers.rs::counters_never_cross_covers_unless_the_shell_shares_one` |
 | HLT-010 | full | `sim/tests/health_flex.rs::an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer`<br>`sim/tests/claims.rs::the_cover_check_reports_the_excess_level_held_on_the_event_date` |
 
+## DSC Discounts and pricing components
+
+| Matrix | Status | Built tests |
+| --- | --- | --- |
+| DSC-001 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net`<br>`sim/tests/personas_spine.rs::a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed` |
+| DSC-002 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net` |
+| DSC-007 | full | `product/tests/products.rs::a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount` |
+| DSC-011 | full | `product/tests/products.rs::a_discount_that_could_raise_the_premium_or_cannot_be_explained_does_not_load` |
+
 ## JNT Joint lives, ownership, assignments and dependants
 
 | Matrix | Status | Built tests |

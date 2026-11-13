@@ -130,6 +130,7 @@ pub(crate) fn bill_scheme_step(
             period_end: period.1,
             total_minor: bill.total(),
             members: Some(pending.members),
+            discounts: bill.discounts.clone(),
             by_cover_type: bill
                 .net
                 .iter()

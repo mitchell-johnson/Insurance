@@ -393,6 +393,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
             ),
             issued(&sch, "group-life", vec![], vec![member_cover("m1", 300), member_cover("m2", 400)]),
             Event::PremiumDue {
+                discounts: vec![],
                 policy: pol.clone(),
                 receivable: 1,
                 period_start: day(1),
@@ -1164,6 +1165,7 @@ fn an_avoided_policy_leaves_the_book_and_a_refund_takes_its_premium_back() {
             members: vec![],
         });
         s.push(Event::PremiumDue {
+            discounts: vec![],
             policy: PolicyId::from(name),
             receivable: 1,
             period_start: day(1),

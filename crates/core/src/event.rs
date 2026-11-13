@@ -308,6 +308,11 @@ pub enum Event {
         /// Reinsurance priced on the original premium reads it.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         by_cover_type: BTreeMap<String, i64>,
+        /// Each discount already taken off the premium for the period, in
+        /// the product's order. The premium before discounts is the premium
+        /// by cover type plus these.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        discounts: Vec<DiscountGiven>,
     },
     PremiumAdjusted {
         policy: PolicyId,
@@ -820,4 +825,15 @@ impl MessageBody {
 
 fn is_zero(n: &i64) -> bool {
     *n == 0
+}
+
+/// One discount on a bill: its code, the name a notice shows, the posting
+/// type its ledger lines carry and what it took off. Negative on a credit
+/// adjustment that hands back premium the discount had reduced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscountGiven {
+    pub code: String,
+    pub name: String,
+    pub posting_type: String,
+    pub amount_minor: i64,
 }

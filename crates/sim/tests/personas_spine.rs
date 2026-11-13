@@ -242,3 +242,88 @@ fn a_life_with_no_recorded_sex_is_issued_at_the_lower_premium() {
     assert!(unrecorded > 0);
     assert_eq!(unrecorded, female.min(male));
 }
+
+/// Purpose: matrix DSC-001 and DSC-002. A term life policy with life and trauma cover earns the
+/// product's multi-cover discount: the billing entry carries the discount as its own pair of
+/// lines under its own posting type (what it cost against income, and the premium before it),
+/// the pair nets to nothing, the receivable and unearned premium are the net premium, the
+/// billing event names the discount and its amount, and giving the trauma cover up hands the
+/// discount on the days ahead back through the same accounts. A policy with one cover has no
+/// discount lines at all.
+/// Why it matters: customers are shown each discount by name and finance costs each programme
+/// from its ledger balance. A discount netted silently into the premium can be neither shown
+/// nor costed, and one that changed the receivable or what is earned would misstate income.
+#[test]
+fn a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed() {
+    let mut c = cluster(d(2027, 3, 1));
+    let alone = issue(&mut c, 1, d(2027, 3, 1), Frequency::Yearly);
+    let given = accounts::discounts_given("term-life", NZD).id;
+    let before = accounts::premium_before_discounts("term-life", NZD).id;
+    assert_eq!((c.state(0).ledger.balance(&given), c.state(0).ledger.balance(&before)), (0, 0));
+
+    c.take_events();
+    let p = term_life(
+        2,
+        d(2027, 3, 1),
+        d(1990, 3, 10),
+        Sex::Female,
+        false,
+        500_000_00,
+        Some(100_000_00),
+        Frequency::Yearly,
+        None,
+    );
+    let id = p.policy.clone();
+    c.submit(0, "new-business", issue_command(p)).unwrap();
+    let (total, by_cover_type, discounts) = c
+        .take_events()
+        .into_iter()
+        .find_map(|e| match e.event {
+            ic_core::Event::PremiumDue {
+                total_minor,
+                by_cover_type,
+                discounts,
+                ..
+            } => Some((total_minor, by_cover_type, discounts)),
+            _ => None,
+        })
+        .expect("the first period is billed at issue");
+    assert_eq!(discounts.len(), 1);
+    let line = &discounts[0];
+    assert_eq!((line.code.as_str(), line.posting_type.as_str()), ("multi-cover", "discount_multi_cover"));
+    // Five per cent of the premium before it: 5/95 of the net premium, within the rounding.
+    let net: i64 = by_cover_type.values().sum();
+    assert!((line.amount_minor * 95 - net * 5).abs() < 100, "{} on {net}", line.amount_minor);
+
+    let s = c.state(0);
+    let cost = s.ledger.natural_balance(&given);
+    assert_eq!(cost, -i128::from(line.amount_minor), "a cost against income");
+    assert_eq!(s.ledger.natural_balance(&before), i128::from(line.amount_minor));
+    assert_eq!(receivable(s, &id), i128::from(total), "the receivable is the net premium");
+    assert_eq!(
+        receivable(s, &alone) + receivable(s, &id),
+        s.ledger.natural_balance(&accounts::unearned_premium(&id, NZD).id) / FINE_PER_MINOR
+            + s.ledger.natural_balance(&accounts::unearned_premium(&alone, NZD).id) / FINE_PER_MINOR
+    );
+
+    // Half way through the year the trauma cover is given up: the policy no longer has two
+    // covers, so the discount on the days ahead is handed back, about half of it.
+    pay(&mut c, &id, "rcpt-dsc", i128::from(total));
+    days(&mut c, 183);
+    let give_up = Command::ReduceCover(Box::new(ic_core::command::ReduceCover {
+        policy: id.clone(),
+        cover: "trauma".to_string(),
+        life: LifeId("life-1".to_string()),
+        sum_insured_minor: 0,
+    }));
+    c.submit(0, "policy-servicing", give_up).unwrap();
+    let left = -c.state(0).ledger.natural_balance(&given);
+    let half = i128::from(line.amount_minor) / 2;
+    assert!(
+        (left - half).abs() <= i128::from(line.amount_minor) / 100 + 1,
+        "{left} of {}",
+        line.amount_minor
+    );
+    assert_eq!(c.state(0).ledger.natural_balance(&before), left);
+    days(&mut c, 1);
+}
