@@ -51,20 +51,20 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
-| BIL Billing and earning | 6 | 5 | 4 | 5 |
+| BIL Billing and earning | 7 | 4 | 4 | 4 |
 | COL Collection, cash matching, standing and dunning | 13 | 8 | 7 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 28 | 1 | 1 | 2 |
-| CLM Claims and claims operations | 34 | 7 | 1 | 5 |
+| CLM Claims and claims operations | 33 | 8 | 1 | 6 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 44 | 1 | 0 | 1 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
-| DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
+| DSC Discounts and pricing components | 8 | 2 | 1 | 1 |
 | SVC Policy servicing | 5 | 5 | 16 | 5 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **328** | **99** | **150** | **107** |
+| **Total** | **336** | **101** | **140** | **105** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 32 | 27 | 10 |
-| B | 105 | 18 | 19 |
-| C | 189 | 51 | 106 |
+| A | 33 | 26 | 10 |
+| B | 107 | 19 | 16 |
+| C | 194 | 53 | 99 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -96,7 +96,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **INV** (2): INV-018, INV-019
 - **GRP** (1): GRP-017
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
-- **DSC** (3): DSC-001, DSC-002, DSC-005
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
@@ -110,17 +109,18 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **POL** (5): POL-001, POL-002, POL-003, POL-005, POL-015
 - **LED** (4): LED-004, LED-007, LED-013, LED-016
 - **PRD** (2): PRD-003, PRD-005
-- **BIL** (3): BIL-001, BIL-002, BIL-013
+- **BIL** (2): BIL-001, BIL-013
 - **COL** (6): COL-003, COL-004, COL-007, COL-010, COL-024, COL-025
 - **XFR** (1): XFR-004
 - **AUD** (4): AUD-002, AUD-003, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
-- **CLM** (5): CLM-003, CLM-008, CLM-026, CLM-028, CLM-039
+- **CLM** (6): CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (1): GRP-013
 - **JNT** (5): JNT-001, JNT-008, JNT-013, JNT-023, JNT-030
 - **ADV** (1): ADV-028
+- **DSC** (1): DSC-005
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
 - **VUL** (4): VUL-003, VUL-005, VUL-007, VUL-008

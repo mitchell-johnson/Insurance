@@ -510,7 +510,9 @@ pub(crate) fn make_effective(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: 
             reasons,
         });
         dropped_out(p, life);
-    } else if d.all_standard() || matches!(d.source, DecisionSource::Migrated { .. }) {
+    } else if d.all_standard() || matches!(d.source, DecisionSource::Migrated { .. } | DecisionSource::Continuation { .. }) {
+        // Terms the person already accepted, under the old system or the
+        // scheme, are not offered to them again.
         life_mut(p, life)?.stage = Stage::Accepted;
     } else {
         offer(p, life, cfg, cx)?;

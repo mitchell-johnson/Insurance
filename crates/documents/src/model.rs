@@ -301,6 +301,10 @@ pub struct Trigger {
     /// date, such as a lender it is assigned to, who are owed a copy.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub copy_to: Vec<PartyId>,
+    /// Facts from the event the document reports, such as the receipt and
+    /// the amount applied. Never anything about health.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub detail: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// An interest in a policy as the core reported it: who holds it and for

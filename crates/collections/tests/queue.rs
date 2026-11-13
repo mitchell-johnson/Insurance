@@ -142,6 +142,7 @@ fn the_core_events_it_follows_become_its_commands() {
     };
     let cases = [
         CoreEvent::PremiumDue {
+            discounts: vec![],
             policy: "p1".into(),
             receivable: 1,
             period_start: d(2027, 1, 1),
@@ -197,6 +198,7 @@ fn the_core_events_it_follows_become_its_commands() {
     };
     assert!(react(&record(opened)).is_empty());
     let annual = fact(&CoreEvent::PremiumDue {
+        discounts: vec![],
         policy: "p1".into(),
         receivable: 1,
         period_start: d(2027, 1, 1),

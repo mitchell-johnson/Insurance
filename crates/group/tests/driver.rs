@@ -19,7 +19,7 @@ use common::*;
 use ic_core::{Command, GroupId};
 use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, MatchDecision, Resolution};
 use ic_group::driver::{content_hash, Answers, Core, CustomerMaster, Driver, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use ic_group::event::{CommissionLayer, ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
+use ic_group::event::{CommissionLayer, ContinuationExcess, ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
 use ic_group::mapping::{Columns, FileKind, FileMapping, SalaryPeriod, SalaryUnit};
 use ic_group::record::MemberIdentity;
 use ic_group::state::{CaseStatus, FileStatus, GroupState, Outcome};
@@ -100,9 +100,21 @@ struct Sink {
     /// (taken when there are none left).
     letters: Arc<Mutex<Vec<MemberLetter>>>,
     letter_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
+    /// Continuations asked of underwriting, the answers it gives to the
+    /// asking, and the outcomes waiting in its outbox.
+    continuations: Arc<Mutex<Vec<ContinuationExcess>>>,
+    continuation_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
+    continued: Arc<Mutex<Vec<(String, String, u64, String)>>>,
 }
 
 impl Peers for Sink {
+    async fn continue_excess(&self, _today: NaiveDate, request: &ContinuationExcess) -> Result<Option<String>, String> {
+        let answer = self.continuation_answers.lock().unwrap().pop_front().unwrap_or(Ok(None));
+        if answer == Ok(None) {
+            self.continuations.lock().unwrap().push(request.clone());
+        }
+        answer
+    }
     async fn letter(&self, letter: &MemberLetter) -> Result<Option<String>, String> {
         let answer = self.letter_answers.lock().unwrap().pop_front().unwrap_or(Ok(None));
         if answer == Ok(None) {
@@ -148,6 +160,7 @@ impl Peers for Sink {
             through: page.last().map_or(after, |(n, _)| *n),
             more: page.len() >= max,
             answers: page.into_iter().filter_map(|(_, a)| a).collect(),
+            continued: std::mem::take(&mut *self.continued.lock().unwrap()),
         })
     }
     async fn publish(&self, seq: u64, _date: NaiveDate, event: &GroupEvent) -> Result<(), String> {
@@ -1708,4 +1721,97 @@ async fn the_driver_asks_for_a_members_letter_and_reports_a_refusal() {
     let raised = g.exceptions.values().find(|e| e.kind == ExceptionKind::LetterNotRequested).unwrap();
     assert_eq!(raised.subject, letter(2).request);
     assert_eq!(d.peers.letters.lock().unwrap().len(), 1);
+}
+
+/// Purpose: the driver carries a leaver's underwritten cover to underwriting and acts on the
+/// answers: a passing fault leaves it for the next pass; underwriting's refusal (`continuation`:
+/// the earlier terms do not cover it) is recorded as the outcome; and an outcome read from
+/// underwriting's outbox is recorded on the offer.
+/// Why it matters: the continued cover exists only once underwriting writes it. A request lost
+/// on a fault would leave the leaver believing they held cover they do not, and a refusal never
+/// recorded would leave staff unable to tell them.
+#[tokio::test]
+async fn the_driver_asks_underwriting_to_continue_a_leavers_cover() {
+    use ic_group::state::{ContinuedExcess, ContinuedStatus, Offer, OfferStatus};
+    let d = rig();
+    let policy = d.module.state.lock().unwrap().schemes[SCHEME].policy.clone();
+    let day = chrono::NaiveDate::from_ymd_opt(2027, 11, 1).unwrap();
+    let request = |offer: u64| ContinuationExcess {
+        key: format!("grp-cont:{SCHEME}:{offer}"),
+        policy: ic_core::PolicyId(format!("pol-cont-{offer}")),
+        group: ic_core::GroupId(format!("grp-cont-{offer}")),
+        party: ic_core::PartyId("party-1".into()),
+        product_code: "term-life".into(),
+        cover: "life".into(),
+        cover_type: "life".into(),
+        date_of_birth: None,
+        sex: None,
+        smoker: None,
+        amount_minor: 150_000_00,
+        inception: day,
+        scheme_policy: policy.clone(),
+        scheme_life: ic_core::LifeId("E001".into()),
+        earlier: vec![format!("grp-uw:{SCHEME}:1")],
+    };
+    // Two offers taken up with an underwritten part, as the module leaves them.
+    {
+        let mut g = d.module.state.lock().unwrap();
+        let s = g.schemes.get_mut(SCHEME).unwrap();
+        for offer in [7, 8] {
+            s.offers.insert(
+                offer,
+                Offer {
+                    id: offer,
+                    employee_id: "E001".into(),
+                    life: ic_core::LifeId("E001".into()),
+                    left: day,
+                    expires: day,
+                    max_sum_insured_minor: 900_000_00,
+                    status: OfferStatus::TakenUp {
+                        policy: ic_core::PolicyId(format!("pol-cont-{offer}")),
+                    },
+                    underwritten_minor: 150_000_00,
+                    earlier: vec![],
+                    continued_excess: Some(ContinuedExcess {
+                        amount_minor: 150_000_00,
+                        cover: "life".into(),
+                        cover_type: "life".into(),
+                        product_code: "term-life".into(),
+                        status: ContinuedStatus::Asked,
+                    }),
+                },
+            );
+        }
+        g.outbox.insert(9_101, ic_group::event::Outbound::ContinueExcess(request(7)));
+    }
+    let status = |d: &Rig, offer: u64| {
+        d.module.state.lock().unwrap().schemes[SCHEME].offers[&offer]
+            .continued_excess
+            .as_ref()
+            .unwrap()
+            .status
+            .clone()
+    };
+    d.peers.continuation_answers.lock().unwrap().push_back(Err("underwriting unavailable".into()));
+    assert!(d.deliver().await.unwrap().failed >= 1);
+    d.deliver().await.unwrap();
+    assert_eq!(d.peers.continuations.lock().unwrap()[0], request(7));
+
+    // The other is refused there: recorded as its outcome.
+    let entry = ic_group::event::Outbound::ContinueExcess(request(8));
+    d.module.state.lock().unwrap().outbox.insert(9_102, entry);
+    d.peers.continuation_answers.lock().unwrap().push_back(Ok(Some("continuation".into())));
+    d.deliver().await.unwrap();
+    assert_eq!(
+        status(&d, 8),
+        ContinuedStatus::NotContinued {
+            outcome: "refused:continuation".into()
+        }
+    );
+
+    // Underwriting writes the first and says so in its outbox.
+    d.peers.continued.lock().unwrap().push(("eff-1".into(), SCHEME.into(), 7, "issued".into()));
+    d.peers.effects.lock().unwrap().push((50, None));
+    d.collect_answers().await.unwrap();
+    assert_eq!(status(&d, 7), ContinuedStatus::InPlace);
 }

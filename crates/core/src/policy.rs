@@ -603,6 +603,14 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// Every entitlement a discount is given for that the policy or a life
+    /// on it has held, with its dates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entitlements: Vec<crate::entitlement::Entitlement>,
+    /// Every approved discount given on the policy, with its dates, reason
+    /// and approvers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discount_overrides: Vec<crate::discount_override::DiscountOverride>,
     /// The owner's own hold on money going out, while it stands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_hold: Option<crate::owner_hold::OwnerHold>,

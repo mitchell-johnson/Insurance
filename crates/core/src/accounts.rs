@@ -40,6 +40,8 @@ pub mod role {
     pub const LEVY_PAYABLE: &str = "levy_payable";
     /// Tax kept back from money paid out, owed to the revenue authority.
     pub const WITHHOLDING_TAX_PAYABLE: &str = "withholding_tax_payable";
+    pub const PREMIUM_BEFORE_DISCOUNTS: &str = "premium_before_discounts";
+    pub const DISCOUNTS_GIVEN: &str = "discounts_given";
     pub const LAPSE_WRITE_OFF: &str = "lapse_write_off";
     pub const AVOIDANCE_PREMIUM_RETAINED: &str = "avoidance_premium_retained";
     pub const ROUNDING: &str = "rounding";
@@ -254,6 +256,28 @@ pub fn avoidance_premium_retained(product: &str, c: Currency) -> Account {
         AccountUnit::Fine(c),
         AccountClass::Income,
         role::AVOIDANCE_PREMIUM_RETAINED,
+    )
+}
+/// What discounts took off premium billed on a product: the other side of
+/// `discounts_given`. Income is earned on the net premium; this account and
+/// that one always sum to nothing, and exist so that the premium before
+/// discounts and the cost of each discount are balances finance can read.
+pub fn premium_before_discounts(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/premium_before_discounts/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Income,
+        role::PREMIUM_BEFORE_DISCOUNTS,
+    )
+}
+/// Discounts given on a product, against income. Each discount's own lines
+/// carry its posting type.
+pub fn discounts_given(product: &str, c: Currency) -> Account {
+    acct(
+        format!("int/discounts_given/{product}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Income,
+        role::DISCOUNTS_GIVEN,
     )
 }
 pub fn gst_payable(c: Currency) -> Account {

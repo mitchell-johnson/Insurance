@@ -2,9 +2,10 @@
 
 use std::collections::BTreeMap;
 
-use ic_money::DecStr;
-use ic_product::rating::{cover_premium, modal_premium, RatingFactors};
-use ic_product::{load_definitions, load_product, load_rate_table, Frequency, Sex};
+use ic_money::{dec, Dec, DecStr};
+use ic_product::discount::{Held, Line, PricingState};
+use ic_product::rating::{cover_premium, modal_premium, modal_premium_by_line, modal_premium_with, ModalPremium, RatingFactors};
+use ic_product::{load_definitions, load_product, load_rate_table, Frequency, ProductDefinition, Sex};
 
 const TERM: &str = include_str!("../../../products/term_life.star");
 const HEALTH: &str = include_str!("../../../products/health_plan.star");
@@ -621,4 +622,223 @@ fn a_cover_can_reduce_another_and_be_joint_on_the_first_event() {
     let income = INCOME.replace("code = \"income\",", "code = \"income\",\n            joint_first_event = True,");
     assert_ne!(income, INCOME, "the shipped product has the cover this test edits");
     assert!(load_product("income_protection.star", &income).is_err());
+}
+
+/// A term life variant whose features end with the given discounts feature in place of the
+/// shipped multi-cover discount.
+fn with_discounts(feature: &str) -> ProductDefinition {
+    let source = TERM.replace("multi_cover_discount(min_covers = 2, percent = \"5\"),", feature);
+    assert_ne!(source, TERM, "the shipped product has the feature this test replaces");
+    load_product("term_life.star", &source).unwrap()
+}
+
+fn annual(life: &str, trauma: &str) -> BTreeMap<String, Dec> {
+    [("life".to_string(), dec(life).unwrap()), ("trauma".to_string(), dec(trauma).unwrap())].into()
+}
+
+fn lines(p: &ModalPremium) -> Vec<(&str, i64)> {
+    p.discounts.iter().map(|d| (d.code.as_str(), d.amount.minor)).collect()
+}
+
+/// Purpose: a chain of discounts runs in the product's order: a single discount takes its
+/// percentage of what earlier ones left, an additive set takes each member's share of the
+/// base premium, and of a best-of set only the largest applies; a discount whose condition
+/// does not hold (too few lives, a frequency not named, an entitlement not held) is not on
+/// the bill; each discount that applied is its own line; and the premium before discounts
+/// less the lines is the net premium to the cent.
+/// Why it matters: customers are shown each discount by name and finance costs each
+/// programme from its own line, so a chain that stacked in the wrong order, or lines that
+/// did not sum to what is billed, would misstate both the notice and the ledger.
+#[test]
+fn discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net() {
+    let p = with_discounts(
+        r#"discounts(chain = [
+            discount("multi-cover", "Multi-cover", "discount_multi_cover", percent_off("10"), min_covers(2)),
+            additive([
+                discount("couple", "Two lives", "discount_multi_life", percent_off("5"), min_lives(2)),
+                discount("annual", "Paid yearly", "discount_frequency", percent_off("4"), paid(["yearly"])),
+                discount("staff", "Staff", "discount_staff", percent_off("2"), entitled("staff")),
+            ]),
+            best_of([
+                discount("loyal", "Loyalty", "discount_loyalty", fixed_annual("30.00")),
+                discount("welcome", "Welcome", "discount_welcome", percent_off("1"), covers = ["life"]),
+            ]),
+        ]),"#,
+    );
+    let held = [Held {
+        code: "staff".to_string(),
+        tier: String::new(),
+        life: None,
+    }];
+    let state = |lives, frequency| PricingState {
+        overrides: &[],
+        covers: 2,
+        lives,
+        frequency,
+        entitlements: &held,
+    };
+    // Base 1,000 + 200 a year, paid yearly by two lives: 10% of each, then (5 + 4 + 2)% of
+    // base, then the fixed 30.00 (more than 1% of what is left on life) across both covers.
+    let bill = modal_premium_with(&p, &annual("1000", "200"), &state(2, Frequency::Yearly)).unwrap();
+    assert_eq!(
+        lines(&bill),
+        vec![
+            ("multi-cover", 120_00),
+            ("couple", 60_00),
+            ("annual", 48_00),
+            ("staff", 24_00),
+            ("loyal", 30_00)
+        ]
+    );
+    let gross: i64 = bill.gross_by_cover.values().map(|m| m.minor).sum();
+    let net: i64 = bill.by_cover.values().map(|m| m.minor).sum();
+    assert_eq!((gross, net), (1_200_00, 918_00));
+    assert_eq!(gross - lines(&bill).iter().map(|l| l.1).sum::<i64>(), net);
+
+    // One life paying monthly: the two-lives and yearly discounts are not on the bill.
+    let monthly = modal_premium_with(&p, &annual("1000", "200"), &state(1, Frequency::Monthly)).unwrap();
+    let codes: Vec<&str> = lines(&monthly).iter().map(|l| l.0).collect();
+    assert_eq!(codes, vec!["multi-cover", "staff", "loyal"]);
+    let gross: i64 = monthly.gross_by_cover.values().map(|m| m.minor).sum();
+    let net: i64 = monthly.by_cover.values().map(|m| m.minor).sum();
+    assert_eq!(
+        gross - lines(&monthly).iter().map(|l| l.1).sum::<i64>(),
+        net,
+        "the last line absorbs the rounding"
+    );
+
+    // The shipped product's multi-cover discount is a line too, and without a second cover
+    // there is no discount and no line before discounts.
+    let shipped = load_product("term_life.star", TERM).unwrap();
+    let two = modal_premium(&shipped, &annual("1000", "200"), Frequency::Yearly).unwrap();
+    assert_eq!(lines(&two), vec![("multi-cover", 60_00)]);
+    let one: BTreeMap<String, Dec> = [("life".to_string(), dec("1000").unwrap())].into();
+    let alone = modal_premium(&shipped, &one, Frequency::Yearly).unwrap();
+    assert!(alone.discounts.is_empty() && alone.gross_by_cover.is_empty());
+}
+
+/// Purpose: a tier discount reads its percentage from the tier of the entitlement held and
+/// gives nothing for a tier the table does not name; a discount's own yearly cap, the cap on
+/// all discounts and the floor under the net premium are kept, and what the cap and the
+/// floor take back comes off the last discount in the order, leaving earlier ones in full.
+/// Why it matters: the wellness tier a module awards must turn into exactly the product's
+/// percentage, and a customer holding several discounts must never be billed less than the
+/// floor the product was priced on, while still being shown the earlier discounts whole.
+#[test]
+fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount() {
+    let chain = r#"chain = [
+            discount("wellness", "Wellness", "discount_wellness", by_tier({"1": "5", "2": "10"}), entitled("wellness")),
+            discount("loyal", "Loyalty", "discount_loyalty", percent_off("50"), max_annual = "300.00"),
+            discount("retain", "Retention", "discount_retention", percent_off("40")),
+        ]"#;
+    let tier = |t: &str| {
+        vec![Held {
+            code: "wellness".to_string(),
+            tier: t.to_string(),
+            life: None,
+        }]
+    };
+    let run = |p: &ProductDefinition, held: &Vec<Held>| {
+        let state = PricingState {
+            overrides: &[],
+            covers: 2,
+            lives: 1,
+            frequency: Frequency::Yearly,
+            entitlements: held,
+        };
+        modal_premium_with(p, &annual("1000", "0"), &state).unwrap()
+    };
+    // Tier two: 10% of 1,000; loyalty 50% of 900 capped at 300; retention 40% of 600.
+    let open = with_discounts(&format!("discounts({chain}),"));
+    assert_eq!(
+        lines(&run(&open, &tier("2"))),
+        vec![("wellness", 100_00), ("loyal", 300_00), ("retain", 240_00)]
+    );
+    assert_eq!(lines(&run(&open, &tier("1")))[0], ("wellness", 50_00));
+    assert_eq!(lines(&run(&open, &tier("9")))[0].0, "loyal", "a tier the table does not name gives nothing");
+
+    // All discounts together are capped at 45% of base: 190 comes off retention.
+    let capped = with_discounts(&format!("discounts({chain}, max_total_percent = \"45\"),"));
+    assert_eq!(
+        lines(&run(&capped, &tier("2"))),
+        vec![("wellness", 100_00), ("loyal", 300_00), ("retain", 50_00)]
+    );
+    // A floor of 700 leaves room for 300 of discount: retention goes and loyalty gives 200.
+    let floored = with_discounts(&format!("discounts({chain}, max_total_percent = \"45\", min_net_annual = \"700.00\"),"));
+    let bill = run(&floored, &tier("2"));
+    assert_eq!(lines(&bill), vec![("wellness", 100_00), ("loyal", 200_00)]);
+    assert_eq!(bill.by_cover["life"].minor, 700_00);
+
+    // A tier is per life: held by one of two lives on the cover, it reduces that life's
+    // premium only, and a tier held by nobody on the policy reduces nothing.
+    let only = with_discounts(r#"discounts(chain = [discount("wellness", "Wellness", "discount_wellness", by_tier({"2": "10"}), entitled("wellness"))]),"#);
+    let line = |life: &str, annual: &str| {
+        let line = Line {
+            cover: "life".to_string(),
+            life: life.to_string(),
+        };
+        (line, dec(annual).unwrap())
+    };
+    let couple: BTreeMap<Line, Dec> = [line("life-1", "1000"), line("life-2", "600")].into();
+    let by_life = |held: &[Held]| {
+        let state = PricingState {
+            overrides: &[],
+            covers: 1,
+            lives: 2,
+            frequency: Frequency::Yearly,
+            entitlements: held,
+        };
+        modal_premium_by_line(&only, &couple, &state).unwrap()
+    };
+    let hers = Held {
+        code: "wellness".to_string(),
+        tier: "2".to_string(),
+        life: Some("life-2".to_string()),
+    };
+    let bill = by_life(std::slice::from_ref(&hers));
+    assert_eq!((lines(&bill), bill.by_cover["life"].minor), (vec![("wellness", 60_00)], 1_540_00));
+    let stranger = Held {
+        life: Some("life-9".to_string()),
+        ..hers
+    };
+    assert!(by_life(&[stranger]).discounts.is_empty());
+}
+
+/// Purpose: a discount that would increase the premium (a negative percentage or amount, or
+/// more than the whole premium) does not load, nor does a tier without an entitlement, two
+/// discounts with one code, a discount on a cover the product does not have, an empty set, a
+/// condition that counts from nothing, or a cap that is not a percentage.
+/// Why it matters: a component that raises the premium is a loading, governed by
+/// underwriting, or a fee. Letting one in as a discount would put a price increase on a
+/// customer's bill under a name that promises a saving, and the other mistakes would each
+/// bill a discount nobody can explain.
+#[test]
+fn a_discount_that_could_raise_the_premium_or_cannot_be_explained_does_not_load() {
+    let load = |inner: &str| {
+        let source = TERM.replace("multi_cover_discount(min_covers = 2, percent = \"5\"),", &format!("discounts({inner}),"));
+        load_product("term_life.star", &source)
+    };
+    let one = |basis: &str, condition: &str| format!(r#"chain = [discount("d", "D", "discount_d", {basis}, {condition})]"#);
+    assert!(load(&one("percent_off(\"10\")", "min_covers(2)")).is_ok());
+    for (basis, condition) in [
+        ("percent_off(\"-1\")", "None"),
+        ("percent_off(\"100.5\")", "None"),
+        ("fixed_annual(\"-5\")", "None"),
+        ("by_tier({\"1\": \"5\"})", "min_covers(2)"),
+        ("by_tier({})", "entitled(\"w\")"),
+        ("by_tier({\"1\": \"-5\"})", "entitled(\"w\")"),
+        ("percent_off(\"10\")", "min_covers(0)"),
+        ("percent_off(\"10\")", "paid([])"),
+        ("percent_off(\"10\")", "entitled(\"\")"),
+    ] {
+        assert!(load(&one(basis, condition)).is_err(), "{basis} with {condition}");
+    }
+    let d = |code: &str, extra: &str| format!(r#"discount("{code}", "D", "discount_d", percent_off("10"){extra})"#);
+    assert!(load(&format!("chain = [{}, {}]", d("a", ""), d("a", ""))).is_err());
+    assert!(load(&format!("chain = [{}]", d("a", ", covers = [\"funeral\"]"))).is_err());
+    assert!(load(&format!("chain = [{}]", d("a", ", max_annual = \"-1\""))).is_err());
+    assert!(load(&format!("chain = [{}]", d("", ""))).is_err());
+    assert!(load("chain = [best_of([])]").is_err());
+    assert!(load(&format!("chain = [{}], max_total_percent = \"120\"", d("a", ""))).is_err());
+    assert!(load(&format!("chain = [{}], min_net_annual = \"-1\"", d("a", ""))).is_err());
 }

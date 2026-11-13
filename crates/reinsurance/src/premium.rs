@@ -61,12 +61,50 @@ pub struct Period {
     /// The billing was reversed by an unwind: nothing is charged for it.
     #[serde(default)]
     pub reversed: bool,
-    /// The customer's premium for the period by cover type, where the core
-    /// supplied it. Needed by treaties priced on the original premium.
+    /// The customer's premium for the period by cover type before
+    /// discounts, where the core supplied it ([`before_discounts`]). Needed
+    /// by treaties priced on the original premium.
     #[serde(default)]
     pub by_cover_type: BTreeMap<String, i64>,
     #[serde(with = "pairs")]
     pub charged: BTreeMap<ChargeKey, i64>,
+}
+
+/// The premium by cover type before discounts: the core bills each cover
+/// type after discounts and names the discounts for the whole policy, so
+/// each discount is given back to the cover types in proportion to their
+/// premium, the remainder to the largest. Exact for a flat percentage off
+/// every cover, the only kind shipped. With nothing billed to share it by,
+/// the premium is left as billed.
+pub fn before_discounts(by_cover_type: BTreeMap<String, i64>, discounts_minor: i64) -> BTreeMap<String, i64> {
+    let mut gross = by_cover_type.clone();
+    for (k, v) in spread(&by_cover_type, discounts_minor) {
+        *gross.entry(k).or_default() += v;
+    }
+    gross
+}
+
+/// `amount` shared across the cover types in proportion to `by`, to the
+/// cent, the remainder to the largest. Empty when there is nothing to share
+/// by or nothing to share.
+pub fn spread(by: &BTreeMap<String, i64>, amount: i64) -> BTreeMap<String, i64> {
+    let total: i64 = by.values().sum();
+    if amount == 0 || total <= 0 {
+        return BTreeMap::new();
+    }
+    let mut given = 0;
+    let mut out: BTreeMap<String, i64> = by
+        .iter()
+        .map(|(k, v)| {
+            let share = (amount as i128 * *v as i128).div_euclid(total as i128) as i64;
+            given += share;
+            (k.clone(), share)
+        })
+        .collect();
+    if let Some(largest) = by.iter().max_by_key(|(k, v)| (**v, std::cmp::Reverse((*k).clone()))).map(|(k, _)| k.clone()) {
+        *out.entry(largest).or_default() += amount - given;
+    }
+    out
 }
 
 /// An annual rate per thousand, in millionths, applied to an amount for a

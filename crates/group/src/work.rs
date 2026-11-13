@@ -16,14 +16,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::benefit::{known_category, member_cover};
 use crate::command::{ExcessDecision, GroupCommand, MatchDecision, Resolution};
-use crate::event::{ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{ContinuationExcess, ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::mapping::RowReject;
 use crate::model::{ChangeKind, JoinAs, Proposed};
 use crate::record::MemberAttrs;
 use crate::state::{
-    CaseStatus, ClassLine, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal, Scheme, SchemeStatus,
+    CaseStatus, ClassLine, ContinuedExcess, ContinuedStatus, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal,
+    Scheme, SchemeStatus,
 };
-use crate::terms::{ExcessLoading, MemberBasis, NoAgreement, SchemeTerms};
+use crate::terms::{ExcessLoading, ExcessPath, MemberBasis, NoAgreement, SchemeTerms};
 
 /// The core asks for a retry: nothing is wrong with what was sent.
 const TRANSIENT: [&str; 2] = ["invoice_in_progress", "policy_transferring"];
@@ -581,6 +582,33 @@ impl GroupState {
                 if let OfferStatus::Issuing { policy, group } = o.status.clone() {
                     o.status = OfferStatus::TakenUp { policy: policy.clone() };
                     let life = o.life.clone();
+                    let ask = o.continued_excess.as_mut().filter(|c| c.status == ContinuedStatus::Waiting).map(|c| {
+                        c.status = ContinuedStatus::Asked;
+                        (c.clone(), o.left, o.earlier.clone())
+                    });
+                    if let Some((c, inception, earlier)) = ask {
+                        let member = s.membership.by_life(&life);
+                        if let Some(party) = member.and_then(|m| m.party.clone()) {
+                            let attrs = member.map(|m| m.attrs.clone()).unwrap_or_default();
+                            self.send(Outbound::ContinueExcess(ContinuationExcess {
+                                key: format!("grp-cont:{}:{offer}", s.id),
+                                policy: policy.clone(),
+                                group: group.clone(),
+                                party,
+                                product_code: c.product_code,
+                                cover: c.cover,
+                                cover_type: c.cover_type,
+                                date_of_birth: attrs.date_of_birth,
+                                sex: attrs.sex,
+                                smoker: attrs.smoker,
+                                amount_minor: c.amount_minor,
+                                inception,
+                                scheme_policy: s.policy.clone(),
+                                scheme_life: life.clone(),
+                                earlier,
+                            }));
+                        }
+                    }
                     self.emit(GroupEvent::ContinuationTakenUp {
                         offer,
                         scheme: s.id.clone(),
@@ -740,7 +768,14 @@ impl GroupState {
                 s.absence_leaves.remove(&change.employee_id);
                 let mut ended = Vec::new();
                 let mut unwanted = Vec::new();
+                // Underwritten cover in place on leaving, for a scheme that
+                // lets it be continued.
+                let mut carried = (0_i64, Vec::new());
                 for c in s.cases.values_mut().filter(|c| c.employee_id == change.employee_id) {
+                    if s.terms.continuation.underwritten_excess && matches!(c.status, CaseStatus::Accepted | CaseStatus::Writing) && c.counts_minor() > 0 {
+                        carried.0 += c.counts_minor();
+                        carried.1.push(format!("grp-uw:{}:{}", s.id, c.request_case()));
+                    }
                     match c.status {
                         CaseStatus::Requested => {
                             c.status = CaseStatus::NotProceeded;
@@ -772,10 +807,12 @@ impl GroupState {
                     .max_age
                     .zip(member.attrs.date_of_birth)
                     .is_some_and(|(max, dob)| age_on(dob, change.effective) >= max);
-                let max_sum_insured_minor: i64 = member_cover(&s.product, &member.attrs, member.auto_cap_minor)
+                let automatic_minor: i64 = member_cover(&s.product, &member.attrs, member.auto_cap_minor)
                     .iter()
                     .map(|c| c.automatic_minor)
                     .sum();
+                let (underwritten_minor, earlier) = carried;
+                let max_sum_insured_minor = automatic_minor + underwritten_minor;
                 if terms.products.is_empty() || too_old || max_sum_insured_minor <= 0 {
                     return;
                 }
@@ -794,6 +831,9 @@ impl GroupState {
                         expires,
                         max_sum_insured_minor,
                         status: OfferStatus::Open,
+                        underwritten_minor,
+                        earlier,
+                        continued_excess: None,
                     },
                 );
                 self.emit(GroupEvent::ContinuationOffered {
@@ -903,6 +943,14 @@ impl GroupState {
                 path: s.terms.excess_path,
                 honour_without_evidence_minor: s.terms.takeover.as_ref().and_then(|t| t.honour_excess_up_to_minor),
                 reference: reference.clone(),
+                // A delegate binds only what we could retain: not a facultative
+                // cession, and not a member reinsurance asked us to underwrite.
+                delegated_authority: s
+                    .terms
+                    .delegated_underwriting
+                    .as_ref()
+                    .filter(|_| s.terms.excess_path == ExcessPath::UnderwrittenExcess && reference.is_none())
+                    .map(|d| d.authority.clone()),
             };
             self.send(Outbound::Underwriting {
                 key: format!("grp-uw:{}:{id}", s.id),
@@ -1659,6 +1707,29 @@ impl GroupState {
                         "the amount must be positive and no more than the cover held on leaving",
                     ));
                 }
+                // The policy is issued for the automatic part; anything above
+                // it is underwriting's to add on the terms it accepted.
+                let automatic_minor = o.automatic_minor();
+                if automatic_minor <= 0 {
+                    return Err(Reject::new("no_automatic_cover", "the leaver had no automatic cover to continue"));
+                }
+                let excess_minor = sum_insured_minor - sum_insured_minor.min(automatic_minor);
+                // The scheme cover the underwritten amount was on.
+                let cover_type = s
+                    .cases
+                    .values()
+                    .filter(|c| c.life == o.life && c.ended_by_leave)
+                    .find_map(|c| s.product.cover(&c.cover))
+                    .map(|def| def.cover_type.trim_start_matches("group_").to_string())
+                    .unwrap_or_default();
+                let continued = (excess_minor > 0).then(|| ContinuedExcess {
+                    amount_minor: excess_minor,
+                    cover: cover.clone(),
+                    cover_type,
+                    product_code: product_code.clone(),
+                    status: ContinuedStatus::Waiting,
+                });
+                let sum_insured_minor = sum_insured_minor.min(automatic_minor);
                 let member = s.membership.by_life(&o.life);
                 let (party, attrs) = member
                     .and_then(|m| Some((m.party.clone()?, m.attrs.clone())))
@@ -1701,6 +1772,7 @@ impl GroupState {
                 };
                 if let Some(o) = s.offers.get_mut(&offer) {
                     o.status = OfferStatus::Issuing { policy, group: group.clone() };
+                    o.continued_excess = continued;
                 }
                 let work = Work::Core {
                     group,
@@ -1788,6 +1860,28 @@ impl GroupState {
                 }
                 Ok(())
             }
+            RecordContinuedExcess { scheme, offer, outcome } => self.with_scheme(&scheme, |st, s| {
+                let c = s
+                    .offers
+                    .get_mut(&offer)
+                    .and_then(|o| o.continued_excess.as_mut())
+                    .ok_or_else(|| Reject::new("unknown_offer", format!("offer {offer} continued no underwritten cover")))?;
+                if c.status != ContinuedStatus::Asked {
+                    // Recorded already: the same answer read again.
+                    return Ok(());
+                }
+                c.status = if outcome == "issued" {
+                    ContinuedStatus::InPlace
+                } else {
+                    ContinuedStatus::NotContinued { outcome: outcome.clone() }
+                };
+                st.emit(GroupEvent::ContinuedExcessDecided {
+                    scheme: s.id.clone(),
+                    offer,
+                    outcome,
+                });
+                Ok(())
+            }),
             LetterRefused { request, code } => {
                 let found = self
                     .outbox

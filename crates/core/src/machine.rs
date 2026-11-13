@@ -754,6 +754,18 @@ impl CoreState {
                 let id = command.policy.clone();
                 self.with_policy(&id, true, |_, p| crate::owner_hold::apply(p, ctx, *command))
             }
+            Command::SetDiscountOverride(command) => {
+                let id = command.policy.clone();
+                self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
+                    crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
+                })
+            }
+            Command::SetEntitlement(command) => {
+                let id = command.policy.clone();
+                self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
+                    crate::entitlement::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
+                })
+            }
             Command::LandTransfer { record } => {
                 let id = record.policy.id.clone();
                 let r = transfer::land(self, ctx, *record);

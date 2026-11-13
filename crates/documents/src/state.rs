@@ -125,6 +125,9 @@ pub struct DocumentsState {
     /// The last core event seen from each core partition.
     pub checkpoints: BTreeMap<u16, u64>,
     pub triggers: BTreeMap<String, Trigger>,
+    /// The business date each policy's latest schedule was asked for.
+    #[serde(default)]
+    pub schedules_raised: BTreeMap<PolicyId, NaiveDate>,
     pub core_outbox: BTreeMap<String, CoreInstruction>,
     /// Events not yet on the stream, oldest first.
     unpublished: VecDeque<EventRecord>,
@@ -805,6 +808,21 @@ impl DocumentsState {
         self.templates
             .values()
             .filter(|t| t.template.id == id && t.status == TemplateStatus::Active && t.effective_from.is_some_and(|d| d <= on))
+            .max_by_key(|t| (t.effective_from, t.template.version))
+    }
+
+    /// The template a product's document of `kind` is rendered with on a
+    /// date: the active one bound to the product, with the latest effective
+    /// date not after it.
+    pub fn template_for_kind(&self, kind: DocumentKind, product: &str, on: NaiveDate) -> Option<&TemplateRecord> {
+        self.templates
+            .values()
+            .filter(|t| {
+                t.template.kind == kind
+                    && t.status == TemplateStatus::Active
+                    && t.effective_from.is_some_and(|d| d <= on)
+                    && t.template.products.iter().any(|p| p.code == product)
+            })
             .max_by_key(|t| (t.effective_from, t.template.version))
     }
 
@@ -1727,6 +1745,14 @@ impl DocumentsState {
                 continue;
             }
             for mut trigger in crate::triggers::triggers(&r) {
+                if trigger.kind == DocumentKind::PolicySchedule {
+                    // One schedule a policy a day: the day's later changes
+                    // are in it when it is issued.
+                    if self.schedules_raised.get(&trigger.policy).is_some_and(|d| *d >= trigger.business_date) {
+                        continue;
+                    }
+                    self.schedules_raised.insert(trigger.policy.clone(), trigger.business_date);
+                }
                 if copied_to_interests(trigger.kind) {
                     trigger.copy_to = self.interested_parties(&trigger.policy, trigger.business_date);
                 }

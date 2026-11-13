@@ -37,6 +37,14 @@ pub enum NoAgreement {
     End,
 }
 
+/// A delegated underwriting authority the scheme's excess goes to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedUnderwriting {
+    /// The underwriting module's `DelegatedAuthority` id.
+    pub authority: String,
+}
+
 /// What happens to cover that takes a life over the insurer's retention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,6 +99,11 @@ pub struct ContinuationTerms {
     /// No offer is made to a leaver at or above this age.
     #[serde(default)]
     pub max_age: Option<u32>,
+    /// A leaver may also continue the cover underwriting accepted above the
+    /// automatic limit, on the terms it was accepted on and without new
+    /// evidence. Off unless the scheme agreed it (Mitchell, 14 Nov 2026).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub underwritten_excess: bool,
 }
 
 /// Continuity of cover for members transferring from a previous insurer.
@@ -175,6 +188,12 @@ pub struct SchemeTerms {
     /// placed direct, which earns no commission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<SchemeBroker>,
+    /// The employer's broker (or another delegate) underwrites members'
+    /// cover above the automatic limit under this authority, which the
+    /// underwriting module holds and checks every decision against
+    /// (Mitchell, 14 Nov 2026). Absent: our underwriters decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_underwriting: Option<DelegatedUnderwriting>,
 }
 
 /// The broker who placed a scheme, as the commission module knows them.
@@ -216,6 +235,9 @@ impl SchemeTerms {
         codes.dedup();
         if codes.len() != self.billing_groups.len() || codes.iter().any(|c| c.is_empty()) {
             return Err("billing group codes must be unique and not empty".to_string());
+        }
+        if self.delegated_underwriting.as_ref().is_some_and(|d| d.authority.trim().is_empty()) {
+            return Err("a delegated authority needs the underwriting module's authority id".to_string());
         }
         if let Some(b) = &self.broker {
             if [&b.engagement, &b.book, &b.schedule, &b.option].iter().any(|v| v.trim().is_empty()) {
@@ -297,6 +319,7 @@ pub(crate) mod tests {
                 take_up_days: 60,
                 products: vec!["term-life".to_string()],
                 max_age: Some(65),
+                underwritten_excess: false,
             },
             leave_of_absence_days: 90,
             takeover: None,
@@ -321,6 +344,7 @@ pub(crate) mod tests {
             excess_loading_min_count: 0,
             suspend_joiners_after_short_payments: Some(3),
             broker: None,
+            delegated_underwriting: None,
         }
     }
 

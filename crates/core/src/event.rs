@@ -308,6 +308,11 @@ pub enum Event {
         /// Reinsurance priced on the original premium reads it.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         by_cover_type: BTreeMap<String, i64>,
+        /// Each discount already taken off the premium for the period, in
+        /// the product's order. The premium before discounts is the premium
+        /// by cover type plus these.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        discounts: Vec<DiscountGiven>,
     },
     PremiumAdjusted {
         policy: PolicyId,
@@ -315,6 +320,10 @@ pub enum Event {
         life: LifeId,
         effective: NaiveDate,
         total_minor: i64,
+        /// The change to each discount on the premium adjusted: negative
+        /// where a credit hands back premium a discount had reduced.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        discounts: Vec<DiscountGiven>,
     },
     /// Member-level breakdown of one chunk of a scheme invoice.
     SchemeInvoiceChunk {
@@ -743,6 +752,31 @@ pub enum Event {
         held: bool,
         reference: String,
     },
+    /// What a life or the policy holds that a discount is given for changed
+    /// from a date: a tier awarded, changed or lost. A tier code only; the
+    /// data behind it stays with the module that judged it.
+    EntitlementChanged {
+        policy: PolicyId,
+        code: String,
+        tier: Option<String>,
+        life: Option<LifeId>,
+        held: bool,
+        from: NaiveDate,
+        until: Option<NaiveDate>,
+        reference: String,
+    },
+    /// An approved discount was given on a policy, or its end brought
+    /// forward: reported with its size, reason and approvers.
+    DiscountOverrideSet {
+        policy: PolicyId,
+        id: String,
+        percent: ic_money::DecStr,
+        reason: String,
+        from: NaiveDate,
+        until: NaiveDate,
+        approver: String,
+        second_approver: Option<String>,
+    },
     /// A nomination for a death benefit was recorded: a first one, a change
     /// or a removal (no nominees). Parties are opaque IDs.
     NominationRecorded {
@@ -820,4 +854,15 @@ impl MessageBody {
 
 fn is_zero(n: &i64) -> bool {
     *n == 0
+}
+
+/// One discount on a bill: its code, the name a notice shows, the posting
+/// type its ledger lines carry and what it took off. Negative on a credit
+/// adjustment that hands back premium the discount had reduced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscountGiven {
+    pub code: String,
+    pub name: String,
+    pub posting_type: String,
+    pub amount_minor: i64,
 }

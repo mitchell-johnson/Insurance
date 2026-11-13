@@ -435,3 +435,110 @@ fn a_seasonal_worker_serves_the_waiting_period_again_on_rejoining() {
     assert_ne!(again.life, first_life, "a new spell of cover, the first kept as it was");
     assert_eq!(h.core_lives().len(), 3);
 }
+
+/// An executive on 240,000 (960,000 of cover by the formula, 750,000 of it automatic) whose
+/// excess underwriting accepted, then leaving on the scheme's terms `t`.
+fn executive_leaves(t: ic_group::terms::SchemeTerms) -> (Harness, u64) {
+    let mut h = Harness::new(t);
+    // A retail policy is rated on sex and smoking, which the employer's file gives.
+    let mut exec = attrs("executive", 240_000_00, "akl");
+    exec.sex = Some(ic_product::Sex::Female);
+    exec.smoker = Some(false);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![row(1, "E001", attrs("staff", 60_000_00, "akl")), row(2, "E004", exec.clone())],
+    );
+    let case = h.requests[0].case;
+    h.underwriting(
+        case,
+        ic_group::command::ExcessDecision::Accepted {
+            sum_insured_minor: 210_000_00,
+            loadings: vec![],
+            exclusions: vec![],
+            member_consents_to_itemising: false,
+            member_pays_loading: false,
+        },
+    )
+    .unwrap();
+    h.settle();
+    let today = h.today();
+    h.apply("f2", FileKind::Changes, vec![change(1, "E004", RowChange::Leave, today, exec)]);
+    let offer = offer_for(&h, "E004").unwrap();
+    (h, offer)
+}
+
+/// Purpose: a leaver continues only their automatic cover unless the scheme's terms say the
+/// underwritten cover goes too. Where they do, the offer includes it; taking up more than the
+/// automatic part issues the policy for the automatic part and asks underwriting, by the agreed
+/// `group_continuation` proposal, to add the rest on the terms it accepted before; and
+/// underwriting's outcome is recorded once.
+/// Why it matters: Mitchell's decision of 14 Nov 2026, default off. A leaver who had to give
+/// evidence again for cover they already held could be refused it after an illness; continuing
+/// it without the earlier terms would drop a loading or an exclusion underwriting set.
+#[test]
+fn a_leaver_continues_underwritten_cover_only_where_the_scheme_allows_it() {
+    let (mut h, offer) = executive_leaves(terms());
+    let o = h.scheme().offers[&offer].clone();
+    assert_eq!((o.max_sum_insured_minor, o.underwritten_minor), (750_000_00, 0), "off by default");
+    assert_eq!(code(take_up(&mut h, offer, 1, "term-life", 960_000_00)), "invalid_amount");
+
+    let mut t = terms();
+    t.continuation.underwritten_excess = true;
+    let (mut h, offer) = executive_leaves(t);
+    let o = h.scheme().offers[&offer].clone();
+    assert_eq!((o.max_sum_insured_minor, o.underwritten_minor), (960_000_00, 210_000_00));
+    assert_eq!(o.earlier.len(), 1);
+    assert!(o.earlier[0].starts_with(&format!("grp-uw:{SCHEME}:")));
+
+    take_up(&mut h, offer, 2, "term-life", 900_000_00).unwrap();
+    // The policy is the automatic part; the rest is asked of underwriting once it is issued.
+    let issued = h.sent.iter().rev().find_map(|(_, c)| match c {
+        ic_core::Command::IssuePolicy(issue) => Some(issue.covers[0].sum_insured_minor),
+        _ => None,
+    });
+    assert_eq!(issued, Some(750_000_00));
+    assert!(
+        matches!(h.scheme().offers[&offer].status, OfferStatus::TakenUp { .. }),
+        "{:?} {:?}",
+        h.scheme().offers[&offer].status,
+        h.published.iter().rev().take(4).collect::<Vec<_>>()
+    );
+    assert_eq!(h.continuations.len(), 1);
+    let asked = &h.continuations[0];
+    assert_eq!(asked.key, format!("grp-cont:{SCHEME}:{offer}"));
+    assert_eq!(asked.amount_minor, 150_000_00);
+    assert_eq!(asked.policy, PolicyId("pol-cont-2".into()));
+    assert_eq!(asked.inception, o.left);
+    assert_eq!(asked.earlier, o.earlier);
+    assert_eq!(asked.cover_type, "life", "the scheme's group_life, as underwriting matches it");
+
+    let record = |h: &mut Harness, outcome: &str| {
+        let r = h.send_as(
+            caller::DRIVER,
+            "driver",
+            GroupCommand::RecordContinuedExcess {
+                scheme: SCHEME.into(),
+                offer,
+                outcome: outcome.into(),
+            },
+        );
+        h.settle();
+        r
+    };
+    record(&mut h, "issued").unwrap();
+    record(&mut h, "issued").unwrap();
+    let decided = h.published.iter().filter(|e| matches!(e, GroupEvent::ContinuedExcessDecided { .. })).count();
+    assert_eq!(decided, 1, "recorded once");
+    assert_eq!(
+        h.scheme().offers[&offer].continued_excess.as_ref().unwrap().status,
+        ic_group::state::ContinuedStatus::InPlace
+    );
+    // An offer that continued nothing underwritten has no outcome to record.
+    let mut t = terms();
+    t.continuation.underwritten_excess = true;
+    let (mut h, offer) = executive_leaves(t);
+    take_up(&mut h, offer, 3, "term-life", 500_000_00).unwrap();
+    assert!(h.continuations.is_empty());
+    assert_eq!(code(record(&mut h, "issued")), "unknown_offer");
+}

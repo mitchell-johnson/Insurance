@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
 use crate::csv::{self, CsvError};
-use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, ContinuationExcess, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{FileToRead, Question};
 use crate::mapping::{FileMapping, Mapped, MappingError};
 use crate::record::MemberIdentity;
@@ -64,6 +64,10 @@ pub trait Peers: Send + Sync {
     /// Ask underwriting to decide a member's cover above the automatic
     /// amount. The request names the member's person.
     fn underwriting(&self, key: &str, today: NaiveDate, request: &UnderwritingRequest) -> impl Future<Output = Result<(), String>> + Send;
+    /// Ask underwriting to continue a leaver's underwritten cover. `Ok(None)`
+    /// is opened (now or before); `Ok(Some(code))` is a refusal that ends it;
+    /// `Err` is to try again.
+    fn continue_excess(&self, today: NaiveDate, request: &ContinuationExcess) -> impl Future<Output = Result<Option<String>, String>> + Send;
     /// Tell underwriting a request is no longer wanted.
     fn withdraw_underwriting(&self, key: &str, today: NaiveDate, request_key: &str) -> impl Future<Output = Result<(), String>> + Send;
     /// Tell underwriting what the core made of terms it accepted.
@@ -93,6 +97,12 @@ pub struct ExcessAnswer {
     pub decision: ExcessDecision,
 }
 
+/// The scheme and offer a proposal named `grp-cont:{scheme}:{offer}` is for.
+pub fn continuation_of_key(key: &str) -> Option<(String, u64)> {
+    let (scheme, offer) = key.strip_prefix("grp-cont:")?.rsplit_once(':')?;
+    Some((scheme.to_string(), offer.parse().ok()?))
+}
+
 /// A page of underwriting's answers.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Answers {
@@ -102,6 +112,9 @@ pub struct Answers {
     /// There may be more after this page.
     pub more: bool,
     pub answers: Vec<ExcessAnswer>,
+    /// Outcomes for continued underwritten cover: the effect's key, the
+    /// scheme, the offer and the outcome (`issued`, or why it ended).
+    pub continued: Vec<(String, String, u64, String)>,
 }
 
 /// The customer master: who a joiner is. The only place a member's name goes.
@@ -302,6 +315,17 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                     Err(reject) => tracing::warn!(scheme = %answer.scheme, case = answer.case, code = %reject.code, "an underwriting answer was not recorded"),
                 }
             }
+            for (key, scheme, offer, outcome) in &page.continued {
+                let command = GroupCommand::RecordContinuedExcess {
+                    scheme: scheme.clone(),
+                    offer: *offer,
+                    outcome: outcome.clone(),
+                };
+                match self.send(format!("uw:{key}"), command).await? {
+                    Ok(()) => pass.done += 1,
+                    Err(reject) => tracing::warn!(%scheme, offer, code = %reject.code, "a continuation outcome was not recorded"),
+                }
+            }
             self.answers_through.store(page.through.max(after), Ordering::Relaxed);
             if !page.more {
                 return Ok(pass);
@@ -363,6 +387,26 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                             .map_err(DriverError::Refused)?;
                             pass.done += 1;
                             continue;
+                        }
+                        Ok(None) => Ok(()),
+                        Err(e) => Err(e),
+                    },
+                    Outbound::ContinueExcess(request) => match self.peers.continue_excess(today, request).await {
+                        Ok(Some(code)) => {
+                            // Underwriting will not continue these terms: the
+                            // leaver keeps the policy for the automatic part.
+                            let (scheme, offer) = continuation_of_key(&request.key).ok_or(DriverError::Refused(Reject::new("bad_key", request.key.clone())))?;
+                            self.send(
+                                format!("cont-refused:{}", request.key),
+                                GroupCommand::RecordContinuedExcess {
+                                    scheme,
+                                    offer,
+                                    outcome: format!("refused:{code}"),
+                                },
+                            )
+                            .await?
+                            .map_err(DriverError::Refused)?;
+                            Ok(())
                         }
                         Ok(None) => Ok(()),
                         Err(e) => Err(e),

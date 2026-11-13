@@ -258,6 +258,7 @@ impl Bench {
         self.feed(
             partition,
             vec![Event::PremiumDue {
+                discounts: vec![],
                 policy: PolicyId::from(policy),
                 receivable,
                 period_start: start,

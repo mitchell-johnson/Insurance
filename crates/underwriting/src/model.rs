@@ -70,13 +70,33 @@ pub enum Entry {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reinsurance_reference: Option<String>,
     },
+    /// A leaver continuing cover above the automatic limit on a retail
+    /// policy group administration has issued. The amount above automatic
+    /// is accepted on the terms the earlier excess proposals accepted, with
+    /// no disclosure, and written as a layer on the continuation policy.
+    GroupContinuation {
+        /// The continuation policy.
+        policy: PolicyId,
+        scheme_policy: PolicyId,
+        scheme_life: LifeId,
+        /// The continuation policy's inception, the day after scheme cover
+        /// ended: the layer is to start then, so there is no gap.
+        inception: NaiveDate,
+        /// The member's group excess proposals whose cover was in place
+        /// when they left.
+        earlier: Vec<ProposalId>,
+    },
 }
 
 impl Entry {
     pub fn policy(&self) -> Option<&PolicyId> {
         match self {
             Entry::NewBusiness => None,
-            Entry::Increase { policy } | Entry::Alteration { policy } | Entry::Reinstatement { policy } | Entry::GroupExcess { policy, .. } => Some(policy),
+            Entry::Increase { policy }
+            | Entry::Alteration { policy }
+            | Entry::Reinstatement { policy }
+            | Entry::GroupExcess { policy, .. }
+            | Entry::GroupContinuation { policy, .. } => Some(policy),
         }
     }
 }
@@ -256,6 +276,11 @@ pub enum DecisionSource {
         delegate_ref: String,
         consent_ref: String,
         decided_by: String,
+    },
+    /// Terms carried over from the member's earlier excess decisions under
+    /// a scheme, for cover they continue after leaving it.
+    Continuation {
+        earlier: Vec<String>,
     },
     /// Terms that arrived as data from a legacy system.
     Migrated {

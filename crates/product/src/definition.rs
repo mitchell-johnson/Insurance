@@ -292,6 +292,26 @@ pub enum Feature {
         min_covers: u32,
         percent: DecStr,
     },
+    /// The product's chain of discounts, in order, and the limits on it
+    /// (see `discount`). Each discount is its own line on the bill.
+    Discounts {
+        chain: Vec<crate::discount::DiscountStep>,
+        /// The most all discounts together take, as a percentage of base premium.
+        #[serde(default)]
+        max_total_percent: Option<DecStr>,
+        /// The least the net annual premium can be, in major currency units.
+        #[serde(default)]
+        min_net_annual: Option<DecStr>,
+        /// The largest approved override, as a percentage, that one
+        /// approver can give. Above it a second approver is needed.
+        /// Absent: every override needs two.
+        #[serde(default)]
+        override_single_approver_percent: Option<DecStr>,
+        /// The largest approved override anyone can give, as a percentage.
+        /// Absent: the product allows no overrides.
+        #[serde(default)]
+        override_max_percent: Option<DecStr>,
+    },
     CoolingOff {
         days: u32,
     },
@@ -317,6 +337,7 @@ impl Feature {
         match self {
             Feature::Composition { .. } => 5,
             Feature::MultiCoverDiscount { .. } => 10,
+            Feature::Discounts { .. } => 11,
             Feature::Indexation { .. } => 20,
             Feature::Billing { .. } => 30,
             Feature::Earning { .. } => 40,

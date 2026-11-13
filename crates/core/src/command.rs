@@ -153,6 +153,13 @@ pub struct UnderwrittenLayer {
     pub exclusions: Vec<String>,
     /// The underwriting decision this layer comes from.
     pub reference: String,
+    /// The day the layer starts, where that is before today: cover a
+    /// leaver continues from the day after leaving, accepted later. Not
+    /// before the policy's start and not after the business date. Every
+    /// period already billed is charged for its days from then. Absent:
+    /// the layer starts today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<NaiveDate>,
 }
 
 /// A cover a life does not hold, added to a retail policy after issue.
@@ -510,6 +517,11 @@ pub enum Command {
     /// The customer master says the owner's own hold on money going out
     /// stands on this policy, or has ended.
     SetOwnerHold(Box<crate::owner_hold::SetOwnerHold>),
+    /// A module says what a life or the policy holds that a discount is
+    /// given for, from a date.
+    SetEntitlement(Box<crate::entitlement::SetEntitlement>),
+    /// An approved, per-policy discount is given, or its end brought forward.
+    SetDiscountOverride(Box<crate::discount_override::SetDiscountOverride>),
     // --- payments: money leaving through a payable ---
     /// Move a credit balance from suspense to refund payable, where it waits
     /// for a payment run. The same route rule as `RefundSuspense` applies.
@@ -641,6 +653,8 @@ impl Command {
             Command::Interest(command) => command.allowed_callers(),
             Command::Nominate(command) => command.allowed_callers(),
             Command::SetOwnerHold(command) => command.allowed_callers(),
+            Command::SetEntitlement(command) => command.allowed_callers(),
+            Command::SetDiscountOverride(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
             Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
@@ -703,6 +717,8 @@ impl Command {
             Command::Interest(_) => "interest",
             Command::Nominate(_) => "nominate",
             Command::SetOwnerHold(_) => "set_owner_hold",
+            Command::SetEntitlement(_) => "set_entitlement",
+            Command::SetDiscountOverride(_) => "set_discount_override",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",
             Command::RaiseRefundPayable { .. } => "raise_refund_payable",

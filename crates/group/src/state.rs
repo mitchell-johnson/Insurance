@@ -185,9 +185,57 @@ pub struct Offer {
     /// The first day without scheme cover: the new policy starts here.
     pub left: NaiveDate,
     pub expires: NaiveDate,
-    /// The most that can be continued: the automatic cover at leaving.
+    /// The most that can be continued: the automatic cover at leaving,
+    /// and the underwritten cover in place then where the scheme lets it
+    /// be continued.
     pub max_sum_insured_minor: i64,
     pub status: OfferStatus,
+    /// The part of the most that was underwritten. Taking up more than the
+    /// rest goes through underwriting, which holds the terms.
+    #[serde(default)]
+    pub underwritten_minor: i64,
+    /// The underwriting proposals behind that cover: `grp-uw:{scheme}:{case}`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub earlier: Vec<String>,
+    /// The underwritten part a leaver took up, and where it stands.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continued_excess: Option<ContinuedExcess>,
+}
+
+/// The underwritten cover a leaver continues: asked of underwriting once
+/// the continuation policy is in the core, and written there as a layer
+/// on the earlier terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuedExcess {
+    pub amount_minor: i64,
+    pub cover: String,
+    /// The kind of cover continued, as underwriting matches it against the
+    /// earlier proposals: the scheme cover's type without `group_`.
+    #[serde(default)]
+    pub cover_type: String,
+    pub product_code: String,
+    pub status: ContinuedStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContinuedStatus {
+    /// Waiting for the continuation policy.
+    Waiting,
+    /// Asked of underwriting.
+    Asked,
+    /// Underwriting wrote the layer.
+    InPlace,
+    /// Underwriting ended it without a layer: declined, lapsed, withdrawn
+    /// or refused as not continuing earlier terms.
+    NotContinued { outcome: String },
+}
+
+impl Offer {
+    /// What can be continued with no underwriting at all.
+    pub fn automatic_minor(&self) -> i64 {
+        self.max_sum_insured_minor - self.underwritten_minor
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

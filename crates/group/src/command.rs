@@ -306,6 +306,13 @@ pub enum GroupCommand {
         request: String,
         code: String,
     },
+    /// Underwriting's outcome for the underwritten part of a continuation,
+    /// read from its outbox.
+    RecordContinuedExcess {
+        scheme: String,
+        offer: u64,
+        outcome: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -345,7 +352,7 @@ impl GroupCommand {
             | Tick => &[DRIVER],
             SelfRegister { .. } | TakeUpContinuation { .. } => &[MEMBER],
             // The driver carries the underwriting module's answer from its outbox.
-            RecordExcessDecision { .. } => &[UNDERWRITING, DRIVER],
+            RecordExcessDecision { .. } | RecordContinuedExcess { .. } => &[UNDERWRITING, DRIVER],
             RequireUnderwrittenExcess { .. } => &[REINSURANCE],
             RecordShortPayment { .. } => &[CASH],
         }

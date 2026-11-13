@@ -133,7 +133,7 @@ fn core_events_require_documents_exactly_once() {
                 kind: DocumentKind::PremiumReceipt
             },
             Event::DocumentRequired {
-                trigger: "7-3:PolicySchedule".into(),
+                trigger: format!("schedule:pol-1:{today}:PolicySchedule"),
                 policy: pol.clone(),
                 kind: DocumentKind::PolicySchedule
             },
@@ -579,4 +579,73 @@ fn old_keys_are_forgotten_and_recent_ones_kept() {
     saved.as_object_mut().unwrap().remove("key_log").expect("the state saves its key log");
     let older: DocumentsState = serde_json::from_value(saved).unwrap();
     assert_eq!(older.remembered_keys(), 2);
+}
+
+/// Purpose: cover taken off a policy, by a claim or by the owner, asks for
+/// a new schedule; however many layers a day ends, cuts or adds, one
+/// schedule is asked for that policy that day; a change on a later day asks
+/// for another; and once the day's schedule is issued, a further change the
+/// same day does not ask again (persona CLM-009).
+/// Why it matters: the schedule is the customer's statement of what cover
+/// they hold. After a lump sum claim it must show the cover left, but a
+/// claim that ends three layers must not send three schedules on one day.
+#[test]
+fn a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day() {
+    let mut kit = Kit::ready();
+    let today = kit.today();
+    let pol = policy("pol-1");
+    let reduced = |seq: u64, on: NaiveDate| {
+        core(
+            seq,
+            on,
+            CoreEvent::LayerReduced {
+                policy: pol.clone(),
+                cover: "life".into(),
+                layer: 1,
+                continued_as: 3,
+                effective: on,
+                sum_insured_minor: 50_000_000,
+                kept_minor: 20_000_000,
+            },
+        )
+    };
+    let ended = |seq: u64, on: NaiveDate, layer: u32| {
+        core(
+            seq,
+            on,
+            CoreEvent::LayerEnded {
+                policy: pol.clone(),
+                cover: "life".into(),
+                layer,
+                life: "life-1".into(),
+                effective: on,
+                sum_insured_minor: 10_000_000,
+            },
+        )
+    };
+    let events = kit.ok("relay", "svc", observe(vec![reduced(1, today), ended(2, today, 1), ended(3, today, 2)]));
+    let id = format!("schedule:pol-1:{today}:PolicySchedule");
+    assert_eq!(
+        events,
+        vec![Event::DocumentRequired {
+            trigger: id.clone(),
+            policy: pol.clone(),
+            kind: DocumentKind::PolicySchedule
+        }]
+    );
+    assert_eq!(kit.state.triggers[&id].event, format!("schedule:pol-1:{today}"));
+
+    // The day's schedule goes out; a later change that day asks for nothing.
+    let mut schedule = kit.issue_spec("s1", DocumentKind::PolicySchedule, "schedule");
+    schedule.trigger_event = Some(format!("schedule:pol-1:{today}"));
+    schedule.wordings = vec![tref("wording", 1)];
+    kit.issue(schedule);
+    assert!(!kit.state.triggers.contains_key(&id));
+    assert!(kit.ok("relay", "svc", observe(vec![ended(4, today, 3)])).is_empty());
+
+    // The next day's change asks again.
+    let tomorrow = today.succ_opt().unwrap();
+    let events = kit.ok("relay", "svc", observe(vec![ended(5, tomorrow, 3)]));
+    assert_eq!(events.len(), 1);
+    assert!(kit.state.triggers.contains_key(&format!("schedule:pol-1:{tomorrow}:PolicySchedule")));
 }

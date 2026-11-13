@@ -70,7 +70,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period` |
-| BIL-002 | part | `documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
+| BIL-002 | full | `documents/tests/required_documents.rs::a_bill_gets_a_premium_notice_with_its_discount_lines`<br>`documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
 | BIL-005 | full | `sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | BIL-007 | full | `sim/tests/scenarios.rs::money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing` |
 | BIL-008 | full | `sim/tests/scenarios.rs::cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part`<br>`distribution/tests/commission.rs::cancelling_in_cooling_off_reverses_all_commission_from_whoever_received_it` |
@@ -199,7 +199,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
 | CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
-| CLM-009 | full | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event` |
+| CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event`<br>`documents/tests/lifecycle.rs::a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day` |
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`claims/tests/suite/covers.rs::the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not` |
@@ -323,6 +323,21 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 | HLT-009 | full | `claims/tests/suite/covers.rs::counters_never_cross_covers_unless_the_shell_shares_one` |
 | HLT-010 | full | `sim/tests/health_flex.rs::an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer`<br>`sim/tests/claims.rs::the_cover_check_reports_the_excess_level_held_on_the_event_date` |
+
+## DSC Discounts and pricing components
+
+| Matrix | Status | Built tests |
+| --- | --- | --- |
+| DSC-001 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net`<br>`sim/tests/personas_spine.rs::a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed` |
+| DSC-002 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net` |
+| DSC-003 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-004 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date`<br>`documents/tests/required_documents.rs::a_lost_discount_is_noticed_before_the_bill_it_raises` |
+| DSC-005 | part | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-006 | full | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
+| DSC-007 | full | `product/tests/products.rs::a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount` |
+| DSC-009 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-010 | part | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
+| DSC-011 | full | `product/tests/products.rs::a_discount_that_could_raise_the_premium_or_cannot_be_explained_does_not_load` |
 
 ## JNT Joint lives, ownership, assignments and dependants
 

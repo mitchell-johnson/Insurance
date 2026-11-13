@@ -4,7 +4,8 @@
 #
 # Holidays are the national public holidays on the day they are observed
 # (a holiday on a weekend is listed on the Monday or Tuesday it moves to).
-# Regional anniversary days are left out. Add each new year before it starts:
+# Best estimate until finance confirms: the office is in Auckland, so Auckland
+# Anniversary Day is included (the Monday nearest 29 January). Add each new year before it starts:
 # a year with no holidays listed has its steps fall due on weekdays only.
 #
 # A blocking check that is red stops sign-off unless the finance lead waives
@@ -40,8 +41,12 @@ CLOSE = close_config(
     ],
     migration_control = ["1420", "1430"],
     # Portfolios of contracts with similar risks managed together, and the
-    # profitability band of each product's new business. Placeholder until
-    # the appointed actuary sets them; a policy is placed once, at issue.
+    # profitability band of each product's new business. Best estimate until
+    # the appointed actuary sets them: one portfolio per line of business
+    # (interim accident cover sits with the term life it leads to), and every
+    # band "other", the IFRS 17 default when there is no evidence that new
+    # business is onerous or carries no significant risk of becoming so. A
+    # policy is placed once, at issue, so confirm before the first issue.
     grouping = [
         accounting_group("term-life", "individual-life"),
         accounting_group("interim-accident", "individual-life"),
@@ -59,10 +64,13 @@ CLOSE = close_config(
         # 2026 (from the first close this configuration serves)
         "2026-12-25", "2026-12-28",
         # 2027
-        "2027-01-01", "2027-01-04", "2027-02-08", "2027-03-26", "2027-03-29", "2027-04-26",
+        "2027-01-01", "2027-01-04", "2027-02-01", "2027-02-08", "2027-03-26", "2027-03-29", "2027-04-26",
         "2027-06-07", "2027-06-25", "2027-10-25", "2027-12-27", "2027-12-28",
         # 2028
-        "2028-01-03", "2028-01-04", "2028-02-07", "2028-04-14", "2028-04-17", "2028-04-25",
+        "2028-01-03", "2028-01-04", "2028-01-31", "2028-02-07", "2028-04-14", "2028-04-17", "2028-04-25",
         "2028-06-05", "2028-07-14", "2028-10-23", "2028-12-25", "2028-12-26",
+        # 2029
+        "2029-01-01", "2029-01-02", "2029-01-29", "2029-02-06", "2029-03-30", "2029-04-02",
+        "2029-04-25", "2029-06-04", "2029-07-06", "2029-10-22", "2029-12-25", "2029-12-26",
     ],
 )

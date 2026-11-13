@@ -314,6 +314,7 @@ fn set_cancellation_aside(
             total_minor: owed_again,
             members: None,
             by_cover_type: Default::default(),
+            discounts: vec![],
         });
     }
     carry_on(ledger, catalog, product, policy, ctx, policy.inception, until)?;

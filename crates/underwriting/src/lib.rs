@@ -34,6 +34,7 @@ pub mod signing;
 pub mod special;
 
 mod casework;
+mod continuation;
 mod external;
 mod flow;
 mod intake;

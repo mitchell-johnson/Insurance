@@ -61,6 +61,7 @@ pub fn terms() -> SchemeTerms {
             take_up_days: 60,
             products: vec!["term-life".to_string()],
             max_age: Some(65),
+            underwritten_excess: false,
         },
         leave_of_absence_days: 90,
         takeover: None,
@@ -85,6 +86,7 @@ pub fn terms() -> SchemeTerms {
         excess_loading_min_count: 0,
         suspend_joiners_after_short_payments: Some(2),
         broker: None,
+        delegated_underwriting: None,
     }
 }
 
@@ -166,6 +168,8 @@ pub struct Harness {
     pub sent: Vec<(String, Command)>,
     /// Letters asked of the documents module.
     pub letters: Vec<ic_group::event::MemberLetter>,
+    /// Leavers' underwritten cover asked of underwriting to continue.
+    pub continuations: Vec<ic_group::event::ContinuationExcess>,
     n: u64,
 }
 
@@ -222,6 +226,7 @@ impl Harness {
             core_faults: VecDeque::new(),
             sent: vec![],
             letters: vec![],
+            continuations: vec![],
             n: 0,
         };
         let founding = if pooled {
@@ -361,6 +366,10 @@ impl Harness {
                     acked.push(id);
                 }
                 Outbound::Commission { .. } => {}
+                Outbound::ContinueExcess(request) => {
+                    self.continuations.push(request);
+                    acked.push(id);
+                }
                 Outbound::Letter(letter) => {
                     self.letters.push(letter);
                     acked.push(id);
