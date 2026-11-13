@@ -350,6 +350,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-004 | part | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 
 ## CMP Complaints and disputes
