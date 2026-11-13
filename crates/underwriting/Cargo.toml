@@ -39,6 +39,8 @@ path = "src/bin/ic-underwriting.rs"
 
 [dev-dependencies]
 ic-sim.workspace = true
+# For the progress rows' contract test only: the driver sends that module JSON.
+ic-channels = { path = "../channels" }
 
 [lints]
 workspace = true

@@ -4,11 +4,12 @@
 
 mod common;
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, NaiveDate, Utc};
 use common::*;
-use ic_core::PolicyStatus;
+use ic_core::{PolicyId, PolicyStatus};
 use ic_ledger::PartitionId;
 use ic_log::StateMachine;
 use ic_reinsurance::capacity::{Outcome, ReservationStatus};
@@ -18,8 +19,10 @@ use ic_sim::config::shipped_activations;
 use ic_sim::Cluster;
 use ic_underwriting::command::{Applied, Command, Effect, Envelope, Reject};
 use ic_underwriting::config::{InterimSettings, Settings};
-use ic_underwriting::driver::{Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
+use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::model::{Entry, ProposalStatus, Stage};
+use ic_underwriting::progress::ProgressRow;
+use ic_underwriting::service::channels_envelope;
 use ic_underwriting::special::{answer, Query};
 use serde_json::Value;
 
@@ -103,6 +106,36 @@ impl Core for Ledger {
 }
 
 /// Group administration as a recorder: what it was sent, and whether it refuses.
+/// The real channel module, taking what the driver sends as JSON.
+#[derive(Clone)]
+struct Portal {
+    state: Arc<Mutex<ic_channels::state::ChannelState>>,
+}
+
+impl Default for Portal {
+    fn default() -> Self {
+        Portal {
+            state: Arc::new(Mutex::new(ic_channels::state::ChannelState::shipped().unwrap())),
+        }
+    }
+}
+
+impl Portal {
+    /// The rows published for a policy, by key.
+    fn rows(&self, policy: &str) -> BTreeMap<String, ic_channels::feed::Row> {
+        let state = self.state.lock().unwrap();
+        state.data.published.get(&PolicyId::from(policy)).cloned().unwrap_or_default()
+    }
+}
+
+impl Channels for Portal {
+    async fn publish(&self, key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> Result<Result<(), Refusal>, DriverError> {
+        let envelope: ic_channels::state::Envelope = serde_json::from_value(channels_envelope(key, at, rows)).unwrap();
+        let output = self.state.lock().unwrap().apply(0, envelope);
+        Ok(output.result.map(|_| ()).map_err(|r| Refusal::new(&r.code, r.message)))
+    }
+}
+
 #[derive(Clone, Default)]
 struct Group {
     sent: Arc<Mutex<Vec<ic_group::command::Envelope>>>,
@@ -143,7 +176,8 @@ struct Bench<F> {
     reinsurance: Reinsurance,
     ledger: Ledger,
     group: Group,
-    driver: Driver<Module, Reinsurance, Ledger, Group, F>,
+    portal: Portal,
+    driver: Driver<Module, Reinsurance, Ledger, Group, F, Portal>,
     product_hash: String,
 }
 
@@ -184,11 +218,13 @@ fn bench<F: Forward + Clone>(forward: F) -> Bench<F> {
         down: Arc::default(),
     };
     let group = Group::default();
+    let portal = Portal::default();
     let driver = Driver {
         underwriting: module.clone(),
         reinsurer: reinsurance.clone(),
         core: ledger.clone(),
         schemes: group.clone(),
+        channels: portal.clone(),
         forward,
         batch: 3,
         clock,
@@ -198,6 +234,7 @@ fn bench<F: Forward + Clone>(forward: F) -> Bench<F> {
         reinsurance,
         ledger,
         group,
+        portal,
         driver,
         product_hash,
     }
@@ -266,6 +303,20 @@ async fn a_clean_application_becomes_a_policy_with_nobody_carrying() {
     let keys = b.reinsurance.sent.lock().unwrap().clone();
     assert_eq!(keys[0], "uw:P1/L1/life/1:reserve");
     assert!(keys.contains(&"uw:P1/L1/life/1:confirm".to_string()) && keys.contains(&format!("uw:{policy}:L1:factors")));
+
+    // The portals show the proposal issued: to everyone on the policy the proposal, and to the
+    // life alone where their own application stands.
+    let rows = b.portal.rows(&policy.to_string());
+    let shown = &rows[&format!("{policy}/underwriting/P1")];
+    assert_eq!((shown.kind.as_str(), shown.sensitive, shown.subject.clone()), ("proposal", false, None));
+    assert_eq!((shown.body["status"].as_str(), shown.body["waiting_on"].clone()), (Some("issued"), Value::Null));
+    let life = &rows[&format!("{policy}/underwriting/P1/L1")];
+    assert_eq!(
+        (life.kind.as_str(), life.sensitive, life.body["stage"].as_str()),
+        ("proposal_life", true, Some("accepted"))
+    );
+    assert_eq!(life.subject, Some(ic_core::PartyId::from("PTY-L1")));
+    assert!(b.module.with(|w| w.s.progress_pending(10).is_empty()));
 
     // Everything else went to whatever is connected, and nothing is left.
     assert!(b.driver.forward.0.lock().unwrap().iter().any(|e| matches!(e, Effect::Notify { .. })));

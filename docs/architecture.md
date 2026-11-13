@@ -504,7 +504,7 @@ Owned by the thread "Build underwriting and new business". The full module descr
 2. Evidence-free reinstatement days are set (term life 60, health plan 30, group life none; reasons in underwriting.md). Still to build: collections opening a reinstatement proposal by itself when `Reinstate` is refused `underwriting_required`.
 3. Staff notices are published to the `underwriting-notices` event hub (`notices.rs`; hub and the workers' sender role in `infra/underwriting.bicep`). Still parked: letters to a customer or adviser (documents has no door for a module's letter), evidence requests and delegate file requests.
 4. A process that writes disclosures to the clinical store, and deploying `infra/underwriting.bicep` (bring it into `infra/main.bicep`; the driver needs its notices hub).
-5. Profiles naming each underwriter's party (supported, none set yet), publishing proposal progress to channels, and an interim cover product.
+5. Profiles naming each underwriter's party (supported, none set yet), portal pages that render the progress rows underwriting now publishes (kinds `proposal`, `proposal_life`; portal work), and an interim cover product.
 6. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
 
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.

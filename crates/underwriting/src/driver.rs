@@ -29,6 +29,7 @@ use serde_json::Value;
 
 use crate::command::{Applied, CapacityAnswer, Command, Effect, Envelope, IssuedLayer, NonDisclosureOutcome, PremiumOnAvoidance, Reject, View};
 use crate::model::{Entry, Proposal, ProposalId};
+use crate::progress::{Pending, ProgressRow};
 use crate::special::Query;
 
 /// The callers the driver acts as when it brings an answer back.
@@ -94,6 +95,12 @@ pub trait Schemes: Send + Sync {
     fn propose(&self, envelope: ic_group::command::Envelope) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
 }
 
+/// The channel module, which keeps the portals' read models.
+pub trait Channels: Send + Sync {
+    /// Publish rows under the module's own name. `key` is the same on every try.
+    fn publish(&self, key: &str, at: DateTime<Utc>, rows: &[ProgressRow]) -> impl Future<Output = Result<Result<(), Refusal>, DriverError>> + Send;
+}
+
 /// Everything with no module of its own yet behind it: evidence providers,
 /// delegates and correspondence. `Ok(None)` is taken; `Ok(Some(reason))` is
 /// why it could not be.
@@ -130,6 +137,10 @@ pub struct Pass {
     pub stale: u32,
     /// Effects parked, with the number each had and the reason.
     pub parked: Vec<(u64, String)>,
+    /// Proposals whose progress was published to the portals.
+    pub published: u32,
+    /// Proposals whose progress the channel module refused.
+    pub progress_refused: u32,
 }
 
 /// What a day's sweep did.
@@ -195,19 +206,20 @@ fn added_layers(events: &[CoreEvent]) -> impl Iterator<Item = IssuedLayer> + '_ 
     })
 }
 
-pub struct Driver<U, R, C, S, F> {
+pub struct Driver<U, R, C, S, F, P> {
     pub underwriting: U,
     pub reinsurer: R,
     pub core: C,
     pub schemes: S,
     pub forward: F,
+    pub channels: P,
     /// Effects read from the outbox at a time.
     pub batch: usize,
     /// The time, read once per command sent to the module.
     pub clock: fn() -> DateTime<Utc>,
 }
 
-impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R, C, S, F> {
+impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels> Driver<U, R, C, S, F, P> {
     fn today(&self) -> NaiveDate {
         (self.clock)().date_naive()
     }
@@ -269,6 +281,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 .await?;
             let outbox: Vec<(u64, Effect)> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
             if outbox.is_empty() {
+                self.publish_progress(&mut pass).await?;
                 return Ok(pass);
             }
             let mut through = None;
@@ -309,6 +322,35 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward> Driver<U, R
                 return Err(e);
             }
         }
+    }
+
+    /// Publish the progress of every proposal waiting for it, then tell the
+    /// module which version went. The channel module upserts rows by key, so
+    /// a repeat is harmless. A refusal will not change on a retry: it is
+    /// logged and counted, and the version is let go so it does not hold up
+    /// the rest.
+    async fn publish_progress(&self, pass: &mut Pass) -> Result<(), DriverError> {
+        let answer = self.underwriting.ask(Query::Progress { max: self.batch.max(1) }).await?;
+        let pending: Vec<Pending> = serde_json::from_value(answer).map_err(|e| DriverError::Answer(e.to_string()))?;
+        for p in pending {
+            let key = format!("{}/progress/{}", p.proposal, p.version);
+            match self.channels.publish(&key, (self.clock)(), &p.rows).await? {
+                Ok(()) => pass.published += 1,
+                Err(r) => {
+                    tracing::warn!(proposal = %p.proposal, code = %r.code, message = %r.message, "the channel module refused a proposal's progress");
+                    pass.progress_refused += 1;
+                }
+            }
+            self.housekeeping(
+                format!("published:{key}"),
+                Command::ProgressPublished {
+                    proposal: p.proposal,
+                    version: p.version,
+                },
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// The day's sweep: lapse what has expired, chase evidence, escalate
