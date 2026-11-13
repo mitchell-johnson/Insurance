@@ -2203,3 +2203,27 @@ fn a_continuation_policy_carries_its_scheme_membership_to_the_claim() {
     let from = claim(&c, "clm-1").continued_from.clone().unwrap();
     assert_eq!((from.policy.as_str(), from.life.as_str()), ("scheme-1", "member-7"));
 }
+
+/// Purpose: a policy with an admitted claim still owed to the claimant cannot be avoided for
+/// non-disclosure, and the refusal changes nothing.
+/// Why it matters: avoidance unwinds the policy's premium as if it never existed. Doing that
+/// while a benefit is payable would leave the insurer owing a claim on a policy it says was
+/// void, so the claim is settled or set aside first, by a person.
+#[test]
+fn a_policy_with_a_benefit_owed_cannot_be_avoided() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    let before = (c.state(0).ledger.head(), money(&c, &id));
+    let avoid = Command::AvoidPolicy {
+        policy: id.clone(),
+        case: "nd-1".into(),
+        premium: ic_core::PremiumOnAvoidance::Refund,
+    };
+    assert_eq!(code(c.submit(0, "underwriting", avoid)), "claim_in_payment");
+    assert_eq!((c.state(0).ledger.head(), money(&c, &id)), before);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+}

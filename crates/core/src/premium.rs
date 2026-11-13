@@ -299,3 +299,34 @@ pub fn zero_premium(currency: ic_money::Currency) -> ModalPremium {
         levies: BTreeMap::new(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ic_money::{Currency::NZD, Money};
+
+    /// Purpose: adding one bill into another adds every line: premium by
+    /// cover, tax by cover, each levy and the policy fee, including lines
+    /// the first bill did not have.
+    /// Why it matters: a scheme's bill and a policy with several lives are
+    /// built by adding bills together. A line dropped here would be tax or
+    /// a levy collected from nobody and still owed to the government.
+    #[test]
+    fn adding_bills_adds_tax_and_levies_line_by_line() {
+        let m = |minor| Money::new(minor, NZD);
+        let bill = |cover: &str, premium, gst, levy, fee| ModalPremium {
+            by_cover: [(cover.to_string(), m(premium))].into(),
+            policy_fee: m(fee),
+            gst: [(cover.to_string(), m(gst))].into(),
+            levies: [("fire".to_string(), m(levy))].into(),
+        };
+        let mut total = bill("life", 100_00, 15_00, 2_00, 3_00);
+        add_premium(&mut total, &bill("life", 50_00, 7_50, 1_00, 0)).unwrap();
+        add_premium(&mut total, &bill("trauma", 20_00, 3_00, 40, 0)).unwrap();
+        assert_eq!((total.by_cover["life"].minor, total.by_cover["trauma"].minor), (150_00, 20_00));
+        assert_eq!((total.gst["life"].minor, total.gst["trauma"].minor), (22_50, 3_00));
+        assert_eq!((total.levies["fire"].minor, total.policy_fee.minor), (3_40, 3_00));
+        let too_much = bill("life", i64::MAX, 0, 0, 0);
+        assert!(add_premium(&mut total, &too_much).is_err(), "an overflow is an error, never a wrapped amount");
+    }
+}
