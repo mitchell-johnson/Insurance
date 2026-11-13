@@ -46,6 +46,10 @@ pub enum ConductMeasure {
     AdmissionReversed,
     ComplaintReceived,
     ComplaintUpheld,
+    /// A policy lapsed for non-payment. Counted from the core's events.
+    PolicyLapsed,
+    /// A lapsed policy put back in force. Counted from the core's events.
+    PolicyReinstated,
 }
 
 impl ConductMeasure {
@@ -53,6 +57,8 @@ impl ConductMeasure {
     fn reporter(self) -> &'static str {
         match self {
             ConductMeasure::ComplaintReceived | ConductMeasure::ComplaintUpheld => "complaints",
+            // Only the feed counts these; no caller may report them.
+            ConductMeasure::PolicyLapsed | ConductMeasure::PolicyReinstated => "the core's events",
             _ => "claims",
         }
     }
@@ -74,12 +80,23 @@ pub struct ConductFact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(crate) struct ConductKey {
+pub struct ConductKey {
     period: PeriodId,
     measure: ConductMeasure,
     product: Option<String>,
     /// The period of the decision an overturn or reversal undoes.
     relates_to: Option<PeriodId>,
+}
+
+impl ConductKey {
+    pub(crate) fn new(period: PeriodId, measure: ConductMeasure, product: Option<String>, relates_to: Option<PeriodId>) -> Self {
+        Self {
+            period,
+            measure,
+            product,
+            relates_to,
+        }
+    }
 }
 
 /// A period's conduct measures.
@@ -96,6 +113,12 @@ pub struct ConductReport {
     pub declines_later_overturned: u64,
     pub complaints_received: u64,
     pub complaints_upheld: u64,
+    pub lapsed: u64,
+    pub reinstated: u64,
+    /// Claims decisions made in the period and the days each took from
+    /// registration, counted from the claims module's facts.
+    pub accepted_turnaround: crate::mart::Turnaround,
+    pub declined_turnaround: crate::mart::Turnaround,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,9 +315,13 @@ impl FinanceState {
         Ok(count)
     }
 
+    /// What other modules reported, and what the feed carried.
+    fn all_conduct(&self) -> impl Iterator<Item = (&ConductKey, &u64)> {
+        self.conduct.iter().chain(self.mart.conduct.iter())
+    }
+
     fn conduct_count(&self, period: PeriodId, measure: ConductMeasure) -> u64 {
-        self.conduct
-            .iter()
+        self.all_conduct()
             .filter(|(k, _)| k.period == period && k.measure == measure)
             .map(|(_, n)| n)
             .sum()
@@ -303,7 +330,20 @@ impl FinanceState {
     /// A period's conduct measures, for one product or for all.
     pub fn conduct_report(&self, period: PeriodId, product: Option<&str>) -> ConductReport {
         let mut report = ConductReport::default();
-        for (key, n) in self.conduct.iter().filter(|(k, _)| product.is_none() || k.product.as_deref() == product) {
+        for ((p, measure, prod), t) in &self.mart.turnaround {
+            if *p != period || (product.is_some() && prod.as_deref() != product) {
+                continue;
+            }
+            let into = match measure {
+                ConductMeasure::ClaimAccepted => &mut report.accepted_turnaround,
+                ConductMeasure::ClaimDeclined => &mut report.declined_turnaround,
+                _ => continue,
+            };
+            into.decisions += t.decisions;
+            into.total_days += t.total_days;
+            into.max_days = into.max_days.max(t.max_days);
+        }
+        for (key, n) in self.all_conduct().filter(|(k, _)| product.is_none() || k.product.as_deref() == product) {
             if key.measure == ConductMeasure::DeclineOverturned && key.relates_to == Some(period) {
                 report.declines_later_overturned += n;
             }
@@ -318,6 +358,8 @@ impl FinanceState {
                 ConductMeasure::AdmissionReversed => *report.admissions_reversed.entry(origin).or_insert(0) += n,
                 ConductMeasure::ComplaintReceived => report.complaints_received += n,
                 ConductMeasure::ComplaintUpheld => report.complaints_upheld += n,
+                ConductMeasure::PolicyLapsed => report.lapsed += n,
+                ConductMeasure::PolicyReinstated => report.reinstated += n,
             }
         }
         report
