@@ -52,7 +52,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 9 | 5 | 4 | 6 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
 | BIL Billing and earning | 6 | 4 | 5 | 5 |
-| COL Collection, cash matching, standing and dunning | 7 | 6 | 15 | 13 |
+| COL Collection, cash matching, standing and dunning | 8 | 6 | 14 | 12 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
@@ -60,7 +60,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 17 | 14 | 11 | 14 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
 | INV Unit pricing and the investment ledger | 11 | 3 | 11 | 3 |
-| GRP Group scheme administration | 19 | 9 | 12 | 4 |
+| GRP Group scheme administration | 19 | 10 | 11 | 4 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 0 | 0 | 11 | 4 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 4 | 4 | 2 | 0 |
 | MIG Migration | 2 | 2 | 14 | 10 |
-| **Total** | **211** | **126** | **240** | **157** |
+| **Total** | **212** | **127** | **238** | **156** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 25 | 29 | 15 |
 | B | 81 | 22 | 39 |
-| C | 103 | 73 | 170 |
+| C | 104 | 74 | 168 |
 | D | 2 | 2 | 16 |
 
 ### Priority 1 tests with no built test, by area
@@ -91,13 +91,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **POL** (1): POL-002
 - **LED** (2): LED-006, LED-012
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (8): COL-005, COL-012, COL-014, COL-015, COL-018, COL-019, COL-023, COL-024
+- **COL** (7): COL-005, COL-012, COL-014, COL-018, COL-019, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030
 - **CLM** (4): CLM-015, CLM-025, CLM-026, CLM-029
 - **INV** (2): INV-018, INV-019
-- **GRP** (2): GRP-017, GRP-028
+- **GRP** (1): GRP-017
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
 - **HLT** (4): HLT-001, HLT-002, HLT-004, HLT-009
@@ -127,7 +127,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (10): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-028, CLM-033, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
-- **GRP** (2): GRP-013, GRP-032
+- **GRP** (3): GRP-013, GRP-028, GRP-032
 - **JNT** (3): JNT-001, JNT-008, JNT-013
 - **ADV** (3): ADV-019, ADV-035, ADV-037
 - **SVC** (1): SVC-008
