@@ -24,7 +24,7 @@ async function visit(browser, path, who, steps) {
     await page.goto(base + path, { waitUntil: "networkidle" });
     await steps.run(page);
   } catch (e) {
-    problems.push(String(e.message).split("\n")[0]);
+    problems.push(String(e.message).split("\n").slice(0, 3).join(" / "));
   }
   if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/${path.replace(/\W/g, "") || "index"}.png`, fullPage: true });
   for (const p of problems) failures.push(`${path}: ${p}`);
@@ -226,6 +226,49 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "No exceptions are open.");
     await sees(p, "Nothing is waiting.");
   } });
+  // Find a case waiting in one of the queues and take it.
+  const takeFrom = async (p, queues) => {
+    for (const q of queues) {
+      await p.selectOption("#q-name", q);
+      await Promise.all([p.waitForResponse((r) => r.url().includes("/underwriting/queue?")), p.locator("#q-form button").click()]);
+      await p.waitForTimeout(100);
+      const take = p.locator("#queue").getByRole("button", { name: "Take" });
+      if (await take.count()) { await take.first().click(); await sees(p, "You hold"); return; }
+    }
+    throw new Error("no case waiting in " + queues.join(", "));
+  };
+  await visit(browser, "/underwriting", { subject: "sub-amy" }, { run: async (p) => {
+    await sees(p, "You are amy. You hold 0 open cases.");
+    await takeFrom(p, ["medical", "financial", "occupational", "tele_interview"]);
+    await p.selectOption("#c-what", "propose");
+    await p.fill("#cf-cover", "life"); await p.selectOption("#cf-outcome", "accept");
+    await p.fill("#cf-reasons", "RC-0101"); await p.fill("#cf-notes", "vault://notes");
+    await p.locator("#c-form button").click();
+    await p.locator("#c-msg").getByText("Done.").waitFor();
+    await p.fill("#p-id", "P2"); await p.locator("#p-form button").first().click();
+    await p.locator("#proposal").getByText("P2:").waitFor();
+    await p.fill("#d-life", "L1"); await p.fill("#d-purpose", "assess the case"); await p.locator("#d-form button").click();
+    await p.locator("#disclosures details").first().waitFor();
+    await p.getByRole("button", { name: "Try again" }).click();
+    await sees(p, "is back in the outbox");
+    await sees(p, "Nothing is parked.");
+    if (await p.locator("#senior").isVisible()) throw new Error("amy sees the senior's tools");
+  } });
+  await visit(browser, "/underwriting", { subject: "sub-sam" }, { run: async (p) => {
+    await sees(p, "a senior underwriter");
+    await takeFrom(p, ["senior_review"]);
+    await p.fill("#n-review", "ndr/CLM-1/L1"); await p.selectOption("#n-outcome", "vary");
+    await p.fill("#n-reasons", "RC-0980"); await p.fill("#n-cover", "life"); await p.fill("#n-loading", "50");
+    await p.locator("#n-form button").click();
+    await sees(p, "A second senior signs it");
+    await p.getByRole("button", { name: "Withdraw" }).waitFor();
+  } });
+  await visit(browser, "/underwriting", { subject: "sub-cat" }, { run: async (p) => {
+    await p.getByRole("button", { name: "Sign and send" }).click();
+    await sees(p, "Signed and sent.");
+    await sees(p, "Nothing is waiting.");
+  } });
+  await visit(browser, "/underwriting", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();

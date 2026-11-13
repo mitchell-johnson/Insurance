@@ -920,7 +920,8 @@ impl GroupState {
         let start = self.today().max(old.effective);
         let id = self.fresh_id();
         let layer = ExcessLayer {
-            continues: None,
+            // The same cover carried on: reinsurance keeps its cession.
+            continues: old.layer,
             policy: s.policy.clone(),
             cover: old.cover.clone(),
             life: old.life.clone(),

@@ -47,7 +47,9 @@ impl ClaimsState {
             .map(|p| p.amount_minor)
             .sum();
         let used = |key: &String| self.health_used.get(key).copied().unwrap_or(0);
-        let share = (item.invoice_minor - benefit.excess_minor).max(0) * i64::from(100 - benefit.copay_pct) / 100;
+        // The excess the life chose replaces the schedule's, where the cover offers a choice.
+        let excess = facts.chosen_excess_minor.unwrap_or(benefit.excess_minor);
+        let share = (item.invoice_minor - excess).max(0) * i64::from(100 - benefit.copay_pct) / 100;
         let amount_minor = share
             .min(benefit.per_event_minor)
             .min(benefit.per_year_minor - used(&year_key) - held)
@@ -156,6 +158,7 @@ impl ClaimsState {
             life_party: facts.life_party.clone(),
             reserve_minor: 0,
             admitted_minor: 0,
+            loan_repaid_minor: 0,
             payable_minor: 0,
             cost_payable_minor: 0,
             waiver_from: None,
@@ -258,6 +261,7 @@ impl ClaimsState {
                     amount_minor: amount,
                     release_reserve: true,
                     deduct_premium_minor: 0,
+                    repay_loan_minor: 0,
                     terminate: None,
                 })?;
                 claim.status = Status::Admitted;

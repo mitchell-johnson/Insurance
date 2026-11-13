@@ -156,6 +156,10 @@ pub enum Change {
     EndSpendingHold,
 }
 
+/// The verification method that records sanctions and politically exposed
+/// person screening, as against an identity check.
+pub const SCREENING_METHOD: &str = "screening";
+
 /// How recent the identity check behind a hold removal must be.
 pub const FRESH_VERIFICATION_HOURS: i64 = 24;
 
@@ -387,6 +391,30 @@ impl Party {
 
     pub fn exists(&self) -> bool {
         self.kind.is_some()
+    }
+
+    /// What due diligence on this party still lacks on `today`: `identity`
+    /// or `screening` with no passed outcome (`..._referred` when the
+    /// latest went to a specialist), and `risk_rating` when none is current.
+    /// Empty when complete.
+    pub fn due_diligence(&self, today: NaiveDate) -> Vec<&'static str> {
+        let mut open = Vec::new();
+        for (kind, referred) in [("identity", "identity_referred"), ("screening", "screening_referred")] {
+            let latest = self
+                .verifications
+                .iter()
+                .filter(|v| (v.method == SCREENING_METHOD) == (kind == "screening"))
+                .max_by_key(|v| v.verified_at);
+            match latest.map(|v| v.outcome) {
+                Some(crate::model::VerificationOutcome::Passed) => {}
+                Some(crate::model::VerificationOutcome::Referred) => open.push(referred),
+                _ => open.push(kind),
+            }
+        }
+        if !self.ratings.iter().any(|r| r.review_by > today) {
+            open.push("risk_rating");
+        }
+        open
     }
 
     /// The facts as they were on `as_of`, as we knew them at `known_at`.

@@ -19,7 +19,7 @@ use crate::config::{content_hash, eval, ConfigError};
 use crate::period::PeriodId;
 
 /// The checks the finance ledger works out from its own state.
-pub const AUTOMATIC_CHECKS: [&str; 8] = [
+pub const AUTOMATIC_CHECKS: [&str; 9] = [
     CONTROL_CHECK,
     VALUATION_EXTRACTS,
     UNAPPROVED_JOURNALS,
@@ -28,6 +28,7 @@ pub const AUTOMATIC_CHECKS: [&str; 8] = [
     FUND_BALANCE,
     MIGRATION_CONTROL,
     RATE_TABLE_VALIDATION,
+    TAX_POSTING_TYPES,
 ];
 pub const CONTROL_CHECK: &str = "control_check";
 pub const VALUATION_EXTRACTS: &str = "valuation_extracts";
@@ -37,6 +38,7 @@ pub const TRIAL_BALANCE: &str = "trial_balance";
 pub const FUND_BALANCE: &str = "fund_balance";
 pub const MIGRATION_CONTROL: &str = "migration_control";
 pub const RATE_TABLE_VALIDATION: &str = "rate_table_validation";
+pub const TAX_POSTING_TYPES: &str = "tax_posting_types";
 
 /// The extract kinds a period needs before it can close.
 pub const REQUIRED_EXTRACTS: [&str; 2] = ["in_force", "movement"];
@@ -88,6 +90,15 @@ impl AgedDecl {
     }
 }
 
+/// A tax or levy account and the posting types that explain a movement on it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaxDecl {
+    pub account: String,
+    pub name: String,
+    pub posting_types: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloseConfig {
@@ -99,6 +110,9 @@ pub struct CloseConfig {
     /// moves in the period the old system is loaded and must then stay still.
     #[serde(default)]
     pub migration_control: Vec<String>,
+    /// The tax accounts and the posting types the core may move each with.
+    #[serde(default)]
+    pub tax: Vec<TaxDecl>,
     /// Public holidays as observed (a holiday that falls on a weekend is
     /// listed on the weekday it is taken). Step due dates skip them.
     #[serde(default)]
@@ -125,6 +139,12 @@ impl CloseConfig {
         // typed where the observed day was meant.
         if let Some(day) = self.holidays.iter().find(|h| matches!(h.weekday(), Weekday::Sat | Weekday::Sun)) {
             return invalid(format!("holiday {day} falls on a weekend; list the weekday it is observed on"));
+        }
+        let mut taxed = BTreeSet::new();
+        for t in &self.tax {
+            if t.account.is_empty() || t.posting_types.is_empty() || !taxed.insert(t.account.as_str()) {
+                return invalid(format!("tax account `{}` is unnamed, declared twice or has no posting types", t.account));
+            }
         }
         let mut ids = BTreeSet::new();
         for c in &self.checks {
@@ -408,6 +428,7 @@ impl FinanceState {
             FUND_BALANCE => self.imbalances(period, true),
             MIGRATION_CONTROL => self.migration_moves(period),
             RATE_TABLE_VALIDATION => self.unvalidated_tables(period),
+            TAX_POSTING_TYPES => self.tax_reconciliation(period).unexplained,
             // The only other automatic check: the declarations were validated when loaded.
             _ => self.imbalances(period, false),
         };

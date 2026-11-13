@@ -22,6 +22,7 @@ CLOSE = close_config(
         automatic("valuation_extracts", "Valuation extracts cut, hashed and reconciled opening to closing", "reporting", 2),
         reported("actuarial_handover", "Handover to the actuarial run with extract IDs and hashes", "reporting", 2, by = "reporting", quarterly = True),
         automatic("unapproved_journals", "No manual journal left unapproved", "finance_operations", 3),
+        automatic("tax_posting_types", "GST and levy accounts moved only under their own posting types", "tax", 3),
         reported("tax_reconciliation", "GST, levies and withholding reconciled to posting types", "tax", 3, by = "finance-console"),
         automatic("actuarial_journals", "Actuarial journals posted with the appointed actuary's sign-off", "appointed_actuary", 5, quarterly = True),
         reported("analytical_review", "Movements against prior period and budget explained", "finance_operations", 4, by = "finance-console", blocking = False),
@@ -38,6 +39,10 @@ CLOSE = close_config(
         aged("held_balance", "Held balances aged by party", "counterparty_finance", 2, by = "commission", max_age_days = 90, max_amount_minor = 10000000),
     ],
     migration_control = ["1420", "1430"],
+    tax = [
+        tax_account("2200", "GST payable", ["gst"]),
+        tax_account("2210", "Levies payable", ["levy"]),
+    ],
     holidays = [
         # 2026 (from the first close this configuration serves)
         "2026-12-25", "2026-12-28",
