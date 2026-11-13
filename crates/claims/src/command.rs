@@ -434,6 +434,18 @@ pub enum Command {
         overpayment: String,
         amount_minor: i64,
     },
+    /// Ask the payee again, by letter, to repay an overpayment being pursued.
+    AskRepayment {
+        claim: String,
+        overpayment: String,
+        actor: Actor,
+    },
+    /// The documents service has taken the request for a repayment letter.
+    RecordRepaymentLetter {
+        claim: String,
+        overpayment: String,
+        request: String,
+    },
 
     // --- controls and other modules ---
     /// The standing control: claims in payment whose recorded cause matches
@@ -558,6 +570,7 @@ impl Command {
             Command::ConfirmAlive { .. } => &["channels", "customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
             Command::ReferForInvestigation { .. } => &["compliance"],
+            Command::RecordRepaymentLetter { .. } => &["documents"],
             Command::OffsetSource { .. } | Command::OffsetTaken { .. } | Command::OffsetReturned { .. } => &["partition"],
             _ => &["claims"],
         }
@@ -598,6 +611,8 @@ impl Command {
             Command::CancelRun { .. } => "cancel_run",
             Command::ConfirmRun { .. } => "confirm_run",
             Command::RaiseOverpayment { .. } => "raise_overpayment",
+            Command::AskRepayment { .. } => "ask_repayment",
+            Command::RecordRepaymentLetter { .. } => "record_repayment_letter",
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::ConfirmAlive { .. } => "confirm_alive",

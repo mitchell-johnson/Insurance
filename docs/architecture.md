@@ -691,7 +691,8 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
 
 ### Seams with other areas
 
-- **Payments**: reads `claim_paid` and `claim_cost_paid`; sends `PaymentReturned` for a refusal before settlement and `ConfirmRun` from the `run` field. Not sent: `RecordRepayment` (an inbound credit is not tied to an overpayment ID). Payments does not compare `account_ref` with its own payee's account. Lenders and providers must be verified payees in payments.
+- **Payments**: reads `claim_paid` and `claim_cost_paid`; sends `PaymentReturned` for a refusal before settlement and `ConfirmRun` from the `run` field. Since 13 November payments holds a repayment reference ("OP" and six digits) for each overpayment being recovered, and sends `RecordRepayment` for a bank credit that quotes it.
+- **Documents**: pulls `Question::RepaymentLetters` from each partition, issues the repayment letter with the payments reference, and confirms with `RecordRepaymentLetter` (caller `documents`). Payments does not compare `account_ref` with its own payee's account. Lenders and providers must be verified payees in payments.
 - **Reinsurance**: reads the claim events; its driver sends the five reinsurance notices as caller `reinsurance`. `payment_returned` carries `ex_gratia`, `cost`, `interest_minor`.
 - **Distribution**: shows overpayments as memo lines from the four overpayment events; earns renewal commission from `premium_waived`; sends recovery status and write-off decisions as `held-balances`.
 - **Core**: owns the assignment record, the transfer protocol and billing. Policy loans, joint life first-event, linked covers and chosen health excess: claims reads `CoverFacts.policy_loan_minor`, `joint_lives`, `reduced_by`, `chosen_excess_minor` and `waiting_days` and sends `Admit.repay_loan_minor` (agreed 13 November); the core fills them as it builds each. Until it does, CLM-002, 009 and 039 stay part built.

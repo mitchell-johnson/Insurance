@@ -16,12 +16,17 @@ use crate::state::{note, open_task, ClaimsState, Cx};
 /// Publish a change to an overpayment with its whole position, so a reader
 /// such as the held balance workbench needs no other source: who owes it,
 /// what is left, how it is being recovered and whose mistake it was.
-pub(crate) fn publish(cx: &mut Cx<'_>, kind: &str, claim: &Claim, o: &Overpayment, extra: &[(&str, String)]) {
-    let party = claim
+/// Who owes an overpayment on a claim: the claimant, else the life, else the policyholder.
+pub(crate) fn payer(claim: &Claim) -> String {
+    claim
         .claimant
         .clone()
         .or_else(|| claim.life_party.clone())
-        .unwrap_or_else(|| claim.policyholder.clone());
+        .unwrap_or_else(|| claim.policyholder.clone())
+}
+
+pub(crate) fn publish(cx: &mut Cx<'_>, kind: &str, claim: &Claim, o: &Overpayment, extra: &[(&str, String)]) {
+    let party = payer(claim);
     let mut detail = vec![
         ("claim", claim.id.clone()),
         ("policy", claim.policy.clone()),
@@ -136,6 +141,52 @@ impl ClaimsState {
         if let Some(o) = changed {
             publish(cx, "recovery_status_changed", claim, &o, &[]);
         }
+        if matches!(status, RecoveryStatus::Pursued | RecoveryStatus::Arrangement) {
+            ask_letter(cx, claim, overpayment);
+        }
+    }
+
+    /// The owner, or the recoveries queue, asks for another letter: a
+    /// reminder, or the first again after a change of address.
+    pub(crate) fn ask_repayment(&mut self, cx: &mut Cx<'_>, id: &str, overpayment: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        let recoveries = self.unconflicted(actor, &claim)?.queues.contains(&Queue::Recoveries);
+        if !recoveries {
+            self.owner(actor, &claim)?;
+        }
+        if !claim.overpayment(overpayment).is_some_and(Overpayment::asking) {
+            return Err(Reject::new(
+                "not_pursued",
+                "repayment is asked for only while it is pursued or arranged and money is owed",
+            ));
+        }
+        if !ask_letter(cx, &mut claim, overpayment) {
+            return Err(Reject::new("letter_waiting", "a letter for this overpayment is already waiting to go"));
+        }
+        note(&mut claim, cx, Some(actor), format!("repayment_asked:{overpayment}"));
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// The documents service has taken a letter's request.
+    pub(crate) fn record_repayment_letter(&mut self, cx: &mut Cx<'_>, id: &str, overpayment: &str, request: &str) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        let Some(letter) = claim
+            .overpayments
+            .iter_mut()
+            .filter(|o| o.id == overpayment)
+            .flat_map(|o| o.letters.iter_mut())
+            .find(|l| l.request == request)
+        else {
+            return Err(Reject::new("unknown_letter", "there is no such letter on this overpayment"));
+        };
+        if letter.requested {
+            return Ok(());
+        }
+        letter.requested = true;
+        note(&mut claim, cx, None, format!("repayment_letter:{request}"));
+        self.commit(claim);
+        Ok(())
     }
 
     /// Write off what is left of an overpayment.
@@ -159,4 +210,24 @@ impl ClaimsState {
         publish(cx, "overpayment_written_off", claim, &o, &[("amount_minor", amount.to_string())]);
         Ok(())
     }
+}
+
+/// Ask for a letter on one overpayment, and say so. False when one is
+/// already waiting or nothing is owed.
+fn ask_letter(cx: &mut Cx<'_>, claim: &mut Claim, overpayment: &str) -> bool {
+    let Some(o) = claim.overpayments.iter_mut().find(|o| o.id == overpayment) else {
+        return false;
+    };
+    let Some(letter) = o.ask_letter(cx.today) else {
+        return false;
+    };
+    let o = o.clone();
+    publish(
+        cx,
+        "repayment_letter_due",
+        claim,
+        &o,
+        &[("request", letter.request), ("amount_minor", letter.amount_minor.to_string())],
+    );
+    true
 }

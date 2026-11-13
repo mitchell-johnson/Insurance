@@ -492,3 +492,73 @@ fn a_disputed_reinsurance_item_is_recorded_on_the_claim() {
     }));
     assert!(w.claim("c-1").reinsurance.large_claim_notified);
 }
+
+/// Purpose: pursuing an overpayment, or agreeing an arrangement, asks for a letter to the payee
+/// that the documents service pulls and then confirms; the owner or the recoveries queue can ask
+/// for a reminder once the last one has gone; and nothing is asked once the money is repaid or
+/// while a letter is still waiting.
+/// Why it matters: a pursued overpayment nobody is told about is never repaid, and the letter is
+/// the only place the payee finds the reference that matches their payment to the debt. Two
+/// letters for one ask, or one for a debt already settled, is a complaint.
+#[test]
+fn pursuing_an_overpayment_asks_for_a_letter_the_documents_service_takes() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    let end = Request::EndBenefit {
+        end: d(2027, 3, 17),
+        reason: ic_claims::model::EndReason::Recovered,
+    };
+    w.decided("ip-1", "ana", end, "R-OK");
+    let op = w.claim("ip-1").overpayments[0].id.clone();
+    let letters = |w: &World| match w.state.answer(&ic_claims::report::Question::RepaymentLetters, w.core.today) {
+        ic_claims::report::Reply::RepaymentLetters(found) => found,
+        other => panic!("letters, not {other:?}"),
+    };
+    assert!(letters(&w).is_empty(), "held: nothing is asked of anyone");
+    let ask = |who: &str| Command::AskRepayment {
+        claim: "ip-1".into(),
+        overpayment: op.clone(),
+        actor: actor(who),
+    };
+    assert_eq!(w.refused(ask("ana")), "not_pursued");
+
+    let pursue = Request::RecoveryStatus {
+        overpayment: op.clone(),
+        status: RecoveryStatus::Pursued,
+        offset_pct: 0,
+        instalment_minor: 0,
+    };
+    w.decided("ip-1", "sam", pursue, "R-OK");
+    let due = letters(&w);
+    assert_eq!(due.len(), 1);
+    let first = due[0].clone();
+    assert_eq!(
+        (first.request.as_str(), first.amount_minor, first.party.as_str(), first.policy.as_str()),
+        (format!("cl-op:{op}:1").as_str(), 1_451, "party-claimant", "pol-2")
+    );
+    assert_eq!(w.core.noticed("repayment_letter_due")[0]["request"], first.request);
+    assert_eq!(w.refused(ask("ana")), "letter_waiting");
+
+    let taken = |request: &str| Command::RecordRepaymentLetter {
+        claim: "ip-1".into(),
+        overpayment: op.clone(),
+        request: request.into(),
+    };
+    assert_eq!(w.refused(taken("cl-op:none:1")), "unknown_letter");
+    w.ok(taken(&first.request));
+    w.ok(taken(&first.request));
+    assert!(letters(&w).is_empty());
+
+    // A reminder, by the owner.
+    assert_eq!(w.refused(ask("ben")), "not_owner");
+    w.ok(ask("ana"));
+    assert_eq!(letters(&w)[0].request, format!("cl-op:{op}:2"));
+    // Repaid in full: the waiting letter is not sent.
+    w.ok(Command::RecordRepayment {
+        claim: "ip-1".into(),
+        overpayment: op.clone(),
+        amount_minor: 1_451,
+    });
+    assert!(letters(&w).is_empty());
+}

@@ -415,6 +415,8 @@ impl ClaimsState {
                 good_faith,
                 actor,
             } => self.raise_overpayment(cx, &claim, overpayment, amount_minor, cause, good_faith, &actor),
+            Command::AskRepayment { claim, overpayment, actor } => self.ask_repayment(cx, &claim, &overpayment, &actor),
+            Command::RecordRepaymentLetter { claim, overpayment, request } => self.record_repayment_letter(cx, &claim, &overpayment, &request),
             Command::RecordRepayment {
                 claim,
                 overpayment,

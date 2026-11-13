@@ -393,7 +393,7 @@ async fn claims_staff(s: &Shared, headers: &HeaderMap, question: Question) -> Ap
             Reply::Book(b) => json!(b),
             Reply::Report(r) => json!(r),
             Reply::Remittance(r) => json!(r),
-            Reply::Claim(_) | Reply::Queue(_) | Reply::Work(_) | Reply::PolicyStatus(_) | Reply::Cases(_) => Value::Null,
+            Reply::Claim(_) | Reply::Queue(_) | Reply::Work(_) | Reply::PolicyStatus(_) | Reply::Cases(_) | Reply::RepaymentLetters(_) => Value::Null,
         })
         .collect();
     Ok(Json(json!({ "partitions": partitions })).into_response())

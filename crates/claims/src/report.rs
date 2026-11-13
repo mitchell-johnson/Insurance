@@ -167,6 +167,23 @@ pub enum Question {
     Cases {
         staff: StaffId,
     },
+    /// Letters asking a payee to repay that the documents service has not
+    /// taken yet, oldest first. Only while repayment is still being asked.
+    RepaymentLetters,
+}
+
+/// A repayment letter for the documents service to issue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LetterDue {
+    pub request: String,
+    pub claim: ClaimId,
+    pub policy: String,
+    /// Who owes it, as `overpayment_raised` names them.
+    pub party: String,
+    pub life: Option<String>,
+    pub overpayment: String,
+    pub amount_minor: i64,
+    pub asked_on: NaiveDate,
 }
 
 /// One claim for the staff working it: who has it, what is waiting and
@@ -265,6 +282,7 @@ pub enum Reply {
     Work(Option<Box<WorkView>>),
     PolicyStatus(Vec<StatusView>),
     Cases(Vec<crate::investigate::CaseView>),
+    RepaymentLetters(Vec<LetterDue>),
 }
 
 impl ClaimsState {
@@ -290,6 +308,7 @@ impl ClaimsState {
             Question::Work { claim, staff } => Reply::Work(self.work_view(claim).filter(|_| self.may_see(staff.as_deref(), claim)).map(Box::new)),
             Question::PolicyStatus { policy } => Reply::PolicyStatus(self.policy_status(policy)),
             Question::Cases { staff } => Reply::Cases(self.cases(staff)),
+            Question::RepaymentLetters => Reply::RepaymentLetters(self.repayment_letters()),
         }
     }
 
@@ -569,5 +588,30 @@ impl ClaimsState {
             entry.1 += item.net_minor();
         }
         advice
+    }
+}
+
+impl ClaimsState {
+    fn repayment_letters(&self) -> Vec<LetterDue> {
+        let mut due: Vec<LetterDue> = self
+            .claims
+            .values()
+            .flat_map(|c| {
+                c.overpayments.iter().filter(|o| o.asking()).flat_map(move |o| {
+                    o.letters.iter().filter(|l| !l.requested).map(move |l| LetterDue {
+                        request: l.request.clone(),
+                        claim: c.id.clone(),
+                        policy: c.policy.clone(),
+                        party: crate::overpay::payer(c),
+                        life: c.life.clone(),
+                        overpayment: o.id.clone(),
+                        amount_minor: l.amount_minor,
+                        asked_on: l.asked_on,
+                    })
+                })
+            })
+            .collect();
+        due.sort_by(|a, b| (a.asked_on, &a.request).cmp(&(b.asked_on, &b.request)));
+        due
     }
 }
