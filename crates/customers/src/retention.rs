@@ -99,7 +99,7 @@ impl<S: WormStore> Register<S> {
             at,
             parties: parties.to_vec(),
         };
-        let body = serde_json::to_vec(&page).map_err(|e| e.to_string())?;
+        let body = serde_json::to_vec(&page).map_err(crate::text)?;
         let day = at.date_naive();
         for n in 1..=100_000 {
             let name = page_name(day, n);

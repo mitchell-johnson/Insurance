@@ -206,7 +206,7 @@ fn staff_end_a_scheme_from_a_date() {
 
 /// Purpose: a pool scheme takes declarations of headcount and total salary in place of
 /// files, each replaces the last from its date, a first declaration that is late is raised
-/// to staff, and a malformed one is refused.
+/// to staff, a malformed one is refused, and none is taken once the scheme is ending.
 /// Why it matters: a pool is billed on what was declared. A declaration that was lost, or
 /// that silently did not replace the one before, misprices every month until the next.
 #[test]
@@ -265,4 +265,15 @@ fn a_pool_scheme_is_run_on_declarations() {
     let mut named = Harness::new(terms());
     let today = named.today();
     assert_eq!(code(declare(&mut named, "seed", "staff", today, 10, 1)), "not_a_pool_scheme");
+
+    // Once the scheme is ending, nothing more is declared.
+    let today = h.today();
+    h.staff(GroupCommand::Terminate {
+        scheme: SCHEME.into(),
+        effective: today + chrono::Days::new(30),
+        reason: "the employer gave notice".into(),
+    })
+    .unwrap();
+    assert_eq!(code(declare(&mut h, "seed", "staff", today, 43, 2_600_000_00)), "scheme_ending");
+    assert_eq!(pool(&h, "pool:seed"), Some((42, 2_500_000_00)));
 }
