@@ -290,6 +290,9 @@ impl DocumentsState {
                 format!("{} may not ask for a letter of kind {}", ctx.caller, request.kind),
             );
         };
+        if let Some(missing) = kind.needs.iter().find(|n| request.detail.get(**n).is_none_or(|v| v.trim().is_empty())) {
+            return reject("missing_detail", format!("a {} letter needs {missing}", request.kind));
+        }
         if kind.clinical && matches!(request.recipient, LetterRecipient::Adviser { .. }) {
             return reject("clinical_to_adviser", "a letter about a person's health goes to that person, not their adviser");
         }

@@ -166,6 +166,7 @@ impl ClaimsState {
             reserve_minor: 0,
             admitted_minor: 0,
             loan_repaid_minor: 0,
+            advanced_minor: 0,
             interest_offer: None,
             interest_declined: None,
             interest_owed_again_minor: 0,

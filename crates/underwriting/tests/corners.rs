@@ -84,6 +84,7 @@ fn every_state_goes_by_the_name_it_has_on_the_wire() {
 #[test]
 fn conditions_the_shipped_rules_do_not_use_still_mean_what_they_say() {
     let rule = |id: &str, when: Condition| Rule {
+        about: String::new(),
         id: id.into(),
         when,
         then: Action::Load { percent: 25 },

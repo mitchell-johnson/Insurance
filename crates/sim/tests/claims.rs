@@ -43,6 +43,7 @@ fn rules() -> Rules {
         DecisionKind::Withdraw,
         DecisionKind::ReverseAdmission,
         DecisionKind::ExGratia,
+        DecisionKind::FuneralAdvance,
         DecisionKind::EndBenefit,
         DecisionKind::RecoveryStatus,
         DecisionKind::WriteOff,
@@ -78,6 +79,7 @@ fn rules() -> Rules {
         estate_simplified_max_minor: i64::MAX,
         pre_approval_days: 30,
         recurrence_days: 180,
+        funeral_advance_max_minor: 15_000_00,
         prepared_by: "config-ann".into(),
         approved_by: vec!["config-bob".into(), "config-cat".into()],
         ..Rules::default()
@@ -2505,5 +2507,39 @@ fn declined_late_interest_is_reversed_in_its_own_entry() {
     c.submit(0, "payments", settle(&id, "pay-1", 80_000_00)).unwrap();
     clean(&c);
     assert_eq!(money(&c, &id), (0, 0, 0));
+    days(&mut c, 2);
+}
+
+/// Purpose: a funeral advance on a death claim moves the reserve into benefit payable without
+/// changing the claim's cost, is paid and settled while the claim is still open, and the
+/// admission that follows posts only the rest of the benefit and ends the policy.
+/// Why it matters: persona test CLM-004 through the real ledger. Two admissions on one claim must
+/// add up to the benefit once; an advance that left the reserve whole would overstate claims
+/// expense until the decision, and one that closed the claim in the core would refuse the rest.
+#[test]
+fn a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let died = c.business_date().unwrap().pred_opt().unwrap();
+    open_claim(&mut c, "clm-1", &id, "life", ClaimType::Death, died);
+    let (reserve, _, _) = money(&c, &id);
+    let expense = accounts::claims_incurred("term-life", "life", NZD);
+    let cost = c.state(0).ledger.natural_balance(&expense.id);
+    ok(&mut c, decide("clm-1", Request::FuneralAdvance { amount_minor: 10_000_00 }));
+    assert_eq!(money(&c, &id), (reserve - 10_000_00, 10_000_00, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id), cost, "the cost is unchanged");
+    verify_payee(&mut c, "clm-1");
+    ok(&mut c, pay("clm-1", "adv-1", 10_000_00, None));
+    c.submit(0, "payments", settle(&id, "adv-1", 10_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(claim(&c, "clm-1").status, Status::Open);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce, "the advance ends nothing");
+
+    ok(&mut c, decide("clm-1", admit(None, None, false)));
+    assert_eq!(money(&c, &id), (0, 490_000_00, 0));
+    assert_eq!(c.state(0).ledger.natural_balance(&expense.id), 500_000_00);
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::Terminated);
+    assert_eq!(module_events(&c, "claim_admitted")[0]["admitted_minor"], "50000000");
     days(&mut c, 2);
 }

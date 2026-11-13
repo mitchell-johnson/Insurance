@@ -130,6 +130,9 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 | underwriting | adviser_unavailable | uw-adviser-unavailable | personal | yes |
 | reinsurance | reinsurance_statement | ri-reinsurance-statement | personal | yes |
 | group | absence_started, absence_limit_reached | grp-absence-started, grp-absence-limit-reached | personal | yes |
+| claims | overpayment_repayment | cl-overpayment-repayment | personal | yes |
+
+The overpayment letter must carry `detail.repayment_reference` (from module payments, `{"q":"repayment_reference","overpayment":…}`, "OP" and six digits) and `detail.amount`; without either it is refused with `missing_detail`. A credit quoting that reference is matched to the overpayment, so the template must print it.
 
 Group sends the leave-of-absence letters to the member (the party on the scheme policy's life), with `policy` the scheme policy, `life` the life, and `detail` `since` and `cover_ends` (persona GRP-038).
 

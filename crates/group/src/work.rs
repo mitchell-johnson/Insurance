@@ -20,7 +20,9 @@ use crate::event::{ExceptionKind, GroupEvent, IssueOutcome, Outbound, Reinsuranc
 use crate::mapping::RowReject;
 use crate::model::{ChangeKind, JoinAs, Proposed};
 use crate::record::MemberAttrs;
-use crate::state::{CaseStatus, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal, Scheme, SchemeStatus};
+use crate::state::{
+    CaseStatus, ClassLine, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal, Scheme, SchemeStatus,
+};
 use crate::terms::{ExcessLoading, MemberBasis, NoAgreement, SchemeTerms};
 
 /// The core asks for a retry: nothing is wrong with what was sent.
@@ -1333,6 +1335,25 @@ impl GroupState {
                         let line: &mut GroupLine = invoice.by_group.entry(group_of(s, &life)).or_default();
                         line.members += 1;
                         line.total_minor += total_minor;
+                        let attrs = s.membership.by_life(&life).map(|m| &m.attrs);
+                        let category = attrs.and_then(|a| a.category.clone()).unwrap_or_default();
+                        let occupation_class = attrs.and_then(|a| a.occupation_class.clone());
+                        let at = invoice
+                            .by_class
+                            .binary_search_by(|l| (&l.category, &l.occupation_class).cmp(&(&category, &occupation_class)));
+                        let i = at.unwrap_or_else(|i| {
+                            invoice.by_class.insert(
+                                i,
+                                ClassLine {
+                                    category,
+                                    occupation_class,
+                                    ..ClassLine::default()
+                                },
+                            );
+                            i
+                        });
+                        invoice.by_class[i].members += 1;
+                        invoice.by_class[i].total_minor += total_minor;
                     }
                     invoice.loading_minor += loading_minor;
                     if !complete {

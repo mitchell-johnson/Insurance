@@ -49,7 +49,8 @@ fn world(until: chrono::NaiveDate) -> World {
 /// was made. The overturn is counted on its own in the month it happened, against the month
 /// of the decline, and a reversed admission is counted the same way. A fact sent twice is
 /// counted once, and a fact from the wrong service, malformed, or dated in a closed period
-/// is refused with nothing counted.
+/// is refused with nothing counted. A replacement written is counted only when the
+/// distribution module reports it.
 /// Why it matters: this is the design addendum's fifth decision. Netting overturns against
 /// declines would make the decline rate look better exactly when the insurer got more
 /// decisions wrong, which is the opposite of what a conduct regulator needs to see.
@@ -90,6 +91,9 @@ fn an_overturned_decline_is_reported_apart_from_the_declines() {
         fact("cmp-1/upheld", ComplaintUpheld, d(2028, 1, 15)),
     ];
     b.send("complaints", None, record(complaints)).unwrap();
+    let replaced = vec![fact("layer-9/replacement", ReplacementWritten, d(2028, 1, 7))];
+    assert_eq!(b.code("claims", None, record(replaced.clone())), "caller");
+    b.send("distribution", None, record(replaced)).unwrap();
 
     let was = b.state.conduct_report(dec, None);
     assert_eq!((was.accepted, was.declined), (2, 3), "December's declines are still three");
@@ -100,6 +104,7 @@ fn an_overturned_decline_is_reported_apart_from_the_declines() {
     assert_eq!(now.overturned.iter().collect::<Vec<_>>(), vec![(&dec, &1)]);
     assert_eq!(now.admissions_reversed.iter().collect::<Vec<_>>(), vec![(&dec, &1)]);
     assert_eq!((now.complaints_received, now.complaints_upheld), (2, 1));
+    assert_eq!((now.replacements, was.replacements), (1, 0));
     assert_eq!(b.state.conduct_report(dec, Some("health-plan")).declined, 1);
     assert_eq!(b.state.conduct_report(dec, Some("term-life")).declined, 2);
 
