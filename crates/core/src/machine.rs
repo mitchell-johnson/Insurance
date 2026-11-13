@@ -509,7 +509,7 @@ impl CoreState {
             Command::VaryForNonDisclosure { policy, case, terms } => self.with_policy(&policy, true, |_, p| nondisclosure::vary(p, ctx, case, terms)),
             Command::ApproveReinstatement(spec) => {
                 let policy = spec.policy.clone();
-                self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx.date, *spec))
+                self.with_policy(&policy, true, |s, p| underwritten::approve_reinstatement(&s.catalog, p, ctx, *spec))
             }
             Command::AlterUnderwrittenTerms(spec) => {
                 let policy = spec.policy.clone();

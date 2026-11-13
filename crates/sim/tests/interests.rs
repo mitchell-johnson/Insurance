@@ -320,6 +320,10 @@ fn a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction() {
     for policy in [&invested, &term] {
         interest(&mut c, insolvency(policy, None)).unwrap();
     }
+    // Payments keeps payee records by party, so the event names the bankrupt owner.
+    let owner = c.state(0).policies[&term].policyholder.clone();
+    assert!(interest_events(&mut c).iter().any(|e| matches!(e,
+        InterestEvent::Recorded { kind: InterestKind::Insolvency, owner: Some(o), .. } if *o == owner)));
     let s = c.state(0);
     let standing = ranked(&s.policies[&term], start());
     assert_eq!(
@@ -404,6 +408,14 @@ fn a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction() {
 
     // Released on discharge: the owner is paid in the usual way, and nothing is held.
     release(&mut c, &invested, "oa-1", start(), "vault/discharge-1").unwrap();
+    assert!(interest_events(&mut c).iter().any(|e| matches!(
+        e,
+        InterestEvent::Released {
+            kind: InterestKind::Insolvency,
+            owner: Some(_),
+            ..
+        }
+    )));
     payout(&mut c, &invested, "wd-2", PayoutReason::Withdrawal).unwrap();
     assert_eq!(c.state(0).policies[&invested].payouts["wd-2"].state, PayoutState::Owed);
     assert_eq!(

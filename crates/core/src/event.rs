@@ -214,6 +214,14 @@ pub enum Event {
         from: PolicyStatus,
         to: PolicyStatus,
     },
+    /// Underwriting's decision to reinstate a lapsed policy was recorded,
+    /// or replaced by a later one. Reinstatement on payment can go ahead
+    /// while it can be relied on.
+    ReinstatementApproved {
+        policy: PolicyId,
+        reference: String,
+        valid_until: NaiveDate,
+    },
     StandingChanged {
         policy: PolicyId,
         from: Option<Standing>,
