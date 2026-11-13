@@ -3,6 +3,7 @@
 
 DEFINITIONS = [
     definition("death", 1, "2027-01-01", "Death", "The death of the life insured while the cover is in force."),
+    definition("accidental-death", 1, "2027-01-01", "Accidental death", "Death caused solely and directly by an accident, within 90 days of it, placeholder wording."),
     definition("terminal-illness", 1, "2027-01-01", "Terminal illness", "An illness that, in the opinion of an appropriate specialist, is likely to lead to death within 12 months."),
     definition("cancer", 1, "2027-01-01", "Cancer", "The presence of one or more malignant tumours, placeholder wording version 1."),
     definition("cancer", 2, "2028-07-01", "Cancer", "The presence of one or more malignant tumours, placeholder wording version 2."),
