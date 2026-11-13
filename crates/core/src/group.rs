@@ -789,6 +789,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
         end: None,
         sum_insured_minor: spec.sum_insured_minor,
         origin: LayerOrigin::UnderwrittenExcess,
+        excess_option: None,
         loadings: spec.loadings,
         exclusions: spec.exclusions,
         loading_itemised: spec.loading_itemised,

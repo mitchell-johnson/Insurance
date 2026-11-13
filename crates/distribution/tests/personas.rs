@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::*;
 use ic_core::{Command as CoreCommand, LifeId, PolicyId};
 use ic_distribution::config::{BookOutcome, Change, MoveRequest};
-use ic_distribution::rules::{portion, CommissionType, Component, Line, Share};
+use ic_distribution::rules::{portion, CommissionType, Component, Line, Share, WHOLE};
+use ic_distribution::state::WriteLayer;
 use ic_distribution::structure::PartyKind;
-use ic_distribution::{BookId, EngagementId, Event};
+use ic_distribution::{BookId, Command, EngagementId, Event};
 
 /// What each payee was allocated on one layer since event `from`, by commission type.
 fn on_layer(w: &World, from: usize, layer: &str) -> BTreeMap<(String, CommissionType), i64> {
@@ -89,7 +90,7 @@ fn moved() -> (World, PolicyId) {
     (w, policy)
 }
 
-/// Purpose (ADV-005): after A has moved, the customer increases cover. The increase is a new
+/// Purpose: (ADV-005) after A has moved, the customer increases cover. The increase is a new
 /// layer written under A's new engagement into A's own book at FAP Two: its initial and renewal
 /// commission and its clawback belong to the new arrangement, and FAP One's tail is paid only
 /// on the original layer.
@@ -135,7 +136,7 @@ fn an_increase_after_a_move_belongs_to_the_new_arrangement_and_pays_no_tail() {
     w.assert_reconciled();
 }
 
-/// Purpose (ADV-008): A moves a second time, from FAP Two to FAP Three, while FAP One's tail is
+/// Purpose: (ADV-008) A moves a second time, from FAP Two to FAP Three, while FAP One's tail is
 /// still running. FAP Two keeps a tail of its own until a date. Both tails are lines on the
 /// whole renewal commission with their own end dates; A and FAP Three share what is left; and
 /// FAP Two's tail drops out on its date while FAP One's carries on.
@@ -248,7 +249,7 @@ fn with_adviser_b(w: &mut World) {
     .unwrap();
 }
 
-/// Purpose (ADV-010): adviser B adds trauma cover to a policy adviser A wrote. The added cover
+/// Purpose: (ADV-010) adviser B adds trauma cover to a policy adviser A wrote. The added cover
 /// is a layer of its own, written under B's engagement into B's book; each premium is split
 /// across the layers, A's book earning on the life cover and B's on the trauma cover only.
 /// Why it matters: a second adviser servicing a customer must be paid for what they wrote
@@ -264,6 +265,7 @@ fn a_cover_another_adviser_adds_earns_in_that_advisers_book_only() {
         &policy,
         "underwriting",
         CoreCommand::AddCover(Box::new(ic_core::command::AddedCover {
+            excess_option: None,
             policy: policy.clone(),
             cover: "trauma".into(),
             life: LifeId("life-1".into()),
@@ -294,7 +296,7 @@ fn a_cover_another_adviser_adds_earns_in_that_advisers_book_only() {
     w.assert_reconciled();
 }
 
-/// Purpose (ADV-011): one adviser holds two engagements at once, with FAP One and with FAP Two.
+/// Purpose: (ADV-011) one adviser holds two engagements at once, with FAP One and with FAP Two.
 /// Each policy lands in the book of the engagement it was written under, and nothing is shared
 /// between the two.
 /// Why it matters: advisers do work for two providers. Commission written under one provider's
@@ -347,7 +349,7 @@ fn an_adviser_with_two_engagements_earns_each_policy_in_the_book_it_was_written_
     w.assert_reconciled();
 }
 
-/// Purpose (ADV-043): a policy bought direct is written to no book and earns nothing however
+/// Purpose: (ADV-043) a policy bought direct is written to no book and earns nothing however
 /// many premiums it pays; it shows in no adviser's commission and raises no clawback when
 /// cancelled.
 /// Why it matters: direct business has no adviser to pay. Commission accrued on it would be an
@@ -366,5 +368,307 @@ fn direct_business_sits_in_no_book_and_earns_nothing() {
         .unwrap();
     assert!(!w.events[before..].iter().any(|e| matches!(e, Event::ClawbackRaised { .. })));
     assert_eq!(w.payable("a-co") + w.payable("fap-one"), 0);
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-009) A and B wrote a policy together, 60 and 40, each into their own book. When
+/// A moves to FAP Two with the book, only A's share of the layer moves to A's new book under the
+/// new rule; B's book, its rule and B's commission are untouched.
+/// Why it matters: a joint policy is two advisers' business. Moving it whole with one of them
+/// would hand B's trail to A's new provider.
+#[test]
+fn a_joint_policy_moves_only_the_share_of_the_adviser_who_leaves() {
+    let mut w = worked_example();
+    with_adviser_b(&mut w);
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.send(
+        module("new-business"),
+        Command::WriteLayer(Box::new(WriteLayer {
+            policy: policy.clone(),
+            cover: "life".into(),
+            layer: 1,
+            writing: vec![(EngagementId::from("eng-a-one"), pct(60.0)), (EngagementId::from("eng-b-one"), pct(40.0))],
+            books: vec![(BookId::from("a-at-fap-one"), pct(60.0)), (BookId::from("b-at-fap-one"), pct(40.0))],
+            schedule: "standard".into(),
+            option: "upfront".into(),
+            annual_premium_minor: 1_200_00,
+            replacement: false,
+        })),
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    let on = w.today();
+    let b_rule = w.dist.config.books[&BookId::from("b-at-fap-one")].clone();
+    let request = MoveRequest {
+        from_engagement: EngagementId::from("eng-a-one"),
+        new_engagement: EngagementId::from("eng-a-two"),
+        to: party("fap-two"),
+        on,
+        accreditations: BTreeSet::from(["term-life".to_string()]),
+        books: vec![BookOutcome::Moves {
+            book: BookId::from("a-at-fap-one"),
+            policies: None,
+            new_book: BookId::from("a-at-fap-two"),
+            new_book_name: "A at FAP Two".into(),
+            release_ref: "release-signed-by-fap-one".into(),
+            lines: vec![
+                base("a-co", Share::OfRemainder(pct(75.0)), true),
+                base("fap-two", Share::OfRemainder(pct(25.0)), false),
+            ],
+            liability: vec![liable("fap-two")],
+            fragments: vec![],
+            tail: None,
+            examples: vec![],
+        }],
+    };
+    let changes = w.dist.plan_move(&request).unwrap();
+    w.activate("move-a", changes).unwrap();
+    let key = layer(&policy, 1);
+    assert_eq!(
+        w.dist.layers[&key].books_on(on).to_vec(),
+        vec![(BookId::from("a-at-fap-two"), pct(60.0)), (BookId::from("b-at-fap-one"), pct(40.0))]
+    );
+    assert_eq!(w.dist.config.books[&BookId::from("b-at-fap-one")], b_rule, "B's book is untouched");
+
+    let before = w.events.len();
+    w.pay(&policy, "r2");
+    let paid = on_layer(&w, before, &key);
+    let total: i64 = paid.values().sum();
+    let b_side = paid[&("b-co".into(), CommissionType::Renewal)] + portion(portion(total, pct(40.0)), pct(20.0));
+    assert!((b_side * 10 - total * 4).abs() <= 10, "B's book still takes 40%: {paid:?}");
+    assert!(paid.contains_key(&("fap-two".into(), CommissionType::Renewal)));
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-012) a retiring adviser's book is split between three successors by file. Each
+/// successor's share of the policies moves into a new book of the successor's carrying the
+/// retiring adviser's tail; the successors' existing books, and new business they write there,
+/// pay no tail.
+/// Why it matters: a retirement sale is priced on the tail. Paid on the wrong policies, the
+/// retiring adviser is overpaid out of the successors' own business; missed, they lose what
+/// they sold the book for.
+#[test]
+fn a_retiring_advisers_book_split_between_three_successors_carries_the_tail() {
+    let mut w = worked_example();
+    let today = w.today();
+    let mut policies = vec![];
+    for n in 1..=3 {
+        let (p, _) = w.issue(n, 500_000_00, None);
+        w.write(&p, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+        w.pay(&p, &format!("r{n}"));
+        policies.push(p);
+    }
+    let mut changes = vec![];
+    for (n, successor) in ["s1", "s2", "s3"].into_iter().enumerate() {
+        let (adviser, co, engagement) = (format!("adviser-{successor}"), format!("{successor}-co"), format!("eng-{successor}"));
+        w.add_party(&adviser, PartyKind::Adviser);
+        w.add_party(&co, PartyKind::Company);
+        w.payee(&co);
+        w.account(&co, &format!("acct-{co}"));
+        w.engage(&engagement, &adviser, "fap-one", d(2020, 1, 1));
+        let lines = |tail: bool| {
+            let mut l = vec![
+                base(&co, Share::OfRemainder(pct(75.0)), true),
+                base("fap-one", Share::OfRemainder(pct(25.0)), false),
+            ];
+            if tail {
+                l.push(Line {
+                    commission_type: Some(CommissionType::Renewal),
+                    share: Share::OfComponent(pct(20.0)),
+                    ..base("a-co", Share::OfRemainder(1), false)
+                });
+            }
+            l
+        };
+        for (book, tail) in [(format!("{successor}-own"), false), (format!("{successor}-from-a"), true)] {
+            changes.push(Change::CreateBook {
+                id: BookId::from(book.as_str()),
+                name: book.clone(),
+                engagement: Some(EngagementId::from(engagement.as_str())),
+                owner: Some(party("fap-one")),
+                house: false,
+            });
+            changes.push(Change::ActivateRule(rule(&book, 1, today, lines(tail), vec![liable("fap-one")])));
+        }
+        changes.push(Change::MoveLayers {
+            layers: vec![layer(&policies[n], 1)],
+            to: vec![(BookId::from(format!("{successor}-from-a").as_str()), WHOLE)],
+            from: today,
+        });
+    }
+    w.activate("retirement", changes).unwrap();
+    // Each successor also writes new business of their own.
+    let (own, _) = w.issue(9, 500_000_00, None);
+    w.write(&own, "life", 1, "eng-s1", "s1-own", 1_200_00).unwrap();
+
+    w.days(31);
+    let before = w.events.len();
+    for (n, p) in policies.iter().enumerate() {
+        w.pay(p, &format!("m{n}"));
+    }
+    w.pay(&own, "own1");
+    for (n, p) in policies.iter().enumerate() {
+        let paid = on_layer(&w, before, &layer(p, 1));
+        let whole: i64 = paid.values().sum();
+        assert_eq!(paid[&("a-co".into(), CommissionType::Renewal)], portion(whole, pct(20.0)), "the tail on {p}");
+        assert!(paid.contains_key(&(format!("s{}-co", n + 1), CommissionType::Renewal)));
+    }
+    let paid = on_layer(&w, before, &layer(&own, 1));
+    assert!(paid.keys().all(|(who, _)| who != "a-co"), "no tail on the successor's own business: {paid:?}");
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-015) a cancellation backdated to before A's move hands back premium for months
+/// paid both before and after the move. Each month handed back takes back exactly the lines
+/// its own premium recorded: the month earned under FAP One's rule comes back from A's company
+/// and FAP One, and the months earned after the move come back from A's company, FAP Two and
+/// FAP One's tail, whatever the rule in force today says.
+/// Why it matters: commission is reversed against what was paid, not recalculated. Recomputing
+/// a pre-move month under the new rule would take money from FAP Two that FAP One received.
+#[test]
+fn premium_handed_back_across_a_move_reverses_the_lines_each_month_recorded() {
+    let mut w = worked_example();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    let unwind_after = w.today() + chrono::Duration::days(20);
+    let who = ["a-co", "fap-one", "fap-two"];
+    let balances = |w: &World| who.map(|p| w.payable(p) + w.held(p));
+    let after_r1 = balances(&w);
+    w.days(31);
+    w.pay(&policy, "r2");
+    let before_move = balances(&w);
+    let on = w.today();
+    let request = MoveRequest {
+        from_engagement: EngagementId::from("eng-a-one"),
+        new_engagement: EngagementId::from("eng-a-two"),
+        to: party("fap-two"),
+        on,
+        accreditations: BTreeSet::from(["term-life".to_string()]),
+        books: vec![BookOutcome::Moves {
+            book: BookId::from("a-at-fap-one"),
+            policies: None,
+            new_book: BookId::from("a-at-fap-two"),
+            new_book_name: "A at FAP Two".into(),
+            release_ref: "release-signed-by-fap-one".into(),
+            lines: vec![
+                base("a-co", Share::OfRemainder(pct(75.0)), true),
+                base("fap-two", Share::OfRemainder(pct(25.0)), false),
+            ],
+            liability: vec![liable("fap-two")],
+            fragments: vec![],
+            tail: Some((party("fap-one"), pct(25.0), None)),
+            examples: vec![],
+        }],
+    };
+    let changes = w.dist.plan_move(&request).unwrap();
+    w.activate("move-a", changes).unwrap();
+    let after_move = balances(&w);
+    w.days(31);
+    w.pay(&policy, "r3");
+    let after_r3 = balances(&w);
+    let earned_before: Vec<i64> = (0..3).map(|i| before_move[i] - after_r1[i]).collect();
+    let earned_after: Vec<i64> = (0..3).map(|i| after_r3[i] - after_move[i]).collect();
+    assert_eq!(earned_before[2], 0, "FAP Two earned nothing before the move");
+    assert!(earned_after.iter().all(|e| *e > 0), "all three earned after the move: {earned_after:?}");
+
+    w.core(
+        &policy,
+        "remediation",
+        CoreCommand::UnwindAfter {
+            policy: policy.clone(),
+            after: unwind_after,
+            cause: ic_core::UnwindCause::Remediation,
+            reference: "backdated-cancellation".into(),
+        },
+    )
+    .unwrap();
+    let now = balances(&w);
+    for i in 0..3 {
+        assert_eq!(
+            after_r3[i] - now[i],
+            earned_before[i] + earned_after[i],
+            "{} gives back exactly what the two months paid it",
+            who[i]
+        );
+    }
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-018) a layer was written on the upfront option when the adviser chose level,
+/// and it is found a year later. An approved change corrects the layer's terms from its start:
+/// the initial commission paid comes back, every month's renewal is worked out again at the
+/// level rate, the differences post today and commission expense changes. Afterwards every
+/// payee stands exactly where they would if the layer had been written on level from the
+/// start, the clawback exposure on the initial commission is gone, and the next premium earns
+/// at the level rate.
+/// Why it matters: a keying error on commission terms is found at the adviser's annual review.
+/// Fixing it by hand means a year of lines recalculated in a spreadsheet; fixing it here keeps
+/// every line traceable to the premium that earned it.
+#[test]
+fn a_wrong_commission_option_found_a_year_later_is_corrected_from_the_start() {
+    let year = |option: &str| {
+        let mut w = worked_example();
+        let (policy, _) = w.issue(1, 500_000_00, None);
+        w.send(
+            module("new-business"),
+            Command::WriteLayer(Box::new(WriteLayer {
+                policy: policy.clone(),
+                cover: "life".into(),
+                layer: 1,
+                writing: vec![(EngagementId::from("eng-a-one"), WHOLE)],
+                books: vec![(BookId::from("a-at-fap-one"), WHOLE)],
+                schedule: "standard".into(),
+                option: option.into(),
+                annual_premium_minor: 1_200_00,
+                replacement: false,
+            })),
+        )
+        .unwrap();
+        w.pay(&policy, "r0");
+        for n in 1..12 {
+            w.days(31);
+            w.pay(&policy, &format!("r{n}"));
+        }
+        (w, policy)
+    };
+    let (right, _) = year("level");
+    let (mut w, policy) = year("upfront");
+    let key = layer(&policy, 1);
+    let expense = |w: &World| w.payable("a-co") + w.payable("fap-one");
+    let wrong = expense(&w);
+    assert!(wrong != expense(&right));
+    assert!(w.dist.exposures.values().any(|e| e.layer == key && e.amount_minor > 0));
+
+    let correct = |option: &str| {
+        vec![Change::CorrectTerms {
+            layer: key.clone(),
+            option: option.into(),
+        }]
+    };
+    assert_eq!(code(w.propose("same", correct("upfront"))), "nothing_to_correct");
+    assert_eq!(code(w.propose("bad", correct("monthly"))), "unknown_option");
+    w.activate("fix-option", correct("level")).unwrap();
+    for who in ["a-co", "fap-one"] {
+        assert!(
+            (w.payable(who) - right.payable(who)).abs() <= 12,
+            "{who}: {} against {}",
+            w.payable(who),
+            right.payable(who)
+        );
+    }
+    assert!(w.dist.exposures.values().filter(|e| e.layer == key).all(|e| e.amount_minor == 0 && !e.open));
+    assert_eq!(w.dist.layers[&key].terms.as_ref().unwrap().option, "level");
+    assert!(w.dist.allocations.values().any(|a| a.kind == "commission_corrected" && a.date == w.today()));
+
+    let before = expense(&w);
+    w.days(31);
+    w.pay(&policy, "r12");
+    let mut level = right;
+    let level_before = expense(&level);
+    level.days(31);
+    level.pay(&policy, "r12");
+    assert_eq!(expense(&w) - before, expense(&level) - level_before, "the next premium earns at the level rate");
     w.assert_reconciled();
 }

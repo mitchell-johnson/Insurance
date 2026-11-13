@@ -48,12 +48,14 @@ A period moves to closing when its last day has closed on every partition. `conf
 
 ## Reports
 
-All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `work`, `extract`.
+All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `return_line`, `work`, `extract`.
 
 ## Regulatory returns and conduct
 
 - A return definition (`config/finance/returns/`) is a list of lines, each a sum of account balances, account movements or a conduct measure. `FileReturn` works the return out from a closed period and stores it. Each line shows the accounts behind it.
 - A filed return never changes. When a later posting restates its period, `returns_needing_restatement` lists it, and `RestateReturn` files a new version with a reason, showing the restating amount by the period it was posted in.
+- A change to what a line means is a new version of the mapping with `effective_from` (and `effective_to` on the version it replaces). A period is filed, or restated, only on the version in effect for it, so a new definition never reaches back into a period already reported.
+- Any figure opens to what is behind it: `{"q":"return_line","id","code","version"}` answers with the mapping's ID, version and hash, the accounts or measure the line was built from, the figure by account as the period closed, what has been posted since by period, the closed trial balance's hash, the question that gives the same rows today, the restating entries, and the extracts registered for the period's last day.
 - Conduct facts are reported by claims and complaints with an opaque ID, a date and a product, and counted once. A decline that is later overturned stays a decline in the period it was made. The overturn is counted on its own in the period it happened, against the period of the decline, and a reversed admission likewise. The two are never netted.
 
 The shipped return is illustrative. Its lines and account mappings are for finance and compliance to replace with the regulator's template.

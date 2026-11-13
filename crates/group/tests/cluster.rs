@@ -385,6 +385,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         employer_may_see_loading: false,
         member_pays_loading: false,
         covers: vec![ic_core::command::CoverSpec {
+            excess_option: None,
             code: "group-life".into(),
             life: Some(life("E003")),
             sum_insured_minor: 200_000_00,

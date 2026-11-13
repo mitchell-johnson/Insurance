@@ -973,7 +973,7 @@ impl DistributionState {
         for a in self
             .allocations
             .values()
-            .filter(|a| &a.policy == policy && !matches!(a.kind.as_str(), "commission_held" | "commission_reallocated"))
+            .filter(|a| &a.policy == policy && !matches!(a.kind.as_str(), "commission_held" | "commission_reallocated" | "commission_corrected"))
         {
             for l in &a.lines {
                 let key = serde_json::to_string(&AllocLine { amount_minor: 0, ..l.clone() }).unwrap_or_default();
@@ -1424,6 +1424,165 @@ impl DistributionState {
                     reversed_by: None,
                 },
             );
+        }
+    }
+
+    /// Whether a layer's terms can be corrected to another option of the
+    /// schedule it was written under. Commission already earned is scaled
+    /// from the old rate to the new, so each rate that changes must have
+    /// been above zero, or there is no record of the premium it applied to;
+    /// such a correction is made by an adjustment instead.
+    pub(crate) fn check_correction(&self, key: &str, option: &str) -> Result<(), Reject> {
+        let layer = self
+            .layers
+            .get(key)
+            .ok_or_else(|| Reject::new("unknown_layer", format!("layer {key} does not exist")))?;
+        let terms = layer
+            .terms
+            .as_ref()
+            .ok_or_else(|| Reject::new("layer_not_written", format!("layer {key} has no terms to correct")))?;
+        if terms.option == option {
+            return reject("nothing_to_correct", format!("layer {key} is already on option {option}"));
+        }
+        let schedule = self.config.schedule_version(&terms.schedule, terms.schedule_version).ok_or_else(|| {
+            Reject::new(
+                "unknown_schedule",
+                format!("schedule {} version {} is not known", terms.schedule, terms.schedule_version),
+            )
+        })?;
+        let new = schedule
+            .options
+            .get(option)
+            .ok_or_else(|| Reject::new("unknown_option", format!("schedule {} has no option {option}", terms.schedule)))?;
+        let old = terms.rates;
+        if new.renewal_from_month != old.renewal_from_month
+            || (old.renewal_ppm == 0 && new.renewal_ppm != 0)
+            || (old.initial_ppm == 0 && new.initial_ppm != 0 && layer.initial_paid.is_some())
+        {
+            return reject(
+                "correction_needs_adjustment",
+                "the options differ in a way earlier commission cannot be scaled to; correct it with an adjustment",
+            );
+        }
+        Ok(())
+    }
+
+    /// Correct a layer's option from its start. Each allocation that earned
+    /// base commission on the layer is worked out again with its gross
+    /// scaled from the old rate to the new, under the rule each book had on
+    /// that day; the difference posts today, the original stands as
+    /// corrected, and the clawback exposure on initial commission is scaled
+    /// the same way.
+    pub(crate) fn correct_terms(&mut self, ctx: &mut Ctx, key: &str, option: &str) {
+        let Ok(today) = self.date() else { return };
+        let Some(layer) = self.layers.get(key).cloned() else { return };
+        let Some(old_terms) = layer.terms.clone() else { return };
+        let Some(new_rates) = self
+            .config
+            .schedule_version(&old_terms.schedule, old_terms.schedule_version)
+            .and_then(|s| s.options.get(option).copied())
+        else {
+            return;
+        };
+        let rate = |r: &crate::model::ScheduleOption, t: CommissionType| if t == CommissionType::Initial { r.initial_ppm } else { r.renewal_ppm };
+        let references: Vec<String> = self
+            .allocations
+            .values()
+            .filter(|a| a.policy == layer.policy && a.kind == "commission_earned" && a.reversed_by.is_none())
+            .map(|a| a.reference.clone())
+            .collect();
+        for reference in references {
+            let Some(original) = self.allocations.get(&reference).cloned() else {
+                continue;
+            };
+            let mine = |l: &AllocLine| l.layer.as_deref() == Some(key) && l.component == Some(Component::Base);
+            let mut groups: BTreeMap<(BookId, CommissionType), Vec<&AllocLine>> = BTreeMap::new();
+            for l in original.lines.iter().filter(|l| mine(l)) {
+                if let (Some(book), Some(ctype)) = (&l.book, l.commission_type) {
+                    groups.entry((book.clone(), ctype)).or_default().push(l);
+                }
+            }
+            let mut lines = vec![];
+            for ((book, ctype), old) in groups {
+                let (from, to) = (rate(&old_terms.rates, ctype), rate(&new_rates, ctype));
+                let gross: i64 = old.iter().map(|l| l.amount_minor).sum();
+                let corrected = if from == 0 { 0 } else { (gross as i128 * to as i128 / from as i128) as i64 };
+                let Some((rule, composed)) = self.config.composed(&book, original.date) else {
+                    continue;
+                };
+                let Ok(new) = composed.allocate_base(corrected, ctype, original.date) else {
+                    continue;
+                };
+                let template = old[0];
+                lines.extend(old.iter().map(|l| AllocLine {
+                    amount_minor: -l.amount_minor,
+                    ..(*l).clone()
+                }));
+                for a in new.into_iter().filter(|a| a.amount_minor != 0) {
+                    lines.push(AllocLine {
+                        dest: self.destination(&a, original.date),
+                        payee: a.payee,
+                        amount_minor: a.amount_minor,
+                        book: Some(book.clone()),
+                        layer: Some(key.to_string()),
+                        component: Some(Component::Base),
+                        commission_type: Some(ctype),
+                        earner: a.earner,
+                        rule_version: Some(rule.version),
+                        product: template.product.clone(),
+                        cover_type: template.cover_type.clone(),
+                    });
+                }
+            }
+            if lines.iter().map(|l| l.amount_minor.abs()).sum::<i64>() == 0 {
+                continue;
+            }
+            let corrected: Vec<AllocLine> = original
+                .lines
+                .iter()
+                .filter(|l| !mine(l))
+                .cloned()
+                .chain(lines.iter().filter(|l| l.amount_minor > 0).cloned())
+                .collect();
+            if let Some(o) = self.allocations.get_mut(&reference) {
+                o.lines = corrected;
+            }
+            let n = self.allocations.len();
+            self.record_allocation(
+                ctx,
+                Allocation {
+                    reference: format!("ct:{}:{n}", self.seq),
+                    partition: self.policies.get(&original.policy).map_or(original.partition, |p| p.partition),
+                    policy: original.policy.clone(),
+                    kind: "commission_corrected".into(),
+                    cause: reference.clone(),
+                    date: today,
+                    lines,
+                    reverses: None,
+                    exposures: vec![],
+                    reversed_by: None,
+                },
+            );
+        }
+        // The clawback exposure on initial commission scales with it.
+        let (from, to) = (old_terms.rates.initial_ppm, new_rates.initial_ppm);
+        if from > 0 {
+            for e in self.exposures.values_mut().filter(|e| e.layer == key) {
+                e.amount_minor = (e.amount_minor as i128 * to as i128 / from as i128) as i64;
+                e.clawed_minor = (e.clawed_minor as i128 * to as i128 / from as i128) as i64;
+                if e.amount_minor == 0 {
+                    e.open = false;
+                }
+            }
+        }
+        if let Some(l) = self.layers.get_mut(key) {
+            if let Some(t) = l.terms.as_mut() {
+                t.option = option.to_string();
+                t.rates = new_rates;
+            }
+            if new_rates.initial_ppm == 0 {
+                l.initial_paid = None;
+            }
         }
     }
 

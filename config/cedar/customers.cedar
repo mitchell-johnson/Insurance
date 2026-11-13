@@ -5,6 +5,7 @@
 //            Action::"<command>" on Command::"<command>",
 //            Action::"match" | "search" | "relationships" | "export" | "routing"
 //            | "merge" | "unmerge" | "reviews" | "audit" | "operate" | "authority"
+//            | "spending_hold"
 //            on Party::"party".
 // Context:   purpose (declared by the caller and logged), self (the person the
 //            caller acts for is this party), actor_roles (the kinds of
@@ -156,7 +157,33 @@ permit(principal, action == Action::"record_concern", resource is Command)
 when { [Service::"claims", Service::"complaints", Service::"policy-servicing"].contains(principal) };
 
 permit(principal == Service::"migration", action, resource is Command)
-when { action != Action::"place_hold" && action != Action::"release_hold" };
+when {
+    !([Action::"place_hold", Action::"release_hold", Action::"place_spending_hold", Action::"request_hold_removal",
+       Action::"cancel_hold_removal", Action::"override_spending_hold", Action::"end_spending_hold"].contains(action))
+};
+
+// A person's own hold on money going out (decision 3 in docs/decisions.md).
+// The person places it, asks for it to end and changes their mind, in the
+// app; staff may place it when the person asks by phone but never remove it;
+// only legal lifts it, on a court order or legal direction. The cooling-off
+// ending is the service's own and no caller can send it.
+permit(principal == Service::"portal", action, resource is Command)
+when {
+    context.self &&
+    [Action::"place_spending_hold", Action::"request_hold_removal", Action::"cancel_hold_removal"].contains(action)
+};
+permit(principal == Service::"staff", action == Action::"place_spending_hold", resource is Command);
+permit(principal == Service::"legal", action == Action::"override_spending_hold", resource is Command);
+forbid(principal, action == Action::"end_spending_hold", resource);
+
+// Whether a person's own spending hold stands: for everyone who pays money
+// out or changes where it goes, and for the person.
+permit(principal, action == Action::"spending_hold", resource)
+when {
+    [Service::"payments", Service::"policy-servicing", Service::"claims", Service::"staff", Service::"legal",
+     Service::"core"].contains(principal) ||
+    (principal == Service::"portal" && context.self)
+};
 
 permit(principal == Service::"claims", action, resource is Command)
 when {
