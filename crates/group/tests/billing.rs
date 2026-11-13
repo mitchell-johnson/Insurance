@@ -47,6 +47,7 @@ fn the_invoice_view_agrees_with_the_core_by_billing_group() {
             loadings: vec![DecStr::parse("0.5").unwrap()],
             exclusions: vec![],
             member_consents_to_itemising: false,
+            member_pays_loading: false,
         },
     )
     .unwrap();

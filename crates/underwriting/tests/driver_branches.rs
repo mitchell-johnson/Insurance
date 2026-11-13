@@ -771,6 +771,7 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                 loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
                 exclusions: vec!["EX-BACK".into()],
                 member_consents_to_itemising: false,
+                member_pays_loading: false,
             },
         ),
         (
@@ -799,6 +800,7 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                 loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
                 exclusions: vec!["EX-BACK".into()],
                 member_consents_to_itemising: true,
+                member_pays_loading: false,
             },
         ),
         (ended("grp-uw:north:shore:12", excess(), "declined"), ExcessDecision::Declined),

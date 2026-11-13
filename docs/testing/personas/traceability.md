@@ -14,11 +14,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | POL-001 | part | `sim/tests/scenarios.rs::issue_bills_the_first_period_and_earns_it_exactly` |
+| POL-002 | part | `sim/tests/personas_spine.rs::a_couple_holds_a_single_cover_each_on_one_policy` |
 | POL-003 | part | `sim/tests/scenarios.rs::anniversary_indexes_cover_and_re_rates_stepped_premium`<br>`sim/tests/reduce_cover.rs::a_reduction_takes_the_newest_layer_first` |
 | POL-004 | part | `sim/tests/edges.rs::old_identical_layers_merge_without_changing_the_cover` |
 | POL-005 | part | `sim/tests/edges.rs::a_member_is_identified_once_and_only_as_one_person`<br>`sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 | POL-006 | full | `sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
-| POL-007 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date` |
+| POL-007 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once` |
 | POL-008 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/scenarios.rs::reinstatement_window_closes` |
 | POL-010 | full | `core/src/bitemporal.rs::backdated_change_is_visible_on_both_timelines`<br>`sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 | POL-011 | part | `core/src/bitemporal.rs::correction_from_the_start_supersedes` |
@@ -36,11 +37,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | LED-003 | full | `sim/tests/scenarios.rs::a_recorded_log_replays_to_an_identical_state_hash_and_the_chain_verifies`<br>`sim/tests/year.rs::the_same_seed_gives_the_same_ledger_and_a_different_seed_does_not` |
 | LED-004 | part | `ledger/src/lib.rs::chain_detects_tampering`<br>`ledger/src/lib.rs::the_chain_catches_reordering_resalting_and_rehashing`<br>`sim/tests/audit.rs::the_audit_names_each_kind_of_divergence` |
 | LED-005 | full | `sim/tests/scenarios.rs::issue_bills_the_first_period_and_earns_it_exactly` |
+| LED-006 | full | `sim/tests/personas_spine.rs::a_yearly_premium_is_earned_exactly_across_the_leap_day` |
 | LED-007 | part | `api/tests/api.rs::a_payment_with_the_policy_number_is_applied_once` |
 | LED-008 | full | `sim/tests/investment.rs::an_order_waits_for_its_price_and_executes_once` |
 | LED-009 | full | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded` |
 | LED-010 | full | `sim/tests/finance_feed.rs::posted_lines_rebuild_the_control_totals_of_every_close`<br>`sim/tests/integrity.rs::control_totals_are_the_role_totals_finance_expects`<br>`finance/tests/feed.rs::the_books_equal_the_core_every_day_and_tie_to_the_merkle_root`<br>`finance/tests/feed.rs::a_core_total_that_differs_turns_the_control_check_red` |
 | LED-011 | full | `sim/tests/integrity.rs::reconciliation_notices_invoices_that_disagree_with_the_ledger`<br>`sim/tests/integrity.rs::reconciliation_notices_earning_that_disagrees_with_the_ledger`<br>`sim/tests/integrity.rs::reconciliation_notices_a_standing_that_does_not_fit_the_status` |
+| LED-012 | full | `sim/tests/personas_spine.rs::two_refunds_of_one_credit_are_applied_in_log_order` |
 | LED-013 | part | `finance/tests/close.rs::a_posting_after_sign_off_clears_it`<br>`finance/tests/journals.rs::a_journal_dated_into_an_earlier_period_is_a_prior_period_item` |
 | LED-014 | full | `sim/tests/scenarios.rs::health_premium_splits_gst_to_the_tax_account`<br>`finance/tests/edges.rs::a_line_in_the_wrong_statutory_fund_turns_the_fund_check_red` |
 | LED-015 | part | `sim/src/cutoff.rs::cutoff_is_midnight_in_auckland` |
@@ -74,6 +77,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | BIL-011 | full | `sim/tests/claims.rs::a_waived_premium_is_billed_and_paid_from_claims_expense` |
 | BIL-012 | full | `product/src/schedule.rs::leap_day_anniversary` |
 | BIL-013 | part | `sim/tests/scenarios.rs::issue_bills_the_first_period_and_earns_it_exactly`<br>`money/src/lib.rs::round_to_money_remainder_is_exact` |
+| BIL-014 | part | `sim/tests/personas_spine.rs::a_premium_paid_three_times_leaves_two_as_a_credit_that_can_be_refunded` |
 | BIL-015 | part | `sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 
 ## COL Collection, cash matching, standing and dunning
@@ -93,6 +97,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
+| COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once` |
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
