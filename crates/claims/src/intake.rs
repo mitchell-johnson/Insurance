@@ -38,12 +38,19 @@ impl ClaimsState {
         let item = claim.health.as_ref()?;
         let benefit = self.rules.health_benefits.get(&item.category)?;
         let life = claim.life.clone().unwrap_or_default();
-        let lifetime_key = format!("{}/{}/{}", claim.policy, life, item.category);
+        // Each cover counts on its own, unless the product's shell declares
+        // a counter that covers share.
+        let counter = facts.shared_counter.clone().unwrap_or_else(|| claim.cover.clone());
+        let lifetime_key = format!("{}/{}/{}/{}", claim.policy, life, counter, item.category);
         let year_key = format!("{lifetime_key}/{}", facts.policy_year_start.map_or_else(|| "-".to_string(), |d| d.to_string()));
         let held: i64 = self
             .pre_approvals
             .values()
             .filter(|p| p.policy == claim.policy && p.life == life && p.category == item.category && Some(&p.claim) != item.settles_pre_approval.as_ref())
+            .filter(|p| {
+                let cover = self.claims.get(&p.claim).map(|c| c.cover.clone()).unwrap_or_default();
+                facts.shared_counter.is_some() || cover == claim.cover
+            })
             .map(|p| p.amount_minor)
             .sum();
         let used = |key: &String| self.health_used.get(key).copied().unwrap_or(0);
@@ -162,6 +169,8 @@ impl ClaimsState {
             interest_offer: None,
             interest_declined: None,
             interest_owed_again_minor: 0,
+            insolvency_hold: false,
+            directed_to: None,
             payable_minor: 0,
             cost_payable_minor: 0,
             waiver_from: None,

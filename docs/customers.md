@@ -87,6 +87,8 @@ The sweep runs in every replica (hourly by default) over parties unchanged for 3
 
 **Restoring a backup.** A restore brings erased keys back. The register (`customers-erasures`, write-once blob storage kept longer than any backup) lists every erasure. After any restore, before the service takes traffic, an operator calls `POST /v1/admin/reshred` with the date the backup was taken; every party listed since is erased again.
 
+**Locking the register.** The register is kept for 10 years (agreed with Mitchell on 2026-11-13). Bicep sets the period but cannot lock it, so once, in prod, after the first deployment of `infra/customers.bicep`, run `tools/lock-erasure-register.sh <resource-group> <registerAccountName output>`. It checks the policy is the agreed period and unlocked, asks for the account name, then locks it. From then on the period can only be lengthened and nobody can delete a page early. Leave it unlocked in dev and test, where accounts are torn down.
+
 ## Running it
 
 The binary is `ic-customers`; settings come from the environment.
@@ -112,4 +114,3 @@ Tests need a PostgreSQL server named by `IC_TEST_POSTGRES_URL` (CI starts one); 
 
 ## Not built yet
 
-- **Locking the register's immutability policy** in prod is a deliberate, irreversible step for a person once the period is agreed.

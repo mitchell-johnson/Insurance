@@ -234,7 +234,7 @@ fn the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not() 
     w.core.cover("pol-3", "health", health(d(2027, 1, 1), None));
     w.ok(dental("h-1", 5_000));
     w.ok(dental("h-2", 5_000));
-    assert_eq!(w.state.health_used["pol-3/life-1/dental/2027-01-01"], 2_000);
+    assert_eq!(w.state.health_used["pol-3/life-1/health/dental/2027-01-01"], 2_000);
     w.ok(dental("h-3", 700));
     assert_eq!(w.claim("h-3").admitted_minor, 0, "the year is used up");
 
@@ -244,12 +244,98 @@ fn the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not() 
     w.ok(dental("h-4", 5_000));
     w.ok(dental("h-5", 5_000));
     assert_eq!(w.claim("h-4").admitted_minor + w.claim("h-5").admitted_minor, 2_000);
-    assert_eq!(w.state.health_used["pol-3/life-1/dental"], 4_000);
+    assert_eq!(w.state.health_used["pol-3/life-1/health/dental"], 4_000);
     w.on(d(2029, 1, 10));
     w.core.cover("pol-3", "health", health(d(2029, 1, 1), None));
     w.ok(dental("h-6", 5_000));
     w.ok(dental("h-7", 5_000));
     // 5,000 over the life of the policy: only 1,000 was left.
     assert_eq!(w.claim("h-6").admitted_minor + w.claim("h-7").admitted_minor, 1_000);
-    assert_eq!(w.state.health_used["pol-3/life-1/dental"], 5_000);
+    assert_eq!(w.state.health_used["pol-3/life-1/health/dental"], 5_000);
+}
+
+fn line(id: &str, cover: &str, category: &str, invoice: i64) -> Command {
+    let mut n = World::notification(id, "pol-3", cover, ClaimType::Health);
+    n.health = Some(HealthItem {
+        category: category.into(),
+        invoice_minor: invoice,
+        provider: Some("provider-1".into()),
+        pre_approval_request: false,
+        settles_pre_approval: None,
+        service_code: None,
+        service_date: None,
+    });
+    Command::Notify(Box::new(n))
+}
+
+/// Health rules with three more categories, each with its own excess, share and limits.
+fn hospital_rules(w: &mut World) {
+    use ic_claims::config::HealthBenefit;
+    let mut r = rules();
+    r.version = 2;
+    let benefit = |excess_minor: i64, copay_pct: u32, per_year_minor: i64| HealthBenefit {
+        per_event_minor: 100_000,
+        per_year_minor,
+        lifetime_minor: 1_000_000,
+        copay_pct,
+        excess_minor,
+    };
+    r.straight_through_max_minor.insert(ClaimType::Health, 100_000);
+    r.health_benefits.insert("surgery".into(), benefit(500, 0, 50_000));
+    r.health_benefits.insert("specialist".into(), benefit(0, 20, 2_000));
+    r.health_benefits.insert("physio".into(), benefit(20, 50, 1_000));
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+}
+
+/// Purpose: one episode of care billed as lines (surgery, a specialist's consultation, physio
+/// afterwards) is priced line by line under each category's own excess and share, and each line
+/// counts against its own cover's counters.
+/// Why it matters: persona test HLT-004. A single excess or share across the whole episode would
+/// pay the wrong amount on every line, and counting physio against the surgical limit would
+/// exhaust cover the member still has.
+#[test]
+fn an_episode_is_priced_line_by_line_against_each_covers_counters() {
+    let mut w = World::new();
+    hospital_rules(&mut w);
+    w.core.cover("pol-3", "hospital", health(d(2027, 1, 1), None));
+    w.core.cover("pol-3", "daycare", health(d(2027, 1, 1), None));
+    w.ok(line("h-surgery", "hospital", "surgery", 12_000));
+    w.ok(line("h-specialist", "hospital", "specialist", 400));
+    w.ok(line("h-physio", "daycare", "physio", 120));
+    let admitted = |id: &str| w.claim(id).admitted_minor;
+    // 12,000 less 500 excess; 400 less a 20% share; 120 less 20 excess, then half.
+    assert_eq!((admitted("h-surgery"), admitted("h-specialist"), admitted("h-physio")), (11_500, 320, 50));
+    let used = &w.state.health_used;
+    assert_eq!(used["pol-3/life-1/hospital/surgery/2027-01-01"], 11_500);
+    assert_eq!(used["pol-3/life-1/hospital/specialist/2027-01-01"], 320);
+    assert_eq!(used["pol-3/life-1/daycare/physio/2027-01-01"], 50);
+}
+
+/// Purpose: the same category on two covers counts on each cover's own counters, unless the
+/// product's shell declares a counter they share, and then one limit covers both.
+/// Why it matters: persona test HLT-009. A member with two covers bought two limits; counting
+/// them together pays too little, and counting a declared shared limit twice pays too much.
+#[test]
+fn counters_never_cross_covers_unless_the_shell_shares_one() {
+    let mut w = World::new();
+    w.core.cover("pol-3", "health", health(d(2027, 1, 1), None));
+    w.core.cover("pol-3", "extras", health(d(2027, 1, 1), None));
+    w.ok(line("h-1", "health", "dental", 5_000));
+    w.ok(line("h-2", "health", "dental", 5_000));
+    // The year's 2,000 is used on one cover; the other still has its own.
+    w.ok(line("h-3", "extras", "dental", 5_000));
+    assert_eq!(w.claim("h-3").admitted_minor, 1_000);
+
+    let mut w = World::new();
+    let shared = CoverFacts {
+        shared_counter: Some("family-dental".into()),
+        ..health(d(2027, 1, 1), None)
+    };
+    w.core.cover("pol-3", "health", shared.clone());
+    w.core.cover("pol-3", "extras", shared);
+    w.ok(line("h-1", "health", "dental", 5_000));
+    w.ok(line("h-2", "health", "dental", 5_000));
+    w.ok(line("h-3", "extras", "dental", 5_000));
+    assert_eq!(w.claim("h-3").admitted_minor, 0, "one shared limit, used up");
+    assert_eq!(w.state.health_used["pol-3/life-1/family-dental/dental/2027-01-01"], 2_000);
 }

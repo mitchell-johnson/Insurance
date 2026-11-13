@@ -239,6 +239,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         joint_lives: vec![],
         reduced_by: vec![],
         benefit_while_imprisoned: Default::default(),
+        shared_counter: None,
     }
 }
 

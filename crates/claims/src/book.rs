@@ -389,6 +389,9 @@ impl ClaimsState {
         let Some(payee) = claim.payee.as_ref().map(|p| p.party.clone()) else {
             return Err(Reject::new("payee_not_verified", "verify the payee before the first payment"));
         };
+        if !claim.directed(&payee) {
+            return Err(held_for_direction());
+        }
         if amount_minor <= 0 || amount_minor > claim.benefit_payable_minor() || claim.in_run.is_some() {
             return Err(Reject::new(
                 "exceeds_payable",
@@ -858,6 +861,8 @@ impl ClaimsState {
                     .iter()
                     .filter_map(|id| self.claims.get(id))
                     .filter(|c| c.in_run.is_none() && c.investigation.is_none())
+                    // Held under an insolvency interest until legal directs, and then only to whom it says.
+                    .filter(|c| c.payee.as_ref().is_some_and(|p| c.directed(&p.party)) || !c.insolvency_hold)
                 {
                     cx.core.work(1);
                     let Some(s) = c.schedule.as_ref() else { continue };
@@ -1293,6 +1298,35 @@ impl ClaimsState {
         claim.interest_owed_again_minor += declined;
         note(&mut claim, cx, Some(actor), "interest_decline_withdrawn");
         cx.notify("late_interest_decline_withdrawn", id, &[("owed_again_minor", declined.to_string())]);
+        self.commit(claim);
+        Ok(())
+    }
+}
+
+fn held_for_direction() -> Reject {
+    Reject::new(
+        "held_for_direction",
+        "an insolvency interest stands: the proceeds are paid only as a legal direction says",
+    )
+}
+
+impl ClaimsState {
+    /// Legal's direction on proceeds held under an insolvency interest.
+    pub(crate) fn direct_proceeds(&mut self, cx: &mut Cx<'_>, id: &str, party: String, direction: String, actor: &Actor) -> Result<(), Reject> {
+        self.staff(actor)?;
+        if !self.authority.has_role(&actor.staff, crate::config::Role::Legal) {
+            return Err(Reject::new("legal_only", "only legal gives a direction on held proceeds"));
+        }
+        let mut claim = self.claim(id)?;
+        if !claim.insolvency_hold || party.trim().is_empty() || direction.trim().is_empty() {
+            return Err(Reject::new(
+                "invalid_direction",
+                "a direction names the party to pay and is on file, for proceeds held under an insolvency interest",
+            ));
+        }
+        note(&mut claim, cx, Some(actor), format!("proceeds_directed:{direction}"));
+        claim.directed_to = Some((party.clone(), direction));
+        cx.notify("proceeds_directed", id, &[("party", party)]);
         self.commit(claim);
         Ok(())
     }

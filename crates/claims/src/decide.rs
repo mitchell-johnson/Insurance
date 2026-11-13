@@ -192,7 +192,9 @@ impl ClaimsState {
                             let mut left = amount - plan.deduct_minor - plan.loan_minor;
                             let mut recorded: Vec<_> = facts.interests.iter().collect();
                             recorded.sort_by(|a, b| (a.priority, &a.party).cmp(&(b.priority, &b.party)));
-                            for i in recorded {
+                            // The Official Assignee's interest is not paid out: it holds what the
+                            // owner or the estate would get until a legal direction.
+                            for i in recorded.into_iter().filter(|i| !i.insolvency) {
                                 let owed = i.extent_minor.map_or(left, |e| e.clamp(0, left));
                                 left -= owed;
                                 if owed > 0 {
@@ -593,6 +595,11 @@ impl ClaimsState {
                 periodic, exclusion_override, ..
             } => {
                 decision.exclusion_override = exclusion_override.clone();
+                let insolvent = claim.cover_check.as_ref().is_some_and(|c| c.facts.interests.iter().any(|i| i.insolvency));
+                if insolvent && claim.claim_type != ClaimType::Health {
+                    claim.insolvency_hold = true;
+                    cx.notify("proceeds_held", &id, &[("reason", "insolvency_interest".into())]);
+                }
                 let pre_approval = claim.health.as_ref().filter(|h| h.pre_approval_request).map(|h| h.category.clone());
                 if let Some(category) = pre_approval {
                     let expires = plus_days(cx.today, self.rules.pre_approval_days);

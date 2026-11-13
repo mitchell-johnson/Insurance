@@ -210,7 +210,7 @@ fn health_invoice_goes_straight_through_inside_the_limits() {
     assert_eq!(w.claim("h-2").admitted_minor, 1_000);
     w.ok(Command::Notify(Box::new(dental("h-3", 5_000))));
     assert_eq!(w.claim("h-3").admitted_minor, 560);
-    assert_eq!(w.state.health_used["pol-3/life-1/dental/2027-01-01"], 2_000);
+    assert_eq!(w.state.health_used["pol-3/life-1/health/dental/2027-01-01"], 2_000);
     // Nothing left this year: the rules do not admit zero, a person looks at it.
     w.ok(Command::Notify(Box::new(dental("h-4", 700))));
     assert_eq!(w.claim("h-4").status, Status::Open);
@@ -346,6 +346,9 @@ fn pre_approval_is_a_hold_not_a_posting() {
     assert!(w.state.pre_approvals.is_empty());
     assert_eq!(w.claim("pre-2").status, Status::Withdrawn);
     assert_eq!(w.core.noticed("pre_approval_released")[0]["reason"], "expired");
+    // The limit the hold took is the member's again.
+    w.ok(Command::Notify(Box::new(dental("h-9", 5_000))));
+    assert_eq!(w.claim("h-9").admitted_minor, 1_000);
 }
 
 /// Purpose: the acknowledgement needs proof of delivery, happens once, and starts the first
