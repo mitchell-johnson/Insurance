@@ -99,11 +99,22 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "Declared.");
     await p.locator("#connections").getByText("party-00000009").waitFor();
   }, expectStatus: [403, 409, 422] });
+  let entered = null;
   await visit(browser, "/staff", { subject: "sub-sue" }, { run: async (p) => {
     await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");
     await p.locator("#lookup button").click();
-    await p.locator("#lookup-msg .banner.bad, #pol-view:not([hidden])").first().waitFor();
-  }, expectStatus: [403, 404, 422] });
+    await p.locator("#pol-view:not([hidden])").waitFor();
+    // A change for a customer who rang, above her limit: it goes to a colleague first.
+    await p.fill("#creason", "customer rang"); await p.fill("#camount", "900");
+    await p.locator("#for-customer button").click();
+    const said = await p.locator("#cust-msg").getByText("recorded").textContent();
+    entered = said.match(/Request (\S+) recorded/)[1];
+  } });
+  await visit(browser, "/staff", { subject: "sub-alice" }, { run: async (p) => {
+    await p.fill("#second-id", entered);
+    await p.locator("#second button").click();
+    await p.locator("#second-msg").getByText("Agreed.").waitFor();
+  } });
   await visit(browser, "/pricing", { subject: "sub-up1" }, { run: async (p) => {
     await sees(p, "preparer, approver");
     await sees(p, "valuations/bad.csv");

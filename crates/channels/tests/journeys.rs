@@ -53,6 +53,66 @@ fn submit(id: &str, policy: Option<&PolicyId>, kind: &str, module: &str) -> Comm
         payload: json!({ "choice": "yes" }),
         signed: false,
         route_to_person: false,
+        assisted: None,
+    }
+}
+
+/// A change staff entered for a customer who rang, with why and the case.
+fn entered(id: &str, policy: &PolicyId, payload: serde_json::Value, reason: &str) -> Command {
+    Command::SubmitRequest {
+        id: id.to_string(),
+        policy: Some(policy.clone()),
+        kind: "change_frequency".to_string(),
+        module: "policy-servicing".to_string(),
+        payload,
+        signed: false,
+        route_to_person: false,
+        assisted: Some(ic_channels::state::Assisted {
+            reason: reason.to_string(),
+            case: "case-1".to_string(),
+            backdated: false,
+            above_limit: false,
+            second: None,
+        }),
+    }
+}
+
+/// Staff who take customers' calls: ana enters changes up to 500.00; ben, a team lead, may also be the second person on
+/// another's change.
+fn service_desk(w: &mut World) {
+    use ic_channels::staff::{Profile, StaffCommand, Template};
+    use ic_channels::state::assisted;
+    let template = |id: &str, actions: &[&str]| Template {
+        id: id.into(),
+        actions: actions.iter().map(|a| a.to_string()).collect(),
+        classes: [ic_channels::classes::DataClass::Ordinary].into(),
+        default_profile: "desk".into(),
+        ceilings: [(assisted::LIMIT.to_string(), 2_000_00)].into(),
+        break_glass: false,
+    };
+    let bootstrap = Command::Staff(StaffCommand::Bootstrap {
+        templates: vec![
+            template("administrator", &[ic_channels::staff::actions::MANAGE_STAFF]),
+            template("service", &[assisted::ENTER]),
+            template("service-lead", &[assisted::ENTER, assisted::APPROVE]),
+        ],
+        profiles: vec![Profile {
+            id: "desk".into(),
+            version: 1,
+            limits: [(assisted::LIMIT.to_string(), 500_00)].into(),
+        }],
+        admin: p("alice"),
+        admin_templates: vec!["administrator".into()],
+    });
+    w.send(module("entitlements"), bootstrap).unwrap();
+    for (who, template) in [("ana", "service"), ("ben", "service-lead")] {
+        let employ = Command::Staff(StaffCommand::Employ {
+            party: p(who),
+            team: "service".into(),
+            manager: None,
+            templates: vec![template.into()],
+        });
+        w.send(staff("alice"), employ).unwrap();
     }
 }
 
@@ -1110,14 +1170,80 @@ fn requests_are_asynchronous_and_owned() {
     assert_eq!(w.ch.data.requests["r3"].status, RequestStatus::Applied { reference: None });
 
     // Staff act for a customer on the phone; the customer approves in the app, or cancels.
-    w.send(staff("ana"), submit("r4", Some(&pol), "change_frequency", "policy-servicing")).unwrap();
+    service_desk(&mut w);
+    w.send(staff("ana"), entered("r4", &pol, json!({}), "customer rang")).unwrap();
     assert_eq!(w.ch.data.requests["r4"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
     assert_eq!(code(w.send(staff("ben"), cancel("r4"))), "not_found");
     w.send(party(KIRI), cancel("r4")).unwrap();
     assert_eq!(w.row(KIRI, &format!("{pol}/request/r4")).unwrap()["state"]["status"], "cancelled");
-    w.send(staff("ana"), submit("r5", Some(&pol), "change_frequency", "policy-servicing")).unwrap();
+    w.send(staff("ana"), entered("r5", &pol, json!({}), "customer rang")).unwrap();
     w.send(staff("ana"), cancel("r5")).unwrap();
     assert!(w.ch.pending_for("policy-servicing").is_empty());
+}
+
+/// Purpose: a change staff enter for a customer who rang carries who entered it, why and the case; one above the enterer's limit, or
+/// dated in the past, waits for a second member of staff who holds that action and is not the enterer, and only then goes to the
+/// customer to approve in the app (SVC-018).
+/// Why it matters: a phone change is the easiest place to slip something past a customer. Naming the person, the reason and the
+/// case makes it traceable; a second person on large or backdated changes stops one officer moving money or rewriting history on a
+/// call alone.
+#[test]
+fn a_change_entered_for_a_caller_carries_who_why_and_a_second_person() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    service_desk(&mut w);
+
+    // Why and which case are required; someone who is not staff, or holds no right to enter changes, is refused.
+    assert_eq!(code(w.send(staff("ana"), entered("r0", &pol, json!({}), " "))), "bad_request");
+    assert_eq!(code(w.send(staff("ana"), submit("r0", Some(&pol), "x", "claims"))), "bad_request");
+    assert_eq!(code(w.send(staff("nobody"), entered("r0", &pol, json!({}), "rang"))), "forbidden");
+    assert_eq!(code(w.send(staff("alice"), entered("r0", &pol, json!({}), "rang"))), "forbidden");
+
+    // Within ana's limit and dated today: straight to the customer, with who, why and the case kept.
+    w.send(staff("ana"), entered("r1", &pol, json!({ "amount_minor": 400_00 }), "customer rang"))
+        .unwrap();
+    let r1 = &w.ch.data.requests["r1"];
+    assert_eq!(r1.status, RequestStatus::AwaitingApproval { from: Approver::Customer });
+    assert_eq!((r1.party.0.as_str(), r1.assisted.as_ref().unwrap().case.as_str()), ("ana", "case-1"));
+
+    // Above her limit: a second person first, then the customer.
+    w.send(staff("ana"), entered("r2", &pol, json!({ "amount_minor": 600_00 }), "customer rang"))
+        .unwrap();
+    assert_eq!(w.ch.data.requests["r2"].status, RequestStatus::AwaitingApproval { from: Approver::SecondStaff });
+    assert!(w.ch.data.requests["r2"].assisted.as_ref().unwrap().above_limit);
+    let second = |id: &str| Command::SecondApproveRequest { id: id.to_string() };
+    let approve = Command::ApproveRequest {
+        id: "r2".into(),
+        signed: true,
+        route_to_person: false,
+    };
+    assert_eq!(
+        code(w.send(party(KIRI), approve.clone())),
+        "not_found",
+        "the customer cannot approve before the second person"
+    );
+    assert_eq!(code(w.send(staff("ana"), second("r2"))), "maker_checker");
+    assert_eq!(code(w.send(party(KIRI), second("r2"))), "forbidden");
+    assert_eq!(code(w.send(staff("ben"), second("nope"))), "not_found");
+    w.send(staff("ben"), second("r2")).unwrap();
+    let r2 = &w.ch.data.requests["r2"];
+    assert_eq!(r2.status, RequestStatus::AwaitingApproval { from: Approver::Customer });
+    assert_eq!(r2.assisted.as_ref().unwrap().second, Some(p("ben")));
+    assert_eq!(code(w.send(staff("ben"), second("r2"))), "not_awaiting");
+    w.send(party(KIRI), approve).unwrap();
+
+    // Dated in the past: a second person whatever the amount, and one who holds that action.
+    let yesterday = (open() - chrono::Duration::days(1)).to_string();
+    w.send(
+        staff("ben"),
+        entered("r3", &pol, json!({ "effective": yesterday }), "backdated at the customer's request"),
+    )
+    .unwrap();
+    assert!(w.ch.data.requests["r3"].assisted.as_ref().unwrap().backdated);
+    assert_eq!(code(w.send(staff("ana"), second("r3"))), "forbidden");
+    let today = open().to_string();
+    w.send(staff("ana"), entered("r4", &pol, json!({ "effective": today }), "rang")).unwrap();
+    assert_eq!(w.ch.data.requests["r4"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
 }
 
 /// Purpose: device and staff commands reach their state machines only from the right caller, and their revocations reach open sessions.

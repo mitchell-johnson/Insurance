@@ -115,7 +115,8 @@ A refusal says which question failed, so the person knows what to ask for. Roles
 | --- | --- |
 | `GET /staff/v1/me` | Your roles, reach, grants and recent access. |
 | `GET /staff/v1/policies/{policy}?case=<ref>&scope=<keys>` | A policy as you may see it. |
-| `POST /staff/v1/requests` | A change for a customer on the phone. It goes to the customer's app for their signed approval. |
+| `POST /staff/v1/requests` | A change for a customer on the phone, with `reason` and `case`; the request keeps who entered it with them. The enterer needs `service.enter_change`. One whose payload moves more than their `assisted_change` limit (`amount_minor`) or takes effect before today (`effective`) waits for a second member of staff first; then it goes to the customer's app for their signed approval. |
+| `POST /staff/v1/requests/{id}/second-approval` | The second member of staff agrees it: someone else holding `service.approve_change`. |
 | `POST /staff/v1/access`, `GET /staff/v1/admin` | Grants, approvals, recertification, administration. |
 | `GET /staff/v1/workbench`, `/workbench/{party}`, `/workbench/{party}/proof-of-debt`, `POST /staff/v1/workbench/actions` | The held balance workbench. |
 

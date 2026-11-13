@@ -51,6 +51,37 @@ pub enum Approver {
     Customer,
     /// A second administrator of the scheme.
     SecondAdministrator,
+    /// A second member of staff, for a change staff entered that is above
+    /// the enterer's limit or dated in the past. The customer approves
+    /// after.
+    SecondStaff,
+}
+
+/// Staff actions and the authority limit for changes staff enter for a
+/// customer who rang (SVC-018).
+pub mod assisted {
+    /// Enter a change for a customer, for them to approve in the app.
+    pub const ENTER: &str = "service.enter_change";
+    /// Be the second person on a change another entered.
+    pub const APPROVE: &str = "service.approve_change";
+    /// The authority profile limit on the amount a change moves.
+    pub const LIMIT: &str = "assisted_change";
+}
+
+/// What a change staff entered for a customer carries: why, the case it
+/// belongs to, and the second member of staff where one was needed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Assisted {
+    pub reason: String,
+    pub case: String,
+    /// The payload's `effective` date was before today.
+    #[serde(default)]
+    pub backdated: bool,
+    /// The payload's `amount_minor` was above the enterer's limit.
+    #[serde(default)]
+    pub above_limit: bool,
+    #[serde(default)]
+    pub second: Option<PartyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +127,9 @@ pub struct Request {
     /// first (a vulnerability marker). The marker itself is never here.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub route_to_person: bool,
+    /// Entered by staff for a customer who rang.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assisted: Option<Assisted>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +164,14 @@ pub enum Command {
         /// Set by the gateway from the customer master's routing answer.
         #[serde(default)]
         route_to_person: bool,
+        /// Staff entering a change for a customer give why and the case.
+        #[serde(default)]
+        assisted: Option<Assisted>,
+    },
+    /// A second member of staff agrees a change another entered, which
+    /// then goes to the customer.
+    SecondApproveRequest {
+        id: String,
     },
     ApproveRequest {
         id: String,
@@ -661,6 +703,55 @@ impl ChannelState {
         Some(policy.clone())
     }
 
+    /// Check a change staff entered for a customer: it says why and names
+    /// the case, the enterer may enter changes and, where it moves money,
+    /// the amount is within their limit; and say whether a second member of
+    /// staff must agree it first (above the limit, or dated in the past).
+    fn assisted_check(&self, staff: &PartyId, at: At, on: NaiveDate, request: &mut Request) -> Result<bool, Reject> {
+        let a = request
+            .assisted
+            .as_mut()
+            .filter(|a| !a.reason.trim().is_empty() && !a.case.trim().is_empty())
+            .ok_or_else(|| reject("bad_request", "a change entered for a customer says why and names the case"))?;
+        let amount = request.payload["amount_minor"].as_i64();
+        let check = |amount: Option<i64>| {
+            self.data.staff.authorise(
+                &self.staff_policy,
+                &crate::staff::AccessRequest {
+                    staff: staff.clone(),
+                    action: assisted::ENTER.to_string(),
+                    class: crate::classes::DataClass::Ordinary,
+                    scopes: vec![],
+                    record: request.policy.as_ref().map(|p| format!("policy:{p}")),
+                    amount: amount.map(|value| crate::staff::Amount {
+                        limit: assisted::LIMIT.to_string(),
+                        value,
+                    }),
+                    purpose: Some(crate::staff::Purpose {
+                        kind: crate::staff::PurposeKind::Case,
+                        reference: a.case.clone(),
+                    }),
+                    decides: true,
+                    conflict_subject: None,
+                    maker: None,
+                    fresh: self.data.staff.external_available,
+                    at,
+                },
+            )
+        };
+        let plain = check(None);
+        if !plain.allowed {
+            let why = plain.denied.map_or("refused", crate::staff::Denial::explain);
+            return Err(reject("forbidden", why));
+        }
+        a.above_limit = amount.is_some_and(|_| check(amount).denied == Some(crate::staff::Denial::HowMuch));
+        a.backdated = request.payload["effective"]
+            .as_str()
+            .and_then(|d| d.parse::<NaiveDate>().ok())
+            .is_some_and(|d| d < on);
+        Ok(a.above_limit || a.backdated)
+    }
+
     fn submit(&mut self, actor: &Actor, at: At, on: NaiveDate, request: Request) -> Result<Request, Reject> {
         let d = &self.data;
         let mut request = request;
@@ -672,8 +763,14 @@ impl ChannelState {
         }
         request.status = match (actor, &request.policy) {
             (Actor::Module(_), _) => return Err(reject("forbidden", "requests come from people")),
-            // Staff act for a customer who called; the customer approves the prompt.
-            (Actor::Staff(_), Some(_)) => RequestStatus::AwaitingApproval { from: Approver::Customer },
+            // Staff act for a customer who called; the customer approves the
+            // prompt, after a second member of staff where one is needed.
+            (Actor::Staff(staff), Some(_)) => {
+                let second = self.assisted_check(staff, at, on, &mut request)?;
+                RequestStatus::AwaitingApproval {
+                    from: if second { Approver::SecondStaff } else { Approver::Customer },
+                }
+            }
             (Actor::Staff(_), None) => return Err(reject("bad_request", "a staff request names the policy it is for")),
             (Actor::Party(_), None) => RequestStatus::Pending,
             (Actor::Party(party), Some(policy)) => {
@@ -879,6 +976,7 @@ impl ChannelState {
                 payload,
                 signed,
                 route_to_person,
+                assisted,
             } => {
                 let party = actor.party().cloned().ok_or_else(|| reject("forbidden", "requests come from people"))?;
                 let request = self.submit(
@@ -897,6 +995,7 @@ impl ChannelState {
                         status: RequestStatus::Pending,
                         approved_by: None,
                         route_to_person,
+                        assisted,
                     },
                 )?;
                 if request.status == RequestStatus::Pending {
@@ -907,6 +1006,31 @@ impl ChannelState {
                 }
                 let policy = request.policy.clone();
                 self.data.requests.insert(id, request);
+                if let Some(policy) = policy {
+                    self.refresh(&policy, on, None, &mut effects);
+                }
+            }
+            Command::SecondApproveRequest { id } => {
+                let Actor::Staff(staff) = &actor else {
+                    return Err(reject("forbidden", "a second approval comes from staff"));
+                };
+                let request = self.data.requests.get(&id).ok_or_else(|| reject("not_found", "no such request"))?;
+                if request.status != (RequestStatus::AwaitingApproval { from: Approver::SecondStaff }) {
+                    return Err(reject("not_awaiting", "that request is not waiting for a second member of staff"));
+                }
+                if &request.party == staff {
+                    return Err(reject("maker_checker", "the person who entered a change is not its second approver"));
+                }
+                if !self.data.staff.holds_action(staff, assisted::APPROVE, at) {
+                    return Err(reject("forbidden", "your roles do not include approving changes others entered"));
+                }
+                let policy = request.policy.clone();
+                if let Some(r) = self.data.requests.get_mut(&id) {
+                    r.status = RequestStatus::AwaitingApproval { from: Approver::Customer };
+                    if let Some(a) = r.assisted.as_mut() {
+                        a.second = Some(staff.clone());
+                    }
+                }
                 if let Some(policy) = policy {
                     self.refresh(&policy, on, None, &mut effects);
                 }
@@ -923,6 +1047,7 @@ impl ChannelState {
                 let relationships = self.data.directory.relationships(&self.data.view, party, &policy, on);
                 let allowed = match from {
                     Approver::Customer => relationships.contains(&Relationship::Policyholder),
+                    Approver::SecondStaff => false,
                     // The administrator who asked cannot be the second.
                     Approver::SecondAdministrator => relationships.contains(&Relationship::EmployerAdmin) && party != &request.party,
                 };

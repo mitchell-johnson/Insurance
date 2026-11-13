@@ -180,8 +180,16 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         module("entitlements"),
         Command::Staff(StaffCommand::Bootstrap {
             templates: vec![
-                template("administrator", &[staff_actions::MANAGE_STAFF], &[DataClass::Ordinary]),
-                template("service", &["policy.view"], &[DataClass::Ordinary, DataClass::Personal]),
+                template(
+                    "administrator",
+                    &[staff_actions::MANAGE_STAFF, ic_channels::state::assisted::APPROVE],
+                    &[DataClass::Ordinary],
+                ),
+                template(
+                    "service",
+                    &["policy.view", ic_channels::state::assisted::ENTER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template(
                     "finance",
                     &[workbench::actions::VIEW, workbench::actions::PREPARE, workbench::actions::APPROVE],
@@ -265,7 +273,12 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
                 Profile {
                     id: "p".into(),
                     version: 1,
-                    limits: [(workbench::LIMIT.to_string(), 100_000_00), (ic_channels::complaints::AUTHORITY.to_string(), 3)].into(),
+                    limits: [
+                        (workbench::LIMIT.to_string(), 100_000_00),
+                        (ic_channels::complaints::AUTHORITY.to_string(), 3),
+                        (ic_channels::state::assisted::LIMIT.to_string(), 500_00),
+                    ]
+                    .into(),
                 },
                 Profile {
                     id: "junior".into(),
@@ -949,17 +962,37 @@ async fn the_staff_console_asks_the_four_questions() {
         StatusCode::OK
     );
 
-    // A request for a customer on the phone waits for the customer.
-    let request = json!({ "id": "r1", "policy": policy, "kind": "change_frequency", "module": "policy-servicing" });
+    // A request for a customer on the phone says why and names the case, and waits for the customer.
+    let request = json!({ "id": "r1", "policy": policy, "kind": "change_frequency", "module": "policy-servicing",
+        "reason": "customer rang", "case": "case-8" });
     assert_eq!(
         portal.write("POST", "sub-kiri", "/staff/v1/requests", request.clone()).await.0,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    let mut unexplained = request.clone();
+    unexplained["reason"] = json!("");
     assert_eq!(
-        portal.local.with(|s| serde_json::to_value(&s.data.requests["r1"]).unwrap())["status"],
-        "awaiting_approval"
+        portal.write("POST", "sub-sue", "/staff/v1/requests", unexplained).await.1["title"],
+        "bad_request"
     );
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    let r1 = portal.local.with(|s| serde_json::to_value(&s.data.requests["r1"]).unwrap());
+    assert_eq!(
+        (&r1["status"], &r1["from"], &r1["assisted"]["case"]),
+        (&json!("awaiting_approval"), &json!("customer"), &json!("case-8"))
+    );
+    // Above her limit it waits for a second member of staff first, who is not her.
+    let large = json!({ "id": "r2", "policy": policy, "kind": "change_sum_insured", "module": "policy-servicing",
+        "payload": { "amount_minor": 900_00 }, "reason": "customer rang", "case": "case-8" });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", large).await.0, StatusCode::ACCEPTED);
+    assert_eq!(
+        portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"],
+        "second_staff"
+    );
+    let second = "/staff/v1/requests/r2/second-approval";
+    assert_eq!(portal.write("POST", "sub-sue", second, json!({})).await.1["title"], "maker_checker");
+    assert_eq!(portal.write("POST", "sub-alice", second, json!({})).await.0, StatusCode::ACCEPTED);
+    assert_eq!(portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"], "customer");
 }
 
 /// Purpose: a staff read of a policy or of the workbench leaves a line in the access log, a refusal does too, and nobody can write the log by hand.
