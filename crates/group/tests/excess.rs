@@ -831,3 +831,47 @@ fn the_employers_view_of_a_member_shows_cover_and_never_health() {
         serde_json::json!({ "schemes": [] })
     );
 }
+
+/// Purpose: on a scheme whose broker underwrites under a delegated authority, a member's
+/// cover above the automatic limit goes to underwriting naming that authority, so the
+/// delegate decides; but a member reinsurance asked us to underwrite, and any scheme that
+/// cedes its excess facultatively, goes to our own underwriters; and an authority with no id
+/// is refused in the terms.
+/// Why it matters: Mitchell's decision of 14 Nov 2026. The delegate may bind only what we can
+/// retain: a delegate deciding a facultative case or an accumulation reinsurance flagged would
+/// bind risk the treaty does not cover.
+#[test]
+fn a_brokers_delegated_authority_decides_only_what_we_retain() {
+    let mut t = terms();
+    t.delegated_underwriting = Some(ic_group::terms::DelegatedUnderwriting {
+        authority: "auth-harbour-broker".into(),
+    });
+    let mut blank = t.clone();
+    blank.delegated_underwriting = Some(ic_group::terms::DelegatedUnderwriting { authority: " ".into() });
+    assert!(blank.validate().is_err());
+
+    let (mut h, _) = with_executive(t.clone());
+    assert_eq!(h.requests[0].delegated_authority.as_deref(), Some("auth-harbour-broker"));
+    let cover = h.requests[0].cover.clone();
+    let policy = h.policy.clone();
+    h.send_as(
+        caller::REINSURANCE,
+        "reinsurance",
+        GroupCommand::RequireUnderwrittenExcess {
+            policy,
+            life: life("E003"),
+            cover,
+            excess_minor: 80_000_00,
+            reference: "ri-accum-7".into(),
+        },
+    )
+    .unwrap();
+    h.settle();
+    let flagged = h.requests.last().unwrap();
+    assert_eq!((flagged.life.clone(), flagged.delegated_authority.clone()), (life("E003"), None));
+
+    let mut ceded = t;
+    ceded.excess_path = ic_group::terms::ExcessPath::Facultative;
+    let (h, _) = with_executive(ceded);
+    assert!(h.requests.iter().all(|r| r.delegated_authority.is_none()));
+}

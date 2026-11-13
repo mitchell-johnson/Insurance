@@ -235,6 +235,7 @@ fn excess_request(party_id: Option<&str>) -> UnderwritingRequest {
         path: ic_group::terms::ExcessPath::UnderwrittenExcess,
         honour_without_evidence_minor: None,
         reference: None,
+        delegated_authority: None,
     }
 }
 
@@ -276,6 +277,12 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     taken_over.honour_without_evidence_minor = Some(0);
     taken_over.reference = Some(" ".into());
     assert_eq!(underwriting_envelope(key, at, today, &taken_over).unwrap()["command"], plain["command"]);
+
+    // A scheme whose broker underwrites names the authority on the entry.
+    let mut delegated = excess_request(Some("party-9"));
+    delegated.delegated_authority = Some("auth-harbour-broker".into());
+    let entry = &underwriting_envelope(key, at, today, &delegated).unwrap()["command"]["open_proposal"]["entry"];
+    assert_eq!(entry["delegated_authority"], "auth-harbour-broker");
 
     let value = underwriting_envelope(key, at, today, &excess_request(Some("party-9"))).unwrap();
     let text = value.to_string();

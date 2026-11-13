@@ -24,7 +24,7 @@ use crate::state::{
     CaseStatus, ClassLine, ContinuedExcess, ContinuedStatus, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal,
     Scheme, SchemeStatus,
 };
-use crate::terms::{ExcessLoading, MemberBasis, NoAgreement, SchemeTerms};
+use crate::terms::{ExcessLoading, ExcessPath, MemberBasis, NoAgreement, SchemeTerms};
 
 /// The core asks for a retry: nothing is wrong with what was sent.
 const TRANSIENT: [&str; 2] = ["invoice_in_progress", "policy_transferring"];
@@ -943,6 +943,14 @@ impl GroupState {
                 path: s.terms.excess_path,
                 honour_without_evidence_minor: s.terms.takeover.as_ref().and_then(|t| t.honour_excess_up_to_minor),
                 reference: reference.clone(),
+                // A delegate binds only what we could retain: not a facultative
+                // cession, and not a member reinsurance asked us to underwrite.
+                delegated_authority: s
+                    .terms
+                    .delegated_underwriting
+                    .as_ref()
+                    .filter(|_| s.terms.excess_path == ExcessPath::UnderwrittenExcess && reference.is_none())
+                    .map(|d| d.authority.clone()),
             };
             self.send(Outbound::Underwriting {
                 key: format!("grp-uw:{}:{id}", s.id),
