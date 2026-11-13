@@ -54,6 +54,11 @@ pub enum Query {
     Capacity {
         reservation_id: String,
     },
+    /// The reservations underwriting the excess a `RequireUnderwrittenExcess`
+    /// notice named by its reference: `[[reservation_id, status]]`.
+    ExcessUnderwriting {
+        reference: String,
+    },
     /// Where the facultative referral for a reservation has got to.
     FacultativeTerms {
         reservation_id: String,
@@ -140,6 +145,7 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
         }
         Query::NoticeRetries { seq } => json(state.notice_retries(seq)),
         Query::Capacity { reservation_id } => json(state.capacity(&reservation_id)),
+        Query::ExcessUnderwriting { reference } => json(state.excess_underwriting(&reference)),
         Query::FacultativeTerms { reservation_id } => json(state.facultative_terms(&reservation_id)),
         Query::Cession { key } => json(state.cession_record(&key)),
         Query::Retained { life, on } => json(state.retained_on(&life, on)),
