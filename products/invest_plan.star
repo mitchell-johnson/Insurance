@@ -26,5 +26,7 @@ PRODUCT = product(
         # asks every product for the feature.
         arrears(grace_days = 30, lapse_days = 90),
         cooling_off(days = 14),
+        # The owner may borrow up to half the account's value. Placeholder.
+        policy_loans(max_percent_of_value = "50", rate_code = "policy-loan-rate"),
     ],
 )

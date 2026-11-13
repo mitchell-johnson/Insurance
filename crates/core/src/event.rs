@@ -485,6 +485,41 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// Money was lent to the owner against the policy and raised to benefit
+    /// payable under the reference.
+    PolicyLoanDrawn {
+        policy: PolicyId,
+        reference: String,
+        amount_minor: i64,
+        outstanding_minor: i64,
+    },
+    /// The loan was reduced: by a receipt, or out of a surrender value or a
+    /// claim (`from` says which, and `reference` is that thing's).
+    PolicyLoanRepaid {
+        policy: PolicyId,
+        reference: String,
+        amount_minor: i64,
+        interest_minor: i64,
+        principal_minor: i64,
+        outstanding_minor: i64,
+        from: String,
+    },
+    /// The loan was found to be more than the policy is worth. Said once,
+    /// the first day it is so.
+    PolicyLoanOverValue {
+        policy: PolicyId,
+        outstanding_minor: i64,
+        value_minor: i64,
+        on: NaiveDate,
+    },
+    /// The policy ended owing more on its loan than it was worth, and the
+    /// rest was written off.
+    PolicyLoanWrittenOff {
+        policy: PolicyId,
+        reference: String,
+        amount_minor: i64,
+        cause: String,
+    },
     /// A member's credit was set against what the member owes.
     MemberCreditApplied {
         policy: PolicyId,

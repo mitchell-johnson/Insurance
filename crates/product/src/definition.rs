@@ -315,6 +315,15 @@ pub enum Feature {
     CoolingOff {
         days: u32,
     },
+    /// The owner may borrow against the policy's value.
+    PolicyLoans {
+        /// The most that may be owed, as a percentage of the policy's
+        /// value on the day more is borrowed.
+        max_percent_of_value: DecStr,
+        /// The code of the yearly interest rate, activated through the log
+        /// as an index rate and read each day as in force that day.
+        rate_code: String,
+    },
     /// The rules for combining covers on a mix-and-match product. They hold
     /// for each life's own set of covers, so a family policy can give each
     /// life a different set.
@@ -343,6 +352,7 @@ impl Feature {
             Feature::Earning { .. } => 40,
             Feature::Arrears { .. } => 50,
             Feature::CoolingOff { .. } => 60,
+            Feature::PolicyLoans { .. } => 70,
         }
     }
 }
@@ -429,6 +439,17 @@ impl ProductDefinition {
     pub fn cooling_off_days(&self) -> Option<u32> {
         self.features.iter().find_map(|f| match f {
             Feature::CoolingOff { days } => Some(*days),
+            _ => None,
+        })
+    }
+    /// The product's policy loan terms: the share of value that may be
+    /// owed, as a percentage, and the interest rate's code.
+    pub fn policy_loans(&self) -> Option<(&DecStr, &str)> {
+        self.features.iter().find_map(|f| match f {
+            Feature::PolicyLoans {
+                max_percent_of_value,
+                rate_code,
+            } => Some((max_percent_of_value, rate_code.as_str())),
             _ => None,
         })
     }

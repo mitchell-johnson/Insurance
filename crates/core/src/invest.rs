@@ -282,6 +282,24 @@ impl InvestmentBook {
             .collect()
     }
 
+    /// Cash the policy's pending buy orders are counting on.
+    pub(crate) fn committed_cash_of(&self, policy: &PolicyId) -> i128 {
+        committed_cash(self, policy)
+    }
+
+    /// Every fund the book knows.
+    pub(crate) fn fund_ids(&self) -> Vec<FundId> {
+        self.funds.keys().map(|f| FundId(f.clone())).collect()
+    }
+
+    /// The latest price in force for a fund on or before a date.
+    pub fn latest_price(&self, fund: &FundId, on: NaiveDate) -> Option<&UnitPrice> {
+        self.in_force
+            .range(format!("{}/", fund.0)..=slot(fund, on))
+            .next_back()
+            .and_then(|(_, id)| self.prices.get(id))
+    }
+
     fn pending_of<'a>(&'a self, policy: &'a PolicyId) -> impl Iterator<Item = &'a UnitOrder> + 'a {
         self.orders
             .values()
@@ -887,6 +905,9 @@ pub enum PayoutReason {
     Surrender,
     /// Cash owed after a price error to a policyholder who has left.
     PriceRemediation,
+    /// Money lent to the owner against the policy. Raised by the loan
+    /// command, never by a payout command.
+    Loan,
 }
 
 impl PayoutReason {
@@ -895,6 +916,7 @@ impl PayoutReason {
             PayoutReason::Withdrawal => "unit_withdrawal",
             PayoutReason::Surrender => "unit_surrender",
             PayoutReason::PriceRemediation => "unit_price_remediation",
+            PayoutReason::Loan => "policy_loan_drawn",
         }
     }
 }
@@ -1017,8 +1039,11 @@ pub(crate) fn raise_payout(
     amount_minor: i64,
     reason: PayoutReason,
 ) -> Result<(), Reject> {
-    if !plain(&payout) || amount_minor <= 0 {
-        return Err(bad("invalid_payout", "a payout has a plain identifier and an amount above zero"));
+    if !plain(&payout) || amount_minor <= 0 || reason == PayoutReason::Loan {
+        return Err(bad(
+            "invalid_payout",
+            "a payout has a plain identifier and an amount above zero, and a loan is drawn by its own command",
+        ));
     }
     if let Some(existing) = policy.payouts.get(&payout) {
         return if existing.amount_minor == amount_minor && existing.reason == reason {

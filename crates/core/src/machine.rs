@@ -795,6 +795,15 @@ impl CoreState {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
             }
+            Command::Loan(command) => {
+                let id = command.policy().clone();
+                self.with_policy(&id, true, |s, p| match *command {
+                    crate::loan::LoanCommand::Draw { reference, amount_minor, .. } => {
+                        crate::loan::draw(&mut s.ledger, &s.catalog, &mut s.investment, p, ctx, reference, amount_minor)
+                    }
+                    crate::loan::LoanCommand::Repay { receipt, amount, .. } => crate::loan::repay(&mut s.ledger, p, ctx, receipt, amount),
+                })
+            }
             Command::SetMemberCovers(command) => {
                 let id = command.policy.clone();
                 self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
@@ -900,7 +909,7 @@ impl CoreState {
                     crate::invest::PayoutReason::Withdrawal => Some(RestrictedAction::Withdrawal),
                     crate::invest::PayoutReason::Surrender => Some(RestrictedAction::Surrender),
                     // Money the insurer owes for its own error is not the owner taking value out.
-                    crate::invest::PayoutReason::PriceRemediation => None,
+                    crate::invest::PayoutReason::PriceRemediation | crate::invest::PayoutReason::Loan => None,
                 };
                 if let Some(action) = restricted {
                     crate::owner_hold::permit(p)?;
@@ -947,7 +956,12 @@ impl CoreState {
                     .clone();
                 // The owner's consent holders agreed to the surrender when it
                 // began; the payout is the same action finishing.
-                let paid = value_minor > 0;
+                // What is owed on a loan is met from the value first; what
+                // the value does not cover is lost when the policy ends.
+                let pending = crate::accounts::pending_investment_cash(&p.id, p.currency);
+                let repaid = crate::loan::deduct(&mut s.ledger, p, ctx, pending, value_minor, "surrender", &request.id)?;
+                crate::loan::write_off(&mut s.ledger, p, ctx, "surrender", &request.id)?;
+                let paid = value_minor - repaid > 0;
                 if paid {
                     invest::raise_payout(
                         &mut s.ledger,
@@ -955,7 +969,7 @@ impl CoreState {
                         p,
                         ctx,
                         payout.clone(),
-                        value_minor,
+                        value_minor - repaid,
                         crate::invest::PayoutReason::Surrender,
                     )?;
                 }
@@ -1103,6 +1117,7 @@ impl CoreState {
         }
         arrears::run(&mut self.ledger, &product, policy, ctx)?;
         voluntary::run_arrears(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
+        crate::loan::end_of_day(&mut self.ledger, &self.catalog, &self.investment, policy, ctx)?;
         if let Some(keep_from) = ctx.date.checked_sub_days(chrono::Days::new(400)) {
             policy.prune_settled(keep_from);
         }

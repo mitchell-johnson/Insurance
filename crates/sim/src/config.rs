@@ -77,5 +77,13 @@ pub fn shipped_activations() -> Result<Vec<Command>, LoadError> {
             rate,
         });
     }
+    // What the owner of a policy with a loan against it is charged a year.
+    if let (Some(from), Ok(rate)) = (chrono::NaiveDate::from_ymd_opt(2027, 1, 1), DecStr::parse("0.0795")) {
+        out.push(Command::ActivateIndexRate {
+            code: "policy-loan-rate".to_string(),
+            effective_from: from,
+            rate,
+        });
+    }
     Ok(out)
 }

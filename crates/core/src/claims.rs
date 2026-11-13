@@ -202,6 +202,7 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
         life_party,
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),
         ends_on_death: p.lives.len() == 1 && p.lives.values().all(|l| matches!(l.kind, LifeKind::Named { .. })) && !p.is_scheme(),
+        policy_loan_minor: p.loan.as_ref().map_or(0, crate::loan::Loan::outstanding_minor),
         policyholder: p.policyholder.0.clone(),
         product_code: p.product_code.clone(),
         product_version: p.product_hash.clone(),
@@ -342,12 +343,14 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             amount_minor,
             release_reserve,
             deduct_premium_minor,
+            repay_loan_minor,
             terminate,
             life,
             ..
         } => {
             let ends = terminate.is_some();
-            admit(s, p, ctx, &claim, cover.clone(), amount_minor, release_reserve, deduct_premium_minor, terminate)?;
+            let deductions = (deduct_premium_minor, repay_loan_minor);
+            admit(s, p, ctx, &claim, cover.clone(), amount_minor, release_reserve, deductions, terminate)?;
             // A policy the claim ended has no cover left to reduce.
             match life.filter(|_| !ends) {
                 Some(life) => {
@@ -546,12 +549,16 @@ fn admit(
     cover: String,
     amount: i64,
     release_reserve: bool,
-    deduct: i64,
+    (deduct, repay_loan): (i64, i64),
     terminate: Option<Termination>,
 ) -> Result<(), Reject> {
     let existing = policy.claims.get(claim);
-    if amount <= 0 || !(0..=amount).contains(&deduct) || existing.is_some_and(|c| !c.open) {
-        return invalid("an admission is a positive amount on an open claim, less no more premium than it pays");
+    let taken = deduct.checked_add(repay_loan).filter(|_| deduct >= 0 && repay_loan >= 0);
+    if amount <= 0 || !taken.is_some_and(|t| t <= amount) || existing.is_some_and(|c| !c.open) {
+        return invalid("an admission is a positive amount on an open claim, less no more premium and loan than it pays");
+    }
+    if repay_loan > policy.loan.as_ref().map_or(0, crate::loan::Loan::outstanding_minor) {
+        return Err(Reject::new("loan_not_owing", "the policy does not owe that much on a loan"));
     }
     if deduct > policy.outstanding_minor() {
         return Err(Reject::new("premium_not_owing", "the policy does not owe that much premium"));
@@ -587,7 +594,10 @@ fn admit(
     });
     record.reserve_minor -= released;
     record.admitted_minor += amount;
-    record.payable_minor += amount - deduct;
+    record.payable_minor += amount - deduct - repay_loan;
+    // The loan is met out of what the claim would have paid.
+    let payable = accounts::benefit_payable(&policy.id, c);
+    crate::loan::deduct(&mut state.ledger, policy, ctx, payable, repay_loan, "claim", claim)?;
     if deduct > 0 {
         cash::apply_suspense(&mut state.ledger, policy, ctx)?;
         if let Some(product) = state.catalog.product(&policy.product_hash) {
@@ -1625,5 +1635,73 @@ mod tests {
         let mut ctx = Ctx { date: today, ..self::ctx() };
         execute(&mut state, &mut ctx, lump_sum("clm-1", "life", Some("life-1"), 400_000_00)).unwrap();
         assert_eq!((held(&state, "life", "life-1", today), held(&state, "life", "life-2", today)), (0, 400_000_00));
+    }
+
+    /// Purpose: the cover check reports what is owed on a loan against the policy, and an
+    /// admission that says to repay it moves that much of the benefit from benefit payable
+    /// to the loan, interest first, in its own entry, leaving the rest payable on the claim;
+    /// it is refused where the policy does not owe that much on a loan, and where premium
+    /// and loan together would take more than the claim pays.
+    /// Why it matters: a death benefit paid in full on a policy with a loan pays the estate
+    /// money the owner already had. The claims module decides the deduction from the fact
+    /// the core reports and relies on the core to refuse one that is not owed; a loan taken
+    /// off without its own entry could not be agreed to the loan account at the close.
+    #[test]
+    fn an_admission_repays_the_policy_loan_out_of_the_benefit() {
+        let (mut state, today) = book();
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let pol = PolicyId("pol-1".to_string());
+        let c = ic_money::Currency::NZD;
+        // A loan of NZD 3,000 with NZD 50 of interest, lent and paid out earlier.
+        let policy = state.policies[&pol].clone();
+        let mut set = PostingSet::new();
+        set.debit(accounts::policy_loan(&pol, c), 3_050_00, Dimensions::default());
+        set.credit(accounts::settlement(c), 3_050_00, Dimensions::default());
+        let postings = set.into_postings(&mut state.ledger).unwrap();
+        ctx.post(&mut state.ledger, "fixture", Some(&policy), today, postings, Default::default())
+            .unwrap();
+        state.policies.get_mut(&pol).unwrap().loan = Some(crate::loan::Loan {
+            principal_minor: 3_000_00,
+            interest_minor: 50_00,
+            ..Default::default()
+        });
+        assert_eq!(cover_facts(&state, "pol-1", "life", None, today).unwrap().policy_loan_minor, 3_050_00);
+
+        let admit = |deduct: i64, repay: i64| Instruction::Admit {
+            life: None,
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            amount_minor: 10_000_00,
+            release_reserve: false,
+            deduct_premium_minor: deduct,
+            terminate: None,
+            repay_loan_minor: repay,
+        };
+        let entries = ctx.entries.len();
+        assert_eq!(execute(&mut state, &mut ctx, admit(0, 3_050_01)).unwrap_err().code, "loan_not_owing");
+        assert_eq!(execute(&mut state, &mut ctx, admit(0, -1)).unwrap_err().code, "invalid_amount");
+        assert_eq!(execute(&mut state, &mut ctx, admit(7_000_00, 3_050_00)).unwrap_err().code, "invalid_amount");
+        assert_eq!(ctx.entries.len(), entries, "a refusal posts nothing");
+
+        execute(&mut state, &mut ctx, admit(0, 3_050_00)).unwrap();
+        assert_eq!(state.ledger.balance(&accounts::policy_loan(&pol, c).id), 0);
+        assert_eq!(state.ledger.natural_balance(&accounts::benefit_payable(&pol, c).id), 6_950_00);
+        let record = &state.policies[&pol];
+        assert_eq!(
+            (record.claims["clm-1"].admitted_minor, record.claims["clm-1"].payable_minor),
+            (10_000_00, 6_950_00)
+        );
+        assert_eq!(record.loan.as_ref().map(crate::loan::Loan::outstanding_minor), Some(0));
+        let repaid = ctx.entries.last().unwrap();
+        assert_eq!(
+            (repaid.body.kind.as_str(), repaid.body.detail["claim"].as_str()),
+            ("policy_loan_repaid", "clm-1")
+        );
+        assert!(ctx.events.iter().any(|e| matches!(
+            e,
+            Event::PolicyLoanRepaid { amount_minor: 3_050_00, interest_minor: 50_00, principal_minor: 3_000_00, outstanding_minor: 0, from, .. } if from == "claim"
+        )));
+        assert_eq!(cover_facts(&state, "pol-1", "life", None, today).unwrap().policy_loan_minor, 0);
     }
 }
