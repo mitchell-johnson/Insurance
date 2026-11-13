@@ -76,6 +76,17 @@ pub struct CoverFacts {
     /// after any interest, before the estate.
     #[serde(default)]
     pub nominations: Vec<Nominee>,
+    /// The scheme membership this policy continues, where it was issued
+    /// under a leaver's continuation option.
+    #[serde(default)]
+    pub continuation_of: Option<Continuation>,
+}
+
+/// The scheme and member a continuation policy carries on from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Continuation {
+    pub policy: String,
+    pub life: String,
 }
 
 /// A person nominated to receive a share of a death benefit.

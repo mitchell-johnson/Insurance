@@ -93,12 +93,16 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried` |
 | COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
-| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies` |
-| COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
+| COL-012 | full | `collections/tests/sequence.rs::mandatory_notices_cannot_be_configured_away`<br>`collections/tests/dunning.rs::each_step_is_an_event_with_its_notice_or_task` |
+| COL-013 | part | `collections/tests/cases.rs::an_outcome_drives_the_next_step` |
+| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies`<br>`collections/tests/cases.rs::hardship_is_applied_for_decided_by_another_and_ended_early` |
+| COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood`<br>`collections/tests/cases.rs::an_arrangement_holds_the_sequence_and_a_break_resumes_the_clock` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
-| COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once` |
+| COL-018 | full | `sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once`<br>`collections/tests/dunning.rs::paying_stops_the_sequence_and_a_new_spell_starts_it_afresh` |
+| COL-019 | full | `collections/tests/queue.rs::the_queue_puts_what_is_about_to_lapse_and_matters_most_first`<br>`collections/tests/cases.rs::an_officer_does_not_read_health_in_a_hardship_note` |
 | COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
+| COL-026 | full | `collections/tests/dunning.rs::a_customer_with_several_policies_gets_one_notice_and_one_task` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
 ## XFR Policy transfer between groups
@@ -202,6 +206,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
+| CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-029 | part | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death` |

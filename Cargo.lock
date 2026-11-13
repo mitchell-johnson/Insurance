@@ -2162,6 +2162,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "ic-collections"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "chrono-tz 0.10.4",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-raft",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "ic-complaints"
 version = "0.1.0"
 dependencies = [
@@ -2398,6 +2414,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "ic-channels",
+ "ic-collections",
  "ic-complaints",
  "ic-core",
  "ic-distribution",

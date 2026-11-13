@@ -302,25 +302,23 @@ impl PaymentsState {
     /// The account an item pays or draws on, and why it cannot go, if it cannot.
     fn examine(&self, tx: &Tx<'_>, run: &Run, item: &Item, item_limit: i64, window: i64) -> (Option<AccountDetails>, Option<String>) {
         let (account, mut hold) = match &item.new.counterparty {
-            Counterparty::Payee(p) => match self.payees.get(p) {
-                Some(payee) => (Some(payee.account.clone()), payee.blocked(tx.now).map(str::to_string)),
-                None => (None, Some("unknown_payee".to_string())),
-            },
-            Counterparty::Authority(a) => match self.authorities.get(a) {
-                Some(authority) => {
-                    let hold = if self.blocked_accounts.contains(&authority.account.number) {
-                        Some("account_blocked")
-                    } else if run.run_type.inbound() && authority.status != AuthorityStatus::Active {
-                        Some("authority_not_active")
-                    } else if authority.status == AuthorityStatus::Cancelled {
-                        Some("source_unavailable")
-                    } else {
-                        None
-                    };
-                    (Some(authority.account.clone()), hold.map(str::to_string))
-                }
-                None => (None, Some("unknown_authority".to_string())),
-            },
+            // An item is added only for a payee or authority on record, and
+            // neither is ever removed; the default is for safety alone.
+            Counterparty::Payee(p) => self.payees.get(p).map_or((None, Some("unknown_payee".to_string())), |payee| {
+                (Some(payee.account.clone()), payee.blocked(tx.now).map(str::to_string))
+            }),
+            Counterparty::Authority(a) => self.authorities.get(a).map_or((None, Some("unknown_authority".to_string())), |authority| {
+                let hold = if self.blocked_accounts.contains(&authority.account.number) {
+                    Some("account_blocked")
+                } else if run.run_type.inbound() && authority.status != AuthorityStatus::Active {
+                    Some("authority_not_active")
+                } else if authority.status == AuthorityStatus::Cancelled {
+                    Some("source_unavailable")
+                } else {
+                    None
+                };
+                (Some(authority.account.clone()), hold.map(str::to_string))
+            }),
         };
         if hold.is_none() && item.new.amount_minor > item_limit {
             hold = Some("over_item_limit".to_string());
