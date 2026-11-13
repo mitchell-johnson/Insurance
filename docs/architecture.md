@@ -595,7 +595,7 @@ Everything is in `crates/finance`, configuration in `config/finance/`, with `inf
 | Data mart | `src/mart.rs` | In the module's replicated state, fed from the same events before the ledger posts them. In-force, movement and experience extracts, definition version 4. Rating factors are kept by the date recorded; date of birth never leaves the mart. Policy suspense by policy. Admitted claims from the claims module's facts. |
 | Tables | `src/tables.rs`, `config/finance/tables.star` | Validation of a rate table against its schema and previous version; dry run of a proposed version against the in-force book. Pure functions plus the question `table_dry_run`. |
 | Host | `src/host.rs` | Module `finance` on the ledger nodes (`module_spec()`), reading core events; every question the module answers. |
-| Close driver | `src/driver.rs`, `src/service.rs`, `src/bin/ic-finance-close.rs` | Service `ic-finance-close`: a restartable pass on a timer. Records verified Merkle roots, writes extracts to immutable blob storage and registers them, asks each module for its close report and forwards it, reports its own check, closes signed-off periods. |
+| Close driver | `src/driver.rs`, `src/temporal.rs`, `src/service.rs`, `src/bin/ic-finance-close.rs` | Service `ic-finance-close`: the close as a Temporal workflow where Temporal is configured, otherwise a restartable pass on a timer. Records verified Merkle roots, writes extracts to immutable blob storage and registers them, asks each module for its close report and forwards it, reports its own check, closes signed-off periods. |
 
 Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a real in-memory core beside the books. `tests/service.rs` runs a real node with the fake Azure store.
 
@@ -609,7 +609,7 @@ Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a 
 
 ### Not finished or not started
 
-1. **Temporal workflow for the close.** Not started. The driver is a timed pass whose whole state is in the ledger, so it is safe to restart, but a step is not visible or retryable on its own. To build: one workflow per period wrapping the steps of `Driver::pass` in `src/driver.rs` as activities; the commands are already idempotent by key.
+1. **Temporal workflow for the close.** Built: `src/temporal.rs` (`CloseRunWorkflow`, activities `record_roots`, `closing`, `work_period`), `service::run_on_temporal`, and the binary chooses it when `TEMPORAL_ADDRESS` is set (`deploy/k8s/finance.yaml` reads the `ic-temporal` settings). Tests: `tests/temporal.rs` (scripted steps on a real server: retry, non-retryable failure, two starters) and `tests/service.rs::the_close_service_runs_on_temporal_against_a_real_node` (two replicas of the binary). They need a Temporal server, so they first ran in CI, not on the build machine; check the first CI run after 2026-11-13 04:30Z if anything here looks wrong. Not built: a workflow per period that waits on a signal for a person's sign-off (today a run ends reporting what it waits for, and the next run looks again); a Temporal Schedule in place of the service's own timer.
 2. **Mart history.** Built: when a period closes, the mart lets go of everything more than twelve months before it (`Mart::trim` in `src/mart.rs`, called from `close_period` in `src/books.rs`, `MART_KEEPS_MONTHS`). Extracts from the kept date on are cut byte for byte as before; earlier ones are refused and the stored files are the record. Not built: a policy's row, its premiums by receivable and each registered claim are kept for ever, so the state still grows with the number of policies and claims ever written (not with their activity). `FinanceState.backdated`, `days` and `idempotency` in `books.rs` are not trimmed either. No measurement at production volume has been taken.
 3. **Scheme benefit category is not published to finance.** The extracts have no category column and `tables::dry_run` cannot price a category table (`rate_for` skips category rows). Needs `category` on `LifeInfo` or `MemberCover` from the core, then a column in `mart.rs` (bump `DEFINITION_VERSION`) and a field on `RatedCover`.
 4. **Loadings are not published**, so the dry run prices before loadings, discounts, fees and tax. It shows movement, not a bill.
@@ -626,7 +626,6 @@ Tests are in `crates/finance/tests/`, one file per part; `common/mod.rs` runs a 
 - The holiday list in `close.star` is New Zealand national holidays for 2026 to 2028, with no regional anniversary day. Is New Zealand right, and which region's day applies? Someone must add each new year.
 - The chart's account codes, the close's due days and aged thresholds, and the shipped return (`config/finance/returns/insurer_quarterly.star`) are placeholders for finance and compliance to replace with the real chart and the regulator's template.
 - The rate tables under `products/rates/` are synthetic.
-- Is a restartable timed pass acceptable for the close in production, or is the Temporal workflow required first?
 
 ## Area: claims operations (`ic-claims`): state and handover
 
