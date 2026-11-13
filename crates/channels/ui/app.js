@@ -81,8 +81,10 @@ const portal = (() => {
       if (dev.roles) headers["x-dev-roles"] = dev.roles;
     } else headers["authorization"] = "Bearer " + store.getItem("token:" + realm);
     if (method !== "GET") headers["idempotency-key"] = crypto.randomUUID();
-    if (body !== undefined) headers["content-type"] = "application/json";
-    const res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    // A file goes as it is; anything else as JSON.
+    const raw = typeof Blob !== "undefined" && body instanceof Blob;
+    if (body !== undefined) headers["content-type"] = raw ? body.type || "application/octet-stream" : "application/json";
+    const res = await fetch(path, { method, headers, body: body === undefined ? undefined : raw ? body : JSON.stringify(body) });
     const data = await res.json().catch(() => null);
     if (res.status === 401 && cfg.mode !== "dev") { store.removeItem("token:" + realm); throw new Error("Your sign-in has expired. Reload the page to sign in again."); }
     if (!res.ok) { const e = new Error((data && data.detail) || "The request failed (" + res.status + ")."); e.status = res.status; e.code = data && data.title; throw e; }

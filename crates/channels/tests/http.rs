@@ -45,6 +45,7 @@ struct Portal {
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
     documents: Arc<common::documents::DocumentsDouble>,
+    group: Arc<common::group::GroupDouble>,
 }
 
 fn healthy() -> RegionReport {
@@ -296,6 +297,7 @@ fn portal() -> Portal {
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
+    let group = Arc::new(common::group::GroupDouble::with("harbour", &scheme.0));
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
         json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
@@ -320,6 +322,7 @@ fn portal() -> Portal {
         master: Some(master.clone()),
         intake: Some(intake.clone()),
         documents: Some(documents.clone()),
+        group: Some(group.clone()),
     }));
     Portal {
         app,
@@ -337,6 +340,7 @@ fn portal() -> Portal {
         commission,
         intake,
         documents,
+        group,
     }
 }
 
@@ -1365,6 +1369,7 @@ async fn the_unit_pricing_console() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1575,6 +1580,7 @@ async fn the_complaints_and_conduct_workbench() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1671,6 +1677,7 @@ async fn the_reinsurance_exceptions_console() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (path, body) in [
         ("/staff/v1/reinsurance/exceptions", None),
@@ -1884,6 +1891,7 @@ async fn the_claims_console() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -2057,6 +2065,7 @@ async fn the_finance_console() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),
@@ -2197,6 +2206,7 @@ async fn a_person_keeps_their_own_customer_record() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     let request = Request::builder()
         .uri("/app/v1/profile")
@@ -2252,6 +2262,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     for (method, body) in [
         ("GET", None),
@@ -2516,6 +2527,7 @@ async fn the_person_insured_signs_their_disclosure() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     let request = Request::builder()
         .method("POST")
@@ -2608,6 +2620,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         master: None,
         intake: None,
         documents: None,
+        group: None,
     }));
     let request = Request::builder()
         .uri("/app/v1/documents/doc-1/pdf")
@@ -2705,4 +2718,141 @@ async fn consoles_report_done_and_missing() {
     assert_eq!(ri.0, StatusCode::NOT_FOUND, "{ri:?}");
     let gl = portal.get("sub-aud", "/staff/v1/finance/journal?id=nope").await;
     assert_eq!((gl.0, gl.1["detail"].as_str()), (StatusCode::BAD_REQUEST, Some("there is no journal nope")));
+}
+
+/// Purpose: an employer administrator uploads the scheme's membership file, reads its preview, approves it, declares a pool, reads the
+/// scheme's standing and invoices, and opens one member's record, all on the scheme the group service holds for their policy and as
+/// themselves; the record carries the member's category, salary and cover and never a loading, a reason, an exclusion or the person;
+/// anyone who does not administer the policy is told it is not there; staff's commands are not passed on; and a group service that is
+/// down or not configured is a 503.
+/// Why it matters: persona row GRP-032. The employer runs the scheme's membership but must never learn an employee's health; and a file
+/// sent to another employer's scheme, or approved under someone else's name, would change people's cover without their employer.
+#[tokio::test]
+async fn an_employer_runs_the_scheme_membership() {
+    let portal = &portal();
+    let at = |rest: &str| format!("/employer/v1/schemes/{}/group/{rest}", portal.scheme);
+    let hr = |rest: &str| {
+        let path = at(rest);
+        async move { portal.get("sub-hr", &path).await }
+    };
+    let upload = |who: &str, file: &str, body: Option<Value>| {
+        let path = at(&format!("files/{file}"));
+        let who = who.to_string();
+        async move { portal.send("POST", &path, &[("x-dev-subject", who)], body).await }
+    };
+
+    // The file goes to the scheme on this policy, under the administrator's name.
+    let csv = json!("employee_id,salary\nE001,80000\n");
+    let (status, stored) = upload("sub-hr", "nov.csv", Some(csv.clone())).await;
+    assert_eq!(
+        (status, &stored["status"], &stored["scheme"]),
+        (StatusCode::ACCEPTED, &json!("quarantined"), &json!("harbour"))
+    );
+    assert_eq!(portal.group.files.lock().unwrap()[&("harbour".to_string(), "nov.csv".to_string())].0, "hr-1");
+    assert_eq!(upload("sub-hr", "nov.csv", None).await.0, StatusCode::BAD_REQUEST, "an empty file");
+    assert_eq!(upload("sub-hr", "..", Some(csv.clone())).await.0, StatusCode::BAD_REQUEST);
+    // Someone who does not administer the scheme learns nothing, not even that it is there.
+    assert_eq!(upload("sub-kiri", "nov.csv", Some(csv.clone())).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-kiri", &at("scheme")).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        portal.get("sub-hr", "/employer/v1/schemes/pol-nowhere/group/scheme").await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // The preview, the standing and the invoices.
+    let (status, file) = hr("file?file=nov.csv").await;
+    assert_eq!((status, &file["status"]), (StatusCode::OK, &json!("quarantined")), "{file}");
+    assert_eq!(hr("file?file=dec.csv").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(hr("file").await.0, StatusCode::BAD_REQUEST, "which file");
+    assert_eq!(hr("file?file=a%2Fb").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(hr("scheme").await.1["members"], 2);
+    assert_eq!(hr("invoices").await.1["invoices"][0]["invoice"], "inv-1");
+    assert_eq!(hr("exceptions").await.0, StatusCode::BAD_REQUEST, "open exceptions are staff's");
+
+    // A member's record: category, salary and cover, never health or who they are.
+    let (status, member) = hr("member?employee=E001").await;
+    assert_eq!(
+        (status, &member["category"], &member["in_force"]),
+        (StatusCode::OK, &json!("staff"), &json!(true)),
+        "{member}"
+    );
+    assert_eq!(member["covers"][0]["automatic_minor"], 200_000_00);
+    assert_eq!(member["above_automatic"][0]["state"], "in_place");
+    let text = member.to_string();
+    for never in ["loading", "party", "exclusion", "reason"] {
+        assert!(!text.contains(never), "{never} reached the employer: {text}");
+    }
+    assert_eq!(hr("member?employee=E999").await.0, StatusCode::NOT_FOUND);
+
+    // The administrator approves the file and declares a pool, as themselves.
+    let approve = json!({ "approve_file": { "file": "nov.csv", "scheme": "someone-elses" } });
+    let (status, done) = portal.write("POST", "sub-hr", &at("commands"), approve).await;
+    assert_eq!((status, &done["applied"]), (StatusCode::OK, &json!(true)), "{done}");
+    let (key, actor, command) = portal.group.commands.lock().unwrap()[0].clone();
+    assert!(key.starts_with("api:employer-portal:hr-1:"), "{key}");
+    assert_eq!(
+        (actor.as_str(), &command["approve_file"]["scheme"]),
+        ("hr-1", &json!("harbour")),
+        "the scheme is the policy's"
+    );
+    assert_eq!(
+        portal.group.files.lock().unwrap()[&("harbour".to_string(), "nov.csv".to_string())].2,
+        "approved"
+    );
+    let pool = json!({ "declare_pool": { "pool": "seed", "category": "staff", "effective": "2027-12-01", "headcount": 10, "total_salary_minor": 1 } });
+    assert_eq!(portal.write("POST", "sub-hr", &at("commands"), pool).await.0, StatusCode::OK);
+    // The group service's refusal is passed on as it gave it.
+    let missing = json!({ "withdraw_file": { "file": "dec.csv" } });
+    assert_eq!(
+        portal.write("POST", "sub-hr", &at("commands"), missing).await,
+        (StatusCode::UNPROCESSABLE_ENTITY, json!({ "code": "unknown_file" }))
+    );
+    // Staff's commands, and anything that is not one command, are not sent at all.
+    for bad in [
+        json!({ "freeze": { "scheme": "harbour" } }),
+        json!({ "a": {}, "b": {} }),
+        json!({ "approve_file": "nov.csv" }),
+    ] {
+        assert_eq!(portal.write("POST", "sub-hr", &at("commands"), bad).await.0, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        portal
+            .write("POST", "sub-kiri", &at("commands"), json!({ "withdraw_file": { "file": "nov.csv" } }))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(portal.group.commands.lock().unwrap().len(), 2);
+
+    // A group service that cannot be reached.
+    portal.group.down.store(true, Ordering::SeqCst);
+    assert_eq!(hr("scheme").await.0, StatusCode::SERVICE_UNAVAILABLE);
+    portal.group.down.store(false, Ordering::SeqCst);
+
+    // A portal deployed without one says so.
+    let now = portal.now();
+    let bare = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::commission::seeded()),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+        intake: None,
+        documents: None,
+        group: None,
+    }));
+    let request = Request::builder()
+        .uri(at("scheme"))
+        .header("x-dev-subject", "sub-hr")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }
