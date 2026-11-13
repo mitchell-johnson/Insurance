@@ -580,6 +580,10 @@ pub struct DryRunCell {
     pub age_band: String,
     pub sex: String,
     pub smoker: Option<bool>,
+    /// Empty where the life has none.
+    pub occupation_class: String,
+    /// The scheme benefit category, empty where the life has none.
+    pub category: String,
     pub covers: u64,
     pub current_annual_minor: i64,
     pub proposed_annual_minor: i64,
@@ -695,7 +699,7 @@ pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -
         largest_changes: Vec::new(),
         passed: true,
     };
-    let mut cells: BTreeMap<(u32, String, Option<bool>), DryRunCell> = BTreeMap::new();
+    let mut cells: BTreeMap<(u32, String, Option<bool>, String, String), DryRunCell> = BTreeMap::new();
     // One plus the sum of a layer's loadings, at the rate scale.
     let one = 10i128.pow(SCALE_DP);
     let mut factors: BTreeMap<(PartitionId, &str, &str, u32), i128> = BTreeMap::new();
@@ -743,10 +747,15 @@ pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -
         run.loaded_current_annual_minor = run.loaded_current_annual_minor.saturating_add(loaded(current, factor));
         run.loaded_proposed_annual_minor = run.loaded_proposed_annual_minor.saturating_add(loaded(proposed, factor));
         let sex = crate::mart::sex_name(c.sex).to_string();
-        let cell = cells.entry((age / 5, sex.clone(), c.smoker)).or_insert_with(|| DryRunCell {
+        let class = c.occupation_class.clone().unwrap_or_default();
+        let category = c.category.clone().unwrap_or_default();
+        let key = (age / 5, sex.clone(), c.smoker, class.clone(), category.clone());
+        let cell = cells.entry(key).or_insert_with(|| DryRunCell {
             age_band: crate::mart::age_band(Some(age)),
             sex,
             smoker: c.smoker,
+            occupation_class: class,
+            category,
             covers: 0,
             current_annual_minor: 0,
             proposed_annual_minor: 0,

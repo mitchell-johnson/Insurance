@@ -128,7 +128,47 @@ pub enum Change {
         from: String,
         about: String,
     },
+    /// Put in question whether the person can make their own decisions,
+    /// before or after any authority is activated. Representatives' acts
+    /// are routed to a person until it is settled; cover and claims go on.
+    QuestionCapacity,
+    /// Settle the question, with the outcome legal reached.
+    SettleCapacity {
+        outcome: String,
+    },
+    /// The person's own hold on their money going out. Takes effect at once;
+    /// placed again while a removal waits, it cancels the removal.
+    PlaceSpendingHold,
+    /// The person asks for their hold to end. Needs a passed identity check
+    /// made within [`FRESH_VERIFICATION_HOURS`] and after the hold was
+    /// placed, named by its evidence reference; the hold ends when the
+    /// cooling-off period has passed.
+    RequestHoldRemoval {
+        verification: String,
+    },
+    /// The person keeps their hold after all.
+    CancelHoldRemoval,
+    /// A court order or legal direction ends the hold at once.
+    OverrideSpendingHold {
+        reference: String,
+    },
+    /// The cooling-off period has passed (the service's own sweep).
+    EndSpendingHold,
 }
+
+/// How recent the identity check behind a hold removal must be.
+pub const FRESH_VERIFICATION_HOURS: i64 = 24;
+
+/// A hold the person put on their own money going out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SpendingHold {
+    pub placed_at: DateTime<Utc>,
+    /// When the person asked for it to end, if they have.
+    pub removal_requested_at: Option<DateTime<Utc>>,
+}
+
+/// How a capacity question can be settled.
+pub const CAPACITY_OUTCOMES: [&str; 2] = ["has_capacity", "lacks_capacity"];
 
 /// Who may raise a concern about someone.
 pub const CONCERN_FROM: [&str; 6] = ["family", "friend", "carer", "professional", "staff", "other"];
@@ -154,6 +194,13 @@ impl Change {
             Change::PlaceHold { .. } => "place_hold",
             Change::ReleaseHold { .. } => "release_hold",
             Change::RecordConcern { .. } => "record_concern",
+            Change::QuestionCapacity => "question_capacity",
+            Change::SettleCapacity { .. } => "settle_capacity",
+            Change::PlaceSpendingHold => "place_spending_hold",
+            Change::RequestHoldRemoval { .. } => "request_hold_removal",
+            Change::CancelHoldRemoval => "cancel_hold_removal",
+            Change::OverrideSpendingHold { .. } => "override_spending_hold",
+            Change::EndSpendingHold => "end_spending_hold",
         }
     }
 }
@@ -185,6 +232,10 @@ pub struct Party {
     pub merged_into: Option<PartyId>,
     pub absorbed: BTreeSet<PartyId>,
     pub holds: BTreeSet<String>,
+    /// Whether the person's capacity is in question now.
+    pub capacity_in_question: bool,
+    /// The person's own hold on money going out, while it stands.
+    pub spending_hold: Option<SpendingHold>,
     pub shredded: bool,
     /// The last sequence number applied.
     pub version: u64,
@@ -301,6 +352,25 @@ impl Party {
                 self.holds.remove(reference);
             }
             EventBody::ConcernRaised { .. } => {}
+            EventBody::CapacityQuestioned => self.capacity_in_question = true,
+            EventBody::CapacitySettled { .. } => self.capacity_in_question = false,
+            EventBody::SpendingHoldPlaced => {
+                self.spending_hold = Some(SpendingHold {
+                    placed_at: rec.recorded_at,
+                    removal_requested_at: None,
+                });
+            }
+            EventBody::SpendingHoldRemovalRequested { .. } => {
+                if let Some(h) = &mut self.spending_hold {
+                    h.removal_requested_at = Some(rec.recorded_at);
+                }
+            }
+            EventBody::SpendingHoldRemovalCancelled => {
+                if let Some(h) = &mut self.spending_hold {
+                    h.removal_requested_at = None;
+                }
+            }
+            EventBody::SpendingHoldEnded { .. } => self.spending_hold = None,
             EventBody::Shredded => {
                 let id = std::mem::take(&mut self.id);
                 *self = Party {
@@ -707,6 +777,70 @@ impl Party {
                     from: pick("from", from, &CONCERN_FROM)?,
                     about: pick("about", about, &CONCERN_ABOUT)?,
                 });
+            }
+            Change::QuestionCapacity => {
+                if !self.capacity_in_question {
+                    events.push(EventBody::CapacityQuestioned);
+                }
+            }
+            Change::SettleCapacity { outcome } => {
+                if !CAPACITY_OUTCOMES.contains(&outcome.as_str()) {
+                    return Err(reject("invalid", format!("outcome is one of {}", CAPACITY_OUTCOMES.join(", "))));
+                }
+                if !self.capacity_in_question {
+                    return Err(reject("not_found", "no capacity question is open"));
+                }
+                events.push(EventBody::CapacitySettled { outcome: outcome.clone() });
+            }
+            Change::PlaceSpendingHold => match &self.spending_hold {
+                None => events.push(EventBody::SpendingHoldPlaced),
+                Some(h) if h.removal_requested_at.is_some() => events.push(EventBody::SpendingHoldRemovalCancelled),
+                Some(_) => {}
+            },
+            Change::RequestHoldRemoval { verification } => {
+                let Some(hold) = &self.spending_hold else {
+                    return Err(reject("not_found", "there is no hold to remove"));
+                };
+                if hold.removal_requested_at.is_some() {
+                    return Ok(events);
+                }
+                let fresh = self.verifications.iter().any(|v| {
+                    v.evidence_ref == *verification
+                        && v.outcome == crate::model::VerificationOutcome::Passed
+                        && v.verified_at > now - chrono::Duration::hours(FRESH_VERIFICATION_HOURS)
+                        && v.verified_at > hold.placed_at
+                });
+                if !fresh {
+                    return Err(reject(
+                        "verification_needed",
+                        format!("removing the hold needs a passed identity check from the last {FRESH_VERIFICATION_HOURS} hours"),
+                    ));
+                }
+                events.push(EventBody::SpendingHoldRemovalRequested {
+                    verification: verification.clone(),
+                });
+            }
+            Change::CancelHoldRemoval => match &self.spending_hold {
+                Some(h) if h.removal_requested_at.is_some() => events.push(EventBody::SpendingHoldRemovalCancelled),
+                _ => return Err(reject("not_found", "no removal is waiting")),
+            },
+            Change::OverrideSpendingHold { reference } => {
+                let reference = token("the legal reference", reference)?;
+                if self.spending_hold.is_none() {
+                    return Err(reject("not_found", "there is no hold to lift"));
+                }
+                events.push(EventBody::SpendingHoldEnded {
+                    reason: "legal_direction".into(),
+                    reference: Some(reference),
+                });
+            }
+            Change::EndSpendingHold => {
+                if self.spending_hold.as_ref().is_some_and(|h| h.removal_requested_at.is_some()) {
+                    events.push(EventBody::SpendingHoldEnded {
+                        reason: "cooling_off".into(),
+                        reference: None,
+                    });
+                }
             }
         }
         Ok(events)

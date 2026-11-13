@@ -212,6 +212,7 @@ pub fn authority() -> AuthorityBook {
 /// Cover as the policy record has it: in force, paid up, 500,000 insured.
 pub fn facts(cover_type: &str) -> CoverFacts {
     CoverFacts {
+        chosen_excess_minor: None,
         policy_status: "in_force".into(),
         in_force: true,
         standing: Some("paid".into()),

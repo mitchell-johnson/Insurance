@@ -166,6 +166,7 @@ fn any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount() 
 
 fn add_cover(c: &mut Cluster, caller: &str, policy: &PolicyId, cover: &str, life: &str) -> Result<(), Reject> {
     let command = Command::AddCover(Box::new(ic_core::command::AddedCover {
+        excess_option: (cover == "hospital").then(|| "standard".to_string()),
         policy: policy.clone(),
         cover: cover.to_string(),
         life: LifeId(life.to_string()),
@@ -271,5 +272,75 @@ fn a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left() {
     add_cover(&mut c, "policy-servicing", &solo, "dental", "life-1").unwrap();
     assert!(holds(&c, &solo, "dental", "life-1"));
     assert_eq!(c.state(0).policies[&solo].covers["dental"].layers.len(), 2);
+    assert!(c.end_of_day().unwrap().breaks.is_empty());
+}
+
+fn change_excess(c: &mut Cluster, caller: &str, policy: &PolicyId, cover: &str, option: &str) -> Result<(), Reject> {
+    let command = Command::ChangeExcess(Box::new(ic_core::command::ChangedExcess {
+        policy: policy.clone(),
+        cover: cover.to_string(),
+        life: LifeId("life-1".to_string()),
+        excess_option: option.to_string(),
+    }));
+    c.submit(0, caller, command)
+}
+
+/// Purpose: a cover that offers excess levels must be issued at one of them and a cover that
+/// offers none must not be given one; the level prices the cover by its factor; and a change
+/// of level mid-year ends the layer and starts a new one from that day at the new level,
+/// billing or crediting the days left of the year, while the old layer keeps the level it had.
+/// A level the cover does not offer, the level already held, and a change sent by a module
+/// that may not are refused and change nothing.
+/// Why it matters: the excess is the customer's main lever on a health premium and decides
+/// what they pay at every claim. If a change rewrote the old layer, a claim for treatment
+/// before the change would be assessed at the wrong excess; if it were not priced from the
+/// day it took effect, the customer would pay for a level they did not have.
+#[test]
+fn an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer() {
+    let mut c = cluster();
+    let (_, standard) = issue(&mut c, 1, &[(adult(), &["hospital"])]).unwrap();
+    let (_, nil) = issue(&mut c, 2, &[(adult(), &["hospital:nil"])]).unwrap();
+    let (id, high) = issue(&mut c, 3, &[(adult(), &["hospital:high", "dental"])]).unwrap();
+    let (_, dental) = issue(&mut c, 4, &[(adult(), &["dental"])]).unwrap();
+    assert_eq!((nil, high - dental), (standard * 120 / 100, standard * 80 / 100));
+    assert_eq!(code(issue(&mut c, 5, &[(adult(), &["hospital:platinum"])]).map(|_| ())), "excess_option");
+    assert_eq!(code(issue(&mut c, 6, &[(adult(), &["dental:nil"])]).map(|_| ())), "excess_option");
+
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-1".to_string(),
+        amount: ic_money::Money::new(20_000_00, ic_money::Currency::NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    for _ in 0..73 {
+        assert!(c.end_of_day().unwrap().breaks.is_empty());
+    }
+    let today = c.state(0).business_date.unwrap();
+    let year_end = d(2028, 11, 15);
+    let part = |yearly: i64| yearly * (year_end - today).num_days() / (year_end - start()).num_days();
+
+    let before = (c.state(0).ledger.head(), c.state(0).policies[&id].clone());
+    assert_eq!(code(change_excess(&mut c, "claims", &id, "hospital", "nil")), "caller_not_allowed");
+    assert_eq!(code(change_excess(&mut c, "policy-servicing", &id, "hospital", "platinum")), "excess_option");
+    assert_eq!(code(change_excess(&mut c, "policy-servicing", &id, "dental", "nil")), "excess_option");
+    assert_eq!(code(change_excess(&mut c, "policy-servicing", &id, "hospital", "high")), "no_change");
+    assert_eq!((c.state(0).ledger.head(), c.state(0).policies[&id].clone()), before);
+
+    // High to nil: the days left are billed at the difference between the two levels.
+    c.take_events();
+    change_excess(&mut c, "policy-servicing", &id, "hospital", "nil").unwrap();
+    let more = adjusted(&mut c);
+    let expected = part(nil - (high - dental));
+    assert!((more - expected).abs() <= 4, "billed {more}, expected {expected}");
+    let layers = &c.state(0).policies[&id].covers["hospital"].layers;
+    assert_eq!(layers.len(), 2);
+    assert_eq!((layers[0].excess_option.as_deref(), layers[0].end), (Some("high"), Some(today)));
+    assert_eq!((layers[1].excess_option.as_deref(), layers[1].start, layers[1].end), (Some("nil"), today, None));
+    // And back down: a credit for the days left.
+    change_excess(&mut c, "policy-servicing", &id, "hospital", "standard").unwrap();
+    let less = adjusted(&mut c);
+    let expected = part(standard - nil);
+    assert!(less < 0 && (less - expected).abs() <= 4, "credited {less}, expected {expected}");
+    assert!(c.reconcile().is_empty());
     assert!(c.end_of_day().unwrap().breaks.is_empty());
 }

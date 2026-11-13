@@ -725,3 +725,213 @@ async fn relationship_changes_reach_the_channels_directory() {
     w.app.store.reshred(&[PartyId(owner.clone())], Utc::now()).await.unwrap();
     assert_eq!(w.sql("select 1 from directory_relay").await.unwrap(), 0);
 }
+
+/// Purpose: the blind index key can be changed without anyone becoming unfindable.
+/// Entries made before keys were named are adopted as the current key's after one
+/// party's are checked against it; with a next key every party is indexed again under
+/// both, the status says when the next key covers everyone, and once it is promoted
+/// lookups use only its entries and the old key's are removed. Older entries that do not
+/// match the current key are not adopted; everyone is indexed afresh instead. An
+/// operator reads the status at `/v1/admin/index`; other callers cannot.
+/// Why it matters: the index key can leak or need rotating like any secret. Every
+/// duplicate check and match depends on it, so a change that dropped entries early would
+/// let a known person be created again or a claimant go unmatched.
+#[tokio::test]
+async fn the_index_key_can_be_changed_without_losing_anyone() {
+    let w = world_or_skip!();
+    let ana = PartyId(w.person("Ana", "Moana", "1980-02-03", &[("email", json!("ana@example.nz"))]).await);
+    let ben = PartyId(w.person("Ben", "Tane", "1975-06-07", &[]).await);
+    let next = "a-next-index-key-of-at-least-32-bytes!!";
+    // Entries from before keys were named: adopted once, after a check.
+    w.sql("update blind_index set key_id = ''").await.unwrap();
+    w.sql("delete from index_state").await.unwrap();
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ana).await, "older entries still answer");
+    assert!(w.app.store.adopt_index().await.unwrap());
+    assert!(!w.app.store.adopt_index().await.unwrap(), "only once");
+    let status = w.app.store.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.next.clone(), status.ready_to_promote), (0, None, false));
+
+    // Changing: everyone is indexed under both keys, a few at a time.
+    let changing = w.store_with(common::INDEX_KEY, Some(next)).await;
+    let status = changing.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.waiting_next, status.ready_to_promote), (0, Some(2), false));
+    assert_eq!(changing.rebuild_index(1).await.unwrap(), 1);
+    assert_eq!(changing.rebuild_index(10).await.unwrap(), 1);
+    assert_eq!(changing.rebuild_index(10).await.unwrap(), 0, "nothing left");
+    assert!(changing.index_status().await.unwrap().ready_to_promote);
+    assert!(findable(&changing, common::INDEX_KEY, &ana).await, "lookups still use the current key");
+    assert!(!findable(&changing, next, &ana).await, "and not the next one yet");
+    assert_eq!(changing.retire_index(100).await.unwrap(), 0, "nothing is retired while both are in use");
+
+    // Promoted: only the new key's entries answer, and the old ones go.
+    let promoted = w.store_with(next, None).await;
+    assert!(findable(&promoted, next, &ana).await);
+    let status = promoted.index_status().await.unwrap();
+    assert_eq!((status.waiting_current, status.retired_entries > 0), (0, true));
+    assert!(!findable(&promoted, common::INDEX_KEY, &ana).await, "the old key finds nobody");
+    assert!(promoted.retire_index(100).await.unwrap() > 0);
+    assert_eq!(promoted.index_status().await.unwrap().retired_entries, 0);
+    assert_eq!(
+        w.sql(&format!(
+            "select 1 from index_state where key_id <> '{}'",
+            promoted.index_status().await.unwrap().current
+        ))
+        .await
+        .unwrap(),
+        0
+    );
+
+    // Older entries that are not the current key's are not adopted; everyone is
+    // indexed afresh, and older entries are kept until then.
+    w.sql("update blind_index set key_id = ''").await.unwrap();
+    w.sql("delete from index_state").await.unwrap();
+    assert!(!w.app.store.adopt_index().await.unwrap());
+    assert_eq!(w.app.store.retire_index(100).await.unwrap(), 0, "kept while anyone is waiting");
+    assert_eq!(w.app.store.index_status().await.unwrap().waiting_current, 2);
+    assert_eq!(work::maintain_index(&w.app).await.unwrap(), (2, 0));
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ben).await);
+    assert!(findable(&w.app.store, common::INDEX_KEY, &ana).await);
+    assert_eq!(w.app.store.index_status().await.unwrap().waiting_current, 0);
+    // Erasing a party removes what it was indexed under.
+    w.app.store.reshred(std::slice::from_ref(&ana), Utc::now()).await.unwrap();
+    assert_eq!(w.sql(&format!("select 1 from index_state where party_id = '{}'", ana.0)).await.unwrap(), 0);
+
+    // Only an operator reads the status.
+    let (status, out) = w.get("/v1/admin/index", "operations", "operations").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["waiting_current"], 0);
+    assert_eq!(out["next"], serde_json::Value::Null);
+    let (status, _) = w.get("/v1/admin/index", "staff", "operations").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Whether the store finds a party by its own index entries under `key`.
+async fn findable(store: &ic_customers::store::Store<ic_azure::keywrap::KeyVaultWrapper>, key: &str, who: &PartyId) -> bool {
+    let key = ic_customers::crypto::IndexKey::new(key.as_bytes()).unwrap();
+    let party = store.load(who).await.unwrap().unwrap();
+    let keys: Vec<(&'static str, Vec<u8>)> = ic_customers::matching::party_keys(&party, &key).into_iter().collect();
+    assert!(!keys.is_empty());
+    store.candidates(&keys).await.unwrap().contains(who)
+}
+
+/// Purpose: a person's own hold on their money going out takes effect at once when they
+/// place it in the app (or ask staff to); ending it needs a passed identity check made
+/// after the hold and within a day, then waits out the cooling-off period, during which
+/// they can change their mind; the sweep ends it only once the period has passed; staff
+/// cannot ask for it to end, only legal can lift it, with a reference, and the
+/// service's own ending cannot be sent by anyone. Payments reads where it stands.
+/// Decision 3 in docs/decisions.md, persona row SVC-022.
+/// Why it matters: a customer who knows they are at risk (gambling, a scam in progress,
+/// a bad night) asks for this to protect themselves; if a scammer or a persuasive call
+/// could lift it on the spot it would protect no one.
+#[tokio::test]
+async fn a_customers_own_spending_hold_ends_only_after_cooling_off() {
+    let w = world_or_skip!();
+    let me = w.person("Lin", "Chen", "1979-09-09", &[]).await;
+    let app = |method: &'static str, body: Option<serde_json::Value>| common::Call {
+        method,
+        path: if method == "GET" {
+            format!("/v1/parties/{me}/spending-hold")
+        } else {
+            format!("/v1/parties/{me}/commands")
+        },
+        role: "portal",
+        purpose: Some("self_service"),
+        body,
+        headers: vec![("x-ic-party", me.clone()), ("x-ic-actor", "app-session-1".into())],
+    };
+    let status_of = || async {
+        let (status, out) = w.get(&format!("/v1/parties/{me}/spending-hold"), "payments", "payments").await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        out
+    };
+    assert_eq!(status_of().await["held"], false);
+    let (status, out) = w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["spending_hold_placed"]));
+    let held = status_of().await;
+    assert_eq!((held["held"].clone(), held["removal"].clone()), (json!(true), serde_json::Value::Null));
+    let (status, mine) = w.send(app("GET", None)).await;
+    assert_eq!((status, mine["held"].clone()), (StatusCode::OK, json!(true)), "the person sees their own");
+    // Staff may place it for the person, never end it.
+    let (status, out) = w.command(&me, "staff", json!({ "command": "place_spending_hold" })).await;
+    assert_eq!((status, out["events"].clone()), (StatusCode::OK, json!([])));
+    for (role, command) in [
+        ("staff", json!({ "command": "request_hold_removal", "verification": "ev-1" })),
+        ("staff", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" })),
+        ("migration", json!({ "command": "end_spending_hold" })),
+        ("legal", json!({ "command": "end_spending_hold" })),
+    ] {
+        let (status, _) = w.command(&me, role, command.clone()).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{role} {command}");
+    }
+    // Ending it needs a fresh identity check made after the hold.
+    let remove = |evidence: &str| app("POST", Some(json!({ "command": "request_hold_removal", "verification": evidence })));
+    let (status, out) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{out}");
+    let verify = |evidence: &str, at: chrono::DateTime<Utc>| {
+        json!({ "command": "record_verification", "method": "document_and_selfie", "provider": "idv",
+                "outcome": "passed", "evidence_ref": evidence, "verified_at": at })
+    };
+    let (status, out) = w.command(&me, "identity", verify("ev-old", Utc::now() - chrono::Duration::days(2))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(
+        w.send(remove("ev-old")).await.0,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "too old, and before the hold"
+    );
+    w.command(&me, "identity", verify("ev-1", Utc::now())).await;
+    let (status, out) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let waiting = status_of().await;
+    assert_eq!(waiting["held"], true, "still held while cooling off");
+    let requested: chrono::DateTime<Utc> = serde_json::from_value(waiting["removal"]["requested_at"].clone()).unwrap();
+    let ends: chrono::DateTime<Utc> = serde_json::from_value(waiting["removal"]["ends_at"].clone()).unwrap();
+    assert_eq!(ends - requested, chrono::Duration::days(7));
+    // The person changes their mind, then asks again.
+    let (_, out) = w.send(app("POST", Some(json!({ "command": "cancel_hold_removal" })))).await;
+    assert_eq!(out["events"], json!(["spending_hold_removal_cancelled"]));
+    assert_eq!(status_of().await["removal"], serde_json::Value::Null);
+    let (status, _) = w.send(app("POST", Some(json!({ "command": "cancel_hold_removal" })))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing waiting");
+    w.send(remove("ev-1")).await;
+    // Placing it again while a removal waits cancels the removal.
+    let (_, out) = w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(out["events"], json!(["spending_hold_removal_cancelled"]));
+    w.send(remove("ev-1")).await;
+    // The sweep ends it only once the period has passed.
+    assert_eq!(w.app.store.end_spending_holds(Utc::now() + chrono::Duration::days(6)).await.unwrap(), 0);
+    assert_eq!(status_of().await["held"], true);
+    assert_eq!(w.app.store.end_spending_holds(Utc::now() + chrono::Duration::days(8)).await.unwrap(), 1);
+    assert_eq!(status_of().await["held"], false);
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 0);
+    let (status, _) = w.send(remove("ev-1")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no hold to remove");
+    // Legal lifts it at once, with a reference.
+    w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    let (status, _) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "bad ref!" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, out) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" }))
+        .await;
+    assert_eq!((status, out["events"].clone()), (StatusCode::OK, json!(["spending_hold_ended"])), "{out}");
+    assert_eq!(status_of().await["held"], false);
+    let (status, _) = w
+        .command(&me, "legal", json!({ "command": "override_spending_hold", "reference": "CIV-2026-1" }))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing to lift");
+    // Somebody else's app session cannot read or touch it; documents cannot read it.
+    let (status, _) = w.get(&format!("/v1/parties/{me}/spending-hold"), "documents", "notices").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    // Erasing the person clears anything waiting. A check made before this hold does
+    // not end it.
+    w.send(app("POST", Some(json!({ "command": "place_spending_hold" })))).await;
+    assert_eq!(w.send(remove("ev-1")).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    w.command(&me, "identity", verify("ev-2", Utc::now())).await;
+    assert_eq!(w.send(remove("ev-2")).await.0, StatusCode::OK);
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 1);
+    w.app.store.reshred(&[PartyId(me.clone())], Utc::now()).await.unwrap();
+    assert_eq!(w.sql("select 1 from spending_hold_removals").await.unwrap(), 0);
+}

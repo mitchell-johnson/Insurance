@@ -18,10 +18,11 @@ fn released(payment: &str, payee: &str, amount: i64) -> Waiting {
         payment: payment.to_string(),
         source: format!("claim:clm-1:{payment}"),
         payee: payee.to_string(),
-        account_ref: "acct-ref-9".to_string(),
+        account_ref: String::new(),
         policy: Some(policy("pol-1")),
         claim: None,
         run: None,
+        run_total_minor: None,
         amount_minor: amount,
         payable: Some(PayableKind::Benefit),
     }
@@ -64,7 +65,7 @@ fn claims_event(id: &str, kind: &str, detail: serde_json::Value) -> ic_core::Eve
 fn a_released_claim_payment_waits_then_is_paid_as_released() {
     let mut desk = Desk::new();
     desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
-    let detail = json!({"policy": "pol-1", "account_ref": "acct-ref-9", "payment_ref": "clm-1-pay-1", "amount_minor": "5200000",
+    let detail = json!({"policy": "pol-1", "account_ref": "01-0123-4567", "payment_ref": "clm-1-pay-1", "amount_minor": "5200000",
         "net_minor": "5000000", "payee": "party-p1", "period_end": "", "ex_gratia": "false"});
     let event = claim_paid("3-78", detail);
     // Offered twice by the feed, taken in once, and the clock does not move.
@@ -75,7 +76,7 @@ fn a_released_claim_payment_waits_then_is_paid_as_released() {
     assert_eq!(desk.state.clock, Some(monday()));
     assert_eq!(waiting(&desk), vec!["clm-1-pay-1"]);
     let held = &desk.state.waiting["clm-1-pay-1"];
-    assert_eq!((held.amount_minor, held.account_ref.as_str()), (50_000_00, "acct-ref-9"));
+    assert_eq!((held.amount_minor, held.account_ref.as_str()), (50_000_00, "01-0123-4567"));
 
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     let events = desk.ok(&mia(), take("r1", &["clm-1-pay-1"]));
@@ -532,4 +533,58 @@ fn claims_is_given_a_runs_settled_total_when_all_of_it_is_done() {
         }]
     );
     assert!(desk.state.claims_runs.is_empty());
+}
+
+/// Purpose: when claims states a run's whole amount, the run is confirmed
+/// only once that much has settled: a payment released late, after the
+/// others had all settled, is waited for.
+/// Why it matters: claims reconciles the run against the bank's total; a
+/// confirmation sent before the late payment was even released would mark
+/// the run reconciled while a claimant was unpaid.
+#[test]
+fn a_run_with_its_total_waits_for_a_late_release() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    let paid = |n: u64, payment: &str| {
+        let net = if n == 0 { "10000" } else { "15000" };
+        let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": net, "payee": "p1", "run": "run-7", "run_total_minor": "25000"});
+        react(&claim_paid(&format!("3-{}", 300 + n), detail)).remove(0)
+    };
+    desk.state.apply(9000, paid(0, "run-7/a")).unwrap();
+    desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
+    desk.ok(&mia(), take("r1", &["run-7/a"]));
+    let first = desk.approve("r1");
+    desk.settle(&first, d(2027, 11, 15));
+    let confirmed = |desk: &Desk| desk.state.outbox.values().any(|e| e.key == "claims-run-confirmed-run-7");
+    assert!(!confirmed(&desk), "half the run has not been released yet");
+
+    desk.state.apply(9001, paid(1, "run-7/b")).unwrap();
+    desk.at(t(2027, 11, 16, 9, 0));
+    desk.prepare("r2", RunType::BenefitPayments, d(2027, 11, 16));
+    desk.ok(&mia(), take("r2", &["run-7/b"]));
+    let second = desk.approve("r2");
+    desk.settle(&second, d(2027, 11, 16));
+    assert!(confirmed(&desk));
+}
+
+/// Purpose: a released payment whose verified account is not the account
+/// the chosen payee holds is refused when taken into a run; the payee's ID
+/// or the same number written with spaces or dashes is accepted.
+/// Why it matters: claims verified one account with the claimant; paying a
+/// different one, after a payee record was changed or the wrong payee was
+/// picked, is how a benefit goes to the wrong person.
+#[test]
+fn a_payment_goes_only_to_the_account_that_was_verified() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    let mut other = released("pay-x", "p1", 100_00);
+    other.account_ref = "02-9999-9999".to_string();
+    let mut by_id = released("pay-y", "p1", 100_00);
+    by_id.account_ref = "p1".to_string();
+    for w in [other, by_id] {
+        desk.ok(&svc(), Command::OfferPayment { waiting: Box::new(w) });
+    }
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    assert_eq!(desk.code(&mia(), take("r1", &["pay-x"])), "account_mismatch");
+    desk.ok(&mia(), take("r1", &["pay-y"]));
 }

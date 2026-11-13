@@ -19,6 +19,12 @@ PRODUCT = product(
                 benefit_limit("surgical", per_event = dollars(300000), per_year = dollars(500000), excess = dollars(500)),
             ]),
             rating = per_life("flex-hospital"),
+            # The excess the customer chooses replaces the schedule's.
+            excess_options = [
+                excess_option("nil", dollars(0), premium_factor = "1.20"),
+                excess_option("standard", dollars(500), premium_factor = "1.00"),
+                excess_option("high", dollars(2000), premium_factor = "0.80"),
+            ],
             definitions = ["pre-existing-condition"],
             gst_rate = "0.15",
         ),

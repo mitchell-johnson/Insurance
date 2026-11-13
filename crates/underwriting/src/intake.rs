@@ -50,6 +50,11 @@ impl UnderwritingState {
                 return reject("takeover", "a takeover amount is above zero and a reinsurance reference is not blank");
             }
         }
+        // Collections asks only when the core refused a reinstatement for
+        // want of underwriting's decision.
+        if cx.caller == "collections" && !matches!(open.entry, crate::model::Entry::Reinstatement { .. }) {
+            return reject("entry", "collections opens a proposal only to reinstate a lapsed policy");
+        }
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");

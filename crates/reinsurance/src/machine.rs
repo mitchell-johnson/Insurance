@@ -442,14 +442,15 @@ pub struct Instruction {
 impl Instruction {
     /// The instructions that must reach the core in order: each cover's
     /// cession record is one lane, since a later record replaces an earlier
-    /// one from its date; money on a partition is another. A refusal holds
-    /// only its own lane.
+    /// one from its date; money on a partition for one treaty and reinsurer
+    /// is another, since that is the account it moves and a sweep must
+    /// follow the postings it sweeps. A refusal holds only its own lane.
     pub fn lane(&self) -> String {
         match &self.body {
             InstructionBody::RecordCession { key, .. } => format!("cover:{key}"),
-            InstructionBody::Post { .. } | InstructionBody::Sweep { .. } | InstructionBody::ClearSettlement { .. } => {
-                format!("money:{}", self.partition)
-            }
+            InstructionBody::Post { treaty, reinsurer, .. }
+            | InstructionBody::Sweep { treaty, reinsurer, .. }
+            | InstructionBody::ClearSettlement { treaty, reinsurer, .. } => format!("money:{}:{treaty}:{reinsurer}", self.partition),
         }
     }
 }

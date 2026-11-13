@@ -298,9 +298,12 @@ def write_coverage(personas, stories, tests, story_tests, persona_tests, situati
 
     add("## Design gaps the personas expose")
     add("")
-    for sid, s in stories.items():
-        if s["gap"]:
-            add(f"- {sid} ({s['persona']} {personas[s['persona']]}): tests {', '.join(story_tests[sid])}")
+    gaps = [sid for sid, s in stories.items() if s["gap"]]
+    for sid in gaps:
+        s = stories[sid]
+        add(f"- {sid} ({s['persona']} {personas[s['persona']]}): tests {', '.join(story_tests[sid])}")
+    if not gaps:
+        add("None open. Decided gaps are recorded in `docs/decisions.md`.")
     add("")
 
     add("## Situations")
