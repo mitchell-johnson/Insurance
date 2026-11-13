@@ -134,6 +134,11 @@ pub enum Command {
     ApproveRequest {
         id: String,
         signed: bool,
+        /// Set by the gateway from the customer master's routing answer for
+        /// the person approving. A request someone prepared for a customer
+        /// is routed as that customer's once they approve it.
+        #[serde(default)]
+        route_to_person: bool,
     },
     CancelRequest {
         id: String,
@@ -794,7 +799,7 @@ impl ChannelState {
                     self.refresh(&policy, on, None, &mut effects);
                 }
             }
-            Command::ApproveRequest { id, signed } => {
+            Command::ApproveRequest { id, signed, route_to_person } => {
                 let Actor::Party(party) = &actor else {
                     return Err(reject("forbidden", "an approval comes from a person"));
                 };
@@ -820,6 +825,11 @@ impl ChannelState {
                     r.status = RequestStatus::Pending;
                     r.approved_by = Some(party.clone());
                     r.signed = signed;
+                    // The customer's own circumstances decide how it is handled;
+                    // a second administrator's do not, the scheme is the employer's.
+                    if from == Approver::Customer {
+                        r.route_to_person |= route_to_person;
+                    }
                 }
                 effects.push(Effect::RequestReady { id, module });
                 self.refresh(&policy, on, None, &mut effects);
