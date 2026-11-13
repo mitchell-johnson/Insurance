@@ -29,7 +29,7 @@ Design: Policy servicing.
 | SVC-019 | US-P07-2 | P7 | Assisted change at a counter | Same quote, same typed command and same refusal rules as the app | J | C | 2 |
 | SVC-020 | US-B13-1 | B13, P30 | Key person policy cancelled on sale of the business | Unearned premium refunded. Lender's interest released by discharge first | J | C | 3 |
 | SVC-021 | US-P06-3 | P6, P50 | Payout account changed to a new account | Signed step, payee name check and cooling-off before the first payment | J | C | 1 |
-| SVC-022 | US-P52-1 | P52 | Customer asks for a self-set hold on refunds with a cooling-off on removal | **Design gap.** Held open until the design says whether this exists | N | C | 3 |
+| SVC-022 | US-P52-1 | P52 | Customer asks for a self-set hold on refunds with a cooling-off on removal | Hold on refunds, surrenders, withdrawals, loans and payout changes takes effect at once. Removal needs fresh verification and waits 7 days, cancellable. Staff cannot lift it (decision 3) | N | C | 3 |
 | SVC-023 | US-P02-2 | P2 | Conversion to another product | New policy linked to the old. Terms, waiting periods served, commission and reinsurance carry by their rules | J | C | 3 |
 | SVC-024 | US-ST15-1 | ST15, ST12 | Rate table change for in-force business | Applies from each policy's next anniversary with the product's notice period | J | C | 2 |
 | SVC-025 | US-P34-1 | P34 | Cancels and takes a new policy elsewhere, then returns | Replacement monitoring flags a new policy soon after a cancellation on the same life | J | C | 3 |

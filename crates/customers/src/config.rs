@@ -31,8 +31,11 @@ pub struct Config {
     pub key_vault: String,
     /// The key-encryption key's name.
     pub kek: String,
-    /// The blind index key. Never changes.
+    /// The blind index key lookups use.
     pub index_key: String,
+    /// The key being changed to: entries are built under it beside the
+    /// current ones until it can be promoted (`docs/customers.md`).
+    pub next_index_key: Option<String>,
     pub tenant: String,
     pub audience: String,
     pub authority: String,
@@ -95,6 +98,19 @@ impl Config {
         if index_key.len() < 32 {
             return Err("IC_CUSTOMERS_INDEX_KEY must be at least 32 characters".into());
         }
+        let next_index_key = match (get("IC_CUSTOMERS_NEXT_INDEX_KEY"), get("IC_CUSTOMERS_NEXT_INDEX_KEY_FILE")) {
+            (Some(v), _) => Some(v),
+            (None, Some(path)) => Some(
+                read(&path)
+                    .map_err(|e| format!("IC_CUSTOMERS_NEXT_INDEX_KEY_FILE cannot be read: {e}"))?
+                    .trim()
+                    .to_string(),
+            ),
+            (None, None) => None,
+        };
+        if next_index_key.as_ref().is_some_and(|k| k.len() < 32 || *k == index_key) {
+            return Err("IC_CUSTOMERS_NEXT_INDEX_KEY must be at least 32 characters and differ from the current key".into());
+        }
         let database = match get("IC_CUSTOMERS_DATABASE_URL") {
             Some(url) => Database::Local(url),
             None => Database::Azure {
@@ -117,6 +133,7 @@ impl Config {
             key_vault: need("IC_CUSTOMERS_KEY_VAULT")?,
             kek: get("IC_CUSTOMERS_KEK").unwrap_or_else(|| "customers-kek".into()),
             index_key,
+            next_index_key,
             tenant: need("IC_CUSTOMERS_TENANT")?,
             audience: need("IC_CUSTOMERS_AUDIENCE")?,
             authority: get("IC_CUSTOMERS_AUTHORITY").unwrap_or_else(|| ENTRA_AUTHORITY.into()),
@@ -213,6 +230,29 @@ mod tests {
         let cluster = load(&env).unwrap().cluster.unwrap();
         assert_eq!(cluster.nodes, "ic-node-1.ic-node:7000");
         assert!(cluster.auth.is_open());
+    }
+
+    /// Purpose: a next index key is optional; when given (directly or from a file) it is
+    /// loaded beside the current one, and one that is short, unreadable or the same as the
+    /// current key stops the service at start.
+    /// Why it matters: changing the index key builds every entry again under the next key;
+    /// a wrong next key found only after that would waste the rebuild or lose lookups.
+    #[test]
+    fn a_next_index_key_is_checked_at_start() {
+        assert_eq!(load(&base()).unwrap().next_index_key, None);
+        let mut env = base();
+        env.insert("IC_CUSTOMERS_NEXT_INDEX_KEY", "n".repeat(40));
+        assert_eq!(load(&env).unwrap().next_index_key, Some("n".repeat(40)));
+        env.insert("IC_CUSTOMERS_NEXT_INDEX_KEY", "k".repeat(40));
+        assert!(load(&env).unwrap_err().contains("differ"));
+        env.insert("IC_CUSTOMERS_NEXT_INDEX_KEY", "short".into());
+        assert!(load(&env).unwrap_err().contains("at least 32"));
+        let mut env = base();
+        env.insert("IC_CUSTOMERS_NEXT_INDEX_KEY_FILE", "/mnt/secrets/customers-index-key".into());
+        assert!(load(&env).unwrap_err().contains("differ"), "the same file as the current key");
+        env.insert("IC_CUSTOMERS_NEXT_INDEX_KEY_FILE", "/elsewhere".into());
+        assert!(load(&env).unwrap_err().contains("IC_CUSTOMERS_NEXT_INDEX_KEY_FILE cannot be read"));
+        assert!(!format!("{:?}", load(&base()).unwrap()).contains("nnnn"));
     }
 
     /// Purpose: missing settings, a short or unreadable index key and bad numbers stop the

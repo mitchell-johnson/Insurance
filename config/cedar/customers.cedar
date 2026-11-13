@@ -188,7 +188,11 @@ when {
 permit(principal == Service::"identity", action == Action::"record_verification", resource is Command);
 
 permit(principal == Service::"legal", action, resource is Command)
-when { [Action::"place_hold", Action::"release_hold"].contains(action) };
+when { [Action::"place_hold", Action::"release_hold", Action::"question_capacity", Action::"settle_capacity"].contains(action) };
+
+// Staff, claims and servicing can put capacity in question; only legal settles it.
+permit(principal, action == Action::"question_capacity", resource is Command)
+when { [Service::"staff", Service::"claims", Service::"policy-servicing"].contains(principal) };
 
 // A person changing their own contact details and consents in the app.
 permit(principal == Service::"portal", action, resource is Command)
