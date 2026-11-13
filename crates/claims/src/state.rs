@@ -216,6 +216,24 @@ impl Cx<'_> {
         self.notify("claim_paid", &claim.id, &detail);
     }
 
+    /// A step in the claim's life that finance reports on: the detail also
+    /// carries the cause category, the top segment of the first tag of the
+    /// claim's cause code, left out while no known cause is recorded.
+    pub(crate) fn lifecycle(&mut self, rules: &Rules, kind: &str, claim: &Claim, detail: &[(&str, String)]) {
+        let category = claim
+            .cause_code
+            .as_ref()
+            .and_then(|c| rules.cause_codes.get(c))
+            .and_then(|tags| tags.first())
+            .and_then(|t| t.split('.').next())
+            .filter(|t| !t.is_empty());
+        let mut all: BTreeMap<String, String> = detail.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+        if let Some(c) = category {
+            all.insert("cause_category".into(), c.to_string());
+        }
+        self.core.notify(kind, &claim.id, all);
+    }
+
     pub fn notify(&mut self, kind: &str, claim: &str, detail: &[(&str, String)]) {
         self.core.notify(kind, claim, detail.iter().map(|(k, v)| (k.to_string(), v.clone())).collect());
     }

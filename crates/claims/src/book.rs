@@ -496,7 +496,7 @@ impl ClaimsState {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         self.commit(claim);
         Ok(())
@@ -565,7 +565,7 @@ impl ClaimsState {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         self.commit(claim);
         Ok(())
@@ -637,7 +637,7 @@ impl ClaimsState {
             claim.status = Status::Paid;
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", id, &[("outcome", "paid".into())]);
+            cx.lifecycle(&self.rules, "claim_closed", &claim, &[("outcome", "paid".into())]);
         }
         claim.payments.push(Payment {
             payment_ref: payment_ref.clone(),
@@ -1115,7 +1115,7 @@ impl ClaimsState {
         if closed {
             claim.closed_on = Some(cx.today);
             claim.due.clear();
-            cx.notify("claim_closed", &claim.id, &[("outcome", claim.status.code().to_string())]);
+            cx.lifecycle(&self.rules, "claim_closed", claim, &[("outcome", claim.status.code().to_string())]);
         }
         Ok(())
     }
