@@ -439,3 +439,83 @@ async fn evidence_and_delegate_files_are_sealed_before_the_module_hears_of_them(
     assert_eq!(sent.caller, "delegate-api");
     assert!(matches!(sent.command, Command::DelegateFileReceived { ref vault_ref, .. } if vault_ref.starts_with("clinical://PTY-L1/delegate_file/")));
 }
+
+/// Purpose: a quality sample of a delegate's decision from end to end. The delegate decides a
+/// life inside its authority; an underwriter calls for the file under the audit access the
+/// agreement gives, which the module logs (who, why) before asking the delegate; the delegate's
+/// file arrives through the intake, is sealed under the life's own name, and the module records
+/// where it is and its hash.
+/// Why it matters: the insurer stays responsible for decisions made in its name. Sampling them
+/// needs the file, and the file is health information: the request must be on the record before
+/// anyone sees it, and on arrival it must be held like the insurer's own disclosures, so it can
+/// be erased with the person's other records.
+#[tokio::test]
+async fn a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key() {
+    use ic_underwriting::command::{DelegatedDecision, Effect, Event};
+    use ic_underwriting::config::DelegatedAuthority;
+    use ic_underwriting::evidence::EvidenceKind;
+    let authority = tenant().await;
+    let (intake, module, _) = intake();
+    {
+        let mut w = module.0.lock().unwrap();
+        w.ok(
+            "config",
+            Command::ActivateDelegatedAuthority {
+                authority: Box::new(DelegatedAuthority {
+                    id: "acme".into(),
+                    version: 1,
+                    delegate: "acme-tpa".into(),
+                    products: ["term-life".to_string()].into(),
+                    per_life_minor: [("life".to_string(), 300_000_00)].into(),
+                    aggregate_minor: 500_000_00,
+                    max_loading_percent: 50,
+                    may_exclude: false,
+                    may_decline: true,
+                    rule_set: Some(("individual".into(), 1)),
+                    effective_from: d(2026, 1, 1),
+                    effective_to: None,
+                    reinsurer_agreement_ref: Some("RE-1".into()),
+                }),
+                approval: approval(),
+            },
+        );
+        w.open("P2", 200_000_00);
+        let decided = w.ok(
+            "delegate-api",
+            Command::DelegatedDecision(Box::new(DelegatedDecision {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                authority: "acme".into(),
+                terms: vec![standard("life")],
+                effective: d(2026, 11, 10),
+                rule_version: Some(1),
+                evidence: BTreeSet::from([EvidenceKind::GpReport]),
+                decided_by: "tpa-underwriter-4".into(),
+                delegate_ref: "REF-9".into(),
+                consent_ref: "CONS-1".into(),
+            })),
+        );
+        assert!(matches!(decided.view, Some(ic_underwriting::command::View::Delegated { accepted: true, .. })));
+        let asked = w.ok(
+            "underwriting-console",
+            Command::RequestDelegateFile {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                underwriter: "sam".into(),
+                purpose: "quality sampling".into(),
+            },
+        );
+        assert!(matches!(&asked.events[0], Event::FileAccessed { who, purpose, .. } if who == "sam" && purpose == "quality sampling"));
+        assert!(matches!(&asked.effects[0], Effect::RequestDelegateFile { delegate_ref, .. } if delegate_ref == "REF-9"));
+    }
+
+    let app = router(intake, Auth::entra_at(&authority, TENANT, AUDIENCE));
+    let file = json!({"proposal": "P2", "life": "L1", "file": STANDARD.encode(b"the delegate's underwriting file")});
+    let (status, filed) = call(&app, "/v1/delegate-files", Some(&token(&authority, &["delegate-api"])), &file).await;
+    assert_eq!(status, StatusCode::OK, "{filed}");
+    let vault_ref = filed["vault_ref"].as_str().unwrap();
+    assert!(vault_ref.starts_with("clinical://PTY-L1/delegate_file/"), "{vault_ref}");
+    let w = module.0.lock().unwrap();
+    let held = w.p("P2").lives[&"L1".into()].delegate_file.clone().unwrap();
+    assert_eq!((held.0.as_str(), held.1.as_str()), (vault_ref, filed["hash"].as_str().unwrap()));
+}
