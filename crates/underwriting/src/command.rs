@@ -579,9 +579,11 @@ impl Command {
             OpenProposal(_) => &["new-business", "migration", "group-admin", "collections"],
             SubmitDisclosure(_) => &["new-business", "migration"],
             Withdraw { .. } => &["new-business", "group-admin"],
-            RecordConsent { .. } | PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => {
-                &["new-business"]
-            }
+            // The life gives or withdraws its own consents in the app; the
+            // portal checks the signed-in person is the life, and a consent
+            // that needs the life's signed step is checked here either way.
+            RecordConsent { .. } => &["new-business", "customer-app"],
+            PrefillExistingCover { .. } | RespondToOffer { .. } | Chaser { .. } | Requote { .. } | ConfirmInterview(_) => &["new-business"],
             AdviserLookup { .. } => &["adviser-portal"],
             EvidenceAcknowledged { .. } | EvidenceReceived { .. } | EvidenceUnobtainable { .. } => &["evidence", "migration"],
             ScheduleInterview { .. } => &["new-business", "underwriting-console"],

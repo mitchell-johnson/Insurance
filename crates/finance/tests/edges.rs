@@ -314,6 +314,16 @@ fn commands_are_refused_from_the_wrong_service_or_before_setup() {
             },
         ),
         ("feed", FinCommand::SignActuarialJournal { id: "x".to_string() }),
+        ("feed", FinCommand::ClassifyPolicies),
+        (
+            "feed",
+            FinCommand::RecordCutoverTotal {
+                account: "x".to_string(),
+                unit: BalanceFamily::Currency(NZD),
+                total: 0,
+                evidence: "x".to_string(),
+            },
+        ),
         (
             "feed",
             FinCommand::ProposeYearEndClose {
@@ -410,7 +420,11 @@ fn commands_are_refused_from_the_wrong_service_or_before_setup() {
 /// later in the same month. March's check is green: that is the cutover. In April a
 /// further load of 5.00 and its reversal reach the account; the balance is back where it
 /// was, and April's check is red all the same, naming the account, the month it was
-/// loaded in and the 10.00 that passed through. May, with nothing, is green. An account
+/// loaded in and the 10.00 that passed through. March itself is red until the finance
+/// lead records the old system's total and it agrees with the 1,000.00 held: an operator
+/// may not record it, nor may anyone without saying where it comes from or for an
+/// account that is not a migration control account, and a figure that differs is named
+/// beside the balance. Once March is closed the figure can no longer be replaced. May, with nothing, is green. An account
 /// the configuration names that the chart does not have is reported, not ignored.
 /// Why it matters: the control account's balance is agreed with the old system once, at
 /// cutover. Anything through it afterwards is a record loaded or backed out behind that
@@ -446,7 +460,41 @@ fn a_migration_control_account_must_stay_still_after_cutover() {
     b.feed(&s.events).unwrap();
 
     let check = "migration_control";
-    assert_eq!(status(&b, period(2028, 3), check), CheckStatus::Green);
+    let march = period(2028, 3);
+    let held = 1_000_00 * FINE_PER_MINOR;
+    let red = |b: &Books, p| match status(b, p, check) {
+        CheckStatus::Red { items } => items,
+        other => panic!("{other:?}"),
+    };
+    // Nothing to agree the load with yet.
+    let items = red(&b, march);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(
+        items[0].contains(&format!("holds {held} ")) && items[0].contains("no total from the old system"),
+        "{items:?}"
+    );
+    let record = |total: i128, evidence: &str| FinCommand::RecordCutoverTotal {
+        account: "1430".to_string(),
+        unit: BalanceFamily::Currency(NZD),
+        total,
+        evidence: evidence.to_string(),
+    };
+    assert_eq!(b.console_code("olive", record(held, "old claims system, run 42")), "authority");
+    assert_eq!(b.console_code("lena", record(held, " ")), "cutover_total");
+    let mut other = record(held, "x");
+    if let FinCommand::RecordCutoverTotal { account, .. } = &mut other {
+        *account = "2200".to_string();
+    }
+    assert_eq!(b.console_code("lena", other), "cutover_total");
+    b.console("lena", record(held - 1, "old claims system, run 41")).unwrap();
+    let items = red(&b, march);
+    assert!(
+        items[0].contains(&format!("the old system's total is {} (old claims system, run 41)", held - 1)),
+        "{items:?}"
+    );
+    b.console("lena", record(held, "old claims system, run 42")).unwrap();
+    assert_eq!(status(&b, march, check), CheckStatus::Green);
+    assert!(format!("{:?}", b.applied.last().unwrap().events).contains("CutoverTotalRecorded"));
     let CheckStatus::Red { items } = status(&b, period(2028, 4), check) else {
         panic!("a load after cutover was not noticed")
     };
@@ -469,6 +517,17 @@ fn a_migration_control_account_must_stay_still_after_cutover() {
         panic!("an account that is not in the chart was ignored")
     };
     assert_eq!(items, ["migration control account 1499 is not in the chart"]);
+    // Once the month it was loaded in is closed, the agreement stands.
+    b.state.periods.get_mut(&march).unwrap().closed = Some(ic_finance::close::ClosedPeriod {
+        final_seq: 0,
+        final_head: Hash32::ZERO,
+        trial_balance: vec![],
+        trial_balance_hash: Hash32::ZERO,
+        by: None,
+        index: 0,
+    });
+    let refused = b.console("lena", record(held + 1, "late")).unwrap_err();
+    assert!(refused.message.contains("loaded in 2028-03, which is closed"), "{refused:?}");
 }
 
 /// Purpose: the core activates version 3 of a rate table on 28 March and version 4 on 10

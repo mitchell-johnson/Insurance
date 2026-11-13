@@ -547,9 +547,12 @@ impl FinanceState {
                 continue;
             };
             let through = || self.turnover.iter().filter(|((_, account, _), amount)| account == code && **amount != 0);
-            let Some(cutover) = through().map(|((p, _, _), _)| *p).min() else {
+            let Some(cutover) = self.cutover_period(code) else {
                 continue;
             };
+            if period == cutover {
+                items.extend(self.cutover_differences(code, &account.name, cutover));
+            }
             if period <= cutover {
                 continue;
             }
@@ -561,6 +564,44 @@ impl FinanceState {
             }
         }
         items
+    }
+
+    /// The first period anything was posted through an account.
+    pub(crate) fn cutover_period(&self, code: &str) -> Option<PeriodId> {
+        self.turnover
+            .iter()
+            .filter(|((_, account, _), amount)| account == code && **amount != 0)
+            .map(|((p, _, _), _)| *p)
+            .min()
+    }
+
+    /// The account's balance at the end of its cutover period against the
+    /// old system's figure, in every unit that moved or has a figure.
+    fn cutover_differences(&self, code: &str, name: &str, cutover: PeriodId) -> Vec<String> {
+        let mut held: std::collections::BTreeMap<ic_ledger::BalanceFamily, i128> = Default::default();
+        for (_, _, unit) in self.turnover.keys().filter(|(p, account, _)| account == code && *p == cutover) {
+            held.entry(unit.clone()).or_insert(0);
+        }
+        for row in self.trial_balance(cutover, None).into_iter().filter(|r| r.account == code) {
+            *held.entry(row.unit).or_insert(0) += row.balance;
+        }
+        for (account, unit) in self.cutover_totals.keys() {
+            if account == code {
+                held.entry(unit.clone()).or_insert(0);
+            }
+        }
+        held.into_iter()
+            .filter_map(|(unit, balance)| match self.cutover_totals.get(&(code.to_string(), unit.clone())) {
+                None => Some(format!(
+                    "{code} {name} holds {balance} in {unit:?} at the end of {cutover}, when it was loaded, and no total from the old system is recorded to agree it with"
+                )),
+                Some(old) if old.total != balance => Some(format!(
+                    "{code} {name} holds {balance} in {unit:?} at the end of {cutover}; the old system's total is {} ({})",
+                    old.total, old.evidence
+                )),
+                Some(_) => None,
+            })
+            .collect()
     }
 
     /// Every rate table version activated by the end of the period with no

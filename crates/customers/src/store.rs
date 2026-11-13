@@ -65,7 +65,18 @@ pub struct Who {
     pub actor: String,
 }
 
-/// What a command did.
+/// A change to a person's own hold, waiting to be told to the core.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnerHoldNotice {
+    pub row: i64,
+    pub party: PartyId,
+    pub policy: String,
+    pub held: bool,
+    pub reference: String,
+    pub recorded_at: DateTime<Utc>,
+    pub attempts: i32,
+}
+
 /// A death, or its retraction, waiting to be told to claims.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeathNotice {
@@ -75,6 +86,7 @@ pub struct DeathNotice {
     pub attempts: i32,
 }
 
+/// What a command did.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Outcome {
     pub party: PartyId,
@@ -836,7 +848,17 @@ impl<W: KeyWrapper> Store<W> {
         }
         // The date a retraction withdraws is the one recorded before it.
         let died_on = loaded.party.current(Field::DateOfDeath, now);
+        let held_before = loaded.party.spending_hold.is_some();
         let written = self.append(&tx, &mut loaded, bodies, who, now).await?;
+        // The core hears of the person's own hold, policy by policy.
+        for h in crate::relay::owner_hold_changes(&loaded.party, &written, held_before, now.date_naive()) {
+            tx.execute(
+                "insert into owner_hold_relay (party_id, policy, held, reference, due_on, recorded_at) values ($1, $2, $3, $4, $5, $6)",
+                &[&id.0, &h.policy, &h.held, &h.reference, &h.due_on, &now],
+            )
+            .await
+            .map_err(db)?;
+        }
         // Claims is told of every death and every retraction, whoever
         // recorded it, in the order they happened.
         let died = written.iter().any(|r| matches!(r.body, EventBody::Deceased { .. }));
@@ -1213,6 +1235,49 @@ impl<W: KeyWrapper> Store<W> {
         Ok(rows.iter().map(|r| (r.get(0), PartyId(r.get(1)), r.get(2), r.get(3))).collect())
     }
 
+    /// Hold changes due by `today`, in order.
+    pub async fn owner_holds_to_relay(&self, today: NaiveDate, limit: i64) -> Result<Vec<OwnerHoldNotice>> {
+        let client = self.client().await?;
+        let rows = client
+            .query(
+                "select id, party_id, policy, held, reference, recorded_at, attempts from owner_hold_relay \
+                 where due_on <= $1 order by id limit $2",
+                &[&today, &limit],
+            )
+            .await
+            .map_err(db)?;
+        Ok(rows
+            .iter()
+            .map(|r| OwnerHoldNotice {
+                row: r.get(0),
+                party: PartyId(r.get(1)),
+                policy: r.get(2),
+                held: r.get(3),
+                reference: r.get(4),
+                recorded_at: r.get(5),
+                attempts: r.get(6),
+            })
+            .collect())
+    }
+
+    /// A hold change told, given up, or failed with the reason.
+    pub async fn owner_hold_done(&self, row: i64, failed: Option<&str>) -> Result<()> {
+        let client = self.client().await?;
+        match failed {
+            None => client.execute("delete from owner_hold_relay where id = $1", &[&row]).await,
+            Some(e) => {
+                client
+                    .execute(
+                        "update owner_hold_relay set attempts = attempts + 1, last_error = $2 where id = $1",
+                        &[&row, &e],
+                    )
+                    .await
+            }
+        }
+        .map_err(db)?;
+        Ok(())
+    }
+
     /// A directory command accepted, or failed with the reason.
     pub async fn directory_done(&self, row: i64, failed: Option<&str>) -> Result<()> {
         let client = self.client().await?;
@@ -1450,6 +1515,7 @@ impl<W: KeyWrapper> Store<W> {
             "delete from blind_index where party_id = $1",
             "delete from index_state where party_id = $1",
             "delete from spending_hold_removals where party_id = $1",
+            "delete from owner_hold_relay where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
             "update parties set shredded_at = $2 where id = $1",
