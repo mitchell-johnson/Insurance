@@ -429,7 +429,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
-| VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
+| VUL-002 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person`<br>`channels/tests/http.rs::staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why` |
 | VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
