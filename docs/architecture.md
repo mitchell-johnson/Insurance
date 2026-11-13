@@ -375,7 +375,7 @@ The one place the insurer knows who a person or organisation is. The core and ev
 
 **Not built yet.**
 
-- Marker review dates (VUL-017) are built: `marker_reviews` holds only the date, and each sweep opens one `consider_marker` prompt (reason `review_date`). The outcome screen (renew, change, remove) is the portal's. Bereavement prompts on a joint policy (VUL-015) need claims or the death relay to open a `consider_marker` prompt for the surviving owner.
+- Marker review dates (VUL-017) are built: `marker_reviews` holds only the date, and each sweep opens one `consider_marker` prompt (reason `review_date`). The outcome screen (renew, change, remove) is the portal's. A death opens a `consider_marker` prompt (reason `bereavement`) for the other owners of a policy the person owned and a recorded partner (VUL-015).
 - Locking the erasure register's immutability policy in prod: a deliberate, irreversible step for a person once the retention period (default 10 years) is agreed.
 - Group schemes now sends `mobile_phone` (optional column, +64 form). Its test against the real service (`crates/group/tests/driver.rs`) expects a mobile with matching given name and birth date but a different family name to score 55 (possible, not linked); changing the weights or the 80/40 bands in `matching.rs` means changing that test too.
 - Retention periods in `retention.rs` (7 years for most classes, 5 for verification evidence, 2 for prospects) were confirmed by Mitchell on 13 Nov 2026.
