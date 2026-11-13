@@ -893,3 +893,61 @@ fn a_members_letter_is_a_command_the_documents_module_accepts() {
     );
     assert!(letter_answer(&serde_json::json!({"Ok": null})).is_err());
 }
+
+/// Purpose: a leaver's underwritten cover goes to underwriting in the shape agreed with that
+/// thread on 13 Nov 2026: an `open_proposal` from `group-admin` named `grp-cont:{scheme}:{offer}`,
+/// entry `group_continuation` with the continuation policy, the scheme policy and life, the
+/// policy's inception and the earlier proposals, and one cover of the amount above the
+/// automatic part; and underwriting's `proposal_ended` for it is read back as the outcome.
+/// Why it matters: underwriting holds the terms, so this message is the only way the cover
+/// carries on. A shape it could not read would leave every such leaver on the automatic
+/// amount without anyone knowing.
+#[test]
+fn a_continued_cover_is_the_proposal_underwriting_agreed() {
+    use ic_group::adapters::{continuation_answer, continuation_envelope};
+    let day = chrono::NaiveDate::from_ymd_opt(2027, 12, 1).unwrap();
+    let request = ic_group::event::ContinuationExcess {
+        key: "grp-cont:harbour:7".into(),
+        policy: ic_core::PolicyId("pol-cont-7".into()),
+        group: ic_core::GroupId("grp-cont-7".into()),
+        party: ic_core::PartyId("party-E004".into()),
+        product_code: "term-life".into(),
+        cover: "life".into(),
+        date_of_birth: Some(chrono::NaiveDate::from_ymd_opt(1980, 5, 1).unwrap()),
+        sex: Some(ic_product::Sex::Female),
+        smoker: Some(false),
+        amount_minor: 150_000_00,
+        inception: day,
+        scheme_policy: ic_core::PolicyId("pol-1".into()),
+        scheme_life: ic_core::LifeId("E004".into()),
+        earlier: vec!["grp-uw:harbour:1".into()],
+    };
+    let at = chrono::DateTime::parse_from_rfc3339("2027-12-10T09:00:00Z").unwrap().to_utc();
+    let v = continuation_envelope(at, day, &request);
+    assert_eq!((v["key"].as_str(), v["caller"].as_str()), (Some("grp-cont:harbour:7"), Some("group-admin")));
+    let p = &v["command"]["open_proposal"];
+    assert_eq!(p["proposal"], "grp-cont:harbour:7");
+    assert_eq!(p["entry"]["entry"], "group_continuation");
+    assert_eq!(p["entry"]["policy"], "pol-cont-7");
+    assert_eq!(p["entry"]["scheme_policy"], "pol-1");
+    assert_eq!(p["entry"]["scheme_life"], "E004");
+    assert_eq!(p["entry"]["inception"], "2027-12-01");
+    assert_eq!(p["entry"]["earlier"][0], "grp-uw:harbour:1");
+    assert_eq!(
+        (p["policy"].as_str(), p["policyholder"].as_str(), p["channel"].as_str()),
+        (Some("pol-cont-7"), Some("party-E004"), Some("group-continuation"))
+    );
+    assert_eq!(p["lives"][0]["life"], "L1");
+    assert_eq!(
+        (p["covers"][0]["code"].as_str(), p["covers"][0]["sum_insured_minor"].as_i64()),
+        (Some("life"), Some(150_000_00))
+    );
+
+    let ended = |entry: &str, proposal: &str| serde_json::json!({"proposal_ended": {"key": "eff-9", "proposal": proposal, "entry": {"entry": entry}, "outcome": "issued"}});
+    assert_eq!(
+        continuation_answer(&ended("group_continuation", "grp-cont:harbour:7")),
+        Some(("eff-9".into(), "harbour".into(), 7, "issued".into()))
+    );
+    assert_eq!(continuation_answer(&ended("group_excess", "grp-cont:harbour:7")), None);
+    assert_eq!(continuation_answer(&ended("group_continuation", "grp-uw:harbour:7")), None);
+}

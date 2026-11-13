@@ -91,6 +91,28 @@ pub enum ExceptionKind {
     LetterNotRequested,
 }
 
+/// A leaver's underwritten cover as underwriting's `group_continuation`
+/// proposal: a layer on the continuation policy, on the earlier terms.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContinuationExcess {
+    /// `grp-cont:{scheme}:{offer}`: the proposal's name and key there.
+    pub key: String,
+    pub policy: PolicyId,
+    pub group: GroupId,
+    pub party: PartyId,
+    pub product_code: String,
+    pub cover: String,
+    pub date_of_birth: Option<NaiveDate>,
+    pub sex: Option<Sex>,
+    pub smoker: Option<bool>,
+    pub amount_minor: i64,
+    /// The continuation policy's first day, which the layer starts from.
+    pub inception: NaiveDate,
+    pub scheme_policy: PolicyId,
+    pub scheme_life: LifeId,
+    pub earlier: Vec<String>,
+}
+
 /// A letter the documents module issues to a member: its `request_letter`
 /// with the facts, never wording. Kinds are the documents module's
 /// (`absence_started`, `absence_limit_reached`).
@@ -306,6 +328,13 @@ pub enum GroupEvent {
         new_policy: PolicyId,
         new_group: GroupId,
     },
+    /// Underwriting decided on the underwritten part of a continuation:
+    /// `issued`, or the outcome that ended it.
+    ContinuedExcessDecided {
+        scheme: String,
+        offer: u64,
+        outcome: String,
+    },
     ContinuationRefused {
         scheme: String,
         offer: u64,
@@ -453,6 +482,9 @@ pub enum Outbound {
         key: String,
         request: UnderwritingRequest,
     },
+    /// Ask underwriting to continue a leaver's underwritten cover on the
+    /// continuation policy, on the terms it accepted before.
+    ContinueExcess(ContinuationExcess),
     /// A request no longer wanted: the member left, or the cover fell back
     /// under the automatic amount, before underwriting answered.
     WithdrawUnderwriting {

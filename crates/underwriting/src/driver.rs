@@ -636,13 +636,28 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             Effect::ApplyTerms {
                 key,
                 proposal,
-                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. }),
+                entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. } | Entry::GroupContinuation { .. }),
                 policy,
                 covers,
+                effective,
                 ..
             } => {
-                let increase = matches!(entry, Entry::Increase { .. });
-                let what = if increase { "increase" } else { "alteration" };
+                let increase = !matches!(entry, Entry::Alteration { .. });
+                let what = match entry {
+                    Entry::Increase { .. } => "increase",
+                    Entry::GroupContinuation { .. } => "continuation",
+                    _ => "alteration",
+                };
+                // A continued amount covers the leaver from the continuation's inception.
+                // The core starts an added layer on its business date, so one taken up
+                // later waits here rather than leave a gap.
+                if let Entry::GroupContinuation { inception, .. } = entry {
+                    if inception < effective {
+                        return Ok(Step::Park(format!(
+                            "the continued cover must start on {inception}, and the core cannot yet start a layer before its business date"
+                        )));
+                    }
+                }
                 let Some(held) = self.proposal(proposal).await? else {
                     return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
                 };
@@ -823,6 +838,11 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 let outcome = answer.refused.map_or(Ok(Vec::new()), |r| Err(r.code));
                 self.issue_answer(key, proposal, outcome).await?
             }
+            // Group administration reads a continuation's end from the outbox itself.
+            Effect::ProposalEnded {
+                entry: Entry::GroupContinuation { .. },
+                ..
+            } => Step::Delivered,
             Effect::ProposalEnded { .. } => Step::Park("policy servicing is not connected to underwriting".to_string()),
             Effect::NonDisclosureRemedy {
                 key,

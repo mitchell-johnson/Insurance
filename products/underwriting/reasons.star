@@ -59,6 +59,7 @@ REASONS = reason_library(
         reason("RC-0961", "source", False, ""),
         reason("RC-0970", "source", True, "Decision made under your scheme's underwriting arrangement."),
         reason("RC-0971", "source", False, ""),
+        reason("RC-0976", "source", True, "Cover you held under your employer's scheme, continued on the terms it was accepted on."),
         reason("RC-0975", "source", True, "Cover your previous insurer accepted, carried over under your scheme's takeover terms."),
         reason("RC-0980", "routing", False, ""),
     ],
