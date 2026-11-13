@@ -91,6 +91,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
+| COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
 ## XFR Policy transfer between groups
