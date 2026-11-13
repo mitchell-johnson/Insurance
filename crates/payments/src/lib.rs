@@ -19,6 +19,7 @@ pub mod file;
 pub mod forecast;
 pub mod hold;
 pub mod incident;
+pub mod insolvency;
 pub mod intake;
 pub mod iso20022;
 pub mod machine;

@@ -642,3 +642,58 @@ fn a_reinstatement_is_asked_of_the_core_and_its_refusal_is_a_task() {
     assert!(posting.starts_with("reinstate-") && world.state.outbox.len() == 1, "{posting}");
     assert_ne!(posting, first);
 }
+
+/// Purpose: when underwriting approves a reinstatement that the core sent
+/// to it, collections asks the core again for the policy it is waiting on,
+/// once; an approval for a policy collections is not waiting on asks
+/// nothing. The core's event is read as that fact.
+/// Why it matters: the customer has done everything asked of them once
+/// underwriting says yes. Waiting for an officer to notice would leave them
+/// uncovered for days; asking for policies nobody is chasing would reinstate
+/// cover the customer did not ask to restore.
+#[test]
+fn an_underwriting_approval_asks_the_core_again() {
+    let mut world = World::new();
+    world.issue("p1", "party-1", 10_000);
+    world.issue("p2", "party-2", 10_000);
+    for policy in ["p1", "p2"] {
+        world.core(
+            0,
+            CoreFact::Status {
+                policy: PolicyId::from(policy),
+                to: ic_core::PolicyStatus::Lapsed,
+            },
+        );
+    }
+    let approved = |policy: &str| CoreFact::ReinstatementApproved {
+        policy: PolicyId::from(policy),
+    };
+    world.core(0, approved("p1"));
+    assert!(world.state.outbox.is_empty(), "nobody asked for p1 yet");
+
+    assert_eq!(world.officer(Command::RequestReinstatement { policy: PolicyId::from("p1") }).result, Ok(()));
+    let first = world.state.outbox.keys().next().unwrap().clone();
+    world.outbox(Command::RecordCoreOutcome {
+        posting: first.clone(),
+        applied: false,
+        code: Some("underwriting_required".into()),
+        message: None,
+    });
+    assert!(world.state.outbox.is_empty());
+
+    world.core(0, approved("p2"));
+    assert!(world.state.outbox.is_empty(), "p2 was not waiting on underwriting");
+    world.core(0, approved("p1"));
+    world.core(0, approved("p1"));
+    assert_eq!(world.state.outbox.len(), 1, "asked once");
+    let again = world.state.outbox.values().next().unwrap();
+    assert!(matches!(&again.command, ic_core::Command::Reinstate { policy } if *policy == PolicyId::from("p1")));
+    assert_ne!(again.id, first);
+
+    let event = ic_core::Event::ReinstatementApproved {
+        policy: PolicyId::from("p1"),
+        reference: "uw-1".into(),
+        valid_until: chrono::NaiveDate::from_ymd_opt(2027, 12, 31).unwrap(),
+    };
+    assert_eq!(ic_collections::query::fact(&event), Some(approved("p1")));
+}

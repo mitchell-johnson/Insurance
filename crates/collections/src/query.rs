@@ -274,6 +274,7 @@ pub fn fact(event: &CoreEvent) -> Option<CoreFact> {
             outstanding_minor: *outstanding_minor,
         },
         CoreEvent::BusinessDateAdvanced { from: Some(from), .. } => CoreFact::DayClosed { closed: *from },
+        CoreEvent::ReinstatementApproved { policy, .. } => CoreFact::ReinstatementApproved { policy: policy.clone() },
         _ => return None,
     })
 }

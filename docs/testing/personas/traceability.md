@@ -87,12 +87,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | COL-001 | full | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | COL-002 | full | `sim/tests/scenarios.rs::a_dishonour_does_not_reset_the_lapse_clock` |
-| COL-003 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does` |
+| COL-003 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_from_an_authoritys_account_names_its_policy` |
 | COL-004 | part | `sim/tests/partition_views.rs::merged_partition_candidates_decide_as_one_read_model_does`<br>`payments/tests/recon.rs::a_direct_credit_goes_to_cash_matching_and_stays_open_until_identified` |
 | COL-007 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date` |
 | COL-008 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/edges.rs::a_lapse_reverses_the_levy_on_unpaid_premium` |
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried`<br>`collections/tests/dunning.rs::an_undeliverable_mandatory_notice_raises_a_task` |
-| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
+| COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms`<br>`collections/tests/cases.rs::an_underwriting_approval_asks_the_core_again` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
 | COL-012 | full | `collections/tests/sequence.rs::mandatory_notices_cannot_be_configured_away`<br>`collections/tests/dunning.rs::each_step_is_an_event_with_its_notice_or_task`<br>`collections/tests/dunning.rs::a_late_arrival_gets_the_latest_reminder_and_every_mandatory_notice`<br>`collections/tests/sequence.rs::a_sequence_is_checked_before_it_is_used`<br>`documents/tests/collections_notices.rs::dunning_notices_are_issued_once_and_reported_sent` |
 | COL-013 | part | `collections/tests/cases.rs::an_outcome_drives_the_next_step` |
@@ -332,7 +332,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
-| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs`<br>`payments/tests/insolvency.rs::a_bankrupt_owners_accounts_are_frozen` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
