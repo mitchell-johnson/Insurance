@@ -304,3 +304,99 @@ fn cover_under_no_treaty_is_charged_nothing() {
     assert!(b.ri.exceptions().keys().all(|k| !k.starts_with("unpriced:")));
     b.assert_reconciles();
 }
+
+/// Purpose: a reinsurer rate table that rates by sex prices a life whose sex it does not hold,
+/// such as a life who is neither male nor female, at the lower of its female and male rates
+/// for the life's other facts, or at a blend when the table says so. A life whose sex is
+/// recorded gets its own row, a table that does not rate by sex is unaffected, and a life
+/// the module knows nothing about is still not priced.
+/// Why it matters: decision 1 in `docs/decisions.md` (persona test PRD-011). The customer is
+/// rated on the lower rate, and the reinsurer must be paid on the same basis; before this the
+/// cover was raised as "cannot be priced" and nothing was ceded in premium.
+#[test]
+fn a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate() {
+    use ic_product::Sex;
+    use ic_reinsurance::loader::load_rate_table;
+    use ic_reinsurance::treaty::{RiskFactors, UnmatchedSex};
+    let source = |unmatched: &str| {
+        format!(
+            r#"
+RATE_TABLE = reinsurer_rate_table(
+    id = "ri-sexed",
+    version = 1,
+    effective_from = "2027-01-01",
+    rows = [
+        reinsurer_rate("0.90", age_to = 39, sex = "female"),
+        reinsurer_rate("1.20", age_to = 39, sex = "male"),
+        reinsurer_rate("4.00", age_from = 40, sex = "female"),
+        reinsurer_rate("3.00", age_from = 40, sex = "male"),
+    ],
+    {unmatched}
+)
+"#
+        )
+    };
+    let on = d(2027, 3, 1);
+    let life = |dob, sex| RiskFactors {
+        date_of_birth: Some(dob),
+        sex,
+        smoker: Some(false),
+    };
+    let young = d(1995, 1, 1);
+    let old = d(1970, 1, 1);
+
+    let lower = load_rate_table("sexed.star", &source("")).unwrap();
+    assert_eq!(lower.unmatched_sex, UnmatchedSex::LowerOf);
+    assert_eq!(lower.rate(Some(&life(young, None)), on), Some(900_000), "female is lower under 40");
+    assert_eq!(lower.rate(Some(&life(old, None)), on), Some(3_000_000), "male is lower from 40");
+    assert_eq!(lower.rate(Some(&life(young, Some(Sex::Male))), on), Some(1_200_000));
+    assert_eq!(lower.rate(Some(&life(old, Some(Sex::Female))), on), Some(4_000_000));
+    assert_eq!(lower.rate(None, on), None, "a life with no facts is never guessed");
+    let no_age = RiskFactors::default();
+    assert_eq!(lower.rate(Some(&no_age), on), None, "nor one with no age");
+
+    let blended = load_rate_table("sexed.star", &source("unmatched_sex = sex_blended(\"0.25\"),")).unwrap();
+    assert_eq!(blended.unmatched_sex, UnmatchedSex::Blended { female_share: 250_000 });
+    // A quarter of 0.90 and three quarters of 1.20.
+    assert_eq!(blended.rate(Some(&life(young, None)), on), Some(1_125_000));
+    let explicit = load_rate_table("sexed.star", &source("unmatched_sex = sex_lower_of(),")).unwrap();
+    assert_eq!(explicit.rate(Some(&life(old, None)), on), Some(3_000_000));
+    assert!(load_rate_table("sexed.star", &source("unmatched_sex = sex_blended(\"1.5\"),")).is_err());
+
+    // The shipped table does not rate by sex: a life without one gets the same rate as before.
+    let shipped = load_rate_table("ri_life_base.star", RATES).unwrap();
+    assert_eq!(
+        shipped.rate(Some(&life(young, None)), on),
+        shipped.rate(Some(&life(young, Some(Sex::Female))), on)
+    );
+    // And the setting survives the module's own record of the table.
+    let kept: ic_reinsurance::treaty::ReinsurerRateTable = serde_json::from_value(serde_json::to_value(&blended).unwrap()).unwrap();
+    assert_eq!(kept, blended);
+}
+
+/// Purpose: money for different reinsurers on one partition travels in different delivery
+/// lanes, and money for one reinsurer under one treaty on one partition shares a lane; a
+/// cover's cession record has a lane of its own.
+/// Why it matters: a posting the core refuses holds only its own lane until a person decides.
+/// One reinsurer's refused posting must not stop every other reinsurer's money on the same
+/// partition, but a sweep must never overtake the postings to the account it sweeps.
+#[test]
+fn each_reinsurers_money_on_a_partition_is_its_own_delivery_lane() {
+    let mut b = anna();
+    b.premium_due(1, "P1", 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    let posts: Vec<_> = b.instructions.iter().filter(|i| matches!(i.body, InstructionBody::Post { .. })).collect();
+    let lane_of = |reinsurer: &ic_reinsurance::ReinsurerId| {
+        let lanes: std::collections::BTreeSet<String> = posts
+            .iter()
+            .filter(|i| matches!(&i.body, InstructionBody::Post { reinsurer: r, .. } if r == reinsurer))
+            .map(|i| i.lane())
+            .collect();
+        assert_eq!(lanes.len(), 1, "one reinsurer's postings on one partition share a lane: {lanes:?}");
+        lanes.into_iter().next().unwrap()
+    };
+    let (n, s) = (lane_of(&north()), lane_of(&south()));
+    assert_ne!(n, s);
+    assert_eq!(n, "money:1:retail-life-surplus:reinsurer-north");
+    let cession = b.instructions.iter().find(|i| matches!(i.body, InstructionBody::RecordCession { .. })).unwrap();
+    assert_eq!(cession.lane(), "cover:P1/life/1/L1");
+}

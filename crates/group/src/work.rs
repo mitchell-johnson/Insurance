@@ -1587,6 +1587,7 @@ impl GroupState {
                         },
                     }],
                     covers: vec![CoverSpec {
+                        excess_option: None,
                         code: cover,
                         life: Some(life),
                         sum_insured_minor,

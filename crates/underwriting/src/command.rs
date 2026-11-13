@@ -672,6 +672,10 @@ pub enum Effect {
         /// Never clinical.
         #[serde(default)]
         risk_codes: Vec<String>,
+        /// Reinsurance's reference, when it asked for this cover to be
+        /// underwritten because of the member's other cover.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        excess_reference: Option<String>,
     },
     ReleaseCapacity {
         reservation: String,

@@ -58,12 +58,12 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 17 | 9 | 4 | 8 |
 | CLM Claims and claims operations | 22 | 13 | 7 | 9 |
-| RI Reinsurance | 13 | 2 | 3 | 1 |
+| RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 21 | 9 | 10 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
-| HLT Composable health product | 2 | 3 | 6 | 2 |
+| HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 5 | 17 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
@@ -72,18 +72,18 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
 | PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
-| FIN Finance close, statutory funds and regulatory reporting | 9 | 3 | 6 | 1 |
+| FIN Finance close, statutory funds and regulatory reporting | 12 | 2 | 4 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
-| INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
+| INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **239** | **135** | **203** | **138** |
+| **Total** | **246** | **132** | **199** | **136** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 86 | 29 | 27 |
-| C | 122 | 73 | 151 |
+| C | 129 | 70 | 147 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -104,7 +104,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANN** (2): ANN-001, ANN-002
 - **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013
-- **FIN** (1): FIN-009
 - **CFG** (1): CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
 - **MIG** (7): MIG-001, MIG-003, MIG-007, MIG-009, MIG-012, MIG-014, MIG-017
@@ -121,7 +120,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (6): UW-002, UW-003, UW-006, UW-014, UW-026, UW-029
 - **CLM** (9): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-026, CLM-028, CLM-039
-- **RI** (1): RI-010
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028
 - **JNT** (3): JNT-001, JNT-008, JNT-013

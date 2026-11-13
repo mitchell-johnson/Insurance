@@ -13,8 +13,14 @@
 //! module renders and delivers: each is a `request_letter` to it under the
 //! request `uw:{outbox number}`, carrying the kind, the recipient, the
 //! proposal, the life and the reason codes the person may be told, and
-//! nothing clinical. A refusal parks the letter for a person. Evidence
-//! requests and delegate files have no receiver yet and are parked.
+//! nothing clinical. A refusal parks the letter for a person.
+//!
+//! Orders for medical evidence (request, chase, cancel) go to the evidence
+//! hub, which the provider's adapter reads, and requests for a delegate's
+//! file to the delegates hub. Each carries the request and, for a new order,
+//! the kind and the person's opaque party ID: who the person is, and who
+//! their doctor is, the adapter reads from the customer master under its own
+//! identity. Answers come back through the intake service.
 
 use std::future::Future;
 
@@ -66,11 +72,18 @@ pub fn letter_request(seq: u64) -> String {
     format!("uw:{seq}")
 }
 
-/// Staff notices to `staff`, letters to `letters`; everything else as with
-/// nothing connected.
+/// The ID an evidence order or a delegate file request is published under.
+pub fn order_id(seq: u64) -> String {
+    format!("underwriting-order:{seq}")
+}
+
+/// Staff notices to `staff`, letters to `letters`, evidence orders to
+/// `evidence` and delegate file requests to `delegates`.
 #[derive(Clone)]
 pub struct Notices<S, L> {
     pub staff: S,
+    pub evidence: S,
+    pub delegates: S,
     pub letters: L,
     pub clock: fn() -> DateTime<Utc>,
 }
@@ -105,8 +118,38 @@ impl<S: StaffFeed, L: Letters> Notices<S, L> {
     }
 }
 
+/// Published, parked with the hub's refusal, or unavailable to try again.
+async fn publish<S: StaffFeed>(feed: &S, hub: &str, what: &str, id: &str, kind: &str, body: Value) -> Result<Option<String>, DriverError> {
+    match feed.publish(id, kind, body).await {
+        Ok(()) => Ok(None),
+        // The hub is missing or the driver may not send to it: trying
+        // again will not help, and every effect behind would wait.
+        Err(AzureError::Status { status, body, .. }) if (400..500).contains(&status) && status != 408 && status != 429 => {
+            Ok(Some(format!("the {hub} hub refused the {what}: {status}: {body}")))
+        }
+        Err(e) => Err(DriverError::Unavailable(e.to_string())),
+    }
+}
+
 impl<S: StaffFeed, L: Letters> Forward for Notices<S, L> {
     async fn forward(&self, seq: u64, effect: &Effect) -> Result<Option<String>, DriverError> {
+        let order = |kind: &str, body: Value| (kind.to_string(), body);
+        let (kind, body) = match effect {
+            Effect::RequestEvidence { request, kind, party } => order(
+                "evidence_request",
+                json!({"order": "request", "request": request, "kind": kind, "party": party}),
+            ),
+            Effect::ChaseEvidence { request } => order("evidence_chase", json!({"order": "chase", "request": request})),
+            Effect::CancelEvidence { request } => order("evidence_cancel", json!({"order": "cancel", "request": request})),
+            Effect::RequestDelegateFile { proposal, life, delegate_ref } => {
+                let body = json!({"proposal": proposal, "life": life, "delegate_ref": delegate_ref});
+                return publish(&self.delegates, "delegates", "request", &order_id(seq), "delegate_file_request", body).await;
+            }
+            _ => (String::new(), Value::Null),
+        };
+        if !kind.is_empty() {
+            return publish(&self.evidence, "evidence", "order", &order_id(seq), &kind, body).await;
+        }
         let Effect::Notify { to, kind, proposal, life, .. } = effect else {
             return NothingConnected.forward(seq, effect).await;
         };
@@ -120,14 +163,6 @@ impl<S: StaffFeed, L: Letters> Forward for Notices<S, L> {
         let kind = json!(kind);
         let name = kind.as_str().unwrap_or_default();
         let body = json!({"notice": name, "to": to, "proposal": proposal, "life": life});
-        match self.staff.publish(&notice_id(seq), name, body).await {
-            Ok(()) => Ok(None),
-            // The hub is missing or the driver may not send to it: trying
-            // again will not help, and every effect behind would wait.
-            Err(AzureError::Status { status, body, .. }) if (400..500).contains(&status) && status != 408 && status != 429 => {
-                Ok(Some(format!("the staff notices hub refused the notice: {status}: {body}")))
-            }
-            Err(e) => Err(DriverError::Unavailable(e.to_string())),
-        }
+        publish(&self.staff, "staff notices", "notice", &notice_id(seq), name, body).await
     }
 }
