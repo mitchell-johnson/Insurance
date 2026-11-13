@@ -153,11 +153,14 @@ impl World {
 /// is issued from its template to the customer on the step's channel, the
 /// suspension notice with proof of delivery and a copy to the lender
 /// standing on the policy, and collections is told each was sent; the next
-/// pass issues nothing.
+/// pass issues nothing; and collections is told which arrived and which
+/// failed for good, while one still in the post waits.
 /// Why it matters: these notices are what lets a policy in arrears lapse
 /// lawfully. One not sent leaves the insurer unable to lapse; one sent
 /// twice tells a customer they are further behind than they are; and a
 /// suspension notice the lender never sees breaks the assignment's terms.
+/// A failed notice not reported back would let a policy lapse on a notice
+/// that never arrived.
 #[tokio::test]
 async fn dunning_notices_are_issued_once_and_reported_sent() {
     let world = World::all(collections_world::d(2027, 4, 10)).await;
@@ -204,7 +207,33 @@ async fn dunning_notices_are_issued_once_and_reported_sent() {
         .starts_with("Dear Mere Parata. A payment is overdue"));
 
     let again = world.relay.pass(&world.driver).await;
-    assert_eq!((again.issued, again.left), (0, 0));
+    assert_eq!((again.issued, again.left, again.reported), (0, 0, 0));
+
+    // The emailed reminder is delivered and the texted one fails for
+    // good; the suspension notice is still in the post.
+    world.driver.deliver().await.unwrap();
+    let report = |notice: &str, outcome| ic_documents::channels::DeliveryReport {
+        provider_reference: format!("ref-{}-mere", document_id(notice)),
+        outcome,
+    };
+    use ic_documents::model::AttemptOutcome;
+    assert!(world.driver.report(report(&reminders[0].0, AttemptOutcome::Delivered)).await.unwrap());
+    assert!(world
+        .driver
+        .report(report(
+            &reminders[1].0,
+            AttemptOutcome::Failed {
+                reason: "unknown number".into()
+            }
+        ))
+        .await
+        .unwrap());
+    let reported = world.relay.pass(&world.driver).await;
+    assert_eq!((reported.reported, reported.errors.clone()), (2, vec![]));
+    let states: Vec<NoticeState> = world.notices(StepKind::Reminder).into_iter().map(|(_, s)| s).collect();
+    assert_eq!(states, [NoticeState::Delivered, NoticeState::Undeliverable]);
+    assert_eq!(world.notices(StepKind::SuspensionNotice)[0].1, NoticeState::Sent);
+    assert_eq!(world.relay.pass(&world.driver).await.reported, 0);
 }
 
 /// Purpose: a notice whose template has no wording waits and is reported
@@ -347,4 +376,92 @@ async fn the_relay_reaches_collections_over_the_cluster() {
         nowhere.ask(json!({ "q": "notices_due", "limit": 1 })).await,
         Err(DriverError::Unavailable(_))
     ));
+}
+
+/// Collections behind switches that fail the delivery question or every
+/// command, to play a module that answers one thing and not the next.
+#[derive(Clone, Default)]
+struct Flaky {
+    inner: LocalCollections,
+    fail_sent_question: Arc<std::sync::Mutex<bool>>,
+    fail_commands: Arc<std::sync::Mutex<bool>>,
+}
+
+impl Collections for Flaky {
+    async fn propose(&self, envelope: ic_collections::Envelope) -> Result<ic_collections::Applied, ic_documents::driver::DriverError> {
+        if *self.fail_commands.lock().unwrap() {
+            return Err(ic_documents::driver::DriverError::Unavailable("no leader".into()));
+        }
+        self.inner.propose(envelope).await
+    }
+
+    async fn ask(&self, question: Value) -> Result<Value, ic_documents::driver::DriverError> {
+        if question["q"] == "notices_sent" && *self.fail_sent_question.lock().unwrap() {
+            return Err(ic_documents::driver::DriverError::Unavailable("no leader".into()));
+        }
+        self.inner.ask(question).await
+    }
+}
+
+/// Purpose: a delivery outcome collections cannot take is reported and
+/// sent again on the next pass; a failed question about sent notices is
+/// reported; and a sent notice whose document cannot be read while the
+/// documents module is down is reported, not guessed at.
+/// Why it matters: the outcome decides whether collections opens a task
+/// to reach a customer before lapse. Losing it in an outage would let a
+/// policy lapse on an undelivered notice, and guessing an outcome while
+/// the documents module is down could report a notice delivered that was not.
+#[tokio::test]
+async fn delivery_outcomes_survive_outages_and_strays_are_reported() {
+    let world = World::all(collections_world::d(2027, 4, 10)).await;
+    let flaky = Flaky {
+        inner: world.relay.collections.clone(),
+        ..Flaky::default()
+    };
+    let relay = NoticeRelay {
+        collections: flaky.clone(),
+        actor: "documents-service".into(),
+        clock: world.relay.clock.clone(),
+        batch: 100,
+    };
+    assert_eq!(relay.pass(&world.driver).await.issued, 3);
+    world.driver.deliver().await.unwrap();
+    let (reminder, _) = world.notices(StepKind::Reminder).remove(0);
+    let reference = format!("ref-{}-mere", document_id(&reminder));
+    let delivered = ic_documents::channels::DeliveryReport {
+        provider_reference: reference,
+        outcome: ic_documents::model::AttemptOutcome::Delivered,
+    };
+    assert!(world.driver.report(delivered).await.unwrap());
+
+    *flaky.fail_sent_question.lock().unwrap() = true;
+    let pass = relay.pass(&world.driver).await;
+    assert!(pass.errors.iter().any(|e| e.starts_with("notices sent")));
+    *flaky.fail_sent_question.lock().unwrap() = false;
+
+    *flaky.fail_commands.lock().unwrap() = true;
+    let pass = relay.pass(&world.driver).await;
+    assert_eq!(pass.reported, 0);
+    assert!(pass.errors.iter().any(|e| e.starts_with(&document_id(&reminder))));
+    *flaky.fail_commands.lock().unwrap() = false;
+    assert_eq!(relay.pass(&world.driver).await.reported, 1);
+
+    // The other reminder is recorded sent again, and the documents
+    // module cannot be read when its outcome is looked up.
+    let stray = ic_collections::Envelope {
+        key: "stray".into(),
+        caller: "delivery".into(),
+        actor: "someone".into(),
+        roles: vec![],
+        at: chrono::Utc::now(),
+        command: ic_collections::Command::RecordNoticeSent {
+            notice: world.notices(StepKind::Reminder)[1].0.clone(),
+        },
+    };
+    assert_eq!(flaky.inner.propose(stray).await.unwrap().result, Ok(()));
+    let documents_down = world.driver.module.clone();
+    documents_down.set_down(true);
+    let pass = relay.pass(&world.driver).await;
+    documents_down.set_down(false);
+    assert!(pass.errors.iter().any(|e| e.contains("unavailable")));
 }

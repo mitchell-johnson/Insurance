@@ -26,6 +26,7 @@ pub mod command;
 pub mod config;
 pub mod investigate;
 pub mod model;
+pub mod offsets;
 pub mod port;
 pub mod report;
 pub mod state;
