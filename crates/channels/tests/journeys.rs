@@ -625,6 +625,43 @@ fn modules_publish_only_their_own_rows() {
     assert!(w.send(module("claims"), publish(vec![early], vec![])).unwrap().is_empty());
 }
 
+/// Purpose: one member of a 3,000-member scheme registers and is matched; they hold their own cover row and nothing else of the scheme on their
+/// device, see nothing else when asking for the policy, and are the scheme's only device audience.
+/// Why it matters: a public service scheme has tens of thousands of members. A member's phone holding a colleague's cover, or the
+/// scheme's member list, would be a breach repeated on every phone that registers.
+#[test]
+fn a_member_of_a_large_scheme_holds_their_own_cover_only() {
+    let mut w = World::new();
+    let staff = |i: usize| member(&format!("m-{i}"), d(1980, 1, 1), "staff", 60_000_00);
+    let pol = w.issue(group_scheme(4, open(), (0..100).map(staff).collect()));
+    for chunk in (100..3_000).collect::<Vec<_>>().chunks(100) {
+        let changes = chunk
+            .iter()
+            .map(|i| MemberChange::Joined {
+                life: staff(*i),
+                effective: open(),
+            })
+            .collect();
+        w.core(&pol, "group-admin", ic_core::Command::ApplyMembership { policy: pol.clone(), changes });
+        assert!(moved(&w.relay()).is_empty(), "nobody has registered yet");
+    }
+    // One member registers and is matched to their place on the scheme.
+    w.core(
+        &pol,
+        "group-admin",
+        ic_core::Command::IdentifyMember {
+            policy: pol.clone(),
+            life: LifeId::from("m-1500"),
+            party: p("worker-1500"),
+        },
+    );
+    assert_eq!(moved(&w.relay()), ["worker-1500".to_string()].into());
+    let own = format!("{pol}/member/m-1500/group-life");
+    assert_eq!(w.held("worker-1500"), std::slice::from_ref(&own));
+    assert_eq!(w.sees("worker-1500", &pol), [own]);
+    assert_eq!(w.ch.data.audiences[&pol], [p("worker-1500")].into());
+}
+
 /// Purpose: on a group scheme a member's phone holds only that member's cover, the employer is served by the portal with scheme-level rows, and a change to one member touches one feed.
 /// Why it matters: a scheme can hold tens of thousands of members; nobody may see a colleague's cover, and one member's change must not rebuild every feed.
 #[test]

@@ -123,7 +123,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| AUD-001 | part | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
+| AUD-001 | full | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::a_member_of_a_large_scheme_holds_their_own_cover_only`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
 | AUD-002 | part | `readmodel/src/scope.rs::policyholder_sees_policy_but_not_another_adults_health_facts`<br>`channels/tests/journeys.rs::family_privacy_and_consent` |
 | AUD-003 | part | `channels/tests/journeys.rs::family_privacy_and_consent`<br>`channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
