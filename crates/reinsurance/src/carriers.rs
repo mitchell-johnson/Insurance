@@ -8,10 +8,13 @@
 //! number as its ID, and a consumer that sees the number twice drops the
 //! second.
 
+use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::{Arc, Mutex};
 
 use chrono::NaiveDate;
-use ic_azure::blob::WormStore;
+use ic_azure::blob::{BlobContainer, MemoryWormStore, WormStore};
+use ic_azure::credential::AzureCredential;
 use ic_azure::eventhubs::EventHubsSink;
 use ic_azure::AzureError;
 use ic_core::Reject;
@@ -33,13 +36,75 @@ impl StaffFeed for EventHubsSink {
     }
 }
 
-/// Every audience: other modules through `modules`, records in `records`,
-/// staff through `staff`.
+/// Where each reinsurer collects its statements and listings: a container
+/// of its own, which it reads over SFTP and nobody else's can.
+pub trait Outbound: Send + Sync {
+    type Store: WormStore;
+    /// The reinsurer's container, or `None` when statements are not left
+    /// for reinsurers at all.
+    fn drop_for(&self, container: &str) -> Option<Self::Store>;
+}
+
+/// The reinsurers' containers in the SFTP storage account, or none.
 #[derive(Clone)]
-pub struct Carriers<A, W, S> {
+pub enum ReinsurerDrops {
+    Off,
+    Azure { endpoint: String, credential: AzureCredential },
+}
+
+impl Outbound for ReinsurerDrops {
+    type Store = BlobContainer;
+    fn drop_for(&self, container: &str) -> Option<BlobContainer> {
+        match self {
+            ReinsurerDrops::Off => None,
+            ReinsurerDrops::Azure { endpoint, credential } => Some(BlobContainer::new(endpoint, container, credential.clone())),
+        }
+    }
+}
+
+/// Reinsurers' containers in memory, for tests and the insurance in a box.
+#[derive(Clone, Default)]
+pub struct MemoryDrops {
+    stores: Arc<Mutex<BTreeMap<String, MemoryWormStore>>>,
+}
+
+impl MemoryDrops {
+    /// The container, created empty when first asked for.
+    pub fn store(&self, container: &str) -> MemoryWormStore {
+        self.stores
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(container.to_string())
+            .or_default()
+            .clone()
+    }
+}
+
+impl Outbound for MemoryDrops {
+    type Store = MemoryWormStore;
+    fn drop_for(&self, container: &str) -> Option<MemoryWormStore> {
+        Some(self.store(container))
+    }
+}
+
+/// The container a reinsurer collects from: `ri-` and its ID in lower case,
+/// with underscores as hyphens. `None` when that is not a valid container
+/// name, which the reinsurer's ID must then be changed to allow.
+pub fn drop_container(reinsurer: &str) -> Option<String> {
+    let name = format!("ri-{}", reinsurer.to_ascii_lowercase().replace('_', "-"));
+    let ok = name.len() <= 63 && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') && !name.contains("--") && !name.ends_with('-');
+    ok.then_some(name)
+}
+
+/// Every audience: other modules through `modules`, records in `records`,
+/// staff through `staff`, and each statement and listing also left for its
+/// reinsurer in `outbound`.
+#[derive(Clone)]
+pub struct Carriers<A, W, S, O = ReinsurerDrops> {
     pub modules: A,
     pub records: W,
     pub staff: S,
+    pub outbound: O,
 }
 
 /// What a notice is called on the wire: `exception_opened`, `document`, …
@@ -61,7 +126,7 @@ fn away(e: AzureError) -> DriverError {
 /// thing, and is refused, for a person, when it holds something else: the
 /// store never replaces what it has.
 async fn file<W: WormStore>(records: &W, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
-    let (name, body, same): (String, Vec<u8>, Box<dyn Fn(&[u8]) -> bool + Send>) = match notice {
+    let (name, body, same): (String, Vec<u8>, Box<dyn Fn(&[u8]) -> bool + Send + Sync>) = match notice {
         Notice::Document { name, sha256, body } => {
             if crate::account::sha256_hex(body) != *sha256 {
                 return Ok(Handed::Refused(Reject::new(
@@ -84,9 +149,14 @@ async fn file<W: WormStore>(records: &W, seq: u64, notice: &Notice, on: NaiveDat
             )
         }
     };
-    match records.put_new(&name, "application/json", body).await {
+    put_once(records, &name, body, same.as_ref()).await
+}
+
+/// Write one object that must never change once written.
+async fn put_once<W: WormStore>(store: &W, name: &str, body: Vec<u8>, same: &(dyn Fn(&[u8]) -> bool + Send + Sync)) -> Result<Handed, DriverError> {
+    match store.put_new(name, "application/json", body).await {
         Ok(()) => Ok(Handed::Taken),
-        Err(AzureError::AlreadyExists(_)) => match records.get(&name).await.map_err(away)? {
+        Err(AzureError::AlreadyExists(_)) => match store.get(name).await.map_err(away)? {
             Some(kept) if same(&kept) => Ok(Handed::Taken),
             Some(_) => Ok(Handed::Refused(Reject::new(
                 "record_conflict",
@@ -98,7 +168,33 @@ async fn file<W: WormStore>(records: &W, seq: u64, notice: &Notice, on: NaiveDat
     }
 }
 
-impl<A: Audiences, W: WormStore, S: StaffFeed> Audiences for Carriers<A, W, S> {
+/// Leave a filed statement or listing (`reinsurance/<treaty>/<reinsurer>/
+/// statement-…`) in its reinsurer's container as `<treaty>/<file>`. Other
+/// records stay with the insurer.
+async fn leave_for_reinsurer<O: Outbound>(outbound: &O, notice: &Notice) -> Result<Handed, DriverError> {
+    let Notice::Document { name, body, .. } = notice else {
+        return Ok(Handed::Taken);
+    };
+    let parts: Vec<&str> = name.split('/').collect();
+    let [_, treaty, reinsurer, file] = parts[..] else { return Ok(Handed::Taken) };
+    if !file.starts_with("statement-") {
+        return Ok(Handed::Taken);
+    }
+    let Some(container) = drop_container(reinsurer) else {
+        return Ok(Handed::Refused(Reject::new(
+            "no_drop_for_reinsurer",
+            format!("reinsurer {reinsurer} has no valid container name for collecting statements"),
+        )));
+    };
+    let Some(store) = outbound.drop_for(&container) else {
+        return Ok(Handed::Taken);
+    };
+    let bytes = body.clone().into_bytes();
+    let ours = bytes.clone();
+    put_once(&store, &format!("{treaty}/{file}"), bytes, &move |kept: &[u8]| kept == ours).await
+}
+
+impl<A: Audiences, W: WormStore, S: StaffFeed, O: Outbound> Audiences for Carriers<A, W, S, O> {
     fn reached(&self) -> Vec<Audience> {
         let mut reached = self.modules.reached();
         reached.extend([Audience::Records, Audience::Staff]);
@@ -107,7 +203,10 @@ impl<A: Audiences, W: WormStore, S: StaffFeed> Audiences for Carriers<A, W, S> {
 
     async fn hand_on(&self, seq: u64, notice: &Notice, on: NaiveDate) -> Result<Handed, DriverError> {
         match notice.audience() {
-            Audience::Records => file(&self.records, seq, notice, on).await,
+            Audience::Records => match file(&self.records, seq, notice, on).await? {
+                Handed::Taken => leave_for_reinsurer(&self.outbound, notice).await,
+                refused => Ok(refused),
+            },
             Audience::Staff => {
                 let kind = kind(notice);
                 let body = json!({"seq": seq, "on": on, "notice": notice});
