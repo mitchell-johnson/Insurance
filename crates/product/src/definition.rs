@@ -196,6 +196,15 @@ pub struct CoverDefinition {
     /// and replaces the schedule's excess at claim.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excess_options: Vec<ExcessOption>,
+    /// Whether premium is waived while a benefit is paid on this cover.
+    /// Absent: the product does not say, and the wording is read.
+    #[serde(default)]
+    pub premium_waiver: Option<bool>,
+    /// A name two or more health covers share where their benefit limits
+    /// draw on one counter, as a base plan and its top-up do. Absent: the
+    /// cover's limits count on their own.
+    #[serde(default)]
+    pub shared_counter: Option<String>,
 }
 
 /// One excess level on a cover's menu.
