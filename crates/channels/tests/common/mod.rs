@@ -12,6 +12,7 @@ pub mod group;
 pub mod intake;
 pub mod pricing;
 pub mod reinsurance;
+pub mod underwriting;
 
 use base64::Engine;
 use chrono::NaiveDate;
