@@ -92,7 +92,8 @@ fn error(status: StatusCode, code: &str, message: impl std::fmt::Display) -> Res
 
 fn refusal(e: IntakeError) -> Response {
     match &e {
-        IntakeError::UnknownProposal(_) | IntakeError::UnknownLife(_) => error(StatusCode::NOT_FOUND, "unknown", &e),
+        IntakeError::UnknownProposal(_) | IntakeError::UnknownLife(_) | IntakeError::UnknownRequest(_) => error(StatusCode::NOT_FOUND, "unknown", &e),
+        IntakeError::Document(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "document", &e),
         IntakeError::NoRules | IntakeError::NoDateOfBirth => error(StatusCode::CONFLICT, "not_ready", &e),
         IntakeError::Answers(problems) => (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -152,6 +153,34 @@ async fn open<U: Underwriting, W: KeyWrapper, R: RecordStore>(
     }
 }
 
+async fn evidence<U: Underwriting, W: KeyWrapper, R: RecordStore>(
+    State(app): State<Arc<App<U, W, R>>>,
+    headers: HeaderMap,
+    Json(a): Json<crate::inbound::EvidenceAnswer>,
+) -> Response {
+    if let Err(refused) = app.allowed(&headers, crate::inbound::EVIDENCE).await {
+        return refused;
+    }
+    match app.intake.evidence(&a).await {
+        Ok(filed) => Json(filed).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn delegate_file<U: Underwriting, W: KeyWrapper, R: RecordStore>(
+    State(app): State<Arc<App<U, W, R>>>,
+    headers: HeaderMap,
+    Json(d): Json<crate::inbound::DelegateFile>,
+) -> Response {
+    if let Err(refused) = app.allowed(&headers, crate::inbound::DELEGATE).await {
+        return refused;
+    }
+    match app.intake.delegate_file(&d).await {
+        Ok(filed) => Json(filed).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
 /// The routes, over any module and store.
 pub fn router<U, W, R>(intake: Intake<U, W, R>, auth: Auth) -> Router
 where
@@ -163,6 +192,10 @@ where
         .route("/v1/disclosures/to-sign", post(to_sign::<U, W, R>))
         .route("/v1/disclosures", post(submit::<U, W, R>))
         .route("/v1/disclosures/open", post(open::<U, W, R>))
+        .route("/v1/evidence", post(evidence::<U, W, R>))
+        .route("/v1/delegate-files", post(delegate_file::<U, W, R>))
+        // A report or a file in base64 is a third larger than the document.
+        .layer(axum::extract::DefaultBodyLimit::max(crate::inbound::MOST_BYTES / 3 * 4 + 64 * 1024))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(Arc::new(App { intake, auth }))
 }

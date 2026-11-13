@@ -60,7 +60,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 22 | 13 | 7 | 9 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
-| GRP Group scheme administration | 21 | 9 | 10 | 3 |
+| GRP Group scheme administration | 23 | 8 | 9 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 3 | 3 | 5 | 2 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **246** | **132** | **199** | **136** |
+| **Total** | **248** | **131** | **198** | **136** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 86 | 29 | 27 |
-| C | 129 | 70 | 147 |
+| C | 131 | 69 | 146 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area

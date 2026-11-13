@@ -263,6 +263,10 @@ pub struct Scheme {
     pub terms: SchemeTerms,
     pub terms_version: u32,
     pub mapping: Option<FileMapping>,
+    /// The layout for the other kind of file, where an employer sends
+    /// both: a monthly full file and changes in between, say from payroll.
+    #[serde(default)]
+    pub second_mapping: Option<FileMapping>,
     pub status: SchemeStatus,
     /// The core refused something for a reason no file row explains.
     /// Nothing more is applied until staff resume the scheme.
@@ -540,7 +544,11 @@ impl GroupState {
                 if !mapping.is_sealed() {
                     return Err(Reject::new("mapping_not_sealed", "the mapping's content hash does not match its content"));
                 }
-                if s.mapping.as_ref().is_some_and(|m| m.version >= mapping.version) {
+                // One layout for full files and one for change files, each
+                // replaced only by a later version of itself.
+                let first = s.mapping.as_ref().is_none_or(|m| m.kind == mapping.kind);
+                let held = if first { &s.mapping } else { &s.second_mapping };
+                if held.as_ref().is_some_and(|m| m.version >= mapping.version) {
                     return Err(Reject::new("mapping_version", "a mapping is replaced only by a later version"));
                 }
                 st.emit(GroupEvent::MappingSet {
@@ -549,7 +557,11 @@ impl GroupState {
                     version: mapping.version,
                     content_hash: mapping.content_hash.clone(),
                 });
-                s.mapping = Some(*mapping);
+                if first {
+                    s.mapping = Some(*mapping);
+                } else {
+                    s.second_mapping = Some(*mapping);
+                }
                 Ok(())
             }),
             Freeze { scheme, reason } => self.with_scheme(&scheme, |st, s| {
@@ -715,6 +727,7 @@ impl GroupState {
                 terms,
                 terms_version: 1,
                 mapping: None,
+                second_mapping: None,
                 status: SchemeStatus::Active,
                 blocked: None,
                 frozen: None,
@@ -838,7 +851,8 @@ impl GroupState {
         if rows.len() > MAX_ROWS_PER_PART {
             return Err(Reject::new("too_many_rows", format!("at most {MAX_ROWS_PER_PART} rows per part")));
         }
-        if s.mapping.as_ref().map(|m| m.content_hash.as_str()) != Some(mapping_hash) {
+        let current = |m: &Option<FileMapping>| m.as_ref().is_some_and(|m| m.content_hash == mapping_hash);
+        if !current(&s.mapping) && !current(&s.second_mapping) {
             return Err(Reject::new("mapping_mismatch", "the rows were not mapped with the scheme's current mapping"));
         }
         if file_date > today {

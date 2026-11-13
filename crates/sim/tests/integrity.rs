@@ -412,6 +412,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             party: PartyId::from("party-1"),
         },
         Command::AddExcessLayer(Box::new(ic_core::command::ExcessLayer {
+            continues: None,
             policy: p.clone(),
             cover: "group-life".into(),
             life: LifeId::from("m1"),
