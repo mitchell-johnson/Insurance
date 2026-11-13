@@ -96,6 +96,7 @@ fn portal() -> Portal {
         ("sub-kiri", KIRI),
         ("sub-adv", "adv-1"),
         ("sub-hr", "hr-1"),
+        ("sub-hr2", "hr-2"),
         ("sub-alice", "alice"),
         ("sub-sue", "sue"),
         ("sub-fin1", "fin-1"),
@@ -2611,4 +2612,49 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         .body(Body::empty())
         .unwrap();
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: at handover between scheme administrators, the joiner is added by the leaver and sees the scheme at once; the joiner then
+/// removes the leaver, who loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
+/// before then is refused; and the last administrator cannot be removed by the scheme's own administrators.
+/// Why it matters: an administrator who has left must not keep seeing member data or make changes through a session still open, and
+/// the scheme must never be left with nobody to run it.
+#[tokio::test]
+async fn an_employer_administrator_hands_over_at_noon() {
+    let portal = portal();
+    let scheme = portal.scheme.clone();
+    let admin = |who: &'static str, party: &'static str, on: bool| {
+        let path = format!("/employer/v1/schemes/{scheme}/admins/{party}");
+        let portal = &portal;
+        async move { portal.write("PUT", who, &path, json!({ "admin": on })).await }
+    };
+    assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1, json!([]));
+    assert_eq!(admin("sub-hr", "hr-2", true).await.0, StatusCode::OK);
+    assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1.as_array().unwrap().len(), 1);
+    assert_eq!(admin("sub-hr2", "hr-1", false).await.0, StatusCode::OK);
+    assert_eq!(portal.get("sub-hr", "/employer/v1/schemes").await.1, json!([]));
+    assert_eq!(portal.get("sub-hr", &format!("/app/v1/policies/{scheme}")).await.0, StatusCode::NOT_FOUND);
+    // The leaver can no longer act on the scheme, and the joiner cannot leave it with nobody.
+    assert_eq!(admin("sub-hr", "hr-1", true).await.0, StatusCode::FORBIDDEN);
+    let (status, problem) = admin("sub-hr2", "hr-2", false).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("last_admin")));
+
+    // The priority revocation: the leaver's sessions are closed, and an earlier token is refused.
+    let now = portal.now();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_001,
+            ic_channels::Envelope {
+                key: "revoke-hr-1".into(),
+                at: now,
+                actor: module("identity"),
+                command: Command::Identity(IdentityCommand::RevokeSessions { party: p("hr-1") }),
+            },
+        );
+        assert!(output.result.is_ok());
+    });
+    let old = [("x-dev-subject", "sub-hr".to_string()), ("x-dev-issued", (now - 5).to_string())];
+    let (status, problem) = portal.send("GET", "/employer/v1/schemes", &old, None).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("session_revoked")));
 }
