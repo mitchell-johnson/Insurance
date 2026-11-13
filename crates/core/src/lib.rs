@@ -47,7 +47,7 @@ pub mod voluntary;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
-pub use group::{preview_membership, ChangePreview, MembershipPreview};
+pub use group::{preview_membership, ChangePreview, MembershipPreview, SplitFrom, SplitScheme};
 pub use ic_claims as claims_module;
 pub use ids::*;
 pub use lifecycle::quote;

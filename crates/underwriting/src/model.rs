@@ -69,6 +69,10 @@ pub enum Entry {
         /// be underwritten because of accumulation.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reinsurance_reference: Option<String>,
+        /// The scheme's broker underwrites its members under this delegated
+        /// authority: the delegate decides, within the authority's limits.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delegated_authority: Option<String>,
     },
     /// A leaver continuing cover above the automatic limit on a retail
     /// policy group administration has issued. The amount above automatic
@@ -672,6 +676,10 @@ pub struct Proposal {
     /// in place from the employer to the member, newest last.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reoffers: Vec<Reoffer>,
+    /// The delegate asked to decide the proposal, under this authority,
+    /// while it is theirs to decide: the member does not disclose to us.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_to: Option<String>,
     /// Advised as a replacement of cover in force: each life confirms the
     /// replacement disclosure before its disclosure is taken.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]

@@ -1048,3 +1048,68 @@ fn a_change_of_underwriting_terms_keeps_the_treaty_and_the_facultative_placement
     assert_eq!((orphan.retained_minor, orphan.treaty.as_ref().unwrap().version), (300 * K, 2));
     b.assert_reconciles();
 }
+
+/// Purpose: members moved by a scheme split carry their cover to the new scheme from the
+/// split date with the same cession, treaty version and place in the retention order; the old
+/// scheme's cover for them ends that day, members left behind are untouched, the new scheme
+/// takes the old one's terms, and a later leaver on the new scheme ends the moved cover.
+/// Why it matters: the core sends the split as one event so that it is not an exit and new
+/// business. Read as either, the reinsurer would see cover cancelled and written again on
+/// the current treaty version with a new start, and the cover's years toward recapture and
+/// the life's retention order would be lost.
+#[test]
+fn members_moved_by_a_scheme_split_keep_their_cession() {
+    let mut b = Bench::new();
+    b.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K), member_cover("M2", 300 * K)]);
+    let (m1, m2) = (key("S1", "group-life", 0, "M1"), key("S1", "group-life", 0, "M2"));
+    let split = d(2027, 6, 1);
+    let before = b.ri.cession(&m1, split).unwrap().clone();
+    let m2_before = b.ri.cession_record(&m2).to_vec();
+    b.today = split;
+    b.feed(
+        2,
+        vec![Event::SchemeSplit {
+            policy: PolicyId::from("S1"),
+            new_policy: PolicyId::from("S2"),
+            new_number: "N-S2".into(),
+            lives: vec![LifeId::from("M1")],
+            effective: split,
+            layers: vec![],
+        }],
+    );
+    let moved = key("S2", "group-life", 0, "M1");
+    assert!(b.ri.cession(&m1, split).is_none(), "the old scheme's cover ends on the split");
+    assert!(b.ri.cession(&m1, d(2027, 5, 31)).is_some(), "and stands before it");
+    assert_eq!(b.ri.cession(&moved, split).unwrap(), &before, "the same cession under the new scheme");
+    assert_eq!(b.ri.cession_record(&m2), &m2_before[..], "a member left behind is untouched");
+    assert!(b.ri.cession_record(&m1).last().unwrap().0 <= split);
+    b.assert_reconciles();
+
+    // A second showing of the split changes nothing.
+    let again = b.feed(
+        2,
+        vec![Event::SchemeSplit {
+            policy: PolicyId::from("S1"),
+            new_policy: PolicyId::from("S2"),
+            new_number: "N-S2".into(),
+            lives: vec![LifeId::from("M1")],
+            effective: split,
+            layers: vec![],
+        }],
+    );
+    assert!(again.instructions.is_empty(), "{:?}", again.instructions);
+
+    // The member later leaves the new scheme.
+    b.today = d(2027, 9, 1);
+    b.feed(
+        2,
+        vec![Event::MemberLeft {
+            policy: PolicyId::from("S2"),
+            life: LifeId::from("M1"),
+            effective: d(2027, 9, 1),
+        }],
+    );
+    assert!(b.ri.cession(&moved, d(2027, 9, 1)).is_none());
+    assert!(b.ri.cession(&moved, d(2027, 8, 31)).is_some());
+    b.assert_reconciles();
+}

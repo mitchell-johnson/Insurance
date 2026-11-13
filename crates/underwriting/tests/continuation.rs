@@ -16,6 +16,7 @@ fn excess(w: &mut World, id: &str, sum: i64, smoker: bool) {
         policy: open.policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     let disclosed = w.disclose(id, "L1", &if smoker { yes("smoked_last_12_months") } else { clean() });
@@ -123,4 +124,73 @@ fn a_leaver_continues_the_excess_on_the_terms_already_accepted() {
         .effects
         .iter()
         .any(|e| matches!(e, Effect::ProposalEnded { outcome, .. } if outcome == "withdrawn")));
+}
+
+/// Purpose: a continuation carries every exclusion the member's earlier excess decisions
+/// accepted, each once, running from the continuation's inception; and an earlier excess that
+/// is decided but not yet issued is no ground for one.
+/// Why it matters: an exclusion the member accepted on the scheme is part of the terms they were
+/// underwritten on, so dropping it on leaving would cover a condition nobody agreed to cover;
+/// and cover that never went into force on the scheme cannot be continued from it.
+#[test]
+fn a_continuation_keeps_the_earlier_exclusions_and_needs_issued_cover() {
+    use ic_underwriting::codes::AppliedExclusion;
+    use ic_underwriting::model::CoverTerms;
+    let mut w = World::new();
+    let excluded = |from| CoverTerms {
+        cover: "life".into(),
+        outcome: CoverOutcome::Accept {
+            loading_percent: 0,
+            exclusions: vec![AppliedExclusion {
+                code: "EX-4001".into(),
+                from,
+                until: None,
+            }],
+            revised_sum_insured_minor: None,
+        },
+    };
+    for id in ["grp-uw:S1:1", "grp-uw:S1:2"] {
+        let mut open = w.open_command(id, &["L1"], &[("L1", "life", "group_life", 150_000_00)], false);
+        open.product_code = "group-life".into();
+        open.policy = PolicyId::from("SCHEME-1");
+        open.entry = Entry::GroupExcess {
+            policy: open.policy.clone(),
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+            delegated_authority: None,
+        };
+        w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+        w.disclose(id, "L1", &yes("heart_condition"));
+        let case = w.take(id, "L1", "amy");
+        let proposed = w.propose(&case, "amy", vec![excluded(w.today())]).unwrap();
+        w.automatic(&proposed);
+        w.respond(id, "L1", ic_underwriting::command::OfferResponse::Accept);
+    }
+    assert_eq!(
+        w.err("group-admin", continuation(&w, "grp-cont:S1:9", 100_000_00, &["grp-uw:S1:1"])),
+        "continuation",
+        "decided but not issued"
+    );
+    for id in ["grp-uw:S1:1", "grp-uw:S1:2"] {
+        w.ok(
+            "issuer",
+            Command::PolicyIssued {
+                proposal: id.into(),
+                layers: vec![IssuedLayer {
+                    life: "L1".into(),
+                    cover: "life".into(),
+                    layer: 2,
+                }],
+            },
+        );
+    }
+    w.ok("group-admin", continuation(&w, "grp-cont:S1:9", 300_000_00, &["grp-uw:S1:1", "grp-uw:S1:2"]));
+    let d = &w.p("grp-cont:S1:9").lives[&LifeId::from("L1")].decisions[0];
+    let Some(CoverOutcome::Accept { exclusions, .. }) = d.terms_for("life") else {
+        panic!("not accepted: {d:?}")
+    };
+    assert_eq!(
+        exclusions.iter().map(|e| (e.code.as_str(), e.from)).collect::<Vec<_>>(),
+        vec![("EX-4001", w.today())]
+    );
 }

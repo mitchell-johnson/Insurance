@@ -510,6 +510,7 @@ async fn an_excess_decision_reaches_group_administration_under_the_agreed_key() 
                 policy: open.policy.clone(),
                 takeover_accepted_minor: None,
                 reinsurance_reference: None,
+                delegated_authority: None,
             };
             w.ok("group-admin", Command::OpenProposal(Box::new(open)));
         })
@@ -851,7 +852,7 @@ async fn a_change_of_occupation_reaches_the_core_with_the_new_class() {
 /// Purpose: a leaver's continued cover above the automatic limit reaches the core as a layer
 /// on the continuation policy group administration issued, on the terms the member's scheme
 /// excess was accepted on, and the end of the proposal is left for group administration to read.
-/// One taken up after its inception waits, parked with the reason, rather than start late.
+/// One taken up after its inception is backdated to it: the core starts the layer on the inception.
 /// Why it matters: the leaver pays for this cover from the day scheme cover ended; a layer
 /// that started on the day of take-up would leave them without the underwritten amount in
 /// between while they believed they had it.
@@ -872,6 +873,7 @@ async fn a_continued_excess_becomes_a_layer_on_the_continuation_policy() {
             policy: PolicyId::from("SCHEME-1"),
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         };
         open.policy = PolicyId::from("SCHEME-1");
         w.ok("group-admin", Command::OpenProposal(Box::new(open)));
@@ -935,14 +937,22 @@ async fn a_continued_excess_becomes_a_layer_on_the_continuation_policy() {
         assert!(cluster.reconcile().is_empty());
     }
 
-    continuation("grp-cont:S1:2", start() - chrono::Duration::days(10));
+    // Taken up ten days after its inception: the layer is backdated to the inception.
+    {
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        let mut date = start();
+        while date < start() + chrono::Duration::days(10) {
+            date = date.succ_opt().unwrap();
+            cluster.submit(0, "leader", ic_core::Command::AdvanceBusinessDate { to: date }).unwrap();
+        }
+    }
+    continuation("grp-cont:S1:2", start());
     let pass = b.pass().await;
-    assert!(
-        pass.parked
-            .iter()
-            .any(|(_, why)| why.contains("cannot yet start a layer before its business date")),
-        "{pass:?}"
-    );
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let layers = &cluster.state(0).policies[&policy].covers["life"].layers;
+    assert_eq!((layers.len(), layers[2].start), (3, start()), "starts on the inception, not the take-up");
+    assert!(cluster.reconcile().is_empty());
 }
 
 /// Purpose: a lapsed policy goes through underwriting for reinstatement, opened by collections

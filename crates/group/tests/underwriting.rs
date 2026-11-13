@@ -340,3 +340,104 @@ fn a_scheme_taken_over_keeps_members_cover_without_new_evidence() {
     assert_eq!(h.scheme().cases[&request.case].status, CaseStatus::Accepted);
     assert_eq!(h.excess_layers("E004"), vec![(210_000_00, None)]);
 }
+
+/// Purpose: a leaver continues their underwritten cover with the real underwriting module:
+/// the excess is accepted and written on the scheme, the member leaves on a scheme whose
+/// terms allow continuing it, the continuation policy is issued in the core for the automatic
+/// part, and underwriting takes group's `group_continuation` proposal, accepts the rest on the
+/// terms it accepted before with no disclosure, and once the policy's layer is reported its
+/// outcome comes back here as in place.
+/// Why it matters: each side was tested against the other's types; this proves the two
+/// state machines agree on the behaviour, so a leaver promised their underwritten cover
+/// actually keeps it.
+#[test]
+fn a_leaver_keeps_underwritten_cover_through_underwriting() {
+    use ic_group::adapters::{continuation_answer, continuation_envelope};
+    let mut t = terms();
+    t.continuation.underwritten_excess = true;
+    let mut h = Harness::new(t);
+    let mut exec = attrs("executive", 240_000_00, "wlg");
+    exec.sex = Some(ic_product::Sex::Female);
+    exec.smoker = Some(false);
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![row(1, "E001", attrs("staff", 60_000_00, "akl")), row(2, "E004", exec.clone())],
+    );
+    let request = h.requests[0].clone();
+    let key = format!("grp-uw:{SCHEME}:{}", request.case);
+    let mut w = uw::World::new();
+    w.now = h.today().and_hms_opt(9, 0, 0).unwrap().and_utc();
+    deliver(&mut w, |at, today| underwriting_envelope(&key, at, today, &request).unwrap()).unwrap();
+    let disclosed = w.disclose(&key, "E004", &uw::clean());
+    w.automatic(&disclosed);
+    carry_answers(&w, &mut h);
+    let (request_key, outcome) = h.outcomes[0].clone();
+    deliver(&mut w, |at, today| {
+        underwriting_outcome(&format!("{key}/excess-issued"), at, today, &request_key, &outcome)
+    })
+    .unwrap();
+
+    // E004 leaves today and takes up all 960,000 the same day.
+    let today = h.today();
+    h.apply(
+        "f2",
+        FileKind::Changes,
+        vec![change(1, "E004", ic_group::record::RowChange::Leave, today, exec)],
+    );
+    let offer = h.scheme().offers.values().find(|o| o.employee_id == "E004").unwrap().clone();
+    assert_eq!(offer.max_sum_insured_minor, 960_000_00);
+    h.send_as(
+        caller::MEMBER,
+        "party-E004",
+        GroupCommand::TakeUpContinuation {
+            scheme: SCHEME.into(),
+            offer: offer.id,
+            policy: ic_core::PolicyId("pol-cont-1".into()),
+            number: "WPL90000001".into(),
+            group: ic_core::GroupId("grp-cont-1".into()),
+            product_code: "term-life".into(),
+            cover: "life".into(),
+            frequency: ic_product::Frequency::Monthly,
+            sum_insured_minor: 960_000_00,
+        },
+    )
+    .unwrap();
+    h.settle();
+    let asked = h.continuations[0].clone();
+    assert_eq!(asked.amount_minor, 210_000_00);
+
+    let opened = deliver(&mut w, |at, today| continuation_envelope(at, today, &asked)).unwrap();
+    let applied = w.automatic(&opened);
+    assert!(applied.effects.iter().any(|e| matches!(e, Effect::ApplyTerms { .. })), "{:?}", applied.effects);
+    let issued = w.ok(
+        "issuer",
+        Uw::PolicyIssued {
+            proposal: asked.key.as_str().into(),
+            layers: vec![],
+        },
+    );
+    let outcomes: Vec<_> = issued
+        .effects
+        .iter()
+        .filter_map(|e| continuation_answer(&serde_json::to_value(e).unwrap()))
+        .collect();
+    assert_eq!(outcomes.len(), 1);
+    let (effect_key, scheme, offer_id, outcome) = outcomes[0].clone();
+    assert_eq!((scheme.as_str(), offer_id, outcome.as_str()), (SCHEME, offer.id, "issued"));
+    h.send_as(
+        caller::DRIVER,
+        "group-driver",
+        GroupCommand::RecordContinuedExcess {
+            scheme,
+            offer: offer_id,
+            outcome,
+        },
+    )
+    .unwrap();
+    assert!(!effect_key.is_empty());
+    assert_eq!(
+        h.scheme().offers[&offer.id].continued_excess.as_ref().unwrap().status,
+        ic_group::state::ContinuedStatus::InPlace
+    );
+}

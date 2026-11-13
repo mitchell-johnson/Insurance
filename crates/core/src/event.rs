@@ -752,6 +752,18 @@ pub enum Event {
         held: bool,
         reference: String,
     },
+    /// Members of a scheme moved to a new scheme from a date, with their
+    /// history and underwritten cover: a sale or a demerger. They did not
+    /// leave. `layers` names each underwritten layer that moved, as life,
+    /// cover and layer ID, the same on both schemes.
+    SchemeSplit {
+        policy: PolicyId,
+        new_policy: PolicyId,
+        new_number: String,
+        lives: Vec<LifeId>,
+        effective: NaiveDate,
+        layers: Vec<(LifeId, String, u32)>,
+    },
     /// What a life or the policy holds that a discount is given for changed
     /// from a date: a tier awarded, changed or lost. A tier code only; the
     /// data behind it stays with the module that judged it.

@@ -919,3 +919,86 @@ fn a_replacement_layer_names_the_layer_it_carries_on() {
     });
     assert_eq!(linked, Some((first.0 + 1, Some(first.0), LayerOrigin::UnderwrittenExcess)));
 }
+
+fn split(id: &PolicyId, new: &str, lives: &[&str], effective: NaiveDate) -> Command {
+    Command::SplitScheme(Box::new(ic_core::SplitScheme {
+        policy: id.clone(),
+        new_policy: PolicyId(new.to_string()),
+        new_number: "WPL-SPLIT-1".to_string(),
+        lives: lives.iter().map(|l| life(l)).collect(),
+        effective,
+    }))
+}
+
+/// Purpose: part of a scheme moves to a new scheme from the first day of a billing period. The
+/// member moves with the date they joined, their recorded details and their underwritten layer
+/// on its own terms and number; the old scheme is credited for them on the period already
+/// billed from that day and the new scheme bills the same amount for it, so nothing is billed
+/// twice or dropped; the move is published as a split, never as a member leaving; and a split
+/// on any other day, of every member, of someone not on the scheme, by another caller, or
+/// added to after the new scheme has been billed, is refused and changes nothing.
+/// Why it matters: when an employer sells a division its people must keep the cover they were
+/// underwritten for without being asked for evidence again. Treated as leavers they would be
+/// offered continuation and their loadings would be lost; billed on both schemes, two
+/// employers would pay for the same people.
+#[test]
+fn a_split_moves_members_with_their_history_and_bills_each_scheme_its_own() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    add(&mut c, p, excess(&id, d(2027, 11, 1), Some("0.5"), false)).unwrap();
+    days(&mut c, 34);
+    assert_eq!(c.business_date().unwrap(), d(2027, 12, 5));
+    let billed = |c: &Cluster, id: &PolicyId| -> i64 { c.state(p).policies[id].receivables.iter().map(|r| r.total_minor).sum() };
+    let before = c.state(p).policies[&id].clone();
+    assert_eq!(before.periods_billed, 2);
+    let total = billed(&c, &id);
+    let new = PolicyId("pol-split-1".to_string());
+
+    let refused = |c: &mut Cluster, command| c.submit(p, "group-admin", command).unwrap_err().code;
+    assert_eq!(refused(&mut c, split(&id, "pol-split-1", &["exec-1"], d(2027, 12, 3))), "effective");
+    assert_eq!(
+        refused(&mut c, split(&id, "pol-split-1", &["exec-1", "staff-1"], d(2027, 12, 1))),
+        "not_a_split"
+    );
+    assert_eq!(refused(&mut c, split(&id, "pol-split-1", &["nobody"], d(2027, 12, 1))), "unknown_member");
+    assert_eq!(refused(&mut c, split(&id, &id.0, &["exec-1"], d(2027, 12, 1))), "invalid_split");
+    assert_eq!(refused(&mut c, split(&id, "pol-split-1", &[], d(2027, 12, 1))), "apply_budget");
+    assert!(c.submit(p, "policy-servicing", split(&id, "pol-split-1", &["exec-1"], d(2027, 12, 1))).is_err());
+    assert_eq!(c.state(p).policies[&id], before, "a refused split changes nothing");
+    assert!(!c.state(p).policies.contains_key(&new));
+
+    c.take_events();
+    c.submit(p, "group-admin", split(&id, "pol-split-1", &["exec-1"], d(2027, 12, 1))).unwrap();
+    let seen = events(&mut c);
+    assert!(seen.iter().any(|e| matches!(e, Event::SchemeSplit { new_policy, lives, layers, .. }
+            if new_policy == &new && lives == &vec![life("exec-1")] && layers.len() == 1 && layers[0].1 == "group-life")));
+    assert!(
+        !seen.iter().any(|e| matches!(e, Event::MemberLeft { .. } | Event::LayerEnded { .. })),
+        "moved, not left"
+    );
+
+    let s = c.state(p);
+    let (old, child) = (&s.policies[&id], &s.policies[&new]);
+    assert_eq!(old.lives[&life("exec-1")].left, Some(d(2027, 12, 1)));
+    let member = &child.lives[&life("exec-1")];
+    assert_eq!((member.joined, member.left), (d(2027, 11, 1), None));
+    assert_eq!(member.factors, before.lives[&life("exec-1")].factors);
+    let was = &before.covers["group-life"].layers[0];
+    let now = &child.covers["group-life"].layers[0];
+    assert_eq!((now.id, now.start, &now.loadings, now.end), (was.id, was.start, &was.loadings, None));
+    assert_eq!(
+        (child.inception, child.periods_billed, child.group.clone()),
+        (old.inception, 1, old.group.clone())
+    );
+    assert_eq!(child.split_from.as_ref().map(|f| f.effective), Some(d(2027, 12, 1)));
+    let credited = total - billed(&c, &id);
+    assert!(credited > 90_62, "December's premium for the member and their layer is credited: {credited}");
+
+    // Overnight the new scheme bills December for its member: exactly what the old one gave back.
+    days(&mut c, 1);
+    assert_eq!(billed(&c, &new), credited);
+    assert_eq!(billed(&c, &id) + billed(&c, &new), total);
+    assert_eq!(refused(&mut c, split(&id, "pol-split-1", &["staff-1"], d(2027, 12, 1))), "split_billed");
+    days(&mut c, 30);
+    assert_eq!(c.state(p).policies[&new].periods_billed, 3, "and it is billed with the calendar from then on");
+}

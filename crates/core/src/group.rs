@@ -10,6 +10,7 @@ use ic_product::ProductDefinition;
 
 use serde::{Deserialize, Serialize};
 
+use crate::accounts;
 use crate::billing::{raise_receivable, raise_receivable_for, Bill};
 use crate::bitemporal::Bitemporal;
 use crate::catalog::Catalog;
@@ -17,7 +18,9 @@ use crate::command::{ExcessLayer, MemberChange};
 use crate::event::{Event, LayerInfo, LifeInfo, MemberCover};
 use crate::lifecycle::{member_covers, BACKDATING_LIMIT_DAYS};
 use crate::machine::{CoreState, Ctx, Reject, APPLY_BUDGET, MAX_MEMBERSHIP_CHUNK, SCHEME_BILLING_CHUNK};
-use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind};
+use crate::policy::{
+    CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind, Standing,
+};
 use crate::premium::{add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
 use crate::voluntary;
 use crate::{LifeId, PartyId, PolicyId};
@@ -900,4 +903,214 @@ pub(crate) fn identify(policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId, pa
         }
         _ => Err(Reject::new("not_unnamed", "only an unnamed member record can be identified")),
     }
+}
+
+/// Where a scheme made by a split came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitFrom {
+    pub policy: PolicyId,
+    pub effective: NaiveDate,
+}
+
+/// Move some of a scheme's members to a new scheme from the first day of a
+/// billing period: a sale or a demerger. They go with their details as
+/// recorded over time, the date they joined and their underwritten cover on
+/// its terms, as members who moved, not as leavers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SplitScheme {
+    pub policy: PolicyId,
+    pub new_policy: PolicyId,
+    pub new_number: String,
+    pub lives: Vec<LifeId>,
+    pub effective: NaiveDate,
+}
+
+impl SplitScheme {
+    pub fn allowed_callers(&self) -> &'static [&'static str] {
+        &["group-admin"]
+    }
+}
+
+/// Split a scheme. `child` is the new scheme where an earlier command of the
+/// same split made it. Returns the new scheme as it now stands; the caller
+/// keeps it.
+///
+/// The new scheme has the old one's product version, group, start date,
+/// frequency and renewal, and is billed from the period that starts on the
+/// effective date. The old scheme is credited for the moved members on
+/// every period already billed from then. Money, claims and history stay
+/// with the old scheme.
+pub(crate) fn split(
+    ledger: &mut Ledger,
+    catalog: &Catalog,
+    policy: &mut Policy,
+    child: Option<Policy>,
+    ctx: &mut Ctx<'_>,
+    spec: SplitScheme,
+) -> Result<Policy, Reject> {
+    if spec.lives.is_empty() || spec.lives.len() > MAX_MEMBERSHIP_CHUNK {
+        return Err(Reject::new(
+            "apply_budget",
+            format!("a split moves between one and {MAX_MEMBERSHIP_CHUNK} members per command"),
+        ));
+    }
+    if !crate::interest::plain(&spec.new_number) || spec.new_policy == policy.id {
+        return Err(Reject::new("invalid_split", "the new scheme has its own ID and a plain number"));
+    }
+    // The period that starts on the effective date: billed already, or next.
+    let period = (0..=policy.periods_billed).find(|n| period_start(policy.inception, policy.frequency, *n) == Some(spec.effective));
+    let Some(period) = period else {
+        return Err(Reject::new(
+            "effective",
+            "a split takes effect on the first day of a billing period, billed or next",
+        ));
+    };
+    let origin = SplitFrom {
+        policy: policy.id.clone(),
+        effective: spec.effective,
+    };
+    if let Some(existing) = &child {
+        if existing.split_from.as_ref() != Some(&origin) {
+            return Err(Reject::new("policy_exists", format!("policy {} already exists", spec.new_policy)));
+        }
+        if existing.periods_billed > period || existing.pending_invoice.is_some() {
+            return Err(Reject::new(
+                "split_billed",
+                "the new scheme has been billed; move further members by a new split",
+            ));
+        }
+    }
+    let c = policy.currency;
+    for life in &spec.lives {
+        if policy.lives.get(life).is_some_and(|l| matches!(l.kind, LifeKind::Pool { .. })) {
+            return Err(Reject::new("pool_life", format!("{life} is a pool of members, which a split cannot divide")));
+        }
+        let owes = policy.receivables.iter().any(|r| r.payer.as_ref() == Some(life) && r.outstanding_minor != 0);
+        if owes || ledger.natural_balance(&accounts::member_suspense(&policy.id, life, c).id) != 0 {
+            return Err(Reject::new(
+                "member_money",
+                format!("{life} owes or is owed money for cover they pay for; settle it before the split"),
+            ));
+        }
+    }
+    let staying = policy
+        .lives
+        .values()
+        .filter(|l| l.in_force_on(spec.effective) && !spec.lives.contains(&l.id))
+        .count();
+    if staying == 0 {
+        return Err(Reject::new("not_a_split", "a split leaves members behind; to move a whole scheme, transfer it"));
+    }
+
+    // What moves, as it stands before the old scheme lets it go.
+    let moving: Vec<LifeRecord> = spec.lives.iter().filter_map(|l| policy.lives.get(l).cloned()).collect();
+    let mut layers: Vec<(String, Layer)> = Vec::new();
+    for cover in policy.covers.values() {
+        for layer in cover
+            .layers
+            .iter()
+            .filter(|l| spec.lives.contains(&l.life) && l.end.is_none_or(|e| e > spec.effective))
+        {
+            layers.push((cover.code.clone(), layer.clone()));
+        }
+    }
+
+    // On the old scheme the members stop from the date, priced as leavers
+    // are: every period billed from then is credited.
+    let changes = spec
+        .lives
+        .iter()
+        .map(|life| MemberChange::Left {
+            life: life.clone(),
+            effective: spec.effective,
+        })
+        .collect();
+    let (scratch, _, staged) = stage(catalog, policy, ctx.date, ctx.index, changes)?;
+    policy.lives = scratch.lives;
+    policy.covers = scratch.covers;
+    for s in staged {
+        post_deltas(ledger, policy, ctx, &s.life, s.effective, s.deltas)?;
+    }
+
+    let mut new = match child {
+        Some(existing) => existing,
+        None => {
+            let mut covers = policy.covers.clone();
+            covers.values_mut().for_each(|cover| cover.layers.clear());
+            Policy {
+                id: spec.new_policy.clone(),
+                number: spec.new_number.clone(),
+                group: policy.group.clone(),
+                policyholder: policy.policyholder.clone(),
+                product_code: policy.product_code.clone(),
+                product_hash: policy.product_hash.clone(),
+                currency: policy.currency,
+                statutory_fund: policy.statutory_fund.clone(),
+                inception: policy.inception,
+                frequency: policy.frequency,
+                status: PolicyStatus::InForce,
+                standing: Some(Standing::Paid),
+                covers,
+                indexation_declined: policy.indexation_declined,
+                periods_billed: period,
+                next_receivable_id: 1,
+                anniversaries_processed: policy.anniversaries_processed,
+                variations: policy.variations.clone(),
+                declined_anniversaries: policy.declined_anniversaries.clone(),
+                split_from: Some(origin),
+                lives: Default::default(),
+                reopen_windows: Default::default(),
+                notices: Default::default(),
+                cancellation: None,
+                avoidance: None,
+                surrender: None,
+                arrangement: None,
+                arrears_pause: None,
+                hardship: None,
+                pruned: Default::default(),
+                migrated: false,
+                receivables: vec![],
+                receipts: Default::default(),
+                pending_invoice: None,
+                lapse: None,
+                transfer_out: None,
+                history: vec![],
+                unwind: None,
+                refund_with_claim: None,
+                claims: Default::default(),
+                refunds_raised: Default::default(),
+                payouts: Default::default(),
+                member_accounts: Default::default(),
+                member_standing: Default::default(),
+                interests: Default::default(),
+                nominations: vec![],
+                owner_hold: None,
+                entitlements: Vec::new(),
+                discount_overrides: Vec::new(),
+                continuation_of: None,
+                payments: Default::default(),
+                cessions: Default::default(),
+            }
+        }
+    };
+    for mut life in moving {
+        life.left = None;
+        new.lives.insert(life.id.clone(), life);
+    }
+    let mut moved = Vec::new();
+    for (code, layer) in layers {
+        moved.push((layer.life.clone(), code.clone(), layer.id));
+        if let Some(cover) = new.covers.get_mut(&code) {
+            cover.layers.push(layer);
+        }
+    }
+    ctx.emit(Event::SchemeSplit {
+        policy: policy.id.clone(),
+        new_policy: new.id.clone(),
+        new_number: new.number.clone(),
+        lives: spec.lives,
+        effective: spec.effective,
+        layers: moved,
+    });
+    Ok(new)
 }

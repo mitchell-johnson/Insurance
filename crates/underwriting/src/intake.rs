@@ -70,6 +70,15 @@ impl UnderwritingState {
             return reject("replacement", "a replacement is advised more cover on a policy in force");
         }
         let continued = crate::continuation::earlier_terms(self, &open)?;
+        if let crate::model::Entry::GroupExcess {
+            delegated_authority: Some(authority),
+            ..
+        } = &open.entry
+        {
+            if self.config.delegated_on(authority, cx.today).is_none() {
+                return reject("authority", format!("no delegated authority {authority} is in force"));
+            }
+        }
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");
@@ -127,6 +136,7 @@ impl UnderwritingState {
             issue_attempts: 0,
             reoffers: vec![],
             replacement: open.replacement,
+            delegated_to: None,
         };
         cx.event(Event::ProposalReceived {
             proposal: p.id.clone(),
@@ -141,6 +151,7 @@ impl UnderwritingState {
             flow::interim(&self.config, &mut p, cx);
         }
         flow::takeover(&self.config, &mut p, cx)?;
+        crate::special::ask_delegate(&self.config, &mut p, cx);
         if let Some(terms) = continued {
             crate::continuation::decide(self, &mut p, terms, cx)?;
         }
@@ -340,6 +351,9 @@ pub(crate) fn accept_disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &m
 pub(crate) fn disclosure(st: &UnderwritingState, p: &mut Proposal, cx: &mut Cx, d: SubmitDisclosure) -> Result<(), Reject> {
     if life_ref(p, &d.life)?.stage != Stage::AwaitingDisclosure {
         return reject("not_awaiting_disclosure", "the life's disclosure is not awaited");
+    }
+    if p.delegated_to.is_some() {
+        return reject("delegated", "the scheme's delegate decides this member's cover");
     }
     if p.replacement && !life_ref(p, &d.life)?.consented(ConsentKind::ReplacementDisclosure) {
         return reject("replacement_disclosure", "the life has not confirmed the replacement disclosure");

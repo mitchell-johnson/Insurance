@@ -760,6 +760,20 @@ impl CoreState {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
             }
+            Command::SplitScheme(command) => {
+                let (id, new_id) = (command.policy.clone(), command.new_policy.clone());
+                // The new scheme is written only if the whole split stands.
+                let child = self.policies.get(&new_id).cloned();
+                let mut made = None;
+                self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
+                    made = Some(crate::group::split(&mut s.ledger, &s.catalog, p, child, ctx, *command)?);
+                    Ok(())
+                })?;
+                if let Some(new) = made {
+                    self.policies.insert(new_id, new);
+                }
+                Ok(())
+            }
             Command::SetEntitlement(command) => {
                 let id = command.policy.clone();
                 self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
