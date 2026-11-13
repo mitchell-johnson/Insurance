@@ -99,6 +99,10 @@ pub struct LifeInfo {
     pub smoker: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occupation_class: Option<String>,
+    /// The scheme benefit category the member is in, where the scheme has
+    /// them: what a category rate table prices on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 impl LifeInfo {
@@ -111,6 +115,7 @@ impl LifeInfo {
             sex: None,
             smoker: None,
             occupation_class: None,
+            category: None,
         }
     }
 
@@ -123,6 +128,7 @@ impl LifeInfo {
             sex: factors.and_then(|f| f.sex),
             smoker: factors.and_then(|f| f.smoker),
             occupation_class: factors.and_then(|f| f.occupation_class.clone()),
+            category: factors.and_then(|f| f.category.clone()),
         }
     }
 }

@@ -38,6 +38,7 @@ ic-underwriting = { path = "../underwriting" }
 # The customer master and what its own test harness needs (tests/driver.rs
 # builds it with that harness to run the two services together).
 ic-customers = { path = "../customers" }
+ic-channels = { path = "../channels" }
 base64.workspace = true
 rand.workspace = true
 tower.workspace = true
