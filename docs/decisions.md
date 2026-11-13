@@ -190,3 +190,12 @@ The underwriting module decides the remedy on an approved case; the core carries
 
 - Mitchell agreed the customer master's erasure register (`customers-erasures`) is kept 10 years (`registerYears`, 3,660 days) and is locked. The register must outlive every database backup, because a restore brings erased keys back and the register is how they are erased again (`POST /v1/admin/reshred`).
 - Bicep cannot lock an immutability policy. `tools/lock-erasure-register.sh` does it once in prod after the first deployment: it refuses unless the policy is the agreed period and unlocked, and asks for the account name. No subscription has been deployed to yet, so it has not been run. Once locked the period can only be lengthened, and the account cannot be deleted while it holds a page inside its period.
+
+## Group schemes: continuation, delegated underwriting, split and health menu (14 Nov 2026, NZ time)
+
+Mitchell answered the four group questions in the group thread.
+
+- **Continuing underwritten cover on leaving:** allowed as a scheme setting, off by default (`continuation.underwritten_excess`). With it on, underwriting carries the terms it accepted before onto the continuation policy, as a layer, with no new evidence. The layer starts on the policy's first day once the core can backdate it; until then a take-up after that day waits in underwriting.
+- **Delegated underwriting for an employer's broker:** to be built. The scheme names the underwriting module's delegated authority. Only cover we can retain goes to the delegate: not a facultative scheme, and not a member reinsurance asked us to underwrite. Underwriting checks every delegated decision against the authority.
+- **Splitting a scheme (sale or demerger):** to be built. Members move with their history and underwriting terms, from the first day of a billing period, with no leaver events, using the core's `SplitScheme` (being built in the core thread). Moving the new policy to a buyer's group uses the existing transfer protocol.
+- **Health plan menu:** to be built. Plans are sets of the product's covers. A member chooses a plan and a tier, and the employer sees the tier but never the dependants. The menu and members' choices are built; putting a choice into force needs per-member covers and dependants on a scheme in the core, which the core thread agreed to in principle.
