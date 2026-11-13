@@ -151,6 +151,10 @@ pub enum ReinsurancePosting {
     /// A statement going for payment: debit the reinsurer's account, credit
     /// reinsurance settlement clearing.
     SettlementSweep,
+    /// The bank moved a statement's settlement: debit reinsurance settlement
+    /// clearing, credit the bank account named on the command. Money received
+    /// from a reinsurer is a negative amount.
+    SettlementCleared,
 }
 
 impl ReinsurancePosting {
@@ -165,6 +169,7 @@ impl ReinsurancePosting {
             ReinsurancePosting::DisputeSettlement => "reinsurance_dispute_settlement",
             ReinsurancePosting::OpeningBalance => "reinsurance_opening_balance",
             ReinsurancePosting::SettlementSweep => "reinsurance_settlement_sweep",
+            ReinsurancePosting::SettlementCleared => "reinsurance_settlement_cleared",
         }
     }
 }
@@ -187,6 +192,7 @@ pub(crate) fn post(
     amount_minor: i64,
     value_date: NaiveDate,
     reference: &str,
+    bank_account: Option<&str>,
 ) -> Result<(), Reject> {
     if !valid_code(treaty) || !valid_code(reinsurer) {
         return Err(Reject::new(
@@ -200,6 +206,18 @@ pub(crate) fn post(
     if policy.is_some_and(|p| p.currency != currency) {
         return Err(Reject::new("currency", "the entry is not in the policy's currency"));
     }
+    // Only the entry that moves money at the bank names a bank account.
+    let bank = match (kind, bank_account) {
+        (ReinsurancePosting::SettlementCleared, Some(code)) if valid_code(code) => Some(code),
+        (ReinsurancePosting::SettlementCleared, _) => {
+            return Err(Reject::new(
+                "invalid_bank_account",
+                "a cleared settlement names the bank account it moved through: 1 to 64 letters, digits, hyphens or underscores",
+            ))
+        }
+        (_, Some(_)) => return Err(Reject::new("bank_account_not_expected", "only a cleared settlement names a bank account")),
+        (_, None) => None,
+    };
     let c = currency;
     let account = accounts::reinsurer_account(treaty, reinsurer, c);
     let (debit, credit) = match kind {
@@ -212,6 +230,7 @@ pub(crate) fn post(
         ReinsurancePosting::DisputeSettlement => (accounts::reinsurance_recoveries(c), account),
         ReinsurancePosting::OpeningBalance => (accounts::reinsurance_migration_control(c), account),
         ReinsurancePosting::SettlementSweep => (account, accounts::reinsurance_settlement_clearing(c)),
+        ReinsurancePosting::SettlementCleared => (accounts::reinsurance_settlement_clearing(c), accounts::bank(bank.unwrap_or_default(), c)),
     };
     let dims = match policy {
         Some(p) => accounts::dims(p, None, kind.entry_kind()),
@@ -227,6 +246,9 @@ pub(crate) fn post(
     detail.insert("treaty".to_string(), treaty.to_string());
     detail.insert("reinsurer".to_string(), reinsurer.to_string());
     detail.insert("reference".to_string(), reference.to_string());
+    if let Some(code) = bank {
+        detail.insert("bank_account".to_string(), code.to_string());
+    }
     let postings = set.into_postings(ledger)?;
     // A correction to an earlier period carries that period's value date.
     ctx.post(ledger, kind.entry_kind(), policy, value_date.min(ctx.date), postings, detail)?;

@@ -8,6 +8,7 @@ use ic_azure::blob::BlobContainer;
 use ic_azure::credential::AzureCredential;
 use ic_azure::eventhubs::EventHubsSink;
 use ic_group::adapters::{ClusterCore, ClusterModule, ClusterPeers, QuarantineBlobs};
+use ic_group::auth::Entra;
 use ic_group::driver::Driver;
 use ic_group::service::{router, run_passes, serve, Config, HttpCustomerMaster};
 use ic_raft::{ClusterAuth, ClusterClient};
@@ -65,7 +66,11 @@ async fn main() -> Result<(), String> {
         .await
         .map_err(|e| format!("cannot listen on {}: {e}", config.listen))?;
     tracing::info!(?config, "group service started");
-    let web = tokio::spawn(serve(listener, router(driver.clone(), &config.api_key), stopped(stop.clone())));
+    let web = tokio::spawn(serve(
+        listener,
+        router(driver.clone(), Entra::new(&config.entra_authority, &config.tenant, &config.audience)),
+        stopped(stop.clone()),
+    ));
     run_passes(driver, config.cycle_every, stopped(stop), |_| {}).await;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }

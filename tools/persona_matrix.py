@@ -5,6 +5,7 @@ Sources (hand-written, in docs/testing/personas/):
   personas-insurance.md   persona, situation and cast tables
   user-stories.md         stories with IDs of the form US-<persona>-<n>
   test-matrix-*.md        test cases, one table per capability area
+  traceability.md         which built tests (under crates/) carry out each test case
 
 Outputs (generated, same folder):
   test-matrix.csv         every test case as one row
@@ -23,7 +24,9 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent / "docs" / "testing" / "personas"
+REPO = Path(__file__).resolve().parent.parent
+ROOT = REPO / "docs" / "testing" / "personas"
+CRATES = REPO / "crates"
 TYPES = {
     "J": "Scripted journey",
     "N": "Negative or refusal",
@@ -104,6 +107,48 @@ def load_tests() -> list[dict]:
     return tests
 
 
+def load_trace() -> dict[str, dict]:
+    trace: dict[str, dict] = {}
+    path = ROOT / "traceability.md"
+    if not path.exists():
+        return trace
+    for line in path.read_text().splitlines():
+        if not line.startswith("|"):
+            continue
+        row = cells(line)
+        if len(row) != 3 or not re.match(r"^[A-Z]+-\d{3}$", row[0]):
+            continue
+        refs = [r.strip().strip("`") for r in row[2].split("<br>") if r.strip()]
+        if row[0] in trace:
+            raise SystemExit(f"duplicate traceability row {row[0]}")
+        trace[row[0]] = {"status": row[1], "tests": refs}
+    return trace
+
+
+def validate_trace(tests, trace) -> list[str]:
+    errors: list[str] = []
+    known = {t["id"] for t in tests}
+    sources: dict[Path, str] = {}
+    for tid, t in trace.items():
+        if tid not in known:
+            errors.append(f"traceability {tid}: not a test in the matrix")
+        if t["status"] not in {"full", "part"}:
+            errors.append(f"traceability {tid}: status must be full or part, not {t['status']}")
+        if not t["tests"]:
+            errors.append(f"traceability {tid}: names no built test")
+        for ref in t["tests"]:
+            if "::" not in ref:
+                errors.append(f"traceability {tid}: {ref} is not file::test")
+                continue
+            file, name = ref.split("::", 1)
+            src = CRATES / file
+            if src not in sources:
+                sources[src] = src.read_text() if src.is_file() else ""
+            if not re.search(rf"\bfn\s+{re.escape(name)}\b", sources[src]):
+                errors.append(f"traceability {tid}: no test {name} in crates/{file}")
+    return errors
+
+
 def validate(personas, stories, tests) -> list[str]:
     errors: list[str] = []
     seen = set()
@@ -154,18 +199,20 @@ def validate(personas, stories, tests) -> list[str]:
     return errors, story_tests, persona_tests, situations
 
 
-def write_csv(tests):
+def write_csv(tests, trace):
     with (ROOT / "test-matrix.csv").open("w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["id", "area", "area_title", "design_sections", "story", "personas",
-                    "scenario", "expected", "type", "phase", "priority"])
+                    "scenario", "expected", "type", "phase", "priority", "built", "built_tests"])
         for t in tests:
             w.writerow([t["id"], t["area"], t["area_title"], t["design_refs"], t["story"],
                         " ".join(t["personas"]), t["scenario"], t["expected"],
-                        TYPES[t["type"]], t["phase"], t["priority"]])
+                        TYPES[t["type"]], t["phase"], t["priority"],
+                        trace.get(t["id"], {}).get("status", "none"),
+                        " ".join(trace.get(t["id"], {}).get("tests", []))])
 
 
-def write_coverage(personas, stories, tests, story_tests, persona_tests, situations):
+def write_coverage(personas, stories, tests, story_tests, persona_tests, situations, trace):
     out: list[str] = []
     add = out.append
     add("# Coverage report")
@@ -199,6 +246,46 @@ def write_coverage(personas, stories, tests, story_tests, persona_tests, situati
         tot[t["phase"]] += 1
     add("| **Total** | | " + " | ".join(f"**{tot[p]}**" for p in PHASES)
         + f" | **{len(tests)}** | **{sum(t['priority'] == '1' for t in tests)}** |")
+    add("")
+
+    def built(t):
+        return trace.get(t["id"], {}).get("status", "none")
+
+    add("## Built so far")
+    add("")
+    add("How many persona tests the built test suite carries out, from `traceability.md`. "
+        "**Full** means the built tests check what the row expects; **part** means some of it.")
+    add("")
+    add("| Area | Full | Part | None | Priority 1 not full |")
+    add("| --- | ---: | ---: | ---: | ---: |")
+    for code, a in areas.items():
+        mine = [t for t in tests if t["area"] == code]
+        n = {k: sum(built(t) == k for t in mine) for k in ("full", "part", "none")}
+        gap = sum(t["priority"] == "1" and built(t) != "full" for t in mine)
+        add(f"| {code} {a['title']} | {n['full']} | {n['part']} | {n['none']} | {gap} |")
+    n = {k: sum(built(t) == k for t in tests) for k in ("full", "part", "none")}
+    add(f"| **Total** | **{n['full']}** | **{n['part']}** | **{n['none']}** | "
+        f"**{sum(t['priority'] == '1' and built(t) != 'full' for t in tests)}** |")
+    add("")
+    add("| Phase | Full | Part | None |")
+    add("| --- | ---: | ---: | ---: |")
+    for ph in PHASES:
+        mine = [t for t in tests if t["phase"] == ph]
+        add(f"| {ph} | " + " | ".join(str(sum(built(t) == k for t in mine)) for k in ("full", "part", "none")) + " |")
+    add("")
+    add("### Priority 1 tests with no built test, by area")
+    add("")
+    for code, a in areas.items():
+        ids = [t["id"] for t in tests if t["area"] == code and t["priority"] == "1" and built(t) == "none"]
+        if ids:
+            add(f"- **{code}** ({len(ids)}): {', '.join(ids)}")
+    add("")
+    add("### Priority 1 tests only partly built, by area")
+    add("")
+    for code, a in areas.items():
+        ids = [t["id"] for t in tests if t["area"] == code and t["priority"] == "1" and built(t) == "part"]
+        if ids:
+            add(f"- **{code}** ({len(ids)}): {', '.join(ids)}")
     add("")
 
     add("## Tests by type")
@@ -245,14 +332,17 @@ def write_coverage(personas, stories, tests, story_tests, persona_tests, situati
 
 
 def main() -> int:
-    personas, stories, tests = load_personas(), load_stories(), load_tests()
+    personas, stories, tests, trace = load_personas(), load_stories(), load_tests(), load_trace()
     errors, story_tests, persona_tests, situations = validate(personas, stories, tests)
+    errors += validate_trace(tests, trace)
     for e in errors:
         print("ERROR", e)
-    print(f"{len(personas)} personas and situations, {len(stories)} stories, {len(tests)} tests, {len(errors)} errors")
+    full = sum(t["status"] == "full" for t in trace.values())
+    print(f"{len(personas)} personas and situations, {len(stories)} stories, {len(tests)} tests "
+          f"({full} fully and {len(trace) - full} partly built), {len(errors)} errors")
     if "--check" not in sys.argv:
-        write_csv(tests)
-        write_coverage(personas, stories, tests, story_tests, persona_tests, situations)
+        write_csv(tests, trace)
+        write_coverage(personas, stories, tests, story_tests, persona_tests, situations, trace)
     return 1 if errors else 0
 
 
