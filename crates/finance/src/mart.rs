@@ -47,6 +47,12 @@ pub const DEFINITION_VERSION: u32 = 5;
 pub const IN_FORCE: &str = "in_force";
 pub const MOVEMENT: &str = "movement";
 pub const EXPERIENCE: &str = "experience";
+/// Claims by cause category, cut on request and never stored at the close.
+pub const CLAIMS_BY_CAUSE: &str = "claims_by_cause";
+
+/// The fewest claims a row of the claims by cause extract may show. A row
+/// with fewer is folded into a coarser one or withheld.
+pub const CAUSE_MIN_CELL: usize = 5;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum MartError {
@@ -153,6 +159,19 @@ impl Factors {
 fn plain(code: Option<&str>) -> String {
     let keep = |c: char| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' };
     code.unwrap_or_default().chars().map(keep).collect()
+}
+
+/// The top of a cause tag, which is all the mart keeps: "cancer" from
+/// "cancer.breast". Anything that is not a plain lower-case word is "unknown",
+/// so that a code or words typed into the field never reach a file.
+fn cause_category(tag: &str) -> String {
+    let top = tag.split('.').next().unwrap_or_default();
+    let plain = !top.is_empty() && top.len() <= 32 && top.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    if plain {
+        top.to_string()
+    } else {
+        "unknown".to_string()
+    }
 }
 
 pub(crate) fn sex_name(sex: Option<Sex>) -> &'static str {
@@ -365,6 +384,10 @@ struct KnownClaim {
     occupation_class: String,
     #[serde(default)]
     category: String,
+    /// The cause category the claims module last gave: the top of its cause
+    /// tree only, never the code or the words.
+    #[serde(default)]
+    cause: String,
     /// The business date the claims module registered it.
     #[serde(default)]
     registered_on: Option<NaiveDate>,
@@ -989,6 +1012,12 @@ impl Mart {
             }
             _ => {}
         }
+        // Any fact may carry the cause category as it now stands.
+        if let Some(cause) = text("cause_category").map(|c| cause_category(c)) {
+            if let Some(known) = self.known_claims.get_mut(&(partition, claim.to_string())) {
+                known.cause = cause;
+            }
+        }
     }
 
     fn arrive(&mut self, partition: PartitionId, policy: &PolicyId, row: PolicyRow, date: NaiveDate, effective: Option<NaiveDate>, kind: &str) {
@@ -1461,7 +1490,117 @@ impl Mart {
             reconciled,
         })
     }
+
+    /// Claims registered, admitted or declined from `from` to `to`, by
+    /// product, cover type, age band, sex and cause category, for an
+    /// experience study. Nothing below [`CAUSE_MIN_CELL`] claims is shown:
+    /// a small row's cause becomes "(other)"; a small "(other)" row loses
+    /// its age band and sex; a row still small is withheld, and only how
+    /// many claims were withheld is said. The totals are of the rows shown,
+    /// so that no withheld amount can be worked out by subtraction.
+    pub fn claims_by_cause(&self, from: NaiveDate, to: NaiveDate) -> Result<Extract, MartError> {
+        if from > to {
+            return Err(MartError::Range { from, to });
+        }
+        self.kept(from)?;
+        self.closed(to)?;
+        #[derive(Default, Clone, Copy)]
+        struct Cell {
+            claims: usize,
+            registered: i128,
+            admitted_claims: i128,
+            admitted_minor: i128,
+            declined: i128,
+        }
+        impl Cell {
+            fn add(&mut self, o: &Cell) {
+                self.claims += o.claims;
+                self.registered += o.registered;
+                self.admitted_claims += o.admitted_claims;
+                self.admitted_minor += o.admitted_minor;
+                self.declined += o.declined;
+            }
+        }
+        let within = |d: Option<NaiveDate>| d.is_some_and(|d| d >= from && d <= to);
+        // Each claim's part in the period, under its own key.
+        let mut each: BTreeMap<&(PartitionId, String), Cell> = BTreeMap::new();
+        for (key, known) in &self.known_claims {
+            if within(known.registered_on) || within(known.declined_on) {
+                let cell = each.entry(key).or_default();
+                cell.registered += i128::from(within(known.registered_on));
+                cell.declined += i128::from(within(known.declined_on));
+            }
+        }
+        for a in self.admissions.iter().filter(|a| a.business_date >= from && a.business_date <= to) {
+            if let Some((key, _)) = self.known_claims.get_key_value(&(a.partition, a.claim.clone())) {
+                let cell = each.entry(key).or_default();
+                cell.admitted_claims += i128::from(a.claims);
+                cell.admitted_minor += i128::from(a.admitted_minor);
+            }
+        }
+        type Key = (String, String, String, String, String);
+        let mut cells: BTreeMap<Key, Cell> = BTreeMap::new();
+        for (key, part) in &each {
+            let known = &self.known_claims[*key];
+            let cause = if known.cause.is_empty() { "unknown".to_string() } else { known.cause.clone() };
+            let row = (
+                known.product_code.clone(),
+                known.cover_type.clone(),
+                age_band(known.age),
+                sex_name(known.sex).to_string(),
+                cause,
+            );
+            let cell = cells.entry(row).or_default();
+            cell.add(&Cell { claims: 1, ..*part });
+        }
+        let total: usize = cells.values().map(|c| c.claims).sum();
+        // Fold small rows into coarser ones, twice.
+        for coarser in [(|k: Key| (k.0, k.1, k.2, k.3, OTHER_CAUSE.to_string())) as fn(Key) -> Key, |k: Key| {
+            (k.0, k.1, "all".to_string(), "all".to_string(), k.4)
+        }] {
+            let mut next: BTreeMap<Key, Cell> = BTreeMap::new();
+            for (key, cell) in cells {
+                let key = if cell.claims < CAUSE_MIN_CELL { coarser(key) } else { key };
+                next.entry(key).or_default().add(&cell);
+            }
+            cells = next;
+        }
+        let mut lines = vec!["product,cover_type,age_band,sex,cause,claims,registered,admitted_claims,admitted_minor,declined".to_string()];
+        let mut control: BTreeMap<String, i128> = BTreeMap::new();
+        let mut shown = 0usize;
+        for ((product, cover_type, band, sex, cause), c) in cells.iter().filter(|(_, c)| c.claims >= CAUSE_MIN_CELL) {
+            lines.push(format!(
+                "{product},{cover_type},{band},{sex},{cause},{},{},{},{},{}",
+                c.claims, c.registered, c.admitted_claims, c.admitted_minor, c.declined
+            ));
+            shown += c.claims;
+            for (name, v) in [
+                ("registered", c.registered),
+                ("admitted_claims", c.admitted_claims),
+                ("admitted_minor", c.admitted_minor),
+                ("declined", c.declined),
+            ] {
+                *control.entry(name.to_string()).or_insert(0) += v;
+            }
+        }
+        let withheld = total - shown;
+        control.insert("claims".to_string(), shown as i128);
+        control.insert("withheld_claims".to_string(), withheld as i128);
+        control.insert("min_cell".to_string(), CAUSE_MIN_CELL as i128);
+        Ok(Extract {
+            kind: CLAIMS_BY_CAUSE,
+            from: Some(from),
+            as_at: to,
+            lines,
+            control,
+            reconciled: true,
+        })
+    }
 }
+
+/// The cause a small row is folded under. Not a plain word, so that no cause
+/// the claims module gives can be mistaken for it.
+const OTHER_CAUSE: &str = "(other)";
 
 fn control(closing: Totals, opening: Option<Totals>) -> BTreeMap<String, i128> {
     let mut out = BTreeMap::new();
