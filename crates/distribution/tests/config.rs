@@ -793,3 +793,49 @@ fn nothing_is_decided_before_the_first_business_date_is_known() {
     assert_eq!(out.result.unwrap_err().code, "business_date");
     assert!(state.unconfirmed().is_empty());
 }
+
+/// Purpose: with the production setting, a rule is refused unless it carries
+/// worked examples; an example that the rule does not reproduce is refused
+/// naming what the rule pays and what the agreement says; an example dated
+/// before the rule takes effect is refused; and a rule whose examples all
+/// come out right activates.
+/// Why it matters: a rule is the agreement turned into data. The examples
+/// are the agreement's own arithmetic, written by the person who read it, so
+/// a share typed wrongly is caught before any adviser is paid by it.
+#[test]
+fn a_rule_activates_only_when_its_worked_examples_come_out_right() {
+    use ic_distribution::rules::RuleExample;
+    let mut w = worked_example();
+    w.dist.settings.rule_examples_required = true;
+    let on = w.today();
+    let lines = vec![
+        base("a-co", Share::OfRemainder(pct(80.0)), true),
+        base("fap-one", Share::OfRemainder(pct(20.0)), false),
+    ];
+    let example = |name: &str, on, a_co: i64, fap_one: i64| RuleExample {
+        name: name.into(),
+        on,
+        commission_type: CommissionType::Initial,
+        gross_minor: 1_000_00,
+        premium_minor: 0,
+        expect: vec![(party("a-co"), Component::Base, a_co), (party("fap-one"), Component::Base, fap_one)],
+    };
+    let with = |examples: Vec<RuleExample>| {
+        let mut r = rule("a-at-fap-one", 2, on, lines.clone(), vec![liable("fap-one")]);
+        r.examples = examples;
+        vec![Change::ActivateRule(r)]
+    };
+    let refused = |w: &mut World, id: &str, changes| w.propose(id, changes).unwrap_err();
+    assert_eq!(refused(&mut w, "none", with(vec![])).code, "rule_examples");
+    let wrong = refused(&mut w, "wrong", with(vec![example("typed-75", on, 750_00, 250_00)]));
+    assert_eq!(wrong.code, "rule_examples");
+    assert!(
+        wrong.message.contains("typed-75") && wrong.message.contains("800") && wrong.message.contains("750"),
+        "the refusal says what differs: {}",
+        wrong.message
+    );
+    let early = refused(&mut w, "early", with(vec![example("early", on.pred_opt().unwrap(), 800_00, 200_00)]));
+    assert_eq!(early.code, "rule_examples");
+    w.activate("right", with(vec![example("agreement-2", on, 800_00, 200_00)])).unwrap();
+    assert!(w.events.iter().any(|e| matches!(e, Event::RuleActivated { .. })));
+}

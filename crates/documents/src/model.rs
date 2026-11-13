@@ -320,3 +320,145 @@ impl StandingInterest {
         self.from <= on && self.until.is_none_or(|until| until > on)
     }
 }
+
+/// Who a requested letter is to: a person, or an adviser by their party
+/// in the customer master.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LetterRecipient {
+    Party { party: PartyId },
+    Adviser { adviser: PartyId },
+}
+
+impl LetterRecipient {
+    pub fn party(&self) -> &PartyId {
+        match self {
+            LetterRecipient::Party { party } => party,
+            LetterRecipient::Adviser { adviser } => adviser,
+        }
+    }
+}
+
+/// A letter another module asks for: what happened, to whom, and the codes
+/// the wording explains. The module sends facts, never wording.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LetterRequest {
+    /// The asking module's own id for it, stable across retries.
+    pub request: String,
+    pub kind: String,
+    pub recipient: LetterRecipient,
+    #[serde(default)]
+    pub policy: Option<PolicyId>,
+    /// What the letter is about in the asking module: a proposal, a
+    /// statement.
+    pub subject: String,
+    #[serde(default)]
+    pub life: Option<String>,
+    #[serde(default)]
+    pub reasons: Vec<String>,
+    #[serde(default)]
+    pub detail: std::collections::BTreeMap<String, String>,
+    pub business_date: NaiveDate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LetterRequestStatus {
+    Pending,
+    Issued { document: String },
+    Cancelled { reason: String },
+}
+
+/// A requested letter and where it stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LetterRequestRecord {
+    pub request: LetterRequest,
+    /// The module that asked.
+    pub caller: String,
+    pub received: NaiveDate,
+    pub status: LetterRequestStatus,
+}
+
+/// One kind of letter a module may ask for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RequestedKind {
+    pub caller: &'static str,
+    pub kind: &'static str,
+    /// The template the letter is issued from.
+    pub template: &'static str,
+    /// It tells a person about their own health: issued as clinical, to
+    /// them alone.
+    pub clinical: bool,
+    /// Delivery must be provable.
+    pub proven: bool,
+}
+
+/// Every letter another module may ask for.
+pub const REQUESTED_KINDS: &[RequestedKind] = &[
+    RequestedKind {
+        caller: "underwriting",
+        kind: "offer_made",
+        template: "uw-offer-made",
+        clinical: true,
+        proven: false,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "declined",
+        template: "uw-declined",
+        clinical: true,
+        proven: true,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "proposal_lapsed",
+        template: "uw-proposal-lapsed",
+        clinical: false,
+        proven: false,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "proposal_withdrawn",
+        template: "uw-proposal-withdrawn",
+        clinical: false,
+        proven: false,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "policy_issued",
+        template: "uw-policy-issued",
+        clinical: false,
+        proven: false,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "adviser_unavailable",
+        template: "uw-adviser-unavailable",
+        clinical: false,
+        proven: true,
+    },
+    RequestedKind {
+        caller: "underwriting",
+        kind: "interview_to_confirm",
+        template: "uw-interview-to-confirm",
+        clinical: false,
+        proven: false,
+    },
+    RequestedKind {
+        caller: "reinsurance",
+        kind: "reinsurance_statement",
+        template: "ri-reinsurance-statement",
+        clinical: false,
+        proven: true,
+    },
+];
+
+/// The kind `caller` may ask for under `kind`, if there is one.
+pub fn requested_kind(caller: &str, kind: &str) -> Option<&'static RequestedKind> {
+    REQUESTED_KINDS.iter().find(|k| k.caller == caller && k.kind == kind)
+}
+
+/// The document a requested letter becomes, the same on every attempt.
+pub fn requested_document(request: &str) -> String {
+    format!("letter:{request}")
+}

@@ -287,6 +287,13 @@ pub enum Event {
     AuthorityReinstated {
         authority: Id,
     },
+    /// The bank's window for a submission's value date had passed when a
+    /// driver took it; it goes for the next window.
+    SubmissionDeferred {
+        submission: Id,
+        from: NaiveDate,
+        to: NaiveDate,
+    },
     HardshipMarked {
         authority: Id,
         hardship: bool,
@@ -508,6 +515,10 @@ pub struct PaymentsState {
     /// to talk to the payer before anything is presented again.
     #[serde(default)]
     pub awaiting_conversation: BTreeMap<Id, Id>,
+    /// Items that went to the bank later than their run's value date, by
+    /// item, so what the delay caused can be found and reversed.
+    #[serde(default)]
+    pub deferred: BTreeMap<Id, crate::model::Deferred>,
     pub refunds: BTreeMap<Id, Refund>,
     /// Payments other modules released, until they settle.
     #[serde(default)]
