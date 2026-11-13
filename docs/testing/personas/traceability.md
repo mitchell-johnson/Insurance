@@ -468,11 +468,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | STF-001 | full | `channels/tests/staff.rs::the_four_questions_each_deny_on_their_own`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
-| STF-002 | part | `channels/tests/staff.rs::personal_connections_and_flagged_attempts` |
+| STF-002 | full | `channels/tests/staff.rs::personal_connections_and_flagged_attempts`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-003 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
 | STF-004 | full | `channels/tests/staff.rs::the_four_questions_each_deny_on_their_own` |
 | STF-005 | full | `channels/tests/staff.rs::cover_and_uplift_grants` |
-| STF-006 | part | `channels/tests/staff.rs::cover_and_uplift_grants` |
+| STF-006 | full | `channels/tests/staff.rs::cover_and_uplift_grants` |
 | STF-007 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`payments/tests/controls.rs::an_approver_cannot_also_maintain_payees_or_connectivity`<br>`payments/tests/runs.rs::the_maker_never_approves_their_own_run` |
 | STF-008 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`underwriting/tests/special.rs::a_declared_conflict_removes_the_underwriter_from_the_case`<br>`underwriting/tests/special.rs::an_underwriter_never_acts_on_their_own_application` |
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
