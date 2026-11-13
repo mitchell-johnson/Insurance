@@ -309,7 +309,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
-| GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
+| GRP-038 | full | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date`<br>`group/tests/driver.rs::the_driver_asks_for_a_members_letter_and_reports_a_refusal`<br>`group/tests/cluster.rs::a_members_letter_is_a_command_the_documents_module_accepts`<br>`documents/tests/requested_letters.rs::group_asks_for_the_leave_of_absence_letters` |
 
 ## HLT Composable health product
 
@@ -468,11 +468,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | STF-001 | full | `channels/tests/staff.rs::the_four_questions_each_deny_on_their_own`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
-| STF-002 | part | `channels/tests/staff.rs::personal_connections_and_flagged_attempts` |
+| STF-002 | full | `channels/tests/staff.rs::personal_connections_and_flagged_attempts`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-003 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
 | STF-004 | full | `channels/tests/staff.rs::the_four_questions_each_deny_on_their_own` |
 | STF-005 | full | `channels/tests/staff.rs::cover_and_uplift_grants` |
-| STF-006 | part | `channels/tests/staff.rs::cover_and_uplift_grants` |
+| STF-006 | full | `channels/tests/staff.rs::cover_and_uplift_grants` |
 | STF-007 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`payments/tests/controls.rs::an_approver_cannot_also_maintain_payees_or_connectivity`<br>`payments/tests/runs.rs::the_maker_never_approves_their_own_run` |
 | STF-008 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`underwriting/tests/special.rs::a_declared_conflict_removes_the_underwriter_from_the_case`<br>`underwriting/tests/special.rs::an_underwriter_never_acts_on_their_own_application` |
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
@@ -521,11 +521,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-012 | full | `finance/tests/edges.rs::a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
-<<<<<<< HEAD
-=======
 | FIN-015 | full | `payments/tests/aml.rs::a_payer_who_is_not_the_owner_is_raised_once`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
 | FIN-016 | full | `payments/tests/aml.rs::a_recorded_relationship_stops_the_rule`<br>`payments-service/tests/pump.rs::a_payer_relationship_is_confirmed_with_the_customer_master`<br>`customers/tests/api.rs::a_premium_payer_relationship_can_be_checked_by_its_reference` |
->>>>>>> origin/main
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
 | FIN-018 | full | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed`<br>`finance/tests/assessed_claim.rs::an_assessed_claim_admitted_paid_and_reversed_reaches_the_mart_and_the_books` |
 

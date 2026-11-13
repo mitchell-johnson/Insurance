@@ -60,7 +60,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 32 | 9 | 1 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
-| GRP Group scheme administration | 25 | 7 | 8 | 3 |
+| GRP Group scheme administration | 26 | 6 | 8 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 43 | 2 | 0 | 2 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
@@ -70,20 +70,20 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
-| STF Staff authorisation and permissions | 13 | 3 | 2 | 3 |
+| STF Staff authorisation and permissions | 15 | 1 | 2 | 2 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 17 | 1 | 0 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **314** | **113** | **150** | **115** |
+| **Total** | **317** | **110** | **150** | **114** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 104 | 19 | 19 |
-| C | 179 | 61 | 106 |
+| C | 182 | 58 | 106 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -124,7 +124,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
 - **VUL** (5): VUL-002, VUL-003, VUL-005, VUL-007, VUL-008
-- **STF** (2): STF-002, STF-012
+- **STF** (1): STF-012
 - **CFG** (1): CFG-005
 - **INC** (2): INC-003, INC-009
 - **MIG** (3): MIG-004, MIG-008, MIG-011

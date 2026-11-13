@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::benefit::{known_category, member_cover};
 use crate::command::{ExcessDecision, GroupCommand, MatchDecision, Resolution};
-use crate::event::{ExceptionKind, GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::mapping::RowReject;
 use crate::model::{ChangeKind, JoinAs, Proposed};
 use crate::record::MemberAttrs;
@@ -637,6 +637,34 @@ impl GroupState {
         });
     }
 
+    /// Ask the documents module for a letter to a member about their leave
+    /// of absence. A member not yet linked to a person cannot be written to
+    /// by the module, so staff are told instead and send it themselves.
+    fn member_letter(&mut self, s: &Scheme, kind: &str, life: LifeId, party: Option<PartyId>, since: NaiveDate, cover_ends: NaiveDate) {
+        let request = format!("grp:{kind}:{}:{}:{since}", s.id, life.0);
+        let Some(party) = party else {
+            self.raise(&s.id, ExceptionKind::LetterNotRequested, &request);
+            self.emit(GroupEvent::LetterNotRequested {
+                scheme: s.id.clone(),
+                request,
+                code: "no_party".to_string(),
+            });
+            return;
+        };
+        let business_date = self.today();
+        self.send(Outbound::Letter(MemberLetter {
+            request,
+            kind: kind.to_string(),
+            party,
+            policy: s.policy.clone(),
+            scheme: s.id.clone(),
+            life,
+            since,
+            cover_ends,
+            business_date,
+        }));
+    }
+
     fn risk_notice(&mut self, s: &Scheme, life: &LifeId, attrs: &MemberAttrs) {
         self.notify_reinsurance(ReinsuranceNotice::RecordRiskFactors {
             policy: s.policy.clone(),
@@ -780,12 +808,14 @@ impl GroupState {
                 let limit = Days::new(u64::from(s.terms.leave_of_absence_days));
                 let Some(m) = s.membership.active(&change.employee_id) else { return };
                 if let (Some(since), Some(ends)) = (m.absence_since, change.effective.checked_add_days(limit)) {
+                    let (life, party, cover_ends) = (m.life.clone(), m.party.clone(), s.terms.cover_end_for(ends));
                     self.emit(GroupEvent::AbsenceStarted {
                         scheme: s.id.clone(),
-                        life: m.life.clone(),
+                        life: life.clone(),
                         since,
-                        cover_ends: s.terms.cover_end_for(ends),
+                        cover_ends,
                     });
+                    self.member_letter(s, "absence_started", life, party, since, cover_ends);
                 }
             }
             _ => {
@@ -1157,22 +1187,34 @@ impl GroupState {
 
         // A leave of absence that has run past what the terms allow.
         let limit = Days::new(u64::from(s.terms.leave_of_absence_days));
-        let overdue: Vec<(String, MemberAttrs, LifeId, NaiveDate)> = s
+        type Overdue = (String, MemberAttrs, LifeId, Option<PartyId>, NaiveDate, NaiveDate);
+        let overdue: Vec<Overdue> = s
             .membership
             .active_members()
             .filter(|m| !s.absence_leaves.contains(&m.employee_id))
             .filter_map(|m| {
-                let ends = m.absence_since?.checked_add_days(limit)?;
-                (ends <= today).then(|| (m.employee_id.clone(), m.attrs.clone(), m.life.clone(), s.terms.cover_end_for(ends)))
+                let since = m.absence_since?;
+                let ends = since.checked_add_days(limit)?;
+                (ends <= today).then(|| {
+                    (
+                        m.employee_id.clone(),
+                        m.attrs.clone(),
+                        m.life.clone(),
+                        m.party.clone(),
+                        since,
+                        s.terms.cover_end_for(ends),
+                    )
+                })
             })
             .collect();
-        for (employee_id, attrs, life, cover_ends) in overdue {
+        for (employee_id, attrs, life, party, since, cover_ends) in overdue {
             s.absence_leaves.insert(employee_id.clone());
             self.emit(GroupEvent::AbsenceLimitReached {
                 scheme: s.id.clone(),
-                life,
+                life: life.clone(),
                 cover_ends,
             });
+            self.member_letter(s, "absence_limit_reached", life, party, since, cover_ends);
             let work = Work::Member {
                 change: leave(&employee_id, &attrs, cover_ends),
                 resolution: None,
@@ -1744,6 +1786,24 @@ impl GroupState {
                         code,
                     });
                 }
+                Ok(())
+            }
+            LetterRefused { request, code } => {
+                let found = self
+                    .outbox
+                    .iter()
+                    .find_map(|(id, o)| matches!(o, Outbound::Letter(l) if l.request == request).then_some(*id));
+                // Already settled: nothing more to do.
+                let Some(id) = found else { return Ok(()) };
+                let Some(Outbound::Letter(letter)) = self.outbox.remove(&id) else {
+                    return Ok(());
+                };
+                self.raise(&letter.scheme, ExceptionKind::LetterNotRequested, &request);
+                self.emit(GroupEvent::LetterNotRequested {
+                    scheme: letter.scheme,
+                    request,
+                    code,
+                });
                 Ok(())
             }
             ObserveCore { event } => self.observe(*event),

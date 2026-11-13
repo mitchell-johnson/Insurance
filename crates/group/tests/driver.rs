@@ -19,7 +19,7 @@ use common::*;
 use ic_core::{Command, GroupId};
 use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, MatchDecision, Resolution};
 use ic_group::driver::{content_hash, Answers, Core, CustomerMaster, Driver, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use ic_group::event::{CommissionLayer, ExceptionKind, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
+use ic_group::event::{CommissionLayer, ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
 use ic_group::mapping::{Columns, FileKind, FileMapping, SalaryPeriod, SalaryUnit};
 use ic_group::record::MemberIdentity;
 use ic_group::state::{CaseStatus, FileStatus, GroupState, Outcome};
@@ -96,9 +96,20 @@ struct Sink {
     /// next (written when there are none left).
     layers: Arc<Mutex<Vec<(String, CommissionLayer)>>>,
     commission_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
+    /// Letters the documents module took, and the answers it gives next
+    /// (taken when there are none left).
+    letters: Arc<Mutex<Vec<MemberLetter>>>,
+    letter_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
 }
 
 impl Peers for Sink {
+    async fn letter(&self, letter: &MemberLetter) -> Result<Option<String>, String> {
+        let answer = self.letter_answers.lock().unwrap().pop_front().unwrap_or(Ok(None));
+        if answer == Ok(None) {
+            self.letters.lock().unwrap().push(letter.clone());
+        }
+        answer
+    }
     async fn commission(&self, key: &str, layer: &CommissionLayer) -> Result<Option<String>, String> {
         let answer = self.commission_answers.lock().unwrap().pop_front().unwrap_or(Ok(None));
         if answer == Ok(None) {
@@ -1644,4 +1655,57 @@ async fn the_driver_writes_a_schemes_broker_and_reports_a_refusal() {
     d.deliver().await.unwrap();
     assert_eq!((waiting(&d), refused(&d)), (0, 1));
     assert!(d.peers.layers.lock().unwrap().is_empty());
+}
+
+/// Purpose: the driver carries a member's letter to the documents module and acts on its
+/// three kinds of answer: one to try again leaves the letter in the outbox; a letter taken
+/// leaves it; and a refusal takes it out and raises `letter_not_requested` for staff.
+/// Why it matters: the leave of absence letters (GRP-038) tell a member abroad the day
+/// their cover ends. A letter dropped on a passing fault would leave them uninsured without
+/// knowing, and one retried for ever after a refusal would hide that nobody wrote to them.
+#[tokio::test]
+async fn the_driver_asks_for_a_members_letter_and_reports_a_refusal() {
+    let d = rig();
+    let policy = d.module.state.lock().unwrap().schemes[SCHEME].policy.clone();
+    let letter = |n: u32| MemberLetter {
+        request: format!("grp:absence_started:{SCHEME}:E001:2027-11-0{n}"),
+        kind: "absence_started".into(),
+        party: ic_core::PartyId("party-1".into()),
+        policy: policy.clone(),
+        scheme: SCHEME.into(),
+        life: ic_core::LifeId("E001".into()),
+        since: chrono::NaiveDate::from_ymd_opt(2027, 11, n).unwrap(),
+        cover_ends: chrono::NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(),
+        business_date: chrono::NaiveDate::from_ymd_opt(2027, 11, 1).unwrap(),
+    };
+    let waiting = |d: &Rig| {
+        d.module
+            .state
+            .lock()
+            .unwrap()
+            .outbox
+            .values()
+            .filter(|o| matches!(o, ic_group::event::Outbound::Letter(_)))
+            .count()
+    };
+    // A letter is put in the outbox as the module puts it there when a leave starts.
+    let entry = ic_group::event::Outbound::Letter(letter(1));
+    d.module.state.lock().unwrap().outbox.insert(9_001, entry);
+    d.peers.letter_answers.lock().unwrap().push_back(Err("documents unavailable".into()));
+    let pass = d.deliver().await.unwrap();
+    assert!(pass.failed >= 1);
+    assert_eq!(waiting(&d), 1, "kept for the next pass");
+    d.deliver().await.unwrap();
+    assert_eq!(waiting(&d), 0);
+    assert_eq!(d.peers.letters.lock().unwrap()[0], letter(1));
+
+    let entry = ic_group::event::Outbound::Letter(letter(2));
+    d.module.state.lock().unwrap().outbox.insert(9_002, entry);
+    d.peers.letter_answers.lock().unwrap().push_back(Ok(Some("unknown_letter_kind".into())));
+    d.deliver().await.unwrap();
+    assert_eq!(waiting(&d), 0);
+    let g = d.module.state.lock().unwrap();
+    let raised = g.exceptions.values().find(|e| e.kind == ExceptionKind::LetterNotRequested).unwrap();
+    assert_eq!(raised.subject, letter(2).request);
+    assert_eq!(d.peers.letters.lock().unwrap().len(), 1);
 }

@@ -300,6 +300,12 @@ pub enum GroupCommand {
         key: String,
         code: String,
     },
+    /// The documents module refused a member's letter for good: the entry
+    /// leaves the outbox and staff are told.
+    LetterRefused {
+        request: String,
+        code: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -333,6 +339,7 @@ impl GroupCommand {
             | PartiesResolved { .. }
             | CoreResult { .. }
             | CommissionRefused { .. }
+            | LetterRefused { .. }
             | ObserveCore { .. }
             | Ack { .. }
             | Tick => &[DRIVER],

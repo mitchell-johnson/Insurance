@@ -525,9 +525,43 @@ pub struct Overpayment {
     /// returned, by partition: what each has been told is settled.
     #[serde(default)]
     pub remote_received: BTreeMap<u16, i64>,
+    /// Letters asking the payee to repay, in the order they were asked for.
+    #[serde(default)]
+    pub letters: Vec<RepaymentLetter>,
+}
+
+/// A letter asking the payee to repay, which the documents service issues.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RepaymentLetter {
+    /// The documents request it goes out under: `cl-op:<overpayment>:<n>`.
+    pub request: String,
+    pub asked_on: NaiveDate,
+    /// What was outstanding when it was asked for.
+    pub amount_minor: i64,
+    /// The documents service has taken the request.
+    pub requested: bool,
 }
 
 impl Overpayment {
+    /// Ask for a letter, unless one is already waiting to be taken.
+    pub(crate) fn ask_letter(&mut self, on: NaiveDate) -> Option<RepaymentLetter> {
+        if self.letters.iter().any(|l| !l.requested) || self.outstanding_minor() <= 0 {
+            return None;
+        }
+        let letter = RepaymentLetter {
+            request: format!("cl-op:{}:{}", self.id, self.letters.len() + 1),
+            asked_on: on,
+            amount_minor: self.outstanding_minor(),
+            requested: false,
+        };
+        self.letters.push(letter.clone());
+        Some(letter)
+    }
+
+    /// Whether the payee is being asked to repay: pursued or under an arrangement, with money owed.
+    pub fn asking(&self) -> bool {
+        matches!(self.status, RecoveryStatus::Pursued | RecoveryStatus::Arrangement) && self.outstanding_minor() > 0
+    }
     pub fn outstanding_minor(&self) -> i64 {
         self.amount_minor - self.recovered_minor - self.written_off_minor
     }

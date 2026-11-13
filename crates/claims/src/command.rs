@@ -434,6 +434,18 @@ pub enum Command {
         overpayment: String,
         amount_minor: i64,
     },
+    /// Ask the payee again, by letter, to repay an overpayment being pursued.
+    AskRepayment {
+        claim: String,
+        overpayment: String,
+        actor: Actor,
+    },
+    /// The documents service has taken the request for a repayment letter.
+    RecordRepaymentLetter {
+        claim: String,
+        overpayment: String,
+        request: String,
+    },
 
     // --- controls and other modules ---
     /// The standing control: claims in payment whose recorded cause matches
@@ -448,8 +460,9 @@ pub enum Command {
         date_of_death: NaiveDate,
     },
     /// A person paid a benefit has shown they are alive without a claims
-    /// person filing it: a liveness check in the app (caller `channels`) or
-    /// an identity check in the customer master (caller `customer-master`).
+    /// person filing it: an identity check that saw the living person,
+    /// recorded in the customer master (a liveness check in the app reaches
+    /// claims this way too).
     /// Every open proof of life on their claims is met with the evidence.
     ConfirmAlive {
         party: String,
@@ -495,6 +508,15 @@ pub enum Command {
         take_ref: String,
         claim: String,
         amount_minor: i64,
+    },
+    /// From another partition: a health claim there bills this service. A
+    /// claim here for the same service opens a restricted case.
+    BilledElsewhere {
+        from: u16,
+        claim: String,
+        service_date: NaiveDate,
+        provider: String,
+        service_code: String,
     },
     /// Legal's direction on proceeds held under an insolvency interest: pay
     /// `party` (who must then be verified as the payee). `direction` is the
@@ -555,10 +577,11 @@ impl Command {
             Command::NonDisclosureOutcome { .. } => &["underwriting"],
             Command::ExclusionControl { .. } | Command::DrainDue => &["claims", "end-of-day"],
             Command::RecordDeath { .. } | Command::RetractDeath { .. } => &["claims", "customer-master"],
-            Command::ConfirmAlive { .. } => &["channels", "customer-master"],
+            Command::ConfirmAlive { .. } => &["customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
             Command::ReferForInvestigation { .. } => &["compliance"],
-            Command::OffsetSource { .. } | Command::OffsetTaken { .. } | Command::OffsetReturned { .. } => &["partition"],
+            Command::RecordRepaymentLetter { .. } => &["documents"],
+            Command::OffsetSource { .. } | Command::OffsetTaken { .. } | Command::OffsetReturned { .. } | Command::BilledElsewhere { .. } => &["partition"],
             _ => &["claims"],
         }
     }
@@ -598,6 +621,8 @@ impl Command {
             Command::CancelRun { .. } => "cancel_run",
             Command::ConfirmRun { .. } => "confirm_run",
             Command::RaiseOverpayment { .. } => "raise_overpayment",
+            Command::AskRepayment { .. } => "ask_repayment",
+            Command::RecordRepaymentLetter { .. } => "record_repayment_letter",
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::ConfirmAlive { .. } => "confirm_alive",
@@ -609,6 +634,7 @@ impl Command {
             Command::WithdrawInterestDecline { .. } => "withdraw_interest_decline",
             Command::OffsetSource { .. } => "offset_source",
             Command::OffsetTaken { .. } => "offset_taken",
+            Command::BilledElsewhere { .. } => "billed_elsewhere",
             Command::OffsetReturned { .. } => "offset_returned",
             Command::CloseInvestigation { .. } => "close_investigation",
             Command::RetractDeath { .. } => "retract_death",

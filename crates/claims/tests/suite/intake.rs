@@ -1031,6 +1031,7 @@ fn a_communication_marker_gives_one_owner_a_said_handover_and_more_time() {
     w.ok(ask("e-3", "party-claimant"));
     assert_eq!(due(&w, "e-3"), mine + chrono::Days::new(10));
     assert_eq!(w.core.noticed("communication_need_recorded").len(), 1);
+    assert!(w.state.work_view("c-1").expect("the claim exists").communication_support);
 
     // A handover is said: the new owner calls the claimant.
     w.ok(Command::Assign {
