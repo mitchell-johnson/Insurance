@@ -407,6 +407,22 @@ pub enum InvestEvent {
         amount_minor: i64,
         reason: PayoutReason,
     },
+    /// A full surrender was asked for and its sell orders placed.
+    SurrenderStarted {
+        policy: PolicyId,
+        surrender: String,
+        /// The sell orders placed, one per fund held.
+        orders: Vec<String>,
+    },
+    /// Every sell executed, the value was raised to benefit payable (where
+    /// there was any) and the policy closed.
+    SurrenderCompleted {
+        policy: PolicyId,
+        surrender: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        payout: Option<String>,
+        value_minor: i64,
+    },
     /// The bank sent a payout's payment back: it is owed again and needs a
     /// new payment reference before it can be paid.
     PayoutReturned {
@@ -503,6 +519,22 @@ pub enum InvestCommand {
         payout: String,
         payment: String,
     },
+    /// Begin a full surrender: sell everything the policy holds in every
+    /// fund, each at the pricing date given for that fund, and stop new
+    /// money going in. Nothing may be pending when it is asked for.
+    Surrender {
+        policy: PolicyId,
+        surrender: String,
+        /// The pricing date for each fund the policy holds units in,
+        /// assigned at the edge from the fund's cut-off like any order's.
+        pricing_dates: BTreeMap<FundId, NaiveDate>,
+    },
+    /// Finish a surrender once every sell has executed: raise all the cash
+    /// to benefit payable under `payout`, end the cover and close the policy.
+    CompleteSurrender {
+        policy: PolicyId,
+        payout: String,
+    },
     /// Execute up to `limit` of the orders pending for this fund and pricing
     /// date at the price in force. Sent again until nothing is pending.
     ExecuteOrders {
@@ -529,6 +561,7 @@ impl InvestCommand {
             InvestCommand::AllocateCash { .. } => &["policy-servicing", "cash-matching"],
             InvestCommand::PlaceOrder(_) | InvestCommand::CancelOrder { .. } => &["policy-servicing", "claims", "fees"],
             InvestCommand::RaisePayout { .. } | InvestCommand::ReinstructPayout { .. } => &["policy-servicing", "claims"],
+            InvestCommand::Surrender { .. } | InvestCommand::CompleteSurrender { .. } => &["policy-servicing"],
             InvestCommand::ExecuteOrders { .. } | InvestCommand::ReplayOrders { .. } => &["unit-orders"],
         }
     }
@@ -542,6 +575,8 @@ impl InvestCommand {
             InvestCommand::CancelOrder { .. } => "cancel_unit_order",
             InvestCommand::RaisePayout { .. } => "raise_investment_payout",
             InvestCommand::ReinstructPayout { .. } => "reinstruct_investment_payout",
+            InvestCommand::Surrender { .. } => "surrender_units",
+            InvestCommand::CompleteSurrender { .. } => "complete_surrender",
             InvestCommand::ExecuteOrders { .. } => "execute_unit_orders",
             InvestCommand::ReplayOrders { .. } => "replay_unit_orders",
         }
@@ -550,9 +585,11 @@ impl InvestCommand {
     /// The policy the command is about, where it names one.
     pub fn policy<'a>(&'a self, book: &'a InvestmentBook) -> Option<&'a PolicyId> {
         match self {
-            InvestCommand::AllocateCash { policy, .. } | InvestCommand::RaisePayout { policy, .. } | InvestCommand::ReinstructPayout { policy, .. } => {
-                Some(policy)
-            }
+            InvestCommand::AllocateCash { policy, .. }
+            | InvestCommand::RaisePayout { policy, .. }
+            | InvestCommand::ReinstructPayout { policy, .. }
+            | InvestCommand::Surrender { policy, .. }
+            | InvestCommand::CompleteSurrender { policy, .. } => Some(policy),
             InvestCommand::PlaceOrder(order) => Some(&order.policy),
             InvestCommand::CancelOrder { order_id } => book.orders.get(order_id).map(|o| &o.order.policy),
             _ => None,
@@ -698,6 +735,14 @@ fn investable(policy: &Policy) -> Result<(), Reject> {
     match policy.status {
         PolicyStatus::InForce => Ok(()),
         _ => Err(bad("not_in_force", "the policy is not in force")),
+    }
+}
+
+/// No new money goes into a policy that is being surrendered.
+pub(crate) fn open_to_money(policy: &Policy) -> Result<(), Reject> {
+    match policy.surrender {
+        Some(_) => Err(bad("surrender_in_progress", "the policy is being surrendered")),
+        None => Ok(()),
     }
 }
 
@@ -922,6 +967,112 @@ pub(crate) fn raise_payout(
         reason,
     }));
     Ok(())
+}
+
+/// A full surrender that has been asked for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SurrenderRequest {
+    pub id: String,
+    pub requested_on: NaiveDate,
+    /// Set when it completed: the payout the value was raised under, if
+    /// there was any value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_on: Option<NaiveDate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payout: Option<String>,
+}
+
+/// Begin a full surrender. One sell order per fund the policy holds units
+/// in, for everything, named `{surrender}-{fund}`. A refusal leaves nothing
+/// placed.
+pub(crate) fn begin_surrender(
+    ledger: &Ledger,
+    book: &mut InvestmentBook,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    surrender: String,
+    pricing_dates: &BTreeMap<FundId, NaiveDate>,
+) -> Result<(), Reject> {
+    if !plain(&surrender) || surrender.contains('/') {
+        return Err(bad("invalid_surrender", "a surrender is named by a plain identifier"));
+    }
+    match &policy.surrender {
+        Some(existing) if existing.id == surrender => return Ok(()),
+        Some(_) => return Err(bad("surrender_in_progress", "another surrender of this policy has been asked for")),
+        None => {}
+    }
+    investable(policy)?;
+    if book.pending_of(&policy.id).next().is_some() {
+        return Err(bad(
+            "orders_pending",
+            "the policy has pending unit orders; they execute or are cancelled before a surrender",
+        ));
+    }
+    let held: Vec<FundId> = book
+        .funds
+        .keys()
+        .map(|f| FundId(f.clone()))
+        .filter(|f| ledger.balance(&accounts::unit_account(&policy.id, f).id) != 0)
+        .collect();
+    let mut orders = Vec::new();
+    for fund in &held {
+        let Some(date) = pricing_dates.get(fund) else {
+            return Err(bad("invalid_surrender", format!("no pricing date was given for fund {}", fund.0)));
+        };
+        orders.push(NewOrder {
+            order_id: format!("{surrender}-{}", fund.0),
+            policy: policy.id.clone(),
+            fund: fund.clone(),
+            direction: Direction::Sell,
+            amount: OrderAmount::AllUnits,
+            kind: OrderKind::Surrender,
+            pricing_date: *date,
+            switch_to: None,
+        });
+    }
+    // Placed on a copy of the book, so that a later fund's refusal does not
+    // leave an earlier fund's order behind.
+    let mut draft = book.clone();
+    let events = ctx.events.len();
+    for order in &orders {
+        if let Err(e) = place(ledger, &mut draft, policy, ctx, order.clone(), false) {
+            ctx.events.truncate(events);
+            return Err(e);
+        }
+    }
+    *book = draft;
+    policy.surrender = Some(SurrenderRequest {
+        id: surrender.clone(),
+        requested_on: ctx.date,
+        completed_on: None,
+        payout: None,
+    });
+    ctx.emit(crate::Event::Investment(InvestEvent::SurrenderStarted {
+        policy: policy.id.clone(),
+        surrender,
+        orders: orders.into_iter().map(|o| o.order_id).collect(),
+    }));
+    Ok(())
+}
+
+/// What a surrender has left to pay: the policy's pending investment cash.
+/// Refused while a sell is still waiting for its price or units are held.
+pub(crate) fn surrender_value(ledger: &Ledger, book: &InvestmentBook, policy: &Policy) -> Result<i64, Reject> {
+    if book.pending_of(&policy.id).next().is_some() {
+        return Err(bad("orders_pending", "the surrender's sell orders have not all executed"));
+    }
+    if book
+        .funds
+        .keys()
+        .any(|f| ledger.balance(&accounts::unit_account(&policy.id, &FundId(f.clone())).id) != 0)
+    {
+        return Err(bad(
+            "units_held",
+            "the policy still holds units; a sell was cancelled or failed and is placed again first",
+        ));
+    }
+    let cash = -ledger.balance(&accounts::pending_investment_cash(&policy.id, policy.currency).id);
+    i64::try_from(cash).map_err(|_| bad("invalid_surrender", "the surrender value is out of range"))
 }
 
 /// A payout the bank sent back is paid again under a new reference, once

@@ -227,7 +227,7 @@ impl PaymentsState {
 
     /// A reinsurer settlement is paid: the reinsurance module records it
     /// against the statement, in that module's own command.
-    pub(crate) fn origin_settled(&mut self, n: &NewItem, on: NaiveDate) {
+    pub(crate) fn origin_settled(&mut self, n: &NewItem, on: NaiveDate, bank_account: &str) {
         let Some(number) = statement_number(&n.source) else { return };
         self.push_outbox(OutboxEntry {
             key: format!("reinsurance-settled-{}", n.item),
@@ -237,7 +237,7 @@ impl PaymentsState {
                     "key": format!("payments:settled:{}", n.item),
                     "caller": "payments",
                     "on": on,
-                    "command": {"record_settlement": {"number": number, "payment_ref": n.item, "amount_minor": n.amount_minor}},
+                    "command": {"record_settlement": {"number": number, "payment_ref": n.item, "amount_minor": n.amount_minor, "bank_account": bank_account}},
                 }),
             },
             about: Some(About::Item(n.item.clone())),

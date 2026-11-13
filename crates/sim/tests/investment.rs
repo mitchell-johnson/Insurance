@@ -1279,3 +1279,146 @@ fn money_goes_only_into_funds_on_the_products_menu() {
     assert_eq!(code(place(&mut c, buy)), "not_invested");
     assert!(c.reconcile().is_empty());
 }
+
+/// Purpose: a full surrender of a unit-linked policy sells everything in every fund at
+/// each fund's next price, lets no new money in while it waits, and completes only when
+/// every sell has executed and no units are left: the whole value is then raised to
+/// benefit payable under one payout and the policy is closed as surrendered. Asking twice
+/// does nothing more. It is refused on a policy that is not unit-linked, while orders are
+/// pending, and without a pricing date for a fund that is held.
+/// Why it matters: a surrender pays out everything the customer has. Paid before the last
+/// sell has a price it pays the wrong amount; a policy closed with units still in it
+/// leaves money in the market that nobody owns; and money accepted into a policy on its
+/// way out has to be chased back out of the fund.
+#[test]
+fn a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy() {
+    let (mut c, policy) = invested();
+    let today = start();
+    let next = d(2027, 11, 16);
+    let surrender = |id: &str, funds: &[&str]| InvestCommand::Surrender {
+        policy: policy.clone(),
+        surrender: id.to_string(),
+        pricing_dates: funds.iter().map(|f| (fund_id(f), next)).collect(),
+    };
+    let complete = |payout: &str| InvestCommand::CompleteSurrender {
+        policy: policy.clone(),
+        payout: payout.to_string(),
+    };
+    let servicing = |c: &mut Cluster, command: InvestCommand| code(invest(c, "policy-servicing", command));
+    let payable = |c: &Cluster| c.state(0).ledger.natural_balance(&accounts::benefit_payable(&policy, NZD).id);
+
+    assert_eq!(servicing(&mut c, complete("sur-pay")), "no_surrender");
+    place(
+        &mut c,
+        order("b-growth", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 1_000_00 }, today),
+    )
+    .unwrap();
+    place(
+        &mut c,
+        order("b-balanced", &policy, "balanced", Direction::Buy, OrderAmount::Cash { minor: 2_000_00 }, today),
+    )
+    .unwrap();
+    assert_eq!(servicing(&mut c, surrender("sur-1", &["growth", "balanced"])), "orders_pending");
+    for (id, name) in [("g-mon", "growth"), ("b-mon", "balanced")] {
+        invest(
+            &mut c,
+            "unit-pricing",
+            InvestCommand::ActivateUnitPrice(Box::new(price(id, name, today, "2.0000", "2.0000"))),
+        )
+        .unwrap();
+        execute(&mut c, name, today).unwrap();
+    }
+    assert_eq!((units(&c, &policy, "growth"), units(&c, &policy, "balanced")), (500_000_000, 1_000_000_000));
+
+    assert_eq!(servicing(&mut c, surrender("sur 1", &["growth", "balanced"])), "invalid_surrender");
+    assert_eq!(servicing(&mut c, surrender("sur-1", &["growth"])), "invalid_surrender");
+    assert!(c.state(0).policies[&policy].surrender.is_none());
+    c.take_events();
+    assert_eq!(servicing(&mut c, surrender("sur-1", &["growth", "balanced"])), "accepted");
+    let started = invest_events(&mut c);
+    assert!(started
+        .iter()
+        .any(|e| matches!(e, InvestEvent::SurrenderStarted { orders, .. } if orders.len() == 2)));
+    assert_eq!(servicing(&mut c, surrender("sur-1", &["growth", "balanced"])), "accepted");
+    assert_eq!(servicing(&mut c, surrender("sur-2", &["growth", "balanced"])), "surrender_in_progress");
+
+    // No new money while it waits.
+    let buy = order("b-late", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 100_00 }, next);
+    assert_eq!(code(place(&mut c, buy)), "surrender_in_progress");
+    let allocate = InvestCommand::AllocateCash {
+        policy: policy.clone(),
+        reference: "alloc-late".to_string(),
+        amount_minor: 1_00,
+    };
+    c.submit(
+        0,
+        "cash-matching",
+        Command::ApplyReceipt {
+            policy: policy.clone(),
+            receipt: "r-late".to_string(),
+            amount: Money::new(1_00, NZD),
+        },
+    )
+    .unwrap();
+    assert_eq!(servicing(&mut c, allocate), "surrender_in_progress");
+
+    // Not before every sell has executed, and not with units left behind.
+    assert_eq!(servicing(&mut c, complete("sur-pay")), "orders_pending");
+    invest(
+        &mut c,
+        "policy-servicing",
+        InvestCommand::CancelOrder {
+            order_id: "sur-1-balanced".to_string(),
+        },
+    )
+    .unwrap();
+    assert!(c.end_of_day().unwrap().breaks.is_empty());
+    invest(
+        &mut c,
+        "unit-pricing",
+        InvestCommand::ActivateUnitPrice(Box::new(price("g-tue", "growth", next, "3.0000", "3.0000"))),
+    )
+    .unwrap();
+    execute(&mut c, "growth", next).unwrap();
+    assert_eq!(servicing(&mut c, complete("sur-pay")), "units_held");
+    place(
+        &mut c,
+        order("sur-1-balanced-again", &policy, "balanced", Direction::Sell, OrderAmount::AllUnits, next),
+    )
+    .unwrap();
+    invest(
+        &mut c,
+        "unit-pricing",
+        InvestCommand::ActivateUnitPrice(Box::new(price("b-tue", "balanced", next, "2.5000", "2.5000"))),
+    )
+    .unwrap();
+    execute(&mut c, "balanced", next).unwrap();
+
+    // 2,000 never invested, 500 units at 3 and 1,000 units at 2.50.
+    let value = 2_000_00 + 1_500_00 + 2_500_00;
+    assert_eq!(pending_cash(&c, &policy), value);
+    c.take_events();
+    assert_eq!(servicing(&mut c, complete("sur-pay")), "accepted");
+    assert_eq!((pending_cash(&c, &policy), payable(&c)), (0, value));
+    let state = &c.state(0).policies[&policy];
+    assert_eq!(state.status, ic_core::PolicyStatus::Surrendered);
+    assert_eq!(state.surrender.as_ref().and_then(|s| s.payout.as_deref()), Some("sur-pay"));
+    let done = invest_events(&mut c);
+    assert!(done
+        .iter()
+        .any(|e| matches!(e, InvestEvent::SurrenderCompleted { value_minor, payout: Some(p), .. } if *value_minor as i128 == value && p == "sur-pay")));
+    assert_eq!(servicing(&mut c, complete("sur-pay")), "accepted");
+    assert_eq!(payable(&c), value);
+    assert!(c.reconcile().is_empty());
+
+    // A policy that is not unit-linked has nothing to surrender this way.
+    let issue = term_life(2, start(), d(1985, 6, 1), Sex::Male, false, 500_000_00, None, Frequency::Monthly, None);
+    let term = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let not_linked = InvestCommand::Surrender {
+        policy: term,
+        surrender: "sur-term".to_string(),
+        pricing_dates: BTreeMap::new(),
+    };
+    assert_eq!(servicing(&mut c, not_linked), "not_invested");
+}

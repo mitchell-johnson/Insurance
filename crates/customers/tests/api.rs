@@ -823,3 +823,46 @@ async fn an_identity_outage_is_retryable() {
     let (status, _) = elsewhere.get("/v1/reviews", "staff", "servicing").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
 }
+
+/// Purpose: a family member's worry about a customer is recorded as a third-party concern,
+/// who raised it and what about and nothing more; the answer to the staff member says
+/// nothing about the person; and it opens a prompt for a trained person to consider a
+/// marker, which can be dismissed but never merged. Values outside the lists are refused.
+/// Why it matters: a daughter worried about her father (matrix VUL-006), or children asking
+/// to limit their parents' withdrawals (VUL-004), have no authority over the policy; the
+/// insurer must listen without disclosing anything, and a person, not a rule, decides on a
+/// marker.
+#[tokio::test]
+async fn a_third_party_concern_opens_a_prompt_and_discloses_nothing() {
+    let w = world_or_skip!();
+    let p = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let concern = json!({ "command": "record_concern", "from": "family", "about": "financial_abuse" });
+    let (status, out) = w.command(&p, "staff", concern.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["concern_raised"]));
+    assert_eq!(out.as_object().unwrap().len(), 3, "party, version and events only: {out}");
+    let (status, _) = w
+        .command(&p, "claims", json!({ "command": "record_concern", "from": "carer", "about": "capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = w.command(&p, "documents", concern).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for bad in [
+        json!({ "command": "record_concern", "from": "neighbour's cousin", "about": "wellbeing" }),
+        json!({ "command": "record_concern", "from": "family", "about": "he has dementia" }),
+    ] {
+        let (status, _) = w.command(&p, "staff", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
+    let prompts: Vec<&Value> = r["reviews"].as_array().unwrap().iter().filter(|r| r["kind"] == "consider_marker").collect();
+    assert_eq!(prompts.len(), 2, "{r}");
+    assert_eq!(prompts[0]["party"], p);
+    assert_eq!(prompts[0]["reason"], "financial_abuse");
+    let id = prompts[0]["id"].as_str().unwrap();
+    let other = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": other, "review": id })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a prompt is not a duplicate review");
+    let (status, _) = w.post(&format!("/v1/reviews/{id}/dismiss"), "staff", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+}
