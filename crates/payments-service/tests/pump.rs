@@ -297,6 +297,7 @@ impl World {
             clock: Arc::new(move || *now.lock().unwrap()),
             grace: Duration::minutes(10),
             cursors: Mutex::default(),
+            holds: None,
         }
     }
 
@@ -1174,6 +1175,14 @@ fn the_pump_does_not_start_half_configured() {
     assert!(with("IC_PUMP_INTERVAL_SECS", "soon").unwrap_err().contains("IC_PUMP_INTERVAL_SECS"));
     assert_eq!(with("IC_PAYMENTS_INSTANCE", "x").unwrap().instance, "x");
     assert_eq!(with("IC_PAYMENTS_CONTAINER", "c").unwrap().container, "c");
+    // The customer master is both an address and a scope, or not there.
+    assert!(with("IC_CUSTOMERS_URL", "https://customers").unwrap_err().contains("together"));
+    assert!(settings.customers.is_none());
+    let mut env = full.clone();
+    env.extend([("IC_CUSTOMERS_URL", "https://customers"), ("IC_CUSTOMERS_SCOPE", "api://ic-customers/.default")]);
+    let asking = load(&env).unwrap();
+    let pump = ic_payments_service::pump::DeployedPump::deployed(&asking, ic_azure::credential::AzureCredential::static_token("t"));
+    assert!(pump.holds.is_some());
 
     // Built as deployed, the pump is in the region and under the name given.
     let pump = ic_payments_service::pump::DeployedPump::deployed(&settings, ic_azure::credential::AzureCredential::static_token("t"));
@@ -1659,4 +1668,122 @@ async fn a_bank_that_requires_mutual_tls_takes_only_its_own_certificates() {
     // With it, the pump sends over mutual TLS.
     let pass = world.pump("akl", "w").pass().await;
     assert_eq!((pass.sent, pass.problems.len()), (2, 0), "{:?}", pass.problems);
+}
+
+/// Purpose: the pump asks the customer master about the party a refund is
+/// owed to, records the answer, and does not ask again until the record is
+/// half as old as the check allows; a hold the master reports stops the
+/// refund joining a run, and its end lets it through.
+/// Why it matters: the customer master owns a person's own hold on money
+/// going out (decision 3); payments must hear of it before the money is
+/// put in a run, and hear of its end, without asking on every pass.
+#[tokio::test]
+async fn the_pump_hears_a_customers_own_hold_from_the_customer_master() {
+    use ic_payments_service::fake::FakeMaster;
+    use ic_payments_service::ports::MasterHolds;
+    let mut world = World::new().await;
+    let master = FakeMaster::start(&[("payer", true)]).await.unwrap();
+    let mut pump = world.pump("akl", "a");
+    pump.holds = Some(Arc::new(MasterHolds {
+        base: format!("{}/", master.url),
+        scope: "api://ic-customers/.default".to_string(),
+        credential: ic_azure::credential::AzureCredential::static_token("t"),
+        http: reqwest::Client::new(),
+    }));
+    let policy = world.policy.clone();
+    let create = Command::CreateAuthority {
+        authority: "a1".to_string(),
+        policy: policy.clone(),
+        party: "payer".to_string(),
+        life: None,
+        account: account("Ana Payer", "0101234567"),
+        sole_name: false,
+    };
+    world.ok(&pam(), create);
+    let request = Command::RequestRefund {
+        refund: "rf1".to_string(),
+        policy: policy.clone(),
+        amount_minor: 100_00,
+        currency: NZD,
+        destination: RefundDestination::Source { authority: "a1".to_string() },
+    };
+    world.ok(&mia(), request);
+    // One pass raises the refund and then asks about its payer; the next
+    // does not ask again.
+    let pass = pump.pass().await;
+    assert_eq!((pass.instructions, pass.holds, pass.problems.len()), (1, 1, 0), "{:?}", pass.problems);
+    assert!(world.state().held("payer"));
+    assert_eq!(pump.pass().await.holds, 0);
+    let item = NewItem {
+        item: "i1".to_string(),
+        source: "refund-rf1".to_string(),
+        counterparty: Counterparty::Authority("a1".to_string()),
+        amount_minor: 100_00,
+        policy: Some(policy.clone()),
+        payable: Some(PayableKind::Refund),
+        refund: Some("rf1".to_string()),
+        represents: None,
+    };
+    let today = world.now.lock().unwrap().date();
+    let prepare = Command::PrepareRun {
+        run: "r1".to_string(),
+        run_type: RunType::PremiumRefunds,
+        fund: "sf1".to_string(),
+        currency: NZD,
+        value_date: today,
+        urgent: false,
+    };
+    world.ok(&mia(), prepare);
+    let add = Command::AddRunItems {
+        run: "r1".to_string(),
+        items: vec![item.clone()],
+    };
+    assert_eq!(world.send(&mia(), add.clone()).unwrap_err().code, "customer_hold");
+
+    // The person lifts it at the master. Within fifteen minutes nobody asks.
+    master.holds.lock().unwrap().insert("payer".to_string(), false);
+    world.later(10);
+    assert_eq!(pump.pass().await.holds, 0);
+    world.later(6);
+    assert_eq!(pump.pass().await.holds, 1);
+    assert!(!world.state().held("payer"));
+    world.ok(&mia(), add);
+    // The party is still watched while the refund is in an unapproved run;
+    // a master that has lost the party is a problem, not an answer.
+    master.holds.lock().unwrap().clear();
+    world.later(16);
+    let pass = pump.pass().await;
+    assert_eq!(pass.holds, 0);
+    assert!(
+        pass.problems.iter().any(|p| p.contains("hold for payer") && p.contains("404")),
+        "{:?}",
+        pass.problems
+    );
+}
+
+/// Purpose: the customer master's answer is read strictly, a party ID that
+/// cannot be one is never sent, and the refresh interval follows the
+/// check's limit.
+/// Why it matters: a misread answer would let money out under a hold, or
+/// hold it for no reason; neither may happen quietly.
+#[tokio::test]
+async fn the_customer_masters_answer_is_read_strictly() {
+    use ic_payments_service::ports::{hold_in, Holds, MasterHolds};
+    use ic_payments_service::pump::refresh_after;
+    assert_eq!(hold_in(200, &serde_json::json!({"held": true})), Ok(true));
+    assert!(hold_in(200, &serde_json::json!({"held": "yes"})).is_err());
+    assert!(hold_in(403, &serde_json::json!({"held": false})).unwrap_err().contains("403"));
+    let master = MasterHolds {
+        base: "http://127.0.0.1:1".to_string(),
+        scope: "s".to_string(),
+        credential: ic_azure::credential::AzureCredential::static_token("t"),
+        http: reqwest::Client::new(),
+    };
+    assert!(master.held("a/../b").await.unwrap_err().contains("not a party ID"));
+    assert!(master.held("p1").await.is_err());
+    let answers: BTreeMap<String, bool> = BTreeMap::from([("p1".to_string(), true)]);
+    assert_eq!(answers.held("p1").await, Ok(true));
+    assert!(answers.held("p2").await.is_err());
+    assert_eq!(refresh_after(None), Duration::minutes(15));
+    assert_eq!(refresh_after(Some(45)), Duration::minutes(23));
 }

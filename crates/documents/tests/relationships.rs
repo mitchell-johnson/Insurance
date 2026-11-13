@@ -194,3 +194,45 @@ async fn joint_owners_are_each_addressed_by_their_own_relationship() {
     let joint = driver.document("joint-1").await.unwrap();
     assert!(joint.deliveries.iter().all(|d| d.recipient.role == RecipientRole::Addressee));
 }
+
+/// Purpose: when a person changes the contact point their relationships
+/// share, the next letter in every one of those relationships goes to the
+/// new one; when they choose a different contact point for one
+/// relationship, only that relationship's letters move.
+/// Why it matters: contact points are held once, in the customer master,
+/// and read at sending. A copy kept per policy would send the next notice
+/// to an address the person told us they had left, and a change meant for
+/// one relationship must not redirect letters about the others.
+#[tokio::test]
+async fn a_changed_contact_point_reaches_every_relationship_that_uses_it() {
+    let driver = driver().await;
+    let directory = &driver.directory;
+    directory.set_contact("mere", Channel::Email, email("Mere Parata", "mere@old.example"));
+    let send = |id: &str, relationship: &str| request(id, "receipt", "pol-own", "mere", &[("mere", Some(relationship))]);
+
+    driver.issue(send("a", "policyholder")).await.unwrap();
+    assert_eq!(driver.deliver().await.unwrap().sent, 1);
+
+    directory.set_contact("mere", Channel::Email, email("Mere Parata", "mere@new.example"));
+    driver.issue(send("b", "policyholder")).await.unwrap();
+    driver.issue(send("c", "claimant")).await.unwrap();
+    assert_eq!(driver.deliver().await.unwrap().sent, 2);
+
+    directory.set_for("mere", "claimant", Channel::Email, email("Mere Parata", "mere@claims-only.example"));
+    driver.issue(send("d", "claimant")).await.unwrap();
+    driver.issue(send("e", "policyholder")).await.unwrap();
+    assert_eq!(driver.deliver().await.unwrap().sent, 2);
+
+    let to = |address: &str| address.to_string();
+    let sent: Vec<(String, String)> = sent(&driver).into_iter().map(|(d, _, a)| (d, a)).collect();
+    assert_eq!(
+        sent,
+        vec![
+            ("a".into(), to("mere@old.example")),
+            ("b".into(), to("mere@new.example")),
+            ("c".into(), to("mere@new.example")),
+            ("d".into(), to("mere@claims-only.example")),
+            ("e".into(), to("mere@new.example")),
+        ]
+    );
+}

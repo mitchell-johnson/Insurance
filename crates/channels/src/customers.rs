@@ -16,8 +16,12 @@ use ic_core::PartyId;
 use serde_json::Value;
 
 /// The commands a person sends about themselves. The master checks again
-/// that `record` touches contact details only.
-pub const COMMANDS: [&str; 2] = ["record", "set_consent"];
+/// that `record` touches contact details only. A person may put a hold on
+/// their own money going out, ask for it to end (naming a passed identity
+/// check made since it was placed), and take that request back; the hold
+/// then stands for its cooling-off period (`docs/customers.md`, "A
+/// person's own spending hold").
+pub const COMMANDS: [&str; 5] = ["record", "set_consent", "place_spending_hold", "request_hold_removal", "cancel_hold_removal"];
 
 /// What the master answered: its HTTP status and body.
 pub type Answered = (u16, Value);
@@ -35,6 +39,9 @@ pub trait Master: Send + Sync {
     /// Whether the person's requests go to a person first, and the
     /// adjustments to make: never the marker's kind.
     fn routing(&self, party: &PartyId) -> Asked<'_>;
+    /// Where the person's own hold on money going out stands:
+    /// `{held, placed_at, removal}`.
+    fn spending_hold(&self, party: &PartyId) -> Asked<'_>;
 }
 
 /// Whether a request goes to a person first, from the master's routing
@@ -164,6 +171,21 @@ impl Master for Hosted {
             self.call(
                 reqwest::Method::GET,
                 format!("/v1/parties/{}/routing", encode(&party)),
+                &party,
+                "self_service",
+                vec![],
+                None,
+            )
+            .await
+        })
+    }
+
+    fn spending_hold(&self, party: &PartyId) -> Asked<'_> {
+        let party = party.clone();
+        Box::pin(async move {
+            self.call(
+                reqwest::Method::GET,
+                format!("/v1/parties/{}/spending-hold", encode(&party)),
                 &party,
                 "self_service",
                 vec![],

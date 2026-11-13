@@ -2452,3 +2452,58 @@ fn the_cover_check_reports_the_excess_level_held_on_the_event_date() {
     assert_eq!(excess_on(&mut c, "hospital", after), Some(0));
     assert_eq!(excess_on(&mut c, "dental", after), None);
 }
+
+/// Purpose: interest a payee declined after being told the amount is posted with the payment and
+/// reversed in its own entry with the reason `declined_by_payee`, so claim interest expense nets
+/// to nothing, the bank is asked for the benefit alone, and a return and reissue sends exactly
+/// that again, with no reconciliation breaks.
+/// Why it matters: decision 2 of 13 November (CLM-037). The decline must stay visible in the
+/// journal, and the money the payments module is told to send must match what was declined, or
+/// the payee is paid interest they refused or the ledger disagrees with the bank.
+#[test]
+fn declined_late_interest_is_reversed_in_its_own_entry() {
+    let mut c = cluster();
+    let mut r = rules();
+    r.version = 2;
+    r.late_interest = Some(claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    c.activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(r) })).unwrap();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    verify_payee(&mut c, "clm-1");
+    days(&mut c, 40);
+    ok(
+        &mut c,
+        claims::Command::OfferLateInterest {
+            claim: "clm-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::DeclineLateInterest {
+            claim: "clm-1".into(),
+            vault_ref: "vault-decision-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(&mut c, pay("clm-1", "pay-1", 80_000_00, None));
+    let interest = accounts::claim_interest("term-life", NZD);
+    assert_eq!(c.state(0).ledger.natural_balance(&interest.id), 0);
+    assert_eq!(money(&c, &id), (0, 80_000_00, 0));
+    let reversed = c.nodes[&0]
+        .journal
+        .iter()
+        .find(|e| e.body.kind == "claim_late_interest_declined")
+        .expect("the reversal entry");
+    assert_eq!(reversed.body.detail["reason"], "declined_by_payee");
+    c.submit(0, "payments", settle(&id, "pay-1", 80_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    days(&mut c, 2);
+}

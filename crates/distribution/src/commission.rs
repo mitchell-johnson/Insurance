@@ -169,6 +169,7 @@ impl DistributionState {
                 inception,
                 lives,
                 layers,
+                members,
                 ..
             } => {
                 self.policies.entry(policy.clone()).or_insert_with(|| PolicyRecord {
@@ -187,6 +188,9 @@ impl DistributionState {
                 });
                 for info in layers {
                     self.add_layer(ctx, &policy, info, LayerOrigin::Original, date);
+                }
+                for m in members {
+                    self.scheme_layer(ctx, &policy, &m, inception, date);
                 }
             }
             CoreEvent::LayerAdded {
@@ -303,6 +307,22 @@ impl DistributionState {
             // The person behind a scheme member's life, as soon as it is
             // known: what the replacement rule matches lives by.
             CoreEvent::MemberJoined {
+                ref policy,
+                ref covers,
+                effective,
+                ..
+            } if covers.iter().any(|m| !self.layers.contains_key(&layer_key(policy, &m.cover, 0))) => {
+                let (policy, covers, effective) = (policy.clone(), covers.clone(), effective);
+                for m in &covers {
+                    self.scheme_layer(ctx, &policy, m, effective, date);
+                }
+                if let CoreEvent::MemberJoined { life, party: Some(party), .. } = record.event {
+                    if let Some(p) = self.policies.get_mut(&policy) {
+                        p.lives.insert(life.0, party);
+                    }
+                }
+            }
+            CoreEvent::MemberJoined {
                 policy,
                 life,
                 party: Some(party),
@@ -348,6 +368,26 @@ impl DistributionState {
             _ => {}
         }
         Ok(())
+    }
+
+    /// Scheme cover is formula-driven per member and is not held as layers
+    /// in the core. For commission the module keeps one layer per scheme
+    /// cover, numbered 0, on no particular life: the broker writes it like
+    /// any layer, with the scheme's expected annual premium, and premium the
+    /// scheme pays for that cover type earns on it.
+    fn scheme_layer(&mut self, ctx: &mut Ctx, policy: &PolicyId, m: &ic_core::event::MemberCover, start: NaiveDate, date: NaiveDate) {
+        let info = LayerInfo {
+            cover: m.cover.clone(),
+            cover_type: m.cover_type.clone(),
+            layer: 0,
+            life: ic_core::LifeId("scheme".into()),
+            sum_insured_minor: 0,
+            start,
+        };
+        self.add_layer(ctx, policy, info, LayerOrigin::Original, date);
+        if let Some(l) = self.layers.get_mut(&layer_key(policy, &m.cover, 0)) {
+            l.life = None;
+        }
     }
 
     fn add_layer(&mut self, ctx: &mut Ctx, policy: &PolicyId, info: LayerInfo, origin: LayerOrigin, date: NaiveDate) {

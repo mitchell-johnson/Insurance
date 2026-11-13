@@ -839,3 +839,424 @@ fn a_retired_advisers_tail_passes_to_the_estate_from_the_date_of_death() {
     assert_eq!(w.payable("a-co"), a_before, "what the adviser earned before stays theirs");
     w.assert_reconciled();
 }
+
+/// Purpose: (ADV-041) an authorised body licensed through FAP One gains its own licence. From
+/// the date, one change set ends the licensing relation, and the body's own licence is
+/// recorded; the adviser's engagement with the body, the body's book and its payee record are
+/// unchanged, and the book's rule drops FAP One's override in one new version. Afterwards a
+/// licence problem at FAP One no longer stops the body's adviser writing business or being paid.
+/// Why it matters: the licence cascade walks the dated structure. If the body stayed under FAP
+/// One after licensing itself, FAP One losing its licence would wrongly stop advisers who no
+/// longer depend on it; if FAP One's override stayed, it would be paid on business it no longer
+/// supervises.
+#[test]
+fn an_authorised_body_that_gains_its_own_licence_leaves_its_providers_cascade() {
+    use ic_distribution::structure::{LicenceState, Relation, RelationKind};
+    let mut w = worked_example();
+    let start = d(START.0, START.1, START.2);
+    for (id, kind) in [("adviser-x", PartyKind::Adviser), ("ab-one", PartyKind::AuthorisedBody)] {
+        w.add_party(id, kind);
+    }
+    w.payee("ab-one");
+    w.account("ab-one", "acct-ab-one");
+    let licensed_by = Relation {
+        child: party("ab-one"),
+        parent: party("fap-one"),
+        kind: RelationKind::LicensedBy,
+        from: d(2020, 1, 1),
+        to: None,
+    };
+    w.send(admin(), Command::Relate(licensed_by)).unwrap();
+    w.engage("eng-x-ab", "adviser-x", "ab-one", d(2020, 1, 1));
+    let lines = || {
+        vec![
+            base("ab-one", Share::OfRemainder(pct(100.0)), true),
+            Line {
+                component: Component::Override("provider".into()),
+                share: Share::RateOnPremium(pct(1.0)),
+                ..base("fap-one", Share::OfRemainder(1), false)
+            },
+        ]
+    };
+    w.activate(
+        "ab-book",
+        vec![
+            Change::CreateBook {
+                id: BookId::from("x-at-ab"),
+                name: "X at the authorised body".into(),
+                engagement: Some(EngagementId::from("eng-x-ab")),
+                owner: Some(party("ab-one")),
+                house: false,
+            },
+            Change::ActivateRule(rule("x-at-ab", 1, start, lines(), vec![liable("ab-one")])),
+        ],
+    )
+    .unwrap();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-x-ab", "x-at-ab", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    let book_before = w.dist.config.books[&BookId::from("x-at-ab")].engagement.clone();
+
+    w.days(10);
+    let on = w.today();
+    let mut own = lines();
+    own.pop();
+    w.activate(
+        "ab-licensed",
+        vec![
+            Change::EndRelation {
+                child: party("ab-one"),
+                parent: party("fap-one"),
+                kind: RelationKind::LicensedBy,
+                on,
+            },
+            Change::ActivateRule(rule("x-at-ab", 2, on, own, vec![liable("ab-one")])),
+        ],
+    )
+    .unwrap();
+    w.licence("ab-one", LicenceState::Active, on).unwrap();
+    assert_eq!(w.dist.config.books[&BookId::from("x-at-ab")].engagement, book_before, "the book is unchanged");
+    assert!(w.dist.payees.contains_key(&party("ab-one")), "and so is the payee");
+
+    // FAP One then loses its licence: the body's adviser is not caught by it.
+    w.days(1);
+    let today = w.today();
+    w.licence("fap-one", LicenceState::Suspended, today).unwrap();
+    let structure = &w.dist.config.structure;
+    assert!(structure.may_advise(&EngagementId::from("eng-x-ab"), "term-life", today).is_ok());
+    assert!(structure.payee_impairment(&party("ab-one"), today).is_none());
+    let (later, _) = w.issue(2, 500_000_00, None);
+    w.write(&later, "life", 1, "eng-x-ab", "x-at-ab", 1_200_00).unwrap();
+    w.days(20);
+    let before = w.events.len();
+    w.pay(&policy, "r2");
+    let paid = on_layer(&w, before, &layer(&policy, 1));
+    assert!(paid.keys().all(|(who, _)| who == "ab-one"), "no override to FAP One after the change: {paid:?}");
+    assert_eq!(w.held("ab-one"), 0, "nothing held for a licence problem that is not the body's");
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-030) a group scheme's cover is formula-driven per member, so the module keeps
+/// one layer for each scheme cover that the scheme's broker writes. Mid-year the employer
+/// appoints a new broker: from the appointment date the scheme's layer moves to the new
+/// broker's book, whose rule carries the outgoing broker's agreed share as a dated line. Before
+/// the date the old broker is paid alone; between the date and the end of the handover share
+/// the two split it; after that the new broker is paid alone.
+/// Why it matters: scheme commission is paid on the whole scheme premium, so a broker change
+/// moves a large income stream on one date. Paying the wrong broker for even a month is a
+/// dispute between two firms the insurer has to settle.
+#[test]
+fn a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split() {
+    let mut w = worked_example();
+    let start = d(START.0, START.1, START.2);
+    for (broker, person) in [("broker-x", "person-x"), ("broker-y", "person-y")] {
+        w.add_party(broker, PartyKind::Broker);
+        w.add_party(person, PartyKind::Adviser);
+        w.payee(broker);
+        w.account(broker, &format!("acct-{broker}"));
+        w.send(
+            admin(),
+            Command::StartEngagement {
+                id: EngagementId::from(format!("eng-{broker}").as_str()),
+                engagement: ic_distribution::structure::Engagement {
+                    adviser: party(person),
+                    with: party(broker),
+                    from: d(2020, 1, 1),
+                    to: None,
+                    accreditations: BTreeSet::from(["group-life".to_string()]),
+                },
+            },
+        )
+        .unwrap();
+    }
+    let today = w.today();
+    let handover_until = today + chrono::Duration::days(75);
+    let book = |id: &str, broker: &str, lines: Vec<Line>| {
+        vec![
+            Change::CreateBook {
+                id: BookId::from(id),
+                name: id.into(),
+                engagement: Some(EngagementId::from(format!("eng-{broker}").as_str())),
+                owner: Some(party(broker)),
+                house: false,
+            },
+            Change::ActivateRule(rule(id, 1, start, lines, vec![liable(broker)])),
+        ]
+    };
+    let mut changes = book("x-schemes", "broker-x", vec![base("broker-x", Share::OfRemainder(WHOLE), true)]);
+    changes.extend(book(
+        "y-schemes",
+        "broker-y",
+        vec![
+            Line {
+                commission_type: Some(CommissionType::Renewal),
+                share: Share::OfComponent(pct(50.0)),
+                until: Some(handover_until),
+                ..base("broker-x", Share::OfRemainder(1), false)
+            },
+            base("broker-y", Share::OfRemainder(WHOLE), true),
+        ],
+    ));
+    w.activate("brokers", changes).unwrap();
+
+    let issue = ic_sim::persona::group_scheme(
+        5,
+        today,
+        vec![
+            ic_sim::persona::member("m1", d(1980, 1, 1), "staff", 80_000_00),
+            ic_sim::persona::member("m2", d(1985, 6, 1), "staff", 95_000_00),
+        ],
+    );
+    let scheme = issue.policy.clone();
+    let partition = w.cluster.partition_of(&issue.group);
+    w.cluster.submit(partition, "group-admin", ic_sim::persona::issue_command(issue)).unwrap();
+    w.sync();
+    let key = format!("{scheme}/group-life/0");
+    assert!(w.dist.layers.contains_key(&key), "the scheme cover has a layer for commission");
+    let monthly = w.owing(&scheme);
+    w.send(
+        module("group-admin"),
+        Command::WriteLayer(Box::new(WriteLayer {
+            policy: scheme.clone(),
+            cover: "group-life".into(),
+            layer: 0,
+            writing: vec![(EngagementId::from("eng-broker-x"), WHOLE)],
+            books: vec![(BookId::from("x-schemes"), WHOLE)],
+            schedule: "standard".into(),
+            option: "level".into(),
+            annual_premium_minor: monthly * 12,
+            replacement: false,
+        })),
+    )
+    .unwrap();
+    let month = |w: &mut World, n: u32| {
+        let before = w.events.len();
+        w.pay(&scheme, &format!("s{n}"));
+        on_layer(w, before, &key)
+    };
+    let first = month(&mut w, 0);
+    assert!(first.keys().all(|(who, _)| who == "broker-x") && !first.is_empty(), "{first:?}");
+
+    w.days(31);
+    let appointed = w.today();
+    w.activate(
+        "broker-change",
+        vec![
+            Change::MoveLayers {
+                layers: vec![key.clone()],
+                to: vec![(BookId::from("y-schemes"), WHOLE)],
+                from: appointed,
+            },
+            Change::SetServicing {
+                policy: scheme.clone(),
+                engagement: Some(EngagementId::from("eng-broker-y")),
+            },
+        ],
+    )
+    .unwrap();
+    let handover = month(&mut w, 1);
+    let whole: i64 = handover.values().sum();
+    assert_eq!(
+        handover[&("broker-x".into(), CommissionType::Renewal)],
+        portion(whole, pct(50.0)),
+        "{handover:?}"
+    );
+    assert_eq!(handover[&("broker-y".into(), CommissionType::Renewal)], whole - portion(whole, pct(50.0)));
+
+    w.days(31);
+    let _ = month(&mut w, 2);
+    w.days(31);
+    assert!(w.today() > handover_until);
+    let after = month(&mut w, 3);
+    assert!(after.keys().all(|(who, _)| who == "broker-y") && !after.is_empty(), "{after:?}");
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-019) FAP One loses its licence. From the date, new business under any
+/// engagement with it is refused; commission still earned on its advisers' existing business,
+/// for FAP One and for the adviser's company, goes to held with the licence as the reason; each
+/// policy it serviced gets a task for a new servicing adviser; and appointing one tells the
+/// customer.
+/// Why it matters: this is the scenario the held balance design exists for. Paying a provider
+/// that may not give advice, or losing the commission it would otherwise have earned, are both
+/// failures a regulator would see.
+#[test]
+fn a_provider_losing_its_licence_stops_new_business_holds_commission_and_asks_for_servicing() {
+    use ic_distribution::structure::LicenceState;
+    let mut w = worked_example();
+    with_adviser_b(&mut w);
+    w.add_party("fap-two-adviser", PartyKind::Adviser);
+    w.engage("eng-c-two", "fap-two-adviser", "fap-two", d(2020, 1, 1));
+    // A's company is paid on A's behalf, so it follows A's licence.
+    let payee_for = ic_distribution::structure::Relation {
+        child: party("a-co"),
+        parent: party("adviser-a"),
+        kind: ic_distribution::structure::RelationKind::PayeeFor,
+        from: d(2020, 1, 1),
+        to: None,
+    };
+    w.send(admin(), Command::Relate(payee_for)).unwrap();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.activate(
+        "servicing",
+        vec![Change::SetServicing {
+            policy: policy.clone(),
+            engagement: Some(EngagementId::from("eng-a-one")),
+        }],
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    let today = w.today();
+    let events = w.licence("fap-one", LicenceState::Revoked, today).unwrap();
+    assert!(events.iter().any(|e| matches!(e, Event::CaseOpened { .. })), "a conduct case opens: {events:?}");
+
+    let (new, _) = w.issue(2, 500_000_00, None);
+    assert_eq!(
+        code(w.write(&new, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00)),
+        "not_authorised_to_advise"
+    );
+    assert_eq!(
+        code(w.write(&new, "life", 1, "eng-b-one", "b-at-fap-one", 1_200_00)),
+        "not_authorised_to_advise"
+    );
+
+    let held_before = (w.held("fap-one"), w.held("a-co"));
+    let payable_before = (w.payable("fap-one"), w.payable("a-co"));
+    w.pay(&policy, "r2");
+    assert!(w.held("fap-one") > held_before.0 && w.held("a-co") > held_before.1, "earned into held");
+    assert_eq!((w.payable("fap-one"), w.payable("a-co")), payable_before, "and nothing to payable");
+    assert!(w
+        .dist
+        .held
+        .iter()
+        .any(|h| h.party == party("fap-one") && h.reason == Some(ic_distribution::rules::HeldReason::SuspendedLicence)));
+
+    let tasks: Vec<_> = w.dist.tasks.values().filter(|t| t.subject.contains(&policy.0) && t.done.is_none()).collect();
+    assert!(!tasks.is_empty(), "the policy needs a new servicing adviser: {:?}", w.dist.tasks);
+    w.activate(
+        "new-servicing",
+        vec![Change::SetServicing {
+            policy: policy.clone(),
+            engagement: Some(EngagementId::from("eng-c-two")),
+        }],
+    )
+    .unwrap();
+    assert!(w.events.iter().any(|e| matches!(e, Event::ServicingChanged { .. })), "the customer is told");
+    assert!(
+        w.dist.tasks.values().filter(|t| t.subject == policy.0).all(|t| t.done.is_some()),
+        "appointing settles the task"
+    );
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-025) a referral partner is paid a fixed fee when a policy is issued from its
+/// referral. The partner is a party with a payee record and an agreement, but no engagement, so
+/// it can write no business; the fee is a line of its own on the book's rule, separate from base
+/// commission; and the fee is clawed back with the initial commission when the policy is
+/// cancelled inside the clawback period.
+/// Why it matters: referral fees are commission in law. Paid without an agreement, or kept when
+/// the business does not stay, they become an inducement the insurer cannot justify.
+#[test]
+fn a_referral_partners_fixed_fee_is_its_own_line_and_is_clawed_back() {
+    let mut w = worked_example();
+    w.add_party("partner", PartyKind::ReferralPartner);
+    w.payee("partner");
+    w.account("partner", "acct-partner");
+    let today = w.today();
+    let fee = Line {
+        component: Component::FixedFee("referral".into()),
+        commission_type: Some(CommissionType::Initial),
+        share: Share::Fixed(150_00),
+        ..base("partner", Share::OfRemainder(1), false)
+    };
+    let mut lines = vec![
+        base("a-co", Share::OfRemainder(pct(75.0)), true),
+        base("fap-one", Share::OfRemainder(pct(25.0)), false),
+    ];
+    lines.push(fee);
+    w.activate(
+        "referral",
+        vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, lines, vec![liable("fap-one")]))],
+    )
+    .unwrap();
+    assert!(!w
+        .dist
+        .config
+        .structure
+        .engagements
+        .values()
+        .any(|e| e.adviser == party("partner") || e.with == party("partner")));
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    let before = w.events.len();
+    w.pay(&policy, "r1");
+    let mut fee_lines = vec![];
+    for e in &w.events[before..] {
+        if let Event::CommissionEarned { reference, .. } = e {
+            fee_lines.extend(w.dist.allocations[reference].lines.iter().filter(|l| l.payee == party("partner")).cloned());
+        }
+    }
+    assert_eq!(fee_lines.len(), 1);
+    assert_eq!(fee_lines[0].component, Some(Component::FixedFee("referral".into())));
+    assert_eq!(fee_lines[0].amount_minor, 150_00);
+    assert_eq!(w.payable("partner"), 150_00);
+    assert!(w.dist.exposures.values().any(|e| e.paid_to == party("partner") && e.amount_minor == 150_00));
+
+    w.days(40);
+    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() })
+        .unwrap();
+    let clawed: i64 = w
+        .dist
+        .exposures
+        .values()
+        .filter(|e| e.paid_to == party("partner"))
+        .map(|e| e.clawed_minor)
+        .sum();
+    assert_eq!(clawed, 150_00, "inside the first year the whole fee comes back");
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-039) premium paused under a hardship arrangement is not billed, so it earns no
+/// commission while the pause runs; when billing resumes, renewal commission is earned again on
+/// what is paid. (Premium waived during a claim, which does earn, is covered in lifecycle.rs.)
+/// Why it matters: a pause is premium the insurer never receives. Commission on it would be paid
+/// out of nothing and taken back later from an adviser who did nothing wrong.
+#[test]
+fn premium_paused_in_hardship_earns_nothing_until_billing_resumes() {
+    let mut w = worked_example();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    let from = w.today() + chrono::Duration::days(20);
+    let to = from + chrono::Duration::days(60);
+    w.core(
+        &policy,
+        "collections",
+        CoreCommand::GrantHardship {
+            policy: policy.clone(),
+            hardship: "pause-1".into(),
+            from,
+            to,
+            share_bps: 0,
+        },
+    )
+    .unwrap();
+    let total = |w: &World| w.payable("a-co") + w.payable("fap-one");
+    let before = total(&w);
+    let earned_events = w.events.len();
+    w.days(31);
+    let owed = w.owing(&policy);
+    if owed > 0 {
+        w.pay(&policy, "during");
+    }
+    assert_eq!(owed, 0, "nothing is billed while premium is paused");
+    assert_eq!(total(&w), before, "and nothing is earned");
+    assert!(!w.events[earned_events..].iter().any(|e| matches!(e, Event::CommissionEarned { .. })));
+    w.run_until(to + chrono::Duration::days(1));
+    w.days(31);
+    assert!(w.pay(&policy, "after") > 0, "billing resumes");
+    assert!(total(&w) > before, "and earns again");
+    w.assert_reconciled();
+}

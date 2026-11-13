@@ -174,6 +174,10 @@ pub enum Instruction {
         /// Interest for late payment, expensed now and paid with it.
         #[serde(default)]
         interest_minor: i64,
+        /// Of that interest, what the payee was told of and declined: the
+        /// core reverses it in its own entry and pays the rest.
+        #[serde(default)]
+        interest_declined_minor: i64,
         /// Part of the payment kept back against an overpayment the payee
         /// owes: a provider's billing error recovered from its next run.
         #[serde(default)]
