@@ -2203,6 +2203,10 @@ async fn claims_question(
                 .collect();
             ok(json!({ "partitions": partitions }))
         }
+        // Questions other services ask (the documents service's repayment
+        // letters): `claims::question` never makes one, so none reaches here.
+        #[allow(unreachable_patterns)]
+        _ => Err(Problem::not_found()),
     }
 }
 
