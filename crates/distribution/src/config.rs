@@ -924,7 +924,17 @@ impl DistributionState {
                     to: engagement.clone(),
                     on,
                 });
-                p.servicing = engagement;
+                p.servicing = engagement.clone();
+            }
+        }
+        // A new servicing adviser settles the task a licence event raised.
+        if let Some(e) = engagement {
+            for t in self
+                .tasks
+                .values_mut()
+                .filter(|t| t.kind == "needs_servicing_adviser" && t.subject == policy.0 && t.done.is_none())
+            {
+                t.done = Some(format!("servicing appointed: {e}"));
             }
         }
     }
