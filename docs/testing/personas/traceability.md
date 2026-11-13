@@ -155,12 +155,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-003 | part | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-004 | full | `underwriting/tests/libraries.rs::cedar_policy_enforces_authority_limits`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-005 | full | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
-| UW-006 | part | `underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life` |
+| UW-006 | part | `underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
 | UW-007 | full | `reinsurance/tests/capacity.rs::a_reservation_sees_cover_already_held_on_the_life` |
 | UW-008 | full | `underwriting/tests/casework.rs::nothing_is_offered_above_the_treaty_limit_until_the_reinsurer_has_answered` |
 | UW-009 | full | `reinsurance/tests/capacity.rs::two_proposals_on_one_life_see_each_other`<br>`reinsurance/tests/accumulation.rs::arrival_order_does_not_change_the_cessions` |
 | UW-010 | full | `underwriting/tests/libraries.rs::a_case_tracks_ownership_escalation_and_priority`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
-| UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
+| UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
+| UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
 | UW-014 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
 | UW-016 | part | `underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
@@ -225,7 +226,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
 | RI-009 | full | `reinsurance/tests/accumulation.rs::membership_events_move_the_cession_on_their_effective_dates`<br>`reinsurance/tests/accumulation.rs::an_identified_member_joins_the_life_and_the_excess_is_ceded_facultatively` |
 | RI-010 | part | `reinsurance/tests/claims.rs::catastrophe_and_stop_loss_respond_to_what_is_kept_across_claims` |
-| RI-011 | full | `reinsurance/tests/statements.rs::a_statement_nets_the_account_and_lists_only_what_the_treaty_allows`<br>`reinsurance/tests/carriers.rs::statements_and_the_release_log_are_filed_once` |
+| RI-011 | full | `reinsurance/tests/statements.rs::a_statement_nets_the_account_and_lists_only_what_the_treaty_allows`<br>`reinsurance/tests/carriers.rs::statements_and_the_release_log_are_filed_once`<br>`reinsurance/tests/statements.rs::a_long_listing_is_filed_in_parts_the_statement_names`<br>`reinsurance/tests/carriers.rs::statements_and_listings_are_left_for_their_reinsurer_to_collect` |
 | RI-012 | full | `reinsurance/tests/core.rs::an_agreed_statement_sweeps_its_net_amount_to_settlement_clearing`<br>`reinsurance/tests/statements.rs::settlement_is_agreed_checked_and_paid_once`<br>`payments/tests/recon.rs::money_a_reinsurer_pays_is_matched_to_its_statement` |
 | RI-013 | full | `reinsurance/tests/replay.rs::reconciliation_notices_damage` |
 | RI-014 | full | `reinsurance/tests/claims.rs::large_claims_are_notified_and_consent_is_tracked`<br>`claims/tests/suite/controls.rs::a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior` |
@@ -238,6 +239,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | INV-001 | full | `sim/tests/investment.rs::an_order_waits_for_its_price_and_executes_once` |
 | INV-002 | full | `pricing/src/fund.rs::pricing_date_follows_cutoff_and_calendar` |
+| INV-003 | full | `sim/tests/investment.rs::orders_that_cannot_be_honoured_are_refused_when_placed` |
 | INV-004 | full | `sim/tests/investment.rs::a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run` |
 | INV-006 | full | `pricing/src/strike.rs::units_on_issue_difference_blocks` |
 | INV-007 | full | `pricing/src/strike.rs::failed_checks_hold_the_price`<br>`pricing/tests/prices.rs::held_and_blocked_prices` |
@@ -281,7 +283,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
-| GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows` |
+| GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
@@ -337,7 +339,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-001 | full | `sim/tests/integrity.rs::a_quote_equals_the_first_bill`<br>`sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | SVC-002 | full | `sim/tests/reduce_cover.rs::a_reduction_takes_the_newest_layer_first`<br>`sim/tests/reduce_cover.rs::a_reduction_ends_layers_from_today_and_credits_the_days_left` |
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
-| SVC-008 | part | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
+| SVC-008 | full | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
@@ -486,5 +488,6 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | MIG-002 | full | `underwriting/tests/special.rs::migrated_terms_are_carried_as_data_and_never_defaulted` |
 | MIG-004 | part | `sim/tests/underwriting_door.rs::only_the_migration_load_issues_a_migrated_policy` |
+| MIG-008 | part | `finance/tests/edges.rs::a_migration_control_account_must_stay_still_after_cutover` |
 | MIG-011 | part | `reinsurance/tests/statements.rs::migrated_cessions_and_balances_are_taken_as_data` |
 | MIG-013 | full | `claims/tests/suite/intake.rs::a_migrated_claim_in_payment_carries_on_where_it_was`<br>`sim/tests/claims.rs::a_migrated_claim_opens_against_the_migration_control_account` |
