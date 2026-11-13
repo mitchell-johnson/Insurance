@@ -20,6 +20,7 @@ pub mod crypto;
 pub mod driver;
 pub mod event;
 pub mod kinds;
+pub mod listing;
 pub mod model;
 pub mod module;
 pub mod pdf;

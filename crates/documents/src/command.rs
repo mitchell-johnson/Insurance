@@ -278,6 +278,10 @@ pub enum Command {
     },
     /// Crypto-shred a party: destroy what may be destroyed now, and the
     /// rest as each retention period ends.
+    /// The channel rows of these documents were written or taken down.
+    AckListing {
+        documents: Vec<(String, bool)>,
+    },
     /// A letter another module asks for (`model::REQUESTED_KINDS`).
     RequestLetter(LetterRequest),
     /// Drop a requested letter that is still waiting.
@@ -308,6 +312,7 @@ impl Command {
             Command::IssueDocument(_) => "issue_document",
             Command::ImportLegacy(_) => "import_legacy",
             Command::RequestLetter(_) => "request_letter",
+            Command::AckListing { .. } => "ack_listing",
             Command::CancelLetterRequest { .. } => "cancel_letter_request",
             Command::RecordSend { .. } => "record_send",
             Command::RecordOutcome { .. } => "record_outcome",
@@ -346,7 +351,7 @@ impl Command {
             Command::RaiseNoticeDefect { .. } | Command::AttachDefectNotices { .. } | Command::ExcludeFromDefect { .. } | Command::CloseNoticeDefect { .. } => {
                 &["remediation"]
             }
-            Command::ObserveCoreEvents { .. } | Command::AckCoreInstructions { .. } | Command::MarkPublished { .. } => &["relay"],
+            Command::ObserveCoreEvents { .. } | Command::AckCoreInstructions { .. } | Command::MarkPublished { .. } | Command::AckListing { .. } => &["relay"],
             Command::DismissTrigger { .. } => &["documents"],
             Command::PlaceLegalHold { .. } | Command::ReleaseLegalHold { .. } => &["legal"],
             Command::ShredParty { .. } => &["privacy"],

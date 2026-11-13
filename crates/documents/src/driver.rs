@@ -241,7 +241,7 @@ fn decode<T: DeserializeOwned>(value: Value) -> Result<T, DriverError> {
 }
 
 impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Driver<M, S, W, C, D> {
-    async fn send(&self, key: String, caller: &str, command: Command) -> Result<Applied, DriverError> {
+    pub(crate) async fn send(&self, key: String, caller: &str, command: Command) -> Result<Applied, DriverError> {
         let applied = self
             .module
             .propose(Envelope {
@@ -285,7 +285,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         Ok(self.wrap.unwrap(&wrapped).await?)
     }
 
-    async fn template(&self, r: &TemplateRef) -> Result<(TemplateRecord, std::collections::BTreeMap<PartRef, Part>), DriverError> {
+    pub(crate) async fn template(&self, r: &TemplateRef) -> Result<(TemplateRecord, std::collections::BTreeMap<PartRef, Part>), DriverError> {
         let record: Option<TemplateRecord> = decode(self.module.ask(Query::Template { template: r.clone() }).await?)?;
         let record = record.ok_or_else(|| DriverError::NotFound(format!("template {} version {}", r.id, r.version)))?;
         let parts: Vec<Part> = decode(self.module.ask(Query::Parts { template: r.clone() }).await?)?;
