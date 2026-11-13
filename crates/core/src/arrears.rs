@@ -22,7 +22,7 @@ pub(crate) enum Derived {
 
 /// Pure: the standing a policy's receivables imply on a date.
 pub(crate) fn derive(policy: &Policy, rules: ArrearsRules, on: NaiveDate) -> Derived {
-    derive_from(policy.oldest_unpaid_due(), rules, on)
+    derive_from(policy.oldest_unpaid_due(), rules, crate::arrangement::clock(policy, on))
 }
 
 /// Pure: the standing an oldest unpaid due date implies on a date.
@@ -60,6 +60,10 @@ pub(crate) fn refresh(product: &ProductDefinition, policy: &mut Policy, ctx: &mu
     if policy.status != PolicyStatus::InForce {
         return;
     }
+    if crate::arrangement::watch(product, policy, ctx) {
+        // Kept: standing is held where it stood.
+        return;
+    }
     if let Some(rules) = product.arrears() {
         let to = match derive(policy, rules, ctx.date) {
             Derived::Standing(s) => s,
@@ -78,6 +82,10 @@ pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut
     let Some(rules) = product.arrears() else {
         return Ok(());
     };
+    if crate::arrangement::watch(product, policy, ctx) {
+        // Kept: standing is held where it stood and the policy does not lapse.
+        return Ok(());
+    }
     match derive(policy, rules, ctx.date) {
         Derived::Standing(s) => {
             set_standing(policy, ctx, Some(s));

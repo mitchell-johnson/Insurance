@@ -678,6 +678,7 @@ fn a_layer_removed_while_the_policy_continues_is_clawed_back_once() {
             allocated_minor: 100_00,
             to_suspense_minor: 0,
             net_by_cover_type: std::collections::BTreeMap::from([("life".to_string(), 90_00)]),
+            fund: None,
         },
         CoreEvent::PolicyStatusChanged {
             policy: policy.clone(),
