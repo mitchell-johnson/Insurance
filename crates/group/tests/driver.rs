@@ -824,7 +824,11 @@ async fn served(d: Arc<Rig>) -> (String, String) {
     let entra = ic_group::auth::Entra::new(&authority, customer_master::TENANT, GROUP_AUDIENCE);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(ic_group::service::serve(listener, ic_group::service::router(d, entra), std::future::pending()));
+    tokio::spawn(ic_group::service::serve(
+        listener,
+        ic_group::service::router(d, entra, Default::default()),
+        std::future::pending(),
+    ));
     (base, authority)
 }
 
@@ -871,6 +875,13 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
     let who = [("x-ic-caller", "employer-portal"), ("x-ic-actor", "admin-bo")];
     let upload = "/v1/schemes/harbour/files/nov.csv";
     assert_eq!(http.get(format!("{base}/healthz")).send().await.unwrap().text().await.unwrap(), "ok");
+    // Ready only while the cluster answers; no token is needed to ask.
+    assert_eq!(http.get(format!("{base}/readyz")).send().await.unwrap().status().as_u16(), 200);
+    d.core.down.set(true);
+    assert_eq!(http.get(format!("{base}/readyz")).send().await.unwrap().status().as_u16(), 503);
+    d.core.down.set(false);
+    let metrics = http.get(format!("{base}/metrics")).send().await.unwrap().text().await.unwrap();
+    assert!(metrics.contains("ic_group_passes_total 0\n"), "{metrics}");
 
     // The token: missing, not a token, for another service, or from another tenant.
     let elsewhere = customer_master::token_with(&authority, &["group-admin"], "api://customer-master");
@@ -1039,7 +1050,7 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
     let unreachable = ic_group::auth::Entra::new("http://127.0.0.1:1", customer_master::TENANT, GROUP_AUDIENCE);
     tokio::spawn(ic_group::service::serve(
         listener,
-        ic_group::service::router(d.clone(), unreachable),
+        ic_group::service::router(d.clone(), unreachable, Default::default()),
         std::future::pending(),
     ));
     let resp = http.post(format!("{dark}/v1/commands")).bearer_auth(&all).body(as_staff).send().await.unwrap();
@@ -1047,7 +1058,8 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
 }
 
 /// Purpose: the service loop keeps running passes until told to stop, whatever a pass
-/// meets: work to do, nothing to do, or the module away.
+/// meets: work to do, nothing to do, or the module away; and the counters served at
+/// `/metrics` say how many passes ran, how many could not, and what is left waiting.
 /// Why it matters: the loop is the only thing that moves a file forward in production. If
 /// one failed pass ended it, a brief outage of any dependency would stop all schemes
 /// until someone restarted the service.
@@ -1061,6 +1073,8 @@ async fn the_service_loop_survives_failed_passes() {
     let seen = Arc::new(Mutex::new(Vec::new()));
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let (log, down) = (seen.clone(), d.module.down.clone());
+    let health = Arc::new(ic_group::service::Health::default());
+    let counted = health.clone();
     let running = tokio::spawn(ic_group::service::run_passes(
         d.clone(),
         Duration::from_millis(5),
@@ -1068,6 +1082,7 @@ async fn the_service_loop_survives_failed_passes() {
             let _ = stop_rx.await;
         },
         move |pass| {
+            counted.record(pass);
             let mut log = log.lock().unwrap();
             log.push(pass.as_ref().map(|p| p.done).map_err(|e| e.to_string()));
             // The module goes away for the third and fourth passes.
@@ -1087,6 +1102,16 @@ async fn the_service_loop_survives_failed_passes() {
     assert!(seen.iter().any(|p| matches!(p, Ok(n) if *n > 0)));
     assert!(matches!(seen.last(), Some(Ok(0))), "idle at the end: {seen:?}");
     assert_eq!(file_status(&d, "nov.csv"), FileStatus::AwaitingApproval);
+    // What an operator's dashboard is told about the same run.
+    let metrics = health.metrics();
+    let value = |name: &str| -> u64 {
+        let line = metrics.lines().find(|l| l.starts_with(&format!("{name} "))).unwrap();
+        line.rsplit(' ').next().unwrap().parse().unwrap()
+    };
+    assert_eq!(value("ic_group_passes_total"), seen.len() as u64);
+    assert_eq!(value("ic_group_passes_failed_total"), seen.iter().filter(|p| p.is_err()).count() as u64);
+    assert!(value("ic_group_steps_total") > 0 && value("ic_group_waiting") == 0, "{metrics}");
+    assert!(metrics.contains("# TYPE ic_group_waiting gauge"));
 }
 
 /// Purpose: the customer master client sends a joiner's identity with an Entra ID token

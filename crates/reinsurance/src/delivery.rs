@@ -194,6 +194,23 @@ impl Reinsurance {
                 reference: format!("statement {statement}"),
                 bank_account: None,
             },
+            InstructionBody::ClearSettlement {
+                treaty,
+                reinsurer,
+                statement,
+                bank_account,
+                amount_minor,
+            } => ic_core::Command::PostReinsurance {
+                kind: ReinsurancePosting::SettlementCleared,
+                treaty: treaty.to_string(),
+                reinsurer: reinsurer.to_string(),
+                currency: self.treaty_currency(treaty)?,
+                policy: None,
+                amount_minor: *amount_minor,
+                value_date: on,
+                reference: format!("statement {statement} settled"),
+                bank_account: Some(bank_account.clone()),
+            },
         };
         Some(CoreDelivery {
             partition: instruction.partition,

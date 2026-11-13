@@ -660,11 +660,14 @@ async fn callers_must_prove_who_they_are() {
     assert_eq!(status(req).await, StatusCode::OK);
 }
 
-/// Purpose: the routing question answers whether a request should go to a person first,
-/// true once staff record a vulnerability marker, without ever showing the marker; callers
-/// the policy does not name are refused.
-/// Why it matters: a vulnerable customer's request must reach a trained person, and the
-/// marker itself is the most sensitive fact the master holds.
+/// Purpose: a vulnerability marker records a kind, a review date and adjustments, never a
+/// diagnosis; the routing question then answers "go to a person first" with the
+/// adjustments for anyone serving the person, the kind only for trained support staff, and
+/// the person sees their own marker in the app; other readers see no trace of it, not even
+/// a withheld field; only staff may set or remove it.
+/// Why it matters: a vulnerable customer's request must reach a trained person who knows
+/// what helps (matrix VUL-001, VUL-002), and the marker is the most sensitive fact the
+/// master holds: a label on a list, or a field marked as hidden, tells everyone it exists.
 #[tokio::test]
 async fn vulnerable_people_are_routed_to_a_person() {
     let w = world_or_skip!();
@@ -672,17 +675,53 @@ async fn vulnerable_people_are_routed_to_a_person() {
     let path = format!("/v1/parties/{p}/routing");
     let (status, out) = w.get(&path, "portal", "servicing").await;
     assert_eq!(status, StatusCode::OK, "{out}");
-    assert_eq!(out["route_to_person"], false);
-    let mark = json!({ "command": "record", "facts": [{ "field": "vulnerability", "value": true }] });
+    assert_eq!(out, json!({ "party": p, "route_to_person": false }));
+    let marker = json!({ "kind": "bereavement", "review_on": "2027-05-01", "adjustments": ["more_time", "speak_to_trained_person"] });
+    let mark = json!({ "command": "record", "facts": [{ "field": "vulnerability", "value": marker }] });
     let (status, _) = w.command(&p, "documents", mark.clone()).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
+    let with_diagnosis = json!({ "command": "record", "facts": [{ "field": "vulnerability",
+        "value": { "kind": "health", "review_on": "2027-05-01", "adjustments": [], "diagnosis": "x" } }] });
+    let (status, _) = w.command(&p, "staff", with_diagnosis).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "no diagnosis can be recorded");
     let (status, out) = w.command(&p, "staff", mark).await;
     assert_eq!(status, StatusCode::OK, "{out}");
+    // Anyone serving her: go to a person, and what helps. Not the kind.
     let (_, out) = w.get(&path, "claims", "claims").await;
-    assert_eq!(out["route_to_person"], true);
-    assert_eq!(out.as_object().unwrap().len(), 2, "only the answer, never the marker: {out}");
+    assert_eq!(
+        out,
+        json!({ "party": p, "route_to_person": true, "review_on": "2027-05-01",
+                "adjustments": ["more_time", "speak_to_trained_person"] })
+    );
+    // Trained support staff: the kind too.
+    let (_, out) = w.get(&path, "staff", "vulnerability_support").await;
+    assert_eq!(out["kind"], "bereavement");
+    // An ordinary read shows no trace of it.
     let (_, r) = w.get(&format!("/v1/parties/{p}"), "staff", "servicing").await;
-    assert!(r["facts"].get("vulnerability").is_none());
+    assert!(!r.to_string().contains("vulnerability"), "{r}");
+    let (_, r) = w.get(&format!("/v1/parties/{p}"), "staff", "vulnerability_support").await;
+    assert_eq!(r["facts"]["vulnerability"]["value"], marker);
+    // She sees her own marker in the app.
+    let mine = Call {
+        method: "GET",
+        path: format!("/v1/parties/{p}?purpose=self_service"),
+        role: "portal",
+        purpose: None,
+        body: None,
+        headers: vec![("x-ic-party", p.clone())],
+    };
+    let (status, r) = w.send(mine).await;
+    assert_eq!(status, StatusCode::OK, "{r}");
+    assert_eq!(r["facts"]["vulnerability"]["value"], marker);
+    // Removing it is a statement like any other; the history keeps what was.
+    let remove = json!({ "command": "record", "reason": "reviewed with her: no longer needed",
+        "facts": [{ "field": "vulnerability", "value": false }] });
+    let (status, out) = w.command(&p, "staff", remove).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, out) = w.get(&path, "claims", "claims").await;
+    assert_eq!(out["route_to_person"], false);
+    let (_, h) = w.get(&format!("/v1/parties/{p}/history"), "staff", "vulnerability_support").await;
+    assert_eq!(h["statements"].as_array().unwrap().iter().filter(|s| s["field"] == "vulnerability").count(), 2);
     let (status, _) = w.get(&path, "commission", "commission").await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }
@@ -783,4 +822,47 @@ async fn an_identity_outage_is_retryable() {
     };
     let (status, _) = elsewhere.get("/v1/reviews", "staff", "servicing").await;
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: a family member's worry about a customer is recorded as a third-party concern,
+/// who raised it and what about and nothing more; the answer to the staff member says
+/// nothing about the person; and it opens a prompt for a trained person to consider a
+/// marker, which can be dismissed but never merged. Values outside the lists are refused.
+/// Why it matters: a daughter worried about her father (matrix VUL-006), or children asking
+/// to limit their parents' withdrawals (VUL-004), have no authority over the policy; the
+/// insurer must listen without disclosing anything, and a person, not a rule, decides on a
+/// marker.
+#[tokio::test]
+async fn a_third_party_concern_opens_a_prompt_and_discloses_nothing() {
+    let w = world_or_skip!();
+    let p = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let concern = json!({ "command": "record_concern", "from": "family", "about": "financial_abuse" });
+    let (status, out) = w.command(&p, "staff", concern.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["events"], json!(["concern_raised"]));
+    assert_eq!(out.as_object().unwrap().len(), 3, "party, version and events only: {out}");
+    let (status, _) = w
+        .command(&p, "claims", json!({ "command": "record_concern", "from": "carer", "about": "capacity" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = w.command(&p, "documents", concern).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    for bad in [
+        json!({ "command": "record_concern", "from": "neighbour's cousin", "about": "wellbeing" }),
+        json!({ "command": "record_concern", "from": "family", "about": "he has dementia" }),
+    ] {
+        let (status, _) = w.command(&p, "staff", bad).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
+    let prompts: Vec<&Value> = r["reviews"].as_array().unwrap().iter().filter(|r| r["kind"] == "consider_marker").collect();
+    assert_eq!(prompts.len(), 2, "{r}");
+    assert_eq!(prompts[0]["party"], p);
+    assert_eq!(prompts[0]["reason"], "financial_abuse");
+    let id = prompts[0]["id"].as_str().unwrap();
+    let other = w.person("Hone", "Rakau", "1938-03-03", &[]).await;
+    let (status, _) = w.post("/v1/merges", "staff", json!({ "survivor": p, "absorbed": other, "review": id })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a prompt is not a duplicate review");
+    let (status, _) = w.post(&format!("/v1/reviews/{id}/dismiss"), "staff", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
 }

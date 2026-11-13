@@ -30,6 +30,7 @@ cedar-policy.workspace = true
 rand.workspace = true
 base64.workspace = true
 ed25519-dalek = "2"
+ring = "0.17"
 aes-gcm = "0.10"
 tokio.workspace = true
 tracing.workspace = true

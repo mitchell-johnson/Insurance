@@ -2089,9 +2089,19 @@ impl FinanceState {
         let state = self.open_period(period)?;
         state.status = PeriodStatus::Closed;
         state.closed = Some(closed);
+        // A closed period's extracts are stored and registered. The mart
+        // keeps the year behind it, for a file that has to be cut again, and
+        // lets the rest go so that the state does not grow for ever.
+        if let Some(keep_from) = period.start().checked_sub_months(chrono::Months::new(MART_KEEPS_MONTHS)) {
+            self.mart.trim(keep_from);
+        }
         Ok(())
     }
 }
+
+/// How many months of history before a period the mart keeps once that
+/// period has closed.
+pub const MART_KEEPS_MONTHS: u32 = 12;
 
 /// The hash a closed trial balance is known by.
 pub fn hash_rows(rows: &[BalanceRow]) -> Hash32 {
