@@ -598,6 +598,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             party: Some(party("party-1")),
             fingerprint: None,
             auto_cap_minor: None,
+            health: None,
         }],
         pools: vec![],
     };

@@ -32,6 +32,18 @@ pub struct Member {
     /// A cap on this member's automatic cover, below the scheme's limit.
     #[serde(default)]
     pub auto_cap_minor: Option<i64>,
+    /// The plan and tier the member chose from the scheme's health menu.
+    /// None is the menu's default plan, single.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<HealthChoice>,
+}
+
+/// A member's choice from the scheme's health menu, from a date.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthChoice {
+    pub plan: String,
+    pub tier: crate::terms::HealthTier,
+    pub effective: NaiveDate,
 }
 
 impl Member {
@@ -193,6 +205,7 @@ impl Membership {
                     party: join.party.clone(),
                     fingerprint: change.fingerprint.clone(),
                     auto_cap_minor: None,
+                    health: None,
                 });
                 true
             }

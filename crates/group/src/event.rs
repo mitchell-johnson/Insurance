@@ -157,6 +157,15 @@ pub enum GroupEvent {
         scheme: String,
         terms_version: u32,
     },
+    /// A member chose a health plan and tier. The tier is the employer's to
+    /// see; dependants are never named.
+    HealthPlanChosen {
+        scheme: String,
+        life: LifeId,
+        plan: String,
+        tier: crate::terms::HealthTier,
+        effective: NaiveDate,
+    },
     /// A member's letter could not be asked for; staff are told by the
     /// exception `letter_not_requested`.
     LetterNotRequested {
