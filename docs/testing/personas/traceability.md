@@ -477,7 +477,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | part | `channels/tests/staff.rs::external_source_drives_templates` |
-| STF-017 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |
+| STF-017 | full | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness`<br>`channels/tests/staff.rs::builders_and_operators_hold_no_personal_class` |
 | STF-018 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |
 
 ## PAY Payment runs and bank connectivity
