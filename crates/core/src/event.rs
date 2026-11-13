@@ -477,6 +477,14 @@ pub enum Event {
         receipt: String,
         amount_minor: i64,
     },
+    /// A member moved to another scheme in a split, and the credit they
+    /// held on the old scheme went with them.
+    MemberCreditMoved {
+        policy: PolicyId,
+        new_policy: PolicyId,
+        life: LifeId,
+        amount_minor: i64,
+    },
     /// A member's credit was set against what the member owes.
     MemberCreditApplied {
         policy: PolicyId,

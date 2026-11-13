@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::ops::Bound;
 
 use chrono::{Days, NaiveDate};
-use ic_ledger::Ledger;
+use ic_ledger::{Dimensions, Ledger};
 use ic_product::schedule::period_start;
 use ic_product::ProductDefinition;
 
@@ -22,6 +22,7 @@ use crate::machine::{CoreState, Ctx, Reject, APPLY_BUDGET, MAX_MEMBERSHIP_CHUNK,
 use crate::policy::{
     CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind, Standing,
 };
+use crate::postings::PostingSet;
 use crate::premium::{add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
 use crate::voluntary;
 use crate::{LifeId, PartyId, PolicyId};
@@ -1022,13 +1023,6 @@ pub(crate) fn split(
         if policy.lives.get(life).is_some_and(|l| matches!(l.kind, LifeKind::Pool { .. })) {
             return Err(Reject::new("pool_life", format!("{life} is a pool of members, which a split cannot divide")));
         }
-        let owes = policy.receivables.iter().any(|r| r.payer.as_ref() == Some(life) && r.outstanding_minor != 0);
-        if owes || ledger.natural_balance(&accounts::member_suspense(&policy.id, life, c).id) != 0 {
-            return Err(Reject::new(
-                "member_money",
-                format!("{life} owes or is owed money for cover they pay for; settle it before the split"),
-            ));
-        }
     }
     for life in &spec.lives {
         let through = match policy.lives.get(life).map(|l| &l.kind) {
@@ -1153,6 +1147,28 @@ pub(crate) fn split(
         if let Some(cover) = new.covers.get_mut(&code) {
             cover.layers.push(layer);
         }
+    }
+    // A moved member's credit goes with them, to meet their bills on the
+    // new scheme. What they owe for cover the old scheme gave stays owed
+    // there.
+    for life in &spec.lives {
+        let credit = i64::try_from(voluntary::credit_minor(ledger, policy, life)).unwrap_or(0);
+        if credit <= 0 {
+            continue;
+        }
+        new.member_accounts.insert(life.clone());
+        let mut set = PostingSet::new();
+        set.debit(accounts::member_suspense(&policy.id, life, c), credit as i128, Dimensions::default());
+        set.credit(accounts::member_suspense(&new.id, life, c), credit as i128, Dimensions::default());
+        let postings = set.into_postings(ledger)?;
+        let detail = std::collections::BTreeMap::from([("to_policy".to_string(), new.id.to_string())]);
+        ctx.post(ledger, "member_credit_moved", Some(policy), ctx.date, postings, detail)?;
+        ctx.emit(Event::MemberCreditMoved {
+            policy: policy.id.clone(),
+            new_policy: new.id.clone(),
+            life: life.clone(),
+            amount_minor: credit,
+        });
     }
     ctx.emit(Event::SchemeSplit {
         policy: policy.id.clone(),
