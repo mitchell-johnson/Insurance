@@ -52,7 +52,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 9 | 5 | 4 | 6 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
 | BIL Billing and earning | 6 | 4 | 5 | 5 |
-| COL Collection, cash matching, standing and dunning | 7 | 6 | 15 | 13 |
+| COL Collection, cash matching, standing and dunning | 8 | 6 | 14 | 12 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
@@ -75,15 +75,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | FIN Finance close, statutory funds and regulatory reporting | 9 | 3 | 6 | 1 |
 | CFG Configuration operations and the actuary's interface | 6 | 0 | 8 | 2 |
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
-| DOC Policy documents and correspondence | 4 | 4 | 2 | 0 |
+| DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 2 | 14 | 10 |
-| **Total** | **211** | **126** | **240** | **157** |
+| **Total** | **216** | **124** | **237** | **156** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 25 | 29 | 15 |
 | B | 81 | 22 | 39 |
-| C | 103 | 73 | 170 |
+| C | 108 | 71 | 167 |
 | D | 2 | 2 | 16 |
 
 ### Priority 1 tests with no built test, by area
@@ -91,7 +91,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **POL** (1): POL-002
 - **LED** (2): LED-006, LED-012
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (8): COL-005, COL-012, COL-014, COL-015, COL-018, COL-019, COL-023, COL-024
+- **COL** (7): COL-005, COL-012, COL-014, COL-018, COL-019, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030

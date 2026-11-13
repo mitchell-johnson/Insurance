@@ -570,3 +570,76 @@ fn a_new_version_takes_over_from_its_effective_date() {
     assert_eq!(report.due_for_review, vec![r]);
     assert!(AlternateFormat::LargePrint < AlternateFormat::Braille);
 }
+
+/// Purpose: changing a clause shared by ten products is one change
+/// record, and the register lists all ten product versions that use it
+/// and which of them a new version of the clause has not yet reached.
+/// Why it matters: compliance signs off a clause change once, and must
+/// then see every product whose documents carry the old words; a product
+/// missed here keeps sending a superseded cooling-off clause.
+#[test]
+fn a_changed_clause_shows_every_product_it_reaches() {
+    let mut kit = Kit::new();
+    let part = |version: u32, text: &str| Part {
+        id: "cooling-off".into(),
+        version,
+        bodies: BTreeMap::from([("en".to_string(), text.to_string())]),
+    };
+    kit.ok("config", "author", Command::RegisterPart(part(1, "You may cancel within {{days}} days.")));
+    let products = |range: std::ops::Range<u32>| -> Vec<ProductBinding> {
+        range
+            .map(|n| ProductBinding {
+                code: format!("product-{n}"),
+                version: 1,
+            })
+            .collect()
+    };
+    let with_clause = |id: &str, version: u32, clause: u32, products: Vec<ProductBinding>| {
+        let mut t = template(id, DocumentKind::PolicyWording, "Welcome {{name}}. {{> cooling-off}}");
+        t.version = version;
+        t.products = products;
+        t.parts = vec![PartRef {
+            id: "cooling-off".into(),
+            version: clause,
+        }];
+        t
+    };
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(with_clause("life-wording", 1, 1, products(0..6)))),
+    );
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(with_clause("health-wording", 1, 1, products(6..10)))),
+    );
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(template("receipt", DocumentKind::PremiumReceipt, "Thanks."))),
+    );
+
+    let usage = kit.state.part_usage("cooling-off");
+    assert_eq!((usage.latest, usage.templates.len(), usage.products.len()), (Some(1), 2, 10));
+    assert!(usage.behind.is_empty());
+
+    // The change: one record, and all ten products are behind it.
+    let events = kit.ok("config", "author", Command::RegisterPart(part(2, "You have {{days}} days to cancel.")));
+    assert_eq!(events.len(), 1);
+    let usage = kit.state.part_usage("cooling-off");
+    assert_eq!((usage.latest, usage.behind.len()), (Some(2), 10));
+
+    // The life wording takes the new clause; the health products are still behind.
+    kit.ok(
+        "config",
+        "author",
+        Command::SubmitTemplate(Box::new(with_clause("life-wording", 2, 2, products(0..6)))),
+    );
+    let usage = kit.state.part_usage("cooling-off");
+    assert_eq!(usage.behind, products(6..10).into_iter().collect());
+    assert_eq!(usage.products.len(), 10);
+    assert_eq!(usage.templates.len(), 3);
+    assert!(usage.templates.iter().all(|t| t.status == TemplateStatus::Draft));
+    assert_eq!(kit.state.part_usage("no-such-part").latest, None);
+}
