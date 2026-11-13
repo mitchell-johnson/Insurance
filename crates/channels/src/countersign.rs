@@ -28,12 +28,20 @@ pub struct Rule {
     pub commands: &'static [&'static str],
 }
 
-pub const RULES: [Rule; 1] = [Rule {
-    module: crate::reinsurance::MODULE,
-    prepare: crate::reinsurance::actions::OPERATE,
-    sign: crate::reinsurance::actions::APPROVE,
-    commands: &crate::reinsurance::COUNTERSIGNED,
-}];
+pub const RULES: [Rule; 2] = [
+    Rule {
+        module: crate::reinsurance::MODULE,
+        prepare: crate::reinsurance::actions::OPERATE,
+        sign: crate::reinsurance::actions::APPROVE,
+        commands: &crate::reinsurance::COUNTERSIGNED,
+    },
+    Rule {
+        module: crate::underwriting::MODULE,
+        prepare: crate::underwriting::actions::SENIOR,
+        sign: crate::underwriting::actions::SENIOR,
+        commands: &crate::underwriting::COUNTERSIGNED,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {

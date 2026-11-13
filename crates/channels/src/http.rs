@@ -143,6 +143,8 @@ pub struct AppState {
     pub claims: Arc<dyn crate::claims::Partitions>,
     /// The reinsurance module, for the exceptions console.
     pub reinsurance: Arc<dyn crate::forward::Source>,
+    /// The underwriting module, for the underwriting console.
+    pub underwriting: Arc<dyn crate::forward::Source>,
     /// The customer master, for a person's own record. `None` where it is
     /// not configured: those routes answer 503.
     pub master: Option<Arc<dyn crate::customers::Master>>,
@@ -1695,6 +1697,173 @@ async fn reinsurance_decide(State(s): State<Shared>, headers: HeaderMap, method:
     sent
 }
 
+impl AppState {
+    /// Whether this person may open the underwriting console. Nobody
+    /// without an underwriting action gets as far as that module.
+    async fn underwriting_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::UnderwritingStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include underwriting"));
+        }
+        Ok((session, standing))
+    }
+
+    /// Send one command to the underwriting module and say what became of
+    /// it: what it recorded, or why it refused.
+    async fn to_underwriting(&self, envelope: Value) -> Answer {
+        let output = self
+            .underwriting
+            .tell(envelope)
+            .await
+            .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))?;
+        if let Some(refused) = output.get("Err") {
+            return Err(module_refusal(
+                refused["code"].as_str().unwrap_or("refused"),
+                refused["message"].as_str().unwrap_or("the underwriting module refused it"),
+            ));
+        }
+        let applied = &output["Ok"];
+        ok(json!({ "accepted": true, "events": applied["events"], "view": applied["view"], "duplicate": applied["duplicate"] }))
+    }
+}
+
+/// One of the console's questions to the underwriting module. `me` answers
+/// from here, with the remedies waiting for a second senior.
+async fn underwriting_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (session, standing) = s.underwriting_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::underwriting::question(&name, &fields, &session.party, session.at).map_err(Problem::bad_request)?;
+    let answer = s
+        .underwriting
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("underwriting", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// A person's command on a case. The person acting is whoever signed in;
+/// a non-disclosure remedy is kept until a second senior signs it.
+async fn underwriting_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.underwriting_standing(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let sent: Value = parse(&body)?;
+    let senior = standing["senior"] == true;
+    let (command, name, countersigned) = crate::underwriting::command(&sent, &session.party, senior).map_err(|e| {
+        if e.ends_with("for a senior underwriter") {
+            Problem::forbidden(&e)
+        } else {
+            Problem::bad_request(e)
+        }
+    })?;
+    if countersigned {
+        let reason = command[&name]["reasons"]
+            .as_array()
+            .map(|r| r.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        let id = format!("underwriting:{key}");
+        let prepare = crate::countersign::CountersignCommand::Prepare {
+            id: id.clone(),
+            module: crate::underwriting::MODULE.to_string(),
+            command,
+            reason,
+        };
+        s.propose(format!("countersign:{id}"), Actor::Staff(session.party), Command::Countersign(prepare))
+            .await?;
+        return ok(json!({ "prepared": id, "needs": "a second senior underwriter to sign it" }));
+    }
+    let today = business_date(&standing, session.at);
+    s.to_underwriting(crate::underwriting::envelope(&key, session.at, &today, command)).await
+}
+
+/// Sign, or take back, a remedy waiting for a second senior.
+async fn underwriting_decide(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((verb, id)): Path<(String, String)>) -> Answer {
+    use crate::countersign::CountersignCommand as C;
+    let (session, standing) = s.underwriting_standing(&headers, &method, &uri, b"").await?;
+    let waiting = |standing: &Value| {
+        standing["pending"]
+            .as_array()
+            .and_then(|all| all.iter().find(|p| p["id"] == id.as_str()))
+            .cloned()
+    };
+    // Only this module's remedies are signed or taken back from here.
+    if waiting(&standing).is_none() {
+        return Err(Problem::not_found());
+    }
+    let actor = Actor::Staff(session.party.clone());
+    let fresh = |what: &str| format!("countersign:{id}:{what}:{}:{}", session.party.0, session.at);
+    match verb.as_str() {
+        "withdraw" => {
+            s.propose(fresh("withdraw"), actor, Command::Countersign(C::Withdraw { id: id.clone() }))
+                .await?;
+            return ok(json!({ "withdrawn": id }));
+        }
+        "sign" => {}
+        _ => return Err(Problem::not_found()),
+    }
+    s.propose(fresh("sign"), actor.clone(), Command::Countersign(C::Sign { id: id.clone() }))
+        .await?;
+    let (_, now) = s.underwriting_standing(&headers, &method, &uri, b"").await?;
+    let pending = waiting(&now).ok_or_else(Problem::not_found)?;
+    let signed = crate::underwriting::countersigned(&pending["command"], &session.party);
+    let today = business_date(&standing, session.at);
+    // The key is the prepared one's, so a sign repeated after a lost answer applies once.
+    let sent = s
+        .to_underwriting(crate::underwriting::envelope(&format!("countersigned:{id}"), session.at, &today, signed))
+        .await;
+    match &sent {
+        // Unreachable: leave it signed, so signing again finishes it.
+        Err(problem) if problem.status == StatusCode::SERVICE_UNAVAILABLE => {}
+        // Done, or refused for good: either way it no longer waits.
+        _ => {
+            s.propose(fresh("settle"), actor, Command::Countersign(C::Settle { id })).await?;
+        }
+    }
+    sent
+}
+
+/// An underwriter reads a life's disclosures through the intake, which has
+/// the underwriting module allow it and record the reading first. The
+/// person reading is whoever signed in, and a purpose is required.
+async fn underwriting_disclosures(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, _) = s.underwriting_standing(&headers, &method, &uri, &body).await?;
+    let key = key(&headers, &session.party.0)?;
+    let sent: Value = parse(&body)?;
+    let field = |name: &str| {
+        sent[name]
+            .as_str()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| Problem::bad_request(format!("send the {name}")))
+    };
+    let request = json!({
+        "request": key,
+        "proposal": field("proposal")?,
+        "life": field("life")?,
+        "underwriter": session.party,
+        "purpose": field("purpose")?,
+    });
+    intake_answer(s.intake()?.open(request).await)
+}
+
 fn claims_down(reason: String) -> Problem {
     Problem::new(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -2225,6 +2394,10 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/commission/commands", post(commission_command))
         .route("/staff/v1/commission/{question}", get(commission_question))
         .route("/staff/v1/replacements/decide", post(replacement_decide))
+        .route("/staff/v1/underwriting/commands", post(underwriting_command))
+        .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))
+        .route("/staff/v1/underwriting/{verb}/{id}", post(underwriting_decide))
+        .route("/staff/v1/underwriting/{question}", get(underwriting_question))
         .route("/staff/v1/reinsurance/commands", post(reinsurance_command))
         .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
         .route("/staff/v1/reinsurance/{question}", get(reinsurance_question))
@@ -2247,6 +2420,7 @@ pub fn router(state: Shared) -> Router {
         .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
+        .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))
         .route("/commission", get(|State(s): State<Shared>| async move { page(&s, crate::ui::COMMISSION) }))
