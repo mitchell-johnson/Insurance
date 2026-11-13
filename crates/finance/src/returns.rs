@@ -271,7 +271,7 @@ impl FinanceState {
             if self.periods.get(&period).is_some_and(|p| p.status == PeriodStatus::Closed) {
                 return reject("period_closed", format!("{period} is closed; fact {} cannot be counted in it", fact.id));
             }
-            if !self.conduct_seen.contains(&fact.id) {
+            if !self.conduct_seen.contains_key(&fact.id) {
                 fresh.insert(
                     &fact.id,
                     ConductKey {
@@ -286,7 +286,7 @@ impl FinanceState {
         let count = fresh.len() as u32;
         let keys: Vec<(String, ConductKey)> = fresh.into_iter().map(|(id, key)| (id.to_string(), key)).collect();
         for (id, key) in keys {
-            self.conduct_seen.insert(id);
+            self.conduct_seen.insert(id, key.period);
             *self.conduct.entry(key).or_insert(0) += 1;
         }
         Ok(count)

@@ -10,6 +10,7 @@ const TERM: &str = include_str!("../../../products/term_life.star");
 const HEALTH: &str = include_str!("../../../products/health_plan.star");
 const GROUP: &str = include_str!("../../../products/group_life.star");
 const INVEST: &str = include_str!("../../../products/invest_plan.star");
+const INTERIM: &str = include_str!("../../../products/interim_accident.star");
 const NO_PREMIUM: &str = include_str!("../../../products/rates/no_premium.star");
 const FLEX: &str = include_str!("../../../products/health_flex.star");
 const FLEX_RATES: [&str; 4] = [
@@ -36,6 +37,7 @@ fn all_shipped_configuration_loads() {
         ("group_life.star", GROUP),
         ("invest_plan.star", INVEST),
         ("health_flex.star", FLEX),
+        ("interim_accident.star", INTERIM),
     ] {
         let p = load_product(f, s).unwrap();
         assert_eq!(p.content_hash.len(), 64);
@@ -54,7 +56,7 @@ fn all_shipped_configuration_loads() {
     for source in FLEX_RATES {
         load_rate_table("flex", source).unwrap();
     }
-    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 7);
+    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 8);
 }
 
 /// Purpose: a product's content hash changes when a rate in it changes and is the same for the same

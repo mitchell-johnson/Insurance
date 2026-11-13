@@ -464,3 +464,60 @@ fn any_figure_on_a_filed_return_opens_to_what_is_behind_it() {
         assert!(refused.contains(problem), "{refused}");
     }
 }
+
+/// Purpose: a ledger runs from November 2027 with every month closed in turn until
+/// January 2030 closes. A declined claim is counted in November 2027 under a command
+/// key. While the month is open the same key, and the same fact under a new key, are
+/// both recognised and nothing is counted twice. Once January 2030 has closed, the day
+/// records and Merkle roots before January 2028 are gone and no root is asked for again;
+/// November 2027's closed trial balance, its conduct count and a later month's day
+/// records are all still there; and the old key and the old fact, sent again, are
+/// refused because the month is closed.
+/// Why it matters: the ledger's state is replicated and snapshotted on every node. The
+/// records that only serve an open period (each day's control record, command keys, fact
+/// IDs) would otherwise grow for the life of the insurer, and letting them go must never
+/// let an old command or fact be taken a second time.
+#[test]
+fn working_records_are_let_go_two_years_after_a_period_closes() {
+    let start = d(2027, 11, 15);
+    let mut w = World::new(1, start);
+    let (p, id) = w.issue(1, start);
+    w.pay(p, &id, "r1", 40 * MONTHLY);
+    let nov = period(2027, 11);
+    let declined = || record(vec![fact("clm-1", ConductMeasure::ClaimDeclined, d(2027, 11, 25))]);
+    assert_eq!(w.books.send_keyed("k-1", "claims", None, declined()).result, Ok(()));
+    let again = w.books.send_keyed("k-1", "claims", None, declined());
+    assert!(again.duplicate);
+    assert_eq!(w.books.send_keyed("k-2", "claims", None, declined()).result, Ok(()));
+    assert_eq!(w.books.state.conduct_report(nov, None).declined, 1);
+
+    let mut month = nov;
+    while month <= period(2030, 1) {
+        let next = ic_finance::PeriodId::of(month.end().succ_opt().unwrap());
+        w.until(next.start() + chrono::Days::new(2));
+        if month < period(2030, 1) {
+            assert_eq!(w.books.state.first_date(), Some(start), "trimmed before {month} closed");
+        }
+        w.close(month);
+        month = next;
+    }
+    let state = &w.books.state;
+    assert_eq!(state.first_date(), Some(d(2028, 1, 1)));
+    assert!(state.sources(period(2027, 12)).is_empty());
+    assert_eq!(state.sources(period(2028, 1)).len(), 31);
+    assert!(
+        state.work().roots_wanted.iter().all(|date| *date >= d(2030, 2, 1)),
+        "{:?}",
+        state.work().roots_wanted
+    );
+    let closed = state.periods[&nov].closed.clone().unwrap();
+    assert_eq!(state.trial_balance(nov, None), closed.trial_balance);
+    assert_eq!(state.conduct_report(nov, None).declined, 1);
+
+    for key in ["k-1", "k-3"] {
+        let late = w.books.send_keyed(key, "claims", None, declined());
+        assert!(!late.duplicate);
+        assert_eq!(late.result.unwrap_err().code, "period_closed");
+    }
+    assert_eq!(w.books.state.conduct_report(nov, None).declined, 1);
+}

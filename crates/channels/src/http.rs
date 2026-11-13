@@ -611,6 +611,13 @@ async fn profile_command(State(s): State<Shared>, headers: HeaderMap, method: Me
     mastered(s.master()?.command(&session.party, version, key, command).await)
 }
 
+/// Where your own hold on money going out stands: whether it is on, and
+/// when a removal you asked for takes effect.
+async fn profile_spending_hold(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    mastered(s.master()?.spending_hold(&session.party).await)
+}
+
 /// A copy of everything the insurer holds about you, from an enrolled device.
 async fn profile_export(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
@@ -2348,6 +2355,7 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/profile", get(profile))
         .route("/app/v1/profile/commands", post(profile_command))
         .route("/app/v1/profile/export", get(profile_export))
+        .route("/app/v1/profile/spending-hold", get(profile_spending_hold))
         .route("/app/v1/documents/{id}/pdf", get(own_document))
         .route("/staff/v1/documents/{id}/pdf", get(staff_document))
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign", post(disclosure_to_sign))

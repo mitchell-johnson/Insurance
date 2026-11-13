@@ -2173,8 +2173,8 @@ async fn serve_for_a_browser() {
 
 /// Purpose: a customer reads their own record from the customer master, changes contact details and consents only from an enrolled
 /// device that proved its key, cannot send any other command, has their version and key passed on, gets the master's own answer
-/// (including a stale-version refusal), takes a copy of their record from a device, and is told plainly when the master is down or
-/// not configured.
+/// (including a stale-version refusal), takes a copy of their record from a device, puts a hold on their own money going out and
+/// asks for it to end with a fresh identity check, and is told plainly when the master is down or not configured.
 /// Why it matters: this is the Privacy Act self-service route; the portal must only ever ask about the person signed in, must not
 /// widen what a person may change beyond the master's own policy, and a retried change must carry the same key so it applies once.
 #[tokio::test]
@@ -2223,6 +2223,32 @@ async fn a_person_keeps_their_own_customer_record() {
     let proved = portal.proof(&portal.phone, "GET", "/app/v1/profile/export", "");
     let (status, export) = portal.send("GET", "/app/v1/profile/export", &proved, None).await;
     assert_eq!((status, &export["party"]), (StatusCode::OK, &json!(KIRI)));
+
+    // A hold on your own money going out: on at once, off only after a fresh identity check and the cooling-off period.
+    assert_eq!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["held"], false);
+    let ((status, _), _) = send(json!({ "command": "place_spending_hold" }), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let hold = portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1;
+    assert_eq!((&hold["held"], &hold["removal"]), (&json!(true), &Value::Null), "{hold}");
+    assert_eq!(
+        portal.master.calls.lock().unwrap().last().unwrap().party,
+        KIRI,
+        "the hold asked about is the person's own"
+    );
+    let ((status, problem), _) = send(json!({ "command": "request_hold_removal" }), None).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("verification_needed"))
+    );
+    let ((status, _), _) = send(json!({ "command": "request_hold_removal", "verification": "idv-2" }), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["removal"]["ends_at"].is_string());
+    let ((status, _), _) = send(json!({ "command": "cancel_hold_removal" }), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(portal.get("sub-kiri", "/app/v1/profile/spending-hold").await.1["removal"], Value::Null);
+    // Legal lifts it; a person cannot send that.
+    let ((status, _), _) = send(json!({ "command": "override_spending_hold", "reference": "court-1" }), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 
     // An unreachable master is a 503 the app can retry.
     portal.master.down.store(true, Ordering::SeqCst);

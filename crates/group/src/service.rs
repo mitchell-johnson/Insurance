@@ -321,6 +321,40 @@ where
     }
 }
 
+/// A proposed mapping and a sample of the employer's file.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Trial {
+    mapping: crate::mapping::FileMapping,
+    sample: String,
+}
+
+/// Staff try a new mapping version against a sample file before setting
+/// it. Nothing is stored and nothing changes.
+async fn try_mapping<M, C, P, D, F>(State(web): State<Arc<Web<M, C, P, D, F>>>, Path(scheme): Path<String>, headers: HeaderMap, body: Bytes) -> Answer
+where
+    M: Module + 'static,
+    C: Core + 'static,
+    P: Peers + 'static,
+    D: CustomerMaster + 'static,
+    F: FileStore + 'static,
+{
+    match web.authorised(&headers).await {
+        Ok(service) if service.may_act_as(caller::STAFF) => {}
+        Ok(_) => return not_your_role(caller::STAFF),
+        Err(answer) => return answer,
+    }
+    let trial: Trial = match serde_json::from_slice(&body) {
+        Ok(t) => t,
+        Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_trial", &e.to_string()),
+    };
+    match web.driver.try_mapping(&scheme, trial.mapping, trial.sample.as_bytes()).await {
+        Ok(answer) => (StatusCode::OK, Json(answer)),
+        Err(DriverError::Answer(e)) => refused(StatusCode::NOT_FOUND, "not_found", &e),
+        Err(e) => failed(e),
+    }
+}
+
 /// A command from a portal or another service. The business date is the
 /// core's, never the caller's.
 #[derive(Debug, Deserialize)]
@@ -453,6 +487,7 @@ where
     let web = Arc::new(Web { driver, entra, health });
     Router::new()
         .route("/v1/schemes/{scheme}/files/{file}", post(upload::<M, C, P, D, F>))
+        .route("/v1/schemes/{scheme}/mappings/try", post(try_mapping::<M, C, P, D, F>))
         .route("/v1/commands", post(command::<M, C, P, D, F>))
         .route("/v1/questions", post(question::<M, C, P, D, F>))
         .route("/healthz", get(|| async { "ok" }))

@@ -366,8 +366,8 @@ async fn an_outage_stops_the_pass_and_the_next_one_carries_on() {
     assert_eq!(reserves, 1, "the reservation was sent once: the stop came after it was acknowledged");
 }
 
-/// Purpose: where interim accidental death cover is configured, the driver issues it in the
-/// core when the proposal opens and tells the module it is in force; when the proposal becomes
+/// Purpose: where interim accidental death cover is configured, with the shipped
+/// `interim-accident` product, the driver issues it in the core when the proposal opens and tells the module it is in force; when the proposal becomes
 /// a policy the driver cancels the interim policy in the core. Both are real policies in the
 /// ledger, and at the end only the applied-for policy is in force.
 /// Why it matters: interim cover is a promise made the day the applicant signs. If it were
@@ -380,8 +380,8 @@ async fn interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issu
         let settings = Settings {
             version: 2,
             interim: Some(InterimSettings {
-                product_code: "term-life".into(),
-                cover_code: "life".into(),
+                product_code: "interim-accident".into(),
+                cover_code: "accidental-death".into(),
                 max_sum_insured_minor: 250_000_00,
             }),
             ..Settings::default()
@@ -400,10 +400,13 @@ async fn interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issu
     assert!(pass.parked.is_empty(), "{pass:?}");
     let interim = b.module.with(|w| w.p("P1").interim.clone().unwrap());
     assert!(interim.issued && !interim.ended);
-    assert_eq!(
-        b.ledger.cluster.lock().unwrap().state(0).policies[&interim.policy].status,
-        PolicyStatus::InForce
-    );
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let written = &cluster.state(0).policies[&interim.policy];
+        assert_eq!(written.status, PolicyStatus::InForce);
+        let covers: Vec<i64> = written.covers.values().map(|c| c.sum_insured_on(c.start)).collect();
+        assert_eq!(covers, vec![250_000_00], "the most interim cover on a life, not the amount applied for");
+    }
 
     b.module.with(|w| w.disclose("P1", "L1", &clean()));
     let pass = b.pass().await;

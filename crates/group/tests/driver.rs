@@ -1437,3 +1437,91 @@ async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
     assert_eq!(file_status(&d, "pay-4.csv"), FileStatus::Refused);
     assert_eq!(salary(&d, "E002"), Some(71_000_00));
 }
+
+/// Purpose: staff try a proposed mapping version against a sample of the employer's file
+/// before setting it. The answer says what the file would do (joiners, leavers, changes,
+/// rows refused by number and code, whether the safety check would hold it) and which
+/// mapping version was tried; nothing is stored, no file appears, the scheme's mapping and
+/// members are untouched and no name leaves the service. A mapping that cannot be sealed, a
+/// sample that does not fit it, an unknown scheme, and a caller who is not staff are each
+/// refused.
+/// Why it matters: a mapping is trusted for every file once set. Finding out that the new
+/// version reads the wrong column from the first live file means the employer's real month
+/// is refused, or worse, half read; trying it first on a sample costs nothing.
+#[tokio::test]
+async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
+    let d = Arc::new(rig());
+    through(&d, "nov.csv", FILE).await;
+    let (base, authority) = served(d.clone()).await;
+    let staff = customer_master::token_with(&authority, &["group-admin"], GROUP_AUDIENCE);
+    let employer = customer_master::token_with(&authority, &["employer-portal"], GROUP_AUDIENCE);
+    let http = reqwest::Client::new();
+    let attempt = |scheme: &str, token: &str, body: Value| {
+        let r = http
+            .post(format!("{base}/v1/schemes/{scheme}/mappings/try"))
+            .bearer_auth(token)
+            .body(serde_json::to_vec(&body).unwrap());
+        async move {
+            let resp = r.send().await.unwrap();
+            (resp.status().as_u16(), resp.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let before = d.module.state.lock().unwrap().clone();
+
+    // The export now heads its columns differently and writes dates year first. E002 is
+    // gone, E005 is new, E003's pay has changed and one date cannot be read.
+    let mut next = named_mapping();
+    next.version = 3;
+    next.columns.employee_id = "Staff ID".into();
+    next.date_format = "%Y-%m-%d".into();
+    next.content_hash = String::new();
+    let sample = "Staff ID,First,Last,DOB,Category,Salary,Site\n\
+        E001,Ana,Founder,1980-05-01,staff,60000,akl\n\
+        E003,Cy,Patel,1975-07-03,executive,250000,wlg\n\
+        E005,Eve,Tane,1990-01-09,staff,55000,akl\n\
+        E006,Fa,Broken,09/01/1990,staff,55000,akl\n";
+    let (status, tried) = attempt(SCHEME, &staff, serde_json::json!({"mapping": next, "sample": sample})).await;
+    assert_eq!(status, 200, "{tried}");
+    let summary = &tried["summary"];
+    assert_eq!(
+        (
+            summary["joiners"].as_u64(),
+            summary["leavers"].as_u64(),
+            summary["changes"].as_u64(),
+            summary["rejected"].as_u64()
+        ),
+        (Some(1), Some(1), Some(1), Some(1))
+    );
+    assert_eq!(
+        (tried["rejected"][0]["row"].as_u64(), tried["rejected"][0]["code"].as_str()),
+        (Some(4), Some("bad_date"))
+    );
+    assert_eq!(
+        (tried["mapping"]["version"].as_u64(), tried["mapping"]["kind"].as_str()),
+        (Some(3), Some("full"))
+    );
+    assert_eq!(tried["would_be_held"], true, "one of three members leaving trips the safety check");
+    let text = tried.to_string();
+    assert!(!text.contains("Tane") && !text.contains("Eve"), "{text}");
+    assert!(*d.module.state.lock().unwrap() == before, "a trial changes nothing");
+    assert!(d.files.blobs.lock().unwrap().keys().all(|k| k.ends_with("nov.csv")));
+
+    // What cannot be tried.
+    let old_sample = serde_json::json!({"mapping": next, "sample": FILE});
+    assert_eq!(attempt(SCHEME, &staff, old_sample).await.1["error"]["code"], "missing_column");
+    let mut unusable = next.clone();
+    unusable.date_format = "%m/%Y".into();
+    let bad = attempt(SCHEME, &staff, serde_json::json!({"mapping": unusable, "sample": sample})).await;
+    assert_eq!((bad.0, bad.1["error"]["code"].as_str()), (422, Some("invalid_mapping")));
+    assert_eq!(attempt("nowhere", &staff, serde_json::json!({"mapping": next, "sample": sample})).await.0, 404);
+    assert_eq!(
+        attempt(SCHEME, &staff, serde_json::json!({"sample": sample})).await.1["error"]["code"],
+        "invalid_trial"
+    );
+    assert_eq!(attempt(SCHEME, &employer, serde_json::json!({"mapping": next, "sample": sample})).await.0, 403);
+    assert_eq!(
+        attempt(SCHEME, "not-a-token", serde_json::json!({"mapping": next, "sample": sample})).await.0,
+        401
+    );
+    assert!(*d.module.state.lock().unwrap() == before);
+}
