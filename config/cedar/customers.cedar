@@ -139,8 +139,12 @@ permit(principal == Service::"staff", action, resource is Command)
 when {
     [Action::"create", Action::"record", Action::"decline_correction", Action::"add_relationship",
      Action::"end_relationship", Action::"set_consent", Action::"activate", Action::"mark_deceased",
-     Action::"retract_death", Action::"exit", Action::"assign_group"].contains(action)
+     Action::"retract_death", Action::"exit", Action::"assign_group", Action::"record_concern"].contains(action)
 };
+
+// Claims, complaints and servicing hear concerns from families and carers too.
+permit(principal, action == Action::"record_concern", resource is Command)
+when { [Service::"claims", Service::"complaints", Service::"policy-servicing"].contains(principal) };
 
 permit(principal == Service::"migration", action, resource is Command)
 when { action != Action::"place_hold" && action != Action::"release_hold" };

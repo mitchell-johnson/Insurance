@@ -604,7 +604,7 @@ fn money_a_reinsurer_pays_is_matched_to_its_statement() {
     assert_eq!(
         sent[0].1,
         json!({"key": "payments:received:anz-sf1-operating-2027-11-15-l1", "caller": "payments", "on": "2027-11-15",
-               "command": {"record_settlement": {"number": 42, "payment_ref": "Swiss Re RI-STMT-42 Q3", "amount_minor": -1_200_00}}})
+               "command": {"record_settlement": {"number": 42, "payment_ref": "Swiss Re RI-STMT-42 Q3", "amount_minor": -1_200_00, "bank_account": "anz-sf1-operating"}}})
     );
     assert_eq!(sent[1].1["command"]["record_settlement"]["number"], 7);
     let unidentified = |desk: &Desk| {

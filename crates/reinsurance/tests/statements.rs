@@ -194,7 +194,8 @@ fn settlement_is_agreed_checked_and_paid_once() {
             Command::RecordSettlement {
                 number: 1,
                 payment_ref: "BANK-1".into(),
-                amount_minor: 7_18
+                amount_minor: 7_18,
+                bank_account: None
             }
         ),
         "not_instructed"
@@ -231,18 +232,33 @@ fn settlement_is_agreed_checked_and_paid_once() {
             number: 1,
             payment_ref: "BANK-1".into(),
             amount_minor: 7_00,
+            bank_account: None,
         },
     );
     assert!(b.ri.exceptions().contains_key("settlement_mismatch:1"));
     assert_eq!(b.ri.statement(1).unwrap().status, StatementStatus::Instructed);
-    b.ok(
+    let paid = b.ok(
         "finance",
         Command::RecordSettlement {
             number: 1,
             payment_ref: "BANK-2".into(),
             amount_minor: 7_18,
+            bank_account: Some("nz-main".into()),
         },
     );
+    // Settlement clearing is cleared against the bank account the money left.
+    let cleared: i64 = paid
+        .instructions
+        .iter()
+        .map(|i| match &i.body {
+            InstructionBody::ClearSettlement {
+                bank_account, amount_minor, ..
+            } if bank_account == "nz-main" => *amount_minor,
+            other => panic!("{other:?}"),
+        })
+        .sum();
+    assert_eq!(cleared, 7_18);
+    assert_eq!(b.ri.statement(1).unwrap().cleared.as_deref(), Some("nz-main"));
     assert_eq!(b.ri.statement(1).unwrap().status, StatementStatus::Settled { payment_ref: "BANK-2".into() });
     assert!(b.ri.exceptions().is_empty());
     assert_eq!(b.ri.balance(&retail(), &north()), 0);
@@ -252,7 +268,8 @@ fn settlement_is_agreed_checked_and_paid_once() {
             Command::RecordSettlement {
                 number: 1,
                 payment_ref: "BANK-3".into(),
-                amount_minor: 7_18
+                amount_minor: 7_18,
+                bank_account: None
             }
         ),
         "not_instructed"
@@ -300,6 +317,7 @@ fn a_settlement_the_bank_returns_is_owed_again() {
         number: 1,
         payment_ref: payment_ref.into(),
         amount_minor: 25_50,
+        bank_account: Some("nz-main".into()),
     };
     assert_eq!(g.refused("payments", returned("ri-stmt-1")), "not_settled");
     g.ok("finance", instruct(1));
@@ -313,6 +331,9 @@ fn a_settlement_the_bank_returns_is_owed_again() {
     let applied = g.ok("payments", returned("ri-stmt-1"));
     assert!(matches!(&applied.notices[..], [Notice::ExceptionOpened { id, code, detail }]
         if id == "settlement_returned:1" && code == "settlement_returned" && detail.contains("account closed")));
+    // The money is back in clearing until it is paid again.
+    assert!(matches!(&applied.instructions[..], [i] if matches!(&i.body, InstructionBody::ClearSettlement { amount_minor: -25_50, .. })));
+    assert_eq!(g.ri.statement(1).unwrap().cleared, None);
     assert_eq!(g.ri.statement(1).unwrap().status, StatementStatus::Instructed);
     assert_eq!(g.ri.balance(&group(), &north()), 25_50, "the reinsurer is owed again");
     // Told again while still owed (the bank file read twice): one exception.
@@ -390,6 +411,7 @@ fn a_returned_settlement_is_offered_again_as_a_new_payment() {
             number: 1,
             payment_ref: "ri-stmt-1-3".into(),
             amount_minor: 25_50,
+            bank_account: Some("nz-main".into()),
         },
     );
     assert!(g.ri.exceptions().is_empty());
@@ -478,6 +500,7 @@ fn statements_that_cannot_be_cut_are_refused() {
             number: 9,
             payment_ref: "p".into(),
             amount_minor: 1,
+            bank_account: None,
         },
         Command::IssueSupplementaryListing { number: 9, reason: "r".into() },
     ] {
@@ -1072,4 +1095,74 @@ fn the_close_check_names_what_stands_in_the_way() {
     let broken = answer(&damaged, serde_json::json!({"sweep_check": {"period_end": "2027-03-31"}})).unwrap();
     assert_eq!(kinds(&broken), ["does_not_reconcile"]);
     assert!(broken["items"][0]["detail"].as_str().unwrap().contains("exception item disagree"));
+}
+
+/// Purpose: a settlement recorded by hand without its bank account opens an exception asking
+/// for it, and naming it clears settlement clearing once; a malformed bank account is refused
+/// before anything changes; and a return of a settlement never cleared has nothing to put back.
+/// Why it matters: money that moved some other way is still money at the bank. Left in
+/// clearing it would show reinsurance owing cash it has already paid, and finance's clearing
+/// account would never reconcile to zero.
+#[test]
+fn a_settlement_recorded_without_its_bank_account_is_cleared_when_it_is_named() {
+    let mut g = Bench::new();
+    g.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K)]);
+    g.premium_due(2, "S1", 1, d(2027, 2, 1), d(2027, 3, 1), &[("group_life", 100_00)]);
+    g.today = d(2027, 3, 2);
+    g.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: group(),
+            reinsurer: north(),
+            period_end: d(2027, 2, 28),
+        },
+    );
+    g.ok("finance", instruct(1));
+    let clear = |bank: &str| Command::ClearSettlement {
+        number: 1,
+        bank_account: bank.into(),
+    };
+    assert_eq!(g.refused("finance", clear("nz-main")), "not_uncleared");
+    let by_hand = |bank: Option<&str>| Command::RecordSettlement {
+        number: 1,
+        payment_ref: "JNL-9".into(),
+        amount_minor: 25_50,
+        bank_account: bank.map(str::to_string),
+    };
+    assert_eq!(g.refused("finance", by_hand(Some("not valid"))), "invalid_bank_account");
+    let applied = g.ok("finance", by_hand(None));
+    assert!(applied.instructions.is_empty());
+    assert_eq!(g.ri.exceptions()["settlement_not_cleared:1"].code, "settlement_not_cleared");
+    assert_eq!(g.refused("finance", clear("")), "invalid_bank_account");
+    assert_eq!(g.refused("claims", clear("nz-main")), "caller_not_allowed");
+    let applied = g.ok("finance", clear("nz-main"));
+    assert!(matches!(&applied.instructions[..], [i] if matches!(&i.body, InstructionBody::ClearSettlement { amount_minor: 25_50, .. })));
+    assert!(g.ri.exceptions().is_empty());
+    assert_eq!(g.refused("finance", clear("nz-main")), "not_uncleared", "cleared once");
+
+    // Recorded without a bank account and returned before anyone named it: nothing to put back.
+    let returned = Command::SettlementReturned {
+        number: 1,
+        payment_ref: "JNL-9".into(),
+        reason: "entered in error".into(),
+    };
+    let mut h = Bench::new();
+    h.issue_scheme(2, "S1", d(2027, 2, 1), vec![member_cover("M1", 200 * K)]);
+    h.premium_due(2, "S1", 1, d(2027, 2, 1), d(2027, 3, 1), &[("group_life", 100_00)]);
+    h.today = d(2027, 3, 2);
+    h.ok(
+        "month-end",
+        Command::CutStatement {
+            treaty: group(),
+            reinsurer: north(),
+            period_end: d(2027, 2, 28),
+        },
+    );
+    h.ok("finance", instruct(1));
+    h.ok("finance", by_hand(None));
+    let applied = h.ok("payments", returned);
+    assert!(applied.instructions.is_empty());
+    assert!(!h.ri.exceptions().contains_key("settlement_not_cleared:1"));
+    assert!(h.ri.exceptions().contains_key("settlement_returned:1"));
+    assert_eq!(without_keys(&h.replayed()), without_keys(&h.ri));
 }

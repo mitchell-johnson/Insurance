@@ -764,7 +764,7 @@ fn every_kind_of_change_keeps_the_book_and_its_movements_in_step() {
             }
             during.apply(e).unwrap();
         }
-        assert_eq!(during.kept_from(), Some(day(cut)).filter(|_| cut_done));
+        assert_eq!(during.kept_from(), cut_done.then_some(day(cut)));
         if cut_done {
             same(&during, cut);
         }

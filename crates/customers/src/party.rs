@@ -121,7 +121,19 @@ pub enum Change {
     ReleaseHold {
         reference: String,
     },
+    /// A third party's concern about the person: a family member, a friend,
+    /// a professional. It opens a prompt for a trained person to consider a
+    /// marker; nothing about the person is told to whoever raised it.
+    RecordConcern {
+        from: String,
+        about: String,
+    },
 }
+
+/// Who may raise a concern about someone.
+pub const CONCERN_FROM: [&str; 6] = ["family", "friend", "carer", "professional", "staff", "other"];
+/// What a concern may be about.
+pub const CONCERN_ABOUT: [&str; 6] = ["financial_abuse", "capacity", "wellbeing", "bereavement", "coercion", "other"];
 
 impl Change {
     /// The name authorisation and audit use.
@@ -141,6 +153,7 @@ impl Change {
             Change::AssignGroup { .. } => "assign_group",
             Change::PlaceHold { .. } => "place_hold",
             Change::ReleaseHold { .. } => "release_hold",
+            Change::RecordConcern { .. } => "record_concern",
         }
     }
 }
@@ -287,6 +300,7 @@ impl Party {
             EventBody::HoldReleased { reference } => {
                 self.holds.remove(reference);
             }
+            EventBody::ConcernRaised { .. } => {}
             EventBody::Shredded => {
                 let id = std::mem::take(&mut self.id);
                 *self = Party {
@@ -656,6 +670,19 @@ impl Party {
                 } else {
                     return Err(reject("not_found", format!("no hold {reference}")));
                 }
+            }
+            Change::RecordConcern { from, about } => {
+                let pick = |what: &str, v: &str, allowed: &[&str]| {
+                    if allowed.contains(&v) {
+                        Ok(v.to_string())
+                    } else {
+                        Err(reject("invalid", format!("{what} is one of {}", allowed.join(", "))))
+                    }
+                };
+                events.push(EventBody::ConcernRaised {
+                    from: pick("from", from, &CONCERN_FROM)?,
+                    about: pick("about", about, &CONCERN_ABOUT)?,
+                });
             }
         }
         Ok(events)

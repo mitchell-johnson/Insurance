@@ -35,6 +35,15 @@ pub struct Endpoint {
     pub egress_address: String,
     /// The bank has confirmed that address is on its allow list.
     pub whitelisted: bool,
+    /// The secret holding the client certificate and its private key, in
+    /// PEM, that this region presents to the bank (mutual TLS). Required for
+    /// a bank spoken to in ISO 20022.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_certificate: Option<String>,
+    /// The secret holding the certificate authority, in PEM, that the
+    /// bank's own certificate is issued by, where it is a private one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bank_authority: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -177,6 +186,9 @@ impl Config {
                     None => gaps.push(format!("channel {id} has no endpoint in {region}")),
                     Some(e) if !e.whitelisted => gaps.push(format!("channel {id}: the bank has not whitelisted {region}")),
                     Some(e) if e.certificate_expires <= today => gaps.push(format!("channel {id}: the certificate in {region} has expired")),
+                    Some(e) if channel.format == WireFormat::Iso20022 && e.client_certificate.is_none() => {
+                        gaps.push(format!("channel {id}: {region} presents no client certificate to the bank"))
+                    }
                     Some(_) => {}
                 }
             }

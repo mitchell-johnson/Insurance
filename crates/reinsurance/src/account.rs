@@ -117,6 +117,10 @@ pub struct Statement {
     /// n-th offer again is `ri-stmt-<number>-<n + 1>`.
     #[serde(default)]
     pub reoffers: Vec<(NaiveDate, String)>,
+    /// The bank account settlement clearing was cleared against, while it
+    /// stands cleared.
+    #[serde(default)]
+    pub cleared: Option<String>,
 }
 
 /// The last profit commission review of a treaty with a reinsurer.
@@ -374,6 +378,7 @@ impl Reinsurance {
             supplementary_due: false,
             supplementary_issued: 0,
             reoffers: vec![],
+            cleared: None,
         });
         Ok(())
     }
@@ -459,7 +464,17 @@ impl Reinsurance {
 
     /// The bank's confirmation of a settlement. A payment for another amount
     /// is recorded as an open item, never forced to fit.
-    pub(crate) fn record_settlement(&mut self, ctx: &mut Ctx, number: u32, payment_ref: String, amount_minor: i64) -> Result<(), Reject> {
+    pub(crate) fn record_settlement(
+        &mut self,
+        ctx: &mut Ctx,
+        number: u32,
+        payment_ref: String,
+        amount_minor: i64,
+        bank_account: Option<String>,
+    ) -> Result<(), Reject> {
+        if let Some(bank) = &bank_account {
+            bank_code(bank)?;
+        }
         let s = self.statement_mut(number)?;
         if s.status != StatementStatus::Instructed || payment_ref.is_empty() {
             return Err(Reject::new("not_instructed", format!("statement {number} is not waiting for a payment")));
@@ -473,8 +488,49 @@ impl Reinsurance {
         self.set_exception(ctx, format!("settlement_mismatch:{number}"), "settlement_mismatch", detail);
         if settled {
             self.set_exception(ctx, format!("settlement_returned:{number}"), "settlement_returned", None);
+            match bank_account {
+                Some(bank) => self.clear_against(ctx, number, bank, 1),
+                None => {
+                    let detail = format!("statement {number} was recorded as settled without the bank account the money moved through; name it with clear_settlement so settlement clearing is cleared");
+                    self.set_exception(ctx, uncleared(number), "settlement_not_cleared", Some(detail));
+                }
+            }
         }
         Ok(())
+    }
+
+    /// The bank account for a settlement recorded without one.
+    pub(crate) fn clear_settlement(&mut self, ctx: &mut Ctx, number: u32, bank_account: String) -> Result<(), Reject> {
+        bank_code(&bank_account)?;
+        if !self.exceptions.contains_key(&uncleared(number)) {
+            return Err(Reject::new(
+                "not_uncleared",
+                format!("statement {number} has no settlement waiting to be cleared"),
+            ));
+        }
+        self.clear_against(ctx, number, bank_account, 1);
+        Ok(())
+    }
+
+    /// Clear each partition's part of a statement's settlement against the
+    /// bank (`sign` 1), or put it back (`sign` -1) when the bank returns it.
+    fn clear_against(&mut self, ctx: &mut Ctx, number: u32, bank: String, sign: i64) {
+        let Ok(s) = self.statement_mut(number) else { return };
+        s.cleared = (sign > 0).then(|| bank.clone());
+        let s = s.clone();
+        for (partition, amount) in &s.by_partition {
+            ctx.instruct(
+                *partition,
+                InstructionBody::ClearSettlement {
+                    treaty: s.treaty.clone(),
+                    reinsurer: s.reinsurer.clone(),
+                    statement: number,
+                    bank_account: bank.clone(),
+                    amount_minor: sign * amount,
+                },
+            );
+        }
+        self.set_exception(ctx, uncleared(number), "settlement_not_cleared", None);
     }
 
     /// The bank sent a settlement back. The statement is owed again and a
@@ -482,8 +538,12 @@ impl Reinsurance {
     /// of some other payment than the one recorded changes nothing.
     pub(crate) fn settlement_returned(&mut self, ctx: &mut Ctx, number: u32, payment_ref: &str, reason: &str) -> Result<(), Reject> {
         let s = self.statement_mut(number)?;
+        let mut unclear = None;
         match &s.status {
-            StatementStatus::Settled { payment_ref: paid } if paid == payment_ref => s.status = StatementStatus::Instructed,
+            StatementStatus::Settled { payment_ref: paid } if paid == payment_ref => {
+                s.status = StatementStatus::Instructed;
+                unclear = s.cleared.clone();
+            }
             StatementStatus::Instructed if !payment_ref.is_empty() => {}
             _ => {
                 return Err(Reject::new(
@@ -492,6 +552,12 @@ impl Reinsurance {
                 ))
             }
         }
+        if let Some(bank) = unclear {
+            self.clear_against(ctx, number, bank, -1);
+        }
+        // A settlement recorded without its bank account and then returned
+        // has nothing left to clear.
+        self.set_exception(ctx, uncleared(number), "settlement_not_cleared", None);
         let detail = format!("payment {payment_ref} for statement {number} came back from the bank: {reason}");
         self.set_exception(ctx, format!("settlement_returned:{number}"), "settlement_returned", Some(detail));
         Ok(())
@@ -651,5 +717,21 @@ impl Reinsurance {
             format!("profit commission to {on}"),
         );
         Ok(())
+    }
+}
+
+fn uncleared(number: u32) -> String {
+    format!("settlement_not_cleared:{number}")
+}
+
+/// A bank account code as the core's ledger accepts it.
+fn bank_code(code: &str) -> Result<(), Reject> {
+    if !code.is_empty() && code.len() <= 64 && code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        Ok(())
+    } else {
+        Err(Reject::new(
+            "invalid_bank_account",
+            "a bank account code is 1 to 64 letters, digits, hyphens or underscores",
+        ))
     }
 }
