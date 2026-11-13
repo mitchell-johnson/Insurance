@@ -241,6 +241,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         reduced_by: vec![],
         benefit_while_imprisoned: Default::default(),
         shared_counter: None,
+        premium_waiver: None,
     }
 }
 

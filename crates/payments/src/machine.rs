@@ -204,6 +204,14 @@ pub enum Command {
         relationship: Option<String>,
         note: String,
     },
+    /// Whether the customer master confirmed a proposed clearance's
+    /// relationship links the payer and the owner.
+    ConfirmRelationship {
+        case: String,
+        confirmed: bool,
+        #[serde(default)]
+        reason: String,
+    },
     /// Claims changed an overpayment (`overpayment_*`), with what is still
     /// owed on it (`repay.rs`).
     OverpaymentChanged {
@@ -786,6 +794,7 @@ impl PaymentsState {
             Command::PolicyOwner { policy, owner } => self.policy_owner(tx, &policy, &owner),
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
+            Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
             Command::OverpaymentChanged {
                 claim,
                 overpayment,

@@ -113,6 +113,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "payer_cases" => Ok(json_cases(state.open_payer_cases())),
+        "payer_relationships_to_check" => found(Some(state.relationships_to_check())),
         "payer_case" => found(state.payer_checks.cases.get(text(&question, "case")?)),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
