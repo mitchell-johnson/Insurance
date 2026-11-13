@@ -164,6 +164,8 @@ pub struct Harness {
     pub core_faults: VecDeque<Option<String>>,
     /// Every command sent to the core, with its key.
     pub sent: Vec<(String, Command)>,
+    /// Letters asked of the documents module.
+    pub letters: Vec<ic_group::event::MemberLetter>,
     n: u64,
 }
 
@@ -219,6 +221,7 @@ impl Harness {
             to_resolve: vec![],
             core_faults: VecDeque::new(),
             sent: vec![],
+            letters: vec![],
             n: 0,
         };
         let founding = if pooled {
@@ -358,6 +361,10 @@ impl Harness {
                     acked.push(id);
                 }
                 Outbound::Commission { .. } => {}
+                Outbound::Letter(letter) => {
+                    self.letters.push(letter);
+                    acked.push(id);
+                }
                 Outbound::ResolveParties { file, employee_ids, .. } => {
                     self.to_resolve.push((file, employee_ids));
                     acked.push(id);

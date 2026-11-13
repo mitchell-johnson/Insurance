@@ -85,6 +85,28 @@ pub enum ExceptionKind {
     /// The commission module would not record the scheme's broker on a
     /// cover, so that cover earns no commission until someone acts.
     BrokerNotRecorded,
+    /// A letter the member must have could not be asked of the documents
+    /// module: the member is not linked to a person yet, or the module
+    /// refused it. Staff send it another way. The subject is the request.
+    LetterNotRequested,
+}
+
+/// A letter the documents module issues to a member: its `request_letter`
+/// with the facts, never wording. Kinds are the documents module's
+/// (`absence_started`, `absence_limit_reached`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberLetter {
+    /// Stable across retries: `grp:absence:{scheme}:{life}:{since}` with
+    /// the kind, so a resend is one letter.
+    pub request: String,
+    pub kind: String,
+    pub party: PartyId,
+    pub policy: PolicyId,
+    pub scheme: String,
+    pub life: LifeId,
+    pub since: NaiveDate,
+    pub cover_ends: NaiveDate,
+    pub business_date: NaiveDate,
 }
 
 /// A scheme cover as the commission module's `write_layer`: its one layer,
@@ -111,6 +133,13 @@ pub enum GroupEvent {
     TermsAmended {
         scheme: String,
         terms_version: u32,
+    },
+    /// A member's letter could not be asked for; staff are told by the
+    /// exception `letter_not_requested`.
+    LetterNotRequested {
+        scheme: String,
+        request: String,
+        code: String,
     },
     /// The commission module refused the scheme's broker on a cover.
     BrokerNotRecorded {
@@ -401,6 +430,8 @@ pub enum IssueOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outbound {
+    /// Ask the documents module for a letter to a member.
+    Letter(MemberLetter),
     /// Tell the commission module who placed a scheme cover, so that the
     /// premium the scheme pays for it earns the broker's commission.
     Commission {

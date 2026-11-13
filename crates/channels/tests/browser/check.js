@@ -190,6 +190,13 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
     await p.locator("#tb-out").getByText("6500").first().waitFor();
   } });
+  await visit(browser, "/payments", { subject: "sub-paycmp" }, { expectStatus: [409], run: async (p) => {
+    // Compliance sees the payer cases; clearing one that is not open is refused in plain words.
+    await p.locator("#aml").getByText("No open cases.").waitFor();
+    await p.fill("#aml-case", "c1"); await p.fill("#aml-note", "a parent pays");
+    await p.locator("#aml-form button").click();
+    await p.locator("#aml-msg").getByText(/case/i).waitFor();
+  } });
   await visit(browser, "/group", { subject: "sub-grpview" }, { run: async (p) => {
     // A reader sees the queue but is offered nothing to act with.
     await p.locator("#ex").getByText("possible match").waitFor();

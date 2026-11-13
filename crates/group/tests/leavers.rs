@@ -7,7 +7,7 @@ use chrono::Days;
 use common::*;
 use ic_core::{GroupId, PolicyId, Reject};
 use ic_group::command::{caller, Envelope, GroupCommand, Resolution};
-use ic_group::event::GroupEvent;
+use ic_group::event::{ExceptionKind, GroupEvent};
 use ic_group::mapping::FileKind;
 use ic_group::record::RowChange;
 use ic_group::state::OfferStatus;
@@ -179,27 +179,39 @@ fn an_option_not_taken_up_expires() {
     assert_eq!(code(take_up(&mut h, offer, 1, "term-life", 100_000_00)), "offer_closed");
 }
 
-/// Purpose: a member going on leave of absence (an overseas posting) is told when it starts
-/// the day their cover ends if they are not back; past the scheme's limit they are taken off
-/// cover on that date, once, with notice published; a member who comes back in time is not.
-/// Why it matters: employers forget to report that someone on long leave has gone. The
-/// limit is in the policy wording, so cover past it is cover the reinsurer will not share,
-/// and a member abroad who was never told the date finds out at a claim.
+/// Purpose: a member going on leave of absence (an overseas posting) is sent a letter when
+/// it starts giving the day their cover ends if they are not back; past the scheme's limit
+/// they are taken off cover on that date, once, with notice published and a second letter;
+/// a member who comes back in time is not. A member not yet linked to a person cannot be
+/// written to, so staff are told instead.
+/// Why it matters: GRP-038. Employers forget to report that someone on long leave has gone.
+/// The limit is in the policy wording, so cover past it is cover the reinsurer will not
+/// share, and a member abroad who was never told the date finds out at a claim.
 #[test]
 fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     let mut t = terms();
     t.cover_end = CoverEnd::EndOfMonth;
     t.leave_of_absence_days = 30;
     let mut h = Harness::new(t);
-    h.apply(
+    h.upload(
         "f1",
         FileKind::Full,
         vec![
             row(1, "E001", attrs("staff", 60_000_00, "akl")),
             row(2, "E002", attrs("staff", 60_000_00, "wlg")),
             row(3, "E003", attrs("staff", 90_000_00, "akl")),
+            row(4, "E004", attrs("staff", 60_000_00, "akl")),
         ],
-    );
+    )
+    .unwrap();
+    h.approve("f1").unwrap();
+    // E004 might be one of two people already known: they join unlinked until staff decide.
+    h.resolve("f1", |id| {
+        (id == "E004").then(|| Resolution::Possible {
+            candidates: vec![party("p-a"), party("p-b")],
+        })
+    });
+    assert!(h.scheme().membership.active("E004").unwrap().party.is_none());
     let start = h.today();
     h.apply(
         "f2",
@@ -207,8 +219,27 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
         vec![
             change(1, "E002", RowChange::AbsenceStart, start, attrs("staff", 60_000_00, "wlg")),
             change(2, "E003", RowChange::AbsenceStart, start, attrs("staff", 90_000_00, "akl")),
+            change(3, "E004", RowChange::AbsenceStart, start, attrs("staff", 60_000_00, "akl")),
         ],
     );
+    // The letters go to each linked member through the documents module, keyed so that a
+    // resend is one letter; the unlinked member's is an exception for staff.
+    let letters: Vec<_> = h
+        .letters
+        .iter()
+        .map(|l| (l.kind.as_str(), l.party.0.as_str(), l.since, l.cover_ends, l.policy == h.policy))
+        .collect();
+    assert_eq!(
+        letters,
+        vec![
+            ("absence_started", "party-E002", start, d(2028, 1, 1), true),
+            ("absence_started", "party-E003", start, d(2028, 1, 1), true),
+        ]
+    );
+    assert_eq!(h.letters[0].request, format!("grp:absence_started:{SCHEME}:E002:{start}"));
+    let unsent = h.g.exceptions.values().find(|e| e.kind == ExceptionKind::LetterNotRequested).unwrap();
+    assert_eq!(unsent.subject, format!("grp:absence_started:{SCHEME}:E004:{start}"));
+    assert!(h.saw(|e| matches!(e, GroupEvent::LetterNotRequested { code, .. } if code == "no_party")));
     assert_eq!(h.scheme().membership.active("E002").unwrap().absence_since, Some(start));
     assert_eq!(h.sent.len(), 1, "an absence is the scheme's business: the core is not told");
     // Each member is told, at the start, the day the cover ends if they are not back.
@@ -220,13 +251,16 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
             _ => None,
         })
         .collect();
-    assert_eq!(told, vec![d(2028, 1, 1), d(2028, 1, 1)]);
+    assert_eq!(told, vec![d(2028, 1, 1), d(2028, 1, 1), d(2028, 1, 1)]);
     h.days(10);
     let back = h.today();
     h.apply(
         "f3",
         FileKind::Changes,
-        vec![change(1, "E003", RowChange::AbsenceEnd, back, attrs("staff", 90_000_00, "akl"))],
+        vec![
+            change(1, "E003", RowChange::AbsenceEnd, back, attrs("staff", 90_000_00, "akl")),
+            change(2, "E004", RowChange::AbsenceEnd, back, attrs("staff", 60_000_00, "akl")),
+        ],
     );
     assert_eq!(h.scheme().membership.active("E003").unwrap().absence_since, None);
 
@@ -236,11 +270,17 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     h.days(1);
     assert!(h.saw(|e| matches!(e, GroupEvent::AbsenceLimitReached { cover_ends, .. } if *cover_ends == d(2028, 1, 1))));
     assert!(h.scheme().membership.active("E002").is_some());
+    let last = h.letters.last().unwrap();
+    assert_eq!(
+        (last.kind.as_str(), last.party.0.as_str(), last.since, last.cover_ends),
+        ("absence_limit_reached", "party-E002", start, d(2028, 1, 1))
+    );
     h.days(31);
     assert_eq!(h.today(), d(2028, 1, 1));
     assert!(h.scheme().membership.active("E002").is_none());
     assert_eq!(h.scheme().membership.members["E002"].left, Some(d(2028, 1, 1)));
-    assert_eq!(h.core_lives(), vec!["E001", "E003"]);
+    assert_eq!(h.core_lives(), vec!["E001", "E003", "E004"]);
+    assert_eq!(h.letters.len(), 3, "one letter at the start each, and one at the limit");
     let notices = h.published.iter().filter(|e| matches!(e, GroupEvent::AbsenceLimitReached { .. })).count();
     assert_eq!(notices, 1, "said once, not every morning");
     assert!(h.scheme().absence_leaves.is_empty());

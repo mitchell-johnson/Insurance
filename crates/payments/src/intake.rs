@@ -193,12 +193,29 @@ impl PaymentsState {
     /// The bank refused or sent back an item before it settled. Its
     /// reference is spent. If claims released it, claims is told the payment
     /// failed, so the money goes back to benefit payable there and a task is
-    /// raised to release it again under a new reference.
+    /// raised to release it again under a new reference. If it was a
+    /// unit-linked payout, the core's investment ledger is told
+    /// (`PayoutRejected`): the payout is owed again and servicing
+    /// reinstructs it, as after a settled return.
     pub(crate) fn failed_before_settlement(&mut self, n: &NewItem) {
         let Some(waiting) = self.waiting.remove(&n.item) else { return };
         // It will be released again under a new reference, in whatever run
         // claims then puts it; this run is finished with it.
         self.claims_run_moved(&waiting, 0);
+        if let (None, Some(policy), true) = (&waiting.claim, &waiting.policy, waiting.source.starts_with("payout:")) {
+            self.push_outbox(OutboxEntry {
+                key: format!("payout-rejected-{}", n.item),
+                instruction: Instruction::CoreAt {
+                    policy: policy.clone(),
+                    caller: "payments".to_string(),
+                    command: Box::new(ic_core::Command::Investment(Box::new(ic_core::invest::InvestCommand::PayoutRejected {
+                        policy: policy.clone(),
+                        payment: n.item.clone(),
+                    }))),
+                },
+                about: Some(About::Item(n.item.clone())),
+            });
+        }
         if let (Some(claim), Some(policy)) = (waiting.claim, waiting.policy) {
             self.push_outbox(OutboxEntry {
                 key: format!("claim-payment-failed-{}", n.item),

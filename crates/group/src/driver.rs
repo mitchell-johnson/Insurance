@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
 use crate::csv::{self, CsvError};
-use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, Outbound, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{FileToRead, Question};
 use crate::mapping::{FileMapping, Mapped, MappingError};
 use crate::record::MemberIdentity;
@@ -76,6 +76,10 @@ pub trait Peers: Send + Sync {
     /// is written (now or before); `Ok(Some(code))` is a refusal a person
     /// must put right; `Err` is to try again.
     fn commission(&self, key: &str, layer: &CommissionLayer) -> impl Future<Output = Result<Option<String>, String>> + Send;
+    /// Ask the documents module for a member's letter. `Ok(None)` is taken
+    /// (now or before); `Ok(Some(code))` is a refusal a person must deal
+    /// with; `Err` is to try again.
+    fn letter(&self, letter: &MemberLetter) -> impl Future<Output = Result<Option<String>, String>> + Send;
 }
 
 /// One answer from underwriting to a request of this module's.
@@ -340,6 +344,23 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                             self.send(format!("commission-refused:{key}"), GroupCommand::CommissionRefused { key: key.clone(), code })
                                 .await?
                                 .map_err(DriverError::Refused)?;
+                            pass.done += 1;
+                            continue;
+                        }
+                        Ok(None) => Ok(()),
+                        Err(e) => Err(e),
+                    },
+                    Outbound::Letter(letter) => match self.peers.letter(letter).await {
+                        Ok(Some(code)) => {
+                            self.send(
+                                format!("letter-refused:{}", letter.request),
+                                GroupCommand::LetterRefused {
+                                    request: letter.request.clone(),
+                                    code,
+                                },
+                            )
+                            .await?
+                            .map_err(DriverError::Refused)?;
                             pass.done += 1;
                             continue;
                         }

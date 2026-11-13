@@ -24,9 +24,16 @@ when
 forbid (principal, action, resource)
 when { context.class == "clinical" && context.purpose_kind != "task" };
 
-// Clinical information is never reached under break-glass.
+// Clinical information is never reached under break-glass, nor through
+// any other grant (a one-off grant, covering a colleague, an uplift): the
+// task is the person's own.
 forbid (principal, action, resource)
-when { context.class == "clinical" && context.break_glass };
+when { context.class == "clinical" && (context.break_glass || context.granted) };
+
+// Clinical information is seen one record at a time: never by a search
+// across records or in a bulk export.
+forbid (principal, action, resource)
+when { context.class == "clinical" && !context.one_record };
 
 // Separation of duties: declared conflicts are refused whatever the role.
 forbid (principal, action, resource)

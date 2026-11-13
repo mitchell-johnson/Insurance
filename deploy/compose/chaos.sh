@@ -93,7 +93,29 @@ reconciles() {
 # A close that has not finished in fifteen minutes will not: fail here, with
 # the cluster's logs, instead of waiting for the job's own time limit.
 close_day() {
-  timeout 900 "${COMPOSE[@]}" run --rm -T close close "$DATE" "$PARTITIONS"
+  limited 900 "${COMPOSE[@]}" run --rm -T close close "$DATE" "$PARTITIONS"
+}
+
+# Run a command with a time limit. GNU `timeout` where there is one (Linux,
+# or coreutils on a Mac as `gtimeout`); otherwise a watchdog in the shell,
+# since macOS ships neither.
+limited() {
+  local seconds=$1
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$seconds" "$@"
+  else
+    "$@" &
+    local pid=$!
+    (sleep "$seconds" && kill "$pid" 2>/dev/null) &
+    local watchdog=$!
+    local status=0
+    wait "$pid" || status=$?
+    kill "$watchdog" 2>/dev/null || true
+    return "$status"
+  fi
 }
 
 root_of() {

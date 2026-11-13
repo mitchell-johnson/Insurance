@@ -2356,6 +2356,7 @@ dependencies = [
  "ic-core",
  "ic-customers",
  "ic-distribution",
+ "ic-documents",
  "ic-ledger",
  "ic-log",
  "ic-money",

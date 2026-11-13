@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 
 use crate::command::{Envelope, ExcessDecision};
 use crate::driver::{Answers, Core, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
+use crate::event::{CommissionLayer, GroupEvent, IssueOutcome, MemberLetter, ReinsuranceNotice, UnderwritingRequest};
 use crate::host::{Question, MODULE};
 use crate::state::Outcome;
 
@@ -171,6 +171,39 @@ pub fn commission_envelope(key: &str, at: DateTime<Utc>, layer: &CommissionLayer
             "replacement": false,
         }},
     })
+}
+
+/// A member's letter as the documents module's `request_letter`, from
+/// caller `group`. The key is the request, so however often it is sent it
+/// is one letter; the documents module accepts an identical resend.
+pub fn letter_envelope(at: DateTime<Utc>, letter: &MemberLetter) -> Value {
+    json!({
+        "key": format!("grp-letter:{}", letter.request),
+        "caller": "group",
+        "actor": crate::command::caller::DRIVER,
+        "at": at,
+        "command": { "request_letter": {
+            "request": letter.request,
+            "kind": letter.kind,
+            "recipient": { "party": { "party": letter.party } },
+            "policy": letter.policy,
+            "subject": letter.scheme,
+            "life": letter.life.0,
+            "reasons": [],
+            "detail": { "since": letter.since.to_string(), "cover_ends": letter.cover_ends.to_string() },
+            "business_date": letter.business_date,
+        }},
+    })
+}
+
+/// What the documents module's answer to a letter means here: taken, or a
+/// refusal a person must deal with. Its result is under `result`.
+pub fn letter_answer(answer: &Value) -> Result<Option<String>, String> {
+    let result = &answer["result"];
+    if result.get("Ok").is_none() && result.get("Err").is_none() {
+        return Err(format!("not an answer from the documents module: {answer}"));
+    }
+    Ok(result["Err"]["code"].as_str().map(str::to_string))
 }
 
 /// The commission module's whole share, in millionths.
@@ -329,17 +362,28 @@ pub struct ClusterPeers {
     underwriting: String,
     /// The name the commission module is hosted under.
     distribution: String,
+    /// The name the documents module is hosted under.
+    documents: String,
     events: EventHubsSink,
 }
 
 impl ClusterPeers {
-    pub fn new(client: ClusterClient, patience: Duration, reinsurance: &str, underwriting: &str, distribution: &str, events: EventHubsSink) -> Self {
+    pub fn new(
+        client: ClusterClient,
+        patience: Duration,
+        reinsurance: &str,
+        underwriting: &str,
+        distribution: &str,
+        documents: &str,
+        events: EventHubsSink,
+    ) -> Self {
         Self {
             client,
             patience,
             reinsurance: reinsurance.to_string(),
             underwriting: underwriting.to_string(),
             distribution: distribution.to_string(),
+            documents: documents.to_string(),
             events,
         }
     }
@@ -361,6 +405,17 @@ impl ClusterPeers {
 }
 
 impl Peers for ClusterPeers {
+    async fn letter(&self, letter: &MemberLetter) -> Result<Option<String>, String> {
+        let command = letter_envelope(Utc::now(), letter);
+        let reply = self
+            .client
+            .propose_module_until(&self.documents, &command, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        let answer = reply.result.map_err(|e| format!("documents could not read the command: {e}"))?;
+        letter_answer(&answer)
+    }
+
     async fn commission(&self, key: &str, layer: &CommissionLayer) -> Result<Option<String>, String> {
         let command = commission_envelope(key, Utc::now(), layer);
         let reply = self

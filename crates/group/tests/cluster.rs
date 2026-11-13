@@ -559,6 +559,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             "reinsurance",
             "underwriting",
             "distribution",
+            "documents",
             EventHubsSink::new(&fake.base, "group-events", credential.clone()),
         ),
         Everyone,
@@ -837,4 +838,58 @@ fn a_scheme_layer_is_a_command_the_commission_module_accepts() {
         commission_answer(&serde_json::json!({"result": {"Err": {"code": "unknown_book"}}})),
         Ok(Some("unknown_book".to_string()))
     );
+}
+
+/// Purpose: a member's leave of absence letter, as the driver sends it, is a command the
+/// documents module's own types read: caller `group`, the documents module's kind, the member
+/// as the party addressed, the scheme policy and life, and the dates as the letter's detail;
+/// and the documents module's real state takes it, with the answer read as taken.
+/// Why it matters: GRP-038. A shape the documents module could not read would be refused
+/// every pass, and the member abroad would never learn the day their cover ends.
+#[test]
+fn a_members_letter_is_a_command_the_documents_module_accepts() {
+    use ic_documents::command::{Command as Docs, Envelope as DocsEnvelope};
+    use ic_documents::state::DocumentsState;
+    use ic_group::adapters::{letter_answer, letter_envelope};
+    use ic_log::StateMachine;
+
+    let since = chrono::NaiveDate::from_ymd_opt(2027, 11, 1).unwrap();
+    let letter = ic_group::event::MemberLetter {
+        request: format!("grp:absence_started:harbour:E002:{since}"),
+        kind: "absence_started".into(),
+        party: ic_core::PartyId("party-E002".into()),
+        policy: ic_core::PolicyId("pol-1".into()),
+        scheme: "harbour".into(),
+        life: ic_core::LifeId("E002".into()),
+        since,
+        cover_ends: chrono::NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(),
+        business_date: since,
+    };
+    let at = chrono::DateTime::parse_from_rfc3339("2027-11-01T09:00:00Z").unwrap().to_utc();
+    let value = letter_envelope(at, &letter);
+    let envelope: DocsEnvelope = serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{value}: {e}"));
+    assert_eq!(
+        (envelope.caller.as_str(), envelope.key.as_str()),
+        ("group", "grp-letter:grp:absence_started:harbour:E002:2027-11-01")
+    );
+    let Docs::RequestLetter(request) = &envelope.command else {
+        panic!("{:?}", envelope.command)
+    };
+    assert_eq!(request.kind, "absence_started");
+    assert_eq!(request.detail["cover_ends"], "2028-01-01");
+    assert_eq!(request.life.as_deref(), Some("E002"));
+
+    let mut docs = DocumentsState::new();
+    let output = docs.apply(1, envelope);
+    let answer = serde_json::to_value(&output).unwrap();
+    assert_eq!(letter_answer(&answer), Ok(None), "{answer}");
+    // The same letter again is one letter.
+    let again: DocsEnvelope = serde_json::from_value(letter_envelope(at + chrono::Duration::hours(1), &letter)).unwrap();
+    assert_eq!(letter_answer(&serde_json::to_value(docs.apply(2, again)).unwrap()), Ok(None));
+    // A refusal is for a person; anything that is not the module's answer is tried again.
+    assert_eq!(
+        letter_answer(&serde_json::json!({"result": {"Err": {"code": "unknown_letter_kind"}}})),
+        Ok(Some("unknown_letter_kind".to_string()))
+    );
+    assert!(letter_answer(&serde_json::json!({"Ok": null})).is_err());
 }
