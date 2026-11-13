@@ -157,6 +157,11 @@ pub enum Command {
         run: String,
         submitted_minor: i64,
     },
+    /// Prepare the day's fund settlement runs for what collection accounts
+    /// owe other funds (the pump, each morning).
+    ProposeFundSweep {
+        as_at: NaiveDate,
+    },
     /// Put released payments into a run.
     TakeWaiting {
         run: Id,
@@ -664,6 +669,7 @@ impl PaymentsState {
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
             Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::ProposeFundSweep { as_at } => self.propose_fund_sweep(tx, as_at),
             Command::ClaimsRunSubmitted { run, submitted_minor } => self.claims_run_submitted(tx, &run, submitted_minor),
             Command::RegisterPayee {
                 payee,

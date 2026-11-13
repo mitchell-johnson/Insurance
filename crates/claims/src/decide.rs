@@ -4,6 +4,8 @@
 //! signatures it waits, and takes effect only when the last one is given.
 //! The checks are run again at that moment, because the claim may have moved.
 
+use chrono::NaiveDate;
+
 use crate::command::{Actor, NonDisclosureOutcome, ReopenBasis, Request};
 use crate::config::{Match, Profile, Queue, Role};
 use crate::intake::{finish_task, HealthAmount};
@@ -297,6 +299,37 @@ impl ClaimsState {
                 };
                 plan.overpaid_minor = crate::book::overpaid_after(schedule, *end);
             }
+            Request::SuspendBenefit { from, evidence } => {
+                let Some(schedule) = claim.schedule.as_ref().filter(|_| claim.status == Status::InPayment) else {
+                    return refuse("not_in_payment", "only a benefit in payment can be suspended");
+                };
+                let wording = claim.cover_check.as_ref().map(|c| c.facts.benefit_while_imprisoned);
+                if wording == Some(crate::port::Imprisonment::Pay) {
+                    return refuse("paid_in_custody", "the product's wording pays this benefit in custody");
+                }
+                if schedule.open_suspension().is_some() || *from >= schedule.end || schedule.suspended.keys().any(|k| k >= from) {
+                    return refuse("invalid_suspension", "the benefit is already suspended, or the date is outside it");
+                }
+                if evidence.trim().is_empty() {
+                    return refuse("evidence_required", "file the evidence of custody after sentence first");
+                }
+                if !claim.task(TaskKind::ClaimantConversation).any(|t| t.completed_on.is_some()) {
+                    return refuse(
+                        "conversation_required",
+                        "talk to the claimant or their representative first, and record it as a task",
+                    );
+                }
+            }
+            Request::ResumeBenefit { from } => {
+                let open = claim
+                    .schedule
+                    .as_ref()
+                    .filter(|_| claim.status == Status::InPayment)
+                    .and_then(|s| s.open_suspension());
+                if !open.is_some_and(|start| *from > start) {
+                    return refuse("not_suspended", "the benefit is not suspended, or resumes before it was suspended");
+                }
+            }
             Request::RecoveryStatus {
                 overpayment,
                 status,
@@ -352,7 +385,7 @@ impl ClaimsState {
             Request::Decline => profile.may_decline,
             Request::ReverseAdmission { .. } => profile.may_reverse_admission && profile.senior,
             Request::ExGratia { .. } => amount <= profile.max_ex_gratia_minor,
-            Request::Withdraw | Request::EndBenefit { .. } => true,
+            Request::Withdraw | Request::EndBenefit { .. } | Request::SuspendBenefit { .. } | Request::ResumeBenefit { .. } => true,
         }
     }
 
@@ -703,6 +736,8 @@ impl ClaimsState {
                 instalment_minor,
             } => Self::set_recovery_status(cx, claim, overpayment, *status, *offset_pct, *instalment_minor, decision.no),
             Request::WriteOff { overpayment } => Self::write_off(cx, claim, overpayment, decision.no)?,
+            Request::SuspendBenefit { from, .. } => self.suspend_benefit(cx, claim, *from)?,
+            Request::ResumeBenefit { from } => self.resume_benefit(cx, claim, *from),
         }
         note(claim, cx, None, format!("decided:{kind:?}:{}", decision.no));
         self.sample(claim, cx, &decision);
@@ -787,5 +822,58 @@ impl ClaimsState {
         note(&mut claim, cx, None, format!("non_disclosure_outcome:{outcome:?}"));
         self.commit(claim);
         Ok(())
+    }
+}
+
+impl ClaimsState {
+    /// No benefit from `from` while the life is in custody. Periods already
+    /// paid for those days become an overpayment held as a fact. The review
+    /// timers wait; the claim, the waiver and the cover carry on.
+    fn suspend_benefit(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, from: NaiveDate) -> Result<(), Reject> {
+        let Some(before) = claim.schedule.clone() else { return Ok(()) };
+        let mut after = before.clone();
+        after.suspended.insert(from, NaiveDate::MAX);
+        let (over, _) = crate::book::replay(&before, &after);
+        if let Some(o) = Self::overpayment(claim, cx, over, OverpaymentCause::LateInformation, true) {
+            cx.core.execute(Instruction::RaiseOverpayment {
+                claim: claim.id.clone(),
+                policy: claim.policy.clone(),
+                cover: claim.cover.clone(),
+                overpayment: o.id.clone(),
+                amount_minor: over,
+            })?;
+            crate::overpay::publish(cx, "overpayment_raised", claim, &o, &[("amount_minor", over.to_string())]);
+            claim.overpayments.push(o);
+        }
+        // The reviews wait for the release; they are put back then, as far on.
+        claim.due.retain(|(_, d)| !matches!(d, Due::Review(_)));
+        claim.schedule = Some(after);
+        cx.notify("benefit_suspended", &claim.id, &[("from", from.to_string())]);
+        Ok(())
+    }
+
+    /// Released: the benefit is payable again from `from`, with no new
+    /// waiting period. Periods paid with nothing for days after `from` are
+    /// owed and go with the next benefit.
+    fn resume_benefit(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, from: NaiveDate) {
+        let Some(before) = claim.schedule.clone() else { return };
+        let Some(start) = before.open_suspension() else { return };
+        let mut after = before.clone();
+        after.suspended.insert(start, from);
+        let (_, under) = crate::book::replay(&before, &after);
+        after.arrears_minor += under;
+        // The review plan moves on by the time it waited.
+        let paused = chrono::Days::new(u64::try_from((from - start).num_days()).unwrap_or(0));
+        for (kind, on) in after.reviews.iter_mut() {
+            *on = on.checked_add_days(paused).unwrap_or(NaiveDate::MAX);
+            if *on < after.end {
+                claim.due.insert((*on, Due::Review(*kind)));
+            }
+        }
+        claim.schedule = Some(after);
+        if under > 0 {
+            cx.notify("underpayment_owed", &claim.id, &[("amount_minor", under.to_string())]);
+        }
+        cx.notify("benefit_resumed", &claim.id, &[("from", from.to_string())]);
     }
 }

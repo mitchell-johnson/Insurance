@@ -56,8 +56,8 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 6 | 11 | 2 | 8 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 20 | 9 | 1 | 7 |
-| CLM Claims and claims operations | 25 | 10 | 7 | 7 |
+| UW Underwriting, underwriting operations and delegated authority | 21 | 8 | 1 | 6 |
+| CLM Claims and claims operations | 26 | 10 | 6 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 23 | 8 | 9 | 3 |
@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
-| PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
+| PAY Payment runs and bank connectivity | 13 | 0 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **281** | **128** | **168** | **126** |
+| **Total** | **284** | **126** | **167** | **125** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 91 | 27 | 24 |
-| C | 159 | 68 | 119 |
+| C | 162 | 66 | 118 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -117,7 +117,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **XFR** (1): XFR-004
 - **AUD** (7): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-011, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
-- **UW** (6): UW-002, UW-003, UW-006, UW-014, UW-026, UW-029
+- **UW** (5): UW-002, UW-003, UW-006, UW-014, UW-029
 - **CLM** (7): CLM-002, CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028

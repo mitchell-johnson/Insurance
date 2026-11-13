@@ -281,3 +281,67 @@ fn the_edges_of_following_receipts() {
 
     assert_eq!(desk.state.fund_sweep(d(2027, 11, 15))["items"][0]["open_minor"], 60_00);
 }
+
+/// Purpose: each morning the pump's request prepares one fund settlement
+/// run per fund, for the next value date, paying what is open to the own
+/// payee whose party is the account it pays into; asking again the same
+/// day changes nothing; a sweep with no such payee is left for a person;
+/// and the run still needs a person to check it and another to approve it.
+/// Why it matters: a sweep nobody remembers to prepare leaves a fund's
+/// cash in another fund's account and the close red. Proposing it takes
+/// the remembering away without taking away the four eyes.
+#[test]
+fn the_days_sweep_is_proposed_and_still_needs_people() {
+    let mut desk = collected();
+    core(&mut desk, "0-1", applied("c1", Some("sf2"), 60_00));
+    let propose = Command::ProposeFundSweep { as_at: d(2027, 11, 15) };
+    assert_eq!(desk.code(&mia(), propose.clone()), "not_permitted");
+    // No own payee for fund two's collection account yet: nothing is made.
+    assert!(desk.ok(&svc(), propose.clone()).is_empty());
+    desk.ok(
+        &pam(),
+        Command::RegisterPayee {
+            payee: "into-sf2".to_string(),
+            party: "anz-sf2-collection".to_string(),
+            kind: PayeeKind::Own,
+            account: account("Fund two collection", "0102222299"),
+            name_check: ic_payments::model::NameCheck::Match,
+        },
+    );
+    desk.ok(&pat(), Command::ConfirmPayee { payee: "into-sf2".to_string() });
+    desk.ok(
+        &svc(),
+        Command::ScreenPayee {
+            payee: "into-sf2".to_string(),
+            clear: true,
+        },
+    );
+    desk.at(t(2027, 11, 15, 17, 0));
+    let events = desk.ok(&svc(), Command::ProposeFundSweep { as_at: d(2027, 11, 16) });
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::RunPrepared { run, .. } if run == "sweep-sf1-20271116")));
+    let run = &desk.state.runs["sweep-sf1-20271116"];
+    assert_eq!((run.value_date, run.items.len()), (d(2027, 11, 16), 1));
+    let item = &run.items["sweep-sf1-20271116-1"];
+    assert_eq!(
+        (item.new.amount_minor, item.new.source.as_str()),
+        (60_00, "fund-sweep:anz-sf1-collection:sf2:20271116")
+    );
+    // Again the same day: nothing more. Nothing open the next day either.
+    assert!(desk.ok(&svc(), Command::ProposeFundSweep { as_at: d(2027, 11, 16) }).is_empty());
+    assert!(desk.ok(&svc(), Command::ProposeFundSweep { as_at: d(2027, 11, 17) }).is_empty());
+    // The pump is a maker of the run; a person checks, another approves.
+    desk.ok(
+        &mia(),
+        Command::CheckRun {
+            run: "sweep-sf1-20271116".to_string(),
+        },
+    );
+    desk.ok(
+        &ari(),
+        Command::ApproveRun {
+            run: "sweep-sf1-20271116".to_string(),
+        },
+    );
+}

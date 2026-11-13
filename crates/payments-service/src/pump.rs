@@ -48,6 +48,12 @@ pub fn refresh_after(max_age_minutes: Option<u32>) -> Duration {
     Duration::minutes(max_age_minutes.map_or(15, |m| i64::from(m.div_ceil(2))))
 }
 
+/// When the day's fund sweep is proposed, New Zealand time.
+pub const SWEEP_FROM: chrono::NaiveTime = match chrono::NaiveTime::from_hms_opt(7, 0, 0) {
+    Some(t) => t,
+    None => chrono::NaiveTime::MIN,
+};
+
 /// The wall clock in New Zealand, which is what cutoffs are measured in.
 pub fn nz_now() -> NaiveDateTime {
     chrono::Utc::now().with_timezone(&chrono_tz::Pacific::Auckland).naive_local()
@@ -401,7 +407,24 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         if let Err(e) = self.check_holds(&config, &mut pass).await {
             pass.problems.push(e);
         }
+        if let Err(e) = self.propose_sweep().await {
+            pass.problems.push(e);
+        }
         pass
+    }
+
+    /// From seven each morning, ask the module once to prepare the day's
+    /// fund settlement runs (PAY-010). The key is the day's, so every pump
+    /// in every region asks under the same key and only the first counts.
+    async fn propose_sweep(&self) -> Result<(), String> {
+        let now = (self.clock)();
+        if now.time() < SWEEP_FROM {
+            return Ok(());
+        }
+        let as_at = now.date();
+        self.tell(format!("fund-sweep-{as_at}"), Command::ProposeFundSweep { as_at })
+            .await
+            .map_err(|e| format!("fund sweep: {e}"))
     }
 
     /// Ask the customer master about each party money taking value out of a

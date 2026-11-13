@@ -21,6 +21,7 @@ ic-azure.workspace = true
 reqwest.workspace = true
 cedar-policy.workspace = true
 chrono.workspace = true
+chrono-tz.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -43,6 +44,7 @@ ic-complaints = { path = "../complaints" }
 ic-finance = { path = "../finance" }
 ic-reinsurance = { path = "../reinsurance" }
 ic-underwriting = { path = "../underwriting" }
+ic-payments = { path = "../payments" }
 ic-sim.workspace = true
 ic-product.workspace = true
 ic-money.workspace = true

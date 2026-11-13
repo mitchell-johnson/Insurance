@@ -10,6 +10,7 @@ pub mod documents;
 pub mod finance;
 pub mod group;
 pub mod intake;
+pub mod payments;
 pub mod pricing;
 pub mod reinsurance;
 pub mod underwriting;

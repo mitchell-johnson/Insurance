@@ -143,6 +143,8 @@ pub struct AppState {
     pub claims: Arc<dyn crate::claims::Partitions>,
     /// The reinsurance module, for the exceptions console.
     pub reinsurance: Arc<dyn crate::forward::Source>,
+    /// The payments module, for the payments console.
+    pub payments: Arc<dyn crate::forward::Source>,
     /// The underwriting module, for the underwriting console.
     pub underwriting: Arc<dyn crate::forward::Source>,
     /// The customer master, for a person's own record. `None` where it is
@@ -1252,7 +1254,9 @@ impl AppState {
 /// does not hold, 409 for anything else it refused.
 fn module_refusal(code: &str, message: &str) -> Problem {
     let status = match code {
-        "unknown_staff" | "authority" | "not_authorised" | "unauthorised" | "not_owner" | "no_access" => StatusCode::FORBIDDEN,
+        "unknown_staff" | "authority" | "not_authorised" | "unauthorised" | "not_owner" | "no_access" | "not_permitted" | "role_conflict" | "same_person" => {
+            StatusCode::FORBIDDEN
+        }
         "unknown_claim" => StatusCode::NOT_FOUND,
         _ => StatusCode::CONFLICT,
     };
@@ -1738,6 +1742,90 @@ impl AppState {
         let applied = &output["Ok"];
         ok(json!({ "accepted": true, "events": applied["events"], "view": applied["view"], "duplicate": applied["duplicate"] }))
     }
+}
+
+impl AppState {
+    /// Whether this person may open the payments console, and their roles
+    /// there. Nobody without a payments action gets as far as that module.
+    async fn payments_standing(&self, headers: &HeaderMap, method: &Method, uri: &Uri, body: &[u8]) -> Result<(Session, Value), Problem> {
+        let session = self.staff(headers, method, uri, body).await?;
+        let standing = self
+            .ask(Question::PaymentsStaff {
+                staff: session.party.clone(),
+                at: session.at,
+            })
+            .await?;
+        if standing["view"] != true {
+            return Err(Problem::forbidden("your roles do not include payments"));
+        }
+        Ok((session, standing))
+    }
+}
+
+/// The roles a person holds in the payments module, from their standing.
+fn payment_roles(standing: &Value) -> Vec<String> {
+    standing["roles"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+/// One of the console's questions to the payments module. `me` answers
+/// from here.
+async fn payments_question(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path(name): Path<String>,
+    Query(fields): Query<std::collections::BTreeMap<String, String>>,
+) -> Answer {
+    let (session, standing) = s.payments_standing(&headers, &method, &uri, b"").await?;
+    if name == "me" {
+        return ok(standing);
+    }
+    let question = crate::payments::question(&name, &fields, &payment_roles(&standing), session.at).map_err(Problem::bad_request)?;
+    let answer = s
+        .payments
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(answer)
+}
+
+/// A person's command to the payments module, as the person signed in
+/// with the roles their staff actions give them there. That module
+/// decides, and keeps makers, approvers and payee maintainers apart.
+async fn payments_command(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let (session, standing) = s.payments_standing(&headers, &method, &uri, &body).await?;
+    let roles = payment_roles(&standing);
+    if roles.is_empty() {
+        return Err(Problem::forbidden("you may read payments but hold no role to act on them"));
+    }
+    let key = key(&headers, &session.party.0)?;
+    let command: Value = parse(&body)?;
+    if crate::payments::console_command(&command).is_none() {
+        return Err(Problem::bad_request("that is not a command people send to payments"));
+    }
+    let envelope = crate::payments::envelope(&key, &session.party, &roles, session.at, command);
+    let output = s
+        .payments
+        .tell(envelope)
+        .await
+        .map_err(|e| module_problem("payments", StatusCode::BAD_REQUEST, e))?;
+    if let Some(refused) = output.get("Err") {
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
+            refused["message"].as_str().unwrap_or("the payments module refused it"),
+        ));
+    }
+    ok(json!({ "accepted": true, "events": output["Ok"] }))
 }
 
 /// One of the console's questions to the underwriting module. `me` answers
@@ -2402,6 +2490,8 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/commission/commands", post(commission_command))
         .route("/staff/v1/commission/{question}", get(commission_question))
         .route("/staff/v1/replacements/decide", post(replacement_decide))
+        .route("/staff/v1/payments/commands", post(payments_command))
+        .route("/staff/v1/payments/{question}", get(payments_question))
         .route("/staff/v1/underwriting/commands", post(underwriting_command))
         .route("/staff/v1/underwriting/disclosures", post(underwriting_disclosures))
         .route("/staff/v1/underwriting/{verb}/{id}", post(underwriting_decide))
@@ -2428,6 +2518,7 @@ pub fn router(state: Shared) -> Router {
         .route("/finance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::FINANCE) }))
         .route("/claims", get(|State(s): State<Shared>| async move { page(&s, crate::ui::CLAIMS) }))
         .route("/reinsurance", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REINSURANCE) }))
+        .route("/payments", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PAYMENTS) }))
         .route("/underwriting", get(|State(s): State<Shared>| async move { page(&s, crate::ui::UNDERWRITING) }))
         .route("/pricing", get(|State(s): State<Shared>| async move { page(&s, crate::ui::PRICING) }))
         .route("/replacements", get(|State(s): State<Shared>| async move { page(&s, crate::ui::REPLACEMENTS) }))

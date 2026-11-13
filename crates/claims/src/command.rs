@@ -110,6 +110,18 @@ pub enum Request {
     WriteOff {
         overpayment: String,
     },
+    /// The life is in custody after sentence: no benefit from `from`, the
+    /// first whole day in custody. `evidence` is the vault reference of the
+    /// proof (a sentencing record or the prison's confirmation).
+    SuspendBenefit {
+        from: NaiveDate,
+        evidence: String,
+    },
+    /// Released: the benefit is payable again from `from`, the day after
+    /// release, with no new waiting period.
+    ResumeBenefit {
+        from: NaiveDate,
+    },
 }
 
 impl Request {
@@ -124,6 +136,8 @@ impl Request {
             Request::EndBenefit { .. } => DecisionKind::EndBenefit,
             Request::RecoveryStatus { .. } => DecisionKind::RecoveryStatus,
             Request::WriteOff { .. } => DecisionKind::WriteOff,
+            Request::SuspendBenefit { .. } => DecisionKind::SuspendBenefit,
+            Request::ResumeBenefit { .. } => DecisionKind::ResumeBenefit,
         }
     }
 }

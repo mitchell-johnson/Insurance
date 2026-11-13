@@ -51,6 +51,7 @@ pub fn rules() -> Rules {
             ("R-NO".to_string(), set(&[DecisionKind::Decline])),
             ("R-REV".to_string(), set(&[DecisionKind::ReverseAdmission])),
             ("R-OVR".to_string(), set(&[DecisionKind::Admit])),
+            ("R-CUSTODY".to_string(), set(&[DecisionKind::SuspendBenefit, DecisionKind::ResumeBenefit])),
         ]
         .into(),
         cause_codes: [
@@ -237,6 +238,7 @@ pub fn facts(cover_type: &str) -> CoverFacts {
         policy_loan_minor: 0,
         joint_lives: vec![],
         reduced_by: vec![],
+        benefit_while_imprisoned: Default::default(),
     }
 }
 

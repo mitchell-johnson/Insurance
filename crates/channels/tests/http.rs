@@ -42,6 +42,7 @@ struct Portal {
     claims: Arc<common::claims::ClaimsCore>,
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
     underwriting: Arc<common::underwriting::UnderwritingModule>,
+    payments: Arc<common::payments::PaymentsModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
@@ -129,6 +130,11 @@ fn portal() -> Portal {
         ("sub-abe", "abe"),
         ("sub-sam", "sam"),
         ("sub-cat", "cat"),
+        ("sub-paymk", "pay-mk"),
+        ("sub-payap", "pay-ap"),
+        ("sub-paypm", "pay-pm"),
+        ("sub-paybad", "pay-bad"),
+        ("sub-payview", "pay-view"),
     ] {
         w.dir(
             module("identity"),
@@ -226,6 +232,16 @@ fn portal() -> Portal {
                     &[ic_channels::underwriting::actions::WORK, ic_channels::underwriting::actions::SENIOR],
                     &[DataClass::InsuranceSensitive],
                 ),
+                template("payments-maker", &[ic_channels::payments::actions::MAKER], &[DataClass::Financial]),
+                template("payments-approver", &[ic_channels::payments::actions::APPROVER], &[DataClass::Financial]),
+                template("payee-maintainer", &[ic_channels::payments::actions::PAYEES], &[DataClass::Financial]),
+                // Both: the payments module refuses anything this person sends.
+                template(
+                    "payments-conflicted",
+                    &[ic_channels::payments::actions::APPROVER, ic_channels::payments::actions::PAYEES],
+                    &[DataClass::Financial],
+                ),
+                template("payments-reader", &[ic_channels::payments::actions::VIEW], &[DataClass::Financial]),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(
                     "conduct-officer",
@@ -281,6 +297,11 @@ fn portal() -> Portal {
         ("abe", "underwriter"),
         ("sam", "senior-underwriter"),
         ("cat", "senior-underwriter"),
+        ("pay-mk", "payments-maker"),
+        ("pay-ap", "payments-approver"),
+        ("pay-pm", "payee-maintainer"),
+        ("pay-bad", "payments-conflicted"),
+        ("pay-view", "payments-reader"),
     ] {
         w.send(
             staff("alice"),
@@ -320,6 +341,7 @@ fn portal() -> Portal {
     let claims = Arc::new(common::claims::seeded());
     let reinsurance = Arc::new(common::reinsurance::seeded());
     let underwriting = Arc::new(common::underwriting::seeded());
+    let payments = Arc::new(common::payments::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
@@ -345,6 +367,7 @@ fn portal() -> Portal {
         finance: finance.clone(),
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
+        payments: payments.clone(),
         underwriting: underwriting.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
@@ -364,6 +387,7 @@ fn portal() -> Portal {
         claims,
         reinsurance,
         underwriting,
+        payments,
         master,
         commission,
         intake,
@@ -862,7 +886,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 30);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 35);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1145,6 +1169,7 @@ async fn pages_are_served_locked_down() {
         "/claims",
         "/reinsurance",
         "/underwriting",
+        "/payments",
         "/replacements",
         "/ops",
         "/status",
@@ -1400,6 +1425,7 @@ async fn the_unit_pricing_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -1612,6 +1638,7 @@ async fn the_complaints_and_conduct_workbench() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -1710,6 +1737,7 @@ async fn the_reinsurance_exceptions_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -1925,6 +1953,7 @@ async fn the_claims_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2100,6 +2129,7 @@ async fn the_finance_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -2273,6 +2303,7 @@ async fn a_person_keeps_their_own_customer_record() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -2330,6 +2361,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -2596,6 +2628,7 @@ async fn the_person_insured_signs_their_disclosure() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -2690,6 +2723,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -2925,6 +2959,7 @@ async fn an_employer_runs_the_scheme_membership() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        payments: portal.payments.clone(),
         underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
@@ -3175,6 +3210,7 @@ async fn the_underwriting_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
         underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
@@ -3193,6 +3229,165 @@ async fn the_underwriting_console() {
             .method(if body.is_some() { "POST" } else { "GET" })
             .uri(path)
             .header("x-dev-subject", "sub-amy")
+            .header("idempotency-key", "k");
+        let response = down
+            .clone()
+            .oneshot(request.body(Body::from(body.map(|b| b.to_string()).unwrap_or_default())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
+}
+
+/// Purpose: staff move money from the payments console: every command reaches the payments module as the person signed in,
+/// with the roles their staff actions give them there, at New Zealand time. A maker prepares and checks a run, the maker cannot
+/// approve it, an approver can; someone holding both approval and payee maintenance is refused by the module; a reader can read
+/// runs but not bank details and cannot act; and the drivers' commands and questions are never sent from here.
+/// Why it matters: payments trusts the roles it is told. If the console let a page name the actor or claim roles, or sent a
+/// bank's own answers as a person, the separation between who prepares, who approves and who decides who may be paid would be
+/// gone.
+#[tokio::test]
+async fn the_payments_console() {
+    use ic_payments::model::{Counterparty, NewItem, RunType};
+    use ic_payments::Command as Pay;
+    let portal = portal();
+    let ask = |who: &'static str, rest: &str| {
+        let path = format!("/staff/v1/payments/{rest}");
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/payments/commands", command).await }
+    };
+    let run = |c: Pay| serde_json::to_value(c).unwrap();
+
+    // Who gets in, and with which roles.
+    assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-payview", "me").await;
+    assert_eq!((status, &me["roles"]), (StatusCode::OK, &json!([])), "{me}");
+    assert_eq!(ask("sub-paymk", "me").await.1["roles"], json!(["maker"]));
+
+    // A maker prepares a run, adds a payment and checks it; the module hears it from them, as a maker, at New Zealand time.
+    let prepare = run(Pay::PrepareRun {
+        run: "r9".into(),
+        run_type: RunType::LumpSumClaims,
+        fund: "sf1".into(),
+        currency: ic_money::Currency::NZD,
+        value_date: d(2027, 11, 16),
+        urgent: false,
+    });
+    let (status, done) = tell("sub-paymk", prepare.clone()).await;
+    assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
+    let sent = portal.payments.received().last().cloned().unwrap();
+    assert_eq!((sent.actor.id.as_str(), sent.actor.roles.len()), ("pay-mk", 1));
+    assert_eq!(sent.at, ic_channels::payments::nz(portal.now()));
+    let item = NewItem {
+        item: "i9".into(),
+        source: "claims:c9".into(),
+        counterparty: Counterparty::Payee("p1".into()),
+        amount_minor: 1_000_00,
+        policy: None,
+        payable: None,
+        refund: None,
+        represents: None,
+    };
+    assert_eq!(
+        tell(
+            "sub-paymk",
+            run(Pay::AddRunItems {
+                run: "r9".into(),
+                items: vec![item]
+            })
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    assert_eq!(tell("sub-paymk", run(Pay::CheckRun { run: "r9".into() })).await.0, StatusCode::OK);
+    // The maker cannot approve their own run; someone who also maintains payees cannot approve at all; an approver can.
+    let approve = run(Pay::ApproveRun { run: "r9".into() });
+    let (status, problem) = tell("sub-paymk", approve.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("not_permitted")), "{problem}");
+    let (status, problem) = tell("sub-paybad", approve.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("role_conflict")), "{problem}");
+    let (status, approved) = tell("sub-payap", approve).await;
+    assert_eq!(status, StatusCode::OK, "{approved}");
+    let (status, totals) = ask("sub-payview", "control_totals?run=r9").await;
+    assert_eq!((status, &totals["unsent"]), (StatusCode::OK, &json!(0)), "{totals}");
+    assert_eq!(ask("sub-payview", "run?run=r9").await.1["makers"], json!(["pay-mk"]));
+    // The module's own refusals come back with its code.
+    let (status, problem) = tell("sub-paymk", prepare).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("duplicate_run")), "{problem}");
+
+    // What is not people's to send, or to read.
+    assert_eq!(tell("sub-payview", run(Pay::CheckRun { run: "r9".into() })).await.0, StatusCode::FORBIDDEN);
+    for bad in [
+        run(Pay::ScreenPayee {
+            payee: "p1".into(),
+            clear: true,
+        }),
+        run(Pay::Prune { before: d(2027, 1, 1) }),
+        json!({ "type": "nope" }),
+        json!("prepare_run"),
+    ] {
+        assert_eq!(tell("sub-paymk", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    assert_eq!(
+        ask("sub-payview", "payee?payee=p1").await.0,
+        StatusCode::BAD_REQUEST,
+        "bank details are not a reader's"
+    );
+    let (status, payee) = ask("sub-paypm", "payee?payee=p1").await;
+    assert_eq!((status, payee["party"].as_str()), (StatusCode::OK, Some("party-p1")), "{payee}");
+    assert_eq!(ask("sub-paypm", "config").await.0, StatusCode::BAD_REQUEST, "the connectivity administrator's");
+    assert_eq!(ask("sub-paymk", "outbox").await.0, StatusCode::BAD_REQUEST, "the drivers'");
+    assert_eq!(ask("sub-paymk", "run").await.0, StatusCode::BAD_REQUEST, "which run");
+    assert_eq!(ask("sub-paymk", "run?run=nope").await.0, StatusCode::NOT_FOUND);
+    let (status, waiting) = ask("sub-payview", "waiting").await;
+    assert_eq!((status, waiting.is_object() || waiting.is_array()), (StatusCode::OK, true), "{waiting}");
+    let (status, book) = ask("sub-payview", "reconciliation?account=anz-sf1-claims").await;
+    assert_eq!((status, book["closing_minor"].as_i64()), (StatusCode::OK, Some(10_000_000_00)), "{book}");
+    assert_eq!(ask("sub-payview", "readiness").await.0, StatusCode::OK);
+    // The lists, without account details: open runs, open exceptions (all, or one account's) and a party's payees.
+    let (status, runs) = ask("sub-payview", "open_runs").await;
+    assert!(status == StatusCode::OK && runs.to_string().contains("r9"), "{runs}");
+    assert_eq!(ask("sub-payview", "open_exceptions").await.0, StatusCode::OK);
+    assert_eq!(ask("sub-payview", "open_exceptions?account=anz-sf1-claims").await.0, StatusCode::OK);
+    let (status, party) = ask("sub-payview", "party?party=party-p1").await;
+    assert_eq!((status, &party["payees"][0]["payee"]), (StatusCode::OK, &json!("p1")), "{party}");
+    assert!(!party.to_string().contains("0101234567"), "no account number: {party}");
+
+    // The module unreachable: the console says so.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
+        payments: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
+        master: None,
+        intake: None,
+        documents: None,
+        group: None,
+    }));
+    for (path, body) in [
+        ("/staff/v1/payments/waiting", None),
+        ("/staff/v1/payments/commands", Some(json!({ "type": "check_run", "run": "r9" }))),
+    ] {
+        let request = Request::builder()
+            .method(if body.is_some() { "POST" } else { "GET" })
+            .uri(path)
+            .header("x-dev-subject", "sub-paymk")
             .header("idempotency-key", "k");
         let response = down
             .clone()

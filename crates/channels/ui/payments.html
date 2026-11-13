@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payments</title><link rel="stylesheet" href="/ui/app.css"></head>
+<body><header><h1>Payments</h1><button class="quiet" id="out">Sign out</button></header>
+<main><div id="msg" aria-live="polite"></div>
+<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+
+<section><h2>Payments waiting</h2><p class="muted">Released by claims, servicing and other modules. A maker takes them into a run; they are checked and approved like any other item.</p>
+<div id="w-msg" aria-live="polite"></div><div id="waiting"></div>
+<form id="take" class="maker" hidden><div class="row"><div><label for="t-run">Into run</label><input id="t-run" required></div><button>Take the ticked payments</button></div></form></section>
+
+<section class="maker" hidden><h2>Prepare a run</h2>
+<form id="prep"><div class="row">
+<div><label for="r-id">Run</label><input id="r-id" required maxlength="31"></div>
+<div><label for="r-type">Type</label><select id="r-type">
+<option>lump_sum_claims</option><option>benefit_payments</option><option>provider_payments</option><option>premium_refunds</option><option>commission</option><option>reinsurer</option>
+<option>fund_settlement</option><option>tax_and_levies</option><option>unclaimed_money</option><option>fund_transfer</option><option>ex_gratia</option><option>collection</option></select></div>
+<div><label for="r-fund">Statutory fund</label><input id="r-fund" required value="sf1"></div>
+<div><label for="r-date">Value date</label><input id="r-date" type="date" required></div>
+<div><label for="r-urgent">Urgent</label><select id="r-urgent"><option value="false">No</option><option value="true">Yes, by API</option></select></div>
+<button>Prepare</button></div></form><div id="r-msg" aria-live="polite"></div></section>
+
+<section><h2>Open runs</h2><div id="runs-msg" aria-live="polite"></div><div id="runs"></div></section>
+
+<section><h2>A run</h2>
+<form id="run-form"><div class="row"><div><label for="run-id">Run</label><input id="run-id" required></div><button>Open</button></div></form>
+<div id="run-msg" aria-live="polite"></div><div id="run"></div><p id="run-actions"></p></section>
+
+<section><h2>A customer or payee party</h2><p class="muted">Their payees and authorities, with no account details, and whether they have put a hold on their own money going out.</p>
+<form id="party-form"><div class="row"><div><label for="party-id">Party</label><input id="party-id" required></div><button>Show</button></div></form>
+<div id="party-msg" aria-live="polite"></div><div id="party"></div></section>
+
+<section><h2>A payee</h2>
+<form id="payee-form"><div class="row"><div><label for="payee-id">Payee</label><input id="payee-id" required></div><button>Open</button></div></form>
+<div id="payee-msg" aria-live="polite"></div><div id="payee"></div><p id="payee-actions"></p></section>
+
+<section><h2>A refund</h2>
+<form id="refund-form"><div class="row"><div><label for="refund-id">Refund</label><input id="refund-id" required></div><button>Open</button></div></form>
+<div id="refund-msg" aria-live="polite"></div><div id="refund"></div><p id="refund-actions"></p></section>
+
+<section><h2>Open reconciliation exceptions</h2><div id="exc-msg" aria-live="polite"></div><div id="exceptions"></div></section>
+
+<section><h2>Reconciliation</h2>
+<form id="rec-form"><div class="row"><div><label for="rec-account">Bank account</label><input id="rec-account" required placeholder="anz-sf1-claims"></div><button>Show</button></div></form>
+<div class="row"><div><label for="rec-resolution">How an exception was resolved</label><input id="rec-resolution"></div></div>
+<div id="rec-msg" aria-live="polite"></div><div id="rec"></div></section>
+
+<section><h2>Collections held for a conversation</h2><div id="conv"></div></section>
+<section><h2>Region readiness</h2><div id="ready"></div></section>
+
+<section id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
+<form id="raw-form"><textarea id="raw-cmd" rows="5" required></textarea><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
+</main>
+<script src="/ui/app.js"></script>
+<script>
+"use strict";
+const { h, put, table, say, signIn, signOut, api, run } = portal;
+const $ = (id) => document.getElementById(id);
+const R = "workforce", BASE = "/staff/v1/payments/";
+let me = {};
+$("out").addEventListener("click", () => signOut(R));
+const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
+const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
+const send = (command) => api(R, "POST", BASE + "commands", command);
+const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
+const has = (role) => (me.roles || []).includes(role);
+const status = (s) => typeof s === "object" && s ? Object.keys(s).map((k) => `${words(k)}: ${words(s[k])}`).join(", ") : words(s);
+const button = (label, out, act) => h("button", { class: "quiet", type: "button", on: { click: run(out, act) } }, label);
+
+async function showWaiting() {
+  const rows = Object.values(await ask("waiting"));
+  put($("waiting"), rows.length ? table(["", "Payment", "What", "Payee", "Amount", "Policy"], rows.map((w) => [
+    has("maker") ? h("input", { type: "checkbox", name: "take", value: w.payment }) : "", w.payment, w.source, w.payee || "(the maker names one)", money(w.amount_minor), w.policy || ""]))
+    : h("p", { class: "muted" }, "Nothing is waiting."));
+}
+$("take").addEventListener("submit", run($("w-msg"), async () => {
+  const payments = [...document.querySelectorAll('input[name="take"]:checked')].map((i) => i.value);
+  await send({ type: "take_waiting", run: $("t-run").value.trim(), payments, payees: {} });
+  await showWaiting();
+  return `Taken into ${$("t-run").value.trim()}.`;
+}));
+$("prep").addEventListener("submit", run($("r-msg"), async () => {
+  await send({ type: "prepare_run", run: $("r-id").value.trim(), run_type: $("r-type").value, fund: $("r-fund").value.trim(), currency: "NZD", value_date: $("r-date").value, urgent: $("r-urgent").value === "true" });
+  $("run-id").value = $("r-id").value.trim();
+  return "Prepared. Add items, then check it.";
+}));
+
+async function showRun() {
+  const id = $("run-id").value.trim();
+  const [r, totals] = await Promise.all([ask("run", { run: id }), ask("control_totals", { run: id })]);
+  put($("run"), h("p", {}, `${words(r.run_type)} from ${r.fund}, value date ${r.value_date}${r.urgent ? ", urgent" : ""}: ${status(r.status)}. Prepared by ${[...r.makers].join(", ")}${r.approvers.length ? `; approved by ${r.approvers.join(", ")}` : ""}.`),
+    table(["Item", "Who", "Amount", "Status"], Object.entries(r.items).map(([i, it]) => [i, JSON.stringify(it.counterparty), money(it.amount_minor),
+      it.status && it.status.held && holdWords[it.status.held] ? `held: ${holdWords[it.status.held]}` : status(it.status)])),
+    table(["Unsent", "At the bank", "Rejected", "Awaiting settlement", "Settled", "Returned"], [[money(totals.unsent), money(totals.awaiting_acknowledgement), money(totals.rejected), money(totals.awaiting_settlement), money(totals.settled), money(totals.returned)]]));
+  const out = $("run-msg");
+  const act = (type) => async () => { await send({ type, run: id }); await Promise.all([showRun(), showRuns()]); return `Done: ${words(type)}.`; };
+  put($("run-actions"), [
+    has("maker") ? button("Check", out, act("check_run")) : null,
+    has("approver") ? button("Approve", out, act("approve_run")) : null,
+    has("maker") ? button("Cancel", out, act("cancel_run")) : null,
+    has("maker") ? button("Close", out, act("close_run")) : null,
+    has("maker") ? button("Send what is unpaid again", out, async () => { await send({ type: "resubmit", run: id, value_date: null }); await showRun(); return "A new submission is queued."; }) : null,
+  ].filter(Boolean));
+}
+$("run-form").addEventListener("submit", run($("run-msg"), showRun));
+// A hold that is the customer's own (SVC-022) reads as such; an unconfirmed one clears when the run is checked again.
+const holdWords = { customer_hold: "the customer's own hold on money going out", hold_unconfirmed: "the customer's hold not yet confirmed: check the run again" };
+async function showRuns() {
+  const runs = await ask("open_runs");
+  put($("runs"), runs.length ? table(["Run", "Type", "Value date", "Status", "Items", "Held", "Total", "Prepared by", ""], runs.map((r) => [r.run, words(r.run_type), r.value_date, status(r.status), r.items, r.held, money(r.total_minor),
+    (r.makers || []).join(", "), button("Open", $("runs-msg"), async () => { $("run-id").value = r.run; await showRun(); return ""; })])) : h("p", { class: "muted" }, "No run is open."));
+}
+async function showExceptions() {
+  const open = await ask("open_exceptions");
+  put($("exceptions"), open.length ? table(["Exception", "Account", "Kind", "Amount", "Reference", "Owner", "Opened"], open.map((e) => [e.exception, e.account, words(e.kind), money(e.amount_minor), e.reference || "", e.owner || "", e.opened_on]))
+    : h("p", { class: "muted" }, "None."));
+}
+$("party-form").addEventListener("submit", run($("party-msg"), async () => {
+  const p = await ask("party", { party: $("party-id").value.trim() });
+  const hold = p.customer_hold;
+  put($("party"), h("p", {}, hold && hold.held ? `They have a hold on their own money going out (checked ${hold.checked_at}).` : "No hold of their own is recorded."),
+    table(["Payee", "Kind", "Blocked", "Cooling off until"], (p.payees || []).map((x) => [x.payee, words(x.kind), x.blocked ? (holdWords[x.blocked] || words(x.blocked)) : "", x.cooling_off_until || ""])),
+    table(["Authority", "Policy", "Life", "Status", "Dishonours", "Hardship", "Sole name"], (p.authorities || []).map((a) => [a.authority, a.policy, a.life || "", status(a.status), a.dishonours, a.hardship ? "yes" : "", a.sole_name ? "yes" : ""])));
+}));
+
+async function showPayee() {
+  const id = $("payee-id").value.trim();
+  const p = await ask("payee", { payee: id });
+  put($("payee"), h("p", {}, `${p.party}, ${words(p.kind)}: ${status(p.status)}.`), h("pre", {}, JSON.stringify(p, null, 2)));
+  const out = $("payee-msg");
+  const act = (type) => async () => { await send({ type, payee: id }); await showPayee(); return `Done: ${words(type)}.`; };
+  put($("payee-actions"), [
+    has("payee_maintainer") ? button("Confirm the details", out, act("confirm_payee")) : null,
+    has("legal") ? button("Approve for an estate or liquidator", out, act("approve_payee")) : null,
+    has("payee_maintainer") ? button("Close", out, act("close_payee")) : null,
+  ].filter(Boolean));
+}
+$("payee-form").addEventListener("submit", run($("payee-msg"), showPayee));
+
+async function showRefund() {
+  const id = $("refund-id").value.trim();
+  const r = await ask("refund", { refund: id });
+  put($("refund"), h("pre", {}, JSON.stringify(r, null, 2)));
+  put($("refund-actions"), has("maker") ? [button("Release", $("refund-msg"), async () => { await send({ type: "release_refund", refund: id }); await showRefund(); return "Released."; })] : []);
+}
+$("refund-form").addEventListener("submit", run($("refund-msg"), showRefund));
+
+async function showRec() {
+  const account = $("rec-account").value.trim();
+  const book = await ask("reconciliation", { account });
+  const out = $("rec-msg");
+  put($("rec"), h("p", {}, `Statement of ${book.statement_date}, closing ${money(book.closing_minor)}.`),
+    h("h3", {}, "Open exceptions"),
+    (book.open || []).length ? table(["Exception", "Kind", "Amount", "Owner", "Days", ""], book.open.map((e) => [e.exception, words(e.kind), money(e.amount_minor), e.owner || "", e.age_days,
+      has("reconciler") ? h("span", {}, button("Take", out, async () => { await send({ type: "assign_exception", exception: e.exception, owner: me.staff }); await showRec(); return "Yours."; }),
+        button("Resolve", out, async () => { const resolution = $("rec-resolution").value.trim(); if (!resolution) throw new Error("Say how it was resolved first."); await send({ type: "resolve_exception", exception: e.exception, resolution }); await showRec(); return "Resolved."; })) : ""]))
+      : h("p", { class: "muted" }, "None."),
+    h("h3", {}, "Still to show on a statement"),
+    (book.outstanding || []).length ? table(["Reference", "Amount", "Days"], book.outstanding.map((o) => [o.reference, money(o.amount_minor), o.age_days])) : h("p", { class: "muted" }, "Nothing."));
+}
+$("rec-form").addEventListener("submit", run($("rec-msg"), showRec));
+$("raw-form").addEventListener("submit", run($("raw-msg"), async () => { await send(JSON.parse($("raw-cmd").value)); return "Done."; }));
+
+signIn(R).then(async () => {
+  me = await ask("me");
+  $("me").textContent = `You are ${me.staff}: ${(me.roles || []).map(words).join(", ") || "view only"}.`;
+  document.querySelectorAll(".maker").forEach((e) => { e.hidden = !has("maker"); });
+  $("raw").hidden = !(me.roles || []).length;
+  await Promise.all([showWaiting(), showRuns(), showExceptions()]);
+  const conv = await ask("awaiting_conversation");
+  const held = Object.entries(conv || {});
+  put($("conv"), held.length ? table(["Item", "Detail"], held.map(([k, v]) => [k, JSON.stringify(v)])) : h("p", { class: "muted" }, "None."));
+  const ready = await ask("readiness");
+  put($("ready"), h("pre", {}, JSON.stringify(ready, null, 2)));
+}).catch((e) => say($("msg"), "bad", e.message));
+</script></body></html>
