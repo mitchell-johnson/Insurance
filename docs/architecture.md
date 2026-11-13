@@ -520,7 +520,8 @@ Owned by the thread "Build underwriting and new business". The full module descr
 3. Staff notices go to the `underwriting-notices` event hub; letters go to documents as `request_letter` (agreed 13 Nov; both sides on main, pinned by a contract test against the real documents state machine in `tests/notices.rs`). Still parked: evidence requests and delegate file requests.
 4. The disclosure intake `ic-underwriting-intake` is built (seals signed answers in the clinical store and submits them; `deploy/k8s/underwriting-intake.yaml`). Still to do: deploy `infra/underwriting.bicep` (bring it into `infra/main.bicep`; the driver needs its notices hub), have the portal call the intake with the life's device signature, and a staff console page for `POST /v1/disclosures/open` (an underwriter reading a disclosure, logged by the module first).
 5. Profiles naming each underwriter's party (supported, none set yet), portal pages that render the progress rows underwriting now publishes (kinds `proposal`, `proposal_life`; portal work), and an interim cover product.
-6. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
+6. A scheme member's loading can move to them (`reoffer_excess_terms`, agreed with group 13 Nov, both sides on main). Not yet: reinsurance is not told the layer number changed when the replacement layer is written.
+7. Terms refused for `billing_behind` are retried by the daily sweep, up to five attempts, then left to a person.
 
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.
 

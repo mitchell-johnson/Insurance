@@ -421,6 +421,7 @@ impl UnderwritingState {
             interim: None,
             migrated: true,
             issue_attempts: 0,
+            reoffers: vec![],
         };
         for l in open.lives {
             let Some(legacy) = m.lives.iter().find(|x| x.life == l.life) else {
