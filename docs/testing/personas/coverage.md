@@ -150,11 +150,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 
 ## Design gaps the personas expose
 
-- US-P12-2 (P12 Fatima Al-Sayed, 38): tests CLM-037
-- US-P49-2 (P49 Alex Rivera, 29): tests PRD-011
-- US-P52-1 (P52 Caleb Stone, 21): tests SVC-022
-- US-N05-1 (N5 Rob Sutherland, 51, undischarged bankrupt with a WOL0 surrender value): tests JNT-029
-- US-N06-1 (N6 Shane Poutama, 34, in prison for two years, holds TERM0 and IP1): tests CLM-040, VUL-019
+None open. Decided gaps are recorded in `docs/decisions.md`.
 
 ## Situations
 
