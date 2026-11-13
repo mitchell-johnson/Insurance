@@ -156,6 +156,9 @@ def by_tier(percent_by_tier):
 def min_covers(count):
     return {"kind": "min_covers", "count": count}
 
+def min_group_covers(count):
+    return {"kind": "min_group_covers", "count": count}
+
 def min_lives(count):
     return {"kind": "min_lives", "count": count}
 

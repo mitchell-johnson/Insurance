@@ -257,6 +257,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         entitlements: Vec::new(),
         split_from: None,
         scheme,
+        covers_elsewhere: 0,
         discount_overrides: Vec::new(),
         continuation_of: cmd.continuation_of,
         payments: BTreeMap::new(),
@@ -306,6 +307,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
         ));
     }
     let (mut policy, product) = build_policy(&state.catalog, cmd, ctx.date, ctx.index)?;
+    policy.covers_elsewhere = state.covers_elsewhere(&policy);
     // Rate everything before anything is written, so a policy that cannot be
     // priced is refused whole.
     retail_period_premium(&state.catalog, &product, &policy, policy.inception, &mut ctx.work)?;
@@ -333,6 +335,7 @@ pub(crate) fn issue(state: &mut CoreState, ctx: &mut Ctx<'_>, cmd: IssuePolicy) 
     // Premium is in advance: the first period is due at issue.
     let r = billing::bill_due_periods(&mut state.ledger, &state.catalog, &product, &mut policy, ctx);
     policy.stamp_settled(ctx.date);
+    state.note_holder(&policy);
     state.policies.insert(policy.id.clone(), policy);
     r.map(|_| ())
 }

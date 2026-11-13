@@ -1102,6 +1102,7 @@ pub(crate) fn split(
                 declined_anniversaries: policy.declined_anniversaries.clone(),
                 split_from: Some(origin),
                 scheme: policy.scheme,
+                covers_elsewhere: 0,
                 lives: Default::default(),
                 reopen_windows: Default::default(),
                 notices: Default::default(),

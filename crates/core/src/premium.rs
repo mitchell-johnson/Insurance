@@ -147,6 +147,7 @@ pub(crate) fn retail_premium_with(
     let overrides = crate::discount_override::in_force_on(policy, read_on);
     let covers: std::collections::BTreeSet<&str> = annual.keys().map(|l| l.cover.as_str()).collect();
     let state = PricingState {
+        covers_elsewhere: policy.covers_elsewhere,
         overrides: &overrides,
         covers: covers.len() as u32,
         lives: lives.len() as u32,

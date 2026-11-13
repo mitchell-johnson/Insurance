@@ -217,6 +217,11 @@ pub struct CoreState {
     /// `id/version`.
     #[serde(default)]
     pub table_validations: BTreeMap<String, crate::command::TableValidation>,
+    /// Each policyholder's policies within a group, by `group|party`. An
+    /// index over `policies`, kept so that a discount for covers held
+    /// across a customer's policies does not read the whole partition.
+    #[serde(default)]
+    pub(crate) holders: BTreeMap<String, BTreeSet<PolicyId>>,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -242,7 +247,37 @@ impl CoreState {
             counterparty: Default::default(),
             investment: Default::default(),
             table_validations: BTreeMap::new(),
+            holders: BTreeMap::new(),
         }
+    }
+
+    fn holder_key(policy: &Policy) -> String {
+        format!("{}|{}", policy.group.0, policy.policyholder.0)
+    }
+
+    /// Record a policy that has just been put on this partition against its
+    /// policyholder.
+    pub(crate) fn note_holder(&mut self, policy: &Policy) {
+        self.holders.entry(Self::holder_key(policy)).or_default().insert(policy.id.clone());
+    }
+
+    /// Covers in force on the policyholder's other retail policies in the
+    /// same group. A scheme is its employer's: it neither counts nor is
+    /// counted.
+    pub(crate) fn covers_elsewhere(&self, policy: &Policy) -> u32 {
+        if policy.is_scheme() {
+            return 0;
+        }
+        let others = self.holders.get(&Self::holder_key(policy)).into_iter().flatten();
+        others
+            .filter(|id| **id != policy.id)
+            .filter_map(|id| self.policies.get(id))
+            .filter(|other| other.status == PolicyStatus::InForce && !other.is_scheme())
+            .map(|other| {
+                let held = |c: &&crate::policy::Cover| c.status == crate::policy::CoverStatus::InForce && c.layers.iter().any(|l| l.end.is_none());
+                other.covers.values().filter(held).count() as u32
+            })
+            .sum()
     }
 
     pub fn last_event_seq(&self) -> u64 {
@@ -776,6 +811,7 @@ impl CoreState {
                     Ok(())
                 })?;
                 if let Some(new) = made {
+                    self.note_holder(&new);
                     self.policies.insert(new_id, new);
                 }
                 Ok(())
@@ -998,6 +1034,9 @@ impl CoreState {
         } else if refuse_if_frozen && policy.status == PolicyStatus::Transferred {
             Err(Reject::new("policy_transferred", format!("policy {id} has moved to another group")))
         } else {
+            // What the policyholder holds elsewhere is counted afresh each
+            // time the policy is worked on, before anything prices it.
+            policy.covers_elsewhere = self.covers_elsewhere(&policy);
             f(self, &mut policy)
         };
         if let Some(today) = self.business_date {

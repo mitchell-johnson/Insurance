@@ -673,6 +673,7 @@ fn discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net
         life: None,
     }];
     let state = |lives, frequency| PricingState {
+        covers_elsewhere: 0,
         overrides: &[],
         covers: 2,
         lives,
@@ -742,6 +743,7 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
     };
     let run = |p: &ProductDefinition, held: &Vec<Held>| {
         let state = PricingState {
+            covers_elsewhere: 0,
             overrides: &[],
             covers: 2,
             lives: 1,
@@ -784,6 +786,7 @@ fn a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount()
     let couple: BTreeMap<Line, Dec> = [line("life-1", "1000"), line("life-2", "600")].into();
     let by_life = |held: &[Held]| {
         let state = PricingState {
+            covers_elsewhere: 0,
             overrides: &[],
             covers: 1,
             lives: 2,

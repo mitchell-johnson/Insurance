@@ -58,6 +58,13 @@ pub enum DiscountCondition {
     MinCovers {
         count: u32,
     },
+    /// The policyholder has at least this many covers priced across their
+    /// own policies in the same group: this policy's, and the covers in
+    /// force on their other policies. A scheme is its employer's and is
+    /// not counted.
+    MinGroupCovers {
+        count: u32,
+    },
     /// The policy has at least this many lives with cover priced.
     MinLives {
         count: u32,
@@ -117,6 +124,8 @@ pub struct Held {
 #[derive(Debug, Clone, Copy)]
 pub struct PricingState<'a> {
     pub covers: u32,
+    /// Covers in force on the policyholder's other policies in the group.
+    pub covers_elsewhere: u32,
     pub lives: u32,
     pub frequency: Frequency,
     pub entitlements: &'a [Held],
@@ -188,6 +197,7 @@ fn rate(d: &Discount, state: &PricingState<'_>, line: &Line, only: Option<&Strin
     let holds = match &d.condition {
         DiscountCondition::Always => true,
         DiscountCondition::MinCovers { count } => state.covers >= *count,
+        DiscountCondition::MinGroupCovers { count } => state.covers.saturating_add(state.covers_elsewhere) >= *count,
         DiscountCondition::MinLives { count } => state.lives >= *count,
         DiscountCondition::Frequency { frequencies } => frequencies.contains(&state.frequency),
         DiscountCondition::Entitlement { code } => held(code).is_some(),

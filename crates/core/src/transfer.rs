@@ -253,6 +253,7 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
             transfer_id: record.transfer_id,
         },
     });
+    state.note_holder(&policy);
     state.policies.insert(id, policy);
     state.claims.attach(record.claims);
     Ok(())

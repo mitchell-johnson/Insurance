@@ -625,6 +625,11 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// Covers in force on the policyholder's other retail policies in the
+    /// same group, as last counted when this policy was last worked on. A
+    /// discount for covers held across a customer's policies reads it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub covers_elsewhere: u32,
     /// A group scheme: its lives are members, billed together on one
     /// invoice. A scheme whose product has only covers that members choose
     /// (a health-only employer plan) has no formula cover to know it by.
@@ -817,4 +822,8 @@ impl Policy {
         self.receipts.retain(|_, r| r.received_on > keep_from);
         self.payments.retain(|_, p| p.settled_on > keep_from);
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
