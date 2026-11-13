@@ -38,6 +38,35 @@ impl PaymentsState {
         json!(rows)
     }
 
+    /// The first value date a run of this type can go for now, through the
+    /// channel it would use (PAY-014): what a maker prepares a run for after
+    /// the cutoff, and what a customer is told to expect.
+    /// `at` is New Zealand wall-clock time; without it, the last time a
+    /// command carried.
+    pub fn next_value_date(&self, run_type: crate::model::RunType, at: Option<chrono::NaiveDateTime>) -> Option<chrono::NaiveDate> {
+        let cfg = self.config.as_ref()?;
+        let route = cfg.routes.get(&run_type)?;
+        let channel = if self.redirected.contains(&run_type) {
+            route.secondary.as_ref()?
+        } else {
+            &route.primary
+        };
+        Some(cfg.next_window(channel, at.or(self.clock)?))
+    }
+
+    /// When a payment is expected to reach the bank account it pays, by its
+    /// item ID (the releasing module's payment reference): the run's value
+    /// date, or the later date it was sent for if it missed its window.
+    pub fn expected_payment(&self, item: &str) -> Value {
+        if self.waiting.contains_key(item) {
+            return json!({"payment": item, "status": "waiting"});
+        }
+        let Some(found) = self.item(item) else { return Value::Null };
+        let run = &self.runs[&self.items[item]];
+        let expected_on = self.deferred.get(item).map_or(run.value_date, |d| d.sent_for);
+        json!({"payment": item, "status": found.status, "expected_on": expected_on})
+    }
+
     /// Reconciliation exceptions not yet resolved, oldest first, on one
     /// account or on all of them.
     pub fn open_exceptions(&self, account: Option<&str>) -> Value {

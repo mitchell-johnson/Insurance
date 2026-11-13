@@ -114,6 +114,14 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
+        "next_value_date" => {
+            let run_type = serde_json::from_value(question["run_type"].clone()).map_err(|_| "the question needs a run_type".to_string())?;
+            let at = question["at"]
+                .as_str()
+                .map(|at| at.parse().map_err(|_| "at is a time like 2026-11-30T16:30:00".to_string()));
+            found(state.next_value_date(run_type, at.transpose()?))
+        }
+        "expected_payment" => Ok(state.expected_payment(text(&question, "payment")?)),
         "open_exceptions" => Ok(state.open_exceptions(question["account"].as_str())),
         "party" => Ok(state.party_summary(text(&question, "party")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
