@@ -82,6 +82,9 @@ pub enum Question {
         id: String,
     },
     OpenTasks,
+    /// What has been let go of to keep the state bounded: the date line
+    /// detail starts from, brought-forward balances and the last run.
+    History,
     Status,
     /// Every conduct case a licence event opened, with the event and the
     /// affected population: what the complaints module's conduct register
@@ -239,6 +242,7 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
                 .collect();
             Ok(json!({ "as_at": as_at, "engagements": rows }))
         }
+        Question::History => value(&state.history),
         Question::Status => Ok(json!({
             "today": state.today,
             "seq": state.seq,

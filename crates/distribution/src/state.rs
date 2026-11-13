@@ -592,6 +592,9 @@ pub(crate) fn structure<T>(r: Result<T, StructureError>) -> Result<T, Reject> {
 struct StoredResult {
     index: u64,
     error: Option<Reject>,
+    /// The business date the command was applied on, so old keys can go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    on: Option<NaiveDate>,
 }
 
 /// Business settings of the module. Changed by configuration, not by code.
@@ -629,6 +632,14 @@ pub struct Settings {
     /// reproduces exactly, as products and treaties ship scenarios.
     #[serde(default = "yes")]
     pub rule_examples_required: bool,
+    /// Days of settled history kept line by line; older detail nothing can
+    /// reach is let go once a month (see `history.rs`). Zero keeps all of it.
+    #[serde(default = "seven_years")]
+    pub history_days: u32,
+}
+
+fn seven_years() -> u32 {
+    2557
 }
 
 fn yes() -> bool {
@@ -659,6 +670,7 @@ impl Default for Settings {
             replacement_window_months: twelve(),
             replacement_amount_tolerance_ppm: five_percent(),
             rule_examples_required: true,
+            history_days: seven_years(),
         }
     }
 }
@@ -716,7 +728,22 @@ pub struct DistributionState {
     /// publisher reads to send on only what moved.
     #[serde(default)]
     pub changed: BTreeMap<PartyId, u64>,
+    /// What has been let go of to keep the state bounded.
+    #[serde(default)]
+    pub history: crate::history::History,
     idempotency: BTreeMap<String, StoredResult>,
+}
+
+impl DistributionState {
+    pub(crate) fn idempotency_len(&self) -> usize {
+        self.idempotency.len()
+    }
+
+    /// Forget command keys applied before `cutoff`. A command resent after
+    /// that long is refused or ignored by its own checks, not by its key.
+    pub(crate) fn forget_keys_before(&mut self, cutoff: NaiveDate) {
+        self.idempotency.retain(|_, s| s.on.is_none_or(|d| d >= cutoff));
+    }
 }
 
 impl Default for DistributionState {
@@ -764,6 +791,7 @@ impl DistributionState {
             checkpoints: BTreeMap::new(),
             memo: BTreeMap::new(),
             changed: BTreeMap::new(),
+            history: Default::default(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1371,6 +1399,7 @@ impl DistributionState {
             StoredResult {
                 index,
                 error: result.clone().err(),
+                on: self.today,
             },
         );
         Output {

@@ -150,6 +150,9 @@ impl DistributionState {
         if self.today.is_none_or(|t| record.business_date > t) {
             self.today = Some(record.business_date);
         }
+        if let Some(today) = self.today {
+            self.compact_if_due(today);
+        }
         let date = record.business_date;
         let partition = record.partition;
         let cause = record.id.clone();
