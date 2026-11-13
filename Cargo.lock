@@ -2602,6 +2602,7 @@ dependencies = [
  "ic-azure",
  "ic-channels",
  "ic-core",
+ "ic-documents",
  "ic-group",
  "ic-ledger",
  "ic-log",
