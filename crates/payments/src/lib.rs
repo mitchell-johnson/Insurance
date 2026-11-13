@@ -11,6 +11,7 @@
 //! driver that works from the outbox and the queue of submissions and
 //! reports back with commands.
 
+pub mod aml;
 mod authority;
 pub mod config;
 mod console;

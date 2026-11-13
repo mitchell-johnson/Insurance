@@ -173,6 +173,10 @@ impl PaymentsState {
                     // the receipt the core names when it says which fund
                     // the money went to.
                     self.sweeps.land(&format!("match-{id}"), account, date);
+                    if let Some(number) = &line.payer_account {
+                        let payer = self.account_payer(number);
+                        self.note_payer(&format!("match-{id}"), payer, date);
+                    }
                     self.push_outbox(OutboxEntry {
                         key: format!("match-{id}"),
                         instruction: Instruction::Match {
