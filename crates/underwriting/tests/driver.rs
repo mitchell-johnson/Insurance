@@ -848,6 +848,103 @@ async fn a_change_of_occupation_reaches_the_core_with_the_new_class() {
     assert!(cluster.reconcile().is_empty());
 }
 
+/// Purpose: a leaver's continued cover above the automatic limit reaches the core as a layer
+/// on the continuation policy group administration issued, on the terms the member's scheme
+/// excess was accepted on, and the end of the proposal is left for group administration to read.
+/// One taken up after its inception waits, parked with the reason, rather than start late.
+/// Why it matters: the leaver pays for this cover from the day scheme cover ended; a layer
+/// that started on the day of take-up would leave them without the underwritten amount in
+/// between while they believed they had it.
+#[tokio::test]
+async fn a_continued_excess_becomes_a_layer_on_the_continuation_policy() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    let hash = b.product_hash.clone();
+    b.module.with(|w| {
+        let mut open = w.open_command("grp-uw:S1:1", &["L1"], &[("L1", "life", "group_life", 300_000_00)], false);
+        open.product_code = "group-life".into();
+        open.entry = Entry::GroupExcess {
+            policy: PolicyId::from("SCHEME-1"),
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+        };
+        open.policy = PolicyId::from("SCHEME-1");
+        w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+        w.disclose("grp-uw:S1:1", "L1", &yes("smoked_last_12_months"));
+    });
+    b.pass().await;
+    b.module
+        .with(|w| w.respond("grp-uw:S1:1", "L1", ic_underwriting::command::OfferResponse::Accept));
+    b.pass().await;
+    // Group administration wrote the excess on the scheme policy.
+    b.module.with(|w| {
+        w.ok(
+            "issuer",
+            Command::PolicyIssued {
+                proposal: "grp-uw:S1:1".into(),
+                layers: vec![ic_underwriting::command::IssuedLayer {
+                    life: "L1".into(),
+                    cover: "life".into(),
+                    layer: 2,
+                }],
+            },
+        )
+    });
+    b.pass().await;
+    let continuation = |id: &str, inception: NaiveDate| {
+        let hash = hash.clone();
+        let (policy, number, group) = (policy.clone(), number.clone(), group.clone());
+        b.module.with(move |w| {
+            let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 200_000_00)], false);
+            open.quote.product_hash = hash;
+            open.channel = "group-continuation".into();
+            open.entry = Entry::GroupContinuation {
+                policy: policy.clone(),
+                scheme_policy: PolicyId::from("SCHEME-1"),
+                scheme_life: "M7".into(),
+                inception,
+                earlier: vec!["grp-uw:S1:1".into()],
+            };
+            open.policy = policy;
+            open.policy_number = number;
+            open.group = group;
+            w.ok("group-admin", Command::OpenProposal(Box::new(open)));
+        })
+    };
+    continuation("grp-cont:S1:1", start());
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(
+        matches!(b.status("grp-cont:S1:1"), ProposalStatus::Issued { .. }),
+        "{:?}",
+        b.status("grp-cont:S1:1")
+    );
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let layers = &cluster.state(0).policies[&policy].covers["life"].layers;
+        assert_eq!(layers.len(), 2);
+        assert_eq!(
+            (layers[1].sum_insured_minor, layers[1].loadings[0].as_str(), layers[1].start),
+            (200_000_00, "0.50", start())
+        );
+        assert!(cluster.reconcile().is_empty());
+    }
+
+    continuation("grp-cont:S1:2", start() - chrono::Duration::days(10));
+    let pass = b.pass().await;
+    assert!(
+        pass.parked
+            .iter()
+            .any(|(_, why)| why.contains("cannot yet start a layer before its business date")),
+        "{pass:?}"
+    );
+}
+
 /// Purpose: a lapsed policy goes through underwriting for reinstatement, opened by collections
 /// with the proposal built from the policy as the core holds it (its lives, the cover held the
 /// day before the lapse, its product version; nothing for a policy that is not lapsed), and the decision

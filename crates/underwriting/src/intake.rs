@@ -33,12 +33,21 @@ impl UnderwritingState {
         if open.legacy_received_on.is_some() != migration {
             return reject("received_on", "only a migrated proposal carries the date it was first received, and it must");
         }
-        let group_excess = matches!(open.entry, crate::model::Entry::GroupExcess { .. });
-        if cx.caller == "group-admin" && !group_excess {
+        let group_excess = matches!(
+            open.entry,
+            crate::model::Entry::GroupExcess { .. } | crate::model::Entry::GroupContinuation { .. }
+        );
+        let continuation = matches!(open.entry, crate::model::Entry::GroupContinuation { .. });
+        if (cx.caller == "group-admin" && !group_excess) || (continuation && cx.caller != "group-admin") {
             return reject(
                 "entry",
-                "group administration opens a proposal only for a member's cover above the automatic acceptance limit",
+                "group administration opens a proposal only for a member's cover above the automatic acceptance limit, or its continuation, and nobody else opens a continuation",
             );
+        }
+        if let crate::model::Entry::GroupContinuation { inception, .. } = &open.entry {
+            if *inception > cx.today {
+                return reject("continuation", "a continuation starts no later than it is taken up");
+            }
         }
         if let crate::model::Entry::GroupExcess {
             takeover_accepted_minor,
@@ -60,6 +69,7 @@ impl UnderwritingState {
         if open.replacement && (!matches!(open.entry, crate::model::Entry::Increase { .. }) || open.adviser.is_none()) {
             return reject("replacement", "a replacement is advised more cover on a policy in force");
         }
+        let continued = crate::continuation::earlier_terms(self, &open)?;
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");
@@ -131,6 +141,9 @@ impl UnderwritingState {
             flow::interim(&self.config, &mut p, cx);
         }
         flow::takeover(&self.config, &mut p, cx)?;
+        if let Some(terms) = continued {
+            crate::continuation::decide(self, &mut p, terms, cx)?;
+        }
         self.store(p);
         Ok(())
     }
@@ -389,7 +402,7 @@ pub(crate) fn respond(
 }
 
 pub(crate) fn withdraw(p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
-    if cx.caller == "group-admin" && !matches!(p.entry, crate::model::Entry::GroupExcess { .. }) {
+    if cx.caller == "group-admin" && !matches!(p.entry, crate::model::Entry::GroupExcess { .. } | crate::model::Entry::GroupContinuation { .. }) {
         return reject("entry", "group administration withdraws only the proposals it opened");
     }
     if !matches!(p.status, ProposalStatus::Open | ProposalStatus::IssueFailed { .. }) {

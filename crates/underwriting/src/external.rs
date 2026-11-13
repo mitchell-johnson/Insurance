@@ -161,6 +161,16 @@ pub(crate) fn policy_issued(p: &mut Proposal, cx: &mut Cx, layers: &[crate::comm
     if crate::reoffer::written(p) {
         return Ok(());
     }
+    // Group administration is waiting to mark the leaver's take-up done.
+    if let crate::model::Entry::GroupContinuation { policy, .. } = &p.entry {
+        cx.effect(Effect::ProposalEnded {
+            key: format!("{}/ended", p.id),
+            proposal: p.id.clone(),
+            entry: p.entry.clone(),
+            policy: policy.clone(),
+            outcome: "issued".into(),
+        });
+    }
     for f in p.lives.values().filter(|f| f.stage == Stage::Accepted) {
         for (cover, r) in &f.capacity {
             cx.effect(Effect::ConfirmCapacity {
