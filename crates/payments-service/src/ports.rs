@@ -202,3 +202,73 @@ impl Notifier for LogNotifier {
         Ok(())
     }
 }
+
+/// What an answer about a party's own hold resolves to.
+pub type HoldAnswer<'a> = std::pin::Pin<Box<dyn Future<Output = Result<bool, String>> + Send + 'a>>;
+
+/// The customer master, as payments asks it whether a party's own hold on
+/// money going out stands (SVC-022). `Err` means it could not say: the
+/// module then holds what it would have stopped, once its record is stale.
+pub trait Holds: Send + Sync {
+    fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a>;
+}
+
+/// The customer master service, reached with the pump's own Entra token
+/// as the `payments` caller (`GET /v1/parties/{id}/spending-hold`).
+pub struct MasterHolds {
+    pub base: String,
+    /// The master's application ID URI scope, such as `api://ic-customers/.default`.
+    pub scope: String,
+    pub credential: AzureCredential,
+    pub http: reqwest::Client,
+}
+
+/// Whether a party ID can go into a path as it is. Anything else is not
+/// asked about: the master would not know it.
+fn plain_party(party: &str) -> bool {
+    !party.is_empty() && party.len() <= 128 && party.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// The hold the master's answer states. Anything but a 200 with a boolean
+/// `held` is not an answer.
+pub fn hold_in(status: u16, body: &Value) -> Result<bool, String> {
+    match (status, body.get("held").and_then(Value::as_bool)) {
+        (200, Some(held)) => Ok(held),
+        (200, None) => Err("the customer master's answer has no `held`".to_string()),
+        (status, _) => Err(format!("the customer master answered {status}")),
+    }
+}
+
+impl MasterHolds {
+    async fn ask(&self, party: &str) -> Result<bool, String> {
+        if !plain_party(party) {
+            return Err(format!("{party:?} is not a party ID the customer master knows"));
+        }
+        let token = self.credential.token(&self.scope).await.map_err(|e| e.to_string())?;
+        let response = self
+            .http
+            .get(format!("{}/v1/parties/{party}/spending-hold", self.base.trim_end_matches('/')))
+            .bearer_auth(token)
+            .header("x-ic-caller", "payments")
+            .header("x-ic-purpose", "payment")
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let status = response.status().as_u16();
+        let body = response.json::<Value>().await.unwrap_or(Value::Null);
+        hold_in(status, &body)
+    }
+}
+
+impl Holds for MasterHolds {
+    fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
+        Box::pin(self.ask(party))
+    }
+}
+
+impl Holds for BTreeMap<String, bool> {
+    fn held<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
+        let answer = self.get(party).copied().ok_or_else(|| format!("no answer for {party}"));
+        Box::pin(std::future::ready(answer))
+    }
+}

@@ -191,6 +191,7 @@ async fn the_service_works_against_a_real_node() {
         clock: Arc::new(monday),
         grace: chrono::Duration::minutes(10),
         cursors: Mutex::default(),
+        holds: None,
     };
     let pass = pump.pass().await;
     assert_eq!((pass.instructions, pass.problems.len()), (2, 0), "{:?}", pass.problems);

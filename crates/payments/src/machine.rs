@@ -93,6 +93,14 @@ pub enum Command {
         amount_minor: i64,
     },
 
+    // --- a customer's own hold on money going out (SVC-022) ---
+    /// What the customer master says about a party's own hold, as the pump
+    /// last asked it. The master owns the hold; this module enforces it.
+    RecordCustomerHold {
+        party: String,
+        held: bool,
+    },
+
     // --- accounts that may be paid ---
     RegisterPayee {
         payee: Id,
@@ -143,6 +151,11 @@ pub enum Command {
     /// Another module released a payment: keep it until a maker puts it in a run.
     OfferPayment {
         waiting: Box<crate::intake::Waiting>,
+    },
+    /// Claims submitted a run (`run_submitted`): the net total it released.
+    ClaimsRunSubmitted {
+        run: String,
+        submitted_minor: i64,
     },
     /// Put released payments into a run.
     TakeWaiting {
@@ -483,6 +496,11 @@ pub enum Event {
         fund: String,
         amount_minor: i64,
     },
+    /// The customer master's answer about a party's hold changed.
+    CustomerHoldRecorded {
+        party: String,
+        held: bool,
+    },
     DrillStarted {
         drill: Id,
         region: String,
@@ -552,6 +570,10 @@ pub struct PaymentsState {
     /// Cash owed between statutory funds (PAY-010).
     #[serde(default)]
     pub sweeps: crate::sweep::Sweeps,
+    /// What the customer master last said about parties' own holds on
+    /// money going out (SVC-022).
+    #[serde(default)]
+    pub customer_holds: BTreeMap<String, crate::hold::HoldRecord>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
     /// Work for the drivers, in order. Removed when its result is recorded.
@@ -641,6 +663,8 @@ impl PaymentsState {
                 tx.need(Role::Service)?;
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
+            Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::ClaimsRunSubmitted { run, submitted_minor } => self.claims_run_submitted(tx, &run, submitted_minor),
             Command::RegisterPayee {
                 payee,
                 party,

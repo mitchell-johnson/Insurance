@@ -19,6 +19,9 @@ pub struct PumpSettings {
     pub container: String,
     pub interval: Duration,
     pub grace: chrono::Duration,
+    /// The customer master's address and token scope, for customers' own
+    /// holds on money going out.
+    pub customers: Option<(String, String)>,
 }
 
 impl PumpSettings {
@@ -30,6 +33,8 @@ impl PumpSettings {
     ///   (immutable storage). The container defaults to `payments-evidence`.
     /// - `IC_PAYMENTS_INSTANCE` or `HOSTNAME`: unique to this process.
     /// - `IC_PUMP_INTERVAL_SECS` (15), `IC_PUMP_GRACE_MINUTES` (10).
+    /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master,
+    ///   asked about customers' own holds. Both or neither.
     ///
     /// There are no fallbacks to a local signer or an in-memory vault: a
     /// pump that would send a bank an unsigned file does not start.
@@ -65,6 +70,11 @@ impl PumpSettings {
             container: get("IC_PAYMENTS_CONTAINER").unwrap_or_else(|| "payments-evidence".to_string()),
             interval: Duration::from_secs(interval),
             grace: chrono::Duration::minutes(grace as i64),
+            customers: match (get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE")) {
+                (Some(url), Some(scope)) => Some((url, scope)),
+                (None, None) => None,
+                _ => return Err("IC_CUSTOMERS_URL and IC_CUSTOMERS_SCOPE go together".to_string()),
+            },
         })
     }
 }

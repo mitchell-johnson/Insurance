@@ -136,6 +136,29 @@ impl ValidationReport {
     pub fn blocking(&self) -> Vec<&Finding> {
         self.findings.iter().filter(|f| f.severity == Severity::Blocking).collect()
     }
+
+    /// What the report is known by: the SHA-256 of its JSON.
+    pub fn hash(&self) -> String {
+        crate::config::content_hash(&serde_json::to_string(self).unwrap_or_default())
+    }
+
+    /// The record of this report that the core keeps beside the table, for
+    /// the close to match against the activation. A report with a blocking
+    /// finding has no record: the table did not pass.
+    pub fn record(&self, by: &str) -> Result<ic_core::command::TableValidation, String> {
+        if !self.passed() {
+            let first = self.blocking().first().map(|f| f.message.clone()).unwrap_or_default();
+            return Err(format!("rate table {} version {} did not pass validation: {first}", self.table, self.version));
+        }
+        Ok(ic_core::command::TableValidation {
+            id: self.table.clone(),
+            version: self.version,
+            content_hash: self.content_hash.clone(),
+            report_hash: self.hash(),
+            schema_version: self.schema_version,
+            by: by.to_string(),
+        })
+    }
 }
 
 /// The rating cell a row belongs to, apart from its age band.
@@ -800,4 +823,45 @@ pub fn load_schemas(file: &str, source: &str) -> Result<BTreeMap<String, TableSc
         }
     }
     Ok(schemas)
+}
+
+/// What the table tool was asked to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolRun {
+    pub report: ValidationReport,
+    /// Who to record the validation as, where recording was asked for.
+    pub record_as: Option<String>,
+}
+
+/// The table tool's work before anything is sent: read the table, its
+/// schema, the manifest and optionally the version it replaces, and
+/// validate. Arguments: `<table.star> <schemas.star> <manifest.json>`, then
+/// optionally `--previous <table.star>` and `--record <who>`.
+pub fn tool(args: &[String], read: impl Fn(&str) -> Result<String, String>) -> Result<ToolRun, String> {
+    const USAGE: &str = "usage: ic-finance-tables <table.star> <schemas.star> <manifest.json> [--previous <table.star>] [--record <who>]";
+    let [table_file, schemas_file, manifest_file, options @ ..] = args else {
+        return Err(USAGE.to_string());
+    };
+    let (mut previous, mut record_as) = (None, None);
+    let mut options = options.iter();
+    while let Some(option) = options.next() {
+        let value = options.next().ok_or_else(|| USAGE.to_string())?;
+        match option.as_str() {
+            "--previous" => previous = Some(value),
+            "--record" => record_as = Some(value.clone()),
+            _ => return Err(USAGE.to_string()),
+        }
+    }
+    let load = |file: &str| ic_product::load_rate_table(file, &read(file)?).map_err(|e| format!("{file}: {e}"));
+    let table = load(table_file)?;
+    let previous = previous.map(|file| load(file)).transpose()?;
+    let schemas = load_schemas(schemas_file, &read(schemas_file)?).map_err(|e| format!("{schemas_file}: {e}"))?;
+    let schema = schemas
+        .get(&table.id)
+        .ok_or_else(|| format!("{schemas_file} declares no schema for table {}", table.id))?;
+    let manifest: Manifest = serde_json::from_str(&read(manifest_file)?).map_err(|e| format!("{manifest_file}: {e}"))?;
+    Ok(ToolRun {
+        report: validate(&table, schema, &manifest, previous.as_ref()),
+        record_as,
+    })
 }

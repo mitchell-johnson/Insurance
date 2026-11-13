@@ -184,6 +184,7 @@ pub fn config() -> Config {
             drill_amount_minor: 1_00,
             voter_regions: REGIONS.iter().map(|r| r.to_string()).collect(),
             holidays: BTreeSet::from([d(2027, 11, 17)]),
+            hold_check_max_age_minutes: None,
         },
     }
 }

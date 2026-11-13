@@ -490,3 +490,40 @@ pub fn iso_document(message: &BankMessage, numbers: &BTreeMap<String, String>) -
         }
     }
 }
+
+/// A customer master for tests, answering only whether a party's own hold
+/// stands, as `GET /v1/parties/{id}/spending-hold` does. A party it has no
+/// answer for is a 404; a request without a bearer token is a 401.
+#[derive(Clone)]
+pub struct FakeMaster {
+    pub url: String,
+    pub holds: Arc<Mutex<BTreeMap<String, bool>>>,
+}
+
+impl FakeMaster {
+    pub async fn start(holds: &[(&str, bool)]) -> std::io::Result<Self> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let master = Self {
+            url: format!("http://{}", listener.local_addr()?),
+            holds: Arc::new(Mutex::new(holds.iter().map(|(p, h)| (p.to_string(), *h)).collect())),
+        };
+        let app = Router::new()
+            .route("/v1/parties/{id}/spending-hold", get(spending_hold))
+            .with_state(master.clone());
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok(master)
+    }
+}
+
+async fn spending_hold(State(master): State<FakeMaster>, Path(id): Path<String>, headers: HeaderMap) -> (StatusCode, Json<Value>) {
+    if !headers.get("authorization").is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) {
+        return (StatusCode::UNAUTHORIZED, Json(json!({"code": "unauthorised"})));
+    }
+    let held = master.holds.lock().expect("the fake master's holds").get(&id).copied();
+    match held {
+        Some(held) => (StatusCode::OK, Json(json!({"party": id, "held": held, "placed_at": null, "removal": null}))),
+        None => (StatusCode::NOT_FOUND, Json(json!({"code": "not_found"}))),
+    }
+}
