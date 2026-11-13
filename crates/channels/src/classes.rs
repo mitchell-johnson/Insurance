@@ -58,6 +58,22 @@ impl<'a> Shaper<'a> {
     }
 
     /// Add a field. It appears only if the caller holds its class.
+    ///
+    /// There is no other way to add one, so a field without a class does not
+    /// compile:
+    ///
+    /// ```compile_fail
+    /// use ic_channels::classes::{DataClass, Shaper};
+    /// let held = [DataClass::Ordinary].into();
+    /// let response = Shaper::new(&held).field("new_field", 1).finish();
+    /// ```
+    ///
+    /// ```
+    /// use ic_channels::classes::{DataClass, Shaper};
+    /// let held = [DataClass::Ordinary].into();
+    /// let response = Shaper::new(&held).field("new_field", DataClass::Ordinary, 1).finish();
+    /// assert_eq!(response["new_field"], 1);
+    /// ```
     pub fn field(mut self, name: &str, class: DataClass, value: impl Serialize) -> Self {
         if self.held.contains(&class) {
             // A value that cannot be represented is treated as absent rather

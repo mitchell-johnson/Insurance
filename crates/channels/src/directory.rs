@@ -236,7 +236,9 @@ pub struct Touched {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Directory {
     pub subjects: BTreeMap<String, PartyId>,
-    pub policyholders: BTreeMap<PolicyId, PartyId>,
+    /// The owners of each policy: one, or several jointly.
+    #[serde(deserialize_with = "owners_of")]
+    pub policyholders: BTreeMap<PolicyId, BTreeSet<PartyId>>,
     /// Lives that are scheme members, as opposed to lives individually insured.
     pub scheme_members: BTreeMap<PolicyId, BTreeSet<LifeId>>,
     /// policy -> adviser -> authority.
@@ -270,7 +272,36 @@ fn in_window(from: NaiveDate, to: Option<NaiveDate>, on: NaiveDate) -> bool {
     from <= on && to.is_none_or(|t| on < t)
 }
 
+/// Owners as recorded: a set per policy, or one party per policy as state
+/// written before joint ownership was.
+fn owners_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<PolicyId, BTreeSet<PartyId>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Owners {
+        Set(BTreeSet<PartyId>),
+        One(PartyId),
+    }
+    let raw = BTreeMap::<PolicyId, Owners>::deserialize(d)?;
+    Ok(raw
+        .into_iter()
+        .map(|(p, o)| match o {
+            Owners::Set(set) => (p, set),
+            Owners::One(one) => (p, [one].into()),
+        })
+        .collect())
+}
+
 impl Directory {
+    /// Whether a party is an owner of a policy.
+    pub fn owns(&self, policy: &PolicyId, party: &PartyId) -> bool {
+        self.policyholders.get(policy).is_some_and(|o| o.contains(party))
+    }
+
+    /// The owners of a policy, none if it has none recorded.
+    pub fn owners(&self, policy: &PolicyId) -> BTreeSet<PartyId> {
+        self.policyholders.get(policy).cloned().unwrap_or_default()
+    }
+
     pub fn party_of_subject(&self, subject: &str) -> Option<&PartyId> {
         self.subjects.get(subject)
     }
@@ -398,7 +429,7 @@ impl Directory {
     /// A party's relationships to a policy on a date.
     pub fn relationships(&self, view: &Projections, party: &PartyId, policy: &PolicyId, on: NaiveDate) -> Vec<Relationship> {
         let mut out = Vec::new();
-        if self.policyholders.get(policy) == Some(party) {
+        if self.owns(policy, party) {
             out.push(Relationship::Policyholder);
         }
         let members = self.scheme_members.get(policy);
@@ -445,7 +476,7 @@ impl Directory {
     /// insured under it and anyone with a recorded interest. Advisers and
     /// employer administrators use online portals instead.
     pub fn feed_audience(&self, view: &Projections, policy: &PolicyId) -> BTreeSet<PartyId> {
-        let mut out: BTreeSet<PartyId> = self.policyholders.get(policy).into_iter().cloned().collect();
+        let mut out: BTreeSet<PartyId> = self.owners(policy);
         for row in view.layers_on_policy(policy) {
             out.extend(view.party_of(policy, &row.life).cloned());
         }
@@ -491,7 +522,7 @@ impl Directory {
             Event::PolicyIssued {
                 policy, policyholder, members, ..
             } => {
-                self.policyholders.insert(policy.clone(), policyholder.clone());
+                self.policyholders.insert(policy.clone(), [policyholder.clone()].into());
                 if !members.is_empty() {
                     self.scheme_members
                         .entry(policy.clone())
@@ -514,20 +545,32 @@ impl Directory {
 
     fn require_policyholder(&self, actor: &Actor, policy: &PolicyId) -> Result<PartyId, Reject> {
         match actor {
-            Actor::Party(p) if self.policyholders.get(policy) == Some(p) => Ok(p.clone()),
+            Actor::Party(p) if self.owns(policy, p) => Ok(p.clone()),
             _ => Err(reject("forbidden", "only the policyholder may do this")),
         }
     }
 
-    /// What an owner gave ends with their ownership: anyone they let look,
-    /// and every adviser they authorised.
-    fn owner_gone(&mut self, policy: &PolicyId, touched: &mut Touched) {
+    /// What an owner gave ends with their ownership: every adviser they
+    /// authorised, and anyone let look at the policy (who let them in is not
+    /// kept, so a joint owner who stays lets them in again if they wish).
+    fn owner_gone(&mut self, policy: &PolicyId, gone: &PartyId, touched: &mut Touched) {
         touched.revoked.extend(self.delegates.remove(policy).unwrap_or_default().into_keys());
-        for adviser in self.authorities.remove(policy).unwrap_or_default().into_keys() {
+        let all = !self.policyholders.contains_key(policy);
+        let authorities = self.authorities.entry(policy.clone()).or_default();
+        let ended: Vec<PartyId> = authorities
+            .iter()
+            .filter(|(_, a)| all || &a.granted_by == gone)
+            .map(|(adviser, _)| adviser.clone())
+            .collect();
+        for adviser in ended {
+            authorities.remove(&adviser);
             if let Some(p) = self.adviser_policies.get_mut(&adviser) {
                 p.remove(policy);
             }
             touched.revoked.insert(adviser);
+        }
+        if authorities.is_empty() {
+            self.authorities.remove(policy);
         }
         touched.policies.insert(policy.clone());
     }
@@ -561,17 +604,22 @@ impl Directory {
                 if view.policy(&policy).is_none() {
                     return Err(reject("unknown_policy", "no such policy"));
                 }
-                if let Some(old) = self.policyholders.insert(policy.clone(), policyholder) {
-                    touched.revoked.insert(old);
+                // An owner is added: a joint owner, or a new owner whose
+                // predecessor's ownership the customer master ends separately.
+                if self.policyholders.entry(policy.clone()).or_default().insert(policyholder) {
+                    touched.policies.insert(policy);
                 }
-                self.owner_gone(&policy, &mut touched);
             }
             DirectoryCommand::EndOwnership { policy, party } => {
                 Self::require_module(actor, &["customer-master"])?;
-                if self.policyholders.get(&policy) == Some(&party) {
+                let owners = self.policyholders.entry(policy.clone()).or_default();
+                let removed = owners.remove(&party);
+                if owners.is_empty() {
                     self.policyholders.remove(&policy);
+                }
+                if removed {
+                    self.owner_gone(&policy, &party, &mut touched);
                     touched.revoked.insert(party);
-                    self.owner_gone(&policy, &mut touched);
                 }
             }
             DirectoryCommand::GrantAdviserAuthority { policy, adviser, engagement } => {
@@ -685,7 +733,7 @@ impl Directory {
                 if !view.layers_on_policy(&policy).iter().any(|r| view.party_of(&policy, &r.life) == Some(&party)) {
                     return Err(reject("not_insured", "a dependant is a person insured under the policy"));
                 }
-                if self.policyholders.get(&policy) == Some(&party) {
+                if self.owns(&policy, &party) {
                     return Err(reject("policyholder", "the policyholder is not their own dependant"));
                 }
                 self.dependants.entry(policy.clone()).or_default().insert(party, controls_from);
@@ -756,5 +804,29 @@ impl Directory {
         // `heard` is not moved here: only the event stream says the
         // relationships the core carries are current.
         Ok(touched)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Purpose: a directory written when a policy had one owner reads back with that owner as the policy's only one, and the
+    /// joint form reads as written.
+    /// Why it matters: state written before joint ownership must load after it; a node that could not read its own snapshot
+    /// would have to rebuild from the whole log, and a misread owner would show a policy to the wrong person.
+    #[test]
+    fn a_single_owner_from_before_joint_ownership_still_reads() {
+        let with = |owners: serde_json::Value| -> Directory {
+            let mut written = serde_json::to_value(Directory::default()).unwrap();
+            written["policyholders"] = owners;
+            serde_json::from_value(written).unwrap()
+        };
+        let old = with(json!({ "pol-1": "party-a" }));
+        assert_eq!(old.owners(&PolicyId::from("pol-1")), [PartyId::from("party-a")].into());
+        let joint = with(json!({ "pol-1": ["party-a", "party-b"] }));
+        assert!(joint.owns(&PolicyId::from("pol-1"), &PartyId::from("party-b")));
+        assert!(joint.owners(&PolicyId::from("pol-2")).is_empty());
     }
 }
