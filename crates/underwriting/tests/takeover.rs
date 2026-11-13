@@ -27,7 +27,8 @@ fn excess(w: &World, id: &str, takeover: Option<i64>, reference: Option<&str>) -
 /// the previous insurer without asking about their health again; asking anyway breaks that
 /// promise. But the promise covers only what was accepted before, and when reinsurance needs the
 /// cover underwritten because of the member's other policies, skipping it would cede a risk the
-/// treaty has not agreed to.
+/// treaty has not agreed to; its reference goes back on the reservation so reinsurance can tie
+/// its accumulation case to the answer.
 #[test]
 fn a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted() {
     let mut w = World::new();
@@ -53,6 +54,13 @@ fn a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted() {
     }
     let held = w.p("grp-uw:S1:3").entry.clone();
     assert!(matches!(held, Entry::GroupExcess { reinsurance_reference: Some(r), .. } if r == "UWX/k/1"));
+    // The reference goes back to reinsurance on the reservation, so its
+    // accumulation case can be tied to the underwritten excess.
+    let disclosed = w.disclose("grp-uw:S1:3", "L1", &clean());
+    assert!(disclosed.effects.iter().any(|e| matches!(
+        e,
+        Effect::ReserveCapacity { excess_reference: Some(r), .. } if r == "UWX/k/1"
+    )));
 
     let zero = excess(&w, "grp-uw:S1:4", Some(0), None);
     assert_eq!(w.err("group-admin", zero), "takeover");
