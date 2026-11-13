@@ -26,6 +26,7 @@ tracing.workspace = true
 rand.workspace = true
 aes-gcm = "0.10"
 axum.workspace = true
+jsonwebtoken.workspace = true
 tracing-subscriber.workspace = true
 pdf-writer = "0.15"
 subsetter = { version = "0.2", default-features = false }
@@ -38,6 +39,7 @@ path = "src/bin/ic-documents.rs"
 
 [dev-dependencies]
 proptest.workspace = true
+rsa = "0.9"
 
 [lints]
 workspace = true

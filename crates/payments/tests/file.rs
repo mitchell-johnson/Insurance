@@ -114,7 +114,8 @@ fn a_bank_message_becomes_the_command_that_records_it() {
 /// Purpose: a channel configured for ISO 20022 is sent its submissions as a
 /// `pain.001` naming the insurer's account as that bank knows it, hashed and
 /// counted over the XML; a bank spoken to in ISO 20022 cannot be configured
-/// without those account details; and a run or item ID too long to travel
+/// without those account details, or with a region that presents it no
+/// client certificate; and a run or item ID too long to travel
 /// as a bank reference is refused when it is made, not when it is sent.
 /// Why it matters: the hash the module records must be the hash of the
 /// bytes the bank holds, or a repeat could not be told from a new file. An
@@ -133,6 +134,16 @@ fn a_bank_spoken_to_in_iso_20022_is_sent_iso_20022() {
     let mut blank = iso_config();
     blank.accounts.get_mut("anz-sf1-claims").unwrap().at_bank.as_mut().unwrap().number = " ".to_string();
     assert_eq!(desk.code(&cal(), activate(1, blank)), "invalid_config");
+    let mut uncertified = iso_config();
+    uncertified
+        .channels
+        .get_mut("anz-file")
+        .unwrap()
+        .endpoints
+        .get_mut("akl")
+        .unwrap()
+        .client_certificate = None;
+    assert_eq!(desk.code(&cal(), activate(1, uncertified)), "region_not_provisioned");
     let mut other_bank = iso_config();
     other_bank.accounts.get_mut("bnz-sf1-claims").unwrap().at_bank = None;
     desk.ok(&cal(), activate(1, other_bank));

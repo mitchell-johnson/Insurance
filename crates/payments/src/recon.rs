@@ -128,7 +128,7 @@ impl PaymentsState {
                                 "key": format!("payments:received:{id}"),
                                 "caller": "payments",
                                 "on": date,
-                                "command": {"record_settlement": {"number": reinsurer, "payment_ref": line.reference, "amount_minor": -line.amount_minor}},
+                                "command": {"record_settlement": {"number": reinsurer, "payment_ref": line.reference, "amount_minor": -line.amount_minor, "bank_account": account}},
                             }),
                         },
                         about: Some(About::Exception(id)),
