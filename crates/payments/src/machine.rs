@@ -80,6 +80,18 @@ pub enum Command {
         policy: PolicyId,
         claim: String,
     },
+    /// The core applied part of a receipt to a policy in a statutory fund
+    /// (`Event::ReceiptApplied` with its `fund`).
+    ReceiptFunded {
+        receipt: String,
+        fund: String,
+        amount_minor: i64,
+    },
+    /// The core reversed a receipt (`Event::ReceiptReversed`).
+    ReceiptUnfunded {
+        receipt: String,
+        amount_minor: i64,
+    },
 
     // --- accounts that may be paid ---
     RegisterPayee {
@@ -464,6 +476,13 @@ pub enum Event {
     InstructionCompleted {
         key: String,
     },
+    /// A collection account owes another fund this much more (or less, when
+    /// negative) for money applied to that fund's policies.
+    FundOwed {
+        account: Id,
+        fund: String,
+        amount_minor: i64,
+    },
     DrillStarted {
         drill: Id,
         region: String,
@@ -530,6 +549,9 @@ pub struct PaymentsState {
     #[serde(default)]
     pub messages_read: BTreeMap<Id, u64>,
     pub books: BTreeMap<Id, Book>,
+    /// Cash owed between statutory funds (PAY-010).
+    #[serde(default)]
+    pub sweeps: crate::sweep::Sweeps,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
     /// Work for the drivers, in order. Removed when its result is recorded.
@@ -611,6 +633,14 @@ impl PaymentsState {
             Command::MarkHardship { authority, hardship } => self.mark_hardship(tx, &authority, hardship),
             Command::RecordConversation { item, outcome, note } => self.record_conversation(tx, &item, outcome, note),
             Command::PayerDeceased { policy, claim } => self.payer_deceased(tx, &policy, &claim),
+            Command::ReceiptFunded { receipt, fund, amount_minor } => {
+                tx.need(Role::Service)?;
+                self.receipt_funded(tx, &receipt, &fund, amount_minor)
+            }
+            Command::ReceiptUnfunded { receipt, amount_minor } => {
+                tx.need(Role::Service)?;
+                self.receipt_unfunded(tx, &receipt, amount_minor)
+            }
             Command::RegisterPayee {
                 payee,
                 party,

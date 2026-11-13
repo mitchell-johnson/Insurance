@@ -74,8 +74,18 @@ async fn main() -> Result<(), String> {
         })),
         None => None,
     };
+    let group: Option<Arc<dyn ic_channels::group::Group>> = match &settings.group {
+        Some((base, scope)) => Some(Arc::new(ic_channels::group::Hosted {
+            base: base.clone(),
+            scope: scope.clone(),
+            credential: ic_azure::credential::AzureCredential::from_env().map_err(|e| format!("group credential: {e}"))?,
+            http: ic_azure::http_client(),
+        })),
+        None => None,
+    };
     let state = Arc::new(AppState {
         documents,
+        group,
         master,
         intake,
         channel: channel.clone(),

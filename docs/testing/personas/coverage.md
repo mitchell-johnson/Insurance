@@ -60,7 +60,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 22 | 13 | 7 | 9 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
 | INV Unit pricing and the investment ledger | 12 | 3 | 10 | 3 |
-| GRP Group scheme administration | 19 | 10 | 11 | 4 |
+| GRP Group scheme administration | 20 | 9 | 11 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 2 | 1 | 8 | 2 |
@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 5 | 6 | 10 | 7 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
-| PAY Payment runs and bank connectivity | 11 | 1 | 2 | 1 |
+| PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 9 | 3 | 6 | 1 |
 | CFG Configuration operations and the actuary's interface | 6 | 0 | 8 | 2 |
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **233** | **128** | **216** | **141** |
+| **Total** | **235** | **127** | **215** | **139** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 85 | 24 | 33 |
-| C | 117 | 71 | 158 |
+| B | 86 | 23 | 33 |
+| C | 118 | 71 | 157 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -104,7 +104,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANN** (2): ANN-001, ANN-002
 - **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013
-- **PAY** (1): PAY-010
 - **FIN** (1): FIN-009
 - **CFG** (2): CFG-005, CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
@@ -124,7 +123,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (9): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-026, CLM-028, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
-- **GRP** (3): GRP-013, GRP-028, GRP-032
+- **GRP** (2): GRP-013, GRP-028
 - **JNT** (3): JNT-001, JNT-008, JNT-013
 - **ADV** (3): ADV-019, ADV-035, ADV-037
 - **ANV** (1): ANV-016

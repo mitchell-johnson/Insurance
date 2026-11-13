@@ -58,6 +58,8 @@ pub struct PortalSettings {
     pub documents: Option<(String, String)>,
     /// The underwriting intake's base URL and token scope, for signing disclosures.
     pub intake: Option<(String, String)>,
+    /// The group service's base URL and token scope, for the employer's files and invoices.
+    pub group: Option<(String, String)>,
 }
 
 impl PortalSettings {
@@ -93,6 +95,8 @@ impl PortalSettings {
     ///   and the scope of its app registration, for PDF downloads.
     /// - `IC_UNDERWRITING_INTAKE_URL` and `IC_UNDERWRITING_INTAKE_SCOPE`: the
     ///   underwriting intake and the scope of its audience, for disclosures.
+    /// - `IC_GROUP_URL` and `IC_GROUP_SCOPE`: the group service and the scope
+    ///   of its app registration, for membership files and scheme invoices.
     /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master and
     ///   the scope of its token (`api://<its application>/.default`), set
     ///   together; without them a person's own record answers 503.
@@ -183,6 +187,7 @@ impl PortalSettings {
             master: service(get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE"), "IC_CUSTOMERS")?,
             documents: service(get("IC_DOCUMENTS_URL"), get("IC_DOCUMENTS_SCOPE"), "IC_DOCUMENTS")?,
             intake: service(get("IC_UNDERWRITING_INTAKE_URL"), get("IC_UNDERWRITING_INTAKE_SCOPE"), "IC_UNDERWRITING_INTAKE")?,
+            group: service(get("IC_GROUP_URL"), get("IC_GROUP_SCOPE"), "IC_GROUP")?,
             partitions: match get("IC_PARTITIONS") {
                 None => ic_ledger::PARTITION_COUNT,
                 Some(p) => match p.parse::<ic_ledger::PartitionId>() {

@@ -19,7 +19,7 @@ use crate::config::{content_hash, eval, ConfigError};
 use crate::period::PeriodId;
 
 /// The checks the finance ledger works out from its own state.
-pub const AUTOMATIC_CHECKS: [&str; 7] = [
+pub const AUTOMATIC_CHECKS: [&str; 8] = [
     CONTROL_CHECK,
     VALUATION_EXTRACTS,
     UNAPPROVED_JOURNALS,
@@ -27,6 +27,7 @@ pub const AUTOMATIC_CHECKS: [&str; 7] = [
     TRIAL_BALANCE,
     FUND_BALANCE,
     MIGRATION_CONTROL,
+    RATE_TABLE_VALIDATION,
 ];
 pub const CONTROL_CHECK: &str = "control_check";
 pub const VALUATION_EXTRACTS: &str = "valuation_extracts";
@@ -35,6 +36,7 @@ pub const ACTUARIAL_JOURNALS: &str = "actuarial_journals";
 pub const TRIAL_BALANCE: &str = "trial_balance";
 pub const FUND_BALANCE: &str = "fund_balance";
 pub const MIGRATION_CONTROL: &str = "migration_control";
+pub const RATE_TABLE_VALIDATION: &str = "rate_table_validation";
 
 /// The extract kinds a period needs before it can close.
 pub const REQUIRED_EXTRACTS: [&str; 2] = ["in_force", "movement"];
@@ -405,6 +407,7 @@ impl FinanceState {
             }
             FUND_BALANCE => self.imbalances(period, true),
             MIGRATION_CONTROL => self.migration_moves(period),
+            RATE_TABLE_VALIDATION => self.unvalidated_tables(period),
             // The only other automatic check: the declarations were validated when loaded.
             _ => self.imbalances(period, false),
         };
@@ -500,6 +503,25 @@ impl FinanceState {
             }
         }
         items
+    }
+
+    /// Every rate table version activated by the end of the period with no
+    /// validation recorded for the same content. The core records a
+    /// validation and does not insist on one, so this is where a table that
+    /// went live unchecked is seen.
+    fn unvalidated_tables(&self, period: PeriodId) -> Vec<String> {
+        // The year's last month has already shown them.
+        if period.is_adjustment() {
+            return Vec::new();
+        }
+        self.rate_tables
+            .iter()
+            .filter(|(_, seen)| !seen.validated && seen.activated.is_some_and(|date| date <= period.end()))
+            .map(|((id, version, hash), seen)| {
+                let date = seen.activated.map(|d| d.to_string()).unwrap_or_default();
+                format!("rate table {id} version {version} ({hash}) was activated on {date} with no validation recorded for that content")
+            })
+            .collect()
     }
 
     fn imbalances(&self, period: PeriodId, by_fund: bool) -> Vec<String> {

@@ -291,7 +291,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
-| GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause` |
+| GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
@@ -442,6 +442,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PAY-007 | full | `payments/tests/runs.rs::run_and_day_limits_cap_what_can_be_released`<br>`payments/tests/runs.rs::a_run_is_not_released_without_the_funds_to_cover_it` |
 | PAY-008 | full | `payments/tests/runs.rs::an_urgent_run_needs_two_on_call_approvers` |
 | PAY-009 | full | `payments/tests/recon.rs::settled_and_returned_money_matches_the_statement`<br>`payments/tests/recon.rs::what_the_statement_cannot_explain_becomes_an_owned_exception` |
+| PAY-010 | full | `payments/tests/sweep.rs::money_applied_to_another_fund_is_moved_to_its_account`<br>`payments/tests/sweep.rs::a_reversal_or_a_returned_sweep_is_owed_the_right_way`<br>`payments/tests/sweep.rs::a_matched_direct_credit_is_followed_too` |
 | PAY-011 | full | `payments/tests/runs.rs::a_collection_run_draws_on_active_authorities`<br>`payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | PAY-012 | full | `payments/tests/refunds.rs::a_refund_goes_back_to_the_account_it_came_from` |
 | PAY-014 | part | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected` |

@@ -416,6 +416,18 @@ impl ClusterClient {
         self.ask(partition, &Query::Investment { question: question.clone() }).await
     }
 
+    /// Underwriting loadings on a partition, a page of policies at a time.
+    /// Pass the page's `next` as `after` until it is None.
+    pub async fn loadings(
+        &self,
+        partition: PartitionId,
+        after: Option<PolicyId>,
+        limit: u32,
+        as_at: Option<NaiveDate>,
+    ) -> Result<ic_core::loadings::LoadingsPage, ClientError> {
+        self.ask(partition, &Query::Loadings { after, limit, as_at }).await
+    }
+
     /// What this partition's policies offer as matches for a payment.
     pub async fn payment_candidates(&self, partition: PartitionId, matcher: &Matcher, payment: &IncomingPayment) -> Result<Candidates, ClientError> {
         let query = Query::PaymentCandidates {

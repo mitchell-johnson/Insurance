@@ -11,6 +11,16 @@
   <h2>Approve a colleague's change</h2><form id="approve"><div class="row"><div><label for="rid">Request</label><input id="rid" required></div><button>Approve</button></div></form><div id="approve-msg" aria-live="polite"></div>
   <h2>Administrators</h2><form id="admin"><div class="row"><div><label for="who">Person</label><input id="who" required></div><div><label for="is">Access</label><select id="is"><option value="true">Administrator</option><option value="false">Remove</option></select></div><button>Save</button></div></form>
   <form id="second"><label for="kinds">Changes that need a second administrator (comma separated)</label><div class="row"><input id="kinds" placeholder="remove_member, change_salary" size="40"><button>Save</button></div></form><div id="admin-msg" aria-live="polite"></div></section>
+<section id="group" hidden><h2>Membership files</h2>
+  <p class="muted">Send the scheme's membership file. It is checked for viruses before anything reads it; then its preview shows who joins, leaves and changes, and you approve it.</p>
+  <div id="standing"></div>
+  <form id="upload"><div class="row"><div><label for="file">File</label><input id="file" type="file" accept=".csv,text/csv" required></div><button>Upload</button></div></form>
+  <form id="preview"><div class="row"><div><label for="fname">File name</label><input id="fname" required maxlength="64"></div><button class="quiet">Show preview</button><button type="button" id="approve-file">Approve</button><button type="button" class="quiet" id="withdraw-file">Withdraw</button></div></form>
+  <div id="file-msg" aria-live="polite"></div><div id="file-view"></div>
+  <h2>A member's record</h2><p class="muted">Category, salary and cover. Health, underwriting and claim details are never shown here.</p>
+  <form id="lookup"><div class="row"><div><label for="employee">Employee ID</label><input id="employee" required maxlength="64"></div><button>Show</button></div></form>
+  <div id="lookup-msg" aria-live="polite"></div><div id="member-view"></div>
+  <h2>Invoices</h2><div id="invoices"></div></section>
 <section><h2>Your requests</h2><div id="requests"></div></section></main>
 <script src="/ui/app.js"></script>
 <script>
@@ -37,6 +47,26 @@ async function open(s) {
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(scheme) + "/claims");
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
+  await group();
+}
+const G = (rest) => `/employer/v1/schemes/${encodeURIComponent(scheme)}/group/${rest}`;
+async function group() {
+  try {
+    const s = await api(R, "GET", G("scheme"));
+    $("group").hidden = false;
+    put($("standing"), h("p", {}, `${s.members} members on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} outstanding.` : ".")));
+    const inv = await api(R, "GET", G("invoices"));
+    put($("invoices"), inv.invoices.length ? h("pre", {}, JSON.stringify(inv.invoices, null, 1)) : h("p", { class: "muted" }, "No invoices yet."));
+  } catch (e) { if (e.status === 404) { $("group").hidden = true; return; } throw e; }
+}
+async function preview() {
+  const f = await api(R, "GET", G("file?file=" + encodeURIComponent($("fname").value)));
+  put($("file-view"), h("pre", {}, JSON.stringify(f, null, 1)));
+  return `The file is ${String(f.status).replace(/_/g, " ")}.`;
+}
+async function fileCommand(name) {
+  await api(R, "POST", G("commands"), { [name]: { file: $("fname").value } });
+  return preview();
 }
 async function load() {
   const schemes = await api(R, "GET", "/employer/v1/schemes");
@@ -51,5 +81,21 @@ $("change").addEventListener("submit", run($("change-msg"), async () => {
 $("approve").addEventListener("submit", run($("approve-msg"), async () => { await api(R, "POST", `/app/v1/requests/${encodeURIComponent($("rid").value)}/approve`, {}); await requests(); return "Approved."; }));
 $("admin").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/admins/${encodeURIComponent($("who").value)}`, { admin: $("is").value === "true" }); return "Saved."; }));
 $("second").addEventListener("submit", run($("admin-msg"), async () => { await api(R, "PUT", `/employer/v1/schemes/${encodeURIComponent(scheme)}/second-admin`, { changes: $("kinds").value.split(",").map((s) => s.trim()).filter(Boolean) }); return "Saved."; }));
+$("upload").addEventListener("submit", run($("file-msg"), async () => {
+  const file = $("file").files[0];
+  const name = file.name.replace(/[^A-Za-z0-9._-]/g, "_");
+  await api(R, "POST", G("files/" + encodeURIComponent(name)), file);
+  $("fname").value = name;
+  return "Uploaded. It is being checked; show its preview in a moment.";
+}));
+$("preview").addEventListener("submit", run($("file-msg"), preview));
+$("approve-file").addEventListener("click", run($("file-msg"), () => fileCommand("approve_file")));
+$("withdraw-file").addEventListener("click", run($("file-msg"), () => fileCommand("withdraw_file")));
+$("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
+  const m = await api(R, "GET", G("member?employee=" + encodeURIComponent($("employee").value)));
+  put($("member-view"), h("div", {}, h("p", {}, `${m.employee}: ${m.category}, salary ${money(m.salary_minor)}, ${m.in_force ? "on cover" : "not on cover"}${m.left ? ", left " + m.left : ""}.`),
+    table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [c.cover, money(c.formula_minor), money(c.automatic_minor)])),
+    m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [a.cover, money(a.asked_minor), String(a.state).replace(/_/g, " "), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
+}));
 signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
 </script></body></html>

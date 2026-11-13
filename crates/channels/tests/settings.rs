@@ -183,6 +183,15 @@ fn bad_values_are_refused_at_start() {
     assert!(load(&[NODES, OPEN, DEV, intake])
         .unwrap_err()
         .contains("IC_UNDERWRITING_INTAKE_URL and IC_UNDERWRITING_INTAKE_SCOPE together"));
+    // So is the group service, which runs inside the cluster.
+    let group = ("IC_GROUP_SCOPE", "api://ic-group/.default");
+    assert_eq!(
+        load(&[NODES, OPEN, DEV, ("IC_GROUP_URL", "http://ic-group"), group]).unwrap().group,
+        Some(("http://ic-group".to_string(), group.1.to_string()))
+    );
+    assert!(load(&[NODES, OPEN, DEV, group])
+        .unwrap_err()
+        .contains("IC_GROUP_URL and IC_GROUP_SCOPE together"));
     assert!(load(&[NODES, OPEN, DEV, ("IC_CUSTOMERS_URL", "https://customers.internal")])
         .unwrap_err()
         .contains("together"));
