@@ -739,6 +739,41 @@ async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Metho
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
 }
 
+/// The claims on a policy as its adviser or a scheme's administrator may
+/// see them: each claim's ID, status, and the dates it was notified and
+/// closed, and never its cause (Mitchell's decision, 13 November 2026).
+/// Anyone else, including a policy the party has no part in, gets 404.
+async fn policy_claims(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let all = s
+        .ask(Question::Policies {
+            party: session.party,
+            at: session.at,
+        })
+        .await?;
+    let allowed = all.as_array().into_iter().flatten().any(|p| {
+        p["policy"] == policy.as_str()
+            && p["relationships"]
+                .as_array()
+                .is_some_and(|r| r.iter().any(|x| x == "adviser" || x == "employer_admin"))
+    });
+    if !allowed {
+        return Err(Problem::not_found());
+    }
+    let question = ic_core::claims_module::report::Question::PolicyStatus { policy: policy.clone() };
+    let mut rows: Vec<Value> = Vec::new();
+    for (_, reply) in s.claims_everywhere(&question).await? {
+        if let ic_core::claims_module::report::Reply::PolicyStatus(found) = reply {
+            rows.extend(
+                found
+                    .into_iter()
+                    .map(|r| json!({ "claim": r.claim, "status": r.status, "notified_on": r.notified_on, "closed_on": r.closed_on })),
+            );
+        }
+    }
+    ok(json!({ "rows": rows }))
+}
+
 impl AppState {
     /// The replacement matches on business this party wrote as an adviser.
     async fn own_matches(&self, party: &PartyId) -> Result<Value, Problem> {
@@ -1759,6 +1794,7 @@ pub fn router(state: Shared) -> Router {
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
         .route("/adviser/v1/replacements", get(adviser_replacements))
+        .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))
         .route("/employer/v1/schemes", get(schemes))
         .route("/employer/v1/schemes/{policy}/admins/{party}", put(scheme_admin))

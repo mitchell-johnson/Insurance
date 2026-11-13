@@ -2307,3 +2307,47 @@ async fn an_adviser_disputes_their_own_replacement_match() {
         json!({ "id": "x", "kind": "dispute_replacement", "module": "new-business", "payload": { "policy": "pol-other", "cover": "life", "layer": 1 } });
     assert_eq!(portal.write("POST", "sub-adv", "/app/v1/requests", around).await.0, StatusCode::BAD_REQUEST);
 }
+
+/// Purpose: the policy's adviser and a scheme's administrator see each claim on it with its status and dates and nothing else; the
+/// policyholder's other helpers, and anyone with no part in the policy, get 404, as for a policy that does not exist.
+/// Why it matters: Mitchell decided advisers and employers see a claim's status but never its cause; the route must carry no more
+/// than the claims module's status view and must not tell a stranger that a claim exists.
+#[tokio::test]
+async fn advisers_and_employers_see_claim_status_and_nothing_more() {
+    let portal = portal();
+    let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
+    assert_eq!(
+        portal
+            .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    portal.claims.cover(0, &portal.retail.to_string());
+    let notify = json!({ "notify": { "claim": "c-9", "policy": portal.retail, "cover": "life", "life": "life-1", "claim_type": "death",
+        "event_date": "2027-02-20", "channel": "phone", "notifier": "policyholder", "claimant": "party-claimant" } });
+    let headers = [("x-dev-subject", "sub-cllead".to_string()), ("idempotency-key", "n-9".to_string())];
+    let (status, done) = portal
+        .send("POST", "/staff/v1/claims/commands", &headers, Some(json!({ "command": notify, "purpose": "" })))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+
+    let path = format!("/app/v1/policies/{}/claims", portal.retail);
+    let (status, view) = portal.get("sub-adv", &path).await;
+    assert_eq!(status, StatusCode::OK, "{view}");
+    let row = view["rows"][0].as_object().unwrap();
+    assert_eq!(
+        row.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["claim", "status", "notified_on", "closed_on"]
+    );
+    assert_eq!(row["claim"], "c-9");
+    let scheme = format!("/app/v1/policies/{}/claims", portal.scheme);
+    assert_eq!(portal.get("sub-hr", &scheme).await, (StatusCode::OK, json!({ "rows": [] })));
+    for (who, path) in [
+        ("sub-hr", path.clone()),
+        ("sub-adv", scheme.clone()),
+        ("sub-kiri", "/app/v1/policies/nope/claims".to_string()),
+    ] {
+        assert_eq!(portal.get(who, &path).await.0, StatusCode::NOT_FOUND, "{who} {path}");
+    }
+}

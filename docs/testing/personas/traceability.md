@@ -174,6 +174,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-001 | full | `claims/tests/suite/intake.rs::notification_opens_a_claim_with_a_reserve`<br>`claims/tests/suite/intake.rs::a_late_notified_death_prompts_a_register_check`<br>`customers/tests/api.rs::deaths_are_marked_and_retracted`<br>`customers/tests/lifecycle.rs::deaths_are_told_to_claims_on_every_partition` |
 | CLM-002 | part | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant` |
 | CLM-003 | part | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
 | CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
@@ -183,11 +184,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-012 | part | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits` |
 | CLM-016 | part | `claims/tests/suite/book.rs::a_benefit_run_is_prepared_by_one_person_and_approved_by_another`<br>`claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
 | CLM-017 | part | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid` |
+| CLM-018 | full | `claims/tests/suite/book.rs::a_late_income_declaration_does_not_stop_the_benefit` |
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | part | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
+| CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
 | CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
 | CLM-031 | full | `claims/tests/suite/decisions.rs::a_closed_claim_reopens_under_independent_review` |
