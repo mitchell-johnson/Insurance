@@ -170,6 +170,9 @@ impl ClaimsState {
         if claim.waiver_from.is_some() {
             return Err(Reject::new("waiver_exists", "premiums are already being waived on this claim"));
         }
+        if claim.cover_check.as_ref().and_then(|c| c.facts.premium_waiver) == Some(false) {
+            return Err(Reject::new("no_waiver_cover", "the product does not waive premium beside this benefit"));
+        }
         claim.waiver_from = Some(from);
         self.waive(cx, &claim)?;
         claim.due.insert((plus_days(cx.today, 1), Due::Waiver));

@@ -154,6 +154,9 @@ impl ClaimsState {
                 match (claim.claim_type.periodic(), periodic) {
                     (true, Some(p)) => {
                         // A premium waiver claim pays no money to anyone: its benefit is the premium.
+                        if claim.claim_type == crate::ClaimType::PremiumWaiver && facts.premium_waiver == Some(false) {
+                            return refuse("no_waiver_cover", "the product does not waive premium on this cover");
+                        }
                         let amount_fits = match claim.claim_type {
                             crate::ClaimType::PremiumWaiver => p.monthly_minor == 0,
                             _ => p.monthly_minor > 0,

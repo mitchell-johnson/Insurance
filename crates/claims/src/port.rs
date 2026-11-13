@@ -108,6 +108,11 @@ pub struct CoverFacts {
     /// shell declares one. Absent: the cover's limits count on their own.
     #[serde(default)]
     pub shared_counter: Option<String>,
+    /// Whether the policy's product waives premium while a benefit is paid
+    /// on this cover. Absent: the product does not say, and the owner reads
+    /// the wording.
+    #[serde(default)]
+    pub premium_waiver: Option<bool>,
 }
 
 /// The product setting `benefit_while_imprisoned`.
