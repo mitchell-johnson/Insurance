@@ -190,6 +190,16 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await p.fill("#tb-period", "2027-11"); await p.locator("#tb button").click();
     await p.locator("#tb-out").getByText("6500").first().waitFor();
   } });
+  await visit(browser, "/finance", { subject: "sub-gllead" }, { expectStatus: [409], run: async (p) => {
+    // The lead sorts policies into accounting groups, and is told plainly why a cut-over total is refused.
+    await p.getByRole("tab", { name: "Aged items and set-up" }).click();
+    await p.locator("#ag-classify").click();
+    await sees(p, "Classified.");
+    await p.fill("#co-account", "1999"); await p.fill("#co-currency", "NZD");
+    await p.fill("#co-total", "100000"); await p.fill("#co-evidence", "legacy TB");
+    await p.locator("#co-send").click();
+    await sees(p, "not a migration control account");
+  } });
   await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
     await sees(p, "You act as cl-lead");
     await p.selectOption("#a-command", "notify");

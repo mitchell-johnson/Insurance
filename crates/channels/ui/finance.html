@@ -39,6 +39,14 @@
 <section><h2>Set-up</h2><form id="config"><div class="row"><div><label for="c-id">Proposed configuration to approve</label><input id="c-id" required></div><button>Approve</button></div></form>
 <form id="retry"><div class="row"><div><label for="r-part">Partition whose feed stalled</label><input id="r-part" type="number" min="0" required></div><button>Retry the feed</button></div></form>
 <p class="muted">A chart of accounts, a close configuration and a return are proposed from their files with the command route; the lead approves them here.</p></section></div>
+<section><h2>Accounting groups</h2><p class="muted">Which accounting group each policy falls in for reporting. Classifying sorts every policy not yet in a group.</p>
+<div class="row"><button type="button" id="ag-classify">Classify policies</button></div>
+<form id="ag-form"><div class="row"><div><label for="ag-partition">Partition</label><input id="ag-partition" type="number" min="0" required></div><div><label for="ag-policy">Policy</label><input id="ag-policy" required></div><button>Show its group</button></div></form>
+<div id="ag-msg" aria-live="polite"></div><div id="ag-out"></div></section>
+<section><h2>Migration cut-over total</h2><p class="muted">Finance lead only. The migration check stays red in a cut-over month until the legacy system's total is recorded and agrees.</p>
+<form id="co-form"><div class="row"><div><label for="co-account">Account</label><input id="co-account" required></div><div><label for="co-currency">Currency</label><input id="co-currency" required value="NZD"></div>
+<div><label for="co-total">Old system's balance, in cents (debit positive)</label><input id="co-total" required></div><div><label for="co-evidence">Evidence reference</label><input id="co-evidence" required></div><button id="co-send">Record</button></div></form>
+<div id="co-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -119,13 +127,23 @@ document.querySelectorAll("[role=tab]").forEach((tab) => tab.addEventListener("c
   document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
   document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
 }));
+async function groups() { put($("ag-out"), grid(await ask("accounting_groups"))); }
+$("ag-classify").addEventListener("click", run($("ag-msg"), async () => { await send("classify_policies"); await groups(); return "Classified."; }));
+$("ag-form").addEventListener("submit", run($("ag-msg"), async () => { put($("ag-out"), grid(await ask("accounting_group", { partition: $("ag-partition").value, policy: $("ag-policy").value.trim() }))); }));
+$("co-form").addEventListener("submit", run($("co-msg"), async () => {
+  await send({ record_cutover_total: { account: $("co-account").value.trim(), unit: { Currency: $("co-currency").value.trim() }, total_minor: Number($("co-total").value.trim()), evidence: $("co-evidence").value.trim() } });
+  return "Recorded.";
+}));
 signIn(R).then(async () => {
   const me = await ask("me"); roles = me.roles;
+  $("ag-classify").disabled = !(can("finance_operator") || can("finance_lead"));
+  $("co-send").disabled = !can("finance_lead");
   $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only.";
   for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"], ["close-period", "finance_lead"], ["j-approve", "finance_approver"], ["j-sign", "appointed_actuary"]]) $(id).disabled = !can(role);
   const s = await ask("status");
   put($("status"), h("p", {}, `Chart version ${cell(s.chart) || "none"}, close configuration ${cell(s.close_config) || "none"}, ${s.entries} entries, books fed to ${cell(s.last_date) || "no date yet"}.`),
     s.partitions.some((p) => p.stalled) ? h("div", { class: "banner bad" }, "A feed has stalled: " + s.partitions.filter((p) => p.stalled).map((p) => `partition ${p.partition}: ${p.stalled}`).join("; ")) : null);
   await work();
+  await groups();
 }).catch((e) => say($("msg"), "bad", e.message));
 </script></body></html>
