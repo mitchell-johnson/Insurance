@@ -25,6 +25,28 @@ const RETAIL: &str = include_str!("../../../treaties/retail_life_surplus.star");
 const RATES: &str = include_str!("../../../treaties/rates/ri_life_base.star");
 const TOKEN: &str = "test-cluster-token-0123456789abcdef";
 
+/// Collections as far as this driver uses it: the list it is given, answered as it was given.
+/// Until a list is set it cannot answer, as when collections is behind.
+#[derive(Default)]
+struct Collections(Option<serde_json::Value>);
+
+impl ic_raft::module::ModuleState for Collections {
+    fn apply(&mut self, _index: u64, command: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.0 = Some(command);
+        Ok(serde_json::Value::Null)
+    }
+    fn query(&self, _question: serde_json::Value) -> Result<serde_json::Value, String> {
+        self.0.clone().ok_or_else(|| "no list yet".to_string())
+    }
+    fn save(&self) -> Result<serde_json::Value, String> {
+        Ok(self.0.clone().unwrap_or_default())
+    }
+    fn load(&mut self, saved: serde_json::Value) -> Result<(), String> {
+        self.0 = (!saved.is_null()).then_some(saved);
+        Ok(())
+    }
+}
+
 fn clock() -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2027-02-01T09:00:00Z").unwrap().with_timezone(&Utc)
 }
@@ -92,6 +114,7 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
 /// does not know is refused by that module and parked with its reason. The channel module
 /// takes the proposal's progress rows under this module's name. The daily sweep runs
 /// once for the day. With no node to reach the pass stops as unavailable. The process itself
+/// reads collections' list of lapsed policies through the core in either shape it may come in;
 /// refuses to start without its settings, runs its cycles and stops when told; and the shipped
 /// binary does the same from its environment and exits cleanly on SIGTERM.
 /// Why it matters: every other driver test runs the modules in the test's own process. This is
@@ -124,6 +147,7 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         ic_reinsurance::host::module_spec().unwrap(),
         ic_group::module_spec().unwrap(),
         ic_channels::query::module_spec().unwrap(),
+        ic_raft::module::ModuleSpec::new("collections", || Box::new(Collections::default())).unwrap(),
     ];
     let node = server::start_with(settings, modules).await.unwrap();
     let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);
@@ -222,9 +246,9 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     let pass = pass.unwrap();
     let sweep = sweep.unwrap().unwrap();
     assert_eq!(sweep.pages, 1);
-    // Collections is not hosted on this node: the day's sweep stands and says why no
-    // reinstatements were looked for.
-    assert!(sweep.reinstatements_unavailable.is_some(), "{sweep:?}");
+    // Collections cannot answer yet: the day's sweep stands and says why no reinstatements
+    // were looked for.
+    assert!(sweep.reinstatements_unavailable.unwrap().contains("no list yet"));
     assert_eq!(swept, Some(clock().date_naive()));
 
     let proposal: Option<Proposal> = serde_json::from_value(cluster.ask(Query::Proposal { proposal: "P1".into() }).await.unwrap()).unwrap();
@@ -234,6 +258,24 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     assert!(policy.is_some(), "the policy is in the ledger's directory");
     let view = client.policy_by_number(0, &proposal.policy_number).await.unwrap().unwrap();
     assert_eq!(view.policy.status, PolicyStatus::InForce);
+
+    // Collections' list read through the core: a policy with its partition, a bare ID found by
+    // asking each partition, and one the ledger does not hold, which is left out.
+    let listed = serde_json::json!([{"policy": proposal.policy, "partition": 0}, proposal.policy, "POL-NOBODY"]);
+    client.propose_module_until("collections", &listed, patience).await.unwrap();
+    let read = ic_underwriting::driver::Core::lapsed_for_underwriting(&cluster).await.unwrap();
+    assert_eq!(
+        read.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        vec![proposal.policy.clone(), proposal.policy.clone()]
+    );
+    client
+        .propose_module_until("collections", &serde_json::json!({"not": "a list"}), patience)
+        .await
+        .unwrap();
+    assert!(matches!(
+        ic_underwriting::driver::Core::lapsed_for_underwriting(&cluster).await,
+        Err(DriverError::Answer(_))
+    ));
 
     // Group administration has no such scheme: its refusal is parked with its code.
     let refused: Vec<_> = pass
