@@ -603,6 +603,7 @@ impl CoreState {
                 amount_minor,
                 value_date,
                 reference,
+                bank_account,
             } => match policy {
                 // The entry touches no policy account, so a policy that is
                 // moving, or has moved, does not stop it: the money is owed
@@ -619,6 +620,7 @@ impl CoreState {
                         amount_minor,
                         value_date,
                         &reference,
+                        bank_account.as_deref(),
                     )
                 }),
                 None => reinsurance::post(
@@ -632,6 +634,7 @@ impl CoreState {
                     amount_minor,
                     value_date,
                     &reference,
+                    bank_account.as_deref(),
                 ),
             },
             Command::BeginTransfer {

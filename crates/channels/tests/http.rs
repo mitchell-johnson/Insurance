@@ -1781,6 +1781,14 @@ async fn the_claims_console() {
         "{work}"
     );
     assert_eq!(ask("sub-cl1", "work?claim=c-404").await.0, StatusCode::NOT_FOUND);
+    // The policy's claims as an adviser or employer would see them: status, never cause.
+    let (status, policy) = ask("sub-cl1", "policy?policy=pol-c1").await;
+    assert_eq!(
+        (status, &policy["rows"][0]["partition"], &policy["rows"][0]["status"]["claim"]),
+        (StatusCode::OK, &json!(1), &json!("c-1")),
+        "{policy}"
+    );
+    assert_eq!(ask("sub-cl1", "policy").await.0, StatusCode::BAD_REQUEST);
     // The assessor records the cause as themselves; a colleague who does not own the claim cannot.
     let cause = json!({ "record_cause": { "claim": "c-1", "cause_code": "CC-0003" } });
     let (status, problem) = tell("sub-cllead", "assessing", cause.clone()).await;
@@ -2056,6 +2064,26 @@ async fn serve_for_a_browser() {
         .write("POST", "sub-kiri", &appoint, json!({ "adviser": "adv-1", "engagement": "e1" }))
         .await;
     assert_eq!(status, StatusCode::OK);
+    // Underwriting has a proposal waiting on the applicant for this policy.
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/prop-1"), "policy": retail, "kind": "proposal", "subject": null,
+            "sensitive": false, "body": { "proposal": "prop-1", "policy_number": "KTL00000001", "entry": "adviser", "status": "open",
+            "waiting_on": "applicant", "received_on": "2027-11-10", "expires_on": "2028-02-08" } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            9_000,
+            ic_channels::Envelope {
+                key: "proposal".into(),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
     // One of the adviser's layers was treated as a replacement.
     portal.commission.matches(
         json!([{ "layer": "pol-new/life/1", "policy": "pol-new", "writing": ["e1"], "matched_minor": 500_000_00,

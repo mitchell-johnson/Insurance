@@ -79,6 +79,7 @@ fn post(kind: ReinsurancePosting, policy: Option<&PolicyId>, amount_minor: i64) 
         amount_minor,
         value_date: d(2027, 3, 1),
         reference: "pol-00000001/life/1/life-1/2027-03-01".into(),
+        bank_account: None,
     }
 }
 
@@ -331,6 +332,7 @@ fn a_negative_amount_reverses_and_the_value_date_is_the_periods() {
         amount_minor: 1_00,
         value_date: d(2030, 1, 1),
         reference: "profit commission 2027".into(),
+        bank_account: None,
     };
     let applied = c.submit_keyed(p, "ri-3", "reinsurance", ahead);
     assert_eq!(applied.entries[0].body.value_date, today, "nothing is valued in the future");
@@ -439,5 +441,74 @@ fn a_policy_in_transfer_takes_entries_but_not_a_change_of_cession() {
         Some(&ceded(400_000_00))
     );
     assert_eq!(reinsurer_balance(&c.state(src).ledger, TREATY, NORTH, NZD), 40_00);
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
+/// Purpose: a cleared settlement moves the swept amount out of reinsurance settlement clearing
+/// to the bank account it names, a receipt from a reinsurer is the same entry negative, and the
+/// entry is refused without a valid bank account, as is a bank account on any other entry.
+/// Why it matters: without it settlement clearing grows by every statement paid and the bank
+/// account in the ledger never shows the money that left. A bank account accepted on another
+/// entry would be silently ignored and look as if it had been used.
+#[test]
+fn a_cleared_settlement_moves_clearing_to_the_bank() {
+    let (mut c, p, _) = book();
+    let cleared = |amount_minor: i64, bank: Option<&str>| match post(ReinsurancePosting::SettlementCleared, None, amount_minor) {
+        Command::PostReinsurance {
+            kind,
+            treaty,
+            reinsurer,
+            currency,
+            policy,
+            amount_minor,
+            value_date,
+            reference,
+            ..
+        } => Command::PostReinsurance {
+            kind,
+            treaty,
+            reinsurer,
+            currency,
+            policy,
+            amount_minor,
+            value_date,
+            reference,
+            bank_account: bank.map(str::to_string),
+        },
+        _ => unreachable!(),
+    };
+    assert_eq!(
+        c.submit_keyed(p, "sweep", "reinsurance", post(ReinsurancePosting::SettlementSweep, None, 900_00))
+            .result,
+        Ok(())
+    );
+    for (bank, code) in [(None, "invalid_bank_account"), (Some("no spaces"), "invalid_bank_account")] {
+        assert_eq!(
+            c.submit_keyed(p, &format!("bad-{code}-{bank:?}"), "reinsurance", cleared(900_00, bank))
+                .result
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    let mut other = post(ReinsurancePosting::CededPremium, None, 1_00);
+    if let Command::PostReinsurance { bank_account, .. } = &mut other {
+        *bank_account = Some("nz-main".into());
+    }
+    assert_eq!(
+        c.submit_keyed(p, "premium-with-bank", "reinsurance", other).result.unwrap_err().code,
+        "bank_account_not_expected"
+    );
+
+    let applied = c.submit_keyed(p, "paid", "reinsurance", cleared(900_00, Some("nz-main")));
+    assert_eq!(applied.result, Ok(()));
+    assert_eq!(applied.entries[0].body.detail["bank_account"], "nz-main");
+    assert_eq!(natural(&c, p, accounts::reinsurance_settlement_clearing(NZD)), 0);
+    assert_eq!(natural(&c, p, accounts::bank("nz-main", NZD)), -900_00);
+    // Money a reinsurer pays in is the same entry, negative.
+    assert_eq!(c.submit_keyed(p, "received", "reinsurance", cleared(-400_00, Some("nz-main"))).result, Ok(()));
+    assert_eq!(natural(&c, p, accounts::bank("nz-main", NZD)), -500_00);
+    // Clearing now holds the receipt until the negative statement's sweep takes it to the reinsurer's account.
+    assert_eq!(natural(&c, p, accounts::reinsurance_settlement_clearing(NZD)), 400_00);
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }

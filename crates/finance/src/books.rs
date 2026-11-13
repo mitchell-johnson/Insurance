@@ -730,6 +730,12 @@ pub struct FinanceState {
     /// events as the books, and needs no chart to take them.
     #[serde(default)]
     pub mart: crate::mart::Mart,
+    /// Everything the core posted to each account in each period, debits
+    /// and credits added together. The books hold a day's entries netted, so
+    /// this is the only record that an amount went through an account and
+    /// came back out.
+    #[serde(default, with = "crate::pairs")]
+    pub(crate) turnover: BTreeMap<(PeriodId, String, BalanceFamily), i128>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -805,6 +811,7 @@ impl FinanceState {
             inbox: BTreeMap::new(),
             stalled: BTreeMap::new(),
             mart: crate::mart::Mart::default(),
+            turnover: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1409,6 +1416,7 @@ impl FinanceState {
         let mut feed = self.feeds.get(&partition).cloned().unwrap_or_else(|| Feed::new(partition));
         let mut closes: Vec<Close> = Vec::new();
         let mut backdated: Vec<BackdatedItem> = Vec::new();
+        let mut turnover: Vec<((PeriodId, String, BalanceFamily), i128)> = Vec::new();
         for record in &events {
             if record.partition != partition {
                 return reject("partition", format!("event {} is not from partition {partition}", record.id));
@@ -1492,6 +1500,7 @@ impl FinanceState {
                             AccountUnit::Minor(_) => line.signed.checked_mul(FINE_PER_MINOR).ok_or_else(overflow)?,
                             AccountUnit::Fine(_) | AccountUnit::Units(_) => line.signed,
                         };
+                        turnover.push(((period, account.code.clone(), line.unit.family()), amount.saturating_abs()));
                         let key = PendingKey {
                             origin,
                             account: account.code.clone(),
@@ -1595,6 +1604,10 @@ impl FinanceState {
 
         self.ledger = ledger;
         self.feeds.insert(partition, feed);
+        for (key, amount) in turnover {
+            let cell = self.turnover.entry(key).or_insert(0);
+            *cell = cell.saturating_add(amount);
+        }
         for item in backdated {
             ctx.events.push(FinEvent::BackdatedEntryReceived {
                 entry: item.entry,
