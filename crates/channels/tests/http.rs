@@ -43,6 +43,7 @@ struct Portal {
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
+    intake: Arc<common::intake::IntakeDouble>,
 }
 
 fn healthy() -> RegionReport {
@@ -288,6 +289,7 @@ fn portal() -> Portal {
     let claims = Arc::new(common::claims::seeded());
     let reinsurance = Arc::new(common::reinsurance::seeded());
     let commission = Arc::new(common::commission::seeded());
+    let intake = Arc::new(common::intake::IntakeDouble::default());
     let master = Arc::new(common::customers::MasterDouble::with(
         KIRI,
         json!({ "given_name": "Kiri", "email": "kiri@example.nz" }),
@@ -310,6 +312,7 @@ fn portal() -> Portal {
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
         master: Some(master.clone()),
+        intake: Some(intake.clone()),
     }));
     Portal {
         app,
@@ -325,6 +328,7 @@ fn portal() -> Portal {
         reinsurance,
         master,
         commission,
+        intake,
     }
 }
 
@@ -1351,6 +1355,7 @@ async fn the_unit_pricing_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
+        intake: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/unit-pricing/work", None),
@@ -1559,6 +1564,7 @@ async fn the_complaints_and_conduct_workbench() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
+        intake: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/complaints/queue", None),
@@ -1653,6 +1659,7 @@ async fn the_reinsurance_exceptions_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
+        intake: None,
     }));
     for (path, body) in [
         ("/staff/v1/reinsurance/exceptions", None),
@@ -1861,6 +1868,7 @@ async fn the_claims_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
+        intake: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/claims/queue?queue=lump_sum", None),
@@ -2032,6 +2040,7 @@ async fn the_finance_console() {
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
         master: None,
+        intake: None,
     }));
     for (method, path, body) in [
         ("GET", "/staff/v1/finance/work", None),
@@ -2170,6 +2179,7 @@ async fn a_person_keeps_their_own_customer_record() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         master: None,
+        intake: None,
     }));
     let request = Request::builder()
         .uri("/app/v1/profile")
@@ -2223,6 +2233,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
         master: None,
+        intake: None,
     }));
     for (method, body) in [
         ("GET", None),
@@ -2248,7 +2259,8 @@ async fn the_conduct_officer_decides_disputed_replacements() {
 }
 
 /// Purpose: an adviser sees the replacement matches on business they wrote and no one else's, without the cover it replaced;
-/// disputes one with a reason, which becomes a request to new business needing no customer's approval; cannot dispute a layer
+/// disputes one with a reason, which is recorded as their request, carried to the commission module under the portal's own caller
+/// naming the adviser, and resolved with that module's answer, including a refusal; cannot dispute a layer
 /// that is not theirs, one already disputed, or without a reason; cannot raise a dispute through the general request route; and an
 /// adviser with no engagements sees none.
 /// Why it matters: a match takes initial commission from the adviser who wrote the business, so they must be told and able to
@@ -2281,8 +2293,16 @@ async fn an_adviser_disputes_their_own_replacement_match() {
     ] {
         assert_eq!(dispute(bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
-    let (status, _) = dispute(json!({ "layer": "pol-new/life/1", "reason": "the customer asked for new cover after a review" })).await;
-    assert_eq!(status, StatusCode::ACCEPTED);
+    let (status, done) = dispute(json!({ "layer": "pol-new/life/1", "reason": "the customer asked for new cover after a review" })).await;
+    assert_eq!((status, &done["disputed"]), (StatusCode::OK, &json!("dispute:pol-new/life/1")), "{done}");
+    // The commission module was told, by the portal under its own caller, naming the adviser and the request as the reference.
+    let sent = portal.commission.disputes();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["actor"], json!({ "module": "adviser-portal" }));
+    assert_eq!(
+        sent[0]["command"]["dispute_replacement"],
+        json!({ "policy": "pol-new", "cover": "life", "layer": 1, "reference": "dispute:pol-new/life/1", "adviser": "adv-1" })
+    );
     let (_, requests) = portal.get("sub-adv", "/app/v1/requests").await;
     let raised = requests
         .as_array()
@@ -2293,15 +2313,38 @@ async fn an_adviser_disputes_their_own_replacement_match() {
         .clone();
     assert_eq!(
         (&raised["id"], &raised["module"], &raised["status"]),
-        (&json!("dispute:pol-new/life/1"), &json!("new-business"), &json!("pending"))
+        (&json!("dispute:pol-new/life/1"), &json!("distribution"), &json!("applied"))
     );
     assert_eq!(
         raised["payload"],
         json!({ "policy": "pol-new", "cover": "life", "layer": 1, "reason": "the customer asked for new cover after a review" })
     );
-    // One dispute per layer.
+    // A second dispute of the same layer is one request already made.
     let (status, problem) = dispute(json!({ "layer": "pol-new/life/1", "reason": "twice" })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("duplicate")));
+    // A dispute the commission module refuses is resolved with its refusal, which the adviser is told.
+    portal
+        .commission
+        .matches(json!([row("pol-new/life/1", "e1", Value::Null), row("pol-new2/life/1", "e1", Value::Null)]));
+    // The stand-in refuses a layer it has already been sent; make it count this one as sent.
+    portal.commission.2.lock().unwrap()[0]["command"]["dispute_replacement"]["policy"] = json!("pol-new2");
+    let (status, problem) = dispute(json!({ "layer": "pol-new2/life/1", "reason": "not one" })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("already_disputed")));
+    let (_, requests) = portal.get("sub-adv", "/app/v1/requests").await;
+    let refused = requests
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == "dispute:pol-new2/life/1")
+        .unwrap()
+        .clone();
+    assert_eq!((&refused["status"], &refused["code"]), (&json!("rejected"), &json!("already_disputed")));
+    // The commission module's own state machine takes the envelope from this caller: it gets as far as the layer, unknown there.
+    use ic_channels::forward::Source;
+    let real = common::commission::seeded();
+    let envelope = ic_channels::replacements::dispute_envelope("dispute:pol-new/life/1", &raised["payload"], &p("adv-1"));
+    let output = real.tell(envelope).await.unwrap();
+    assert_eq!(output["result"]["Err"]["code"], "unknown_layer", "{output}");
     // The general route does not take a dispute, so the check above cannot be gone around.
     let around =
         json!({ "id": "x", "kind": "dispute_replacement", "module": "new-business", "payload": { "policy": "pol-other", "cover": "life", "layer": 1 } });
@@ -2350,4 +2393,117 @@ async fn advisers_and_employers_see_claim_status_and_nothing_more() {
     ] {
         assert_eq!(portal.get(who, &path).await.0, StatusCode::NOT_FOUND, "{who} {path}");
     }
+}
+
+/// Purpose: the person insured on a proposal gets what to sign for their answers, signs it on their enrolled device, and the portal
+/// checks that signature before passing the answers to the underwriting intake with the device's enrolled key; anyone who is not
+/// that life gets 404, a signature without a proven device or over another message is refused before anything leaves, a step that
+/// is not one the app signs is refused, and a portal with no intake says so.
+/// Why it matters: a disclosure is the basis of the cover and of any later non-disclosure review; it must be the life's own, signed
+/// on a device bound to them, and clinical answers must never go to the intake on someone else's behalf.
+#[tokio::test]
+async fn the_person_insured_signs_their_disclosure() {
+    let portal = &portal();
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/prop-1/life-1"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "prop-1", "life": "life-1", "stage": "disclosure", "waiting_on": "applicant" } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(9_001, ic_channels::Envelope { key: "life-row".into(), at: now, actor: module("underwriting"), command });
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    let base = "/app/v1/proposals/prop-1/lives/life-1/disclosures";
+    let answers = json!({ "step": "disclosure", "answers": { "q-smoker": [1, { "yes_no": false }] }, "adviser_entered": [] });
+
+    // What to sign: only for the life, and only for a step the app signs.
+    let (status, to_sign) = portal.write("POST", "sub-kiri", &format!("{base}/to-sign"), answers.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{to_sign}");
+    assert_eq!(portal.intake.received.lock().unwrap()[0]["proposal"], "prop-1");
+    assert_eq!(
+        portal.write("POST", "sub-adv", &format!("{base}/to-sign"), answers.clone()).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        portal
+            .write("POST", "sub-kiri", "/app/v1/proposals/prop-1/lives/life-2/disclosures/to-sign", answers.clone())
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    let mut offer = answers.clone();
+    offer["step"] = json!("offer");
+    assert_eq!(
+        portal.write("POST", "sub-kiri", &format!("{base}/to-sign"), offer).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        portal
+            .write("POST", "sub-kiri", &format!("{base}/to-sign"), json!({ "step": "disclosure", "answers": [] }))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // Signing: a proven device, and its signature over exactly that message.
+    use base64::Engine;
+    let message = base64::engine::general_purpose::STANDARD.decode(to_sign["message"].as_str().unwrap()).unwrap();
+    let mut signed = answers.clone();
+    signed["message"] = to_sign["message"].clone();
+    signed["signature"] = json!(portal.phone.sign(&message));
+    let send = |body: Value| {
+        let text = body.to_string();
+        let headers = portal.proof(&portal.phone, "POST", base, &text);
+        async move { portal.send("POST", base, &headers, Some(body)).await }
+    };
+    let (status, problem) = portal.write("POST", "sub-kiri", base, signed.clone()).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
+    let mut forged = signed.clone();
+    forged["signature"] = json!(portal.phone.sign(b"something else"));
+    let before = portal.intake.received.lock().unwrap().len();
+    let (status, problem) = send(forged).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_signature")));
+    let mut garbled = signed.clone();
+    garbled["message"] = json!("not base64!");
+    assert_eq!(send(garbled).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(portal.intake.received.lock().unwrap().len(), before, "nothing reached the intake");
+    let (status, done) = send(signed).await;
+    assert_eq!(
+        (status, &done["vault_ref"]),
+        (StatusCode::OK, &json!("clinical://party/disclosure/hash-1")),
+        "{done}"
+    );
+    let sent = portal.intake.received.lock().unwrap().last().unwrap().clone();
+    assert_eq!(
+        (&sent["signature"]["key_id"], &sent["signature"]["public_key"]),
+        (&json!("phone"), &json!(portal.phone.public))
+    );
+    assert!(sent.get("message").is_none(), "only the intake's own fields are passed on");
+
+    // A portal with no intake configured.
+    let bare = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: portal.pricing.clone(),
+        complaints: Arc::new(common::pricing::Down),
+        commission: portal.commission.clone(),
+        finance: Arc::new(common::pricing::Down),
+        claims: portal.claims.clone(),
+        reinsurance: portal.reinsurance.clone(),
+        master: None,
+        intake: None,
+    }));
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("{base}/to-sign"))
+        .header("x-dev-subject", "sub-kiri")
+        .header("idempotency-key", "k")
+        .body(Body::from(answers.to_string()))
+        .unwrap();
+    assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }

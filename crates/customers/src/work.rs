@@ -167,6 +167,11 @@ pub async fn run<W: KeyWrapper, S: WormStore, C: crate::relay::Core>(
         }
         if last_sweep.is_none_or(|t| t.elapsed() >= sweep_every) {
             last_sweep = Some(std::time::Instant::now());
+            match app.store.prompt_marker_reviews(Utc::now().date_naive(), Utc::now()).await {
+                Ok(n) if n > 0 => tracing::info!(prompts = n, "vulnerability markers due for review"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "opening marker reviews failed; will retry"),
+            }
             match sweep(app, 500).await {
                 Ok(n) if n > 0 => tracing::info!(erased = n, "retention sweep"),
                 Ok(_) => {}

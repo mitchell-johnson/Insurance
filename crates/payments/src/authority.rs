@@ -52,6 +52,7 @@ impl PaymentsState {
                 status: AuthorityStatus::Active,
                 reason: None,
                 dishonours: 0,
+                hardship: false,
             },
         );
         tx.emit(Event::AuthorityCreated { authority: id, policy });
@@ -65,6 +66,59 @@ impl PaymentsState {
             crate::model::Counterparty::Authority(a) => self.authorities.get(a)?.life.clone(),
             _ => None,
         }
+    }
+
+    pub(crate) fn mark_hardship(&mut self, tx: &mut Tx<'_>, id: &str, hardship: bool) -> Result<(), Reject> {
+        if !tx.actor.roles.contains(&Role::Collections) {
+            tx.need(Role::PayeeMaintainer)?;
+        }
+        self.authority_mut(id)?.hardship = hardship;
+        tx.emit(Event::HardshipMarked {
+            authority: id.to_string(),
+            hardship,
+        });
+        Ok(())
+    }
+
+    /// A dishonour on an authority in hardship: nothing is presented again
+    /// until someone has talked to the payer, and collections is asked to
+    /// call and offer hardship help.
+    pub(crate) fn hold_for_conversation(&mut self, tx: &mut Tx<'_>, item: &str, authority: &str) {
+        self.awaiting_conversation.insert(item.to_string(), authority.to_string());
+        let policy = self.authorities.get(authority).map(|a| a.policy.to_string()).unwrap_or_default();
+        self.push_outbox(OutboxEntry {
+            key: format!("hardship-call-{item}"),
+            instruction: Instruction::Notify {
+                to: Role::Collections,
+                subject: "hardship_conversation".to_string(),
+                detail: format!("collection {item} on policy {policy} was dishonoured; the payer is in hardship: call, offer hardship help, and record the outcome before anything is presented again"),
+            },
+            about: None,
+        });
+        tx.emit(Event::ConversationNeeded {
+            item: item.to_string(),
+            authority: authority.to_string(),
+        });
+    }
+
+    pub(crate) fn record_conversation(&mut self, tx: &mut Tx<'_>, item: &str, outcome: crate::model::ConversationOutcome, note: String) -> Result<(), Reject> {
+        tx.need(Role::Collections)?;
+        if note.trim().is_empty() {
+            return Err(Reject::new("no_note", "a conversation is recorded with what was said"));
+        }
+        let authority = self
+            .awaiting_conversation
+            .remove(item)
+            .ok_or_else(|| Reject::new("no_conversation_due", format!("collection {item} is not waiting for a conversation")))?;
+        let active = self.authorities.get(&authority).is_some_and(|a| a.status == AuthorityStatus::Active);
+        if outcome == crate::model::ConversationOutcome::Represent && active {
+            self.represent.insert(item.to_string());
+        }
+        tx.emit(Event::ConversationRecorded {
+            item: item.to_string(),
+            outcome,
+        });
+        Ok(())
     }
 
     pub(crate) fn suspend_authority(&mut self, tx: &mut Tx<'_>, id: &str, reason: String) -> Result<(), Reject> {

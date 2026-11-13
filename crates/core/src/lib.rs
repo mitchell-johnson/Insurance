@@ -22,6 +22,7 @@ pub mod premium;
 pub mod recon;
 pub mod reinsurance;
 
+pub mod arrangement;
 mod arrears;
 mod billing;
 mod cash;

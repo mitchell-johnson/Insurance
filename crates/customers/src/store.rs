@@ -611,6 +611,27 @@ impl<W: KeyWrapper> Store<W> {
         if let (true, Some(date)) = (retracted, died_on.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<NaiveDate>().ok())) {
             self.queue_death(&tx, id, date, true, now).await?;
         }
+        let marked = written.iter().any(|r| match &r.body {
+            EventBody::Asserted { assertions } => assertions.iter().any(|a| a.field == Field::Vulnerability),
+            _ => false,
+        });
+        if marked {
+            let review_on = loaded
+                .party
+                .current(Field::Vulnerability, now)
+                .and_then(|m| m.get("review_on").and_then(Value::as_str).and_then(|d| d.parse::<NaiveDate>().ok()));
+            match review_on {
+                Some(on) => tx
+                    .execute(
+                        "insert into marker_reviews (party_id, review_on) values ($1, $2) \
+                         on conflict (party_id) do update set review_on = excluded.review_on, prompted_at = null",
+                        &[&id.0, &on],
+                    )
+                    .await
+                    .map_err(db)?,
+                None => tx.execute("delete from marker_reviews where party_id = $1", &[&id.0]).await.map_err(db)?,
+            };
+        }
         for r in &written {
             if let EventBody::ConcernRaised { about, .. } = &r.body {
                 tx.execute(
@@ -856,6 +877,31 @@ impl<W: KeyWrapper> Store<W> {
             .collect()
     }
 
+    /// Open a prompt for every marker whose review date has come, once.
+    /// Returns the number opened.
+    pub async fn prompt_marker_reviews(&self, today: NaiveDate, now: DateTime<Utc>) -> Result<usize> {
+        let mut client = self.client().await?;
+        let tx = client.transaction().await.map_err(db)?;
+        let due = tx
+            .query(
+                "update marker_reviews set prompted_at = $2 where review_on <= $1 and prompted_at is null returning party_id",
+                &[&today, &now],
+            )
+            .await
+            .map_err(db)?;
+        for row in &due {
+            let party: String = row.get(0);
+            tx.execute(
+                "insert into reviews (id, party_id, candidates, status, created_at, kind, reason) values ($1, $2, '{}', 'open', $3, 'consider_marker', 'review_date')",
+                &[&format!("rev_{}", uuid::Uuid::new_v4().simple()), &party, &now],
+            )
+            .await
+            .map_err(db)?;
+        }
+        tx.commit().await.map_err(db)?;
+        Ok(due.len())
+    }
+
     /// Queue a death, or its retraction, for claims. A newer notice about
     /// the same death replaces one not yet sent.
     async fn queue_death(&self, tx: &Transaction<'_>, id: &PartyId, date: NaiveDate, retract: bool, now: DateTime<Utc>) -> Result<()> {
@@ -1048,6 +1094,7 @@ impl<W: KeyWrapper> Store<W> {
         for sql in [
             "delete from party_keys where party_id = $1",
             "delete from death_relay where party_id = $1",
+            "delete from marker_reviews where party_id = $1",
             "delete from blind_index where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",

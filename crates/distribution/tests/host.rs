@@ -9,7 +9,7 @@ use common::*;
 use ic_core::{Command as CoreCommand, Reject};
 use ic_distribution::config::{BookOutcome, Change, MoveRequest};
 use ic_distribution::host::{ask, module_spec, refusal, Question, CORE_CALLER, MODULE, OUTBOX};
-use ic_distribution::rules::Share;
+use ic_distribution::rules::{CommissionType, Component, RuleExample, Share};
 use ic_distribution::structure::{LicenceState, PartyKind};
 use ic_distribution::workbench::Action;
 use ic_distribution::{Actor, BookId, Command, Envelope, Event};
@@ -151,7 +151,20 @@ fn the_hosted_module_earns_holds_answers_and_survives_a_snapshot() {
             owner: Some(party("fap-one")),
             house: false,
         },
-        Change::ActivateRule(rule("book", 1, d(START.0, START.1, START.2), lines, vec![liable("fap-one")])),
+        Change::ActivateRule({
+            // The hosted module keeps the production setting: the rule ships
+            // with the agreement's worked example.
+            let mut r = rule("book", 1, d(START.0, START.1, START.2), lines, vec![liable("fap-one")]);
+            r.examples = vec![RuleExample {
+                name: "agreement".into(),
+                on: d(START.0, START.1, START.2),
+                commission_type: CommissionType::Initial,
+                gross_minor: 1_000_00,
+                premium_minor: 0,
+                expect: vec![(party("a-co"), Component::Base, 750_00), (party("fap-one"), Component::Base, 250_00)],
+            }];
+            r
+        }),
     ];
     h.send(
         "propose",

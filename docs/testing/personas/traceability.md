@@ -89,7 +89,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried` |
 | COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
+| COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
+| COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
+| COL-025 | part | `payments/tests/runs.rs::a_collection_held_up_by_an_outage_goes_next_window_and_is_found`<br>`payments-service/tests/pump.rs::a_bank_that_is_down_or_says_no_leaves_the_money_unpaid_and_known` |
 | COL-027 | full | `documents/tests/interests.rs::a_lapse_notice_must_be_copied_to_the_lender`<br>`documents/tests/interests.rs::a_suspension_notice_is_copied_once_to_each_party` |
 
 ## XFR Policy transfer between groups
@@ -247,29 +250,34 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| GRP-001 | part | `group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
+| GRP-001 | full | `group/tests/intake.rs::twelve_monthly_files_on_a_scheme_of_five_thousand`<br>`group/tests/intake.rs::a_full_file_reaches_the_core_as_the_employer_approved_it`<br>`group/tests/driver.rs::an_uploaded_file_goes_from_quarantine_to_the_core` |
 | GRP-002 | full | `group/src/diff.rs::change_file_rows_that_do_not_fit_are_rejected_with_reasons`<br>`group/src/mapping.rs::unreadable_rows_are_rejected_one_by_one`<br>`group/tests/apply.rs::one_refused_row_does_not_stop_the_rest_of_the_file` |
 | GRP-003 | full | `group/tests/apply.rs::repeats_and_strays_change_nothing` |
 | GRP-004 | full | `group/tests/intake.rs::a_file_that_removes_too_many_members_is_held_for_a_person`<br>`group/src/diff.rs::the_safety_check_trips_past_the_share` |
 | GRP-005 | full | `sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 | GRP-006 | full | `group/tests/intake.rs::approval_needs_a_second_person_and_staff_for_deep_backdating`<br>`group/src/diff.rs::dates_are_held_to_the_backdating_limits` |
 | GRP-007 | full | `group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
+| GRP-008 | full | `group/src/diff.rs::cover_follows_hours_across_the_minimum`<br>`group/tests/leavers.rs::cover_follows_a_member_whose_hours_cross_the_minimum` |
 | GRP-009 | full | `group/src/benefit.rs::cover_splits_into_automatic_and_excess`<br>`group/tests/underwriting.rs::accepted_excess_goes_from_request_to_layer_and_back` |
 | GRP-010 | full | `group/tests/excess.rs::a_loading_is_itemised_to_the_employer_only_with_the_members_consent`<br>`sim/tests/group_cover.rs::a_loading_reaches_the_employer_only_in_a_total_unless_the_member_agreed` |
-| GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading` |
+| GRP-011 | full | `group/tests/excess.rs::too_few_members_for_a_total_means_the_member_pays_the_loading`<br>`group/tests/excess.rs::staff_are_told_when_leavers_leave_too_few_members_in_the_total` |
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
+| GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
-| GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme` |
+| GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
 | GRP-020 | part | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole` |
 | GRP-021 | full | `group/tests/year.rs::agreed_terms_take_effect_on_the_renewal_date` |
 | GRP-022 | full | `group/tests/year.rs::without_an_agreement_the_scheme_runs_on_old_rates_and_then_ends`<br>`group/tests/year.rs::a_rate_guarantee_rolls_the_year_without_an_agreement` |
 | GRP-023 | full | `group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy`<br>`group/tests/leavers.rs::an_option_not_taken_up_expires` |
 | GRP-024 | part | `group/src/model.rs::membership_follows_a_member_through_every_change`<br>`group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 | GRP-025 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
+| GRP-026 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
+| GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
+| GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
 
 ## JNT Joint lives, ownership, assignments and dependants
 
@@ -323,6 +331,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-001 | full | `sim/tests/integrity.rs::a_quote_equals_the_first_bill`<br>`sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | SVC-002 | full | `sim/tests/reduce_cover.rs::a_reduction_takes_the_newest_layer_first`<br>`sim/tests/reduce_cover.rs::a_reduction_ends_layers_from_today_and_credits_the_days_left` |
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
+| SVC-008 | part | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
@@ -354,6 +363,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-004 | part | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 
 ## CMP Complaints and disputes

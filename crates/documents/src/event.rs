@@ -155,6 +155,15 @@ pub enum Event {
     TriggerDismissed {
         trigger: String,
     },
+    /// Another module asked for a letter.
+    LetterRequested {
+        request: String,
+        caller: String,
+        kind: String,
+    },
+    LetterRequestCancelled {
+        request: String,
+    },
     LegalHoldPlaced {
         case: String,
     },

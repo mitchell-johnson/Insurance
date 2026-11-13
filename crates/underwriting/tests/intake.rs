@@ -301,3 +301,72 @@ fn sign_with(a: &Value, hash: &str) -> Value {
     signed_answers["signature"] = serde_json::to_value(signed("disclosure", &["P1", "L1", hash])).unwrap();
     signed_answers
 }
+
+/// Purpose: an underwriter who holds or has worked the life's case, or a senior, reads the
+/// life's disclosures with a purpose; the module records who read which records and why before
+/// any is read, and a repeat of the same reading is the same reading. Someone with no case on
+/// the life, a reading with no purpose, and a record that no longer has the hash it was
+/// submitted with are all refused. Over HTTP only the staff console's role may read.
+/// Why it matters: these are health answers. Every reading must be by someone with a reason to
+/// read and leave a record that names them, and an underwriter must never decide on a record
+/// that was changed after the life signed it.
+#[tokio::test]
+async fn an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged() {
+    let (intake, module, records) = intake();
+    let mut a = answers("L1");
+    a.answers = yes("heart_condition");
+    let ToSign { hash, .. } = intake.to_sign(&a).await.unwrap();
+    let done = intake.submit(&sign(&a, &hash)).await.unwrap();
+    module.0.lock().unwrap().take("P1", "L1", "amy");
+
+    let read = |request: &str, who: &str, purpose: &str| ic_underwriting::disclosures::OpenRequest {
+        request: request.into(),
+        proposal: "P1".into(),
+        life: "L1".into(),
+        underwriter: who.into(),
+        purpose: purpose.into(),
+    };
+    let opened = intake.open(&read("r1", "amy", "assess the case")).await.unwrap();
+    assert_eq!(
+        (opened.len(), opened[0].vault_ref.as_str(), opened[0].hash.as_str()),
+        (1, done.vault_ref.as_str(), hash.as_str())
+    );
+    assert_eq!(opened[0].record["answers"]["heart_condition"]["answer"], json!({"yes_no": true}));
+    let logged = {
+        let w = module.0.lock().unwrap();
+        let at = w.log.iter().position(|e| e.key == "open:r1").unwrap();
+        let mut replica = w.s.clone();
+        (at, replica.apply(u64::MAX, w.log[at].clone()))
+    };
+    let applied = logged.1.unwrap();
+    assert!(applied.duplicate, "the reading was applied once, in the log");
+    assert!(
+        matches!(&applied.events[0], ic_underwriting::command::Event::FileAccessed { who, purpose, documents, .. } if who == "amy" && purpose == "assess the case" && documents == &vec![done.vault_ref.clone()])
+    );
+    assert_eq!(
+        intake.open(&read("r1", "amy", "assess the case")).await.unwrap(),
+        opened,
+        "a repeat is the same reading"
+    );
+    assert!(intake.open(&read("r2", "sam", "senior review")).await.is_ok(), "a senior may read");
+    assert!(matches!(intake.open(&read("r3", "abe", "curious")).await, Err(IntakeError::Refused(r)) if r.code == "not_authorised"));
+    assert!(matches!(intake.open(&read("r4", "amy", " ")).await, Err(IntakeError::Refused(r)) if r.code == "purpose"));
+
+    let name = records.names().into_iter().find(|n| n.contains("/disclosure/")).unwrap();
+    records.overwrite(&name, b"not the record".to_vec());
+    assert!(matches!(intake.open(&read("r5", "amy", "assess the case")).await, Err(IntakeError::Store(_))));
+
+    let authority = tenant().await;
+    let app = router(intake, Auth::entra_at(&authority, TENANT, AUDIENCE));
+    let body = serde_json::to_value(read("r6", "amy", "assess the case")).unwrap();
+    assert_eq!(
+        call(&app, "/v1/disclosures/open", Some(&token(&authority, &["new-business"])), &body).await.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, refused) = call(&app, "/v1/disclosures/open", Some(&token(&authority, &["underwriting-console"])), &body).await;
+    assert_eq!(
+        (status, refused["code"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable")),
+        "the record was tampered with"
+    );
+}

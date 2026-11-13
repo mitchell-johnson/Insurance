@@ -52,8 +52,8 @@ def group_terms(unnamed, excess_path, facultative_reinsurer, facultative_limit, 
         "facultative_rate": facultative_rate,
     }
 
-def statements(period, agree_before_payment = False):
-    return {"period": period, "agree_before_payment": agree_before_payment}
+def statements(period, agree_before_payment = False, listing_part_rows = 2000):
+    return {"period": period, "agree_before_payment": agree_before_payment, "listing_part_rows": listing_part_rows}
 
 def profit_commission(share, expense_allowance):
     return {"share": share, "expense_allowance": expense_allowance}

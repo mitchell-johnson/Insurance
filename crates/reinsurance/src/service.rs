@@ -10,7 +10,7 @@ use ic_azure::eventhubs::EventHubsSink;
 use ic_raft::{ClusterAuth, ClusterClient};
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::carriers::{Carriers, StaffFeed};
+use crate::carriers::{Carriers, Outbound, ReinsurerDrops, StaffFeed};
 use crate::driver::{ClusterAudiences, ClusterCore, ClusterModule, Driver};
 
 /// Settings of the driver process.
@@ -31,6 +31,9 @@ pub struct Config {
     /// The Event Hubs namespace and the hub notices for staff go to.
     pub event_hubs: String,
     pub event_hub: String,
+    /// The SFTP storage account each reinsurer collects its statements and
+    /// listings from, one container each. Unset, they are only filed.
+    pub drops_endpoint: Option<String>,
 }
 
 impl Config {
@@ -60,6 +63,7 @@ impl Config {
             records_container: get("IC_REINSURANCE_RECORDS_CONTAINER").unwrap_or_else(|| "reinsurance-records".into()),
             event_hubs: get("IC_EVENT_HUBS_ENDPOINT").ok_or("set IC_EVENT_HUBS_ENDPOINT to the Event Hubs namespace")?,
             event_hub: get("IC_REINSURANCE_EVENT_HUB").unwrap_or_else(|| "reinsurance-events".into()),
+            drops_endpoint: get("IC_REINSURANCE_DROPS_ENDPOINT"),
         })
     }
 }
@@ -81,7 +85,14 @@ pub fn stop_signals() -> Result<impl Future<Output = ()>, String> {
 /// Run the driver against the cluster until `stop` resolves, filing records
 /// in `records` and telling staff through `staff`. The cycle in progress
 /// finishes first.
-pub async fn serve(config: Config, auth: ClusterAuth, records: impl WormStore, staff: impl StaffFeed, stop: impl Future<Output = ()>) -> Result<(), String> {
+pub async fn serve(
+    config: Config,
+    auth: ClusterAuth,
+    records: impl WormStore,
+    staff: impl StaffFeed,
+    outbound: impl Outbound,
+    stop: impl Future<Output = ()>,
+) -> Result<(), String> {
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
     let driver = Driver {
         module: ClusterModule::new(client.clone(), config.patience),
@@ -92,6 +103,7 @@ pub async fn serve(config: Config, auth: ClusterAuth, records: impl WormStore, s
         modules: ClusterAudiences::new(client, config.patience),
         records,
         staff,
+        outbound,
     };
     tracing::info!(?config, "reinsurance driver started");
     driver.run(&audiences, config.cycle_every, stop, |_, _| {}).await;
@@ -110,6 +122,13 @@ pub async fn run(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> st
     let auth = ClusterAuth::from_lookup(&get, read)?;
     let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
     let records = BlobContainer::new(&config.records_endpoint, &config.records_container, credential.clone());
-    let staff = EventHubsSink::new(&config.event_hubs, &config.event_hub, credential);
-    serve(config, auth, records, staff, stop_signals()?).await
+    let staff = EventHubsSink::new(&config.event_hubs, &config.event_hub, credential.clone());
+    let outbound = match &config.drops_endpoint {
+        Some(endpoint) => ReinsurerDrops::Azure {
+            endpoint: endpoint.clone(),
+            credential,
+        },
+        None => ReinsurerDrops::Off,
+    };
+    serve(config, auth, records, staff, outbound, stop_signals()?).await
 }

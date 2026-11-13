@@ -168,6 +168,11 @@ pub enum Command {
         layer: u32,
         /// The dispute in the system that carries it.
         reference: String,
+        /// The adviser disputing. The adviser portal names them and they
+        /// must be the adviser of an engagement the layer was written
+        /// under; staff and other modules may leave it out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adviser: Option<PartyId>,
     },
     /// The decision on a disputed match: it was a replacement, or it was not.
     DecideReplacement {
@@ -265,7 +270,7 @@ impl Command {
             Command::Ingest(_) | Command::PostingRefused { .. } | Command::PostingDelivered { .. } => &["event-relay"],
             Command::WriteLayer(_) | Command::LinkReplacement { .. } => &["new-business", "policy-servicing", "migration"],
             Command::AttributeAlteration { .. } => &["policy-servicing"],
-            Command::DisputeReplacement { .. } => &["new-business", "policy-servicing"],
+            Command::DisputeReplacement { .. } => &["new-business", "policy-servicing", "adviser-portal"],
             Command::AppointAdviser { .. } => &["customer-app", "policy-servicing"],
             Command::PaymentSettled { .. } | Command::PaymentReturned { .. } => &["payments"],
             Command::DescribePosition { .. } => &["claims", "reinsurance", "group-admin", "collections", "payments"],
@@ -620,6 +625,14 @@ pub struct Settings {
     /// match when the advisers are unrelated, in parts per million.
     #[serde(default = "five_percent")]
     pub replacement_amount_tolerance_ppm: u32,
+    /// A distribution rule is activated only with worked examples that it
+    /// reproduces exactly, as products and treaties ship scenarios.
+    #[serde(default = "yes")]
+    pub rule_examples_required: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 fn twelve() -> u32 {
@@ -645,6 +658,7 @@ impl Default for Settings {
             month_end_held_threshold_minor: 10_000_00,
             replacement_window_months: twelve(),
             replacement_amount_tolerance_ppm: five_percent(),
+            rule_examples_required: true,
         }
     }
 }
@@ -1082,7 +1096,11 @@ impl DistributionState {
                 cover,
                 layer,
                 reference,
-            } => self.dispute_replacement(ctx, &layer_key(&policy, &cover, layer), reference),
+                adviser,
+            } => {
+                let portal = matches!(actor, Actor::Module(m) if m == "adviser-portal");
+                self.dispute_replacement(ctx, &layer_key(&policy, &cover, layer), reference, adviser.as_ref(), portal)
+            }
             Command::DecideReplacement {
                 policy,
                 cover,

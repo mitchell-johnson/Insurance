@@ -409,11 +409,23 @@ impl DistributionState {
         }
     }
 
-    pub(crate) fn dispute_replacement(&mut self, ctx: &mut Ctx, key: &str, reference: String) -> Result<(), Reject> {
+    pub(crate) fn dispute_replacement(&mut self, ctx: &mut Ctx, key: &str, reference: String, adviser: Option<&PartyId>, portal: bool) -> Result<(), Reject> {
         let today = self.date()?;
-        let (_, m) = self.matched_layer(key)?;
+        let (layer, m) = self.matched_layer(key)?;
         if reference.trim().is_empty() {
             return reject("invalid_dispute", "a dispute carries its reference");
+        }
+        match adviser {
+            None if portal => return reject("adviser_required", "the adviser portal names the adviser who disputes"),
+            Some(a)
+                if !layer
+                    .writing
+                    .iter()
+                    .any(|(e, _)| self.config.structure.engagements.get(e).is_some_and(|g| &g.adviser == a)) =>
+            {
+                return reject("not_writing_adviser", format!("{a} did not write {key}"));
+            }
+            _ => {}
         }
         if m.disputed.is_some() {
             return reject("already_disputed", "the match is already disputed");
