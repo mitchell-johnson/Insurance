@@ -304,7 +304,6 @@ fn a_choice_the_menu_does_not_allow_is_refused_and_changes_nothing() {
             effective: d(2027, 12, 1),
         }))
     };
-    c.submit(p, "cash-matching", pay(&id, "staff-1", "m-1", 28_75 + 27_60)).unwrap();
     assert_eq!(c.submit(p, "group-admin", split(&["staff-1"])).unwrap_err().code, "dependants");
     assert_eq!(c.submit(p, "group-admin", split(&["staff-1-child"])).unwrap_err().code, "dependants");
 
@@ -432,9 +431,48 @@ fn dependants_and_chosen_covers_follow_their_member_out_back_and_across_a_split(
     assert_eq!(new.lives.len(), 2);
     assert_eq!(open(&new), 3);
     assert_eq!(open(&c.state(p).policies[&id]), 0);
+    // December, paid on the old scheme, came back as the member's credit there and went
+    // with them: it meets December's bill on the new scheme.
+    let new_id = PolicyId("pol-00000032".into());
+    assert!(events(&mut c)
+        .iter()
+        .any(|e| matches!(e, Event::MemberCreditMoved { life: l, amount_minor, .. } if *l == life("staff-1") && *amount_minor == 28_75 + 27_60)));
+    assert_eq!(credit_minor(&c.state(p).ledger, &c.state(p).policies[&id], &life("staff-1")), 0);
     days(&mut c, 1);
-    assert_eq!(employer_owes(&c, p, &PolicyId("pol-00000032".into())), 11_00 + 115_00);
-    assert_eq!(member_owes(&c, p, &PolicyId("pol-00000032".into()), "staff-1"), 28_75 + 27_60);
+    assert_eq!(employer_owes(&c, p, &new_id), 11_00 + 115_00);
+    assert_eq!(member_owes(&c, p, &new_id, "staff-1"), 0);
+    assert_eq!(credit_minor(&c.state(p).ledger, &c.state(p).policies[&new_id], &life("staff-1")), 0);
+}
+
+/// Purpose: a member who owes for cover they pay for can still be moved in a split. What
+/// they owe for the time on the old scheme stays owed there, the bill for a period the new
+/// scheme now covers is taken back, and the new scheme bills them from its first period.
+/// Why it matters: on a scheme where staff pay for upgrades, somebody always owes
+/// something. A demerger that had to wait until every member's balance was nil would
+/// never happen, and a debt carried to the new scheme would be chased by an employer it
+/// was never owed to.
+#[test]
+fn a_member_in_debt_moves_in_a_split_and_the_debt_stays_where_it_arose() {
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    days(&mut c, 30);
+    assert_eq!(member_owes(&c, p, &id, "staff-1"), 2 * (28_75 + 27_60), "November and December, unpaid");
+    let new_id = PolicyId("pol-00000033".into());
+    let split = Command::SplitScheme(Box::new(SplitScheme {
+        policy: id.clone(),
+        new_policy: new_id.clone(),
+        new_number: "WPL00000033".into(),
+        lives: vec![life("staff-1"), life("staff-1-child")],
+        effective: d(2027, 12, 1),
+    }));
+    c.submit(p, "group-admin", split).unwrap();
+    assert_eq!(member_owes(&c, p, &id, "staff-1"), 28_75 + 27_60, "November is still owed to the old scheme");
+    assert!(!events(&mut c).iter().any(|e| matches!(e, Event::MemberCreditMoved { .. })));
+    days(&mut c, 1);
+    assert_eq!(member_owes(&c, p, &new_id, "staff-1"), 28_75 + 27_60, "December is the new scheme's");
+    // The old debt can still be paid where it is owed.
+    c.submit(p, "cash-matching", pay(&id, "staff-1", "m-9", 28_75 + 27_60)).unwrap();
+    assert_eq!(member_owes(&c, p, &id, "staff-1"), 0);
 }
 
 /// Purpose: a member who stops paying loses, after the product's lapse period, the cover
