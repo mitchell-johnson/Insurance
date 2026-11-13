@@ -269,6 +269,34 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "Nothing is waiting.");
   } });
   await visit(browser, "/underwriting", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
+  await visit(browser, "/payments", { subject: "sub-paymk" }, { run: async (p) => {
+    await sees(p, "You are pay-mk: maker.");
+    await p.fill("#r-id", "rb1"); await p.selectOption("#r-type", "provider_payments"); await p.fill("#r-date", "2027-11-16");
+    await p.locator("#prep button").click();
+    await sees(p, "Prepared. Add items");
+    await p.locator("#run-form button").click();
+    await sees(p, "provider payments from sf1");
+    await p.fill("#raw-cmd", JSON.stringify({ type: "add_run_items", run: "rb1", items: [{ item: "ib1", source: "browser", counterparty: { payee: "p1" }, amount_minor: 1000, policy: null, payable: null, refund: null, represents: null }] }));
+    await p.locator("#raw-form button").click();
+    await p.locator("#raw-msg").getByText("Done.").waitFor();
+    await p.locator("#run-form button").click();
+    await p.locator("#run").getByText("ib1").waitFor();
+    await p.getByRole("button", { name: "Check" }).click();
+    await p.locator("#run-msg").getByText("Done: check run.").waitFor();
+    if (await p.getByRole("button", { name: "Approve" }).count()) throw new Error("a maker is offered approval");
+  } });
+  await visit(browser, "/payments", { subject: "sub-payap" }, { run: async (p) => {
+    await sees(p, "approver");
+    await p.fill("#rec-account", "anz-sf1-claims"); await p.locator("#rec-form button").click();
+    await sees(p, "closing 10000000.00");
+    await p.locator("#runs").getByText("rb1").waitFor();
+    await p.locator("#runs").getByRole("button", { name: "Open" }).first().click();
+    await p.getByRole("button", { name: "Approve" }).click();
+    await p.locator("#run-msg").getByText("Done: approve run.").waitFor();
+    await p.fill("#party-id", "party-p1"); await p.locator("#party-form button").click();
+    await p.locator("#party").getByText("p1").first().waitFor();
+  } });
+  await visit(browser, "/payments", { subject: "sub-gl1" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();

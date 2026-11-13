@@ -24,11 +24,13 @@ fn a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest() {
             policy_loan_minor: 40_000,
             interests: vec![
                 Interest {
+                    insolvency: false,
                     party: "bank".into(),
                     extent_minor: Some(100_000),
                     priority: 1,
                 },
                 Interest {
+                    insolvency: false,
                     party: "second".into(),
                     extent_minor: Some(50_000),
                     priority: 2,

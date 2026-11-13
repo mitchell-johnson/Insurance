@@ -558,6 +558,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             Duration::from_millis(200),
             "reinsurance",
             "underwriting",
+            "distribution",
             EventHubsSink::new(&fake.base, "group-events", credential.clone()),
         ),
         Everyone,
@@ -773,4 +774,67 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
 
     node.stop().await.unwrap();
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Purpose: a scheme cover's layer reaches the commission module as a `write_layer` it reads
+/// and accepts from `group-admin`: layer 0, the broker's engagement and book taking the
+/// whole, the agreed schedule, option and expected premium, never a replacement. Its key
+/// carries the hour of the attempt; the module's answers mean written (also when an
+/// earlier attempt wrote it), try again (the module has not yet seen the scheme in the
+/// core, which a real commission module with no feed answers), or a refusal for a person.
+/// Why it matters: the two modules are built apart and meet only in this JSON, and the
+/// commission module keeps a refusal under its key for good. Without the hour, a layer sent
+/// a moment before the commission module saw the scheme would never be written, and the
+/// broker would never be paid.
+#[test]
+fn a_scheme_layer_is_a_command_the_commission_module_accepts() {
+    use ic_distribution::{Actor, Command as Dist, DistributionState, Envelope as DistEnvelope};
+    use ic_group::adapters::{commission_answer, commission_envelope};
+
+    let layer = ic_group::event::CommissionLayer {
+        policy: ic_core::PolicyId("pol-1".into()),
+        cover: "group-life".into(),
+        engagement: "eng-broker-x".into(),
+        book: "x-schemes".into(),
+        schedule: "standard".into(),
+        option: "level".into(),
+        annual_premium_minor: 24_000_00,
+    };
+    let at = chrono::DateTime::parse_from_rfc3339("2027-11-03T09:41:00Z").unwrap().to_utc();
+    let value = commission_envelope("grp-dist:harbour:group-life", at, &layer);
+    let envelope: DistEnvelope = serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{value}: {e}"));
+    assert_eq!(envelope.key, "grp-dist:harbour:group-life@20271103T09");
+    assert_eq!(envelope.actor, Actor::Module("group-admin".into()));
+    let Dist::WriteLayer(w) = &envelope.command else {
+        panic!("{:?}", envelope.command)
+    };
+    assert_eq!(
+        (w.layer, w.writing.len(), w.writing[0].1, w.books[0].1, w.replacement, w.annual_premium_minor),
+        (0, 1, 1_000_000, 1_000_000, false, 24_000_00)
+    );
+    assert_eq!(
+        (w.writing[0].0.to_string(), w.books[0].0.to_string()),
+        ("eng-broker-x".into(), "x-schemes".into())
+    );
+    let later = at + chrono::Duration::hours(1);
+    assert_ne!(commission_envelope("grp-dist:harbour:group-life", later, &layer)["key"], value["key"]);
+
+    // A commission module that has not seen the scheme: try again, not a refusal for a person.
+    let mut fresh = DistributionState::default();
+    let output = fresh.apply_envelope(1, envelope);
+    let answer = serde_json::to_value(&output).unwrap();
+    assert!(output.result.is_err(), "{answer}");
+    assert!(commission_answer(&answer).is_err(), "{answer}");
+    // The other answers.
+    assert_eq!(commission_answer(&serde_json::json!({"result": {"Ok": null}})), Ok(None));
+    assert_eq!(commission_answer(&serde_json::json!({"result": {"Err": {"code": "layer_written"}}})), Ok(None));
+    assert!(commission_answer(&serde_json::json!({"result": {"Err": {"code": "unknown_layer"}}})).is_err());
+    assert!(
+        commission_answer(&serde_json::json!({"Err": {"code": "unknown_book"}})).is_err(),
+        "not the module's output"
+    );
+    assert_eq!(
+        commission_answer(&serde_json::json!({"result": {"Err": {"code": "unknown_book"}}})),
+        Ok(Some("unknown_book".to_string()))
+    );
 }

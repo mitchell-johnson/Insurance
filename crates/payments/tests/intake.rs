@@ -22,7 +22,6 @@ fn released(payment: &str, payee: &str, amount: i64) -> Waiting {
         policy: Some(policy("pol-1")),
         claim: None,
         run: None,
-        run_total_minor: None,
         amount_minor: amount,
         payable: Some(PayableKind::Benefit),
     }
@@ -535,9 +534,9 @@ fn claims_is_given_a_runs_settled_total_when_all_of_it_is_done() {
     assert!(desk.state.claims_runs.is_empty());
 }
 
-/// Purpose: when claims states a run's whole amount, the run is confirmed
-/// only once that much has settled: a payment released late, after the
-/// others had all settled, is waited for.
+/// Purpose: once claims says what a submitted run released (`run_submitted`),
+/// the run is confirmed only when that much has settled: a payment released
+/// late, after the others had all settled, is waited for.
 /// Why it matters: claims reconciles the run against the bank's total; a
 /// confirmation sent before the late payment was even released would mark
 /// the run reconciled while a claimant was unpaid.
@@ -547,10 +546,24 @@ fn a_run_with_its_total_waits_for_a_late_release() {
     desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
     let paid = |n: u64, payment: &str| {
         let net = if n == 0 { "10000" } else { "15000" };
-        let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": net, "payee": "p1", "run": "run-7", "run_total_minor": "25000"});
+        let detail = json!({"policy": "pol-1", "payment_ref": payment, "net_minor": net, "payee": "p1", "run": "run-7"});
         react(&claim_paid(&format!("3-{}", 300 + n), detail)).remove(0)
     };
     desk.state.apply(9000, paid(0, "run-7/a")).unwrap();
+    // Claims says what the run released once it is submitted.
+    let submitted = |id: &str, detail: serde_json::Value| {
+        let event = json!({"module": {"module": "claims", "kind": "run_submitted", "subject": "run-7", "detail": detail}});
+        let record = serde_json::from_value(json!({"id": id, "partition": 3, "seq": 79, "business_date": "2027-11-15", "log_index": 902, "event": event}));
+        react(&record.unwrap()).remove(0)
+    };
+    desk.state
+        .apply(9002, submitted("3-310", json!({"submitted_minor": "25000", "count": "2"})))
+        .unwrap();
+    // A run none of whose payments are known has nothing to confirm.
+    let unknown = json!({"module": {"module": "claims", "kind": "run_submitted", "subject": "run-8", "detail": {"submitted_minor": "x"}}});
+    let unknown = serde_json::from_value(json!({"id": "3-311", "partition": 3, "seq": 80, "business_date": "2027-11-15", "log_index": 903, "event": unknown}));
+    desk.state.apply(9003, react(&unknown.unwrap()).remove(0)).unwrap();
+    assert!(!desk.state.claims_runs.contains_key("run-8"));
     desk.prepare("r1", RunType::BenefitPayments, d(2027, 11, 15));
     desk.ok(&mia(), take("r1", &["run-7/a"]));
     let first = desk.approve("r1");
@@ -587,4 +600,36 @@ fn a_payment_goes_only_to_the_account_that_was_verified() {
     desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
     assert_eq!(desk.code(&mia(), take("r1", &["pay-x"])), "account_mismatch");
     desk.ok(&mia(), take("r1", &["pay-y"]));
+}
+
+/// Purpose: a payout held while the owner is bankrupt asks payments for nothing, and once a
+/// legal direction names the payee it waits under the direction's reference for that
+/// party, not for the policyholder.
+/// Why it matters: decision 4 in `docs/decisions.md` (JNT-029). Money paid to a bankrupt
+/// owner before legal decides who it belongs to may have to be paid again to the Official
+/// Assignee; the binding to the directed party is what stops it.
+#[test]
+fn a_held_payout_waits_only_once_directed_and_for_the_directed_party() {
+    let mut desk = Desk::new();
+    let record = |id: &str, event: serde_json::Value| -> ic_core::EventRecord {
+        serde_json::from_value(json!({"id": id, "partition": 3, "seq": 95, "business_date": "2027-11-15", "log_index": 960, "event": {"investment": event}}))
+            .unwrap()
+    };
+    let held = record(
+        "3-95",
+        json!({"payout_held": {"policy": "pol-1", "payout": "po-9", "amount_minor": 500_00, "reason": "withdrawal", "interest": "oa-1"}}),
+    );
+    assert!(react(&held).is_empty());
+    let directed = record(
+        "3-96",
+        json!({"payout_directed": {"policy": "pol-1", "payee": "party-oa", "payout": "po-9", "payment": "po-9", "amount_minor": 500_00}}),
+    );
+    for envelope in react(&directed) {
+        desk.state.apply(5100, envelope).unwrap();
+    }
+    let waiting = &desk.state.waiting["po-9"];
+    assert_eq!(
+        (waiting.source.as_str(), waiting.payee.as_str(), waiting.amount_minor),
+        ("payout:pol-1:po-9", "party-oa", 500_00)
+    );
 }

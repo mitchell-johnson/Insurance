@@ -132,6 +132,12 @@ pub struct Rules {
     pub voter_regions: BTreeSet<String>,
     /// Days the banks are closed, beyond weekends.
     pub holidays: BTreeSet<NaiveDate>,
+    /// When set, a refund or a policy-value payout is held at the check
+    /// unless the customer master was asked about its party's own hold
+    /// within this many minutes (SVC-022). Unset where no master is
+    /// connected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hold_check_max_age_minutes: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +166,20 @@ impl Config {
         let format = self.channels.get(channel).map(|c| c.format).unwrap_or_default();
         let ordering = self.accounts.get(account).and_then(|a| a.at_bank.clone());
         (format, ordering.filter(|_| !format.is_own()))
+    }
+
+    /// The first value date a channel still takes work for at `now`: today
+    /// before its cutoff, otherwise the next business day.
+    pub fn next_window(&self, channel: &str, now: chrono::NaiveDateTime) -> NaiveDate {
+        let cutoff = self.channels.get(channel).map(|c| c.cutoff);
+        let mut next = now.date();
+        if cutoff.is_none_or(|c| now.time() > c) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        while !self.is_business_day(next) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        next
     }
 
     pub fn is_business_day(&self, date: NaiveDate) -> bool {
@@ -202,6 +222,9 @@ impl Config {
         }
         if self.rules.drill_amount_minor <= 0 || self.rules.drill_account.number.is_empty() {
             return Err(bad("the evacuation drill needs an account to pay and a token amount"));
+        }
+        if self.rules.hold_check_max_age_minutes.is_some_and(|m| m == 0 || m > 24 * 60) {
+            return Err(bad("the customer master is asked about a hold at most a day before the check, and not never"));
         }
         if self.funds.is_empty() {
             return Err(bad("at least one statutory fund is needed"));

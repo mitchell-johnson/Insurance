@@ -226,6 +226,7 @@ fn a_reduction_needs_the_consent_of_a_standing_interest() {
     let today = c.business_date().unwrap();
     let interest = |cmd: InterestCommand| Command::Interest(Box::new(cmd));
     let record = InterestCommand::Record {
+        kind: Default::default(),
         policy: id.clone(),
         interest: "int-1".into(),
         party: PartyId("lender-1".into()),

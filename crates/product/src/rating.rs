@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use ic_money::{round_to_money, Dec, DecStr, Money, MoneyError};
 use serde::{Deserialize, Serialize};
 
-use crate::{CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, RateTable, Sex};
+use crate::{CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, RateTable, Sex, UnmatchedSexRating};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RatingError {
@@ -50,23 +50,41 @@ pub struct RatingFactors {
     pub loadings: Vec<DecStr>,
 }
 
-fn lookup(table: &RateTable, f: &RatingFactors) -> Result<Dec, RatingError> {
+fn row_rate(table: &RateTable, f: &RatingFactors, sex: Option<Sex>) -> Option<Dec> {
     table
         .rows
         .iter()
         .find(|r| {
             f.age >= r.age_from
                 && f.age <= r.age_to
-                && (r.sex.is_none() || r.sex == f.sex)
+                && (r.sex.is_none() || r.sex == sex)
                 && (r.smoker.is_none() || r.smoker == f.smoker)
                 && (r.category.is_none() || r.category == f.category)
                 && (r.occupation_class.is_none() || r.occupation_class == f.occupation_class)
         })
         .map(|r| r.annual_rate.get())
-        .ok_or_else(|| RatingError::NoRate {
-            table: table.id.clone(),
-            version: table.version,
+}
+
+/// The table's rate for a life. A life whose rating sex is not recorded is
+/// first matched against rows that do not rate by sex; where the table has
+/// none for its other facts, it is rated from the female and male rates on
+/// the product's basis. A rate is never guessed from one of the two alone.
+fn lookup(table: &RateTable, f: &RatingFactors, unmatched: &UnmatchedSexRating) -> Result<Dec, RatingError> {
+    let found = row_rate(table, f, f.sex).or_else(|| {
+        if f.sex.is_some() {
+            return None;
+        }
+        let female = row_rate(table, f, Some(Sex::Female))?;
+        let male = row_rate(table, f, Some(Sex::Male))?;
+        Some(match unmatched {
+            UnmatchedSexRating::LowerOf => female.min(male),
+            UnmatchedSexRating::Blended { female_share } => female * female_share.get() + male * (Dec::from(1i64) - female_share.get()),
         })
+    });
+    found.ok_or_else(|| RatingError::NoRate {
+        table: table.id.clone(),
+        version: table.version,
+    })
 }
 
 /// The cover's limits apply to a life's total sum insured on the cover, not
@@ -81,7 +99,7 @@ pub fn check_sum_insured(cover: &CoverDefinition, total_minor: i64) -> Result<()
 /// Annual premium for one layer of one cover, in major currency units, before
 /// discounts, modal loading, fees and tax. Not yet rounded.
 pub fn cover_premium(cover: &CoverDefinition, table: &RateTable, f: &RatingFactors, sum_insured_minor: i64) -> Result<Dec, RatingError> {
-    let rate = lookup(table, f)?;
+    let rate = lookup(table, f, &cover.rating.unmatched_sex_rating)?;
     let base = match cover.rating.basis {
         // minor units -> major units -> thousands
         RateBasis::PerThousand => Dec::from(sum_insured_minor) / Dec::from(100_000i64) * rate,

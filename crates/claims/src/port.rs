@@ -141,6 +141,11 @@ pub struct Interest {
     pub extent_minor: Option<i64>,
     /// Lower is paid first.
     pub priority: u32,
+    /// The Official Assignee's interest in a bankrupt owner's policy: what
+    /// becomes payable to the owner or the estate is held until a legal
+    /// direction says to whom (`docs/decisions.md`, decision 4).
+    #[serde(default)]
+    pub insolvency: bool,
 }
 
 /// An instruction to the core's ledger. Every one names the claim, carries

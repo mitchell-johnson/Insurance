@@ -595,3 +595,50 @@ fn an_officer_does_not_read_health_in_a_hardship_note() {
     assert!(team["withheld"].as_array().unwrap().is_empty());
     assert!(world.state.hardship_case("none", Role::Hardship).is_none());
 }
+
+/// Purpose: an officer asks the core to reinstate a lapsed policy; one
+/// request waits at a time; a refusal for want of underwriting opens a task
+/// to start the reinstatement proposal, any other refusal a reinstatement
+/// task; asking again after approval is a new posting.
+/// Why it matters: the customer has paid and is waiting for their cover.
+/// A refusal nobody sees leaves them uninsured without knowing it, and a
+/// retry under the old posting would be answered with the old refusal.
+#[test]
+fn a_reinstatement_is_asked_of_the_core_and_its_refusal_is_a_task() {
+    let mut world = World::new();
+    world.issue("p1", "party-1", 10_000);
+    let ask = Command::RequestReinstatement { policy: PolicyId::from("p1") };
+    assert_eq!(world.officer(ask.clone()).result.unwrap_err().code, "not_lapsed");
+    let unknown = Command::RequestReinstatement { policy: PolicyId::from("p9") };
+    assert_eq!(world.officer(unknown).result.unwrap_err().code, "unknown_policy");
+    world.core(
+        0,
+        CoreFact::Status {
+            policy: PolicyId::from("p1"),
+            to: ic_core::PolicyStatus::Lapsed,
+        },
+    );
+    assert_eq!(world.officer(ask.clone()).result, Ok(()));
+    assert_eq!(world.officer(ask.clone()).result.unwrap_err().code, "reinstatement_pending");
+    let refuse = |world: &mut World, code: &str| {
+        let posting = world.state.outbox.keys().next().unwrap().clone();
+        world.outbox(Command::RecordCoreOutcome {
+            posting,
+            applied: false,
+            code: Some(code.into()),
+            message: None,
+        });
+    };
+    let first = world.state.outbox.keys().next().unwrap().clone();
+    refuse(&mut world, "underwriting_required");
+    assert!(world.state.tasks.values().any(|t| t.kind == TaskKind::ReinstatementUnderwriting));
+
+    assert_eq!(world.officer(ask.clone()).result, Ok(()));
+    refuse(&mut world, "arrears_unpaid");
+    assert!(world.state.tasks.values().any(|t| t.kind == TaskKind::Reinstatement));
+
+    assert_eq!(world.officer(ask).result, Ok(()));
+    let posting = world.state.outbox.keys().next().unwrap().clone();
+    assert!(posting.starts_with("reinstate-") && world.state.outbox.len() == 1, "{posting}");
+    assert_ne!(posting, first);
+}

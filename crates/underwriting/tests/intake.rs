@@ -439,3 +439,182 @@ async fn evidence_and_delegate_files_are_sealed_before_the_module_hears_of_them(
     assert_eq!(sent.caller, "delegate-api");
     assert!(matches!(sent.command, Command::DelegateFileReceived { ref vault_ref, .. } if vault_ref.starts_with("clinical://PTY-L1/delegate_file/")));
 }
+
+/// Purpose: a quality sample of a delegate's decision from end to end. The delegate decides a
+/// life inside its authority; an underwriter calls for the file under the audit access the
+/// agreement gives, which the module logs (who, why) before asking the delegate; the delegate's
+/// file arrives through the intake, is sealed under the life's own name, and the module records
+/// where it is and its hash.
+/// Why it matters: the insurer stays responsible for decisions made in its name. Sampling them
+/// needs the file, and the file is health information: the request must be on the record before
+/// anyone sees it, and on arrival it must be held like the insurer's own disclosures, so it can
+/// be erased with the person's other records.
+#[tokio::test]
+async fn a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key() {
+    use ic_underwriting::command::{DelegatedDecision, Effect, Event};
+    use ic_underwriting::config::DelegatedAuthority;
+    use ic_underwriting::evidence::EvidenceKind;
+    let authority = tenant().await;
+    let (intake, module, _) = intake();
+    {
+        let mut w = module.0.lock().unwrap();
+        w.ok(
+            "config",
+            Command::ActivateDelegatedAuthority {
+                authority: Box::new(DelegatedAuthority {
+                    id: "acme".into(),
+                    version: 1,
+                    delegate: "acme-tpa".into(),
+                    products: ["term-life".to_string()].into(),
+                    per_life_minor: [("life".to_string(), 300_000_00)].into(),
+                    aggregate_minor: 500_000_00,
+                    max_loading_percent: 50,
+                    may_exclude: false,
+                    may_decline: true,
+                    rule_set: Some(("individual".into(), 1)),
+                    effective_from: d(2026, 1, 1),
+                    effective_to: None,
+                    reinsurer_agreement_ref: Some("RE-1".into()),
+                }),
+                approval: approval(),
+            },
+        );
+        w.open("P2", 200_000_00);
+        let decided = w.ok(
+            "delegate-api",
+            Command::DelegatedDecision(Box::new(DelegatedDecision {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                authority: "acme".into(),
+                terms: vec![standard("life")],
+                effective: d(2026, 11, 10),
+                rule_version: Some(1),
+                evidence: BTreeSet::from([EvidenceKind::GpReport]),
+                decided_by: "tpa-underwriter-4".into(),
+                delegate_ref: "REF-9".into(),
+                consent_ref: "CONS-1".into(),
+            })),
+        );
+        assert!(matches!(decided.view, Some(ic_underwriting::command::View::Delegated { accepted: true, .. })));
+        let asked = w.ok(
+            "underwriting-console",
+            Command::RequestDelegateFile {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                underwriter: "sam".into(),
+                purpose: "quality sampling".into(),
+            },
+        );
+        assert!(matches!(&asked.events[0], Event::FileAccessed { who, purpose, .. } if who == "sam" && purpose == "quality sampling"));
+        assert!(matches!(&asked.effects[0], Effect::RequestDelegateFile { delegate_ref, .. } if delegate_ref == "REF-9"));
+    }
+
+    let app = router(intake, Auth::entra_at(&authority, TENANT, AUDIENCE));
+    let file = json!({"proposal": "P2", "life": "L1", "file": STANDARD.encode(b"the delegate's underwriting file")});
+    let (status, filed) = call(&app, "/v1/delegate-files", Some(&token(&authority, &["delegate-api"])), &file).await;
+    assert_eq!(status, StatusCode::OK, "{filed}");
+    let vault_ref = filed["vault_ref"].as_str().unwrap();
+    assert!(vault_ref.starts_with("clinical://PTY-L1/delegate_file/"), "{vault_ref}");
+    let w = module.0.lock().unwrap();
+    let held = w.p("P2").lives[&"L1".into()].delegate_file.clone().unwrap();
+    assert_eq!((held.0.as_str(), held.1.as_str()), (vault_ref, filed["hash"].as_str().unwrap()));
+}
+
+/// Records orders published to a hub.
+#[derive(Clone, Default)]
+struct Hub(Arc<Mutex<Vec<(String, String, Value)>>>);
+
+impl ic_underwriting::notices::StaffFeed for Hub {
+    async fn publish(&self, id: &str, kind: &str, body: Value) -> Result<(), ic_azure::AzureError> {
+        self.0.lock().unwrap().push((id.into(), kind.into(), body));
+        Ok(())
+    }
+}
+
+/// Purpose: an underwriter asks a previous insurer overseas for the life's claims history. The
+/// request has a deadline and a status, goes to the evidence hub for the previous-insurer
+/// adapter as an order naming only the request, the kind and the party, comes back through the
+/// intake (acknowledged under the insurer's reference, then the history itself, sealed under the
+/// life's name), and the decision records that it relied on the previous insurer's evidence.
+/// Why it matters: a history from an overseas insurer is often the only record of an earlier
+/// claim. If it were asked for outside the system nobody could chase it or see it was late, and
+/// a decision that does not say what it relied on cannot be reviewed or defended later.
+#[tokio::test]
+async fn a_previous_insurers_history_is_ordered_tracked_and_relied_on() {
+    use ic_underwriting::command::{Effect, Event};
+    use ic_underwriting::driver::Forward;
+    use ic_underwriting::evidence::{EvidenceKind, EvidenceStatus};
+    use ic_underwriting::model::ConsentKind;
+    use ic_underwriting::notices::{NoLetters, Notices};
+    let authority = tenant().await;
+    let (intake, module, _) = intake();
+    let (request, effect, case) = {
+        let mut w = module.0.lock().unwrap();
+        w.consent("P1", "L1", ConsentKind::ObtainRecords);
+        w.disclose("P1", "L1", &yes("heart_condition"));
+        let case = w.take("P1", "L1", "amy");
+        let asked = w.ok(
+            "underwriting-console",
+            Command::RequestEvidence {
+                case: case.clone(),
+                underwriter: "amy".into(),
+                kinds: BTreeSet::from([EvidenceKind::PreviousInsurer]),
+            },
+        );
+        let effect = asked.effects.iter().find(|e| matches!(e, Effect::RequestEvidence { .. })).cloned().unwrap();
+        let deadline = asked.events.iter().find_map(|e| match e {
+            Event::EvidenceRequested { deadline, .. } => Some(*deadline),
+            _ => None,
+        });
+        assert!(deadline.is_some_and(|d| d > w.now), "the request has a deadline");
+        let e = w.p("P1").lives[&"L1".into()]
+            .evidence
+            .iter()
+            .find(|e| e.kind == EvidenceKind::PreviousInsurer)
+            .unwrap()
+            .clone();
+        assert_eq!(e.status, EvidenceStatus::Requested);
+        (e.id, effect, case)
+    };
+
+    let hub = Hub::default();
+    let notices = Notices {
+        staff: Hub::default(),
+        evidence: hub.clone(),
+        delegates: Hub::default(),
+        letters: NoLetters,
+        clock,
+    };
+    assert_eq!(notices.forward(1, &effect).await, Ok(None));
+    let sent = hub.0.lock().unwrap().clone();
+    assert_eq!(
+        sent[0].2,
+        json!({"order": "request", "request": request, "kind": "previous_insurer", "party": "PTY-L1"})
+    );
+
+    let app = router(intake, Auth::entra_at(&authority, TENANT, AUDIENCE));
+    let adapter = token(&authority, &["evidence"]);
+    let ack = json!({"outcome": "acknowledged", "request": request, "provider_ref": "PREV-INS-UK-31"});
+    assert_eq!(call(&app, "/v1/evidence", Some(&adapter), &ack).await.0, StatusCode::OK);
+    let history = json!({"outcome": "received", "request": request, "report": STANDARD.encode(b"claims history"), "cost_minor": 0});
+    let (status, filed) = call(&app, "/v1/evidence", Some(&adapter), &history).await;
+    assert_eq!(status, StatusCode::OK, "{filed}");
+
+    let mut w = module.0.lock().unwrap();
+    let e = w.p("P1").lives[&"L1".into()].evidence.iter().find(|e| e.id == request).unwrap().clone();
+    assert_eq!((e.status, e.provider_ref.as_deref()), (EvidenceStatus::Received, Some("PREV-INS-UK-31")));
+    w.ok(
+        "underwriting-console",
+        Command::ProposeDecision {
+            case,
+            underwriter: "amy".into(),
+            terms: vec![standard("life")],
+            reasons: set(&["RC-0101"]),
+            withheld_reasons: BTreeSet::new(),
+            notes_ref: Some("vault://notes".into()),
+            evidence: BTreeSet::from([EvidenceKind::PreviousInsurer]),
+        },
+    );
+    let decision = w.p("P1").lives[&"L1".into()].decisions.last().unwrap().clone();
+    assert!(decision.evidence.contains(&EvidenceKind::PreviousInsurer));
+}

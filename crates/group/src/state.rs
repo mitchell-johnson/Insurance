@@ -388,6 +388,39 @@ pub(crate) fn compare(s: &Scheme, today: NaiveDate, kind: FileKind, file_date: N
     }
 }
 
+/// The commission module's layer for each of a scheme's covers driven by
+/// member data, written by its broker. Every such cover needs an expected
+/// premium, and nothing else may be named.
+fn broker_layers(
+    scheme: &str,
+    policy: &PolicyId,
+    product: &ProductDefinition,
+    broker: &crate::terms::SchemeBroker,
+) -> Result<Vec<(String, crate::event::CommissionLayer)>, Reject> {
+    let covers: Vec<&str> = crate::benefit::formula_covers(product).map(|c| c.code.as_str()).collect();
+    if broker.expected_annual_premium_minor.keys().any(|c| !covers.contains(&c.as_str())) || covers.len() != broker.expected_annual_premium_minor.len() {
+        return Err(Reject::new(
+            "invalid_terms",
+            format!("the broker's expected premium is given for exactly the scheme's covers: {}", covers.join(", ")),
+        ));
+    }
+    Ok(covers
+        .into_iter()
+        .map(|cover| {
+            let layer = crate::event::CommissionLayer {
+                policy: policy.clone(),
+                cover: cover.to_string(),
+                engagement: broker.engagement.clone(),
+                book: broker.book.clone(),
+                schedule: broker.schedule.clone(),
+                option: broker.option.clone(),
+                annual_premium_minor: broker.expected_annual_premium_minor[cover],
+            };
+            (format!("grp-dist:{scheme}:{cover}"), layer)
+        })
+        .collect())
+}
+
 fn file_in<'a>(files: &'a mut BTreeMap<String, FileRecord>, file: &str, expected: &[FileStatus]) -> Result<&'a mut FileRecord, Reject> {
     let f = files
         .get_mut(file)
@@ -593,6 +626,21 @@ impl GroupState {
             } => self.register(scheme, policy, group, employer, inception, *product, *terms, founding, pools),
             AmendTerms { scheme, terms } => self.with_scheme(&scheme, |st, s| {
                 terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+                // A broker is added once. Changing or removing one is a dated
+                // move of the scheme's book, made in the commission module.
+                let added = match (&s.terms.broker, &terms.broker) {
+                    (None, Some(b)) => Some(broker_layers(&s.id, &s.policy, &s.product, b)?),
+                    (old, new) if old == new => None,
+                    _ => {
+                        return Err(Reject::new(
+                            "broker_change",
+                            "a scheme's broker is changed or removed by a dated move in the commission module",
+                        ))
+                    }
+                };
+                for (key, layer) in added.into_iter().flatten() {
+                    st.send(Outbound::Commission { key, layer });
+                }
                 s.terms = *terms;
                 s.terms_version += 1;
                 st.emit(GroupEvent::TermsAmended {
@@ -780,6 +828,12 @@ impl GroupState {
             excess_path: terms.excess_path,
             sites: terms.sites.clone(),
         });
+        if let Some(broker) = &terms.broker {
+            let covers = broker_layers(&id, &policy, &product, broker)?;
+            for (key, layer) in covers {
+                self.send(Outbound::Commission { key, layer });
+            }
+        }
         self.by_policy.insert(policy.clone(), id.clone());
         self.schemes.insert(
             id.clone(),

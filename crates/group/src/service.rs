@@ -47,6 +47,8 @@ pub struct Config {
     pub reinsurance_module: String,
     /// The name the underwriting module is hosted under.
     pub underwriting_module: String,
+    /// The name the commission module is hosted under.
+    pub distribution_module: String,
     /// Salts member fingerprints. It must never change.
     pub fingerprint_salt: String,
     /// The Entra ID tenant whose tokens callers present, where it issues
@@ -104,6 +106,7 @@ impl Config {
             customer_master_scope: need("IC_GROUP_CUSTOMER_MASTER_SCOPE")?,
             reinsurance_module: get("IC_GROUP_REINSURANCE_MODULE").unwrap_or_else(|| "reinsurance".into()),
             underwriting_module: get("IC_GROUP_UNDERWRITING_MODULE").unwrap_or_else(|| "underwriting".into()),
+            distribution_module: get("IC_GROUP_DISTRIBUTION_MODULE").unwrap_or_else(|| "distribution".into()),
             fingerprint_salt: secret("IC_GROUP_FINGERPRINT_SALT")?,
             tenant: need("AZURE_TENANT_ID")?,
             entra_authority: get("IC_GROUP_ENTRA_AUTHORITY")

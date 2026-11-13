@@ -199,6 +199,15 @@ pub enum GroupCommand {
         employee_ids: Vec<String>,
         reason: String,
     },
+    /// Ask underwriting again for a member's cover above the automatic
+    /// amount, at the member's request: after cover they paid for lapsed,
+    /// or after a decline once their circumstances changed. Underwriting
+    /// decides, with its own rules on reinstating without evidence.
+    RequestExcessAgain {
+        scheme: String,
+        employee_id: String,
+        reason: String,
+    },
 
     // --- people ---
     ResolveMatch {
@@ -285,6 +294,12 @@ pub enum GroupCommand {
     ObserveCore {
         event: Box<CoreEvent>,
     },
+    /// The commission module refused a scheme's broker for good: the entry
+    /// leaves the outbox and staff are told.
+    CommissionRefused {
+        key: String,
+        code: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -307,13 +322,20 @@ impl GroupCommand {
             | ConfirmHeld { .. }
             | DecideBackdating { .. }
             | Reinstate { .. }
+            | RequestExcessAgain { .. }
             | ResolveMatch { .. }
             | AgreeRenewal { .. }
             | Terminate { .. } => &[STAFF],
             ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } => &[EMPLOYER, STAFF],
-            RecordScan { .. } | RefuseFile { .. } | SubmitRows { .. } | PartiesResolved { .. } | CoreResult { .. } | ObserveCore { .. } | Ack { .. } | Tick => {
-                &[DRIVER]
-            }
+            RecordScan { .. }
+            | RefuseFile { .. }
+            | SubmitRows { .. }
+            | PartiesResolved { .. }
+            | CoreResult { .. }
+            | CommissionRefused { .. }
+            | ObserveCore { .. }
+            | Ack { .. }
+            | Tick => &[DRIVER],
             SelfRegister { .. } | TakeUpContinuation { .. } => &[MEMBER],
             // The driver carries the underwriting module's answer from its outbox.
             RecordExcessDecision { .. } => &[UNDERWRITING, DRIVER],

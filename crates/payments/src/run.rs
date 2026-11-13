@@ -8,7 +8,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveDateTime};
 use ic_core::PayableKind;
 use ic_money::{Currency, Money};
 
@@ -102,7 +102,7 @@ impl PaymentsState {
     }
 
     /// Everything that must be true of one new item, given the run it joins.
-    fn vet_item(&self, run: &Run, n: &NewItem) -> Result<(), Reject> {
+    fn vet_item(&self, run: &Run, n: &NewItem, now: NaiveDateTime) -> Result<(), Reject> {
         let bad = |message: &str| Err(Reject::new("invalid_item", format!("item {}: {message}", n.item)));
         if n.item.is_empty() || n.source.is_empty() || n.amount_minor <= 0 {
             return bad("an item has an ID, a source and a positive amount");
@@ -157,6 +157,12 @@ impl PaymentsState {
                 return Err(Reject::new("unknown_payee", format!("there is no payee {p}")));
             }
         }
+        if self.hold_reason(n, now, None).is_some() {
+            return Err(Reject::new(
+                crate::hold::HELD,
+                format!("item {}: the customer has a hold on money going out", n.item),
+            ));
+        }
         match &n.refund {
             None if matches!(n.counterparty, Counterparty::Authority(_)) => bad("only a refund is paid to the account of an authority"),
             None => Ok(()),
@@ -196,7 +202,7 @@ impl PaymentsState {
         }
         let mut seen = BTreeSet::new();
         for n in &items {
-            self.vet_item(run, n)?;
+            self.vet_item(run, n, tx.now)?;
             let fresh = seen.insert(("item", &n.item)) && seen.insert(("source", &n.source));
             let fresh = fresh && n.refund.as_ref().is_none_or(|r| seen.insert(("refund", r)));
             if !(fresh && n.represents.as_ref().is_none_or(|r| seen.insert(("represents", r)))) {
@@ -321,6 +327,11 @@ impl PaymentsState {
                 (Some(authority.account.clone()), hold.map(str::to_string))
             }),
         };
+        // A hold the customer placed after the item joined the run.
+        if hold.is_none() && !run.run_type.inbound() {
+            let fresh = self.config.as_ref().and_then(|c| c.rules.hold_check_max_age_minutes);
+            hold = self.hold_reason(&item.new, tx.now, fresh).map(str::to_string);
+        }
         if hold.is_none() && item.new.amount_minor > item_limit {
             hold = Some("over_item_limit".to_string());
         }
@@ -458,15 +469,7 @@ impl PaymentsState {
         if self.in_time(tx, &s.channel, due).is_ok() {
             return Ok(());
         }
-        let cfg = self.cfg()?;
-        let cutoff = cfg.channels.get(&s.channel).map(|c| c.cutoff);
-        let mut next = tx.now.date();
-        if cutoff.is_none_or(|c| tx.now.time() > c) {
-            next = next.succ_opt().unwrap_or(next);
-        }
-        while !cfg.is_business_day(next) {
-            next = next.succ_opt().unwrap_or(next);
-        }
+        let next = self.cfg()?.next_window(&s.channel, tx.now);
         let deferred: Vec<(Id, Deferred)> = s
             .items
             .iter()

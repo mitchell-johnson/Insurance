@@ -1315,3 +1315,72 @@ fn an_approved_run_is_closed_to_change_and_unknown_accounts_are_refused() {
     let items = vec![collect("i4", "no-such-authority", "pol-1", 100_00)];
     assert_eq!(desk.code(&mia(), Command::AddRunItems { run: run("r3"), items }), "unknown_authority");
 }
+
+/// Purpose: after the cutoff the module says the next value date a run can
+/// go for, skipping weekends and holidays; a run prepared for it is
+/// approved and sent; a customer's payment shows the date it is expected,
+/// the run's value date or the later date it was sent for after missing its
+/// window; a payment still waiting has no date yet.
+/// Why it matters: a maker who misses the cutoff must not have to guess the
+/// next window, and a customer who rings about a payment should be told the
+/// day it will arrive, not the day it was meant to (PAY-014).
+#[test]
+fn a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    let next = |desk: &Desk, run_type: &str| {
+        let at = desk.now.format("%Y-%m-%dT%H:%M:%S").to_string();
+        answer(&desk.state, json!({"q": "next_value_date", "run_type": run_type, "at": at})).unwrap()
+    };
+    // Monday morning: today. After the cutoff: Tuesday. Tuesday evening:
+    // Thursday, because Wednesday is a bank holiday.
+    desk.at(t(2027, 11, 15, 9, 0));
+    assert_eq!(next(&desk, "benefit_payments"), json!("2027-11-15"));
+    desk.at(t(2027, 11, 15, 16, 30));
+    assert_eq!(next(&desk, "benefit_payments"), json!("2027-11-16"));
+    desk.at(t(2027, 11, 16, 18, 0));
+    assert_eq!(next(&desk, "benefit_payments"), json!("2027-11-18"));
+    assert!(answer(&desk.state, json!({"q": "next_value_date"})).unwrap_err().contains("run_type"));
+    let bad_time = json!({"q": "next_value_date", "run_type": "commission", "at": "teatime"});
+    assert!(answer(&desk.state, bad_time).unwrap_err().contains("at is a time"));
+    // Without a time, the last time a command carried.
+    let unsaid = answer(&desk.state, json!({"q": "next_value_date", "run_type": "commission"})).unwrap();
+    assert!(unsaid.is_string());
+    // Sent through the second bank while redirected, with its own cutoff.
+    desk.ok(
+        &cal(),
+        Command::RedirectRoute {
+            run_type: RunType::BenefitPayments,
+            secondary: true,
+        },
+    );
+    assert_eq!(next(&desk, "benefit_payments"), json!("2027-11-18"));
+
+    desk.prepare("late", RunType::LumpSumClaims, d(2027, 11, 18));
+    desk.add("late", vec![pay("i-late", "p1", 120_00)]);
+    let s = desk.approve("late");
+    let expected = |desk: &Desk, payment: &str| answer(&desk.state, json!({"q": "expected_payment", "payment": payment})).unwrap();
+    assert_eq!(expected(&desk, "i-late")["expected_on"], json!("2027-11-18"));
+    // The channel was down until after Thursday's cutoff: it goes Friday.
+    desk.at(t(2027, 11, 18, 20, 0));
+    desk.deliver(&s);
+    let shown = expected(&desk, "i-late");
+    assert_eq!(
+        (shown["expected_on"].clone(), shown["status"].clone()),
+        (json!("2027-11-19"), json!("submitted"))
+    );
+    assert_eq!(expected(&desk, "nothing"), json!(null));
+    let waiting = ic_payments::intake::Waiting {
+        payment: "po-1".to_string(),
+        source: "payout:pol-2:po-1".to_string(),
+        payee: "p1".to_string(),
+        account_ref: String::new(),
+        policy: Some(policy("pol-2")),
+        claim: None,
+        run: None,
+        amount_minor: 5_00,
+        payable: Some(PayableKind::Benefit),
+    };
+    desk.ok(&svc(), Command::OfferPayment { waiting: Box::new(waiting) });
+    assert_eq!(expected(&desk, "po-1"), json!({"payment": "po-1", "status": "waiting"}));
+}
