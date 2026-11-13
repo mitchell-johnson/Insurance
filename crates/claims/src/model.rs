@@ -637,10 +637,18 @@ pub struct Claim {
 }
 
 impl Claim {
-    /// The person the claim is about, for anyone deciding who may see it or
-    /// who owes an overpayment: the claimant, else the life, else the policyholder.
+    /// The person the claim is about, for anyone deciding who may see it.
+    /// A claim on a living person's health is about the life insured, even
+    /// where a company owns the policy and is paid the benefit; a death claim
+    /// is about the claimant (the estate or a beneficiary). Failing those, the
+    /// life, else the policyholder.
     pub fn subject_party(&self) -> &str {
-        self.claimant.as_deref().or(self.life_party.as_deref()).unwrap_or(&self.policyholder)
+        let first = if self.claim_type == ClaimType::Death {
+            self.claimant.as_deref().or(self.life_party.as_deref())
+        } else {
+            self.life_party.as_deref().or(self.claimant.as_deref())
+        };
+        first.unwrap_or(&self.policyholder)
     }
 
     pub fn line(&self) -> Line {
