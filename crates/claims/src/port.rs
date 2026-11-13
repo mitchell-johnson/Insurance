@@ -76,10 +76,30 @@ pub struct CoverFacts {
     /// after any interest, before the estate.
     #[serde(default)]
     pub nominations: Vec<Nominee>,
+    /// The excess this life chose on the cover, where the cover offers a
+    /// choice. It replaces the schedule's excess for this life.
+    #[serde(default)]
+    pub chosen_excess_minor: Option<i64>,
     /// The scheme membership this policy continues, where it was issued
     /// under a leaver's continuation option.
     #[serde(default)]
     pub continuation_of: Option<Continuation>,
+    /// Days from the event before benefit is payable, for a benefit in
+    /// payment. Zero: no waiting period.
+    #[serde(default)]
+    pub waiting_days: u32,
+    /// A loan against the policy, with its interest, outstanding today. It
+    /// is repaid out of a death benefit before anyone else is paid.
+    #[serde(default)]
+    pub policy_loan_minor: i64,
+    /// Every life this cover is written on, where it pays once on the first
+    /// event to any of them. Empty: a single-life cover.
+    #[serde(default)]
+    pub joint_lives: Vec<String>,
+    /// Covers on the same policy and life whose lump sums reduce this one,
+    /// such as trauma cover accelerated from life cover.
+    #[serde(default)]
+    pub reduced_by: Vec<String>,
 }
 
 /// The scheme and member a continuation policy carries on from.
@@ -132,6 +152,10 @@ pub enum Instruction {
         deduct_premium_minor: i64,
         /// A death claim: end the policy as at the event date, in the same step.
         terminate: Option<Termination>,
+        /// A policy loan repaid from the benefit, in the same entry: from
+        /// benefit payable to the loan.
+        #[serde(default)]
+        repay_loan_minor: i64,
     },
     /// Release a payment from benefit payable to the payments module, and
     /// close the claim if that was the last of it.
@@ -145,6 +169,10 @@ pub enum Instruction {
         /// Interest for late payment, expensed now and paid with it.
         #[serde(default)]
         interest_minor: i64,
+        /// Of that interest, what the payee was told of and declined: the
+        /// core reverses it in its own entry and pays the rest.
+        #[serde(default)]
+        interest_declined_minor: i64,
         /// Part of the payment kept back against an overpayment the payee
         /// owes: a provider's billing error recovered from its next run.
         #[serde(default)]

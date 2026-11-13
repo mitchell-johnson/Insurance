@@ -120,7 +120,12 @@ pub(crate) fn delegate_file_received(p: &mut Proposal, life: &LifeId, vault_ref:
     if vault_ref.is_empty() || hash.len() != 64 {
         return reject("disclosure", "a received file needs its SHA-256 and where it is sealed");
     }
-    life_mut(p, life)?.delegate_file = Some((vault_ref, hash));
+    // Only a delegate who decided the life has a file to send for it.
+    let f = life_mut(p, life)?;
+    if !f.decisions.iter().any(|d| matches!(d.source, DecisionSource::Delegated { .. })) {
+        return reject("not_delegated", "no delegate decided this life");
+    }
+    f.delegate_file = Some((vault_ref, hash));
     Ok(())
 }
 
@@ -197,6 +202,20 @@ pub enum Query {
     Progress {
         max: usize,
     },
+    /// Where an evidence request belongs, for the intake filing its answer.
+    EvidenceOrder {
+        request: String,
+    },
+}
+
+/// An evidence request, as the intake needs it to file the report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceOrder {
+    pub proposal: ProposalId,
+    pub life: LifeId,
+    pub party: ic_core::PartyId,
+    pub kind: crate::evidence::EvidenceKind,
+    pub outstanding: bool,
 }
 
 /// Answer a query from the state. The function the module host calls.
@@ -213,9 +232,25 @@ pub fn answer(state: &UnderwritingState, query: serde_json::Value) -> Result<ser
         Query::Workload { underwriter } => json(serde_json::to_value(state.workload(&underwriter))),
         Query::Report { from, to } => json(serde_json::to_value(state.report(from, to))),
         Query::Exclusions { on } => json(serde_json::to_value(state.exclusions(on))),
+        Query::EvidenceOrder { request } => json(serde_json::to_value(state.evidence_order(&request))),
         Query::Outbox { after, max } => json(serde_json::to_value(state.outbox(after, max))),
         Query::Parked => json(serde_json::to_value(state.parked())),
         Query::Progress { max } => json(serde_json::to_value(state.progress_pending(max))),
+    }
+}
+
+impl UnderwritingState {
+    pub fn evidence_order(&self, request: &str) -> Option<EvidenceOrder> {
+        let (proposal, life) = self.evidence.get(request)?;
+        let f = self.proposals.get(proposal)?.lives.get(life)?;
+        let e = f.evidence.iter().find(|e| e.id == request)?;
+        Some(EvidenceOrder {
+            proposal: proposal.clone(),
+            life: life.clone(),
+            party: f.party.clone(),
+            kind: e.kind,
+            outstanding: e.outstanding(),
+        })
     }
 }
 

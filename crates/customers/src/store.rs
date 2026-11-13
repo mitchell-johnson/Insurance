@@ -141,7 +141,13 @@ pub struct Store<W> {
     index: IndexKey,
     /// The key being changed to, while a change is under way.
     next: Option<IndexKey>,
+    /// How long a person's own spending hold stands after they ask for it
+    /// to end.
+    cooling_off: chrono::Duration,
 }
+
+/// The default cooling-off period before a spending hold ends.
+pub const HOLD_COOLING_OFF_DAYS: i64 = 7;
 
 /// How far a change of index key has got.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -189,7 +195,50 @@ fn version_i64(v: u64) -> i64 {
 
 impl<W: KeyWrapper> Store<W> {
     pub fn new(pool: Pool, keys: KeyRing<W>, index: IndexKey) -> Self {
-        Self { pool, keys, index, next: None }
+        Self {
+            pool,
+            keys,
+            index,
+            next: None,
+            cooling_off: chrono::Duration::days(HOLD_COOLING_OFF_DAYS),
+        }
+    }
+
+    /// Set the cooling-off period before a spending hold ends.
+    pub fn with_hold_cooling_off(mut self, period: chrono::Duration) -> Self {
+        self.cooling_off = period;
+        self
+    }
+
+    /// How long a spending hold stands after its removal is asked for.
+    pub fn hold_cooling_off(&self) -> chrono::Duration {
+        self.cooling_off
+    }
+
+    /// End every spending hold whose cooling-off period has passed.
+    pub async fn end_spending_holds(&self, now: DateTime<Utc>) -> Result<usize> {
+        let due: Vec<String> = self
+            .client()
+            .await?
+            .query(
+                "select party_id from spending_hold_removals where requested_at <= $1",
+                &[&(now - self.cooling_off)],
+            )
+            .await
+            .map_err(db)?
+            .iter()
+            .map(|r| r.get(0))
+            .collect();
+        let who = Who {
+            caller: "customer-master".into(),
+            actor: "cooling-off".into(),
+        };
+        let mut ended = 0;
+        for id in due {
+            let out = self.change(&PartyId(id), &Change::EndSpendingHold, None, &who, None, now).await?;
+            ended += usize::from(!out.events.is_empty());
+        }
+        Ok(ended)
     }
 
     /// Build blind indexes under `next` as well, ahead of making it the
@@ -792,6 +841,25 @@ impl<W: KeyWrapper> Store<W> {
         // recorded it, in the order they happened.
         let died = written.iter().any(|r| matches!(r.body, EventBody::Deceased { .. }));
         let retracted = written.iter().any(|r| matches!(r.body, EventBody::DeathRetracted { .. }));
+        for r in &written {
+            match &r.body {
+                EventBody::SpendingHoldRemovalRequested { .. } => {
+                    tx.execute(
+                        "insert into spending_hold_removals (party_id, requested_at) values ($1, $2) \
+                         on conflict (party_id) do update set requested_at = excluded.requested_at",
+                        &[&id.0, &now],
+                    )
+                    .await
+                    .map_err(db)?;
+                }
+                EventBody::SpendingHoldRemovalCancelled | EventBody::SpendingHoldEnded { .. } => {
+                    tx.execute("delete from spending_hold_removals where party_id = $1", &[&id.0])
+                        .await
+                        .map_err(db)?;
+                }
+                _ => {}
+            }
+        }
         if let (true, Change::MarkDeceased { date_of_death }) = (died, change) {
             self.queue_death(&tx, id, *date_of_death, false, now).await?;
             self.prompt_bereaved(&tx, id, now).await?;
@@ -1381,6 +1449,7 @@ impl<W: KeyWrapper> Store<W> {
             "delete from directory_relay where party_id = $1",
             "delete from blind_index where party_id = $1",
             "delete from index_state where party_id = $1",
+            "delete from spending_hold_removals where party_id = $1",
             "delete from relationships where party_id = $1",
             "update party_events set ciphertext = null where party_id = $1 and ciphertext is not null",
             "update parties set shredded_at = $2 where id = $1",

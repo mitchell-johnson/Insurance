@@ -302,3 +302,84 @@ fn cover_follows_a_member_whose_hours_cross_the_minimum() {
     let hers: Vec<_> = lives.values().filter(|l| l.id.0.starts_with("E002")).map(|l| (l.joined, l.left)).collect();
     assert_eq!(hers, vec![(d(2027, 11, 1), Some(short_from)), (back_from, None)]);
 }
+
+/// Purpose: a seasonal worker leaves at the end of the season and is hired again months
+/// later. Leaving ends cover in the core from that day and opens the continuation option;
+/// coming back with a new employment start, the scheme's waiting period runs again from it
+/// and cover starts the day it ends, as a new life; a colleague who comes back with their
+/// original start date is covered from the day of the file.
+/// Why it matters: seasonal employers send the same people in and out every year. Cover
+/// that started the day they came back would ignore a term the scheme was priced on, and
+/// cover dated from a waiting period served years ago would backdate it over months when
+/// they were not employed.
+#[test]
+fn a_seasonal_worker_serves_the_waiting_period_again_on_rejoining() {
+    let mut t = terms();
+    t.eligibility.waiting_days = 30;
+    let mut h = Harness::new(t);
+    let wait = |h: &mut Harness, days: u32| {
+        for _ in 0..days {
+            h.days(1);
+            if h.owed() > 0 {
+                h.pay(h.owed());
+            }
+        }
+    };
+    h.apply(
+        "f1",
+        FileKind::Full,
+        vec![
+            row(1, "E001", attrs("staff", 60_000_00, "akl")),
+            row(2, "E002", attrs("staff", 60_000_00, "wlg")),
+            row(3, "E003", attrs("staff", 90_000_00, "akl")),
+        ],
+    );
+    assert_eq!(h.core_lives().len(), 3);
+    let first_life = h.scheme().membership.active("E002").unwrap().life.clone();
+
+    // The season ends for two of them.
+    wait(&mut h, 10);
+    let left = h.today();
+    h.apply(
+        "f2",
+        FileKind::Changes,
+        vec![
+            change(1, "E002", RowChange::Leave, left, attrs("staff", 60_000_00, "wlg")),
+            change(2, "E003", RowChange::Leave, left, attrs("staff", 90_000_00, "akl")),
+        ],
+    );
+    assert_eq!(h.core_lives(), vec!["E001".to_string()]);
+    assert_eq!(h.scheme().membership.members["E002"].left, Some(left));
+    assert_eq!(
+        h.scheme().offers.values().filter(|o| o.status == OfferStatus::Open && o.left == left).count(),
+        2
+    );
+
+    // Next season: one is hired again from today, the other is shown with the old start date.
+    wait(&mut h, 60);
+    let back = h.today();
+    let mut rehired = attrs("staff", 60_000_00, "wlg");
+    rehired.employment_start = Some(back);
+    // Neither row states a date: the scheme's rules decide when cover starts.
+    let undated = |n, id: &str, a| ic_group::record::MemberRow {
+        effective: None,
+        ..change(n, id, RowChange::Join, back, a)
+    };
+    h.apply(
+        "f3",
+        FileKind::Changes,
+        vec![undated(1, "E002", rehired), undated(2, "E003", attrs("staff", 90_000_00, "akl"))],
+    );
+    assert_eq!(h.scheme().files["f3"].rejected, vec![]);
+    assert_eq!(h.scheme().membership.active("E003").unwrap().joined, back);
+    assert!(h.scheme().membership.active("E002").is_none(), "the waiting period has not run");
+    let due = back + chrono::Days::new(30);
+    assert_eq!(h.scheme().scheduled.keys().map(|(date, _)| *date).collect::<Vec<_>>(), vec![due]);
+
+    // The day comes.
+    wait(&mut h, 30);
+    let again = h.scheme().membership.active("E002").expect("covered once the waiting period has run");
+    assert_eq!(again.joined, due);
+    assert_ne!(again.life, first_life, "a new spell of cover, the first kept as it was");
+    assert_eq!(h.core_lives().len(), 3);
+}

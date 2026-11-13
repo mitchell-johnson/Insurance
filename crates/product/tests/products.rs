@@ -10,6 +10,7 @@ const TERM: &str = include_str!("../../../products/term_life.star");
 const HEALTH: &str = include_str!("../../../products/health_plan.star");
 const GROUP: &str = include_str!("../../../products/group_life.star");
 const INVEST: &str = include_str!("../../../products/invest_plan.star");
+const INTERIM: &str = include_str!("../../../products/interim_accident.star");
 const NO_PREMIUM: &str = include_str!("../../../products/rates/no_premium.star");
 const FLEX: &str = include_str!("../../../products/health_flex.star");
 const FLEX_RATES: [&str; 4] = [
@@ -36,6 +37,7 @@ fn all_shipped_configuration_loads() {
         ("group_life.star", GROUP),
         ("invest_plan.star", INVEST),
         ("health_flex.star", FLEX),
+        ("interim_accident.star", INTERIM),
     ] {
         let p = load_product(f, s).unwrap();
         assert_eq!(p.content_hash.len(), 64);
@@ -54,7 +56,7 @@ fn all_shipped_configuration_loads() {
     for source in FLEX_RATES {
         load_rate_table("flex", source).unwrap();
     }
-    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 7);
+    assert_eq!(load_definitions("library.star", DEFS).unwrap().len(), 8);
 }
 
 /// Purpose: a product's content hash changes when a rate in it changes and is the same for the same
@@ -79,6 +81,7 @@ fn term_life_exact_premium() {
     let life = load_rate_table("life", LIFE_RATES).unwrap();
     let trauma = load_rate_table("trauma", TRAUMA_RATES).unwrap();
     let f = RatingFactors {
+        excess_option: None,
         age: 37,
         sex: Some(Sex::Female),
         smoker: Some(false),
@@ -110,6 +113,7 @@ fn loading_applies_to_base() {
     let p = load_product("term_life.star", TERM).unwrap();
     let life = load_rate_table("life", LIFE_RATES).unwrap();
     let mut f = RatingFactors {
+        excess_option: None,
         age: 37,
         sex: Some(Sex::Female),
         smoker: Some(false),
@@ -294,6 +298,7 @@ fn rating_refuses_what_it_cannot_price() {
     let p = load_product("term_life.star", TERM).unwrap();
     let life = load_rate_table("life", LIFE_RATES).unwrap();
     let child = RatingFactors {
+        excess_option: None,
         age: 5,
         sex: Some(Sex::Female),
         smoker: Some(false),
@@ -394,5 +399,59 @@ fn combination_rules_decide_which_sets_of_covers_a_life_may_hold() {
         let changed = FLEX.replace(from, to);
         assert_ne!(changed, FLEX);
         assert!(load_product("bad.star", &changed).is_err(), "{to} should be refused");
+    }
+}
+
+/// Purpose: a cover's excess levels load with their excess and price factor; a level with
+/// a repeated code, a negative excess or a factor of zero is refused when the product is
+/// loaded; and rating multiplies the cover's premium by the chosen level's factor and refuses
+/// a level the cover does not offer, a level on a cover that offers none, and no level on a
+/// cover that offers some.
+/// Why it matters: the excess level is a price input chosen by the customer. A mistyped
+/// level that rated at the standard price, or a factor of zero that made a cover free, would
+/// be wrong premium on every policy that chose it.
+#[test]
+fn excess_levels_price_a_cover_and_bad_ones_are_refused() {
+    use ic_product::rating::{cover_premium, RatingError};
+    let p = load_product("health_flex.star", FLEX).unwrap();
+    let hospital = p.cover("hospital").unwrap();
+    let dental = p.cover("dental").unwrap();
+    assert_eq!(
+        hospital.excess_options.iter().map(|o| (o.code.as_str(), o.excess_minor)).collect::<Vec<_>>(),
+        [("nil", 0), ("standard", 500_00), ("high", 2_000_00)]
+    );
+    assert!(hospital.accepts_excess(Some("high")) && !hospital.accepts_excess(None) && !hospital.accepts_excess(Some("platinum")));
+    assert!(dental.accepts_excess(None) && !dental.accepts_excess(Some("nil")));
+
+    let rates = load_rate_table("flex-hospital", FLEX_RATES[0]).unwrap();
+    let chosen = |option: Option<&str>| RatingFactors {
+        excess_option: option.map(str::to_string),
+        age: 42,
+        sex: None,
+        smoker: None,
+        category: None,
+        occupation_class: None,
+        loadings: vec![],
+    };
+    let price = |option| cover_premium(hospital, &rates, &chosen(option), 0);
+    let standard = price(Some("standard")).unwrap();
+    assert_eq!(price(Some("nil")).unwrap(), standard * ic_money::dec("1.20").unwrap());
+    assert_eq!(price(Some("high")).unwrap(), standard * ic_money::dec("0.80").unwrap());
+    assert!(matches!(price(Some("platinum")), Err(RatingError::ExcessOption)));
+    assert!(matches!(price(None), Err(RatingError::ExcessOption)));
+    let dental_rates = load_rate_table("flex-dental", FLEX_RATES[2]).unwrap();
+    assert!(matches!(
+        cover_premium(dental, &dental_rates, &chosen(Some("nil")), 0),
+        Err(RatingError::ExcessOption)
+    ));
+
+    for (from, to) in [
+        ("excess_option(\"standard\", dollars(500)", "excess_option(\"nil\", dollars(500)"),
+        ("excess_option(\"high\", dollars(2000)", "excess_option(\"high\", -1"),
+        ("premium_factor = \"0.80\"", "premium_factor = \"0\""),
+    ] {
+        assert_ne!(FLEX.replace(from, to), FLEX, "{from} is in the shipped product");
+        let err = load_product("bad.star", &FLEX.replace(from, to)).unwrap_err().to_string();
+        assert!(err.contains("excess option"), "{to}: {err}");
     }
 }

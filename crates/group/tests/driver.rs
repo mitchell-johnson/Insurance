@@ -1287,3 +1287,241 @@ fn the_service_configuration_is_checked_at_start() {
     vars.insert("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/absent");
     assert!(read(&vars).unwrap_err().contains("IC_GROUP_FINGERPRINT_SALT_FILE cannot be read"));
 }
+
+/// Purpose: an employer who sends a monthly full file can also have payroll send changes in
+/// between. The scheme holds a layout for each; a change file is read with the change
+/// layout and a full file with the full one, whichever order they arrive in; a payroll
+/// change is previewed, approved and applied by the same steps as any file; and when the
+/// payroll export changes its column order and date format, a file in the new format has
+/// its rows refused under the old layout and is read only once a later version of the
+/// layout is set, an earlier version being refused.
+/// Why it matters: a change read with the full-file layout would look like a file naming
+/// one member, and everyone else would be taken off cover. And a payroll feed that skipped
+/// the preview and approval would let a salary typed wrong at the employer change cover
+/// and premium with nobody having looked at it.
+#[tokio::test]
+async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
+    use ic_group::record::RowChange;
+
+    let d = rig();
+    let payroll = |version: u32, columns: [&str; 2], date_format: &str| {
+        FileMapping {
+            id: "harbour-payroll".into(),
+            version,
+            kind: FileKind::Changes,
+            delimiter: ',',
+            columns: Columns {
+                employee_id: "Emp No".into(),
+                category: Some("Category".into()),
+                salary: Some("Salary".into()),
+                billing_group: Some("Site".into()),
+                change: Some(columns[0].into()),
+                effective: Some(columns[1].into()),
+                ..Columns::default()
+            },
+            date_format: date_format.into(),
+            salary_unit: SalaryUnit::Major,
+            salary_period: SalaryPeriod::Annual,
+            categories: BTreeMap::new(),
+            change_values: [("UPD".to_string(), RowChange::Change), ("TERM".to_string(), RowChange::Leave)].into(),
+            content_hash: String::new(),
+        }
+        .seal()
+        .unwrap()
+    };
+    let set = |d: &Rig, key: &str, mapping: FileMapping, today: NaiveDate| {
+        let env = Envelope {
+            key: key.into(),
+            caller: caller::STAFF.into(),
+            actor: "ops-ana".into(),
+            today,
+            command: GroupCommand::SetMapping {
+                scheme: SCHEME.into(),
+                mapping: Box::new(mapping),
+            },
+        };
+        d.module.state.lock().unwrap().apply_envelope(env).result.map(|_| ()).map_err(|r| r.code)
+    };
+    let salary = |d: &Rig, id: &str| {
+        d.module.state.lock().unwrap().schemes[SCHEME]
+            .membership
+            .active(id)
+            .and_then(|m| m.attrs.salary_minor)
+    };
+    let members = |d: &Rig| d.module.state.lock().unwrap().schemes[SCHEME].membership.active_count();
+    let file = |d: &Rig, name: &str| d.module.state.lock().unwrap().schemes[SCHEME].files[name].clone();
+    let today = d.core.business_date().await.unwrap().unwrap();
+    through(&d, "nov.csv", FILE).await;
+    assert_eq!((members(&d), salary(&d, "E002")), (3, Some(60_000_00)));
+
+    // Before there is a change layout, a payroll change does not fit and is refused whole.
+    let change = format!(
+        "Emp No,Event,From,Category,Salary,Site\nE002,UPD,{},staff,65000,wlg\n",
+        today.format("%Y-%m-%d")
+    );
+    d.upload(caller::EMPLOYER, "payroll-feed", SCHEME, "early.csv", change.clone().into_bytes())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "early.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(
+        (file(&d, "early.csv").status, file(&d, "early.csv").code.as_deref()),
+        (FileStatus::Refused, Some("missing_column"))
+    );
+
+    // With one, it is previewed as one change, waits for approval, and is applied.
+    set(&d, "map-1", payroll(1, ["Event", "From"], "%Y-%m-%d"), today).unwrap();
+    d.upload(
+        caller::EMPLOYER,
+        "payroll-feed",
+        SCHEME,
+        "pay-1.csv",
+        change.replace("65000", "66000").into_bytes(),
+    )
+    .await
+    .unwrap();
+    d.files.mark(SCHEME, "pay-1.csv", Scan::Clean);
+    settle(&d).await;
+    let preview = file(&d, "pay-1.csv");
+    assert_eq!(
+        (preview.status, preview.summary.changes, preview.summary.leavers),
+        (FileStatus::AwaitingApproval, 1, 0)
+    );
+    assert_eq!(salary(&d, "E002"), Some(60_000_00), "nothing changes before approval");
+    approve(&d, "pay-1.csv").await;
+    settle(&d).await;
+    assert_eq!(
+        (file_status(&d, "pay-1.csv"), salary(&d, "E002"), members(&d)),
+        (FileStatus::Applied, Some(66_000_00), 3)
+    );
+
+    // The next monthly file is still read as a full file.
+    through(
+        &d,
+        "dec.csv",
+        &FILE.replace("E002,Bo,Ngata,02/06/1985,staff,60000", "E002,Bo,Ngata,02/06/1985,staff,67000"),
+    )
+    .await;
+    assert_eq!((members(&d), salary(&d, "E002")), (3, Some(67_000_00)));
+
+    // Payroll changes its export: columns renamed and moved, dates written another way.
+    let moved = format!(
+        "Emp No,Site,Category,Salary,Effective,Type\nE002,wlg,staff,70000,{},UPD\n",
+        today.format("%d/%m/%Y")
+    );
+    d.upload(caller::EMPLOYER, "payroll-feed", SCHEME, "pay-2.csv", moved.clone().into_bytes())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "pay-2.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(file_status(&d, "pay-2.csv"), FileStatus::Refused, "the old layouts do not read the new export");
+    assert_eq!(
+        set(&d, "map-old", payroll(1, ["Type", "Effective"], "%d/%m/%Y"), today),
+        Err("mapping_version".to_string())
+    );
+    set(&d, "map-2", payroll(2, ["Type", "Effective"], "%d/%m/%Y"), today).unwrap();
+    through(&d, "pay-3.csv", &moved.replace("70000", "71000")).await;
+    assert_eq!(salary(&d, "E002"), Some(71_000_00));
+    // The old export no longer fits either layout.
+    d.upload(
+        caller::EMPLOYER,
+        "payroll-feed",
+        SCHEME,
+        "pay-4.csv",
+        change.replace("65000", "72000").into_bytes(),
+    )
+    .await
+    .unwrap();
+    d.files.mark(SCHEME, "pay-4.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(file_status(&d, "pay-4.csv"), FileStatus::Refused);
+    assert_eq!(salary(&d, "E002"), Some(71_000_00));
+}
+
+/// Purpose: staff try a proposed mapping version against a sample of the employer's file
+/// before setting it. The answer says what the file would do (joiners, leavers, changes,
+/// rows refused by number and code, whether the safety check would hold it) and which
+/// mapping version was tried; nothing is stored, no file appears, the scheme's mapping and
+/// members are untouched and no name leaves the service. A mapping that cannot be sealed, a
+/// sample that does not fit it, an unknown scheme, and a caller who is not staff are each
+/// refused.
+/// Why it matters: a mapping is trusted for every file once set. Finding out that the new
+/// version reads the wrong column from the first live file means the employer's real month
+/// is refused, or worse, half read; trying it first on a sample costs nothing.
+#[tokio::test]
+async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
+    let d = Arc::new(rig());
+    through(&d, "nov.csv", FILE).await;
+    let (base, authority) = served(d.clone()).await;
+    let staff = customer_master::token_with(&authority, &["group-admin"], GROUP_AUDIENCE);
+    let employer = customer_master::token_with(&authority, &["employer-portal"], GROUP_AUDIENCE);
+    let http = reqwest::Client::new();
+    let attempt = |scheme: &str, token: &str, body: Value| {
+        let r = http
+            .post(format!("{base}/v1/schemes/{scheme}/mappings/try"))
+            .bearer_auth(token)
+            .body(serde_json::to_vec(&body).unwrap());
+        async move {
+            let resp = r.send().await.unwrap();
+            (resp.status().as_u16(), resp.json::<Value>().await.unwrap_or(Value::Null))
+        }
+    };
+    let before = d.module.state.lock().unwrap().clone();
+
+    // The export now heads its columns differently and writes dates year first. E002 is
+    // gone, E005 is new, E003's pay has changed and one date cannot be read.
+    let mut next = named_mapping();
+    next.version = 3;
+    next.columns.employee_id = "Staff ID".into();
+    next.date_format = "%Y-%m-%d".into();
+    next.content_hash = String::new();
+    let sample = "Staff ID,First,Last,DOB,Category,Salary,Site\n\
+        E001,Ana,Founder,1980-05-01,staff,60000,akl\n\
+        E003,Cy,Patel,1975-07-03,executive,250000,wlg\n\
+        E005,Eve,Tane,1990-01-09,staff,55000,akl\n\
+        E006,Fa,Broken,09/01/1990,staff,55000,akl\n";
+    let (status, tried) = attempt(SCHEME, &staff, serde_json::json!({"mapping": next, "sample": sample})).await;
+    assert_eq!(status, 200, "{tried}");
+    let summary = &tried["summary"];
+    assert_eq!(
+        (
+            summary["joiners"].as_u64(),
+            summary["leavers"].as_u64(),
+            summary["changes"].as_u64(),
+            summary["rejected"].as_u64()
+        ),
+        (Some(1), Some(1), Some(1), Some(1))
+    );
+    assert_eq!(
+        (tried["rejected"][0]["row"].as_u64(), tried["rejected"][0]["code"].as_str()),
+        (Some(4), Some("bad_date"))
+    );
+    assert_eq!(
+        (tried["mapping"]["version"].as_u64(), tried["mapping"]["kind"].as_str()),
+        (Some(3), Some("full"))
+    );
+    assert_eq!(tried["would_be_held"], true, "one of three members leaving trips the safety check");
+    let text = tried.to_string();
+    assert!(!text.contains("Tane") && !text.contains("Eve"), "{text}");
+    assert!(*d.module.state.lock().unwrap() == before, "a trial changes nothing");
+    assert!(d.files.blobs.lock().unwrap().keys().all(|k| k.ends_with("nov.csv")));
+
+    // What cannot be tried.
+    let old_sample = serde_json::json!({"mapping": next, "sample": FILE});
+    assert_eq!(attempt(SCHEME, &staff, old_sample).await.1["error"]["code"], "missing_column");
+    let mut unusable = next.clone();
+    unusable.date_format = "%m/%Y".into();
+    let bad = attempt(SCHEME, &staff, serde_json::json!({"mapping": unusable, "sample": sample})).await;
+    assert_eq!((bad.0, bad.1["error"]["code"].as_str()), (422, Some("invalid_mapping")));
+    assert_eq!(attempt("nowhere", &staff, serde_json::json!({"mapping": next, "sample": sample})).await.0, 404);
+    assert_eq!(
+        attempt(SCHEME, &staff, serde_json::json!({"sample": sample})).await.1["error"]["code"],
+        "invalid_trial"
+    );
+    assert_eq!(attempt(SCHEME, &employer, serde_json::json!({"mapping": next, "sample": sample})).await.0, 403);
+    assert_eq!(
+        attempt(SCHEME, "not-a-token", serde_json::json!({"mapping": next, "sample": sample})).await.0,
+        401
+    );
+    assert!(*d.module.state.lock().unwrap() == before);
+}

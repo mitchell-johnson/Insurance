@@ -42,7 +42,8 @@ data:
   IC_CLINICAL_KEY_VAULT_URL: REPLACE-clinicalKeyVaultUrl
   IC_CLINICAL_WRAPPING_KEY: REPLACE-clinicalWrappingKey
   # The Entra ID tenant and the application ID URI callers ask tokens for.
-  # A caller needs the app role new-business.
+  # A caller needs the app role for its route: new-business, underwriting-console,
+  # evidence or delegate-api. The portal's identity holds the first two.
   IC_ENTRA_TENANT_ID: REPLACE-tenantId
   IC_UNDERWRITING_INTAKE_AUDIENCE: REPLACE-underwriting-intake-app-id-uri
   IC_UNDERWRITING_INTAKE_LISTEN: 0.0.0.0:8080
@@ -161,7 +162,9 @@ spec:
             matchExpressions:
               - key: app
                 operator: In
-                values: ["ic-portal", "ic-api"]
+                # The portal and API for disclosures; the evidence provider's
+                # adapter and the delegates' gateway for reports and files.
+                values: ["ic-portal", "ic-api", "ic-evidence-adapter", "ic-delegate-gateway"]
       ports:
         - port: 8080
 ---

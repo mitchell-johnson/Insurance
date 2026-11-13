@@ -220,6 +220,12 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     if let Some(first) = at_event.iter().map(|l| l.start).min().filter(|_| life_id.is_some()) {
         facts.cover_start = Some(first.max(c.start));
     }
+    // The excess level the life held the cover at on the event date.
+    facts.chosen_excess_minor = at_event
+        .iter()
+        .find_map(|l| l.excess_option.as_deref())
+        .and_then(|option| product.and_then(|pr| pr.cover(cover)).and_then(|def| def.excess_option(option)))
+        .map(|o| o.excess_minor);
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
     if product.is_some_and(|pr| pr.pays_step_applied_after_event()) {
         // The wording pays an indexation step applied after the event.
@@ -301,9 +307,21 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             payee,
             close,
             interest_minor,
+            interest_declined_minor,
             offset,
             ..
-        } => pay(s, p, ctx, &claim, payment_ref, amount_minor, payee, close, interest_minor, offset),
+        } => pay(
+            s,
+            p,
+            ctx,
+            &claim,
+            payment_ref,
+            amount_minor,
+            payee,
+            close,
+            (interest_minor, interest_declined_minor),
+            offset,
+        ),
         Instruction::PayBenefit {
             claim,
             payment_ref,
@@ -532,10 +550,13 @@ fn pay(
     amount: i64,
     payee: String,
     close: bool,
-    interest: i64,
+    (interest, declined): (i64, i64),
     offset: Option<Offset>,
 ) -> Result<(), Reject> {
     let record = known(policy, claim)?;
+    if !(0..=interest.max(0)).contains(&declined) {
+        return invalid("interest declined is no more than the interest owed");
+    }
     let free = record.payable_minor - record.instructed_minor;
     let taken = offset.as_ref().map_or(0, |o| o.amount_minor);
     if interest < 0 || amount <= 0 || amount > free || !(0..=amount).contains(&taken) || record.payments.contains_key(&payment_ref) || (close && amount != free)
@@ -575,12 +596,29 @@ fn pay(
         claim,
         &[("payment_ref", payment_ref.clone()), ("payee", payee), ("interest_minor", interest.to_string())],
     )?;
+    // A payee who was told the interest and declined it: the interest is
+    // reversed by its own entry, so the decline stays visible.
+    if declined > 0 {
+        let reason = dims(policy, None, "claim_late_interest_declined");
+        let mut set = PostingSet::new();
+        set.debit(accounts::benefit_payable(&policy.id, c), i128::from(declined), reason.clone());
+        set.credit(accounts::claim_interest(&policy.product_code, c), i128::from(declined), reason);
+        post(
+            &mut state.ledger,
+            policy,
+            ctx,
+            "claim_late_interest_declined",
+            set,
+            claim,
+            &[("payment_ref", payment_ref.clone()), ("reason", "declined_by_payee".to_string())],
+        )?;
+    }
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= reserve;
-        record.payable_minor += interest - taken;
+        record.payable_minor += interest - declined - taken;
         record.open = !close;
     }
-    instruct(policy, claim, payment_ref, amount - taken + interest, false);
+    instruct(policy, claim, payment_ref, amount - taken + interest - declined, false);
     reduce_receivable(state, policy, other, offset.as_ref());
     Ok(())
 }

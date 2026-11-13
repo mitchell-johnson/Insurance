@@ -36,10 +36,12 @@ Decisions are made by the Cedar policy in `config/cedar/customers.cedar`: which 
 | `POST /v1/parties` | staff, group, servicing, complaints | Create. Refused with 409 `possible_duplicate` and the candidates unless `allow_duplicate`, which opens a review. `Idempotency-Key` makes a retry safe. |
 | `GET /v1/parties/{id}` | by policy | Facts for `?purpose=`, `as_of`, `known_at`. An absorbed ID answers for its survivor. 410 once erased. |
 | `GET /v1/parties/{id}/history` | by policy | Every statement released to the caller. |
-| `POST /v1/parties/{id}/commands` | by policy | `record`, `decline_correction`, `add_relationship`, `end_relationship`, `set_consent`, `record_verification`, `set_risk_rating`, `activate`, `mark_deceased`, `retract_death`, `exit`, `assign_group`, `place_hold`, `release_hold`, `record_concern`, `question_capacity`, `settle_capacity`. `If-Match` carries the version; `Idempotency-Key` makes a retry safe. A command that changes nothing writes nothing. |
+| `POST /v1/parties/{id}/commands` | by policy | `record`, `decline_correction`, `add_relationship`, `end_relationship`, `set_consent`, `record_verification`, `set_risk_rating`, `activate`, `mark_deceased`, `retract_death`, `exit`, `assign_group`, `place_hold`, `release_hold`, `record_concern`, `question_capacity`, `settle_capacity`, `place_spending_hold`, `request_hold_removal`, `cancel_hold_removal`, `override_spending_hold`. `If-Match` carries the version; `Idempotency-Key` makes a retry safe. A command that changes nothing writes nothing. |
 | `GET /v1/parties/{id}/contact-points?purpose=notices&channel=email\|sms\|post\|in_app\|push&relationship=` | documents | The documents contract: `{name, destination, language, format, deceased}`, or 404 when there is no contact point on that channel. |
 | `GET /v1/parties/{id}/relationships`, `GET /v1/relationships?target=policy:P1` | by policy | Relationships of a party, or to a policy, scheme or party. |
 | `GET /v1/parties/{id}/routing` | portal, staff, claims, servicing, complaints | `{route_to_person, adjustments, review_on}`, and `kind` for `vulnerability_support`. |
+| `GET /v1/parties/{id}/due-diligence` | new-business, underwriting, policy-servicing, staff, compliance, payments | Whether due diligence is complete before the party owns a policy: `{complete, open, to_specialist, connected}`. Open items are `identity` and `screening` (the latest `record_verification` of each kind has not passed; `screening` is the method `screening`, any other method is an identity check, remote ones included), `..._referred` when the latest went to a specialist, and `risk_rating` when none is current. For an organisation, every trustee, director and beneficial owner in force today is checked too and listed under `connected`, with their items as `trustee:<party>:<item>`; those listed are the people who may act for it today. A signing rule goes on the ownership relationship as the attribute `signing_rule`. |
+| `GET /v1/parties/{id}/spending-hold` | payments, policy-servicing, claims, staff, legal, core; the person in the app | The person's own hold on money going out: `{held, placed_at, removal: {requested_at, ends_at} \| null}`. See "A person's own spending hold". |
 | `GET /v1/actors/{actor}/actions` | privacy | Everything one person did as the actor, and every authority question asked about them, across all parties, dated and newest first: the record a guardian or attorney gives the court or the family. |
 | `GET /v1/parties/{id}/authority?actor=&act=&on=&benefits_actor=` | portal, staff, claims, servicing, payments, complaints | May a representative do `act` for this party on `on`? `{decision: allow \| refuse \| route, reason, relationship}`. Representatives are `attorney`, `guardian` and `authorised_representative` relationships held by the actor to `party:<id>`, each with `basis` (enduring_power_of_attorney, court_order, written_authority), `document` (the vault reference) and `scope` (view, pay_premiums, change_payment_method, change_contact_details, change_bank_details, change_cover, change_beneficiary, surrender, claim, complain, all); `valid_from` is activation, `valid_to` the end. An act in scope that benefits the representative (beneficiary, bank details, surrender, claim) is routed to a person. While the person's capacity is in question (`question_capacity` by staff, claims or servicing; `settle_capacity` with `has_capacity` or `lacks_capacity` by legal only) every act of a named representative, activated or not, is routed (`capacity_in_question`); nothing else about the record changes, so cover, claims and notices go on. Every answer is audited with the actor. |
 | `GET /v1/parties/{id}/export?purpose=subject_access` | staff; portal for the person themselves | Every record of the party and those merged into it (Privacy Act access request). |
@@ -59,6 +61,16 @@ Relationship changes on a policy go to the channels directory, which decides wha
 ## Retention and erasure
 
 The schedule is code (`src/retention.rs`, version `SCHEDULE_VERSION`): each field class is kept seven years after the last relationship ends or the last change, verification evidence five, prospects with no relationship two. A legal hold or an unresolved merge stops erasure.
+
+### A person's own spending hold
+
+Decision 3 in `docs/decisions.md` (persona row SVC-022). A person can put a hold on their own money going out: refunds, surrenders, withdrawals, policy loans and changes to their payout account. Premium collection and claim payments to payees they already nominated are not held; payments and the core enforce it, from the events (`spending_hold_placed` goes on the priority hub) and from `GET /v1/parties/{id}/spending-hold`.
+
+- `place_spending_hold` (the person in the app, or staff when the person asks): takes effect at once. Sent again while a removal waits, it cancels the removal.
+- `request_hold_removal {verification}` (the person in the app only): names a passed identity check (`evidence_ref` of a `record_verification` from the identity service) made after the hold was placed and within the last 24 hours. The hold stands for the cooling-off period (`IC_CUSTOMERS_HOLD_COOLING_OFF_DAYS`, default 7) and then the hourly sweep ends it (`spending_hold_ended`, reason `cooling_off`).
+- `cancel_hold_removal` (the person): the hold stays.
+- `override_spending_hold {reference}` (legal only): a court order or legal direction ends it at once, recorded with its reference (reason `legal_direction`).
+- Staff cannot ask for it to end, and no caller can send the cooling-off ending (`end_spending_hold` is forbidden in the policy). Only the request time is kept outside the sealed events, in `spending_hold_removals`.
 
 ### Changing the index key
 
@@ -86,6 +98,7 @@ The binary is `ic-customers`; settings come from the environment.
 | `IC_CUSTOMERS_POOL_SIZE` | Connections per replica | 16 |
 | `IC_CUSTOMERS_KEY_VAULT`, `IC_CUSTOMERS_KEK` | Key Vault URL and wrapping key | key `customers-kek` |
 | `IC_CUSTOMERS_INDEX_KEY_FILE` (or `IC_CUSTOMERS_INDEX_KEY`) | Blind-index key, 32 characters or more | required |
+| `IC_CUSTOMERS_HOLD_COOLING_OFF_DAYS` | How long a spending hold stands after the person asks for it to end | 7 |
 | `IC_CUSTOMERS_NEXT_INDEX_KEY_FILE` (or `IC_CUSTOMERS_NEXT_INDEX_KEY`) | The key being changed to, while a change is under way | optional; must differ from the current key |
 | `IC_CUSTOMERS_TENANT`, `IC_CUSTOMERS_AUDIENCE`, `IC_CUSTOMERS_AUTHORITY` | Entra ID token checks | Entra public cloud |
 | `IC_EVENT_HUBS_NAMESPACE`, `IC_CUSTOMERS_EVENT_HUB`, `IC_CUSTOMERS_PRIORITY_HUB`, `IC_CUSTOMERS_HUB_PARTITIONS` | Where events go | `customer-events`, `customer-priority`, 8 |

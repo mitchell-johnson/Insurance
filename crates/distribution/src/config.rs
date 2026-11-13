@@ -169,6 +169,14 @@ pub enum Change {
         amount_minor: i64,
         kind: AdjustmentKind,
     },
+    /// The commission option was keyed wrongly when the layer was written.
+    /// The layer's terms are corrected from its start: commission already
+    /// earned on it is worked out again under the right option and the
+    /// differences post today. Commission expense changes.
+    CorrectTerms {
+        layer: String,
+        option: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -408,7 +416,7 @@ impl Config {
                 self.staff_paths.insert(staff.clone(), paths.clone());
                 Ok(())
             }
-            Change::MoveLayers { .. } | Change::SetServicing { .. } | Change::Adjustment { .. } => Ok(()),
+            Change::MoveLayers { .. } | Change::SetServicing { .. } | Change::Adjustment { .. } | Change::CorrectTerms { .. } => Ok(()),
         }
     }
 }
@@ -649,6 +657,9 @@ impl DistributionState {
                         }
                     }
                 }
+                Change::CorrectTerms { layer, option } => {
+                    self.check_correction(layer, option)?;
+                }
                 Change::MoveLayers { layers, to, from } => {
                     if !shares_whole(to) {
                         return reject("invalid_shares", "a layer's books take shares that sum to the whole");
@@ -844,6 +855,7 @@ impl DistributionState {
                     }
                 }
                 Change::SetServicing { policy, engagement } => self.set_servicing(ctx, policy, engagement.clone(), today),
+                Change::CorrectTerms { layer, option } => self.correct_terms(ctx, layer, option),
                 Change::Adjustment {
                     reference,
                     payee,
@@ -912,7 +924,17 @@ impl DistributionState {
                     to: engagement.clone(),
                     on,
                 });
-                p.servicing = engagement;
+                p.servicing = engagement.clone();
+            }
+        }
+        // A new servicing adviser settles the task a licence event raised.
+        if let Some(e) = engagement {
+            for t in self
+                .tasks
+                .values_mut()
+                .filter(|t| t.kind == "needs_servicing_adviser" && t.subject == policy.0 && t.done.is_none())
+            {
+                t.done = Some(format!("servicing appointed: {e}"));
             }
         }
     }

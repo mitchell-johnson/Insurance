@@ -457,6 +457,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 commencement,
                 proposal_expires,
                 risk_codes,
+                excess_reference,
             } => {
                 let request = CapacityRequest {
                     reservation_key: reservation.clone(),
@@ -468,7 +469,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     commencement: *commencement,
                     proposal_expires: *proposal_expires,
                     risk_codes: risk_codes.clone(),
-                    excess_reference: None,
+                    excess_reference: excess_reference.clone(),
                 };
                 let reserved = self
                     .reinsure(

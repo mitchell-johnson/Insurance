@@ -404,14 +404,19 @@ impl ClaimsState {
         let carried = reissue_of
             .as_ref()
             .and_then(|r| claim.payments.iter().filter(came_back).find(|p| &p.payment_ref == r))
-            .filter(|p| p.amount_minor + p.interest_minor == amount_minor)
-            .map_or(0, |p| p.interest_minor);
-        let interest_minor = match (self.rules.late_interest, claim.admission()) {
+            .filter(|p| p.amount_minor + p.interest_minor - p.interest_declined_minor == amount_minor)
+            .map_or(0, |p| p.interest_minor - p.interest_declined_minor);
+        let fresh = match (self.rules.late_interest, claim.admission()) {
             (Some(rate), Some(admission)) if period.is_none() && claim.schedule.is_none() && !claim.payments.iter().any(|p| came_back(&p)) => {
                 rate.on(amount_minor, admission.decided_on, cx.today)
             }
             _ => 0,
         };
+        // Interest a payee declined and then asked for after all goes with this payment.
+        let owed_again = std::mem::take(&mut claim.interest_owed_again_minor);
+        let interest_minor = fresh + owed_again;
+        // A payee who was told and declined: worked out, posted, and reversed.
+        let declined = if claim.interest_declined.is_some() { fresh } else { 0 };
         cx.core.execute(Instruction::Pay {
             claim: id.to_string(),
             policy: claim.policy.clone(),
@@ -420,6 +425,7 @@ impl ClaimsState {
             payee: payee.clone(),
             close,
             interest_minor,
+            interest_declined_minor: declined,
             offset: None,
         })?;
         claim.payable_minor -= amount_minor;
@@ -442,6 +448,7 @@ impl ClaimsState {
                 run: None,
                 cost_item: None,
                 interest_minor: interest_minor + carried,
+                interest_declined_minor: declined,
                 interested_party: None,
             }),
         }
@@ -451,11 +458,11 @@ impl ClaimsState {
             &claim,
             &payment_ref,
             amount_minor - carried,
-            amount_minor + interest_minor,
+            amount_minor + interest_minor - declined,
             &payee,
             period_end,
             false,
-            interest_minor + carried,
+            interest_minor + carried - declined,
         );
         if close && claim.status == Status::Admitted {
             claim.status = Status::Paid;
@@ -505,6 +512,7 @@ impl ClaimsState {
             payee: party.to_string(),
             close,
             interest_minor: 0,
+            interest_declined_minor: 0,
             offset: None,
         })?;
         claim.payable_minor -= amount_minor;
@@ -519,6 +527,7 @@ impl ClaimsState {
             run: None,
             cost_item: None,
             interest_minor: 0,
+            interest_declined_minor: 0,
             interested_party: Some(party.to_string()),
         });
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
@@ -578,6 +587,7 @@ impl ClaimsState {
                 payee: provider.to_string(),
                 close,
                 interest_minor: 0,
+                interest_declined_minor: 0,
                 offset: None,
             }
         } else {
@@ -611,6 +621,7 @@ impl ClaimsState {
             run: None,
             cost_item: Some(item.to_string()),
             interest_minor: 0,
+            interest_declined_minor: 0,
             interested_party: None,
         });
         note(&mut claim, cx, Some(actor), format!("cost_paid:{item}"));
@@ -654,8 +665,8 @@ impl ClaimsState {
         let mut kind = (false, 0);
         if let Some(p) = lump.and_then(|i| claim.payments.get_mut(i)) {
             p.returned = true;
-            came_back = (p.amount_minor + p.interest_minor, p.run.clone());
-            kind = (p.ex_gratia, p.interest_minor);
+            came_back = (p.amount_minor + p.interest_minor - p.interest_declined_minor, p.run.clone());
+            kind = (p.ex_gratia, p.interest_minor - p.interest_declined_minor);
             cost = p.cost_item.as_ref().map_or(0, |_| p.amount_minor);
             // An interested party's payment that came back is owed to them again.
             let (party, amount) = (p.interested_party.clone(), p.amount_minor);
@@ -982,6 +993,7 @@ impl ClaimsState {
                 payee: item.payee.clone(),
                 close: true,
                 interest_minor: 0,
+                interest_declined_minor: 0,
                 offset: item.offset.clone(),
             })?;
             if let Some(o) = &item.offset {
@@ -997,6 +1009,7 @@ impl ClaimsState {
                 run: Some(run.id.clone()),
                 cost_item: None,
                 interest_minor: 0,
+                interest_declined_minor: 0,
                 interested_party: None,
             });
             claim.payable_minor = 0;
@@ -1197,6 +1210,65 @@ impl ClaimsState {
                 &[("expected_minor", expected.to_string()), ("settled_minor", settled_minor.to_string())],
             );
         }
+        Ok(())
+    }
+}
+
+impl ClaimsState {
+    /// Work out the late payment interest on what is payable now and tell
+    /// the payee. Interest is always offered; it is never waived for them.
+    pub(crate) fn offer_late_interest(&mut self, cx: &mut Cx<'_>, id: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        let amount = match (self.rules.late_interest, claim.admission()) {
+            (Some(rate), Some(admission)) if claim.status == Status::Admitted => rate.on(claim.benefit_payable_minor(), admission.decided_on, cx.today),
+            _ => 0,
+        };
+        if amount <= 0 {
+            return Err(Reject::new("no_interest_owed", "no late payment interest is owed on this claim today"));
+        }
+        claim.interest_offer = Some((amount, cx.today));
+        note(&mut claim, cx, Some(actor), format!("interest_offered:{amount}"));
+        cx.notify("late_interest_offered", id, &[("amount_minor", amount.to_string())]);
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// The payee was told the interest and declines it, by their own
+    /// recorded decision.
+    pub(crate) fn decline_late_interest(&mut self, cx: &mut Cx<'_>, id: &str, vault_ref: String, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        if claim.interest_offer.is_none() || !claim.status.is_open() {
+            return Err(Reject::new(
+                "interest_not_offered",
+                "a payee can decline interest only on an open claim, after being told the amount",
+            ));
+        }
+        if vault_ref.trim().is_empty() {
+            return Err(Reject::new("decision_required", "file the payee's own signed or recorded decision"));
+        }
+        claim.interest_declined = Some((cx.today, vault_ref));
+        note(&mut claim, cx, Some(actor), "interest_declined");
+        cx.notify("late_interest_declined", id, &[("reason", "declined_by_payee".into())]);
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// The payee changes their mind before the claim closes: interest is
+    /// paid from now on, and what they declined goes with the next payment.
+    pub(crate) fn withdraw_interest_decline(&mut self, cx: &mut Cx<'_>, id: &str, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        if claim.interest_declined.is_none() || !claim.status.is_open() {
+            return Err(Reject::new("no_decline", "there is no decline to withdraw on an open claim"));
+        }
+        claim.interest_declined = None;
+        let declined: i64 = claim.payments.iter_mut().map(|p| std::mem::take(&mut p.interest_declined_minor)).sum();
+        claim.interest_owed_again_minor += declined;
+        note(&mut claim, cx, Some(actor), "interest_decline_withdrawn");
+        cx.notify("late_interest_decline_withdrawn", id, &[("owed_again_minor", declined.to_string())]);
+        self.commit(claim);
         Ok(())
     }
 }

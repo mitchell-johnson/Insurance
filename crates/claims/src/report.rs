@@ -110,6 +110,9 @@ pub struct Report {
     pub written_off_minor: i64,
     pub held_minor: i64,
     pub evidence_cost_minor: i64,
+    /// Late payment interest the payees were told of and declined.
+    #[serde(default)]
+    pub interest_declined_minor: i64,
     pub workload: BTreeMap<StaffId, u32>,
     pub runs_unreconciled: u32,
 }
@@ -339,7 +342,14 @@ impl ClaimsState {
             payments: c
                 .payments
                 .iter()
-                .map(|p| (p.payment_ref.clone(), p.amount_minor + p.interest_minor, p.paid_on, p.returned))
+                .map(|p| {
+                    (
+                        p.payment_ref.clone(),
+                        p.amount_minor + p.interest_minor - p.interest_declined_minor,
+                        p.paid_on,
+                        p.returned,
+                    )
+                })
                 .collect(),
             benefit: c.schedule.as_ref().map(|s| WorkBenefit {
                 monthly_minor: s.monthly_minor,
@@ -519,6 +529,7 @@ impl ClaimsState {
                 }
             }
             r.evidence_cost_minor += c.evidence.iter().map(|e| e.cost_minor).sum::<i64>();
+            r.interest_declined_minor += c.payments.iter().map(|p| p.interest_declined_minor).sum::<i64>();
         }
         r.workload = self
             .owned

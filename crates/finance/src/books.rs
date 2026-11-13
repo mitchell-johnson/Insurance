@@ -714,8 +714,11 @@ pub struct FinanceState {
     pub extracts: BTreeMap<String, ExtractRecord>,
     #[serde(default, with = "crate::pairs")]
     pub(crate) conduct: BTreeMap<ConductKey, u64>,
+    /// The conduct facts counted in periods still open, by ID, so that one
+    /// sent twice is counted once. A closed period takes no more facts, so
+    /// its IDs are let go when it closes.
     #[serde(default)]
-    pub(crate) conduct_seen: BTreeSet<String>,
+    pub(crate) conduct_seen: BTreeMap<String, PeriodId>,
     /// Every version of every return filed, oldest first.
     #[serde(default)]
     pub returns: BTreeMap<String, Vec<FiledReturn>>,
@@ -818,7 +821,7 @@ impl FinanceState {
             aged: BTreeMap::new(),
             extracts: BTreeMap::new(),
             conduct: BTreeMap::new(),
-            conduct_seen: BTreeSet::new(),
+            conduct_seen: BTreeMap::new(),
             returns: BTreeMap::new(),
             next_event_seq: 1,
             inbox: BTreeMap::new(),
@@ -2122,9 +2125,42 @@ impl FinanceState {
         if let Some(keep_from) = period.start().checked_sub_months(chrono::Months::new(MART_KEEPS_MONTHS)) {
             self.mart.trim(keep_from);
         }
+        if !period.is_adjustment() {
+            self.conduct_seen.retain(|_, counted_in| *counted_in > period);
+        }
+        if let Some(keep_from) = period.start().checked_sub_months(chrono::Months::new(LEDGER_KEEPS_MONTHS)) {
+            self.trim(keep_from);
+        }
         Ok(())
     }
 }
+
+impl FinanceState {
+    /// Let go of the working records dated before `keep_from`: each day's
+    /// control record and Merkle root, the backdated entries posted before
+    /// it, and the keys of commands applied before the last period that
+    /// ended before it closed. The books themselves, every closed period's
+    /// trial balance, the journals, the registered extracts and the filed
+    /// returns are kept for ever.
+    fn trim(&mut self, keep_from: NaiveDate) {
+        self.days.retain(|(date, _), _| *date >= keep_from);
+        self.roots.retain(|date, _| *date >= keep_from);
+        self.backdated.retain(|item| item.period.end() >= keep_from);
+        let before = self
+            .periods
+            .iter()
+            .filter(|(p, _)| p.end() < keep_from)
+            .filter_map(|(_, state)| state.closed.as_ref().map(|c| c.index))
+            .max();
+        if let Some(before) = before {
+            self.idempotency.retain(|_, stored| stored.index > before);
+        }
+    }
+}
+
+/// How many months of working records before a period the ledger keeps
+/// once that period has closed.
+pub const LEDGER_KEEPS_MONTHS: u32 = 24;
 
 /// How many months of history before a period the mart keeps once that
 /// period has closed.

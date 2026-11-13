@@ -1194,3 +1194,160 @@ async fn gender_is_recorded_in_the_persons_words_and_never_matched() {
         .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// Purpose: due diligence on a new owner is complete only when its own identity check,
+/// screening and a current risk rating have passed, and, for a trust, the same for every
+/// trustee in force; a referred screening sends it to a specialist; the signing rule is
+/// kept on the ownership relationship. Persona rows JNT-031 (a new trust with three
+/// trustees) and JNT-030 (a new owner overseas).
+/// Why it matters: issuing to, or transferring ownership to, someone not yet checked is
+/// how a policy is used to move money or taken from a vulnerable owner; the issuing side
+/// must be able to ask one question and get every gap back.
+#[tokio::test]
+async fn due_diligence_covers_an_owner_and_every_trustee() {
+    let w = world_or_skip!();
+    let (status, trust) = w
+        .post(
+            "/v1/parties",
+            "staff",
+            json!({ "kind": "organisation", "facts": [
+            { "field": "organisation_name", "value": "Ngata Whanau Trust" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "{trust}");
+    let trust = trust["party"].as_str().unwrap().to_string();
+    let mut trustees = vec![];
+    for (given, dob) in [("Aroha", "1960-01-01"), ("Hemi", "1962-02-02"), ("Mere", "1965-03-03")] {
+        let t = w.person(given, "Ngata", dob, &[]).await;
+        let (status, out) = w
+            .command(
+                &t,
+                "staff",
+                json!({ "command": "add_relationship", "id": format!("tr-{given}"), "kind": "trustee",
+                "target": { "kind": "party", "id": trust }, "valid_from": "2026-01-01" }),
+            )
+            .await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        trustees.push(t);
+    }
+    let check = || async {
+        let (status, out) = w.get(&format!("/v1/parties/{trust}/due-diligence"), "underwriting", "new_business").await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        out
+    };
+    let first = check().await;
+    assert_eq!(first["complete"], false);
+    assert_eq!(first["open"].as_array().unwrap().len(), 4 * 3, "the trust and each trustee lack all three");
+    let verify = |method: &str, outcome: &str, n: usize| {
+        json!({ "command": "record_verification", "method": method, "provider": "idv", "outcome": outcome,
+                "evidence_ref": format!("ev-{method}-{n}"), "verified_at": chrono::Utc::now() - chrono::Duration::minutes(10 - n as i64) })
+    };
+    let rate = json!({ "command": "set_risk_rating", "rating": "low", "review_by": "2030-01-01" });
+    for (n, p) in std::iter::once(&trust).chain(trustees.iter()).enumerate() {
+        w.command(p, "identity", verify("document_check", "passed", n)).await;
+        let screening = if n == 3 { "referred" } else { "passed" };
+        let (status, out) = w.command(p, "compliance", verify("screening", screening, n)).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+        let (status, out) = w.command(p, "compliance", rate.clone()).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let referred = check().await;
+    assert_eq!(referred["complete"], false);
+    assert_eq!(referred["to_specialist"], true);
+    assert_eq!(referred["open"], json!([format!("trustee:{}:screening_referred", trustees[2])]));
+    // The specialist clears it; a later passed screening completes the trust.
+    w.command(&trustees[2], "compliance", verify("screening", "passed", 9)).await;
+    let done = check().await;
+    assert_eq!((done["complete"].clone(), done["to_specialist"].clone()), (json!(true), json!(false)), "{done}");
+    // The trust owns the policy under a signing rule kept on the ownership.
+    let (status, out) = w
+        .command(
+            &trust,
+            "staff",
+            json!({ "command": "add_relationship", "id": "own", "kind": "owner",
+            "target": { "kind": "policy", "id": "TP1" }, "valid_from": "2026-02-01",
+            "attributes": { "signing_rule": "any_two_trustees" } }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let (_, rels) = w.get(&format!("/v1/parties/{trust}/relationships"), "staff", "servicing").await;
+    assert!(rels.to_string().contains("any_two_trustees"), "{rels}");
+    // A new owner overseas, unchecked: nothing complete; documents may not ask.
+    let newcomer = w.person("Joe", "Smith", "1985-05-05", &[]).await;
+    let (_, out) = w.get(&format!("/v1/parties/{newcomer}/due-diligence"), "policy-servicing", "servicing").await;
+    assert_eq!(out["open"], json!(["identity", "screening", "risk_rating"]));
+    let (status, _) = w.get(&format!("/v1/parties/{newcomer}/due-diligence"), "documents", "notices").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: changes to a trust's trustees are dated on the resolution: one who resigned
+/// stops being a trustee from that date and one appointed starts from it, so the trust's
+/// due diligence lists only the trustees in force, each with their own checks (a trustee
+/// abroad verified remotely counts like any other). A request signed by the resigned
+/// trustee the next day finds them absent. Persona rows JNT-023 and JNT-025 (a partner
+/// joining as owner with due diligence).
+/// Why it matters: a trustee who has resigned has no power to bind the trust, and an
+/// appointment not dated on its resolution would let the wrong person sign, or leave the
+/// right one unable to.
+#[tokio::test]
+async fn trustee_changes_are_dated_on_the_resolution() {
+    let w = world_or_skip!();
+    let (_, trust) = w
+        .post(
+            "/v1/parties",
+            "staff",
+            json!({ "kind": "organisation", "facts": [
+            { "field": "organisation_name", "value": "Rewi Family Trust" }] }),
+        )
+        .await;
+    let trust = trust["party"].as_str().unwrap().to_string();
+    let resigned = w.person("Pita", "Rewi", "1950-01-01", &[]).await;
+    let stays = w.person("Ani", "Rewi", "1955-01-01", &[]).await;
+    let appointed = w.person("Tui", "Rewi", "1980-01-01", &[]).await;
+    let trustee = |id: &str, from: &str, to: Option<&str>| {
+        json!({ "command": "add_relationship", "id": id, "kind": "trustee", "target": { "kind": "party", "id": trust },
+                "valid_from": from, "valid_to": to })
+    };
+    w.command(&resigned, "staff", trustee("t1", "2020-01-01", None)).await;
+    w.command(&stays, "staff", trustee("t2", "2020-01-01", None)).await;
+    // The resolution of 1 March 2026: one resigns, one is appointed (in Sydney, verified remotely).
+    let (status, out) = w
+        .command(
+            &resigned,
+            "staff",
+            json!({ "command": "end_relationship", "id": "t1", "valid_to": "2026-03-01" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    w.command(&appointed, "staff", trustee("t3", "2026-03-01", None)).await;
+    w.command(
+        &appointed,
+        "identity",
+        json!({ "command": "record_verification", "method": "remote_video", "provider": "idv", "outcome": "passed",
+                "evidence_ref": "ev-syd", "verified_at": chrono::Utc::now() }),
+    )
+    .await;
+    let (_, dd) = w.get(&format!("/v1/parties/{trust}/due-diligence"), "policy-servicing", "servicing").await;
+    let mut in_force: Vec<String> = dd["connected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["party"].as_str().unwrap().to_string())
+        .collect();
+    in_force.sort();
+    let mut expected = vec![stays.clone(), appointed.clone()];
+    expected.sort();
+    assert_eq!(in_force, expected, "the resigned trustee is not among those who may sign");
+    let tui = dd["connected"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["party"] == appointed.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(tui["open"], json!(["screening", "risk_rating"]), "the remote check counts as an identity check");
+    // The history keeps both, dated.
+    let (_, rels) = w.get(&format!("/v1/relationships?target=party:{trust}"), "staff", "servicing").await;
+    let text = rels.to_string();
+    assert!(text.contains("2026-03-01") && text.contains(&resigned), "{rels}");
+}

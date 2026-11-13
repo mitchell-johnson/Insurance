@@ -263,6 +263,10 @@ pub struct Scheme {
     pub terms: SchemeTerms,
     pub terms_version: u32,
     pub mapping: Option<FileMapping>,
+    /// The layout for the other kind of file, where an employer sends
+    /// both: a monthly full file and changes in between, say from payroll.
+    #[serde(default)]
+    pub second_mapping: Option<FileMapping>,
     pub status: SchemeStatus,
     /// The core refused something for a reason no file row explains.
     /// Nothing more is applied until staff resume the scheme.
@@ -318,6 +322,72 @@ impl Scheme {
 }
 
 /// A file of the scheme, if it is in one of the expected states.
+/// What a file would do to a scheme as it stands: the changes, the rows
+/// refused, and whether the safety check would hold it.
+pub(crate) struct Compared {
+    pub changes: Vec<Proposed>,
+    pub rejected: Vec<RowReject>,
+    pub ambiguities: Vec<Ambiguity>,
+    pub summary: FileSummary,
+    pub held: bool,
+}
+
+/// Compare a file's rows with the membership. Changes nothing: the same
+/// comparison serves a real file and a trial of a new mapping.
+pub(crate) fn compare(s: &Scheme, today: NaiveDate, kind: FileKind, file_date: NaiveDate, rows: &[MemberRow], mut rejected: Vec<RowReject>) -> Compared {
+    let ctx = DiffContext {
+        terms: &s.terms,
+        product: &s.product,
+        inception: s.inception,
+        today,
+        file_date,
+    };
+    let mut derived = derive(&ctx, &s.membership, kind, rows);
+    // A scheme that keeps paying short takes no new joiners until it
+    // has paid; its existing members are untouched.
+    if s.joiners_suspended {
+        let (joins, rest): (Vec<_>, Vec<_>) = derived.changes.into_iter().partition(|c| c.kind == ChangeKind::Join);
+        derived.changes = rest;
+        derived
+            .rejected
+            .extend(joins.iter().map(|c| RowReject::new(c.row, Some(&c.employee_id), "joiners_suspended", None)));
+    }
+    let members_before = s.membership.active_count();
+    let leavers = derived.count(&ChangeKind::Leave);
+    let above = derived
+        .changes
+        .iter()
+        .filter(|c| matches!(c.kind, ChangeKind::Join | ChangeKind::Change))
+        .filter(|c| {
+            let cap = s.membership.active(&c.employee_id).and_then(|m| m.auto_cap_minor);
+            crate::benefit::member_cover(&s.product, &c.attrs, cap).iter().any(|a| a.excess_minor() > 0)
+        })
+        .count();
+    rejected.extend(derived.rejected);
+    rejected.sort_by_key(|r| r.row);
+    let count = |pick: &dyn Fn(&Proposed) -> bool| derived.changes.iter().filter(|c| pick(c)).count() as u32;
+    let summary = FileSummary {
+        rows: rows.len() as u32 + rejected.iter().filter(|r| !rows.iter().any(|row| row.row == r.row)).count() as u32,
+        joiners: count(&|c| c.kind == ChangeKind::Join),
+        leavers: leavers as u32,
+        changes: count(&|c| c.kind == ChangeKind::Change),
+        absences: count(&|c| matches!(c.kind, ChangeKind::AbsenceStart | ChangeKind::AbsenceEnd)),
+        rekeys: count(&|c| matches!(c.kind, ChangeKind::Rekey { .. })),
+        rejected: rejected.len() as u32,
+        ambiguities: derived.ambiguities.len() as u32,
+        needing_backdating_approval: count(&|c| c.needs_backdating_approval),
+        above_automatic_cover: above as u32,
+        members_before: members_before as u32,
+    };
+    Compared {
+        changes: derived.changes,
+        rejected,
+        ambiguities: derived.ambiguities,
+        summary,
+        held: kind == FileKind::Full && trips_safety_check(&s.terms, members_before, leavers),
+    }
+}
+
 fn file_in<'a>(files: &'a mut BTreeMap<String, FileRecord>, file: &str, expected: &[FileStatus]) -> Result<&'a mut FileRecord, Reject> {
     let f = files
         .get_mut(file)
@@ -540,7 +610,11 @@ impl GroupState {
                 if !mapping.is_sealed() {
                     return Err(Reject::new("mapping_not_sealed", "the mapping's content hash does not match its content"));
                 }
-                if s.mapping.as_ref().is_some_and(|m| m.version >= mapping.version) {
+                // One layout for full files and one for change files, each
+                // replaced only by a later version of itself.
+                let first = s.mapping.as_ref().is_none_or(|m| m.kind == mapping.kind);
+                let held = if first { &s.mapping } else { &s.second_mapping };
+                if held.as_ref().is_some_and(|m| m.version >= mapping.version) {
                     return Err(Reject::new("mapping_version", "a mapping is replaced only by a later version"));
                 }
                 st.emit(GroupEvent::MappingSet {
@@ -549,7 +623,11 @@ impl GroupState {
                     version: mapping.version,
                     content_hash: mapping.content_hash.clone(),
                 });
-                s.mapping = Some(*mapping);
+                if first {
+                    s.mapping = Some(*mapping);
+                } else {
+                    s.second_mapping = Some(*mapping);
+                }
                 Ok(())
             }),
             Freeze { scheme, reason } => self.with_scheme(&scheme, |st, s| {
@@ -715,6 +793,7 @@ impl GroupState {
                 terms,
                 terms_version: 1,
                 mapping: None,
+                second_mapping: None,
                 status: SchemeStatus::Active,
                 blocked: None,
                 frozen: None,
@@ -838,7 +917,8 @@ impl GroupState {
         if rows.len() > MAX_ROWS_PER_PART {
             return Err(Reject::new("too_many_rows", format!("at most {MAX_ROWS_PER_PART} rows per part")));
         }
-        if s.mapping.as_ref().map(|m| m.content_hash.as_str()) != Some(mapping_hash) {
+        let current = |m: &Option<FileMapping>| m.as_ref().is_some_and(|m| m.content_hash == mapping_hash);
+        if !current(&s.mapping) && !current(&s.second_mapping) {
             return Err(Reject::new("mapping_mismatch", "the rows were not mapped with the scheme's current mapping"));
         }
         if file_date > today {
@@ -853,57 +933,14 @@ impl GroupState {
             return Ok(());
         }
         let rows = std::mem::take(&mut f.rows);
-        let ctx = DiffContext {
-            terms: &s.terms,
-            product: &s.product,
-            inception: s.inception,
-            today,
-            file_date,
-        };
-        let mut derived = derive(&ctx, &s.membership, kind, &rows);
-        // A scheme that keeps paying short takes no new joiners until it
-        // has paid; its existing members are untouched.
-        if s.joiners_suspended {
-            let (joins, rest): (Vec<_>, Vec<_>) = derived.changes.into_iter().partition(|c| c.kind == ChangeKind::Join);
-            derived.changes = rest;
-            derived
-                .rejected
-                .extend(joins.iter().map(|c| RowReject::new(c.row, Some(&c.employee_id), "joiners_suspended", None)));
-        }
-        let members_before = s.membership.active_count();
-        let leavers = derived.count(&ChangeKind::Leave);
-        let above = derived
-            .changes
-            .iter()
-            .filter(|c| matches!(c.kind, ChangeKind::Join | ChangeKind::Change))
-            .filter(|c| {
-                let cap = s.membership.active(&c.employee_id).and_then(|m| m.auto_cap_minor);
-                crate::benefit::member_cover(&s.product, &c.attrs, cap).iter().any(|a| a.excess_minor() > 0)
-            })
-            .count();
+        let mapper_rejected = std::mem::take(&mut f.rejected);
+        let compared = compare(s, today, kind, file_date, &rows, mapper_rejected);
+        let (members_before, leavers, held) = (compared.summary.members_before, compared.summary.leavers, compared.held);
         let f = file_in(&mut s.files, file, &[FileStatus::Scanned])?;
-        f.rejected.extend(derived.rejected);
-        f.rejected.sort_by_key(|r| r.row);
-        f.ambiguities = derived.ambiguities;
-        f.summary = FileSummary {
-            rows: rows.len() as u32 + f.rejected.iter().filter(|r| !rows.iter().any(|row| row.row == r.row)).count() as u32,
-            joiners: derived.changes.iter().filter(|c| c.kind == ChangeKind::Join).count() as u32,
-            leavers: leavers as u32,
-            changes: derived.changes.iter().filter(|c| c.kind == ChangeKind::Change).count() as u32,
-            absences: derived
-                .changes
-                .iter()
-                .filter(|c| matches!(c.kind, ChangeKind::AbsenceStart | ChangeKind::AbsenceEnd))
-                .count() as u32,
-            rekeys: derived.changes.iter().filter(|c| matches!(c.kind, ChangeKind::Rekey { .. })).count() as u32,
-            rejected: f.rejected.len() as u32,
-            ambiguities: f.ambiguities.len() as u32,
-            needing_backdating_approval: derived.changes.iter().filter(|c| c.needs_backdating_approval).count() as u32,
-            above_automatic_cover: above as u32,
-            members_before: members_before as u32,
-        };
-        f.changes = derived.changes;
-        let held = kind == FileKind::Full && trips_safety_check(&s.terms, members_before, leavers);
+        f.rejected = compared.rejected;
+        f.ambiguities = compared.ambiguities;
+        f.summary = compared.summary;
+        f.changes = compared.changes;
         f.status = if held { FileStatus::Held } else { FileStatus::AwaitingApproval };
         self.emit(GroupEvent::FileCompared {
             scheme: s.id.clone(),
@@ -917,8 +954,8 @@ impl GroupState {
             self.emit(GroupEvent::FileHeld {
                 scheme: s.id.clone(),
                 file: file.to_string(),
-                leavers: leavers as u32,
-                members: members_before as u32,
+                leavers,
+                members: members_before,
             });
         } else {
             self.emit(GroupEvent::FileAwaitingApproval {

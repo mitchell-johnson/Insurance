@@ -69,11 +69,22 @@ pub enum Question {
     Return {
         id: String,
     },
+    /// One figure on a filed return with what is behind it.
+    ReturnLine {
+        id: String,
+        #[serde(default)]
+        version: Option<u32>,
+        code: String,
+    },
     /// What the close is waiting for from its drivers.
     Work,
     /// Money held in policy suspense, by policy, as an aged items report.
     AgedSuspense {
         as_at: NaiveDate,
+    },
+    /// The period's tax and levy accounts by posting type and product.
+    TaxReconciliation {
+        period: PeriodId,
     },
     /// A proposed rate table priced against the book in force on a closed
     /// date, beside the version it replaces.
@@ -131,6 +142,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Conduct { period, product } => encode(&state.conduct_report(period, product.as_deref())),
         Question::Work => encode(&state.work()),
         Question::AgedSuspense { as_at } => Ok(state.aged_suspense(as_at)),
+        Question::TaxReconciliation { period } => encode(&state.tax_reconciliation(period)),
         Question::TableDryRun { as_at, request } => {
             let covers = request.covers.iter().cloned().collect();
             let book = state.mart.rated_covers(as_at, &covers).map_err(|e| e.to_string())?;
@@ -139,6 +151,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Extract { kind, period, offset, limit } => {
             encode(&state.extract(&kind, period, offset, limit.unwrap_or(crate::report::MAX_EXTRACT_LINES))?)
         }
+        Question::ReturnLine { id, version, code } => encode(&state.line_lineage(&id, version, &code)?),
         Question::Return { id } => state.returns.get(&id).map_or_else(|| Err(format!("return {id} has not been filed")), encode),
     }
 }

@@ -130,6 +130,13 @@ pub struct ReturnDefinition {
     pub title: String,
     pub currency: Currency,
     pub lines: Vec<LineDef>,
+    /// The first period this version of the mapping is used for. A change
+    /// to a line's definition is a new version effective from a period.
+    #[serde(default)]
+    pub effective_from: Option<PeriodId>,
+    /// The last period this version is used for, once a later one replaces it.
+    #[serde(default)]
+    pub effective_to: Option<PeriodId>,
     #[serde(default)]
     pub content_hash: String,
 }
@@ -148,6 +155,9 @@ impl ReturnDefinition {
         if self.id.is_empty() || self.version == 0 || self.lines.is_empty() {
             return invalid("a return needs an ID, a version of at least 1 and at least one line".to_string());
         }
+        if matches!((self.effective_from, self.effective_to), (Some(from), Some(to)) if from > to) {
+            return invalid("a return's mapping cannot stop being effective before it starts".to_string());
+        }
         let mut codes = BTreeSet::new();
         for line in &self.lines {
             if line.code.is_empty() || !codes.insert(line.code.as_str()) {
@@ -162,6 +172,11 @@ impl ReturnDefinition {
         }
         Ok(())
     }
+
+    /// Whether this version of the mapping is the one in effect for a period.
+    pub fn in_effect(&self, period: PeriodId) -> bool {
+        self.effective_from.is_none_or(|from| period >= from) && self.effective_to.is_none_or(|to| period <= to)
+    }
 }
 
 /// One line of a filed return with where its figure came from.
@@ -175,6 +190,34 @@ pub struct ReturnLine {
     pub as_closed: BTreeMap<String, i128>,
     /// Posted since for this period, by the period it was posted in.
     pub restated: BTreeMap<PeriodId, i128>,
+    /// What the line was built from under the definition it was filed on:
+    /// the accounts or the measure, and the fund it was limited to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<LineSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fund: Option<String>,
+}
+
+/// Where one figure on a filed return came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LineLineage {
+    pub id: String,
+    pub period: PeriodId,
+    pub version: u32,
+    pub definition: String,
+    pub definition_version: u32,
+    pub definition_hash: String,
+    pub line: ReturnLine,
+    /// The closed trial balance the figure was taken from.
+    pub trial_balance_hash: Hash32,
+    /// The question that gives the same rows from the ledger today.
+    pub query: serde_json::Value,
+    /// Backdated core entries posted since the period closed that belong to it.
+    pub restating_entries: Vec<EntryId>,
+    /// The extracts registered as at the period's last day.
+    pub extracts: Vec<crate::books::ExtractRecord>,
+    pub filed_by: String,
+    pub reason: Option<String>,
 }
 
 /// A return as filed. Never changes.
@@ -228,7 +271,7 @@ impl FinanceState {
             if self.periods.get(&period).is_some_and(|p| p.status == PeriodStatus::Closed) {
                 return reject("period_closed", format!("{period} is closed; fact {} cannot be counted in it", fact.id));
             }
-            if !self.conduct_seen.contains(&fact.id) {
+            if !self.conduct_seen.contains_key(&fact.id) {
                 fresh.insert(
                     &fact.id,
                     ConductKey {
@@ -243,7 +286,7 @@ impl FinanceState {
         let count = fresh.len() as u32;
         let keys: Vec<(String, ConductKey)> = fresh.into_iter().map(|(id, key)| (id.to_string(), key)).collect();
         for (id, key) in keys {
-            self.conduct_seen.insert(id);
+            self.conduct_seen.insert(id, key.period);
             *self.conduct.entry(key).or_insert(0) += 1;
         }
         Ok(count)
@@ -300,6 +343,8 @@ impl FinanceState {
                         value: i128::from(self.conduct_count(period, *measure)),
                         as_closed,
                         restated,
+                        source: Some(def.source.clone()),
+                        fund: None,
                     });
                     continue;
                 }
@@ -339,6 +384,8 @@ impl FinanceState {
                 value: as_closed.values().sum::<i128>() + restated.values().sum::<i128>(),
                 as_closed,
                 restated,
+                source: Some(def.source.clone()),
+                fund: def.fund.clone(),
             });
         }
         Ok((lines, closed.trial_balance_hash))
@@ -355,6 +402,15 @@ impl FinanceState {
         index: u64,
     ) -> Result<&FiledReturn, Reject> {
         definition.validate().map_err(|e| Reject::new("definition", e.to_string()))?;
+        if !definition.in_effect(period) {
+            return reject(
+                "not_effective",
+                format!(
+                    "version {} of return {} is not the mapping in effect for {period}",
+                    definition.version, definition.id
+                ),
+            );
+        }
         let (lines, trial_balance_hash) = self.prepare_return(definition, period)?;
         let earlier = self.returns.get(id).map(Vec::as_slice).unwrap_or_default();
         match (earlier.last(), &reason) {
@@ -402,6 +458,43 @@ impl FinanceState {
         versions.push(filed);
         // Just pushed.
         versions.last().ok_or_else(|| Reject::new("return", "nothing was filed"))
+    }
+
+    /// One figure of a filed return with everything behind it: the
+    /// definition version, the accounts or measure, the closed trial
+    /// balance, the entries that have restated it and the period's extracts.
+    /// `version` is the filing; the latest when not given.
+    pub fn line_lineage(&self, id: &str, version: Option<u32>, code: &str) -> Result<LineLineage, String> {
+        let versions = self.returns.get(id).ok_or_else(|| format!("return {id} has not been filed"))?;
+        let filed = match version {
+            Some(v) => versions.iter().find(|f| f.version == v),
+            None => versions.last(),
+        }
+        .ok_or_else(|| format!("return {id} has no version {}", version.unwrap_or_default()))?;
+        let line = filed
+            .lines
+            .iter()
+            .find(|l| l.code == code)
+            .ok_or_else(|| format!("return {id} has no line {code}"))?;
+        let query = match &line.source {
+            Some(LineSource::Conduct { .. }) => serde_json::json!({ "q": "conduct", "period": filed.period }),
+            _ => serde_json::json!({ "q": "trial_balance", "period": filed.period, "fund": line.fund }),
+        };
+        Ok(LineLineage {
+            id: filed.id.clone(),
+            period: filed.period,
+            version: filed.version,
+            definition: filed.definition.clone(),
+            definition_version: filed.definition_version,
+            definition_hash: filed.definition_hash.clone(),
+            line: line.clone(),
+            trial_balance_hash: filed.trial_balance_hash,
+            query,
+            restating_entries: filed.restating_entries.clone(),
+            extracts: self.extracts.values().filter(|x| x.as_at == filed.period.end()).cloned().collect(),
+            filed_by: filed.filed_by.clone(),
+            reason: filed.reason.clone(),
+        })
     }
 
     /// The returns a later posting has restated: the filed figures no longer

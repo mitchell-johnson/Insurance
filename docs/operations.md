@@ -26,7 +26,7 @@
 
 4. **Register the API with Entra ID.** Create an app registration for the API, define the app roles callers will hold (`new-business`, `policy-servicing`, `cash-matching`, `group-admin`, `claims`, `collections`, `config`, `operations`), and note its application ID URI.
 
-5. **Fill in `deploy/k8s`.** Replace every `REPLACE-` value in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml`. The first business date in `bootstrap.yaml` is set once and can never be changed.
+5. **Fill in `deploy/k8s`.** Deploy underwriting's resources first (step 10): its manifests are in the kustomization and need that template's outputs. Replace every `REPLACE-` value in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml`, and in `underwriting-intake.yaml` from step 10. The first business date in `bootstrap.yaml` is set once and can never be changed.
 
 6. **Apply.**
 
@@ -44,6 +44,17 @@
 8. **Set up the portal service** (`ic-portal`: the app's API, the portals, the consoles and the status page). Its app registrations, the values in `deploy/k8s/portal.yaml` and its public host are described in `docs/channels.md`, "Running it".
 
 9. **Set up payments** (`ic-payments-pump`: the bank channels and the evacuation drill). The payments vault, the bank keys and credentials, and the values in `deploy/k8s/payments.yaml` are described in `docs/payments.md`, "Running it".
+
+10. **Set up underwriting** (the driver `ic-underwriting` and the intake `ic-underwriting-intake`; `docs/underwriting.md`). Before step 6, deploy its template into the same resource group, with the main deployment's Key Vault, AKS OIDC issuer and Event Hubs namespace:
+
+    ```sh
+    az deployment group create -g <rg> -f infra/underwriting.bicep \
+      -p name=<name> keyVaultName=<keyVaultName> aksOidcIssuer=<aksOidcIssuer> \
+      eventHubsNamespaceName=<eventHubsNamespace>
+    az deployment group show -g <rg> -n underwriting --query properties.outputs
+    ```
+
+    It creates the clinical store (its own storage account with no soft delete or versioning, deliberately), the HSM wrapping key, the intake's identity, and the `underwriting-notices`, `underwriting-evidence` and `underwriting-delegates` hubs with the workers' right to send to them. Register an app for the intake with the app roles `new-business`, `underwriting-console`, `evidence` and `delegate-api`, and put its application ID URI and the outputs in `deploy/k8s/underwriting-intake.yaml`. The driver reads `IC_EVENT_HUBS_ENDPOINT` from `settings.yaml`.
 
 ## Day to day
 

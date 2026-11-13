@@ -17,7 +17,7 @@ use ic_product::schedule::period_start;
 use crate::billing::{raise_receivable, Bill};
 use crate::cash;
 use crate::catalog::Catalog;
-use crate::command::{AddedCover, AlteredTerms, ReinstatementTerms, UnderwrittenLayer};
+use crate::command::{AddedCover, AlteredTerms, ChangedExcess, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
 use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
@@ -73,8 +73,21 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
 
     let cover_type = cover.cover_type.clone();
     let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
+    // More of a cover the life holds comes at the excess level it holds it at.
+    let excess_option = cover
+        .layers
+        .iter()
+        .find(|l| l.life == spec.life && l.in_force_on(effective))
+        .and_then(|l| l.excess_option.clone());
+    if !def.accepts_excess(excess_option.as_deref()) {
+        return Err(Reject::new(
+            "excess_option",
+            format!("cover {} needs a choice of excess; add it as a cover", spec.cover),
+        ));
+    }
     if let Some(cover) = policy.covers.get_mut(&spec.cover) {
         cover.layers.push(Layer {
+            excess_option,
             id,
             life: spec.life.clone(),
             start: effective,
@@ -136,6 +149,12 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         return Err(Reject::new("invalid_cover", "a sum insured and a loading cannot be negative"));
     }
     ic_product::rating::check_sum_insured(def, spec.sum_insured_minor).map_err(|e| Reject::new("sum_insured", format!("cover {}: {e}", spec.cover)))?;
+    if !def.accepts_excess(spec.excess_option.as_deref()) {
+        return Err(Reject::new(
+            "excess_option",
+            format!("cover {}: choose one of the excess levels it offers, or none where it offers none", spec.cover),
+        ));
+    }
     let holds = |policy: &Policy, code: &str| {
         policy
             .covers
@@ -189,6 +208,7 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         end: None,
         sum_insured_minor: spec.sum_insured_minor,
         origin: LayerOrigin::Increase,
+        excess_option: spec.excess_option,
         loadings: spec.loadings,
         exclusions: spec.exclusions,
         loading_itemised: false,
@@ -274,12 +294,37 @@ fn adjust(
 pub(crate) fn alter_terms(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: AlteredTerms) -> Result<(), Reject> {
     // Worked on a copy, so a refusal part way leaves the policy as it was.
     let mut draft = policy.clone();
-    alter(ledger, catalog, &mut draft, ctx, spec)?;
+    let change = Change::Terms {
+        loadings: spec.loadings,
+        exclusions: spec.exclusions,
+    };
+    alter(ledger, catalog, &mut draft, ctx, &spec.cover, &spec.life, change)?;
     *policy = draft;
     Ok(())
 }
 
-fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: AlteredTerms) -> Result<(), Reject> {
+/// Another excess level on a life's cover from the business date: the
+/// cover carries on as new layers at the new level, priced from today.
+pub(crate) fn change_excess(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: ChangedExcess) -> Result<(), Reject> {
+    let mut draft = policy.clone();
+    alter(ledger, catalog, &mut draft, ctx, &spec.cover, &spec.life, Change::Excess(spec.excess_option))?;
+    *policy = draft;
+    Ok(())
+}
+
+/// What a change of terms changes on the layers it replaces.
+enum Change {
+    Terms { loadings: Vec<ic_money::DecStr>, exclusions: Vec<String> },
+    Excess(String),
+}
+
+struct Target<'a> {
+    cover: &'a str,
+    life: &'a LifeId,
+}
+
+fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, cover: &str, life: &LifeId, change: Change) -> Result<(), Reject> {
+    let spec = Target { cover, life };
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "terms can only change on a policy in force"));
     }
@@ -290,7 +335,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     let effective = ctx.date.max(policy.inception);
     let cover = policy
         .covers
-        .get(&spec.cover)
+        .get(spec.cover)
         .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
         .ok_or_else(|| {
             Reject::new(
@@ -298,14 +343,29 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 format!("{} is not a cover in force on this policy that is priced per life", spec.cover),
             )
         })?;
-    if spec.loadings.iter().any(|l| l.get().is_negative()) {
-        return Err(Reject::new("invalid_loading", "a loading cannot be negative"));
+    match &change {
+        Change::Terms { loadings, .. } => {
+            if loadings.iter().any(|l| l.get().is_negative()) {
+                return Err(Reject::new("invalid_loading", "a loading cannot be negative"));
+            }
+        }
+        Change::Excess(option) => {
+            if product.cover(spec.cover).is_none_or(|def| def.excess_option(option).is_none()) {
+                return Err(Reject::new(
+                    "excess_option",
+                    format!("cover {} does not offer excess level {option}", spec.cover),
+                ));
+            }
+        }
     }
     let altered: Vec<Layer> = cover
         .layers
         .iter()
-        .filter(|l| l.life == spec.life && l.in_force_on(effective))
-        .filter(|l| l.loadings != spec.loadings || l.exclusions != spec.exclusions)
+        .filter(|l| &l.life == spec.life && l.in_force_on(effective))
+        .filter(|l| match &change {
+            Change::Terms { loadings, exclusions } => &l.loadings != loadings || &l.exclusions != exclusions,
+            Change::Excess(option) => l.excess_option.as_ref() != Some(option),
+        })
         .cloned()
         .collect();
     if altered.is_empty() {
@@ -323,7 +383,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     let cover_type = cover.cover_type.clone();
     let first = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     for (id, old) in (first..).zip(altered) {
-        if let Some(cover) = policy.covers.get_mut(&spec.cover) {
+        if let Some(cover) = policy.covers.get_mut(spec.cover) {
             if let Some(l) = cover.layers.iter_mut().find(|l| l.id == old.id) {
                 l.end = Some(effective);
             }
@@ -334,8 +394,18 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 end: None,
                 sum_insured_minor: old.sum_insured_minor,
                 origin: old.origin,
-                loadings: spec.loadings.clone(),
-                exclusions: spec.exclusions.clone(),
+                loadings: match &change {
+                    Change::Terms { loadings, .. } => loadings.clone(),
+                    Change::Excess(_) => old.loadings.clone(),
+                },
+                exclusions: match &change {
+                    Change::Terms { exclusions, .. } => exclusions.clone(),
+                    Change::Excess(_) => old.exclusions.clone(),
+                },
+                excess_option: match &change {
+                    Change::Terms { .. } => old.excess_option.clone(),
+                    Change::Excess(option) => Some(option.clone()),
+                },
                 loading_itemised: old.loading_itemised,
                 rated_from: Some(old.rating_start()),
                 member_pays: MemberPays::Nothing,
@@ -343,7 +413,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
         }
         ctx.emit(Event::LayerEnded {
             policy: policy.id.clone(),
-            cover: spec.cover.clone(),
+            cover: spec.cover.to_string(),
             layer: old.id,
             life: old.life.clone(),
             effective,
@@ -352,7 +422,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
         ctx.emit(Event::LayerAdded {
             policy: policy.id.clone(),
             layer: LayerInfo {
-                cover: spec.cover.clone(),
+                cover: spec.cover.to_string(),
                 cover_type: cover_type.clone(),
                 layer: id,
                 life: old.life,
@@ -365,7 +435,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     }
     if let (Some(period), Some(without)) = (billed, without) {
         let with = retail_premium_with(catalog, &product, policy, period.0, &mut ctx.work, Layers::On(effective))?;
-        adjust(ledger, policy, ctx, &spec.life, effective, period, &with, &without)?;
+        adjust(ledger, policy, ctx, spec.life, effective, period, &with, &without)?;
     }
     Ok(())
 }

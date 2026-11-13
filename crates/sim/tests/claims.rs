@@ -994,6 +994,7 @@ fn a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_under
     days(&mut c, 10);
     let today = c.business_date().unwrap();
     let layer = ic_core::command::ExcessLayer {
+        continues: None,
         policy: id.clone(),
         cover: "group-life".into(),
         life: ic_core::LifeId("pilot-1".into()),
@@ -2394,4 +2395,114 @@ fn a_policy_with_a_benefit_owed_cannot_be_avoided() {
     assert_eq!(code(c.submit(0, "underwriting", avoid)), "claim_in_payment");
     assert_eq!((c.state(0).ledger.head(), money(&c, &id)), before);
     assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+}
+
+/// Purpose: the cover check reports the excess level the life held on the event date, so an
+/// event before a change of excess is assessed at the old level and one after it at the new,
+/// and a cover with no choice of excess reports none.
+/// Why it matters: the chosen excess replaces the schedule's at claim. Reading today's level
+/// for last month's treatment would pay the customer too much or too little on every claim
+/// that straddles a change.
+#[test]
+fn the_cover_check_reports_the_excess_level_held_on_the_event_date() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = ic_sim::persona::health_flex(n, start(), &[(d(1988, 5, 5), &["hospital:high", "dental"])], Frequency::Yearly);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-h".into(),
+        amount: Money::new(20_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let before = c.business_date().unwrap();
+    days(&mut c, 5);
+    let change = Command::ChangeExcess(Box::new(ic_core::command::ChangedExcess {
+        policy: id.clone(),
+        cover: "hospital".into(),
+        life: ic_core::LifeId("life-1".into()),
+        excess_option: "nil".into(),
+    }));
+    c.submit(0, "policy-servicing", change).unwrap();
+    days(&mut c, 3);
+    let after = c.business_date().unwrap();
+    let mut checked = 0;
+    let mut excess_on = |c: &mut Cluster, cover: &str, event: NaiveDate| {
+        checked += 1;
+        let claim_id = format!("clm-{checked}");
+        ok(c, notification(&claim_id, &id, cover, ClaimType::Health, event));
+        let assign = claims::Command::Assign {
+            claim: claim_id.clone(),
+            to: "sam".into(),
+            actor: actor("sam"),
+        };
+        ok(c, assign);
+        let check = claims::Command::CoverCheck {
+            claim: claim_id.clone(),
+            relied_on: vec![],
+            actor: actor("sam"),
+        };
+        ok(c, check);
+        claim(c, &claim_id).cover_check.clone().unwrap().facts.chosen_excess_minor
+    };
+    assert_eq!(excess_on(&mut c, "hospital", before), Some(2_000_00));
+    assert_eq!(excess_on(&mut c, "hospital", after), Some(0));
+    assert_eq!(excess_on(&mut c, "dental", after), None);
+}
+
+/// Purpose: interest a payee declined after being told the amount is posted with the payment and
+/// reversed in its own entry with the reason `declined_by_payee`, so claim interest expense nets
+/// to nothing, the bank is asked for the benefit alone, and a return and reissue sends exactly
+/// that again, with no reconciliation breaks.
+/// Why it matters: decision 2 of 13 November (CLM-037). The decline must stay visible in the
+/// journal, and the money the payments module is told to send must match what was declined, or
+/// the payee is paid interest they refused or the ledger disagrees with the bank.
+#[test]
+fn declined_late_interest_is_reversed_in_its_own_entry() {
+    let mut c = cluster();
+    let mut r = rules();
+    r.version = 2;
+    r.late_interest = Some(claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    c.activate_everywhere(wrap(claims::Command::ActivateRules { rules: Box::new(r) })).unwrap();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(80_000_00), None, false)));
+    verify_payee(&mut c, "clm-1");
+    days(&mut c, 40);
+    ok(
+        &mut c,
+        claims::Command::OfferLateInterest {
+            claim: "clm-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(
+        &mut c,
+        claims::Command::DeclineLateInterest {
+            claim: "clm-1".into(),
+            vault_ref: "vault-decision-1".into(),
+            actor: actor("sam"),
+        },
+    );
+    ok(&mut c, pay("clm-1", "pay-1", 80_000_00, None));
+    let interest = accounts::claim_interest("term-life", NZD);
+    assert_eq!(c.state(0).ledger.natural_balance(&interest.id), 0);
+    assert_eq!(money(&c, &id), (0, 80_000_00, 0));
+    let reversed = c.nodes[&0]
+        .journal
+        .iter()
+        .find(|e| e.body.kind == "claim_late_interest_declined")
+        .expect("the reversal entry");
+    assert_eq!(reversed.body.detail["reason"], "declined_by_payee");
+    c.submit(0, "payments", settle(&id, "pay-1", 80_000_00)).unwrap();
+    clean(&c);
+    assert_eq!(money(&c, &id), (0, 0, 0));
+    days(&mut c, 2);
 }

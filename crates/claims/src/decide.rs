@@ -21,6 +21,8 @@ pub(crate) struct Plan {
     /// The amount the decision is for, which authority is measured against.
     pub amount_minor: i64,
     pub deduct_minor: i64,
+    /// A policy loan repaid out of a death benefit.
+    pub loan_minor: i64,
     pub terminate: Option<Termination>,
     /// Money already paid that the decision makes an overpayment.
     pub overpaid_minor: i64,
@@ -74,10 +76,15 @@ impl ClaimsState {
     }
 
     /// Lump sums already admitted on the same cover for the same life.
-    fn earlier_admitted(&self, claim: &Claim) -> i64 {
+    /// What lump sums already admitted have used of this cover: on the cover
+    /// for this life, or for any life where the cover pays once on the first
+    /// event, and on the covers whose payments reduce it.
+    fn earlier_admitted(&self, claim: &Claim, facts: &CoverFacts) -> i64 {
         let others = self.by_policy.get(&claim.policy).into_iter().flatten().filter_map(|id| self.claims.get(id));
+        let joint = |c: &Claim| c.life.as_ref().is_some_and(|l| facts.joint_lives.contains(l));
         others
-            .filter(|c| c.cover == claim.cover && c.life == claim.life && !c.claim_type.periodic() && c.status != Status::Reversed)
+            .filter(|c| c.id != claim.id && !c.claim_type.periodic() && c.status != Status::Reversed)
+            .filter(|c| (c.cover == claim.cover && (c.life == claim.life || joint(c))) || (c.life == claim.life && facts.reduced_by.contains(&c.cover)))
             .map(|c| c.admitted_minor)
             .sum()
     }
@@ -151,7 +158,7 @@ impl ClaimsState {
                         };
                         let sound = amount_fits
                             && p.monthly_minor <= facts.sum_insured_minor
-                            && p.first_period >= claim.event_date
+                            && p.first_period >= plus_days(claim.event_date, facts.waiting_days)
                             && p.end > p.first_period
                             && p.expected_end > p.first_period;
                         if !sound {
@@ -163,7 +170,7 @@ impl ClaimsState {
                         plan.health = self.health_amount(claim, facts);
                         let cap = match &plan.health {
                             Some(h) => h.amount_minor,
-                            None => facts.sum_insured_minor - self.earlier_admitted(claim),
+                            None => facts.sum_insured_minor - self.earlier_admitted(claim, facts),
                         };
                         let amount = amount_minor.unwrap_or(cap);
                         if amount <= 0 || amount > cap {
@@ -175,8 +182,12 @@ impl ClaimsState {
                             plan.deduct_minor = facts.outstanding_premium_minor.clamp(0, amount);
                         }
                         if plan.health.is_none() {
-                            // Proceeds go to recorded interests first, in priority order, each up to its extent.
-                            let mut left = amount - plan.deduct_minor;
+                            // A loan against the policy is repaid out of a death benefit first.
+                            if claim.claim_type == ClaimType::Death {
+                                plan.loan_minor = facts.policy_loan_minor.clamp(0, amount - plan.deduct_minor);
+                            }
+                            // Then recorded interests, in priority order, each up to its extent.
+                            let mut left = amount - plan.deduct_minor - plan.loan_minor;
                             let mut recorded: Vec<_> = facts.interests.iter().collect();
                             recorded.sort_by(|a, b| (a.priority, &a.party).cmp(&(b.priority, &b.party)));
                             for i in recorded {
@@ -585,10 +596,12 @@ impl ClaimsState {
                         release_reserve: true,
                         deduct_premium_minor: plan.deduct_minor,
                         terminate: plan.terminate,
+                        repay_loan_minor: plan.loan_minor,
                     })?;
                     claim.status = Status::Admitted;
                     claim.admitted_minor += plan.amount_minor;
-                    claim.payable_minor += plan.amount_minor - plan.deduct_minor;
+                    claim.payable_minor += plan.amount_minor - plan.deduct_minor - plan.loan_minor;
+                    claim.loan_repaid_minor += plan.loan_minor;
                     claim.reserve_minor = 0;
                     for due in &plan.interests {
                         let basis = if due.nominated { "nomination" } else { "interest" };
@@ -607,7 +620,14 @@ impl ClaimsState {
                         self.use_health(cx, claim, priced, plan.amount_minor);
                     }
                     self.start_timer(claim, TimerKind::Payment, cx.today);
-                    cx.notify("claim_admitted", &id, &[("admitted_minor", plan.amount_minor.to_string())]);
+                    cx.notify(
+                        "claim_admitted",
+                        &id,
+                        &[
+                            ("admitted_minor", plan.amount_minor.to_string()),
+                            ("loan_repaid_minor", plan.loan_minor.to_string()),
+                        ],
+                    );
                 }
                 Self::meet_timer(claim, TimerKind::Decision, cx.today);
             }
@@ -663,6 +683,7 @@ impl ClaimsState {
                     run: None,
                     cost_item: None,
                     interest_minor: 0,
+                    interest_declined_minor: 0,
                     interested_party: None,
                 });
                 cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true, 0);

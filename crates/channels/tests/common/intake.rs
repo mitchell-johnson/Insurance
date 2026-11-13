@@ -52,4 +52,18 @@ impl Intake for IntakeDouble {
         };
         Box::pin(async move { Ok(answer) })
     }
+
+    fn open(&self, body: Value) -> Asked<'_> {
+        self.received.lock().unwrap().push(body.clone());
+        // As the module would: `abe` has no business with the life.
+        let answer = if body["underwriter"] == "abe" {
+            (403, json!({ "title": "not_authorised", "detail": "abe has not worked a case on this life" }))
+        } else {
+            (
+                200,
+                json!([{ "vault_ref": "clinical://party/disclosure/hash-1", "hash": "hash-1", "submitted_at": "2026-11-11T09:00:00Z", "answers": { "smoker": false } }]),
+            )
+        };
+        Box::pin(async move { Ok(answer) })
+    }
 }

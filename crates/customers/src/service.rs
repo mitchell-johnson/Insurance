@@ -586,6 +586,77 @@ async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
     }
 }
 
+/// Whether due diligence on a party is complete before it owns a policy:
+/// its own identity check, screening and current risk rating, and for an
+/// organisation (a trust, a company, a partnership) the same for every
+/// trustee, director and beneficial owner in force today. A referred check
+/// goes to a specialist; nothing is complete while any item is open.
+async fn due_diligence<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    use crate::model::RelationshipKind;
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, party) = app.find(&id).await?;
+    if !app.access.allows(&app.ask(&ctx), "due_diligence") {
+        return Err(app.deny(&ctx, Some(&resolved), "due_diligence").await);
+    }
+    let today = Utc::now().date_naive();
+    let mut open: Vec<String> = party.due_diligence(today).into_iter().map(String::from).collect();
+    let mut people = Vec::new();
+    for row in app.store.relationships_to(&Target::Party(resolved.clone())).await.map_err(failed)? {
+        let r = &row.relationship;
+        if matches!(
+            r.kind,
+            RelationshipKind::Trustee | RelationshipKind::Director | RelationshipKind::BeneficialOwner
+        ) && r.in_force(today)
+        {
+            let lacks = match app.store.load(&row.party).await.map_err(failed)? {
+                Some(p) => p.due_diligence(today),
+                None => vec!["identity", "screening", "risk_rating"],
+            };
+            open.extend(lacks.iter().map(|item| format!("{}:{}:{item}", r.kind.as_str(), row.party.0)));
+            people.push(json!({ "party": row.party, "kind": r.kind, "open": lacks }));
+        }
+    }
+    let referred = open.iter().any(|o| o.ends_with("_referred"));
+    app.audit(&ctx, Some(&resolved), "due_diligence", vec![], "allow").await?;
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "party": resolved,
+            "complete": open.is_empty(),
+            "open": open,
+            "to_specialist": referred,
+            "connected": people,
+        })),
+    ))
+}
+
+/// Whether a person's own hold on money going out stands, and when a
+/// removal they asked for takes effect. Payments and servicing ask before
+/// paying out or changing a payout account; the core and payments also
+/// take the events.
+async fn spending_hold<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(id): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    let (resolved, party) = app.find(&id).await?;
+    let ask = app.ask_about(&ctx, &resolved).await?;
+    if !app.access.allows(&ask, "spending_hold") {
+        return Err(app.deny(&ctx, Some(&resolved), "spending_hold").await);
+    }
+    app.audit(&ctx, Some(&resolved), "spending_hold", vec![], "allow").await?;
+    let hold = party.spending_hold.as_ref();
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "party": resolved,
+            "held": hold.is_some(),
+            "placed_at": hold.map(|h| h.placed_at),
+            "removal": hold.and_then(|h| h.removal_requested_at).map(|at| json!({
+                "requested_at": at,
+                "ends_at": at + app.store.hold_cooling_off(),
+            })),
+        })),
+    ))
+}
+
 /// Every action one person took, or was asked about, with dates: what a
 /// guardian or attorney asks for to show what they did under their
 /// authority. Read by privacy, like a party's own trail.
@@ -1012,6 +1083,8 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/export", get(export::<W, S>))
         .route("/v1/parties/{id}/audit", get(audit_trail::<W, S>))
         .route("/v1/actors/{actor}/actions", get(actions_by::<W, S>))
+        .route("/v1/parties/{id}/spending-hold", get(spending_hold::<W, S>))
+        .route("/v1/parties/{id}/due-diligence", get(due_diligence::<W, S>))
         .route("/v1/relationships", get(relationships_to::<W, S>))
         .route("/v1/merges", post(merge::<W, S>))
         .route("/v1/unmerges", post(unmerge::<W, S>))
