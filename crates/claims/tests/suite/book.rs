@@ -1567,3 +1567,82 @@ fn other_income_shows_as_its_own_figure_on_each_benefit_line() {
     assert!(lines.iter().all(|l| l.arrears_minor == 0 && l.overpayment_offset_minor == 0 && !l.returned));
     assert!(w.state.claimant_view("c-none").is_none());
 }
+
+/// Purpose: late payment interest is worked out and offered to the payee with its amount; the
+/// payee can decline it only after being told and with their own decision on file; a declined
+/// amount is posted and reversed in the same payment with reason `declined_by_payee`, counted in
+/// the report; and a payee who changes their mind before the claim closes is paid what they
+/// declined with the next payment.
+/// Why it matters: persona test CLM-037 and decision 2 of 13 November. The interest is the
+/// insurer's debt for its own delay; it may be refused only by the payee's informed choice, and
+/// the refusal must stay visible so the insurer can never quietly benefit from it.
+#[test]
+fn late_interest_is_offered_and_declined_only_by_an_informed_payee() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.late_interest = Some(ic_claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    admitted(&mut w, "c-1", 200_000);
+    w.verify_payee("c-1", "ana");
+    w.advance(20);
+    let decline = |vault: &str| Command::DeclineLateInterest {
+        claim: "c-1".into(),
+        vault_ref: vault.into(),
+        actor: actor("ana"),
+    };
+    let offer = Command::OfferLateInterest {
+        claim: "c-1".into(),
+        actor: actor("ana"),
+    };
+    // Never declined before the payee has been told the amount.
+    assert_eq!(w.refused(decline("vault-1")), "interest_not_offered");
+    w.ok(offer.clone());
+    assert_eq!(w.core.noticed("late_interest_offered")[0]["amount_minor"], "400");
+    assert_eq!(w.refused(decline(" ")), "decision_required");
+    w.ok(decline("vault-1"));
+    assert_eq!(w.core.noticed("late_interest_declined")[0]["reason"], "declined_by_payee");
+
+    w.ok(pay("c-1", "ana", "p-1", 100_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            interest_minor: 200,
+            interest_declined_minor: 200,
+            ..
+        })
+    ));
+    let paid = w.core.noticed("claim_paid")[0].clone();
+    assert_eq!((paid["net_minor"].as_str(), paid["interest_minor"].as_str()), ("100000", "0"));
+    assert_eq!(w.state.report().interest_declined_minor, 200);
+
+    // The payee changes their mind: the 200 goes with the next payment, with its own interest.
+    w.ok(Command::WithdrawInterestDecline {
+        claim: "c-1".into(),
+        actor: actor("ana"),
+    });
+    assert_eq!(w.core.noticed("late_interest_decline_withdrawn")[0]["owed_again_minor"], "200");
+    w.ok(pay("c-1", "ana", "p-2", 100_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            interest_minor: 400,
+            interest_declined_minor: 0,
+            close: true,
+            ..
+        })
+    ));
+    assert_eq!(w.state.report().interest_declined_minor, 0);
+    // Closed: there is nothing left to change a mind about.
+    assert_eq!(w.refused(offer), "no_interest_owed");
+    assert_eq!(
+        w.refused(Command::WithdrawInterestDecline {
+            claim: "c-1".into(),
+            actor: actor("ana"),
+        }),
+        "no_decline"
+    );
+}
