@@ -2283,6 +2283,7 @@ dependencies = [
  "flate2",
  "hex",
  "ic-azure",
+ "ic-collections",
  "ic-complaints",
  "ic-core",
  "ic-log",
