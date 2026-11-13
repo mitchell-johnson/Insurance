@@ -362,6 +362,9 @@ pub struct InterestDue {
     pub owed_minor: i64,
     /// Released to them and not returned.
     pub paid_minor: i64,
+    /// Owed as a nominated beneficiary's share, not as a lender's interest.
+    #[serde(default)]
+    pub nominated: bool,
 }
 
 /// One paid period of a benefit in payment.
@@ -634,6 +637,10 @@ pub struct Claim {
     /// outside the investigators' own view.
     #[serde(default)]
     pub investigation: Option<String>,
+    /// On a continuation policy: the scheme policy and member it carries on
+    /// from, so the scheme's claims history and reinsurance follow the life.
+    #[serde(default)]
+    pub continued_from: Option<crate::port::Continuation>,
     /// Lenders and assignees paid before the claimant, in priority order.
     #[serde(default)]
     pub interests: Vec<InterestDue>,

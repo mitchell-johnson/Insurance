@@ -52,12 +52,12 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
-| COL Collection, cash matching, standing and dunning | 10 | 6 | 12 | 10 |
+| COL Collection, cash matching, standing and dunning | 13 | 7 | 8 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 17 | 9 | 4 | 8 |
-| CLM Claims and claims operations | 19 | 14 | 9 | 12 |
+| CLM Claims and claims operations | 19 | 16 | 7 | 12 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
 | INV Unit pricing and the investment ledger | 12 | 3 | 10 | 3 |
 | GRP Group scheme administration | 19 | 10 | 11 | 4 |
@@ -77,23 +77,22 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **225** | **127** | **225** | **148** |
+| **Total** | **228** | **130** | **219** | **146** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 83 | 23 | 36 |
-| C | 111 | 71 | 164 |
+| C | 114 | 74 | 158 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
 
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (5): COL-005, COL-012, COL-019, COL-023, COL-024
+- **COL** (3): COL-005, COL-023, COL-024
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030
-- **CLM** (2): CLM-026, CLM-029
 - **INV** (2): INV-018, INV-019
 - **GRP** (1): GRP-017
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
@@ -122,7 +121,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **AUD** (7): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-011, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (6): UW-002, UW-003, UW-006, UW-014, UW-026, UW-029
-- **CLM** (10): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-028, CLM-033, CLM-039
+- **CLM** (12): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-026, CLM-028, CLM-029, CLM-033, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
 - **GRP** (3): GRP-013, GRP-028, GRP-032
