@@ -2,7 +2,7 @@
 
 Each story is written from the persona's point of view and carries an ID of the form `US-<persona>-<n>`. The line after "Done when" is the acceptance condition in plain words. The exact checks are the test cases in `test-matrix.md` that name the story. `coverage.md` lists the tests behind every story.
 
-Stories describe behaviour the design notes already decide. Where a persona wants something the design does not yet answer, the story is marked **(design gap)** and repeated in the gap list in `README.md`.
+Stories describe behaviour the design notes already decide. Where a persona wants something the design does not yet answer, the story is marked **(design gap)** and repeated in the gap list in `README.md`. A gap once decided is marked **(decided date)** and the decision is in `docs/decisions.md`.
 
 ## Individuals
 
@@ -61,7 +61,7 @@ Stories describe behaviour the design notes already decide. Where a persona want
 
 ### P12 Fatima Al-Sayed
 - **US-P12-1** As someone who prefers Arabic for complex documents, I want my schedule and notices in Arabic with the English shown as controlling, so that I understand what I sign. *Done when* documents render in my preferred language from the same data and say which version controls.
-- **US-P12-2** As someone who avoids interest, I want to be able to decline interest added to a late payment, so that my values are respected. **(design gap)** *Done when* the design says whether a payee may waive late-payment interest and how that posts.
+- **US-P12-2** As someone who avoids interest, I want to be able to decline interest added to a late payment, so that my values are respected. **(decided 13 Nov 2026)** *Done when* a payee told the amount may decline it, and the decline posts with its own reason.
 - **US-P12-3** As an applicant with little local medical history, I want missing records handled without being declined by default, so that my past is not held against me. *Done when* an evidence request that cannot be met routes to an underwriter with reasons and never defaults to decline or to standard.
 
 ### P13 Dave Pākura
@@ -219,7 +219,7 @@ Stories describe behaviour the design notes already decide. Where a persona want
 
 ### P49 Alex Rivera
 - **US-P49-1** As someone who changed their legal name, I want one update that flows to every policy and document, so that I do it once. *Done when* the party change updates every relationship and a new schedule issues with the earlier one kept.
-- **US-P49-2** As a non-binary customer, I want to be rated without being forced into a category that is not mine, so that I am treated with respect. **(design gap)** *Done when* the design says how sex as a rating factor is captured for a non-binary life.
+- **US-P49-2** As a non-binary customer, I want to be rated without being forced into a category that is not mine, so that I am treated with respect. **(decided 13 Nov 2026)** *Done when* a life whose recorded sex the table does not hold is rated at the lower of its rates, with gender kept apart.
 
 ### P50 Barry Hughes
 - **US-P50-1** As a customer being scammed, I want the insurer to slow down and talk to me without taking my choices away, so that I have a chance to see it. *Done when* the surrender to a new overseas payee triggers a conversation and a cooling-off, and my decision stands after.
@@ -231,7 +231,7 @@ Stories describe behaviour the design notes already decide. Where a persona want
 - **US-P51-3** As trustees of a new trust, we want the trust accepted as a policyholder properly, so that the education fund is in the right name. *Done when* due diligence on the trust and trustees completes before issue.
 
 ### P52 Caleb Stone
-- **US-P52-1** As someone struggling, I want to be able to put friction on my own refunds, so that I cannot raid my premiums on a bad night. **(design gap)** *Done when* the design says whether a customer-set hold with a cooling-off on removal exists for refunds and surrenders.
+- **US-P52-1** As someone struggling, I want to be able to put friction on my own refunds, so that I cannot raid my premiums on a bad night. **(decided 13 Nov 2026)** *Done when* a hold I set stops money leaving at once and can only be removed after fresh verification and a cooling-off.
 - **US-P52-2** As a customer, I want my pattern noticed without being accused, so that I am offered help. *Done when* the overpay-then-refund rule raises a restricted case and front-line staff see only a support prompt.
 
 ### P53 Ngaire Thompson
@@ -456,10 +456,10 @@ Stories describe behaviour the design notes already decide. Where a persona want
 - **US-N04-2** As a screen reader user, I want every journey usable without sight, so that I can self-serve. *Done when* app and portal journeys pass assistive technology checks and documents have accessible formats.
 
 ### N5 Rob Sutherland
-- **US-N05-1** As a bankrupt policyholder, I want to know who controls my policy's value, so that I do not act unlawfully. **(design gap)** *Done when* the design says how an insolvency official's claim is recorded and enforced.
+- **US-N05-1** As a bankrupt policyholder, I want to know who controls my policy's value, so that I do not act unlawfully. **(decided 13 Nov 2026)** *Done when* the Official Assignee's notice records an interest that stops value leaving without consent while cover continues.
 
 ### N6 Shane Poutama
-- **US-N06-1** As a prisoner, I want my policy kept in order by post and through a representative, so that I do not lose cover inside. **(design gap)** *Done when* post-only service and a representative work, and the design says how imprisonment affects income protection.
+- **US-N06-1** As a prisoner, I want my policy kept in order by post and through a representative, so that I do not lose cover inside. **(decided 13 Nov 2026)** *Done when* post-only service and a representative work, and the benefit is suspended in custody and resumes on release with the claim and cover kept whole.
 
 ### N7 Leilani Fonoti
 - **US-N07-1** As a staff member with my own policies, I want my file handled by people who do not know me, so that my privacy is equal to any customer's. *Done when* my colleagues have no path to my records and my own lookups of relatives are refused and flagged.
