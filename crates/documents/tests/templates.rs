@@ -643,3 +643,50 @@ fn a_changed_clause_shows_every_product_it_reaches() {
     assert!(usage.templates.iter().all(|t| t.status == TemplateStatus::Draft));
     assert_eq!(kit.state.part_usage("no-such-part").latest, None);
 }
+
+/// Purpose: a template that serves no particular product (a general
+/// letter) still needs a passing rendering case in every language it
+/// offers before it can be activated.
+/// Why it matters: correspondence not tied to a product is exactly where a
+/// translation is most likely to be added late. Without this rule an
+/// untested Māori version of a general letter could go to customers with
+/// a broken field in it.
+#[test]
+fn a_letter_for_no_product_is_tested_in_every_language() {
+    let mut kit = Kit::new();
+    let mut t = template("general", DocumentKind::GeneralCorrespondence, "Dear {{name}}.");
+    t.products.clear();
+    t.bodies.insert("mi".into(), "Tēnā koe {{name}}.".into());
+    t.controlling_statements.insert("mi".into(), "Ko te reo Ingarihi te mana.".into());
+    let r = t.reference();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(t.clone())));
+    kit.approve(&r, &[ApprovalRole::Legal, ApprovalRole::Product]);
+    let en = kit.case_for(&t, &sample_data());
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r.clone(),
+            cases: vec![en.clone()],
+        },
+    );
+    let today = kit.today();
+    let activate = Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: today,
+    };
+    assert_eq!(kit.err("config", "product", activate.clone()), "not_tested");
+    let mut mi = en;
+    mi.language = "mi".into();
+    mi.expected_sha256 = ic_documents::template::sha256_hex(t.render(&kit.state.parts, "mi", &mi.data).unwrap().as_bytes());
+    let en = kit.case_for(&t, &sample_data());
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r,
+            cases: vec![en, mi],
+        },
+    );
+    kit.ok("config", "product", activate);
+}
