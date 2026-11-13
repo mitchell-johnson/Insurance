@@ -158,6 +158,19 @@ fn bad_values_are_refused_at_start() {
         );
     }
     assert!(load(&[NODES, OPEN, DEV, scope]).unwrap_err().contains("together"));
+    // So is the documents service.
+    assert_eq!(
+        load(&[
+            NODES,
+            OPEN,
+            DEV,
+            ("IC_DOCUMENTS_URL", "http://ic-documents"),
+            ("IC_DOCUMENTS_SCOPE", "api://d/.default")
+        ])
+        .unwrap()
+        .documents,
+        Some(("http://ic-documents".to_string(), "api://d/.default".to_string()))
+    );
     // The underwriting intake is configured the same way.
     let intake = ("IC_UNDERWRITING_INTAKE_SCOPE", "api://ic-underwriting-intake/.default");
     assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().intake, None);

@@ -50,6 +50,11 @@ pub enum Question {
         party: PartyId,
         have: Option<u64>,
     },
+    /// Whether a member of staff may download documents.
+    DocumentsStaff {
+        staff: PartyId,
+        at: At,
+    },
     /// Whether this party is the life on an underwriting proposal, and the
     /// enrolled key of the device they proved, if it stands.
     DisclosureSigner {
@@ -370,6 +375,7 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             .map(|v| json!({ "id": v.id, "hardware_backed": v.hardware_backed, "enrolled": v.enrolled, "revoked": v.revoked }))
             .collect::<Vec<_>>()),
         Question::HeldBalance { party } => d.workbench.own_held(&party),
+        Question::DocumentsStaff { staff, at } => json!(d.staff.holds_action(&staff, crate::documents::actions::DOWNLOAD, at)),
         Question::DisclosureSigner { party, device, proposal, life } => {
             let is_life = d.published.values().flat_map(|rows| rows.values()).any(|r| {
                 r.kind == "proposal_life" && r.subject.as_ref() == Some(&party) && r.body["proposal"] == proposal.as_str() && r.body["life"] == life.as_str()

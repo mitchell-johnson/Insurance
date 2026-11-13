@@ -1193,6 +1193,11 @@ fn a_long_listing_is_filed_in_parts_the_statement_names() {
         "statements(\"quarterly\", agree_before_payment = True, listing_part_rows = 0)",
     );
     assert!(load_treaty("t.star", &none).unwrap_err().to_string().contains("between 1 and 10,000 rows"));
+    // A treaty held before part sizes existed reads with the default.
+    let mut held = serde_json::to_value(load_treaty("t.star", RETAIL).unwrap()).unwrap();
+    held["statement"].as_object_mut().unwrap().remove("listing_part_rows");
+    let held: ic_reinsurance::treaty::Treaty = serde_json::from_value(held).unwrap();
+    assert_eq!(held.statement.listing_part_rows, 2_000);
 
     for (policy, party, dob) in [("P1", "anna", d(1990, 3, 10)), ("P2", "bob", d(1985, 7, 1))] {
         b.issue(1, policy, party, vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
