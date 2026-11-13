@@ -570,3 +570,31 @@ fn income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting() 
     ));
     assert!(load_product("income_protection.star", &INCOME.replace("\"suspend\"", "\"sometimes\"")).is_err());
 }
+
+/// Purpose: two covers of a health product can name one shared counter for their benefit
+/// limits, and a cover may say whether premium is waived while a benefit is paid; a counter
+/// named on one cover alone, or with no name, does not load.
+/// Why it matters: claims counts limits per cover unless the product says two covers draw on
+/// one. A top-up that named a counter its base plan did not would silently double the
+/// customer's limit, so a shared counter nobody shares is a configuration error to stop.
+#[test]
+fn covers_can_share_a_limit_counter_and_declare_a_premium_waiver() {
+    let shared = FLEX
+        .replace(
+            "code = \"hospital\",",
+            "code = \"hospital\",\n            shared_counter = \"surgical\",\n            premium_waiver = False,",
+        )
+        .replace("code = \"specialist\",", "code = \"specialist\",\n            shared_counter = \"surgical\",");
+    assert_ne!(shared, FLEX, "the shipped product has the covers this test edits");
+    let p = load_product("health_flex.star", &shared).unwrap();
+    let cover = |code| p.cover(code).unwrap();
+    assert_eq!(cover("hospital").shared_counter.as_deref(), Some("surgical"));
+    assert_eq!(cover("specialist").shared_counter, cover("hospital").shared_counter);
+    assert_eq!((cover("hospital").premium_waiver, cover("dental").premium_waiver), (Some(false), None));
+    assert_eq!(cover("dental").shared_counter, None);
+
+    let alone = FLEX.replace("code = \"hospital\",", "code = \"hospital\",\n            shared_counter = \"surgical\",");
+    assert!(load_product("health_flex.star", &alone).is_err());
+    let unnamed = shared.replace("\"surgical\"", "\"\"");
+    assert!(load_product("health_flex.star", &unnamed).is_err());
+}

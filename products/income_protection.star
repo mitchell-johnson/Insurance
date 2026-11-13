@@ -20,6 +20,7 @@ PRODUCT = product(
             # decision 5).
             benefit = monthly_benefit(waiting_days = 28, benefit_months = 60, benefit_while_imprisoned = "suspend"),
             rating = stepped("income-base"),
+            premium_waiver = True,
             definitions = ["total-disability"],
             expiry_age = 65,
             min_sum_insured = dollars(500),

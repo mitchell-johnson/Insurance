@@ -2233,6 +2233,14 @@ async fn serve_for_a_browser() {
     // Staff's group console works against the group module itself, beside the employer's double.
     let staff = Arc::new(common::group_module::seeded());
     let portal = portal_with(|employer| Arc::new(common::group_module::Beside { employer, staff }));
+    // The group was paid an override, on its first statement.
+    let fap: ic_distribution::Statement = serde_json::from_value(json!({ "payee": "fap-1", "number": 1, "date": "2027-11-30", "cut_seq": 9,
+        "opening_minor": 0, "lines": [{ "date": "2027-11-15", "reference": "r1", "kind": "commission", "ledger": "commission_payable",
+        "policy": "pol-1", "book": null, "layer": null, "component": { "override": "group" }, "earner": "e1", "amount_minor": 30_00 }],
+        "closing_minor": 30_00, "held_minor": 0, "held_reasons": [], "retention_minor": 0, "advance_outstanding_minor": 0,
+        "advance_recovered_minor": 0, "payment_held": null, "payments": [], "hash": "h" }))
+    .unwrap();
+    portal.commission.0.lock().unwrap().0.statements.insert("fap-1.1".into(), fap);
     // Kiri appoints the adviser, so the adviser's book has a policy in it.
     let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
     let (status, _) = portal
@@ -3688,4 +3696,55 @@ async fn the_group_console_says_whose_fault_a_refusal_is() {
         portal.get("sub-grp1", "/staff/v1/group/scheme?scheme=harbour").await.0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+}
+
+/// Purpose: an adviser reads their own commission statement and a group the one paid to it, with totals by what earned each line
+/// (base, each override level, fees); nobody can name another payee's statement, and one not yet cut is 404.
+/// Why it matters: a dealer group checks its overrides against its own figures every month; it must see its statement and its
+/// totals, while an adviser must never read the group's (or a colleague's) pay.
+#[tokio::test]
+async fn an_adviser_and_their_group_read_their_own_statements() {
+    let portal = portal();
+    let statement = |payee: &str, lines: Value| -> ic_distribution::Statement {
+        serde_json::from_value(json!({ "payee": payee, "number": 1, "date": "2027-11-30", "cut_seq": 9, "opening_minor": 0,
+            "lines": lines, "closing_minor": 0, "held_minor": 0, "held_reasons": [], "retention_minor": 0,
+            "advance_outstanding_minor": 0, "advance_recovered_minor": 0, "payment_held": null, "payments": [], "hash": "h" }))
+        .unwrap()
+    };
+    let line = |component: Value, amount: i64| {
+        json!({ "date": "2027-11-15", "reference": "r", "kind": "commission", "ledger": "commission_payable", "policy": "pol-1",
+            "book": null, "layer": null, "component": component, "earner": "e1", "amount_minor": amount })
+    };
+    {
+        let mut module = portal.commission.0.lock().unwrap();
+        let statements = &mut module.0.statements;
+        statements.insert(
+            "adv-1.1".into(),
+            statement("adv-1", json!([line(json!("base"), 120_00), line(Value::Null, 10_00)])),
+        );
+        statements.insert(
+            "fap-1.1".into(),
+            statement(
+                "fap-1",
+                json!([
+                    line(json!({ "override": "group" }), 30_00),
+                    line(json!({ "override": "group" }), 5_00),
+                    line(json!({ "fixed_fee": "referral" }), 50_00)
+                ]),
+            ),
+        );
+    }
+    let (status, own) = portal.get("sub-adv", "/adviser/v1/statements/1").await;
+    assert_eq!(
+        (status, &own["payee"], &own["totals"]),
+        (StatusCode::OK, &json!("adv-1"), &json!({ "base": 120_00, "commission": 10_00 })),
+        "{own}"
+    );
+    let (status, group) = portal.get("sub-fap", "/adviser/v1/statements/1").await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(group["totals"], json!({ "override:group": 35_00, "fee:referral": 50_00 }));
+    assert!(group.get("cut_seq").is_none(), "the module's bookkeeping stays inside it");
+    // The payee is always the person signed in: there is no way to ask for another's.
+    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/2").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/x").await.0, StatusCode::BAD_REQUEST);
 }

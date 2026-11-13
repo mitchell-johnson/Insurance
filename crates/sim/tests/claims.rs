@@ -2513,7 +2513,7 @@ fn declined_late_interest_is_reversed_in_its_own_entry() {
 /// Purpose: the cover check on an income protection claim tells claims the cover's waiting
 /// period and what the product's wording does with the benefit in custody, for the shipped
 /// product (suspend) and for a product whose wording pays; a lump sum cover reports no
-/// waiting period.
+/// waiting period. It also says whether the product waives premium while a benefit is paid.
 /// Why it matters: decision 5 in `docs/decisions.md` (CLM-040). Claims enforces both from
 /// these facts alone. If the core left them at their defaults, every income claim would be
 /// payable from the day of the event, and a product that pays in custody would be suspended.
@@ -2576,6 +2576,9 @@ fn the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting
     );
     assert_eq!(facts(&mut c, "clm-ip-2", &paid, "income", ClaimType::IncomeProtection), (28, Imprisonment::Pay));
     assert_eq!(facts(&mut c, "clm-ip-3", &life_id, "life", ClaimType::Death).0, 0);
+    // The income product says its premium is waived while a benefit is paid; term life is silent.
+    let waiver = |c: &Cluster, claim_id: &str| claim(c, claim_id).cover_check.clone().unwrap().facts.premium_waiver;
+    assert_eq!((waiver(&c, "clm-ip-1"), waiver(&c, "clm-ip-3")), (Some(true), None));
 }
 
 /// Purpose: a funeral advance on a death claim moves the reserve into benefit payable without

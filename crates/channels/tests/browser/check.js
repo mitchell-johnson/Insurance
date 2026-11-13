@@ -229,6 +229,8 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   } });
   await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
     await sees(p, "You act as cl-lead");
+    await p.locator("#inv-show").click();
+    await p.locator("#inv").getByText("No cases are open to you.").waitFor();
     await p.selectOption("#a-command", "notify");
     await p.fill("#f-0", "c-b1"); await p.fill("#f-1", "pol-c1"); await p.fill("#f-2", "trauma");
     await p.selectOption("#f-4", "trauma"); await p.fill("#f-5", "2027-02-20");
@@ -337,6 +339,9 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   await visit(browser, "/adviser", { subject: "sub-fap" }, { run: async (p) => {
     await sees(p, "Advisers under you");
     await p.locator("#practice").getByText("adv-1").waitFor();
+    // The group's own statement, with its overrides totalled.
+    await p.fill("#st-number", "1"); await p.locator("#st-form button").click();
+    await p.locator("#statement").getByText("Override (group)").waitFor();
   } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");
