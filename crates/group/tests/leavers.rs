@@ -120,6 +120,9 @@ fn a_leaver_can_continue_their_cover_as_an_individual_policy() {
     let issued = &h.c.state(h.p).policies[&new_policy];
     assert_eq!(issued.inception, left, "cover continues from the day scheme cover ended");
     assert_eq!(issued.policyholder, party("party-E002"));
+    // The new policy names the scheme policy and the member it carries on from, for claims.
+    let from = issued.continuation_of.as_ref().expect("the link to the scheme");
+    assert_eq!((&from.policy, &from.life), (&h.policy, &life("E002")));
     assert_eq!(code(take_up(&mut h, offer, 3, "term-life", 100_000_00)), "offer_closed");
 }
 
