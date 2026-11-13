@@ -159,6 +159,15 @@ pub struct StatementTerms {
     /// The reinsurer agrees the statement before anything is paid.
     #[serde(default)]
     pub agree_before_payment: bool,
+    /// The most rows in one document of the listing. A longer listing is
+    /// filed in parts, so no single record held in replicated state grows
+    /// with the book.
+    #[serde(default = "default_listing_part_rows")]
+    pub listing_part_rows: u32,
+}
+
+fn default_listing_part_rows() -> u32 {
+    2_000
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +293,9 @@ impl Treaty {
             return Err("a treaty must say which products and cover types it applies to".into());
         }
         check_panel(&self.panel)?;
+        if !(1..=10_000).contains(&self.statement.listing_part_rows) {
+            return Err("a listing part holds between 1 and 10,000 rows".into());
+        }
         if let Some(bad) = self.exclusions.iter().find(|x| !exclusion_well_formed(x)) {
             return Err(format!(
                 "the exclusion {bad:?} is not a risk code: use a tag such as pursuit.aviation, or a family such as pursuit.*"

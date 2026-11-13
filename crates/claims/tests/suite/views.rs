@@ -315,3 +315,63 @@ fn the_policy_status_shows_an_adviser_each_claim_without_its_cause() {
     }
     assert_eq!(w.state.policy_status("pol-none"), vec![]);
 }
+
+/// Purpose: on income protection a company owns, the benefit is paid to the company as
+/// policyholder, while the claim is about the life insured: the view other modules use to decide
+/// who may see it names the life, even when the company is recorded as the claimant. A death
+/// claim is still about its claimant.
+/// Why it matters: persona test CLM-027. An employer that owns key person cover is entitled to
+/// the money but not to its director's medical file; naming the company as the person the claim
+/// is about would show it the claim's detail.
+#[test]
+fn a_company_owned_income_claim_pays_the_company_and_is_about_the_life() {
+    use ic_claims::report::{Question, Reply};
+    let mut w = World::new();
+    let mut owned = World::notification("ip-co", "pol-2", "ip", ClaimType::IncomeProtection);
+    owned.claimant = Some("party-holder".into());
+    owned.notifier = ic_claims::model::Notifier::Employer;
+    w.ok(Command::Notify(Box::new(owned)));
+    w.ok(Command::Acknowledge {
+        claim: "ip-co".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("ip-co", "ana");
+    w.assess("ip-co", "CC-0002");
+    let admit = Request::Admit {
+        amount_minor: None,
+        periodic: Some(ic_claims::command::Periodic {
+            monthly_minor: 3_000,
+            first_period: d(2027, 3, 1),
+            end: d(2029, 3, 1),
+            expected_end: d(2028, 3, 1),
+        }),
+        exclusion_override: None,
+        exclusion_reviewed: false,
+        payer_deceased: false,
+    };
+    w.decide("ip-co", "ana", admit, "R-OK").expect("within ana's authority");
+    w.ok(Command::VerifyPayee {
+        claim: "ip-co".into(),
+        party: "party-holder".into(),
+        kind: ic_claims::model::PayeeKind::Policyholder,
+        account_ref: "acct-co".into(),
+        name_check_ref: "name-co".into(),
+        screening_ref: "screen-co".into(),
+        authority_doc: None,
+        actor: actor("ana"),
+    });
+    w.pay_run("run-1", d(2027, 3, 1));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(ic_claims::Instruction::PayBenefit { payee, .. }) if payee == "party-holder"
+    ));
+    let Reply::Claim(Some(row)) = w.state.answer(&Question::Claim { claim: "ip-co".into() }, d(2027, 3, 1)) else {
+        panic!("the claim is there");
+    };
+    assert_eq!((row.party.as_str(), row.policy.as_str()), ("party-life", "pol-2"));
+
+    let mut death = World::notification("c-death", "pol-1", "life", ClaimType::Death);
+    death.claimant = Some("party-estate".into());
+    w.ok(Command::Notify(Box::new(death)));
+    assert_eq!(w.claim("c-death").subject_party(), "party-estate");
+}

@@ -1080,3 +1080,129 @@ fn a_members_own_collection_is_applied_to_that_member_alone() {
     let old: ic_payments::model::Authority = serde_json::from_value(stored).unwrap();
     assert_eq!(old.life, None);
 }
+
+/// Purpose: a collection dishonoured for want of funds from a payer marked
+/// as in financial hardship is not queued to be presented again; a
+/// collections officer is asked to call and offer hardship help; only once
+/// the conversation is recorded, with what was said, may it be presented,
+/// and only if that was agreed; the marker is set by collections or a payee
+/// maintainer and nobody else; a payer without the marker is presented
+/// again as before.
+/// Why it matters: taking money again from someone who has just told us
+/// they cannot pay costs them a dishonour fee and the insurer their trust.
+/// The design notes put a conversation before any re-presentment for a
+/// customer in hardship (COL-016).
+#[test]
+fn a_payer_in_hardship_is_talked_to_before_anything_is_presented_again() {
+    use ic_payments::model::ConversationOutcome;
+    let mut desk = Desk::new();
+    desk.authority("a1", "pol-1", "0101234567", false);
+    desk.authority("a2", "pol-2", "0201234567", false);
+    let mark = |hardship| Command::MarkHardship {
+        authority: "a1".to_string(),
+        hardship,
+    };
+    assert_eq!(desk.code(&mia(), mark(true)), "not_permitted");
+    assert_eq!(
+        desk.code(
+            &col(),
+            Command::MarkHardship {
+                authority: "zz".to_string(),
+                hardship: true
+            }
+        ),
+        "unknown_authority"
+    );
+    desk.ok(&pam(), mark(false));
+    let events = desk.ok(&col(), mark(true));
+    assert_eq!(
+        events,
+        vec![Event::HardshipMarked {
+            authority: "a1".to_string(),
+            hardship: true
+        }]
+    );
+
+    desk.prepare("d1", RunType::Collection, d(2027, 11, 15));
+    desk.add("d1", vec![collect("c1", "a1", "pol-1", 150_00), collect("c2", "a2", "pol-2", 90_00)]);
+    let s = desk.approve("d1");
+    desk.settle(&s, d(2027, 11, 15));
+    for item in ["c1", "c2"] {
+        desk.ok(
+            &svc(),
+            Command::RecordReturn {
+                item: item.to_string(),
+                reason: ReturnReason::InsufficientFunds,
+                returned_on: d(2027, 11, 16),
+            },
+        );
+    }
+    assert_eq!(
+        answer(&desk.state, json!({"q": "represent"})).unwrap(),
+        json!(["c2"]),
+        "only the payer not in hardship"
+    );
+    assert_eq!(answer(&desk.state, json!({"q": "awaiting_conversation"})).unwrap(), json!({"c1": "a1"}));
+    let call = desk
+        .state
+        .outbox
+        .values()
+        .find(|e| e.key == "hardship-call-c1")
+        .expect("collections is asked to call");
+    assert!(matches!(&call.instruction, Instruction::Notify { to: ic_payments::Role::Collections, subject, .. } if subject == "hardship_conversation"));
+    desk.prepare("d2", RunType::Collection, d(2027, 11, 22));
+    let mut again = collect("c1-2", "a1", "pol-1", 150_00);
+    again.represents = Some("c1".to_string());
+    let early = Command::AddRunItems {
+        run: "d2".to_string(),
+        items: vec![again.clone()],
+    };
+    assert_eq!(desk.code(&mia(), early.clone()), "cannot_represent", "not before the conversation");
+
+    let talk = |outcome, note: &str| Command::RecordConversation {
+        item: "c1".to_string(),
+        outcome,
+        note: note.to_string(),
+    };
+    assert_eq!(desk.code(&mia(), talk(ConversationOutcome::Represent, "agreed")), "not_permitted");
+    assert_eq!(desk.code(&col(), talk(ConversationOutcome::Represent, " ")), "no_note");
+    desk.ok(
+        &col(),
+        talk(ConversationOutcome::Represent, "pay day is Thursday; agreed to try again on the 22nd"),
+    );
+    assert_eq!(desk.code(&col(), talk(ConversationOutcome::Represent, "again")), "no_conversation_due");
+    desk.ok(&mia(), early);
+
+    // Agreed not to present: it never is.
+    let s2 = desk.approve("d2");
+    desk.settle(&s2, d(2027, 11, 22));
+    desk.authority("a3", "pol-3", "0301234567", false);
+    desk.ok(
+        &col(),
+        Command::MarkHardship {
+            authority: "a3".to_string(),
+            hardship: true,
+        },
+    );
+    desk.prepare("d3", RunType::Collection, d(2027, 12, 15));
+    desk.add("d3", vec![collect("c3", "a3", "pol-3", 150_00)]);
+    let s3 = desk.approve("d3");
+    desk.settle(&s3, d(2027, 12, 15));
+    desk.ok(
+        &svc(),
+        Command::RecordReturn {
+            item: "c3".to_string(),
+            reason: ReturnReason::InsufficientFunds,
+            returned_on: d(2027, 12, 16),
+        },
+    );
+    desk.ok(
+        &col(),
+        Command::RecordConversation {
+            item: "c3".to_string(),
+            outcome: ConversationOutcome::DoNotRepresent,
+            note: "hardship application started".to_string(),
+        },
+    );
+    assert!(!desk.state.represent.contains("c3"));
+}

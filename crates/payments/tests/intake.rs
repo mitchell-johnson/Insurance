@@ -337,7 +337,7 @@ fn a_reinsurer_settlement_is_offered_by_its_module_and_paid() {
         vec![(
             "reinsurance".to_string(),
             json!({"key": "payments:settled:ri-stmt-7", "caller": "payments", "on": "2027-11-15",
-                   "command": {"record_settlement": {"number": 7, "payment_ref": "ri-stmt-7", "amount_minor": 90_000_00}}})
+                   "command": {"record_settlement": {"number": 7, "payment_ref": "ri-stmt-7", "amount_minor": 90_000_00, "bank_account": "anz-sf1-third"}}})
         )]
     );
 
