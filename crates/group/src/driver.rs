@@ -249,6 +249,9 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
         let mapped = mapping
             .map(&table, &format!("{}:{scheme}", self.salt))
             .map_err(|e| unfit(mapping_code(&e), e.to_string()))?;
+        if mapped.rows.len() > MAX_ROWS_PER_PART {
+            return Err(unfit("too_many_rows", format!("a sample has at most {MAX_ROWS_PER_PART} rows")));
+        }
         let question = Question::Preview {
             scheme: scheme.to_string(),
             kind: mapping.kind,
