@@ -6,6 +6,9 @@
 <section><h2>Held from you</h2><div id="held"></div></section>
 <section><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
   <form id="dispute" hidden><div class="row"><div><label for="d-reason">Why it was not a replacement</label><input id="d-reason" maxlength="500" required></div><button>Dispute</button> <button class="quiet" type="button" id="d-cancel">Cancel</button></div></form><div id="d-msg" aria-live="polite"></div></section>
+<section><h2>Your commission statements</h2><p class="muted">What was paid to you, line by line, with totals by what earned it: base commission, each override level and fees.</p>
+<form id="st-form"><div class="row"><div><label for="st-number">Statement number</label><input id="st-number" type="number" min="1" required></div><button>Show</button></div></form>
+<div id="st-msg" aria-live="polite"></div><div id="statement"></div></section>
 <section><h2>Your book</h2><div id="book"></div></section>
 <section id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div></section>
 <section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
@@ -35,7 +38,7 @@ async function open(policy, canTransact) {
   const holdings = view.rows.filter((r) => r.kind === "holding"), orders = view.rows.filter((r) => r.kind === "unit_order");
   const amount = (a) => a.cash ? money(a.cash.minor) : a.units ? units(a.units.micro) + " units" : "all units";
   put($("invest"), holdings.length || orders.length ? [
-    holdings.length ? table(["Fund", "Units", "As at"], holdings.map((r) => [r.body.fund, units(r.body.units_micro), r.body.as_at])) : null,
+    holdings.length ? table(["Fund", "Units", "As at", "Value"], holdings.map((r) => [r.body.fund, units(r.body.units_micro), r.body.as_at, r.body.price_date ? `${(r.body.value_minor / 100).toFixed(2)} at ${r.body.price} (price of ${r.body.price_date})` : "no price yet"])) : null,
     orders.length ? [h("h4", {}, "Waiting for a price"), table(["Order", "Fund", "Buy or sell", "Amount", "Pricing date"], orders.map((r) => [r.body.order, r.body.fund, words(r.body.direction), amount(r.body.amount || {}), r.body.pricing_date]))] : null,
   ] : h("p", { class: "muted" }, "No units held."));
   put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
@@ -71,6 +74,13 @@ async function load() {
   const requests = await api(R, "GET", "/app/v1/requests");
   put($("requests"), table(["Request", "Policy", "Change", "State"], requests.map((r) => [r.id, r.policy || "", r.kind, String(r.status).replace(/_/g, " ")])));
 }
+$("st-form").addEventListener("submit", run($("st-msg"), async () => {
+  const st = await api(R, "GET", "/adviser/v1/statements/" + encodeURIComponent($("st-number").value));
+  const label = (c) => c === "base" ? "Base commission" : c.startsWith("override:") ? `Override (${c.slice(9)})` : c.startsWith("fee:") ? `Fee (${c.slice(4)})` : c;
+  put($("statement"), h("p", {}, `Statement ${st.number} of ${st.date}: opening ${money(st.opening_minor)}, closing ${money(st.closing_minor)}${st.held_minor ? `, ${money(st.held_minor)} held` : ""}.`),
+    table(["What earned it", "Total"], Object.entries(st.totals).map(([c, v]) => [label(c), money(v)])),
+    table(["Date", "Reference", "Policy", "Amount"], st.lines.map((l) => [l.date, l.reference, l.policy || "", money(l.amount_minor)])));
+}));
 let disputing = null;
 $("d-cancel").addEventListener("click", () => { $("dispute").hidden = true; });
 $("dispute").addEventListener("submit", run($("d-msg"), async () => {

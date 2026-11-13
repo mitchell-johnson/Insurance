@@ -275,6 +275,14 @@ pub struct Rules {
     /// marker. It is the whole extension: the marker never adds more.
     #[serde(default)]
     pub communication_extra_days: u32,
+    /// Whether resident withholding tax is kept back from late payment
+    /// interest. The law decides; off unless the insurer turns it on.
+    #[serde(default)]
+    pub interest_withholding: bool,
+    /// The rate in basis points for a payee who gave no rate (the
+    /// no-declaration rate).
+    #[serde(default)]
+    pub no_declaration_rate_bp: u32,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]

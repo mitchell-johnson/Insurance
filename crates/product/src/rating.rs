@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use ic_money::{round_to_money, Dec, DecStr, Money, MoneyError};
 use serde::{Deserialize, Serialize};
 
+use crate::discount::{self, Discount, DiscountBasis, DiscountCondition, DiscountStep, Limits, Line, PricingState};
 use crate::{CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, RateTable, Sex, UnmatchedSexRating};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -128,6 +129,23 @@ pub struct ModalPremium {
     pub gst: BTreeMap<String, Money>,
     /// Levies by levy code.
     pub levies: BTreeMap<String, Money>,
+    /// Premium by cover code before discounts, where any discount applied.
+    /// Less the discount lines it is the premium by cover above, to the cent.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub gross_by_cover: BTreeMap<String, Money>,
+    /// Each discount that applied, in the product's order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discounts: Vec<DiscountLine>,
+}
+
+/// One discount on a period's bill.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiscountLine {
+    pub code: String,
+    pub name: String,
+    pub posting_type: String,
+    /// What it takes off the period's premium. Never negative.
+    pub amount: Money,
 }
 
 impl ModalPremium {
@@ -141,10 +159,50 @@ impl ModalPremium {
     }
 }
 
-/// Turn annual premiums per cover into one period's bill: discounts in their
-/// defined order, the frequency's modal loading, then one rounding to cents
-/// per line at the product's rounding mode.
+/// One period's bill for a policy on one life with no entitlements held.
 pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<String, Dec>, frequency: Frequency) -> Result<ModalPremium, RatingError> {
+    let state = PricingState {
+        covers: annual_by_cover.len() as u32,
+        lives: 1,
+        frequency,
+        entitlements: &[],
+        overrides: &[],
+    };
+    modal_premium_with(product, annual_by_cover, &state)
+}
+
+/// One period's bill from annual premiums by cover, with every cover on one
+/// unnamed life: an entitlement reaches it only where the policy holds it.
+pub fn modal_premium_with(product: &ProductDefinition, annual_by_cover: &BTreeMap<String, Dec>, state: &PricingState<'_>) -> Result<ModalPremium, RatingError> {
+    let lines = annual_by_cover
+        .iter()
+        .map(|(cover, annual)| {
+            let line = Line {
+                cover: cover.clone(),
+                life: String::new(),
+            };
+            (line, *annual)
+        })
+        .collect();
+    modal_premium_by_line(product, &lines, state)
+}
+
+/// Turn annual premiums per cover and life into one period's bill: the
+/// product's discounts in their defined order, the frequency's modal
+/// loading, then one rounding to cents per line at the product's rounding
+/// mode. Each discount that applied is its own line, and the last of them
+/// absorbs the rounding, so the premium before discounts less the lines is
+/// the net to the cent.
+pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line, Dec>, state: &PricingState<'_>) -> Result<ModalPremium, RatingError> {
+    let by_cover = |lines: &BTreeMap<Line, Dec>| {
+        let mut out: BTreeMap<String, Dec> = BTreeMap::new();
+        for (line, amount) in lines {
+            *out.entry(line.cover.clone()).or_insert(Dec::from(0i64)) += *amount;
+        }
+        out
+    };
+    let annual_by_cover = &by_cover(annual);
+    let frequency = state.frequency;
     let (fee_annual, loading) = product
         .features
         .iter()
@@ -162,14 +220,39 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
         })
         .ok_or(RatingError::NoBilling)??;
 
-    let mut discount = Dec::from(1i64);
+    // The chain: the older multi-cover feature first, then the product's own.
+    let mut chain: Vec<DiscountStep> = Vec::new();
+    let mut limits = Limits::default();
     for f in &product.features {
-        if let Feature::MultiCoverDiscount { min_covers, percent } = f {
-            if annual_by_cover.len() as u32 >= *min_covers {
-                discount *= Dec::from(1i64) - percent.get() / Dec::from(100i64);
+        match f {
+            Feature::MultiCoverDiscount { min_covers, percent } => chain.push(DiscountStep::One {
+                discount: Discount {
+                    code: "multi-cover".to_string(),
+                    name: "Multi-cover discount".to_string(),
+                    posting_type: "discount_multi_cover".to_string(),
+                    covers: vec![],
+                    basis: DiscountBasis::Percent { percent: percent.clone() },
+                    condition: DiscountCondition::MinCovers { count: *min_covers },
+                    max_annual: None,
+                },
+            }),
+            Feature::Discounts {
+                chain: steps,
+                max_total_percent,
+                min_net_annual,
+                ..
+            } => {
+                chain.extend(steps.iter().cloned());
+                limits = Limits {
+                    max_total_percent: max_total_percent.as_ref(),
+                    min_net_annual: min_net_annual.as_ref(),
+                };
             }
+            _ => {}
         }
     }
+    let (left, applied) = discount::apply(&chain, limits, annual, state);
+    let net_annual = by_cover(&left);
     let periods = Dec::from(frequency.periods_per_year());
     let modal = (Dec::from(1i64) + loading) / periods;
     let cur = product.currency;
@@ -180,10 +263,12 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
         policy_fee: round_to_money(fee_annual / periods, cur, mode)?,
         gst: BTreeMap::new(),
         levies: BTreeMap::new(),
+        gross_by_cover: BTreeMap::new(),
+        discounts: Vec::new(),
     };
-    for (code, annual) in annual_by_cover {
+    for (code, annual) in &net_annual {
         let cover = product.cover(code).ok_or_else(|| RatingError::UnknownCover(code.clone()))?;
-        let amount = *annual * discount * modal;
+        let amount = *annual * modal;
         let premium = round_to_money(amount, cur, mode)?;
         if let Some(rate) = &cover.gst_rate {
             let gst = round_to_money(premium.to_dec() * rate.get(), cur, mode)?;
@@ -197,6 +282,36 @@ pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<Str
             *e = e.checked_add(l)?;
         }
         out.by_cover.insert(code.clone(), premium);
+    }
+    if !applied.is_empty() {
+        let mut gross = 0i64;
+        for (code, annual) in annual_by_cover {
+            let line = round_to_money(*annual * modal, cur, mode)?;
+            gross += line.minor;
+            out.gross_by_cover.insert(code.clone(), line);
+        }
+        for d in &applied {
+            out.discounts.push(DiscountLine {
+                code: d.code.clone(),
+                name: d.name.clone(),
+                posting_type: d.posting_type.clone(),
+                amount: round_to_money(d.total() * modal, cur, mode)?,
+            });
+        }
+        // Rounding once: the last line that can carry it absorbs the
+        // difference, so the lines sum to the net.
+        let net: i64 = out.by_cover.values().map(|m| m.minor).sum();
+        let odd = gross - net - out.discounts.iter().map(|d| d.amount.minor).sum::<i64>();
+        match out.discounts.iter_mut().rev().find(|d| d.amount.minor + odd >= 0) {
+            Some(last) => last.amount = Money::new(last.amount.minor + odd, cur),
+            // No discount is large enough to carry it: the base line does.
+            None => {
+                if let Some(first) = out.gross_by_cover.values_mut().next() {
+                    *first = Money::new(first.minor - odd, cur);
+                }
+            }
+        }
+        out.discounts.retain(|d| !d.amount.is_zero());
     }
     Ok(out)
 }

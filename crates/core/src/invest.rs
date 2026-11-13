@@ -393,6 +393,15 @@ pub enum InvestEvent {
         supersedes: Option<String>,
         /// Orders waiting for this price on this partition.
         pending_orders: u32,
+        /// The price itself, so a follower can value a holding: what a
+        /// seller receives for a unit (what a withdrawal pays, and the
+        /// value to show a customer), what a buyer pays, and the mid.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sell: Option<DecStr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        buy: Option<DecStr>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mid: Option<DecStr>,
     },
     /// Cash moved between the policy's suspense and its pending investment
     /// cash. Negative when it was moved back.
@@ -767,6 +776,9 @@ pub(crate) fn activate_price(book: &mut InvestmentBook, ctx: &mut Ctx<'_>, price
         version: price.version,
         supersedes: price.supersedes.clone(),
         pending_orders,
+        sell: Some(price.sell.clone()),
+        buy: Some(price.buy.clone()),
+        mid: Some(price.mid.clone()),
     }));
     book.in_force.insert(key, price.price_id.clone());
     book.prices.insert(price.price_id.clone(), price);

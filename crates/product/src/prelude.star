@@ -58,7 +58,8 @@ def benefit_category(code, salary_multiple, max_sum_insured):
 
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
-          automatic_acceptance_limit = None, excess_options = []):
+          automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
+          shared_counter = None, reduces = [], joint_first_event = False):
     return {
         "code": code,
         "cover_type": cover_type,
@@ -73,6 +74,10 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "categories": categories,
         "automatic_acceptance_limit_minor": automatic_acceptance_limit,
         "excess_options": excess_options,
+        "premium_waiver": premium_waiver,
+        "shared_counter": shared_counter,
+        "reduces": reduces,
+        "joint_first_event": joint_first_event,
     }
 
 def excess_option(code, excess, premium_factor = "1"):
@@ -108,6 +113,57 @@ def indexation(rate_code, opt_out = True, pays_step_applied_after_event = False)
 
 def multi_cover_discount(min_covers, percent):
     return {"kind": "multi_cover_discount", "min_covers": min_covers, "percent": percent}
+
+def discounts(chain, max_total_percent = None, min_net_annual = None, override_single_approver_percent = None,
+              override_max_percent = None):
+    """The product's discounts in order. Each entry is a discount, additive([...]) or best_of([...])."""
+    steps = [s if s.get("kind") in ["additive", "best_of"] else {"kind": "one", "discount": s} for s in chain]
+    return {
+        "kind": "discounts",
+        "chain": steps,
+        "max_total_percent": max_total_percent,
+        "min_net_annual": min_net_annual,
+        "override_single_approver_percent": override_single_approver_percent,
+        "override_max_percent": override_max_percent,
+    }
+
+def discount(code, name, posting_type, basis, condition = None, covers = [], max_annual = None):
+    return {
+        "code": code,
+        "name": name,
+        "posting_type": posting_type,
+        "covers": covers,
+        "basis": basis,
+        "condition": condition if condition != None else {"kind": "always"},
+        "max_annual": max_annual,
+    }
+
+def additive(members):
+    return {"kind": "additive", "discounts": members}
+
+def best_of(members):
+    return {"kind": "best_of", "discounts": members}
+
+def percent_off(percent):
+    return {"kind": "percent", "percent": percent}
+
+def fixed_annual(amount):
+    return {"kind": "fixed_annual", "amount": amount}
+
+def by_tier(percent_by_tier):
+    return {"kind": "tier", "percent_by_tier": percent_by_tier}
+
+def min_covers(count):
+    return {"kind": "min_covers", "count": count}
+
+def min_lives(count):
+    return {"kind": "min_lives", "count": count}
+
+def paid(frequencies):
+    return {"kind": "frequency", "frequencies": frequencies}
+
+def entitled(code):
+    return {"kind": "entitlement", "code": code}
 
 def composition(core = [], requires = {}, exclusive = []):
     return {"kind": "composition", "core": core, "requires": requires, "exclusive": exclusive}

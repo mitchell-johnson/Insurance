@@ -53,6 +53,8 @@ fn an_admission_within_authority_takes_effect_and_is_recorded() {
         })
     ));
     assert_eq!(w.core.noticed("claim_admitted")[0]["admitted_minor"], "200000");
+    // The core takes the lump sum off this life's cover and the covers linked to it.
+    assert!(matches!(w.core.instructions.last(), Some(Instruction::Admit { life: Some(l), .. }) if l == "life-1"));
     let decision = c.decisions.last().expect("the admission is recorded");
     assert_eq!(decision.kind, DecisionKind::Admit);
     assert_eq!(decision.signers, vec!["ana".to_string()]);

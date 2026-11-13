@@ -99,11 +99,22 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "Declared.");
     await p.locator("#connections").getByText("party-00000009").waitFor();
   }, expectStatus: [403, 409, 422] });
+  let entered = null;
   await visit(browser, "/staff", { subject: "sub-sue" }, { run: async (p) => {
     await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");
     await p.locator("#lookup button").click();
-    await p.locator("#lookup-msg .banner.bad, #pol-view:not([hidden])").first().waitFor();
-  }, expectStatus: [403, 404, 422] });
+    await p.locator("#pol-view:not([hidden])").waitFor();
+    // A change for a customer who rang, above her limit: it goes to a colleague first.
+    await p.fill("#creason", "customer rang"); await p.fill("#camount", "900");
+    await p.locator("#for-customer button").click();
+    const said = await p.locator("#cust-msg").getByText("recorded").textContent();
+    entered = said.match(/Request (\S+) recorded/)[1];
+  } });
+  await visit(browser, "/staff", { subject: "sub-alice" }, { run: async (p) => {
+    await p.fill("#second-id", entered);
+    await p.locator("#second button").click();
+    await p.locator("#second-msg").getByText("Agreed.").waitFor();
+  } });
   await visit(browser, "/pricing", { subject: "sub-up1" }, { run: async (p) => {
     await sees(p, "preparer, approver");
     await sees(p, "valuations/bad.csv");
@@ -229,6 +240,8 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   } });
   await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
     await sees(p, "You act as cl-lead");
+    await p.locator("#inv-show").click();
+    await p.locator("#inv").getByText("No cases are open to you.").waitFor();
     await p.selectOption("#a-command", "notify");
     await p.fill("#f-0", "c-b1"); await p.fill("#f-1", "pol-c1"); await p.fill("#f-2", "trauma");
     await p.selectOption("#f-4", "trauma"); await p.fill("#f-5", "2027-02-20");
@@ -337,6 +350,9 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
   await visit(browser, "/adviser", { subject: "sub-fap" }, { run: async (p) => {
     await sees(p, "Advisers under you");
     await p.locator("#practice").getByText("adv-1").waitFor();
+    // The group's own statement, with its overrides totalled.
+    await p.fill("#st-number", "1"); await p.locator("#st-form button").click();
+    await p.locator("#statement").getByText("Override (group)").waitFor();
   } });
   await visit(browser, "/replacements", { subject: "sub-wbcon" }, { run: async (p) => {
     await sees(p, "You decide disputed matches");

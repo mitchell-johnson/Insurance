@@ -144,6 +144,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("sub-paycmp", "pay-cmp"),
         ("sub-grp1", "grp-1"),
         ("sub-grpview", "grp-view"),
+        ("sub-hcs", "hcs-1"),
     ] {
         w.dir(
             module("identity"),
@@ -180,8 +181,21 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         module("entitlements"),
         Command::Staff(StaffCommand::Bootstrap {
             templates: vec![
-                template("administrator", &[staff_actions::MANAGE_STAFF], &[DataClass::Ordinary]),
-                template("service", &["policy.view"], &[DataClass::Ordinary, DataClass::Personal]),
+                template(
+                    "administrator",
+                    &[staff_actions::MANAGE_STAFF, ic_channels::state::assisted::APPROVE],
+                    &[DataClass::Ordinary],
+                ),
+                template(
+                    "service",
+                    &["policy.view", ic_channels::state::assisted::ENTER],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
+                template(
+                    "hardship",
+                    &["policy.view", staff_actions::VULNERABILITY_KIND],
+                    &[DataClass::Ordinary, DataClass::Personal],
+                ),
                 template(
                     "finance",
                     &[workbench::actions::VIEW, workbench::actions::PREPARE, workbench::actions::APPROVE],
@@ -265,7 +279,12 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
                 Profile {
                     id: "p".into(),
                     version: 1,
-                    limits: [(workbench::LIMIT.to_string(), 100_000_00), (ic_channels::complaints::AUTHORITY.to_string(), 3)].into(),
+                    limits: [
+                        (workbench::LIMIT.to_string(), 100_000_00),
+                        (ic_channels::complaints::AUTHORITY.to_string(), 3),
+                        (ic_channels::state::assisted::LIMIT.to_string(), 500_00),
+                    ]
+                    .into(),
                 },
                 Profile {
                     id: "junior".into(),
@@ -317,6 +336,7 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
         ("pay-cmp", "payments-compliance"),
         ("grp-1", "group-admin"),
         ("grp-view", "group-reader"),
+        ("hcs-1", "hardship"),
     ] {
         w.send(
             staff("alice"),
@@ -939,7 +959,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 38);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 39);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -949,17 +969,37 @@ async fn the_staff_console_asks_the_four_questions() {
         StatusCode::OK
     );
 
-    // A request for a customer on the phone waits for the customer.
-    let request = json!({ "id": "r1", "policy": policy, "kind": "change_frequency", "module": "policy-servicing" });
+    // A request for a customer on the phone says why and names the case, and waits for the customer.
+    let request = json!({ "id": "r1", "policy": policy, "kind": "change_frequency", "module": "policy-servicing",
+        "reason": "customer rang", "case": "case-8" });
     assert_eq!(
         portal.write("POST", "sub-kiri", "/staff/v1/requests", request.clone()).await.0,
         StatusCode::FORBIDDEN
     );
-    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    let mut unexplained = request.clone();
+    unexplained["reason"] = json!("");
     assert_eq!(
-        portal.local.with(|s| serde_json::to_value(&s.data.requests["r1"]).unwrap())["status"],
-        "awaiting_approval"
+        portal.write("POST", "sub-sue", "/staff/v1/requests", unexplained).await.1["title"],
+        "bad_request"
     );
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", request).await.0, StatusCode::ACCEPTED);
+    let r1 = portal.local.with(|s| serde_json::to_value(&s.data.requests["r1"]).unwrap());
+    assert_eq!(
+        (&r1["status"], &r1["from"], &r1["assisted"]["case"]),
+        (&json!("awaiting_approval"), &json!("customer"), &json!("case-8"))
+    );
+    // Above her limit it waits for a second member of staff first, who is not her.
+    let large = json!({ "id": "r2", "policy": policy, "kind": "change_sum_insured", "module": "policy-servicing",
+        "payload": { "amount_minor": 900_00 }, "reason": "customer rang", "case": "case-8" });
+    assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/requests", large).await.0, StatusCode::ACCEPTED);
+    assert_eq!(
+        portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"],
+        "second_staff"
+    );
+    let second = "/staff/v1/requests/r2/second-approval";
+    assert_eq!(portal.write("POST", "sub-sue", second, json!({})).await.1["title"], "maker_checker");
+    assert_eq!(portal.write("POST", "sub-alice", second, json!({})).await.0, StatusCode::ACCEPTED);
+    assert_eq!(portal.local.with(|s| serde_json::to_value(&s.data.requests["r2"]).unwrap())["from"], "customer");
 }
 
 /// Purpose: a staff read of a policy or of the workbench leaves a line in the access log, a refusal does too, and nobody can write the log by hand.
@@ -2233,6 +2273,14 @@ async fn serve_for_a_browser() {
     // Staff's group console works against the group module itself, beside the employer's double.
     let staff = Arc::new(common::group_module::seeded());
     let portal = portal_with(|employer| Arc::new(common::group_module::Beside { employer, staff }));
+    // The group was paid an override, on its first statement.
+    let fap: ic_distribution::Statement = serde_json::from_value(json!({ "payee": "fap-1", "number": 1, "date": "2027-11-30", "cut_seq": 9,
+        "opening_minor": 0, "lines": [{ "date": "2027-11-15", "reference": "r1", "kind": "commission", "ledger": "commission_payable",
+        "policy": "pol-1", "book": null, "layer": null, "component": { "override": "group" }, "earner": "e1", "amount_minor": 30_00 }],
+        "closing_minor": 30_00, "held_minor": 0, "held_reasons": [], "retention_minor": 0, "advance_outstanding_minor": 0,
+        "advance_recovered_minor": 0, "payment_held": null, "payments": [], "hash": "h" }))
+    .unwrap();
+    portal.commission.0.lock().unwrap().0.statements.insert("fap-1.1".into(), fap);
     // Kiri appoints the adviser, so the adviser's book has a policy in it.
     let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
     let (status, _) = portal
@@ -2811,7 +2859,8 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
 }
 
 /// Purpose: at handover between scheme administrators, the joiner is added by the leaver and sees the scheme at once; the joiner then
-/// removes the leaver, who loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
+/// removes the leaver, which itself tells the host to re-check the leaver's sessions now (the priority revocation), and the
+/// leaver loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
 /// before then is refused; and the last administrator cannot be removed by the scheme's own administrators.
 /// Why it matters: an administrator who has left must not keep seeing member data or make changes through a session still open, and
 /// the scheme must never be left with nobody to run it.
@@ -2827,7 +2876,25 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(admin("sub-hr", "hr-2", true).await.0, StatusCode::OK);
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1.as_array().unwrap().len(), 1);
-    assert_eq!(admin("sub-hr2", "hr-1", false).await.0, StatusCode::OK);
+    // The joiner removes the leaver; the removal itself tells the host to re-check the leaver's sessions now.
+    let now = portal.now();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_000,
+            ic_channels::Envelope {
+                key: "hr-1-leaves".into(),
+                at: now,
+                actor: party("hr-2"),
+                command: Command::Directory(DirectoryCommand::SetEmployerAdmin {
+                    policy: scheme.clone(),
+                    party: p("hr-1"),
+                    admin: false,
+                }),
+            },
+        );
+        assert!(output.result.unwrap().contains(&ic_channels::Effect::Revoked { party: p("hr-1") }));
+    });
     assert_eq!(portal.get("sub-hr", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(portal.get("sub-hr", &format!("/app/v1/policies/{scheme}")).await.0, StatusCode::NOT_FOUND);
     // The leaver can no longer act on the scheme, and the joiner cannot leave it with nobody.
@@ -2836,7 +2903,6 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("last_admin")));
 
     // The priority revocation: the leaver's sessions are closed, and an earlier token is refused.
-    let now = portal.now();
     portal.local.with(|state| {
         use ic_log::StateMachine;
         let output = state.apply(
@@ -2853,6 +2919,35 @@ async fn an_employer_administrator_hands_over_at_noon() {
     let old = [("x-dev-subject", "sub-hr".to_string()), ("x-dev-issued", (now - 5).to_string())];
     let (status, problem) = portal.send("GET", "/employer/v1/schemes", &old, None).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("session_revoked")));
+}
+
+/// Purpose: staff who open a policy whose owner the customer master says to serve with care see the adjustments in effect and when
+/// they are reviewed, under no label; only a specialist whose role needs it sees why; nothing is shown for anyone else; and when the
+/// master cannot answer, staff are told it is unknown.
+/// Why it matters: an officer who cannot see that a customer needs plain language or more time will not give it. Showing every
+/// officer why (bereavement, illness, financial abuse) would spread the most private fact held about the person to people who
+/// do not need it.
+#[tokio::test]
+async fn staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why() {
+    let portal = portal();
+    let open = |who: &'static str| {
+        let path = format!("/staff/v1/policies/{}?case=case-v", portal.retail);
+        let portal = &portal;
+        async move { portal.get(who, &path).await }
+    };
+    let (status, view) = open("sub-sue").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(view.get("approach").is_none() && view.get("may_see_kind").is_none(), "{view}");
+
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
+    let officer = open("sub-sue").await.1;
+    assert_eq!(officer["approach"], json!({ "adjustments": ["plain_language"], "review_on": null }));
+    let specialist = open("sub-hcs").await.1;
+    assert_eq!(specialist["approach"]["kind"], "bereavement");
+    assert_eq!(specialist["approach"]["adjustments"], json!(["plain_language"]));
+
+    portal.master.down.store(true, Ordering::SeqCst);
+    assert_eq!(open("sub-sue").await.1["approach"], json!({ "unavailable": true }));
 }
 
 /// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module
@@ -3688,4 +3783,117 @@ async fn the_group_console_says_whose_fault_a_refusal_is() {
         portal.get("sub-grp1", "/staff/v1/group/scheme?scheme=harbour").await.0,
         StatusCode::SERVICE_UNAVAILABLE
     );
+}
+
+/// Purpose: an adviser reads their own commission statement and a group the one paid to it, with totals by what earned each line
+/// (base, each override level, fees); nobody can name another payee's statement, and one not yet cut is 404.
+/// Why it matters: a dealer group checks its overrides against its own figures every month; it must see its statement and its
+/// totals, while an adviser must never read the group's (or a colleague's) pay.
+#[tokio::test]
+async fn an_adviser_and_their_group_read_their_own_statements() {
+    let portal = portal();
+    let statement = |payee: &str, lines: Value| -> ic_distribution::Statement {
+        serde_json::from_value(json!({ "payee": payee, "number": 1, "date": "2027-11-30", "cut_seq": 9, "opening_minor": 0,
+            "lines": lines, "closing_minor": 0, "held_minor": 0, "held_reasons": [], "retention_minor": 0,
+            "advance_outstanding_minor": 0, "advance_recovered_minor": 0, "payment_held": null, "payments": [], "hash": "h" }))
+        .unwrap()
+    };
+    let line = |component: Value, amount: i64| {
+        json!({ "date": "2027-11-15", "reference": "r", "kind": "commission", "ledger": "commission_payable", "policy": "pol-1",
+            "book": null, "layer": null, "component": component, "earner": "e1", "amount_minor": amount })
+    };
+    {
+        let mut module = portal.commission.0.lock().unwrap();
+        let statements = &mut module.0.statements;
+        statements.insert(
+            "adv-1.1".into(),
+            statement("adv-1", json!([line(json!("base"), 120_00), line(Value::Null, 10_00)])),
+        );
+        statements.insert(
+            "fap-1.1".into(),
+            statement(
+                "fap-1",
+                json!([
+                    line(json!({ "override": "group" }), 30_00),
+                    line(json!({ "override": "group" }), 5_00),
+                    line(json!({ "fixed_fee": "referral" }), 50_00)
+                ]),
+            ),
+        );
+    }
+    let (status, own) = portal.get("sub-adv", "/adviser/v1/statements/1").await;
+    assert_eq!(
+        (status, &own["payee"], &own["totals"]),
+        (StatusCode::OK, &json!("adv-1"), &json!({ "base": 120_00, "commission": 10_00 })),
+        "{own}"
+    );
+    let (status, group) = portal.get("sub-fap", "/adviser/v1/statements/1").await;
+    assert_eq!(status, StatusCode::OK, "{group}");
+    assert_eq!(group["totals"], json!({ "override:group": 35_00, "fee:referral": 50_00 }));
+    assert!(group.get("cut_seq").is_none(), "the module's bookkeeping stays inside it");
+    // The payee is always the person signed in: there is no way to ask for another's.
+    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/2").await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/x").await.0, StatusCode::BAD_REQUEST);
+}
+
+/// Purpose: what a write answers says only what concerns the person who wrote: their own feed's new version (so the app syncs to
+/// at least that and reads its own write) and nothing about anyone else on the policy, such as a relative whose feed also moved.
+/// Why it matters: a write's answer that listed every feed it moved would tell one person who else can see the policy; without
+/// the version the app could show a stale screen straight after the customer's own change.
+#[tokio::test]
+async fn a_write_answers_with_the_writers_own_version_and_nobody_elses() {
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let viewer = format!("/app/v1/policies/{policy}/delegates/daughter");
+    assert_eq!(portal.write("PUT", "sub-kiri", &viewer, json!({ "access": "viewer" })).await.0, StatusCode::OK);
+    let version_of = |who: &str| portal.local.with(|s| s.data.feeds.get(&ic_core::PartyId::from(who)).map(|f| f.version));
+    let before = version_of("daughter").expect("the relative follows the policy");
+
+    // Kiri declines indexation in the app; the policy's rows move for her and for her daughter.
+    let request = json!({ "id": "r9", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, answer) = portal.write("POST", "sub-kiri", "/app/v1/requests", request).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    let version = answer["version"].as_u64().expect("the writer's own version");
+    assert_eq!(Some(version), version_of(KIRI));
+    assert!(version_of("daughter") > Some(before), "the daughter's feed moved too");
+    assert!(!answer.to_string().contains("daughter"), "and Kiri's answer does not say so: {answer}");
+    // Syncing from just before that version brings her request.
+    let changes = portal
+        .local
+        .with(|s| serde_json::to_value(s.data.feeds[&ic_core::PartyId::from(KIRI)].sync(Some(version - 1))).unwrap());
+    assert!(changes.to_string().contains("request/r9"), "{changes}");
+}
+
+/// Purpose: the connection drops after the app submits and before the outcome: the request shows as pending, the app's retry with
+/// the same idempotency key creates nothing new and says it is a repeat, and the outcome appears on the request when the owning
+/// module reports it (AUD-008).
+/// Why it matters: people on a train lose signal mid-change all the time; a retry that made a second cancellation or a second
+/// payment change, or a screen stuck without the outcome, is exactly the failure the asynchronous contract exists to prevent.
+#[tokio::test]
+async fn a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows() {
+    let portal = portal();
+    let keyed = [("x-dev-subject", "sub-kiri".to_string()), ("idempotency-key", "phone-1".to_string())];
+    let request = json!({ "id": "r7", "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, first) = portal.send("POST", "/app/v1/requests", &keyed, Some(request.clone())).await;
+    assert_eq!((status, &first["duplicate"]), (StatusCode::ACCEPTED, &json!(false)));
+    // The answer never reached the phone; it sends the same again.
+    let (status, again) = portal.send("POST", "/app/v1/requests", &keyed, Some(request)).await;
+    assert_eq!((status, &again["duplicate"]), (StatusCode::ACCEPTED, &json!(true)));
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let mine: Vec<&Value> = mine.as_array().unwrap().iter().filter(|r| r["id"] == "r7").collect();
+    assert_eq!((mine.len(), &mine[0]["status"]), (1, &json!("pending")));
+
+    // The owning module reports the outcome; the request shows it.
+    let module = [
+        ("x-dev-subject", "svc".to_string()),
+        ("x-dev-roles", "policy-servicing".to_string()),
+        ("x-module", "policy-servicing".to_string()),
+        ("idempotency-key", "done-r7".to_string()),
+    ];
+    let resolve = json!({ "resolve_request": { "id": "r7", "reference": "chg-1", "rejected": null } });
+    let (status, done) = portal.send("POST", "/internal/v1/commands", &module, Some(resolve)).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let r7 = mine.as_array().unwrap().iter().find(|r| r["id"] == "r7").unwrap().clone();
+    assert_eq!((&r7["status"], &r7["reference"]), (&json!("applied"), &json!("chg-1")), "{r7}");
 }

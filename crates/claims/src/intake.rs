@@ -268,6 +268,8 @@ impl ClaimsState {
             }
             (Some(amount), false) => {
                 cx.core.execute(Instruction::Admit {
+                    // A lump sum comes off the life's cover; a health invoice does not.
+                    life: claim.life.clone().filter(|_| claim.claim_type != ClaimType::Health),
                     claim: claim.id.clone(),
                     policy: claim.policy.clone(),
                     cover: claim.cover.clone(),

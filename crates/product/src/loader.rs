@@ -9,6 +9,7 @@ use starlark::environment::{Globals, Module};
 use starlark::eval::Evaluator;
 use starlark::syntax::{AstModule, Dialect};
 
+use crate::discount::{DiscountBasis, DiscountCondition};
 use crate::{Benefit, Definition, Feature, PremiumType, ProductDefinition, RateTable, UnmatchedSexRating};
 
 const PRELUDE: &str = include_str!("prelude.star");
@@ -120,6 +121,25 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
         if c.max_sum_insured_minor.is_some_and(|m| m < c.min_sum_insured_minor) || c.min_sum_insured_minor < 0 {
             return Err(invalid(file, format!("cover {}: sum insured limits are inconsistent", c.code)));
         }
+        if c.shared_counter
+            .as_ref()
+            .is_some_and(|name| name.is_empty() || !p.covers.iter().any(|o| o.code != c.code && o.shared_counter == c.shared_counter))
+        {
+            return Err(invalid(
+                file,
+                format!("cover {}: a shared counter is named and shared with another cover", c.code),
+            ));
+        }
+        let lump_sum = |code: &str| p.covers.iter().any(|o| o.code == code && matches!(o.benefit, Benefit::LumpSum { .. }));
+        if (c.joint_first_event || !c.reduces.is_empty()) && !lump_sum(&c.code) {
+            return Err(invalid(file, format!("cover {}: only a lump sum cover is joint or reduces another", c.code)));
+        }
+        if c.reduces.iter().any(|other| other == &c.code || !lump_sum(other)) {
+            return Err(invalid(
+                file,
+                format!("cover {}: a cover reduces other lump sum covers of the same product", c.code),
+            ));
+        }
         let mut options = BTreeSet::new();
         for o in &c.excess_options {
             if o.code.is_empty() || !options.insert(o.code.as_str()) {
@@ -176,6 +196,61 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
             Feature::MultiCoverDiscount { percent, .. } => {
                 if percent.get() < Dec::from(0i64) || percent.get() > Dec::from(100i64) {
                     return Err(invalid(file, "discount percent out of range"));
+                }
+            }
+            Feature::Discounts {
+                chain,
+                max_total_percent,
+                min_net_annual,
+                override_single_approver_percent,
+                override_max_percent,
+            } => {
+                let pct = |p: &ic_money::DecStr| p.get() >= Dec::from(0i64) && p.get() <= Dec::from(100i64);
+                let amount = |a: &ic_money::DecStr| a.get() >= Dec::from(0i64);
+                let limits_ok = override_single_approver_percent.as_ref().is_none_or(pct) && override_max_percent.as_ref().is_none_or(pct);
+                if !limits_ok || !max_total_percent.as_ref().is_none_or(pct) || !min_net_annual.as_ref().is_none_or(amount) {
+                    return Err(invalid(file, "the cap on all discounts is a percentage and the floor is not negative"));
+                }
+                let mut codes = BTreeSet::new();
+                for d in chain.iter().flat_map(|s| s.discounts()) {
+                    if d.code.is_empty() || d.name.is_empty() || d.posting_type.is_empty() || !codes.insert(d.code.as_str()) {
+                        return Err(invalid(
+                            file,
+                            format!("discount {}: a discount has its own code, a name and a posting type", d.code),
+                        ));
+                    }
+                    if d.covers.iter().any(|c| !p.covers.iter().any(|o| &o.code == c)) {
+                        return Err(invalid(file, format!("discount {}: it names a cover the product does not have", d.code)));
+                    }
+                    // A component that would increase the premium is a loading or a fee, never a discount.
+                    let never_negative = match &d.basis {
+                        DiscountBasis::Percent { percent } => pct(percent),
+                        DiscountBasis::FixedAnnual { amount: a } => amount(a),
+                        DiscountBasis::Tier { percent_by_tier } => {
+                            !percent_by_tier.is_empty() && percent_by_tier.values().all(pct) && matches!(d.condition, DiscountCondition::Entitlement { .. })
+                        }
+                    };
+                    if !never_negative || !d.max_annual.as_ref().is_none_or(amount) {
+                        return Err(invalid(
+                            file,
+                            format!(
+                                "discount {}: a discount is between nothing and the whole premium, and a tier needs an entitlement",
+                                d.code
+                            ),
+                        ));
+                    }
+                    let counted = match &d.condition {
+                        DiscountCondition::MinCovers { count } | DiscountCondition::MinLives { count } => *count > 0,
+                        DiscountCondition::Frequency { frequencies } => !frequencies.is_empty(),
+                        DiscountCondition::Entitlement { code } => !code.is_empty(),
+                        DiscountCondition::Always => true,
+                    };
+                    if !counted {
+                        return Err(invalid(file, format!("discount {}: its condition can never be told apart from none", d.code)));
+                    }
+                }
+                if chain.iter().any(|s| s.discounts().is_empty()) {
+                    return Err(invalid(file, "a set of discounts has at least one member"));
                 }
             }
             Feature::Composition { core, requires, exclusive } => {

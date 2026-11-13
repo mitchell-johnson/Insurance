@@ -35,7 +35,7 @@ use crate::identity::{action_hash, Enrolment, IdentityCommand, MAX_CHALLENGE_SEC
 use crate::ops::{RegionSource, StatusPage};
 use crate::query::{self, DeviceProof, Question, MODULE};
 use crate::staff::{AccessRequest, At, Decision, Purpose, PurposeKind, StaffCommand};
-use crate::state::{ChannelState, Command, Envelope, Output, GATEWAY};
+use crate::state::{ChannelState, Command, Effect, Envelope, Output, GATEWAY};
 use crate::ui::UiConfig;
 use crate::workbench::WorkbenchCommand;
 
@@ -284,6 +284,7 @@ impl AppState {
 
     /// Propose a command and return its effects, or the module's refusal.
     async fn propose(&self, key: String, actor: Actor, command: Command) -> Result<Value, Problem> {
+        let own = actor.party().cloned();
         let envelope = Envelope {
             key,
             at: self.now(),
@@ -292,7 +293,23 @@ impl AppState {
         };
         let output = self.channel.propose(envelope).await?;
         let effects = output.result?;
-        Ok(json!({ "accepted": true, "duplicate": output.duplicate, "effects": effects }))
+        // What the caller is told: never another party's feed, sessions or
+        // control, which would say who else is on the policy. Their own
+        // feed's version is the one to sync to for reading their own write.
+        let mine = |party: &PartyId| own.as_ref() == Some(party);
+        let version = effects.iter().find_map(|e| match e {
+            Effect::FeedMoved { party, version } if mine(party) => Some(*version),
+            _ => None,
+        });
+        let effects: Vec<Effect> = effects
+            .into_iter()
+            .filter(|e| match e {
+                Effect::FeedMoved { party, .. } | Effect::Revoked { party } => mine(party),
+                Effect::ControlPassed { .. } => false,
+                _ => true,
+            })
+            .collect();
+        Ok(json!({ "accepted": true, "duplicate": output.duplicate, "effects": effects, "version": version }))
     }
 
     /// Resolve the caller to a party and check the session still stands.
@@ -779,6 +796,7 @@ async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Met
                 payload: new.payload,
                 signed,
                 route_to_person,
+                assisted: None,
             },
         )
         .await?;
@@ -979,6 +997,24 @@ async fn practice(State(s): State<Shared>, headers: HeaderMap, method: Method, u
     .await?)
 }
 
+/// The signed-in party's own commission statement, by number: an adviser
+/// sees their own lines, a provider or group the lines paid to it, with
+/// totals by component (its overrides among them). Anyone else's
+/// statement cannot be named, and one not yet cut is 404.
+async fn own_statement(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(number): Path<u32>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let question = json!({ "statement": { "payee": session.party, "number": number } });
+    let answer = s
+        .commission
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(crate::commission::own_statement(&answer))
+}
+
 async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
@@ -1064,6 +1100,7 @@ async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Me
             payload: payload.clone(),
             signed: false,
             route_to_person: false,
+            assisted: None,
         },
     )
     .await?;
@@ -2203,10 +2240,8 @@ async fn claims_question(
                 .collect();
             ok(json!({ "partitions": partitions }))
         }
-        // Questions other services ask (the documents service's repayment
-        // letters): `claims::question` never makes one, so none reaches here.
-        #[allow(unreachable_patterns)]
-        _ => Err(Problem::not_found()),
+        // The documents service's question: `claims::question` never makes it.
+        Q::RepaymentLetters => Err(Problem::not_found()),
     }
 }
 
@@ -2406,11 +2441,36 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
             at: session.at,
         })
         .await?;
-    let view = s.logged(view).await?;
+    let mut view = s.logged(view).await?;
     if view["found"] != true {
         return Err(Problem::not_found());
     }
+    let may_see_kind = view.as_object_mut().and_then(|v| v.remove("may_see_kind")) == Some(Value::Bool(true));
+    let holder = view["policyholder"].as_str().map(PartyId::from);
+    if let (Some(master), Some(holder)) = (&s.master, holder) {
+        if let Some(approach) = approach(master.routing(&holder).await, may_see_kind) {
+            view["approach"] = approach;
+        }
+    }
     ok(view)
+}
+
+/// How to serve the policyholder, for staff who opened their policy: the
+/// adjustments in effect and when they are next reviewed, with no label; why
+/// only for those whose role needs it. Nothing when nothing is in effect; a
+/// master that cannot answer says so, so staff take care rather than assume.
+fn approach(routing: Result<crate::customers::Answered, String>, may_see_kind: bool) -> Option<Value> {
+    match routing {
+        Ok((200, body)) if body["route_to_person"] == true => {
+            let mut approach = json!({ "adjustments": body["adjustments"], "review_on": body["review_on"] });
+            if may_see_kind && !body["kind"].is_null() {
+                approach["kind"] = body["kind"].clone();
+            }
+            Some(approach)
+        }
+        Ok((200, _)) => None,
+        _ => Some(json!({ "unavailable": true })),
+    }
 }
 
 /// Staff access commands: request, approve and revoke grants, break-glass,
@@ -2430,8 +2490,22 @@ async fn staff_command(State(s): State<Shared>, headers: HeaderMap, method: Meth
 
 /// A request made for a customer who called. The customer approves it in the app.
 async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    #[derive(Deserialize)]
+    struct Entered {
+        id: String,
+        policy: Option<PolicyId>,
+        kind: String,
+        module: String,
+        #[serde(default)]
+        payload: Value,
+        /// Why the change is made, and the case it belongs to.
+        #[serde(default)]
+        reason: String,
+        #[serde(default)]
+        case: String,
+    }
     let session = s.staff(&headers, &method, &uri, &body).await?;
-    let new: NewRequest = parse(&body)?;
+    let new: Entered = parse(&body)?;
     let command = Command::SubmitRequest {
         id: new.id,
         policy: new.policy,
@@ -2440,7 +2514,22 @@ async fn staff_request(State(s): State<Shared>, headers: HeaderMap, method: Meth
         payload: new.payload,
         signed: false,
         route_to_person: false,
+        assisted: Some(crate::state::Assisted {
+            reason: new.reason,
+            case: new.case,
+            backdated: false,
+            above_limit: false,
+            second: None,
+        }),
     };
+    accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
+}
+
+/// A second member of staff agrees a change another entered for a customer;
+/// it then waits for the customer's approval in the app.
+async fn staff_second_approval(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(id): Path<String>) -> Answer {
+    let session = s.staff(&headers, &method, &uri, b"").await?;
+    let command = Command::SecondApproveRequest { id };
     accepted(s.propose(key(&headers, &session.party.0)?, Actor::Staff(session.party), command).await?)
 }
 
@@ -2612,6 +2701,7 @@ pub fn router(state: Shared) -> Router {
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
         .route("/adviser/v1/practice", get(practice))
+        .route("/adviser/v1/statements/{number}", get(own_statement))
         .route("/adviser/v1/replacements", get(adviser_replacements))
         .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))
@@ -2629,6 +2719,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/access", post(staff_command))
         .route("/staff/v1/policies/{policy}", get(staff_policy))
         .route("/staff/v1/requests", post(staff_request))
+        .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/workbench", get(workbench))
         .route("/staff/v1/workbench/actions", post(workbench_action))
         .route("/staff/v1/workbench/{party}", get(workbench_party))

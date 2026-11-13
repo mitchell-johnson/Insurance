@@ -504,6 +504,8 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "withheld": withheld,
                 "advisers": d.directory.advisers_on(&policy, state.today(at)).into_iter()
                     .map(|(adviser, standing)| json!({ "adviser": adviser, "standing": standing_json(&standing) })).collect::<Vec<_>>(),
+                "policyholder": d.directory.policyholders.get(&policy),
+                "may_see_kind": d.staff.holds_action(&staff, crate::staff::actions::VULNERABILITY_KIND, at),
             })
         }
         Question::StaffAdmin { staff, at } => {

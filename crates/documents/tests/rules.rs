@@ -259,13 +259,16 @@ fn changes_to_cover_require_a_new_schedule() {
         json!({ "cover_expired": { "policy": "pol-1", "cover": "tpd", "on": "2027-11-15" } }),
         json!({ "policy_reinstated": { "policy": "pol-1" } }),
         json!({ "layer_added": { "policy": "pol-1", "layer": { "cover": "life", "cover_type": "life", "layer": 2, "life": "life-1", "sum_insured_minor": 10000000, "start": "2027-11-15" }, "origin": "increase" } }),
+        json!({ "layer_reduced": { "policy": "pol-1", "cover": "life", "layer": 1, "continued_as": 3, "effective": "2027-11-15", "sum_insured_minor": 50000000, "kept_minor": 20000000 } }),
+        json!({ "layer_ended": { "policy": "pol-1", "cover": "life", "layer": 2, "life": "life-1", "effective": "2027-11-15", "sum_insured_minor": 10000000 } }),
     ];
     for (i, event) in changes.into_iter().enumerate() {
         let found = triggers(&record(i as u64 + 1, event));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, DocumentKind::PolicySchedule);
         assert_eq!(found[0].policy, policy("pol-1"));
-        assert_eq!(found[0].id, format!("3-{}:PolicySchedule", i + 1));
+        // One a policy a day, whichever change asked for it.
+        assert_eq!(found[0].id, "schedule:pol-1:2027-11-15:PolicySchedule", "change {i}");
     }
     let nothing = record(9, json!({ "indexation_choice_recorded": { "policy": "pol-1", "declined": true } }));
     assert!(triggers(&nothing).is_empty());

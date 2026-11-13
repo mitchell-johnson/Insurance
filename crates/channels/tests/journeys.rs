@@ -53,6 +53,66 @@ fn submit(id: &str, policy: Option<&PolicyId>, kind: &str, module: &str) -> Comm
         payload: json!({ "choice": "yes" }),
         signed: false,
         route_to_person: false,
+        assisted: None,
+    }
+}
+
+/// A change staff entered for a customer who rang, with why and the case.
+fn entered(id: &str, policy: &PolicyId, payload: serde_json::Value, reason: &str) -> Command {
+    Command::SubmitRequest {
+        id: id.to_string(),
+        policy: Some(policy.clone()),
+        kind: "change_frequency".to_string(),
+        module: "policy-servicing".to_string(),
+        payload,
+        signed: false,
+        route_to_person: false,
+        assisted: Some(ic_channels::state::Assisted {
+            reason: reason.to_string(),
+            case: "case-1".to_string(),
+            backdated: false,
+            above_limit: false,
+            second: None,
+        }),
+    }
+}
+
+/// Staff who take customers' calls: ana enters changes up to 500.00; ben, a team lead, may also be the second person on
+/// another's change.
+fn service_desk(w: &mut World) {
+    use ic_channels::staff::{Profile, StaffCommand, Template};
+    use ic_channels::state::assisted;
+    let template = |id: &str, actions: &[&str]| Template {
+        id: id.into(),
+        actions: actions.iter().map(|a| a.to_string()).collect(),
+        classes: [ic_channels::classes::DataClass::Ordinary].into(),
+        default_profile: "desk".into(),
+        ceilings: [(assisted::LIMIT.to_string(), 2_000_00)].into(),
+        break_glass: false,
+    };
+    let bootstrap = Command::Staff(StaffCommand::Bootstrap {
+        templates: vec![
+            template("administrator", &[ic_channels::staff::actions::MANAGE_STAFF]),
+            template("service", &[assisted::ENTER]),
+            template("service-lead", &[assisted::ENTER, assisted::APPROVE]),
+        ],
+        profiles: vec![Profile {
+            id: "desk".into(),
+            version: 1,
+            limits: [(assisted::LIMIT.to_string(), 500_00)].into(),
+        }],
+        admin: p("alice"),
+        admin_templates: vec!["administrator".into()],
+    });
+    w.send(module("entitlements"), bootstrap).unwrap();
+    for (who, template) in [("ana", "service"), ("ben", "service-lead")] {
+        let employ = Command::Staff(StaffCommand::Employ {
+            party: p(who),
+            team: "service".into(),
+            manager: None,
+            templates: vec![template.into()],
+        });
+        w.send(staff("alice"), employ).unwrap();
     }
 }
 
@@ -116,6 +176,42 @@ fn a_retail_customer_follows_their_policy() {
     assert_eq!(changes[0].key, format!("{pol}/policy"));
     assert_eq!(w.row(KIRI, &format!("{pol}/policy")).unwrap()["indexation_declined"], true);
     assert_eq!(w.ch.today(0), open(), "the business date comes from the stream");
+}
+
+/// Purpose: a premium receipt the core applies while the app is open moves the billing row on the customer's device, as one change
+/// after the version the device holds, so the app shows the new standing without a fresh snapshot (AUD-015).
+/// Why it matters: a customer who has just paid and still sees the amount owing will pay again or ring; the sync feed is how the
+/// app learns of the payment, so it must carry it promptly and in order.
+#[test]
+fn a_receipt_moves_the_billing_row_while_the_app_is_open() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let billing = format!("{pol}/billing");
+    let owed = w.row(KIRI, &billing).unwrap()["outstanding_minor"].as_i64().unwrap();
+    assert!(owed > 0, "the first premium is due at issue");
+    let Sync::Snapshot { version, .. } = w.feed(KIRI).unwrap().sync(None) else {
+        panic!("expected a snapshot")
+    };
+
+    w.core(
+        &pol,
+        "cash-matching",
+        ic_core::Command::ApplyReceipt {
+            policy: pol.clone(),
+            receipt: "rcpt-1".into(),
+            amount: ic_money::Money::new(owed, ic_money::Currency::NZD),
+        },
+    );
+    let effects = w.relay();
+    assert_eq!(moved(&effects), [KIRI.to_string()].into());
+    let Sync::Changes { version: now, changes } = w.feed(KIRI).unwrap().sync(Some(version)) else {
+        panic!("expected changes")
+    };
+    assert!(now > version);
+    assert!(changes.iter().any(|c| c.key == billing), "{changes:?}");
+    assert_eq!(w.row(KIRI, &billing).unwrap()["outstanding_minor"], 0);
+    // A device already at the new version has nothing more to fetch.
+    assert_eq!(w.feed(KIRI).unwrap().sync(Some(now)), Sync::Changes { version: now, changes: vec![] });
 }
 
 /// Purpose: the relay delivers at least once and in order; a repeat changes nothing, a hole is reported and nothing after it is applied, and redelivery heals it.
@@ -341,7 +437,7 @@ fn a_childs_health_information_becomes_their_own() {
 }
 
 /// Purpose: the policyholder lets a relative look, an accountant see the money side, and a support person help; each sees what that
-/// access is for, none can change anything, a support person's prepared request waits for the policyholder's own signature, and the
+/// access is for (the accountant nothing of a claim or of the policyholder's other policies), none can change anything, a support person's prepared request waits for the policyholder's own signature, and the
 /// access ends when the policyholder says so or the policy changes hands.
 /// Why it matters: people share sign-ins when there is no proper way to let someone help. This is the proper way, and it must not
 /// become a way round the policyholder: no health information, no commands, no approving on their behalf.
@@ -403,6 +499,30 @@ fn people_the_policyholder_lets_in() {
         !kinds.is_empty() && kinds.iter().all(|k| ["policy", "billing", "notice", "document"].contains(k)),
         "{kinds:?}"
     );
+    // The accountant is let in on this policy only: a claim on it, and the policyholder's own other policy, stay out of view.
+    let claim = format!("{pol}/claims/c-1");
+    w.send(
+        module("claims"),
+        Command::PublishRows {
+            rows: vec![Row {
+                key: claim.clone(),
+                policy: pol.clone(),
+                kind: "claim".into(),
+                subject: None,
+                sensitive: false,
+                body: json!({ "status": "assessing" }),
+            }],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    let mut own = term_life(2, open(), d(1990, 3, 10), Sex::Female, false, 200_000_00, None, Frequency::Monthly, None);
+    own.policyholder = p(KIRI);
+    let personal = w.issue(own);
+    assert!(w.sees(KIRI, &pol).contains(&claim) && !w.sees(KIRI, &personal).is_empty());
+    assert!(!w.sees("accountant", &pol).contains(&claim));
+    assert!(w.sees("accountant", &personal).is_empty());
+    assert!(w.held("accountant").iter().all(|k| k.starts_with(pol.0.as_str())), "{:?}", w.held("accountant"));
 
     // None of them can change anything.
     for who in ["daughter", "accountant"] {
@@ -503,6 +623,43 @@ fn modules_publish_only_their_own_rows() {
         ..row(String::new())
     };
     assert!(w.send(module("claims"), publish(vec![early], vec![])).unwrap().is_empty());
+}
+
+/// Purpose: one member of a 3,000-member scheme registers and is matched; they hold their own cover row and nothing else of the scheme on their
+/// device, see nothing else when asking for the policy, and are the scheme's only device audience.
+/// Why it matters: a public service scheme has tens of thousands of members. A member's phone holding a colleague's cover, or the
+/// scheme's member list, would be a breach repeated on every phone that registers.
+#[test]
+fn a_member_of_a_large_scheme_holds_their_own_cover_only() {
+    let mut w = World::new();
+    let staff = |i: usize| member(&format!("m-{i}"), d(1980, 1, 1), "staff", 60_000_00);
+    let pol = w.issue(group_scheme(4, open(), (0..100).map(staff).collect()));
+    for chunk in (100..3_000).collect::<Vec<_>>().chunks(100) {
+        let changes = chunk
+            .iter()
+            .map(|i| MemberChange::Joined {
+                life: staff(*i),
+                effective: open(),
+            })
+            .collect();
+        w.core(&pol, "group-admin", ic_core::Command::ApplyMembership { policy: pol.clone(), changes });
+        assert!(moved(&w.relay()).is_empty(), "nobody has registered yet");
+    }
+    // One member registers and is matched to their place on the scheme.
+    w.core(
+        &pol,
+        "group-admin",
+        ic_core::Command::IdentifyMember {
+            policy: pol.clone(),
+            life: LifeId::from("m-1500"),
+            party: p("worker-1500"),
+        },
+    );
+    assert_eq!(moved(&w.relay()), ["worker-1500".to_string()].into());
+    let own = format!("{pol}/member/m-1500/group-life");
+    assert_eq!(w.held("worker-1500"), std::slice::from_ref(&own));
+    assert_eq!(w.sees("worker-1500", &pol), [own]);
+    assert_eq!(w.ch.data.audiences[&pol], [p("worker-1500")].into());
 }
 
 /// Purpose: on a group scheme a member's phone holds only that member's cover, the employer is served by the portal with scheme-level rows, and a change to one member touches one feed.
@@ -1110,14 +1267,80 @@ fn requests_are_asynchronous_and_owned() {
     assert_eq!(w.ch.data.requests["r3"].status, RequestStatus::Applied { reference: None });
 
     // Staff act for a customer on the phone; the customer approves in the app, or cancels.
-    w.send(staff("ana"), submit("r4", Some(&pol), "change_frequency", "policy-servicing")).unwrap();
+    service_desk(&mut w);
+    w.send(staff("ana"), entered("r4", &pol, json!({}), "customer rang")).unwrap();
     assert_eq!(w.ch.data.requests["r4"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
     assert_eq!(code(w.send(staff("ben"), cancel("r4"))), "not_found");
     w.send(party(KIRI), cancel("r4")).unwrap();
     assert_eq!(w.row(KIRI, &format!("{pol}/request/r4")).unwrap()["state"]["status"], "cancelled");
-    w.send(staff("ana"), submit("r5", Some(&pol), "change_frequency", "policy-servicing")).unwrap();
+    w.send(staff("ana"), entered("r5", &pol, json!({}), "customer rang")).unwrap();
     w.send(staff("ana"), cancel("r5")).unwrap();
     assert!(w.ch.pending_for("policy-servicing").is_empty());
+}
+
+/// Purpose: a change staff enter for a customer who rang carries who entered it, why and the case; one above the enterer's limit, or
+/// dated in the past, waits for a second member of staff who holds that action and is not the enterer, and only then goes to the
+/// customer to approve in the app (SVC-018).
+/// Why it matters: a phone change is the easiest place to slip something past a customer. Naming the person, the reason and the
+/// case makes it traceable; a second person on large or backdated changes stops one officer moving money or rewriting history on a
+/// call alone.
+#[test]
+fn a_change_entered_for_a_caller_carries_who_why_and_a_second_person() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    service_desk(&mut w);
+
+    // Why and which case are required; someone who is not staff, or holds no right to enter changes, is refused.
+    assert_eq!(code(w.send(staff("ana"), entered("r0", &pol, json!({}), " "))), "bad_request");
+    assert_eq!(code(w.send(staff("ana"), submit("r0", Some(&pol), "x", "claims"))), "bad_request");
+    assert_eq!(code(w.send(staff("nobody"), entered("r0", &pol, json!({}), "rang"))), "forbidden");
+    assert_eq!(code(w.send(staff("alice"), entered("r0", &pol, json!({}), "rang"))), "forbidden");
+
+    // Within ana's limit and dated today: straight to the customer, with who, why and the case kept.
+    w.send(staff("ana"), entered("r1", &pol, json!({ "amount_minor": 400_00 }), "customer rang"))
+        .unwrap();
+    let r1 = &w.ch.data.requests["r1"];
+    assert_eq!(r1.status, RequestStatus::AwaitingApproval { from: Approver::Customer });
+    assert_eq!((r1.party.0.as_str(), r1.assisted.as_ref().unwrap().case.as_str()), ("ana", "case-1"));
+
+    // Above her limit: a second person first, then the customer.
+    w.send(staff("ana"), entered("r2", &pol, json!({ "amount_minor": 600_00 }), "customer rang"))
+        .unwrap();
+    assert_eq!(w.ch.data.requests["r2"].status, RequestStatus::AwaitingApproval { from: Approver::SecondStaff });
+    assert!(w.ch.data.requests["r2"].assisted.as_ref().unwrap().above_limit);
+    let second = |id: &str| Command::SecondApproveRequest { id: id.to_string() };
+    let approve = Command::ApproveRequest {
+        id: "r2".into(),
+        signed: true,
+        route_to_person: false,
+    };
+    assert_eq!(
+        code(w.send(party(KIRI), approve.clone())),
+        "not_found",
+        "the customer cannot approve before the second person"
+    );
+    assert_eq!(code(w.send(staff("ana"), second("r2"))), "maker_checker");
+    assert_eq!(code(w.send(party(KIRI), second("r2"))), "forbidden");
+    assert_eq!(code(w.send(staff("ben"), second("nope"))), "not_found");
+    w.send(staff("ben"), second("r2")).unwrap();
+    let r2 = &w.ch.data.requests["r2"];
+    assert_eq!(r2.status, RequestStatus::AwaitingApproval { from: Approver::Customer });
+    assert_eq!(r2.assisted.as_ref().unwrap().second, Some(p("ben")));
+    assert_eq!(code(w.send(staff("ben"), second("r2"))), "not_awaiting");
+    w.send(party(KIRI), approve).unwrap();
+
+    // Dated in the past: a second person whatever the amount, and one who holds that action.
+    let yesterday = (open() - chrono::Duration::days(1)).to_string();
+    w.send(
+        staff("ben"),
+        entered("r3", &pol, json!({ "effective": yesterday }), "backdated at the customer's request"),
+    )
+    .unwrap();
+    assert!(w.ch.data.requests["r3"].assisted.as_ref().unwrap().backdated);
+    assert_eq!(code(w.send(staff("ana"), second("r3"))), "forbidden");
+    let today = open().to_string();
+    w.send(staff("ana"), entered("r4", &pol, json!({ "effective": today }), "rang")).unwrap();
+    assert_eq!(w.ch.data.requests["r4"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
 }
 
 /// Purpose: device and staff commands reach their state machines only from the right caller, and their revocations reach open sessions.
@@ -1468,8 +1691,9 @@ fn an_owner_or_a_dependant_ending_in_the_customer_master() {
 }
 
 /// Purpose: on a unit-linked policy the policyholder's phone shows an order while it waits for its price and then the units it
-/// bought in the fund, from the investment ledger's own events; a sell on a later pricing date takes units off the holding; a
-/// cancelled order goes from the phone; and when a price is corrected and the order replayed, the holding follows.
+/// bought in the fund, valued at the latest sell price and labelled with its date, from the investment ledger's own events; a
+/// sell on a later pricing date takes units off the holding; a cancelled order goes from the phone; and when a price is corrected
+/// and the order replayed, the holding follows.
 /// Why it matters: a unit-linked customer wants to know what they hold and what is still waiting. A holding that missed a sell, or
 /// counted an order before its price, would tell them they own units they do not.
 #[test]
@@ -1564,6 +1788,12 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         (Some(500_000_000), &json!("2027-11-15")),
         "{held}"
     );
+    // Valued at the sell price, what a withdrawal would pay, and labelled with that price's date.
+    assert_eq!(
+        (&held["price"], &held["price_date"], &held["value_minor"]),
+        (&json!("1.9800"), &json!("2027-11-15"), &json!(990_00)),
+        "{held}"
+    );
     assert_eq!(w.last_op(KIRI, &waiting), Some(Op::Delete));
 
     // A sell of 100 units on the next pricing date takes them off.
@@ -1580,6 +1810,7 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         (Some(400_000_000), &json!("2027-11-16")),
         "{held}"
     );
+    assert_eq!((&held["price_date"], &held["value_minor"]), (&json!("2027-11-16"), &json!(792_00)));
     assert!(w.ch.data.extras[&pol].orders.is_empty());
 
     // An order cancelled before its price leaves nothing waiting.
@@ -1611,6 +1842,9 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         held["units_micro"].as_i64().unwrap() < 400_000_000,
         "fewer units at the higher buy price: {held}"
     );
+    // A correction of an earlier date's price does not replace the latest date's for valuing.
+    assert_eq!(held["price_date"], "2027-11-16");
+    assert_eq!(w.ch.data.prices["growth"].version, 1);
 }
 
 /// Purpose: a broker taking over a scheme is engaged from the appointment date and authorised by the employer on the scheme

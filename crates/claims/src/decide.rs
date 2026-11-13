@@ -657,7 +657,10 @@ impl ClaimsState {
                         &[("admitted_minor", "0".into()), ("monthly_minor", terms.monthly_minor.to_string())],
                     );
                 } else {
+                    // The core takes a lump sum off the life's cover and the covers linked to it.
+                    let life = claim.life.clone().filter(|_| plan.health.is_none());
                     cx.core.execute(Instruction::Admit {
+                        life,
                         claim: id.clone(),
                         policy,
                         cover,
@@ -715,6 +718,7 @@ impl ClaimsState {
                     reason: "funeral_advance".into(),
                 })?;
                 cx.core.execute(Instruction::Admit {
+                    life: None,
                     claim: id.clone(),
                     policy,
                     cover,
@@ -746,6 +750,16 @@ impl ClaimsState {
                     OverpaymentCause::InsurerError
                 };
                 let overpayment = Self::overpayment(claim, cx, plan.overpaid_minor, cause, !false_declaration);
+                if let (true, Some(from)) = (*false_declaration, claim.waiver_from) {
+                    // Premium waived on a false declaration is owed again.
+                    cx.core.execute(Instruction::UnwaivePremium {
+                        claim: id.clone(),
+                        policy: claim.policy.clone(),
+                        cover: claim.cover.clone(),
+                        from,
+                    })?;
+                    note(claim, cx, None, "waiver_billed_back");
+                }
                 self.close(cx, claim, Status::Reversed, overpayment)?;
                 if let Some(s) = claim.schedule.as_mut() {
                     // The benefit stops from the decision date, never before it.
@@ -783,6 +797,7 @@ impl ClaimsState {
                     cost_item: None,
                     interest_minor: 0,
                     interest_declined_minor: 0,
+                    interest_withheld_minor: 0,
                     interested_party: None,
                 });
                 cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true, 0);

@@ -70,7 +70,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period` |
-| BIL-002 | part | `documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
+| BIL-002 | full | `documents/tests/required_documents.rs::a_bill_gets_a_premium_notice_with_its_discount_lines`<br>`documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
 | BIL-005 | full | `sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | BIL-007 | full | `sim/tests/scenarios.rs::money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing` |
 | BIL-008 | full | `sim/tests/scenarios.rs::cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part`<br>`distribution/tests/commission.rs::cancelling_in_cooling_off_reverses_all_commission_from_whoever_received_it` |
@@ -123,23 +123,23 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| AUD-001 | part | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
+| AUD-001 | full | `readmodel/src/scope.rs::scheme_member_sees_nothing_else_from_the_scheme`<br>`channels/tests/journeys.rs::a_member_of_a_large_scheme_holds_their_own_cover_only`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
 | AUD-002 | part | `readmodel/src/scope.rs::policyholder_sees_policy_but_not_another_adults_health_facts`<br>`channels/tests/journeys.rs::family_privacy_and_consent` |
 | AUD-003 | part | `channels/tests/journeys.rs::family_privacy_and_consent`<br>`channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
-| AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
+| AUD-008 | full | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe`<br>`channels/tests/http.rs::a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
 | AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
-| AUD-013 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
+| AUD-013 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 | AUD-014 | full | `documents/tests/channels.rs::sms_carries_a_pointer_and_asks_for_a_report` |
-| AUD-015 | part | `channels/tests/feed.rs::snapshot_then_changes` |
+| AUD-015 | full | `channels/tests/feed.rs::snapshot_then_changes`<br>`channels/tests/journeys.rs::a_receipt_moves_the_billing_row_while_the_app_is_open`<br>`channels/tests/http.rs::a_write_answers_with_the_writers_own_version_and_nobody_elses` |
 | AUD-016 | full | `channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload` |
 | AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point` |
-| AUD-019 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
+| AUD-019 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 
 ## RES Resilience, capacity and scale
 
@@ -192,14 +192,14 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | CLM-001 | full | `claims/tests/suite/intake.rs::notification_opens_a_claim_with_a_reserve`<br>`claims/tests/suite/intake.rs::a_late_notified_death_prompts_a_register_check`<br>`customers/tests/api.rs::deaths_are_marked_and_retracted`<br>`customers/tests/lifecycle.rs::deaths_are_told_to_claims_on_every_partition` |
-| CLM-002 | part | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid` |
+| CLM-002 | full | `sim/tests/claims.rs::a_lender_recorded_on_the_policy_is_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`core/src/claims.rs::a_joint_cover_ends_for_every_life_on_the_first_event` |
 | CLM-003 | part | `sim/tests/claims.rs::a_lump_sum_claim_runs_from_notification_to_the_bank`<br>`sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
 | CLM-004 | full | `claims/tests/suite/book.rs::a_funeral_advance_is_paid_early_and_counted_against_the_benefit`<br>`sim/tests/claims.rs::a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest` |
 | CLM-005 | full | `claims/tests/suite/intake.rs::a_death_with_no_certificate_is_registered_and_the_coroner_is_chased` |
 | CLM-006 | full | `sim/tests/claims.rs::an_admission_can_end_the_policy_or_take_the_premium_owing`<br>`sim/tests/claims.rs::a_premium_paid_after_the_event_does_not_rewrite_the_event_date` |
 | CLM-007 | full | `sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`claims/tests/suite/intake.rs::doubtful_cover_still_registers_and_a_refused_reserve_leaves_nothing` |
 | CLM-008 | part | `sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
-| CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid` |
+| CLM-009 | part | `claims/tests/suite/decisions.rs::lump_sums_on_one_cover_never_exceed_the_sum_insured`<br>`claims/tests/suite/covers.rs::joint_and_linked_covers_count_what_the_others_have_paid`<br>`claims/tests/suite/decisions.rs::an_admission_within_authority_takes_effect_and_is_recorded`<br>`core/src/claims.rs::a_lump_sum_reduces_its_cover_and_the_covers_linked_to_it_until_reversed`<br>`product/tests/products.rs::a_cover_can_reduce_another_and_be_joint_on_the_first_event`<br>`documents/tests/lifecycle.rs::a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day` |
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`claims/tests/suite/covers.rs::the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not` |
@@ -304,7 +304,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-026 | full | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`group/tests/year.rs::a_pools_renewal_waits_for_an_overdue_declaration` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
-| GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
+| GRP-028 | full | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
 | GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send`<br>`group/tests/excess.rs::the_employers_view_of_a_member_shows_cover_and_never_health` |
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
@@ -323,6 +323,21 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
 | HLT-009 | full | `claims/tests/suite/covers.rs::counters_never_cross_covers_unless_the_shell_shares_one` |
 | HLT-010 | full | `sim/tests/health_flex.rs::an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer`<br>`sim/tests/claims.rs::the_cover_check_reports_the_excess_level_held_on_the_event_date` |
+
+## DSC Discounts and pricing components
+
+| Matrix | Status | Built tests |
+| --- | --- | --- |
+| DSC-001 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net`<br>`sim/tests/personas_spine.rs::a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed` |
+| DSC-002 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net` |
+| DSC-003 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-004 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date`<br>`documents/tests/required_documents.rs::a_lost_discount_is_noticed_before_the_bill_it_raises` |
+| DSC-005 | part | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-006 | full | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
+| DSC-007 | full | `product/tests/products.rs::a_tier_sets_the_percentage_and_the_cap_and_floor_come_off_the_last_discount` |
+| DSC-009 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
+| DSC-010 | part | `sim/tests/edges.rs::a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_dates` |
+| DSC-011 | full | `product/tests/products.rs::a_discount_that_could_raise_the_premium_or_cannot_be_explained_does_not_load` |
 
 ## JNT Joint lives, ownership, assignments and dependants
 
@@ -378,7 +393,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ADV-032 | full | `distribution/tests/units.rs::a_rule_allocates_every_cent_of_any_amount` |
 | ADV-033 | full | `distribution/tests/units.rs::rule_validation_catches_every_way_a_rule_fails_to_add_up` |
 | ADV-034 | full | `distribution/tests/statements.rs::one_net_payment_covers_credits_and_debts_on_different_partitions`<br>`distribution/tests/statements.rs::a_statement_shows_the_detail_and_its_payment_clears_the_ledger` |
-| ADV-035 | part | `channels/tests/queries.rs::an_advisers_book_shows_standing_and_held_money`<br>`channels/tests/queries.rs::a_provider_and_its_group_see_the_book_under_them` |
+| ADV-035 | full | `channels/tests/queries.rs::an_advisers_book_shows_standing_and_held_money`<br>`channels/tests/queries.rs::a_provider_and_its_group_see_the_book_under_them`<br>`channels/tests/http.rs::an_adviser_and_their_group_read_their_own_statements` |
 | ADV-036 | full | `channels/tests/journeys.rs::access_ends_with_the_engagement`<br>`channels/tests/http.rs::an_advisers_request_needs_the_customers_signed_approval` |
 | ADV-037 | full | `distribution/tests/statements.rs::a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement`<br>`distribution/tests/config.rs::the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party`<br>`payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period` |
 | ADV-038 | full | `distribution/tests/commission.rs::a_dry_run_shows_what_a_premium_would_earn_and_changes_nothing` |
@@ -400,7 +415,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-008 | full | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-017 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
-| SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
+| SVC-018 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/journeys.rs::a_change_entered_for_a_caller_carries_who_why_and_a_second_person` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
 | SVC-022 | part | `payments/tests/hold.rs::only_the_service_records_what_the_master_says`<br>`payments/tests/hold.rs::a_hold_stops_value_leaving_and_nothing_else`<br>`payments/tests/hold.rs::a_refund_is_value_going_out_and_a_claim_is_not`<br>`payments/tests/hold.rs::a_hold_heard_after_the_item_joined_holds_it_at_the_check`<br>`payments/tests/hold.rs::a_payout_waits_for_a_recent_answer_where_one_is_required`<br>`payments/tests/hold.rs::the_pump_watches_every_party_money_is_about_to_go_to`<br>`payments-service/tests/pump.rs::the_pump_hears_a_customers_own_hold_from_the_customer_master`<br>`customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off`<br>`sim/tests/interests.rs::an_owners_own_hold_stops_value_leaving_until_the_master_ends_it` |
 | SVC-025 | part | `distribution/tests/replacement.rs::cover_given_up_after_new_cover_was_written_is_matched_looking_back` |
@@ -429,7 +444,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
-| VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
+| VUL-002 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person`<br>`channels/tests/http.rs::staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why` |
 | VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |

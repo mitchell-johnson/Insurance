@@ -457,6 +457,26 @@ pub struct ClaimLedger {
     /// Premium paid from claims expense under this claim's waiver.
     #[serde(default)]
     pub waived_minor: i64,
+    /// What of it was waived on each receivable, by receivable ID, so that
+    /// a waiver can be billed back period by period.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub waived: BTreeMap<u32, i64>,
+    /// Cover this claim's lump sums took off the policy, layer by layer,
+    /// until the admission is reversed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cuts: Vec<ClaimCut>,
+}
+
+/// Cover a claim's lump sum took off one layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClaimCut {
+    pub cover: String,
+    pub life: LifeId,
+    /// The layer that was ended or reduced.
+    pub layer: u32,
+    pub amount_minor: i64,
+    /// The business date the cover came off.
+    pub on: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -583,6 +603,14 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// Every entitlement a discount is given for that the policy or a life
+    /// on it has held, with its dates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub entitlements: Vec<crate::entitlement::Entitlement>,
+    /// Every approved discount given on the policy, with its dates, reason
+    /// and approvers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discount_overrides: Vec<crate::discount_override::DiscountOverride>,
     /// The owner's own hold on money going out, while it stands.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_hold: Option<crate::owner_hold::OwnerHold>,

@@ -38,6 +38,9 @@ pub mod actions {
     pub const APPROVE_GRANT: &str = "staff.approve_grant";
     pub const APPROVE_PROFILE_UPLIFT: &str = "staff.approve_profile_uplift";
     pub const REVIEW_BREAK_GLASS: &str = "staff.review_break_glass";
+    /// Read why a customer is served with care, not only how: for the
+    /// hardship and vulnerable customer specialists, never a general role.
+    pub const VULNERABILITY_KIND: &str = "service.vulnerability_kind";
 }
 
 /// A role template: what kind of action a person may take, which data

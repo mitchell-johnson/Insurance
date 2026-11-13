@@ -12,7 +12,7 @@ use ic_product::ProductDefinition;
 
 use crate::accounts::{self, dims};
 use crate::catalog::Catalog;
-use crate::event::Event;
+use crate::event::{DiscountGiven, Event};
 use crate::machine::{Ctx, Reject};
 use crate::policy::{Policy, PolicyStatus, Receivable, ReceivableKind};
 use crate::postings::{div_half_even, scale_map, PostingSet};
@@ -26,6 +26,9 @@ pub(crate) struct Bill {
     pub net: BTreeMap<String, i64>,
     pub gst: i64,
     pub levies: BTreeMap<String, i64>,
+    /// Each discount already taken off `net`, as its own line: never part
+    /// of what is owed, posted so that it can be shown and costed.
+    pub discounts: Vec<DiscountGiven>,
 }
 
 impl Bill {
@@ -42,6 +45,16 @@ impl Bill {
             net,
             gst: m.gst.values().map(|g| g.minor).sum(),
             levies: m.levies.iter().map(|(k, v)| (k.clone(), v.minor)).collect(),
+            discounts: m
+                .discounts
+                .iter()
+                .map(|d| DiscountGiven {
+                    code: d.code.clone(),
+                    name: d.name.clone(),
+                    posting_type: d.posting_type.clone(),
+                    amount_minor: d.amount.minor,
+                })
+                .collect(),
         }
     }
     /// The bill scaled by `num / den`, each line rounded half-even.
@@ -50,6 +63,14 @@ impl Bill {
             net: scale_map(&self.net, num, den),
             gst: div_half_even(self.gst as i128 * num, den) as i64,
             levies: scale_map(&self.levies, num, den),
+            discounts: self
+                .discounts
+                .iter()
+                .map(|d| DiscountGiven {
+                    amount_minor: div_half_even(d.amount_minor as i128 * num, den) as i64,
+                    ..d.clone()
+                })
+                .collect(),
         }
     }
     pub fn minus(&self, other: &Bill) -> Bill {
@@ -61,6 +82,16 @@ impl Bill {
             *out.levies.entry(k.clone()).or_insert(0) -= v;
         }
         out.gst -= other.gst;
+        for d in &other.discounts {
+            match out.discounts.iter_mut().find(|mine| mine.code == d.code) {
+                Some(mine) => mine.amount_minor -= d.amount_minor,
+                None => out.discounts.push(DiscountGiven {
+                    amount_minor: -d.amount_minor,
+                    ..d.clone()
+                }),
+            }
+        }
+        out.discounts.retain(|d| d.amount_minor != 0);
         out
     }
     pub fn total(&self) -> i64 {
@@ -117,6 +148,14 @@ pub(crate) fn raise_receivable_for(
     set.credit(accounts::gst_payable(c), bill.gst as i128, dims(policy, None, "gst"));
     for (code, amount) in &bill.levies {
         set.credit(accounts::levy_payable(code, c), *amount as i128, dims(policy, None, "levy"));
+    }
+    // Each discount is its own pair of lines under its posting type: what it
+    // cost against income, and the premium before it. The receivable and
+    // what is earned are the net, so the pair changes neither.
+    for d in &bill.discounts {
+        let by_type = dims(policy, None, &d.posting_type);
+        set.debit(accounts::discounts_given(&policy.product_code, c), d.amount_minor as i128, by_type.clone());
+        set.credit(accounts::premium_before_discounts(&policy.product_code, c), d.amount_minor as i128, by_type);
     }
     let id = policy.next_receivable_id;
     let mut detail = BTreeMap::new();
@@ -262,6 +301,7 @@ pub(crate) fn bill_due_periods(
                     period_end: end,
                     total_minor: bill.total(),
                     members: None,
+                    discounts: bill.discounts.clone(),
                     by_cover_type: bill
                         .net
                         .iter()
