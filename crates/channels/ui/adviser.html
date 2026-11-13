@@ -27,7 +27,13 @@ async function open(policy, canTransact) {
   current = policy.policy;
   $("detail").hidden = false;
   $("detail-title").textContent = `Policy ${policy.number}`;
-  put($("rows"), table(["What", "Details"], view.rows.map((r) => [r.kind, h("pre", {}, JSON.stringify(r.body, null, 1))])));
+  const words = (v) => String(v == null ? "" : v).replace(/_/g, " ");
+  const proposals = view.rows.filter((r) => r.kind === "proposal");
+  const others = view.rows.filter((r) => r.kind !== "proposal");
+  put($("rows"),
+    proposals.length ? [h("h3", {}, "Proposals"), table(["Proposal", "Status", "Waiting on", "Received", "Expires"], proposals.map((r) => [r.body.proposal, words(r.body.status),
+      r.body.waiting_on === "applicant" ? "The applicant" : r.body.waiting_on === "insurer" ? "Us" : "", r.body.received_on || "", r.body.expires_on || ""]))] : null,
+    table(["What", "Details"], others.map((r) => [r.kind, h("pre", {}, JSON.stringify(r.body, null, 1))])));
   $("send").disabled = !canTransact;
   $("detail").scrollIntoView({ behavior: "smooth" });
 }
