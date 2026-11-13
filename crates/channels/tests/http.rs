@@ -2848,6 +2848,13 @@ async fn an_employer_runs_the_scheme_membership() {
     portal.group.down.store(true, Ordering::SeqCst);
     assert_eq!(hr("scheme").await.0, StatusCode::SERVICE_UNAVAILABLE);
     portal.group.down.store(false, Ordering::SeqCst);
+    // A policy with no scheme on the group service is not found; a service that fails is a bad gateway.
+    portal.group.unmapped.store(true, Ordering::SeqCst);
+    assert_eq!(hr("scheme").await.0, StatusCode::NOT_FOUND);
+    portal.group.unmapped.store(false, Ordering::SeqCst);
+    portal.group.broken.store(true, Ordering::SeqCst);
+    assert_eq!(hr("scheme").await.0, StatusCode::BAD_GATEWAY);
+    portal.group.broken.store(false, Ordering::SeqCst);
 
     // A portal deployed without one says so.
     let now = portal.now();

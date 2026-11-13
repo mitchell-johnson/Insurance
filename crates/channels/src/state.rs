@@ -198,6 +198,31 @@ pub struct PolicyExtras {
     pub notices: VecDeque<(u32, NaiveDate, NaiveDate, i64)>,
     pub indexation_declined: Option<bool>,
     pub last_anniversary: Option<(u32, NaiveDate)>,
+    /// Units held in each fund, from the investment ledger's executed and
+    /// replayed orders.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub holdings: BTreeMap<String, Holding>,
+    /// Orders placed and not yet executed or cancelled, by order ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub orders: BTreeMap<String, PendingOrder>,
+}
+
+/// A policy's units in one fund, in millionths of a unit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Holding {
+    pub units_micro: i64,
+    /// The pricing date of the last order that moved it.
+    pub as_at: NaiveDate,
+}
+
+/// An order waiting for its price.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingOrder {
+    pub fund: String,
+    pub direction: ic_core::invest::Direction,
+    pub amount: ic_core::invest::OrderAmount,
+    pub kind: ic_core::invest::OrderKind,
+    pub pricing_date: NaiveDate,
 }
 
 /// Everything replicated. A pure function of the log.
@@ -356,6 +381,24 @@ impl ChannelState {
         );
         if let Some(b) = d.view.billing(policy) {
             add("billing".to_string(), "billing", None, false, json!(b));
+        }
+        for (fund, held) in extras.into_iter().flat_map(|e| e.holdings.iter()) {
+            add(
+                format!("holding/{fund}"),
+                "holding",
+                None,
+                false,
+                json!({ "fund": fund, "units_micro": held.units_micro, "as_at": held.as_at }),
+            );
+        }
+        for (order, o) in extras.into_iter().flat_map(|e| e.orders.iter()) {
+            add(
+                format!("unit_order/{order}"),
+                "unit_order",
+                None,
+                false,
+                json!({ "order": order, "fund": o.fund, "direction": o.direction, "amount": o.amount, "kind": o.kind, "pricing_date": o.pricing_date }),
+            );
         }
         for (receivable, start, end, total) in extras.into_iter().flat_map(|e| e.notices.iter()) {
             add(
@@ -528,6 +571,11 @@ impl ChannelState {
             Event::AnniversaryReached { policy, number, on } => {
                 self.data.extras.entry(policy.clone()).or_default().last_anniversary = Some((*number, *on));
             }
+            Event::Investment(invest) => {
+                if let Some(policy) = self.follow_investment(invest) {
+                    touched.insert(policy, None);
+                }
+            }
             _ => {}
         }
         if let Some((policy, life)) = subject_of(record) {
@@ -547,6 +595,70 @@ impl ChannelState {
             }
         }
         Ok(())
+    }
+
+    /// Keep a policy's units and waiting orders as the investment ledger
+    /// reports them. The policy whose rows changed, if any.
+    fn follow_investment(&mut self, event: &ic_core::invest::InvestEvent) -> Option<PolicyId> {
+        use ic_core::invest::{Direction, InvestEvent};
+        let (policy, extras) = match event {
+            InvestEvent::UnitOrderPlaced { policy, .. }
+            | InvestEvent::UnitOrderCancelled { policy, .. }
+            | InvestEvent::UnitOrderExecuted { policy, .. }
+            | InvestEvent::UnitOrderReplayed { policy, .. } => (policy, self.data.extras.entry(policy.clone()).or_default()),
+            _ => return None,
+        };
+        let mut moved = |fund: &str, delta: i64, on: NaiveDate| {
+            let held = extras.holdings.entry(fund.to_string()).or_insert(Holding { units_micro: 0, as_at: on });
+            held.units_micro = held.units_micro.saturating_add(delta);
+            held.as_at = held.as_at.max(on);
+        };
+        match event {
+            InvestEvent::UnitOrderPlaced {
+                order_id,
+                fund,
+                direction,
+                amount,
+                kind,
+                pricing_date,
+                ..
+            } => {
+                let order = PendingOrder {
+                    fund: fund.0.clone(),
+                    direction: *direction,
+                    amount: *amount,
+                    kind: *kind,
+                    pricing_date: *pricing_date,
+                };
+                extras.orders.insert(order_id.clone(), order);
+            }
+            InvestEvent::UnitOrderCancelled { order_id, .. } => {
+                extras.orders.remove(order_id);
+            }
+            InvestEvent::UnitOrderExecuted {
+                order_id,
+                fund,
+                direction,
+                units_micro,
+                pricing_date,
+                ..
+            } => {
+                extras.orders.remove(order_id);
+                let delta = match direction {
+                    Direction::Buy => *units_micro,
+                    Direction::Sell => -units_micro.abs(),
+                };
+                moved(&fund.0, delta, *pricing_date);
+            }
+            InvestEvent::UnitOrderReplayed {
+                fund,
+                units_delta_micro,
+                pricing_date,
+                ..
+            } => moved(&fund.0, *units_delta_micro, *pricing_date),
+            _ => {}
+        }
+        Some(policy.clone())
     }
 
     fn submit(&mut self, actor: &Actor, at: At, on: NaiveDate, request: Request) -> Result<Request, Reject> {

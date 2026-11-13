@@ -53,6 +53,7 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "The applicant");
     await p.locator("#claims").getByText("No claims.").waitFor();
     // The schedule is listed; the documents module decides who may download it, and it is the customer's.
+    await p.locator("#invest").getByText("No units held.").waitFor();
     await p.locator("#docs").getByText("Policy schedule").waitFor();
     await p.locator("#docs").getByRole("button", { name: "Download" }).click();
     await p.locator("#docs-msg").getByText("not available to you").waitFor();

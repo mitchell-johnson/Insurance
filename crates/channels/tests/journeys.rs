@@ -1466,3 +1466,149 @@ fn an_owner_or_a_dependant_ending_in_the_customer_master() {
     // Ending a record that is not there is harmless.
     w.dir(module("customer-master"), end(child)).unwrap();
 }
+
+/// Purpose: on a unit-linked policy the policyholder's phone shows an order while it waits for its price and then the units it
+/// bought in the fund, from the investment ledger's own events; a sell on a later pricing date takes units off the holding; a
+/// cancelled order goes from the phone; and when a price is corrected and the order replayed, the holding follows.
+/// Why it matters: a unit-linked customer wants to know what they hold and what is still waiting. A holding that missed a sell, or
+/// counted an order before its price, would tell them they own units they do not.
+#[test]
+fn units_held_and_orders_waiting_reach_the_policyholder() {
+    use ic_core::invest::{Direction, FundDefinition, InvestCommand, NewOrder, OrderAmount, OrderKind, UnitPrice};
+    use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
+    let mut w = World::new();
+    let pol = w.issue(ic_sim::persona::invest_plan(1, open(), d(1990, 3, 10), Sex::Female));
+    let invest = |w: &mut World, caller: &str, command: InvestCommand| w.core(&pol, caller, ic_core::Command::Investment(Box::new(command)));
+    let growth = FundId("growth".into());
+    invest(
+        &mut w,
+        "config",
+        InvestCommand::ActivateFund(Box::new(FundDefinition {
+            id: growth.clone(),
+            version: 1,
+            content_hash: "hash-growth-1".into(),
+            name: "growth".into(),
+            currency: NZD,
+            cut_off: "14:00".into(),
+            buy_spread_bps: 10,
+            sell_spread_bps: 10,
+            price_decimals: 4,
+            unit_rounding: RoundingMode::HalfEven,
+            non_pricing_days: Default::default(),
+            open_to_new_money: true,
+            pricing: [("movement_tolerance_bps".to_string(), "500".to_string())].into(),
+        })),
+    );
+    w.core(
+        &pol,
+        "cash-matching",
+        ic_core::Command::ApplyReceipt {
+            policy: pol.clone(),
+            receipt: "r1".into(),
+            amount: Money::new(5_000_00, NZD),
+        },
+    );
+    let allocate = InvestCommand::AllocateCash {
+        policy: pol.clone(),
+        reference: "alloc-1".into(),
+        amount_minor: 5_000_00,
+    };
+    invest(&mut w, "policy-servicing", allocate);
+    let order = |id: &str, direction, amount, on| NewOrder {
+        order_id: id.into(),
+        policy: pol.clone(),
+        fund: growth.clone(),
+        direction,
+        amount,
+        kind: if direction == Direction::Buy {
+            OrderKind::PremiumAllocation
+        } else {
+            OrderKind::Withdrawal
+        },
+        pricing_date: on,
+        switch_to: None,
+    };
+    invest(
+        &mut w,
+        "policy-servicing",
+        InvestCommand::PlaceOrder(Box::new(order("buy-1", Direction::Buy, OrderAmount::Cash { minor: 1_000_00 }, open()))),
+    );
+    w.relay();
+    let waiting = format!("{pol}/unit_order/buy-1");
+    assert_eq!(w.row(KIRI, &waiting).unwrap()["direction"], "buy", "{:?}", w.held(KIRI));
+    assert!(w.row(KIRI, &format!("{pol}/holding/growth")).is_none(), "nothing is held before the price");
+
+    // The price is activated and the order executes: the units are held and the order is gone.
+    let price = |on: chrono::NaiveDate| UnitPrice {
+        price_id: format!("growth:{on}.1"),
+        fund: growth.clone(),
+        pricing_date: on,
+        version: 1,
+        buy: DecStr::parse("2.0000").unwrap(),
+        sell: DecStr::parse("1.9800").unwrap(),
+        mid: DecStr::parse("2.0000").unwrap(),
+        inputs_hash: "inputs".into(),
+        supersedes: None,
+    };
+    let execute = |on| InvestCommand::ExecuteOrders {
+        fund: growth.clone(),
+        pricing_date: on,
+        limit: 100,
+    };
+    invest(&mut w, "unit-pricing", InvestCommand::ActivateUnitPrice(Box::new(price(open()))));
+    invest(&mut w, "unit-orders", execute(open()));
+    w.relay();
+    let held = w.row(KIRI, &format!("{pol}/holding/growth")).unwrap();
+    assert_eq!(
+        (held["units_micro"].as_i64(), &held["as_at"]),
+        (Some(500_000_000), &json!("2027-11-15")),
+        "{held}"
+    );
+    assert_eq!(w.last_op(KIRI, &waiting), Some(Op::Delete));
+
+    // A sell of 100 units on the next pricing date takes them off.
+    let next = d(2027, 11, 16);
+    let sell = order("sell-1", Direction::Sell, OrderAmount::Units { micro: 100_000_000 }, next);
+    invest(&mut w, "policy-servicing", InvestCommand::PlaceOrder(Box::new(sell)));
+    w.cluster.end_of_day().unwrap();
+    invest(&mut w, "unit-pricing", InvestCommand::ActivateUnitPrice(Box::new(price(next))));
+    invest(&mut w, "unit-orders", execute(next));
+    w.relay();
+    let held = w.row(KIRI, &format!("{pol}/holding/growth")).unwrap();
+    assert_eq!(
+        (held["units_micro"].as_i64(), &held["as_at"]),
+        (Some(400_000_000), &json!("2027-11-16")),
+        "{held}"
+    );
+    assert!(w.ch.data.extras[&pol].orders.is_empty());
+
+    // An order cancelled before its price leaves nothing waiting.
+    let later = order("sell-2", Direction::Sell, OrderAmount::Units { micro: 1_000_000 }, d(2027, 11, 17));
+    invest(&mut w, "policy-servicing", InvestCommand::PlaceOrder(Box::new(later)));
+    w.relay();
+    assert!(w.row(KIRI, &format!("{pol}/unit_order/sell-2")).is_some());
+    invest(&mut w, "policy-servicing", InvestCommand::CancelOrder { order_id: "sell-2".into() });
+    w.relay();
+    assert_eq!(w.last_op(KIRI, &format!("{pol}/unit_order/sell-2")), Some(Op::Delete));
+
+    // The first price is corrected: the buy is put on the new price and the holding follows.
+    let mut corrected = price(open());
+    corrected.price_id = "growth:2027-11-15.2".into();
+    corrected.version = 2;
+    corrected.buy = DecStr::parse("2.5000").unwrap();
+    corrected.mid = DecStr::parse("2.5000").unwrap();
+    corrected.supersedes = Some("growth:2027-11-15.1".into());
+    invest(&mut w, "unit-pricing", InvestCommand::ActivateUnitPrice(Box::new(corrected)));
+    let replay = InvestCommand::ReplayOrders {
+        superseded: "growth:2027-11-15.1".into(),
+        limit: 100,
+        materiality_minor: 0,
+    };
+    invest(&mut w, "unit-orders", replay);
+    w.relay();
+    let held = w.row(KIRI, &format!("{pol}/holding/growth")).unwrap();
+    assert!(
+        held["units_micro"].as_i64().unwrap() < 400_000_000,
+        "fewer units at the higher buy price: {held}"
+    );
+}
