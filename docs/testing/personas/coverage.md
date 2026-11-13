@@ -70,20 +70,20 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
-| STF Staff authorisation and permissions | 11 | 5 | 2 | 4 |
+| STF Staff authorisation and permissions | 13 | 3 | 2 | 3 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 17 | 1 | 0 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **311** | **116** | **150** | **116** |
+| **Total** | **313** | **114** | **150** | **115** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 103 | 20 | 19 |
-| C | 177 | 63 | 106 |
+| B | 104 | 19 | 19 |
+| C | 178 | 62 | 106 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -124,7 +124,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
 - **VUL** (5): VUL-002, VUL-003, VUL-005, VUL-007, VUL-008
-- **STF** (3): STF-002, STF-012, STF-018
+- **STF** (2): STF-002, STF-012
 - **CFG** (1): CFG-005
 - **INC** (2): INC-003, INC-009
 - **MIG** (3): MIG-004, MIG-008, MIG-011

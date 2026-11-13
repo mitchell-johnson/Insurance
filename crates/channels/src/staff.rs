@@ -376,6 +376,10 @@ pub struct Mapping {
     /// Grant kinds that come from the external source. The rest are local.
     #[serde(default)]
     pub grants_external: BTreeSet<String>,
+    /// The member of staff who works the alignment report's exceptions,
+    /// such as an entitlement with no mapping. Every mapping names one.
+    #[serde(default)]
+    pub alignment_owner: Option<PartyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,6 +401,9 @@ pub struct Alignment {
     pub templates_without_source: BTreeSet<String>,
     /// People holding a template locally that the source does not grant.
     pub local_only: BTreeSet<(PartyId, String)>,
+    /// Who works these exceptions, as the mapping in force names them.
+    #[serde(default)]
+    pub owner: Option<PartyId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -795,7 +802,9 @@ impl StaffState {
             Some(Denial::Conflict)
         } else if f.is_maker {
             Some(Denial::MakerChecker)
-        } else if req.class == DataClass::Clinical && req.purpose.as_ref().map(|p| p.kind) != Some(PurposeKind::Task) {
+        } else if req.class == DataClass::Clinical
+            && (req.purpose.as_ref().map(|p| p.kind) != Some(PurposeKind::Task) || f.grant.is_some() || req.record.is_none())
+        {
             Some(Denial::Why)
         } else if !req.fresh {
             Some(Denial::Stale)
@@ -837,6 +846,7 @@ impl StaffState {
     pub fn alignment(&self) -> Alignment {
         let mut out = Alignment {
             unmapped: self.unmapped.clone(),
+            owner: self.mapping.as_ref().and_then(|m| m.alignment_owner.clone()),
             ..Alignment::default()
         };
         let Some(mapping) = self.mapping.as_ref().filter(|m| m.templates_external) else {
@@ -1396,6 +1406,17 @@ impl StaffState {
                 {
                     return Err(reject("bad_elevation", format!("elevation {name} maps to no grant kind")));
                 }
+                let owned = mapping
+                    .alignment_owner
+                    .as_ref()
+                    .and_then(|o| self.members.get(o))
+                    .is_some_and(|m| m.ended.is_none());
+                if !owned {
+                    return Err(reject(
+                        "no_alignment_owner",
+                        "a mapping names a member of staff who works the alignment report's exceptions",
+                    ));
+                }
                 self.mapping = Some(mapping);
             }
             StaffCommand::ExternalSync { holdings, full } => {
@@ -1582,6 +1603,8 @@ impl StaffPolicy {
                 "conflict": f.conflict,
                 "is_maker": f.is_maker,
                 "break_glass": f.break_glass,
+                "granted": f.grant.is_some(),
+                "one_record": req.record.is_some(),
                 "decides": req.decides,
                 "fresh": req.fresh,
             }),

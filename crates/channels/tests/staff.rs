@@ -241,8 +241,8 @@ fn the_four_questions_each_deny_on_their_own() {
 }
 
 /// Purpose: data classes limit what a role sees whatever the action, clinical information is
-/// reached only through a task, and stale entitlement data blocks decisions and sensitive reads
-/// while still allowing an ordinary read.
+/// reached only through a task on one record (never an ad hoc search or a bulk export), and stale
+/// entitlement data blocks decisions and sensitive reads while still allowing an ordinary read.
 /// Why it matters: a collections officer must never reach a loading or a diagnosis, and an
 /// assessor must not browse clinical files by ad hoc lookup. If the platform cannot confirm a
 /// person's entitlements are current, the safe failure is to refuse what could do harm.
@@ -268,6 +268,9 @@ fn classes_clinical_purpose_and_freshness() {
         kind: PurposeKind::Task,
         reference: "task-4".into(),
     });
+    // A search or a bulk export names no one record: refused even under a task.
+    assert_eq!(s.authorise(&pol, &clinical).denied, Some(Denial::Why));
+    clinical.record = Some("claim-1".into());
     assert!(s.authorise(&pol, &clinical).allowed);
     clinical.fresh = false;
     assert_eq!(s.authorise(&pol, &clinical).denied, Some(Denial::Stale));
@@ -399,7 +402,8 @@ fn maker_checker_and_separation_of_duties() {
 
 /// Purpose: a cover grant gives the coverer the covered person's queues and not their authority;
 /// a profile uplift raises a limit only to the template's ceiling; both need a second person, end
-/// on their own, and are named on the decisions that relied on them.
+/// on their own, and are named on the decisions that relied on them. Covering never opens the
+/// covered person's clinical information.
 /// Why it matters: leave cover and short staffing are when controls usually get bypassed with
 /// shared logins. Grants make the exception explicit, time-boxed and auditable, and the ceiling
 /// means no approval can hand out more authority than the role was ever meant to carry.
@@ -445,6 +449,17 @@ fn cover_and_uplift_grants() {
     let d = s.authorise(&pol, &on_anas_queue);
     assert!(d.allowed);
     assert_eq!(d.grant.as_deref(), Some("g-cover"));
+    // Covering a colleague's queue never reaches clinical information, even with a task on one record (STF-018).
+    let mut clinical = request("ben", "claim.view_clinical", DataClass::Clinical);
+    clinical.scopes = vec!["queue:claims-life".into()];
+    clinical.record = Some("claim-1".into());
+    clinical.purpose = Some(Purpose {
+        kind: PurposeKind::Task,
+        reference: "task-4".into(),
+    });
+    assert_eq!(s.authorise(&pol, &clinical).denied, Some(Denial::Why));
+    clinical.scopes = vec!["queue:claims-health".into()];
+    assert!(s.authorise(&pol, &clinical).allowed, "on ben's own queue it is his own task");
     // The grant ends on its own.
     on_anas_queue.at = T0 + 7 * DAY;
     assert_eq!(s.authorise(&pol, &on_anas_queue).denied, Some(Denial::Whose));
@@ -1086,11 +1101,13 @@ fn mapping(version: u32) -> Mapping {
         .into(),
         templates_external: true,
         grants_external: set(&["cover"]),
+        alignment_owner: Some(p("sam")),
     }
 }
 
 /// Purpose: with an external identity governance system as the source, role holdings follow what
-/// it says: mapped entitlements become templates, unmapped ones confer nothing and are reported,
+/// it says: mapped entitlements become templates, unmapped ones confer nothing and are reported
+/// with the member of staff the mapping names to work them,
 /// a full reconciliation revokes what the source no longer grants, durations are mirrored, and
 /// local assignment is switched off.
 /// Why it matters: an insurer that already runs an identity governance tool will not maintain
@@ -1127,7 +1144,16 @@ fn external_source_drives_templates() {
         },
     );
     assert_eq!(code(s.apply(&p("alice"), T0, activate(&bad, "sam"))), "bad_elevation");
+    // Every exception the report lists has someone to work it: a mapping names a current member of staff.
+    for owner in [None, Some(p("nobody"))] {
+        let unowned = Mapping {
+            alignment_owner: owner,
+            ..m.clone()
+        };
+        assert_eq!(code(s.apply(&p("alice"), T0, activate(&unowned, "sam"))), "no_alignment_owner");
+    }
     s.apply(&p("alice"), T0, activate(&m, "sam")).unwrap();
+    assert_eq!(s.alignment().owner, Some(p("sam")));
 
     // Templates now come from the source.
     assert_eq!(
