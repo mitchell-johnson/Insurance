@@ -42,10 +42,13 @@ RUNNERS=(
 # take turns rather than corrupt it.
 SHARED_TARGET=insurance-ci-target
 
-# A login agent that opens Docker Desktop, so the runners come back after a
-# reboot even if Docker's own "start when you sign in" setting is off.
+# A login agent that opens Docker Desktop at login, so the runners come back
+# after a reboot, and every five minutes restarts it if its engine has been
+# down for ten (docker-watchdog.sh). The script is copied to the internal
+# disk, because launchd jobs may not read this clone if it is elsewhere.
 AGENT_LABEL=fyi.johnson.docker-desktop
 AGENT=$HOME/Library/LaunchAgents/$AGENT_LABEL.plist
+WATCHDOG=$HOME/Library/Application\ Support/insurance-ci/docker-watchdog.sh
 
 registered() { docker run --rm -v "$1:/data" --entrypoint test "$IMAGE" -f /data/state/.runner; }
 
@@ -69,7 +72,8 @@ start() {
 }
 
 install_agent() {
-  [[ -f $AGENT ]] && return
+  mkdir -p "$(dirname "$WATCHDOG")"
+  install -m 0755 docker-watchdog.sh "$WATCHDOG"
   cat >"$AGENT" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -77,12 +81,14 @@ install_agent() {
 <dict>
   <key>Label</key><string>$AGENT_LABEL</string>
   <key>ProgramArguments</key>
-  <array><string>/usr/bin/open</string><string>-g</string><string>-a</string><string>Docker</string></array>
+  <array><string>/bin/bash</string><string>$WATCHDOG</string></array>
   <key>RunAtLoad</key><true/>
+  <key>StartInterval</key><integer>300</integer>
 </dict>
 </plist>
 EOF
-  launchctl bootstrap "gui/$(id -u)" "$AGENT" 2>/dev/null || true
+  launchctl bootout "gui/$(id -u)/$AGENT_LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$AGENT"
   echo "installed $AGENT"
 }
 
