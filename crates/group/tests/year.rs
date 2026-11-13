@@ -277,3 +277,34 @@ fn a_pool_scheme_is_run_on_declarations() {
     assert_eq!(code(declare(&mut h, "seed", "staff", today, 43, 2_600_000_00)), "scheme_ending");
     assert_eq!(pool(&h, "pool:seed"), Some((42, 2_500_000_00)));
 }
+
+/// Purpose: a pool scheme whose declaration is overdue has its renewal held: terms cannot
+/// be agreed while the timer's exception is open, and can be once the declaration is in.
+/// Why it matters: a pool is priced on the headcount and salaries it declares. Agreeing a
+/// year's rates on a declaration that never came prices the scheme on last year's numbers,
+/// and the insurer has given away its only lever to get the figures.
+#[test]
+fn a_pools_renewal_waits_for_an_overdue_declaration() {
+    let mut t = short_year();
+    t.basis = MemberBasis::Pool;
+    let mut h = Harness::new(t.clone());
+    go_to(&mut h, d(2028, 1, 2));
+    assert!(h.scheme().renewal.is_some());
+    assert!(h.g.exceptions.values().any(|e| e.kind == ExceptionKind::DeclarationOverdue));
+    let next = next_year(&t);
+    assert_eq!(code(agree(&mut h, next.clone())), "declaration_overdue");
+    assert!(h.scheme().renewal.as_ref().unwrap().agreed.is_none());
+
+    let today = h.today();
+    h.employer(GroupCommand::DeclarePool {
+        scheme: SCHEME.into(),
+        pool: "seed".into(),
+        category: "staff".into(),
+        effective: today,
+        headcount: 40,
+        total_salary_minor: 2_400_000_00,
+    })
+    .unwrap();
+    agree(&mut h, next).unwrap();
+    assert!(h.saw(|e| matches!(e, GroupEvent::RenewalAgreed { .. })));
+}

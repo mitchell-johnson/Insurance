@@ -56,11 +56,11 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 7 | 10 | 2 | 7 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 22 | 7 | 1 | 5 |
+| UW Underwriting, underwriting operations and delegated authority | 23 | 6 | 1 | 4 |
 | CLM Claims and claims operations | 29 | 9 | 4 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
-| GRP Group scheme administration | 23 | 8 | 9 | 3 |
+| GRP Group scheme administration | 24 | 7 | 9 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 43 | 2 | 0 | 2 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **295** | **125** | **157** | **120** |
+| **Total** | **297** | **123** | **157** | **119** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 96 | 26 | 20 |
-| C | 168 | 66 | 112 |
+| B | 97 | 25 | 20 |
+| C | 169 | 65 | 112 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -115,7 +115,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **XFR** (1): XFR-004
 - **AUD** (6): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
-- **UW** (4): UW-003, UW-006, UW-014, UW-029
+- **UW** (3): UW-006, UW-014, UW-029
 - **CLM** (7): CLM-002, CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028

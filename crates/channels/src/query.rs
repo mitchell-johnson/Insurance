@@ -79,6 +79,13 @@ pub enum Question {
         at: At,
     },
     /// An adviser's engagements, standing and book.
+    /// What an advice provider or a group sees: each adviser engaged under
+    /// it today, their standing, and the policies they service, each as
+    /// that adviser sees it. Never a policy's health facts or a claim.
+    Practice {
+        party: PartyId,
+        at: At,
+    },
     Book {
         adviser: PartyId,
         at: At,
@@ -349,6 +356,32 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "fresh": is_fresh,
                 "rows": rows.into_iter().map(|r| json!({ "key": r.key, "kind": r.kind, "subject": r.subject, "body": r.body })).collect::<Vec<_>>(),
             })
+        }
+        Question::Practice { party, at } => {
+            let on = state.today(at);
+            let advisers: Vec<Value> = d
+                .directory
+                .practice(&party, on)
+                .into_iter()
+                .map(|e| {
+                    let policies: Vec<Value> = d
+                        .directory
+                        .policies_of(e)
+                        .into_iter()
+                        .filter_map(|policy| policy_summary(state, &e.adviser, policy, at))
+                        .collect();
+                    json!({
+                        "engagement": e.id,
+                        "adviser": e.adviser,
+                        "fap": e.fap,
+                        "from": e.from,
+                        "standing": standing_json(&d.directory.standing(&e.id, on)),
+                        "policies": policies,
+                    })
+                })
+                .collect();
+            let policies: usize = advisers.iter().map(|a| a["policies"].as_array().map_or(0, Vec::len)).sum();
+            json!({ "party": party, "advisers": advisers, "policies": policies })
         }
         Question::Book { adviser, at } => {
             let on = state.today(at);
