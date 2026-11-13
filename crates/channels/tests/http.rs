@@ -2852,7 +2852,8 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
 }
 
 /// Purpose: at handover between scheme administrators, the joiner is added by the leaver and sees the scheme at once; the joiner then
-/// removes the leaver, who loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
+/// removes the leaver, which itself tells the host to re-check the leaver's sessions now (the priority revocation), and the
+/// leaver loses the scheme straight away; the identity service closes the leaver's sessions, after which a token issued
 /// before then is refused; and the last administrator cannot be removed by the scheme's own administrators.
 /// Why it matters: an administrator who has left must not keep seeing member data or make changes through a session still open, and
 /// the scheme must never be left with nobody to run it.
@@ -2868,7 +2869,25 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(admin("sub-hr", "hr-2", true).await.0, StatusCode::OK);
     assert_eq!(portal.get("sub-hr2", "/employer/v1/schemes").await.1.as_array().unwrap().len(), 1);
-    assert_eq!(admin("sub-hr2", "hr-1", false).await.0, StatusCode::OK);
+    // The joiner removes the leaver; the removal itself tells the host to re-check the leaver's sessions now.
+    let now = portal.now();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let output = state.apply(
+            10_000,
+            ic_channels::Envelope {
+                key: "hr-1-leaves".into(),
+                at: now,
+                actor: party("hr-2"),
+                command: Command::Directory(DirectoryCommand::SetEmployerAdmin {
+                    policy: scheme.clone(),
+                    party: p("hr-1"),
+                    admin: false,
+                }),
+            },
+        );
+        assert!(output.result.unwrap().contains(&ic_channels::Effect::Revoked { party: p("hr-1") }));
+    });
     assert_eq!(portal.get("sub-hr", "/employer/v1/schemes").await.1, json!([]));
     assert_eq!(portal.get("sub-hr", &format!("/app/v1/policies/{scheme}")).await.0, StatusCode::NOT_FOUND);
     // The leaver can no longer act on the scheme, and the joiner cannot leave it with nobody.
@@ -2877,7 +2896,6 @@ async fn an_employer_administrator_hands_over_at_noon() {
     assert_eq!((status, problem["title"].as_str()), (StatusCode::UNPROCESSABLE_ENTITY, Some("last_admin")));
 
     // The priority revocation: the leaver's sessions are closed, and an earlier token is refused.
-    let now = portal.now();
     portal.local.with(|state| {
         use ic_log::StateMachine;
         let output = state.apply(
@@ -3780,4 +3798,66 @@ async fn an_adviser_and_their_group_read_their_own_statements() {
     // The payee is always the person signed in: there is no way to ask for another's.
     assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/2").await.0, StatusCode::NOT_FOUND);
     assert_eq!(portal.get("sub-adv", "/adviser/v1/statements/x").await.0, StatusCode::BAD_REQUEST);
+}
+
+/// Purpose: what a write answers says only what concerns the person who wrote: their own feed's new version (so the app syncs to
+/// at least that and reads its own write) and nothing about anyone else on the policy, such as a relative whose feed also moved.
+/// Why it matters: a write's answer that listed every feed it moved would tell one person who else can see the policy; without
+/// the version the app could show a stale screen straight after the customer's own change.
+#[tokio::test]
+async fn a_write_answers_with_the_writers_own_version_and_nobody_elses() {
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let viewer = format!("/app/v1/policies/{policy}/delegates/daughter");
+    assert_eq!(portal.write("PUT", "sub-kiri", &viewer, json!({ "access": "viewer" })).await.0, StatusCode::OK);
+    let version_of = |who: &str| portal.local.with(|s| s.data.feeds.get(&ic_core::PartyId::from(who)).map(|f| f.version));
+    let before = version_of("daughter").expect("the relative follows the policy");
+
+    // Kiri declines indexation in the app; the policy's rows move for her and for her daughter.
+    let request = json!({ "id": "r9", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, answer) = portal.write("POST", "sub-kiri", "/app/v1/requests", request).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{answer}");
+    let version = answer["version"].as_u64().expect("the writer's own version");
+    assert_eq!(Some(version), version_of(KIRI));
+    assert!(version_of("daughter") > Some(before), "the daughter's feed moved too");
+    assert!(!answer.to_string().contains("daughter"), "and Kiri's answer does not say so: {answer}");
+    // Syncing from just before that version brings her request.
+    let changes = portal
+        .local
+        .with(|s| serde_json::to_value(s.data.feeds[&ic_core::PartyId::from(KIRI)].sync(Some(version - 1))).unwrap());
+    assert!(changes.to_string().contains("request/r9"), "{changes}");
+}
+
+/// Purpose: the connection drops after the app submits and before the outcome: the request shows as pending, the app's retry with
+/// the same idempotency key creates nothing new and says it is a repeat, and the outcome appears on the request when the owning
+/// module reports it (AUD-008).
+/// Why it matters: people on a train lose signal mid-change all the time; a retry that made a second cancellation or a second
+/// payment change, or a screen stuck without the outcome, is exactly the failure the asynchronous contract exists to prevent.
+#[tokio::test]
+async fn a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows() {
+    let portal = portal();
+    let keyed = [("x-dev-subject", "sub-kiri".to_string()), ("idempotency-key", "phone-1".to_string())];
+    let request = json!({ "id": "r7", "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, first) = portal.send("POST", "/app/v1/requests", &keyed, Some(request.clone())).await;
+    assert_eq!((status, &first["duplicate"]), (StatusCode::ACCEPTED, &json!(false)));
+    // The answer never reached the phone; it sends the same again.
+    let (status, again) = portal.send("POST", "/app/v1/requests", &keyed, Some(request)).await;
+    assert_eq!((status, &again["duplicate"]), (StatusCode::ACCEPTED, &json!(true)));
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let mine: Vec<&Value> = mine.as_array().unwrap().iter().filter(|r| r["id"] == "r7").collect();
+    assert_eq!((mine.len(), &mine[0]["status"]), (1, &json!("pending")));
+
+    // The owning module reports the outcome; the request shows it.
+    let module = [
+        ("x-dev-subject", "svc".to_string()),
+        ("x-dev-roles", "policy-servicing".to_string()),
+        ("x-module", "policy-servicing".to_string()),
+        ("idempotency-key", "done-r7".to_string()),
+    ];
+    let resolve = json!({ "resolve_request": { "id": "r7", "reference": "chg-1", "rejected": null } });
+    let (status, done) = portal.send("POST", "/internal/v1/commands", &module, Some(resolve)).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let r7 = mine.as_array().unwrap().iter().find(|r| r["id"] == "r7").unwrap().clone();
+    assert_eq!((&r7["status"], &r7["reference"]), (&json!("applied"), &json!("chg-1")), "{r7}");
 }

@@ -45,7 +45,7 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `POST`, `DELETE /app/v1/policies/{policy}/advisers` | Appoint or remove an adviser. Removal takes effect at once. |
 | `PUT /app/v1/policies/{policy}/delegates/{party}` | Let someone look (`viewer`, `financial` or `support`), change it, or end it with `null`. |
 | `PUT /app/v1/policies/{policy}/consent` | An adult on a family policy lets the policyholder see their sensitive rows, or stops it. |
-| `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. |
+| `GET`, `POST /app/v1/requests`, `DELETE /app/v1/requests/{id}`, `POST /app/v1/requests/{id}/approve` | Ask for a change, withdraw it, approve one prepared for you. Every write answers `202` with `version`, your own feed's position once it is recorded: sync until you hold at least that and you read your own write. The answer never names anyone else whose view moved with it. |
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
 | `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |

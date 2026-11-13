@@ -129,17 +129,17 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
-| AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
+| AUD-008 | full | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe`<br>`channels/tests/http.rs::a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
 | AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
-| AUD-013 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
+| AUD-013 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 | AUD-014 | full | `documents/tests/channels.rs::sms_carries_a_pointer_and_asks_for_a_report` |
-| AUD-015 | part | `channels/tests/feed.rs::snapshot_then_changes` |
+| AUD-015 | full | `channels/tests/feed.rs::snapshot_then_changes`<br>`channels/tests/journeys.rs::a_receipt_moves_the_billing_row_while_the_app_is_open`<br>`channels/tests/http.rs::a_write_answers_with_the_writers_own_version_and_nobody_elses` |
 | AUD-016 | full | `channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload` |
 | AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point` |
-| AUD-019 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
+| AUD-019 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 
 ## RES Resilience, capacity and scale
 
@@ -304,7 +304,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-026 | full | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations`<br>`group/tests/year.rs::a_pools_renewal_waits_for_an_overdue_declaration` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
-| GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
+| GRP-028 | full | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
 | GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send`<br>`group/tests/excess.rs::the_employers_view_of_a_member_shows_cover_and_never_health` |
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
