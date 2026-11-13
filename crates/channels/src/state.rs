@@ -59,6 +59,10 @@ pub enum Approver {
 
 /// Staff actions and the authority limit for changes staff enter for a
 /// customer who rang (SVC-018).
+/// Requests either owner of a jointly owned policy makes alone. Anything
+/// else on such a policy waits until every owner has signed it.
+pub const EITHER_OWNER: &[&str] = &["notify_claim", "update_contact_details"];
+
 pub mod assisted {
     /// Enter a change for a customer, for them to approve in the app.
     pub const ENTER: &str = "service.enter_change";
@@ -123,6 +127,10 @@ pub struct Request {
     pub status: RequestStatus,
     /// Who approved it, where it needed approval.
     pub approved_by: Option<PartyId>,
+    /// On a policy owned jointly, the owners who have signed it so far. It
+    /// goes ahead once every owner has.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub signed_by: BTreeSet<PartyId>,
     /// The customer master says this person's requests go to a person
     /// first (a vulnerability marker). The marker itself is never here.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -219,7 +227,9 @@ pub enum Effect {
     ControlPassed {
         policy: PolicyId,
         party: PartyId,
-        policyholder: Option<PartyId>,
+        /// Every owner, each of whom is told.
+        #[serde(default)]
+        policyholders: BTreeSet<PartyId>,
     },
     /// A request is ready for its owning module.
     RequestReady {
@@ -568,8 +578,8 @@ impl ChannelState {
         let mut now = self.data.directory.feed_audience(&self.data.view, policy);
         // An employer's scheme is served by the portal, not by a device feed.
         if self.data.directory.scheme_members.contains_key(policy) {
-            if let Some(holder) = self.data.directory.policyholders.get(policy) {
-                now.remove(holder);
+            for holder in self.data.directory.owners(policy) {
+                now.remove(&holder);
             }
         }
         let before = self.data.audiences.get(policy).cloned().unwrap_or_default();
@@ -827,8 +837,17 @@ impl ChannelState {
                     // The same answer as for a policy that does not exist.
                     return Err(reject("not_found", "no such policy"));
                 }
+                let owners = d.directory.owners(policy);
                 if relationships.contains(&Relationship::Policyholder) {
-                    RequestStatus::Pending
+                    if owners.len() > 1 && !EITHER_OWNER.contains(&request.kind.as_str()) {
+                        // Owned jointly: every owner signs, this one first if they did.
+                        if request.signed {
+                            request.signed_by.insert(party.clone());
+                        }
+                        RequestStatus::AwaitingApproval { from: Approver::Customer }
+                    } else {
+                        RequestStatus::Pending
+                    }
                 } else if relationships.contains(&Relationship::EmployerAdmin) {
                     if d.directory.second_admin.get(policy).is_some_and(|kinds| kinds.contains(&request.kind)) {
                         RequestStatus::AwaitingApproval {
@@ -889,7 +908,7 @@ impl ChannelState {
                 if let Some(was) = was.filter(|was| *was < on) {
                     for (policy, party) in self.data.directory.came_of_age(was, on) {
                         effects.push(Effect::ControlPassed {
-                            policyholder: self.data.directory.policyholders.get(&policy).cloned(),
+                            policyholders: self.data.directory.owners(&policy),
                             policy: policy.clone(),
                             party,
                         });
@@ -1042,6 +1061,7 @@ impl ChannelState {
                         submitted: at,
                         status: RequestStatus::Pending,
                         approved_by: None,
+                        signed_by: BTreeSet::new(),
                         route_to_person,
                         assisted,
                     },
@@ -1105,18 +1125,31 @@ impl ChannelState {
                 if from == Approver::Customer && !signed {
                     return Err(reject("step_up_required", "approving this needs your device's signature"));
                 }
-                let module = request.module.clone();
-                if let Some(r) = self.data.requests.get_mut(&id) {
-                    r.status = RequestStatus::Pending;
-                    r.approved_by = Some(party.clone());
-                    r.signed = signed;
-                    // The customer's own circumstances decide how it is handled;
-                    // a second administrator's do not, the scheme is the employer's.
-                    if from == Approver::Customer {
-                        r.route_to_person |= route_to_person;
+                let mut signed_by = request.signed_by.clone();
+                if from == Approver::Customer {
+                    // Every owner signs; on a policy with one owner, that is this one.
+                    if !signed_by.insert(party.clone()) {
+                        return Err(reject("already_signed", "you have signed this; it waits for the other owners"));
                     }
                 }
-                effects.push(Effect::RequestReady { id, module });
+                let complete = from != Approver::Customer || self.data.directory.owners(&policy).is_subset(&signed_by);
+                let module = request.module.clone();
+                if let Some(r) = self.data.requests.get_mut(&id) {
+                    if from == Approver::Customer {
+                        r.signed_by = signed_by;
+                        // The customer's own circumstances decide how it is handled;
+                        // a second administrator's do not, the scheme is the employer's.
+                        r.route_to_person |= route_to_person;
+                    }
+                    if complete {
+                        r.status = RequestStatus::Pending;
+                        r.approved_by = Some(party.clone());
+                        r.signed = signed;
+                    }
+                }
+                if complete {
+                    effects.push(Effect::RequestReady { id, module });
+                }
                 self.refresh(&policy, on, None, &mut effects);
             }
             Command::CancelRequest { id } => {
@@ -1125,7 +1158,7 @@ impl ChannelState {
                 let by_owner = request.policy.as_ref().is_some_and(|policy| {
                     actor
                         .party()
-                        .is_some_and(|p| matches!(actor, Actor::Party(_)) && self.data.directory.policyholders.get(policy) == Some(p))
+                        .is_some_and(|p| matches!(actor, Actor::Party(_)) && self.data.directory.owns(policy, p))
                 });
                 if !by_requester && !by_owner {
                     return Err(reject("not_found", "no such request"));

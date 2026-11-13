@@ -416,7 +416,7 @@ fn a_childs_health_information_becomes_their_own() {
     assert!(effects.contains(&Effect::ControlPassed {
         policy: pol.clone(),
         party: p(child),
-        policyholder: Some(p(holder)),
+        policyholders: [p(holder)].into(),
     }));
     assert_eq!(w.last_op(holder, &claim), Some(Op::Purge));
     assert!(w.held(child).contains(&claim), "it is still theirs");
@@ -556,15 +556,16 @@ fn people_the_policyholder_lets_in() {
     assert!(w.held("daughter").is_empty() && w.sees("daughter", &pol).is_empty());
 
     // The policy changes hands: everyone the old owner let in is out.
-    let effects = w
-        .dir(
-            module("customer-master"),
-            DirectoryCommand::RecordOwnership {
-                policy: pol.clone(),
-                policyholder: p("new-owner"),
-            },
-        )
-        .unwrap();
+    let to_new = DirectoryCommand::RecordOwnership {
+        policy: pol.clone(),
+        policyholder: p("new-owner"),
+    };
+    w.dir(module("customer-master"), to_new).unwrap();
+    let end = DirectoryCommand::EndOwnership {
+        policy: pol.clone(),
+        party: p(KIRI),
+    };
+    let effects = w.dir(module("customer-master"), end).unwrap();
     assert!(revoked(&effects).contains("moko") && revoked(&effects).contains("accountant"));
     assert!(w.sees("moko", &pol).is_empty() && w.held("accountant").is_empty());
 }
@@ -1155,7 +1156,14 @@ fn ownership_change_and_assignment() {
         code(w.dir(module("customer-master"), own(&PolicyId::from("nope"), "trust-1"))),
         "unknown_policy"
     );
+    // The master records the new owner and ends the old one, in either order.
     let effects = w.dir(module("customer-master"), own(&pol, "trust-1")).unwrap();
+    assert!(revoked(&effects).is_empty(), "nobody loses anything until Kiri's ownership ends");
+    let end = DirectoryCommand::EndOwnership {
+        policy: pol.clone(),
+        party: p(KIRI),
+    };
+    let effects = w.dir(module("customer-master"), end).unwrap();
     assert_eq!(revoked(&effects), [KIRI.to_string(), "adv-1".to_string()].into());
     assert!(w.sees("adv-1", &pol).is_empty());
     assert!(w.ch.data.directory.adviser_policies[&p("adv-1")].is_empty());
@@ -1170,6 +1178,83 @@ fn ownership_change_and_assignment() {
     assert!(w.held("bank-1").is_empty());
     assert_eq!(w.last_op("bank-1", &format!("{pol}/policy")), Some(Op::Purge));
     assert_eq!(w.ch.data.audiences[&pol], [p(KIRI), p("trust-1")].into());
+}
+
+/// Purpose: a policy owned jointly is a policyholder's for each owner; a change one owner asks for waits until every owner has
+/// signed it on their own device, and nobody signs twice; a claim either owner may notify alone; when the buyer becomes owner
+/// and the sellers' ownership ends, the buyer's own request goes ahead on their signature alone, and an adviser one seller
+/// authorised loses access when that seller leaves while the other seller's stays until they leave too.
+/// Why it matters: persona row JNT-013. Two partners own a key person policy; a transfer one of them signs alone would hand
+/// the policy away without the other's consent, and the customer master records joint owners one at a time, so the second
+/// must never quietly replace the first.
+#[test]
+fn every_joint_owner_signs_and_ownership_passes_to_the_buyer() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let own = |to: &str| DirectoryCommand::RecordOwnership {
+        policy: pol.clone(),
+        policyholder: p(to),
+    };
+    let end = |who: &str| DirectoryCommand::EndOwnership {
+        policy: pol.clone(),
+        party: p(who),
+    };
+    w.dir(module("customer-master"), own("partner-2")).unwrap();
+    assert_eq!(
+        w.ch.data.directory.owners(&pol),
+        [p(KIRI), p("partner-2")].into(),
+        "the second owner joins the first"
+    );
+    let on = w.ch.today(w.at);
+    let relationship = |w: &World, who: &str| w.ch.data.directory.relationships(&w.ch.data.view, &p(who), &pol, on);
+    assert!(relationship(&w, "partner-2").contains(&Relationship::Policyholder));
+    w.engage("e1", "adv-1", "fap-1", None).unwrap();
+    w.engage("e2", "adv-2", "fap-1", None).unwrap();
+    for (owner, adviser, engagement) in [(KIRI, "adv-1", "e1"), ("partner-2", "adv-2", "e2")] {
+        let grant = DirectoryCommand::GrantAdviserAuthority {
+            policy: pol.clone(),
+            adviser: p(adviser),
+            engagement: engagement.into(),
+        };
+        w.dir(party(owner), grant).unwrap();
+    }
+
+    // The transfer waits for both owners' signatures.
+    let mut transfer = submit("r-sell", Some(&pol), "transfer_ownership", "policy-servicing");
+    if let Command::SubmitRequest { signed, .. } = &mut transfer {
+        *signed = true;
+    }
+    w.send(party(KIRI), transfer).unwrap();
+    let status = |w: &World| w.ch.data.requests["r-sell"].status.clone();
+    assert_eq!(status(&w), RequestStatus::AwaitingApproval { from: Approver::Customer });
+    assert_eq!(w.ch.data.requests["r-sell"].signed_by, [p(KIRI)].into());
+    let approve = |signed| Command::ApproveRequest {
+        id: "r-sell".into(),
+        signed,
+        route_to_person: false,
+    };
+    assert_eq!(code(w.send(party(KIRI), approve(true))), "already_signed");
+    assert_eq!(code(w.send(party("partner-2"), approve(false))), "step_up_required");
+    assert_eq!(code(w.send(party("stranger"), approve(true))), "not_found");
+    let effects = w.send(party("partner-2"), approve(true)).unwrap();
+    assert!(effects.iter().any(|e| matches!(e, Effect::RequestReady { id, .. } if id == "r-sell")));
+    assert_eq!(status(&w), RequestStatus::Pending);
+
+    // A claim either owner notifies alone.
+    w.send(party("partner-2"), submit("r-claim", Some(&pol), "notify_claim", "claims")).unwrap();
+    assert_eq!(w.ch.data.requests["r-claim"].status, RequestStatus::Pending);
+
+    // The buyer becomes owner; the sellers leave one at a time.
+    w.dir(module("customer-master"), own("buyer")).unwrap();
+    let effects = w.dir(module("customer-master"), end(KIRI)).unwrap();
+    assert_eq!(revoked(&effects), [KIRI.to_string(), "adv-1".to_string()].into(), "her adviser goes with her");
+    assert!(w.sees("adv-2", &pol).len() > 1, "the adviser the other seller authorised stays for now");
+    let effects = w.dir(module("customer-master"), end("partner-2")).unwrap();
+    assert_eq!(revoked(&effects), ["partner-2".to_string(), "adv-2".to_string()].into());
+    assert_eq!(w.ch.data.directory.owners(&pol), [p("buyer")].into());
+    w.send(party("buyer"), submit("r-own", Some(&pol), "change_frequency", "policy-servicing"))
+        .unwrap();
+    assert_eq!(w.ch.data.requests["r-own"].status, RequestStatus::Pending, "one owner, nobody else to sign");
 }
 
 /// Purpose: a sign-in subject is bound to one party by the identity service, and unbinding closes that party's sessions.
@@ -1638,7 +1723,7 @@ fn an_owner_or_a_dependant_ending_in_the_customer_master() {
     assert_eq!(code(w.dir(party(KIRI), end(KIRI))), "forbidden");
     // Someone who is not the owner: nothing changes.
     assert!(revoked(&w.dir(module("customer-master"), end("trust-1")).unwrap()).is_empty());
-    assert_eq!(w.ch.data.directory.policyholders.get(&pol), Some(&p(KIRI)));
+    assert_eq!(w.ch.data.directory.owners(&pol), [p(KIRI)].into());
 
     let effects = w.dir(module("customer-master"), end(KIRI)).unwrap();
     assert_eq!(revoked(&effects), [KIRI.to_string(), "adv-1".to_string()].into());

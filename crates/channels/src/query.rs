@@ -220,7 +220,7 @@ fn standing_json(standing: &AdviserStanding) -> Value {
 fn related(state: &ChannelState, party: &PartyId) -> BTreeSet<PolicyId> {
     let d = &state.data;
     let mut out: BTreeSet<PolicyId> = d.audiences.iter().filter(|(_, a)| a.contains(party)).map(|(p, _)| p.clone()).collect();
-    out.extend(d.directory.policyholders.iter().filter(|(_, h)| *h == party).map(|(p, _)| p.clone()));
+    out.extend(d.directory.policyholders.iter().filter(|(_, h)| h.contains(party)).map(|(p, _)| p.clone()));
     out.extend(d.directory.adviser_policies.get(party).into_iter().flatten().cloned());
     out.extend(d.directory.admin_policies.get(party).into_iter().flatten().cloned());
     out
@@ -494,19 +494,36 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             let sensitive = decision.classes.contains(&DataClass::InsuranceSensitive);
             let rows = state.rows(&policy, state.today(at), None);
             let withheld = rows.values().filter(|r| r.sensitive && !sensitive).count();
-            json!({
-                "request": request,
-                "decision": decision,
-                "found": state.data.view.policy(&policy).is_some(),
-                "rows": rows.values().filter(|r| !r.sensitive || sensitive)
-                    .map(|r| json!({ "key": r.key, "kind": r.kind, "subject": r.subject, "sensitive": r.sensitive, "body": r.body })).collect::<Vec<_>>(),
+            let shown: Vec<Value> = rows
+                .values()
+                .filter(|r| !r.sensitive || sensitive)
+                .map(|r| json!({ "key": r.key, "kind": r.kind, "subject": r.subject, "sensitive": r.sensitive, "body": r.body }))
+                .collect();
+            let advisers: Vec<Value> = d
+                .directory
+                .advisers_on(&policy, state.today(at))
+                .into_iter()
+                .map(|(adviser, standing)| json!({ "adviser": adviser, "standing": standing_json(&standing) }))
+                .collect();
+            // Every field is added with its class: a field with none does not compile.
+            let mut held = decision.classes.clone();
+            held.insert(DataClass::Ordinary);
+            crate::classes::Shaper::new(&held)
+                .field("request", DataClass::Ordinary, &request)
+                .field("decision", DataClass::Ordinary, &decision)
+                .field("found", DataClass::Ordinary, state.data.view.policy(&policy).is_some())
+                // Rows about the policy and its people; health-implying rows are kept to those holding that class above.
+                .field("rows", DataClass::Personal, shown)
                 // The person is told that something was withheld, never what.
-                "withheld": withheld,
-                "advisers": d.directory.advisers_on(&policy, state.today(at)).into_iter()
-                    .map(|(adviser, standing)| json!({ "adviser": adviser, "standing": standing_json(&standing) })).collect::<Vec<_>>(),
-                "policyholder": d.directory.policyholders.get(&policy),
-                "may_see_kind": d.staff.holds_action(&staff, crate::staff::actions::VULNERABILITY_KIND, at),
-            })
+                .field("withheld", DataClass::Ordinary, withheld)
+                .field("advisers", DataClass::Personal, advisers)
+                .field("policyholders", DataClass::Personal, d.directory.owners(&policy))
+                .field(
+                    "may_see_kind",
+                    DataClass::Ordinary,
+                    d.staff.holds_action(&staff, crate::staff::actions::VULNERABILITY_KIND, at),
+                )
+                .finish()
         }
         Question::StaffAdmin { staff, at } => {
             if !d.staff.holds_action(&staff, crate::staff::actions::MANAGE_STAFF, at) && !d.staff.holds_action(&staff, crate::staff::actions::APPROVE_GRANT, at)

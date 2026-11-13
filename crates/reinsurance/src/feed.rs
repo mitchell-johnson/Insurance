@@ -4,6 +4,8 @@
 //! once. Nothing here depends on how the partitions' streams interleave: the
 //! cession calculation orders covers by their own dates.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use ic_core::event::{Event, EventRecord, LayerInfo, LifeInfo, MemberCover};
 use ic_core::{PolicyId, PolicyStatus};
@@ -173,6 +175,82 @@ impl Reinsurance {
                 references.join(", ")
             );
             self.set_exception(ctx, format!("facultative_terms_altered:{key}"), "facultative_terms_altered", Some(detail));
+        }
+    }
+
+    /// Members moved to a new scheme split from theirs. The move is neither
+    /// an exit nor new business: each of their covers on the old scheme ends
+    /// on the day and carries on under the new scheme from it, on the same
+    /// treaty version, with the same facultative placement, amount and
+    /// place in the life's retention order, as a rewritten layer does. The
+    /// new scheme takes the old one's terms until group sets its own.
+    #[allow(clippy::too_many_arguments)]
+    fn split_scheme(
+        &mut self,
+        ctx: &mut Ctx,
+        partition: PartitionId,
+        policy: &PolicyId,
+        new_policy: &PolicyId,
+        new_number: String,
+        lives: &[ic_core::LifeId],
+        effective: NaiveDate,
+    ) {
+        let Some(old) = self.policies.get(policy).cloned() else { return };
+        let moved: BTreeMap<_, _> = old
+            .lives
+            .iter()
+            .filter(|(l, _)| lives.contains(l))
+            .map(|(l, p)| (l.clone(), p.clone()))
+            .collect();
+        let info = self.policies.entry(new_policy.clone()).or_insert_with(|| PolicyInfo {
+            number: new_number,
+            partition,
+            lives: BTreeMap::new(),
+            ..old.clone()
+        });
+        info.lives.extend(moved);
+        if let Some(terms) = self.schemes.get(policy).cloned() {
+            self.schemes.entry(new_policy.clone()).or_insert(terms);
+        }
+        for life in lives {
+            if let Some(f) = self.factors.get(&(policy.clone(), life.clone())).cloned() {
+                self.factors.insert((new_policy.clone(), life.clone()), f);
+            }
+            if let Some(p) = self.possible.get(&(policy.clone(), life.clone())).cloned() {
+                self.possible.insert((new_policy.clone(), life.clone()), p);
+            }
+        }
+        let keys: Vec<RiskKey> = self.policy_risks(policy).into_iter().filter(|k| lives.contains(&k.life)).collect();
+        for key in keys {
+            let Some(was) = self.risk(&key).cloned() else { continue };
+            if was.end.is_some_and(|e| e <= effective) {
+                continue;
+            }
+            let start = effective.max(was.start);
+            let mut risk = was.clone();
+            risk.key = RiskKey {
+                policy: new_policy.clone(),
+                ..key.clone()
+            };
+            risk.partition = partition;
+            risk.start = start;
+            risk.amounts = std::iter::once((start, was.amount_on(start)))
+                .chain(was.amounts.iter().filter(|(d, _)| *d > start).cloned())
+                .collect();
+            risk.treaties = std::iter::once((start, was.treaty_on(start).cloned()))
+                .chain(was.treaties.iter().filter(|(d, _)| *d > start).cloned())
+                .collect();
+            risk.suspensions = was
+                .suspensions
+                .iter()
+                .filter(|(_, until)| until.is_none_or(|u| u > start))
+                .map(|(from, until)| ((*from).max(start), *until))
+                .collect();
+            risk.continues = Some(was.continues.clone().unwrap_or((was.start, key.clone())));
+            if let Some(old_risk) = self.risk_mut(ctx, &key) {
+                end_risk(old_risk, effective);
+            }
+            self.put_risk(ctx, risk);
         }
     }
 
@@ -378,6 +456,14 @@ impl Reinsurance {
             // discount on it: the gross change is added to the billed period
             // the change takes effect in, shared across its cover types, so a
             // treaty on original premium cedes from it.
+            Event::SchemeSplit {
+                policy,
+                new_policy,
+                new_number,
+                lives,
+                effective,
+                ..
+            } => self.split_scheme(ctx, partition, &policy, &new_policy, new_number, &lives, effective),
             Event::PremiumAdjusted {
                 policy,
                 effective,
