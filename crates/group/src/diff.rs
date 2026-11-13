@@ -93,12 +93,13 @@ impl DiffContext<'_> {
         if self.terms.basis == MemberBasis::Named && row.fingerprint.is_none() {
             return Err(("missing_value", "name"));
         }
-        // Someone coming back served their waiting period long ago: without
-        // a stated date they rejoin from the file's date, not from the day
-        // that first waiting period ended.
+        // Someone coming back without a stated date rejoins from the file's
+        // date, not from the day their first waiting period ended long ago.
+        // If the employer gives a new employment start (a seasonal worker
+        // hired again), the waiting period runs again from it.
         let rejoining = view.has_left(&row.employee_id);
         let effective = if rejoining && row.effective.is_none() {
-            self.file_date
+            self.join_date(row).max(self.file_date)
         } else {
             self.join_date(row)
         };
