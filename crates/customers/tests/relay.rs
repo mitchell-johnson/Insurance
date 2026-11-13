@@ -96,6 +96,25 @@ async fn a_death_is_accepted_on_every_partition_of_a_real_node() {
         active: true,
     };
     assert_eq!(relay::Directory::direct(&core, "directory:2:0", &assignment).await.unwrap(), None);
+    // Endings with nothing to end are accepted, so a late or repeated one is harmless.
+    for (key, ending) in [
+        (
+            "directory:3:0",
+            ic_channels::directory::DirectoryCommand::EndOwnership {
+                policy: ic_core::PolicyId("P1".into()),
+                party: ic_core::PartyId("pty_relay".into()),
+            },
+        ),
+        (
+            "directory:4:0",
+            ic_channels::directory::DirectoryCommand::EndDependant {
+                policy: ic_core::PolicyId("P1".into()),
+                party: ic_core::PartyId("pty_relay".into()),
+            },
+        ),
+    ] {
+        assert_eq!(relay::Directory::direct(&core, key, &ending).await.unwrap(), None, "{key}");
+    }
     // Withdrawn: the retraction is accepted everywhere, and again.
     relay::send(&core, 2, &notice(true, 0)).await.unwrap();
     relay::send(&core, 2, &notice(true, 1)).await.unwrap();

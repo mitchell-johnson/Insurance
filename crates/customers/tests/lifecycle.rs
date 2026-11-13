@@ -633,14 +633,15 @@ async fn markers_are_reviewed_when_due() {
     assert_eq!(w.sql("select 1 from marker_reviews").await.unwrap(), 0);
 }
 
-/// Purpose: relationship changes the channels directory needs (a policy's owner, an
-/// assignee arriving or leaving, a child with the date they control their own health
-/// information) are told to it in order as module `customer-master`; other relationships
+/// Purpose: relationship changes the channels directory needs (a policy's owner arriving
+/// or leaving, an assignee arriving or leaving, a child with the date they control their
+/// own health information, and that child's record ending) are told to it in order as module `customer-master`; other relationships
 /// are not; a refusal or no answer keeps the change and holds up only that party's later
 /// changes; erasing the party removes what is waiting.
 /// Why it matters: the directory decides who sees which policy in the app. An assignee
-/// told of leaving before arriving would keep access, and a new owner never told would
-/// leave the old one seeing the policy.
+/// told of leaving before arriving would keep access, a new owner never told would leave
+/// the old one seeing the policy, and an ended owner or dependant not told would keep
+/// their view.
 #[tokio::test]
 async fn relationship_changes_reach_the_channels_directory() {
     let w = world_or_skip!();
@@ -694,6 +695,23 @@ async fn relationship_changes_reach_the_channels_directory() {
         w.sql("select 1 from directory_relay").await.unwrap(),
         0,
         "the same relationship again changes nothing"
+    );
+    // An owner and a dependant ending are told too.
+    for (party, id) in [(&owner, "own"), (&child, "dep")] {
+        let (status, out) = w
+            .command(party, "staff", json!({ "command": "end_relationship", "id": id, "valid_to": "2026-07-01" }))
+            .await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    core.directed.lock().unwrap().clear();
+    assert_eq!(work::relay_directory(&w.app, &core).await.unwrap(), 2);
+    let told: Vec<serde_json::Value> = core.directed.lock().unwrap().iter().map(|(_, c)| c.clone()).collect();
+    assert_eq!(
+        told,
+        vec![
+            json!({ "end_ownership": { "policy": "P1", "party": owner } }),
+            json!({ "end_dependant": { "policy": "P1", "party": child } }),
+        ]
     );
     // Erased while waiting: nothing left to send.
     w.command(
