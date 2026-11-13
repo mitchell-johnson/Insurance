@@ -145,7 +145,11 @@ fn format_of(contact: &Contact) -> Option<AlternateFormat> {
 /// Money owed or paid is financial; a schedule or letter is personal.
 fn class_of(kind: DocumentKind) -> DataClass {
     match kind {
-        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::PremiumReceipt | DocumentKind::Invoice => DataClass::Financial,
+        DocumentKind::LapseNotice
+        | DocumentKind::SuspensionNotice
+        | DocumentKind::PremiumReceipt
+        | DocumentKind::Invoice
+        | DocumentKind::PremiumChangeNotice => DataClass::Financial,
         _ => DataClass::Personal,
     }
 }

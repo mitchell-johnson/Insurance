@@ -13,6 +13,9 @@ use crate::kinds::DocumentKind;
 use crate::model::Trigger;
 use crate::state::standing_notice;
 
+/// The purpose of the notice that a discount is lost.
+pub const DISCOUNT_CHANGE: &str = "discount_change";
+
 fn trigger(record: &EventRecord, policy: &ic_core::PolicyId, kind: DocumentKind, purpose: Option<&str>) -> Trigger {
     Trigger {
         id: format!("{}:{kind:?}", record.id),
@@ -116,6 +119,28 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
             t.detail.insert("net_premium".into(), json!(premium));
             t.detail.insert("charges".into(), json!(total_minor - premium));
             t.detail.insert("total".into(), json!(total_minor));
+            vec![t]
+        }
+        // A discount lost (a wellness tier, an entitlement withdrawn) puts
+        // the premium up from the first bill on or after `from`: the
+        // policyholder is told before then. Only the tier code travels,
+        // never the data behind it.
+        Event::EntitlementChanged {
+            policy,
+            code,
+            tier,
+            life,
+            held: false,
+            from,
+            reference,
+            ..
+        } => {
+            let mut t = trigger(record, policy, DocumentKind::PremiumChangeNotice, Some(DISCOUNT_CHANGE));
+            t.detail.insert("entitlement".into(), json!(code));
+            t.detail.insert("tier".into(), json!(tier));
+            t.detail.insert("life".into(), json!(life.as_ref().map(|l| l.0.clone())));
+            t.detail.insert("from".into(), json!(from.to_string()));
+            t.detail.insert("reference".into(), json!(reference));
             vec![t]
         }
         _ => vec![],
