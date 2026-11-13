@@ -624,6 +624,9 @@ pub struct Claim {
     pub life_party: Option<String>,
     pub reserve_minor: i64,
     pub admitted_minor: i64,
+    /// Of what was admitted, the policy loan it repaid.
+    #[serde(default)]
+    pub loan_repaid_minor: i64,
     /// Admitted and not yet paid: mirrors the claim's share of benefit payable.
     pub payable_minor: i64,
     /// The part of `payable_minor` that is a handling cost the bank sent

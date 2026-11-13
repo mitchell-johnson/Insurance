@@ -549,6 +549,62 @@ impl FinanceState {
         Work { roots_wanted, closing }
     }
 
+    /// Each tax and levy account's movement in a period by the posting
+    /// type and product the core gave it, and whatever moved it under a
+    /// posting type the close configuration does not list for it, or under
+    /// none. These are control accounts, so only the core's feed moves them.
+    pub fn tax_reconciliation(&self, period: PeriodId) -> TaxReconciliation {
+        let mut out = TaxReconciliation {
+            period,
+            accounts: Vec::new(),
+            unexplained: Vec::new(),
+        };
+        if period.is_adjustment() {
+            return out;
+        }
+        let declared = self.close_config.as_ref().map(|c| c.tax.as_slice()).unwrap_or_default();
+        for decl in declared {
+            let Some(account) = self.chart.as_ref().and_then(|c| c.account(&decl.account)) else {
+                out.unexplained.push(format!("tax account {} is not in the chart", decl.account));
+                continue;
+            };
+            let mut rows: BTreeMap<(Option<String>, Option<String>, ic_ledger::BalanceFamily), i128> = BTreeMap::new();
+            for (key, amount) in self.cube.iter().filter(|(k, _)| k.period == period && k.account == decl.account) {
+                *rows
+                    .entry((key.dims.posting_type.clone(), key.dims.product.clone(), key.unit.clone()))
+                    .or_insert(0) += amount;
+            }
+            let mut lines = Vec::new();
+            for ((posting_type, product, unit), movement) in rows {
+                let explained = posting_type.as_ref().is_some_and(|t| decl.posting_types.contains(t));
+                if !explained && movement != 0 {
+                    out.unexplained.push(format!(
+                        "{} {} moved by {movement} in {unit:?} under {}, which is not one of {:?}",
+                        decl.account,
+                        account.name,
+                        posting_type.as_ref().map_or("no posting type".to_string(), |t| format!("posting type {t}")),
+                        decl.posting_types
+                    ));
+                }
+                lines.push(TaxLine {
+                    posting_type,
+                    product,
+                    unit: format!("{unit:?}"),
+                    movement,
+                    explained,
+                });
+            }
+            out.accounts.push(TaxAccount {
+                account: decl.account.clone(),
+                name: account.name.clone(),
+                posting_types: decl.posting_types.clone(),
+                movement: lines.iter().map(|l| l.movement).sum(),
+                lines,
+            });
+        }
+        out
+    }
+
     /// Money the core holds in suspense for each policy, as the feed has
     /// built it up: one item for each policy, oldest first. The balances are
     /// as at the latest day closed, which is the date the report carries
@@ -594,4 +650,32 @@ impl FinanceState {
             lines: extract.lines[first..last].to_vec(),
         })
     }
+}
+
+/// A period's tax and levy accounts reconciled to posting types.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaxReconciliation {
+    pub period: PeriodId,
+    pub accounts: Vec<TaxAccount>,
+    /// What moved a tax account under a posting type not listed for it.
+    pub unexplained: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaxAccount {
+    pub account: String,
+    pub name: String,
+    pub posting_types: Vec<String>,
+    /// The account's whole movement in the period, debits positive.
+    pub movement: i128,
+    pub lines: Vec<TaxLine>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TaxLine {
+    pub posting_type: Option<String>,
+    pub product: Option<String>,
+    pub unit: String,
+    pub movement: i128,
+    pub explained: bool,
 }
