@@ -138,7 +138,8 @@ A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Ot
 
 ## Not built, or waiting on others
 
-- **Audio, braille and tagged PDF.** The requested format is recorded on the document and passed to the print house, which produces audio and braille. The PDF records its language and title and can be read back as text, but it is not a tagged (PDF/UA) file.
+- **Audio and braille.** The requested format is recorded on the document and passed to the print house, which produces audio and braille.
+- **Tagged PDF.** Built 2026-11-13 (`pdf.rs`): every PDF is marked and has a structure tree (Document; a P for each address line and paragraph, the title as the one H1, in reading order; a paragraph crossing a page is one element), the page foot is a pagination artifact, pages tab in structure order, and XMP metadata gives the title, language and `pdfuaid:part` 1. Not done: a run through a PDF/UA checker such as veraPDF or PAC before go-live, which this environment does not have.
 - **Scripts outside the typeface.** Text in a script the font lacks (Chinese, for example) goes as text without a PDF, and the download route answers 500 for it. A second face for such scripts is not set.
 - **The documents app registration.** The portal and staff tools call the route inside the cluster; it is not routed through the ingress. `deploy/k8s/documents.yaml` sets the two Entra settings, but the app registration (audience, app roles `portal` and `staff`, granted to those callers' identities) needs a person to create in Entra ID.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.

@@ -3,7 +3,8 @@
 use std::io::Read;
 
 use ic_documents::pdf::{
-    layout, pdf, Fonts, Letter, PdfError, Weight, ADDRESS_TOP, FOOTER_BASELINE, MARGIN_BOTTOM, MARGIN_SIDE, MARGIN_TOP, MAX_PAGES, PAGE_HEIGHT, PAGE_WIDTH,
+    layout, pdf, Fonts, Letter, PdfError, Role, Weight, ADDRESS_TOP, FOOTER_BASELINE, MARGIN_BOTTOM, MARGIN_SIDE, MARGIN_TOP, MAX_PAGES, PAGE_HEIGHT,
+    PAGE_WIDTH,
 };
 
 const TEXT: &str =
@@ -226,7 +227,7 @@ fn the_file_embeds_what_a_reader_needs() {
     assert!(maps.iter().any(|m| m.contains("<0113>") && m.contains("<0101>")), "{maps:?}");
     // One page of content, with one show operator per line.
     let pages = layout(&letter(TEXT, &address), &fonts).unwrap();
-    let content: Vec<&Vec<u8>> = streams.iter().filter(|s| s.starts_with(b"BT")).collect();
+    let content: Vec<&Vec<u8>> = streams.iter().filter(|s| count(s, b" Tj") > 0).collect();
     assert_eq!(content.len(), 1);
     assert_eq!(count(content[0], b" Tj"), pages[0].lines.len());
     // The embedded font programs are TrueType.
@@ -263,4 +264,65 @@ fn the_insurers_own_fonts_are_checked() {
         Fonts::new(other.clone(), other).unwrap_err().to_string(),
         "the font is not a TrueType font this service can use: it has no TrueType outlines"
     );
+}
+
+/// Purpose: the file is tagged for assistive technology: marked, with a
+/// structure tree that reads the address lines and paragraphs as P and the
+/// title as the one H1, in the order they are set; a paragraph that runs
+/// over a page is one element with its pieces on both pages; the page
+/// foot is a pagination artifact a screen reader skips; pages tab in
+/// structure order; and the metadata claims PDF/UA-1 with the title and
+/// language.
+/// Why it matters: a customer who uses a screen reader is entitled to the
+/// same notice as anyone else. An untagged PDF is read as loose fragments
+/// in drawing order, with "doc-1 1 / 3" read out on every page and a
+/// paragraph broken where the page breaks.
+#[test]
+fn the_file_is_tagged_for_screen_readers() {
+    let fonts = Fonts::bundled();
+    let address = address();
+    let file = pdf(&letter(TEXT, &address), &fonts).unwrap();
+    assert_eq!(count(&file, b"/StructTreeRoot"), 2, "the root and the catalog's entry");
+    assert_eq!(count(&file, b"/Marked true"), 1);
+    assert_eq!(count(&file, b"/StructParents 0"), 1);
+    assert_eq!(count(&file, b"/Tabs /S"), 1);
+    assert_eq!(count(&file, b"/S /Document"), 1);
+    assert_eq!(count(&file, b"/S /H1"), 1);
+    // Name, three address lines and three paragraphs of text.
+    assert_eq!(count(&file, b"/S /P"), 7);
+    assert_eq!(count(&file, b"<pdfuaid:part>1</pdfuaid:part>"), 1);
+    assert_eq!(count(&file, b"<rdf:li>en-NZ</rdf:li>"), 1);
+    assert_eq!(count(&file, b"Your policy is in arrears</rdf:li>"), 1);
+
+    let streams = streams(&file);
+    let content = streams.iter().find(|s| count(s, b" Tj") > 0).unwrap();
+    assert_eq!(count(content, b"/Artifact <<"), 1);
+    assert_eq!(count(content, b"/Type /Pagination"), 1);
+    assert_eq!(count(content, b"/H1 <<"), 1);
+    assert_eq!(count(content, b"BDC"), count(content, b"EMC"));
+
+    let pages = layout(&letter(TEXT, &address), &fonts).unwrap();
+    let roles: Vec<Role> = pages[0].lines.iter().map(|l| l.role).collect();
+    assert_eq!(roles[..5], [Role::Address; 4][..].iter().copied().chain([Role::Title]).collect::<Vec<_>>()[..]);
+    assert_eq!(roles.last(), Some(&Role::Footer));
+
+    // A paragraph long enough to cross a page is one element.
+    let long = "The insurer will pay the sum insured when the life insured dies while this policy is in force. ".repeat(80);
+    let pages = layout(&letter(&long, &[]), &fonts).unwrap();
+    assert!(pages.len() >= 2);
+    let first = pages[0].lines.iter().find(|l| l.role == Role::Paragraph).unwrap().block;
+    assert!(pages[1].lines.iter().any(|l| l.role == Role::Paragraph && l.block == first));
+    let file = pdf(&letter(&long, &[]), &fonts).unwrap();
+    // The name, and the one paragraph however many pages it takes.
+    assert_eq!(count(&file, b"/S /P"), 2);
+    assert_eq!(count(&file, b"/StructParents 1"), 1);
+    assert!(count(&file, b"/Type /MCR") > pages.len());
+
+    // Text that would break the metadata is escaped.
+    let mut odd = letter(TEXT, &address);
+    odd.title = "Fees & charges <2027>";
+    odd.language = "";
+    let file = pdf(&odd, &fonts).unwrap();
+    assert_eq!(count(&file, b"Fees &amp; charges &lt;2027&gt;</rdf:li>"), 1);
+    assert_eq!(count(&file, b"<rdf:li>x-default</rdf:li>"), 1);
 }
