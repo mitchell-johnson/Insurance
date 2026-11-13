@@ -19,7 +19,7 @@ use common::*;
 use ic_core::{Command, GroupId};
 use ic_group::command::{caller, Envelope, ExcessDecision, GroupCommand, MatchDecision, Resolution};
 use ic_group::driver::{content_hash, Answers, Core, CustomerMaster, Driver, DriverError, ExcessAnswer, FileStore, Module, Peers, Scan};
-use ic_group::event::{ExceptionKind, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
+use ic_group::event::{CommissionLayer, ExceptionKind, GroupEvent, IssueOutcome, ReinsuranceNotice, UnderwritingRequest};
 use ic_group::mapping::{Columns, FileKind, FileMapping, SalaryPeriod, SalaryUnit};
 use ic_group::record::MemberIdentity;
 use ic_group::state::{CaseStatus, FileStatus, GroupState, Outcome};
@@ -92,9 +92,20 @@ struct Sink {
     /// Underwriting's outbox: numbered effects, of which some answer us.
     effects: Arc<Mutex<Vec<(u64, Option<ExcessAnswer>)>>>,
     events: Arc<Mutex<Vec<(u64, GroupEvent)>>>,
+    /// Layers written in the commission module, and the answers it gives
+    /// next (written when there are none left).
+    layers: Arc<Mutex<Vec<(String, CommissionLayer)>>>,
+    commission_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
 }
 
 impl Peers for Sink {
+    async fn commission(&self, key: &str, layer: &CommissionLayer) -> Result<Option<String>, String> {
+        let answer = self.commission_answers.lock().unwrap().pop_front().unwrap_or(Ok(None));
+        if answer == Ok(None) {
+            self.layers.lock().unwrap().push((key.to_string(), layer.clone()));
+        }
+        answer
+    }
     async fn reinsurance(&self, key: &str, _on: NaiveDate, notice: &ReinsuranceNotice) -> Result<(), String> {
         self.down.check("reinsurance")?;
         self.notices.lock().unwrap().push((key.to_string(), notice.clone()));
@@ -1524,4 +1535,101 @@ async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
         401
     );
     assert!(*d.module.state.lock().unwrap() == before);
+}
+
+/// Purpose: the driver carries a scheme's broker to the commission module and acts on the
+/// three kinds of answer: one to try again (the module has not seen the scheme yet) leaves
+/// the layer in the outbox for the next pass; a written layer leaves it; and on the other
+/// cover a refusal a person must put right takes it out and raises an exception for staff.
+/// Why it matters: the commission module learns of a new scheme from its own feed of the
+/// core, which may lag this one. Treating that lag as a failure would leave the broker
+/// unpaid, and retrying a real refusal for ever would hide it from everyone.
+#[tokio::test]
+async fn the_driver_writes_a_schemes_broker_and_reports_a_refusal() {
+    let d = rig();
+    let today = d.core.business_date().await.unwrap().unwrap();
+    let mut t = terms();
+    t.broker = Some(ic_group::terms::SchemeBroker {
+        engagement: "eng-broker-x".into(),
+        book: "x-schemes".into(),
+        schedule: "standard".into(),
+        option: "level".into(),
+        expected_annual_premium_minor: [("group-life".to_string(), 24_000_00)].into(),
+    });
+    let env = Envelope {
+        key: "broker".into(),
+        caller: caller::STAFF.into(),
+        actor: "ops-ana".into(),
+        today,
+        command: GroupCommand::AmendTerms {
+            scheme: SCHEME.into(),
+            terms: Box::new(t),
+        },
+    };
+    d.module.state.lock().unwrap().apply_envelope(env).result.unwrap();
+    let waiting = |d: &Rig| {
+        d.module
+            .state
+            .lock()
+            .unwrap()
+            .outbox
+            .values()
+            .filter(|o| matches!(o, ic_group::event::Outbound::Commission { .. }))
+            .count()
+    };
+    let refused = |d: &Rig| {
+        d.module
+            .state
+            .lock()
+            .unwrap()
+            .exceptions
+            .values()
+            .filter(|e| e.kind == ExceptionKind::BrokerNotRecorded)
+            .count()
+    };
+    assert_eq!(waiting(&d), 1);
+
+    // Not seen yet: the layer waits for the next pass.
+    d.peers
+        .commission_answers
+        .lock()
+        .unwrap()
+        .push_back(Err("commission does not know the layer yet".into()));
+    let pass = d.deliver().await.unwrap();
+    assert!(pass.failed >= 1);
+    assert_eq!((waiting(&d), refused(&d)), (1, 0));
+    // Written on the next.
+    d.deliver().await.unwrap();
+    assert_eq!(waiting(&d), 0);
+    assert_eq!(d.peers.layers.lock().unwrap()[0].1.engagement, "eng-broker-x");
+
+    // A refusal for a person, on a scheme whose broker is added later.
+    let d = rig();
+    let mut t = terms();
+    t.broker = Some(ic_group::terms::SchemeBroker {
+        engagement: "eng-unlicensed".into(),
+        book: "u-schemes".into(),
+        schedule: "standard".into(),
+        option: "level".into(),
+        expected_annual_premium_minor: [("group-life".to_string(), 24_000_00)].into(),
+    });
+    let env = Envelope {
+        key: "broker".into(),
+        caller: caller::STAFF.into(),
+        actor: "ops-ana".into(),
+        today,
+        command: GroupCommand::AmendTerms {
+            scheme: SCHEME.into(),
+            terms: Box::new(t),
+        },
+    };
+    d.module.state.lock().unwrap().apply_envelope(env).result.unwrap();
+    d.peers
+        .commission_answers
+        .lock()
+        .unwrap()
+        .push_back(Ok(Some("not_authorised_to_advise".into())));
+    d.deliver().await.unwrap();
+    assert_eq!((waiting(&d), refused(&d)), (0, 1));
+    assert!(d.peers.layers.lock().unwrap().is_empty());
 }

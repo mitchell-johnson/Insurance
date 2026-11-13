@@ -31,6 +31,7 @@ fn interest(c: &mut Cluster, command: InterestCommand) -> Result<(), Reject> {
 
 fn record(policy: &PolicyId, id: &str, party: &str, notice_received: NaiveDate, extent_minor: Option<i64>) -> InterestCommand {
     InterestCommand::Record {
+        kind: Default::default(),
         policy: policy.clone(),
         interest: id.to_string(),
         party: PartyId(party.to_string()),
@@ -264,4 +265,149 @@ fn an_interest_restricts_the_owner_until_its_holder_consents_or_releases() {
     );
     assert_eq!(count(&|e| matches!(e, InterestEvent::Recorded { interest, .. } if interest == "int-3")), 1);
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+}
+
+fn settle(c: &mut Cluster, policy: &PolicyId, payment: &str) -> Result<(), Reject> {
+    let settle = Command::SettlePayable {
+        policy: policy.clone(),
+        payment: payment.to_string(),
+        payable: ic_core::payments::PayableKind::Benefit,
+        refund: None,
+        amount: Money::new(100_00, NZD),
+        bank_account: "nz-main-benefits".to_string(),
+    };
+    c.submit(0, "payments", settle)
+}
+
+fn direct(c: &mut Cluster, caller: &str, policy: &PolicyId, payout: &str, payee: &str, payment: &str, direction: &str) -> Result<(), Reject> {
+    let command = InvestCommand::DirectPayout {
+        policy: policy.clone(),
+        payout: payout.to_string(),
+        payee: PartyId(payee.to_string()),
+        payment: payment.to_string(),
+        direction: direction.to_string(),
+    };
+    c.submit(0, caller, Command::Investment(Box::new(command)))
+}
+
+/// Purpose: matrix JNT-029. On the Official Assignee's notice an insolvency interest is
+/// recorded in the whole of each policy's proceeds. The owner then cannot take value out
+/// or give cover up without the Official Assignee's consent; what is raised to benefit
+/// payable with that consent is held, cannot be paid, and is owed only once a legal
+/// direction names the payee, to that payee. Cover carries on, and once the interest is
+/// released the owner is paid in the usual way again.
+/// Why it matters: decision 4 in `docs/decisions.md`. Whether a policy's value vests in the
+/// Official Assignee is legal's call, case by case; the core's job is to stop value
+/// reaching the owner, or anyone else, before that call is made, without ending cover the
+/// person may still need. A payout paid to the bankrupt owner by default would be money the
+/// insurer may have to pay twice.
+#[test]
+fn a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction() {
+    use ic_core::interest::InterestKind;
+    use ic_core::invest::{InvestEvent, PayoutState};
+    let (mut c, invested, term) = book();
+    let insolvency = |policy: &PolicyId, extent| InterestCommand::Record {
+        kind: InterestKind::Insolvency,
+        policy: policy.clone(),
+        interest: "oa-1".to_string(),
+        party: PartyId("party-oa".to_string()),
+        notice_received: start(),
+        extent_minor: extent,
+        effective_from: start(),
+        notice: "vault/adjudication-1".to_string(),
+    };
+    assert_eq!(code(interest(&mut c, insolvency(&invested, Some(100_00)))), "invalid_interest");
+    for policy in [&invested, &term] {
+        interest(&mut c, insolvency(policy, None)).unwrap();
+    }
+    let s = c.state(0);
+    let standing = ranked(&s.policies[&term], start());
+    assert_eq!(
+        (standing.len(), standing[0].kind, standing[0].extent_minor),
+        (1, InterestKind::Insolvency, None)
+    );
+
+    // Restricted like any interest: no withdrawal, no cancellation, without consent.
+    assert_eq!(code(payout(&mut c, &invested, "wd-1", PayoutReason::Withdrawal)), "interest_consent_required");
+    assert_eq!(code(cancel(&mut c, "policy-servicing", &term)), "interest_consent_required");
+    // Cover and premiums carry on.
+    assert_eq!(c.state(0).policies[&term].status, ic_core::PolicyStatus::InForce);
+
+    // With consent the money is raised to benefit payable, but held for nobody.
+    consent(&mut c, &invested, "oa-1", RestrictedAction::Withdrawal, "vault/consent-1").unwrap();
+    c.take_events();
+    payout(&mut c, &invested, "wd-1", PayoutReason::Withdrawal).unwrap();
+    let payable = |c: &Cluster| c.state(0).ledger.natural_balance(&accounts::benefit_payable(&invested, NZD).id);
+    let state = |c: &Cluster| c.state(0).policies[&invested].payouts["wd-1"].state;
+    assert_eq!((payable(&c), state(&c)), (100_00, PayoutState::Held));
+    let events: Vec<_> = c.take_events().into_iter().map(|e| e.event).collect();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::Investment(InvestEvent::PayoutHeld { interest, .. }) if interest == "oa-1")));
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Investment(InvestEvent::PayoutRaised { .. }))),
+        "payments is never told to pay the owner"
+    );
+    assert_eq!(code(settle(&mut c, &invested, "wd-1")), "payment_not_instructed");
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // A direction names whom to pay, by a plain vault reference, and only servicing records it.
+    assert_eq!(
+        code(direct(&mut c, "claims", &invested, "wd-1", "party-oa", "wd-1", "vault/dir-1")),
+        "caller_not_allowed"
+    );
+    assert_eq!(
+        code(direct(&mut c, "policy-servicing", &invested, "wd-9", "party-oa", "wd-1", "vault/dir-1")),
+        "unknown_payout"
+    );
+    assert_eq!(
+        code(direct(&mut c, "policy-servicing", &invested, "wd-1", "party-oa", "wd-1", "a court said so")),
+        "invalid_payout"
+    );
+    assert_eq!(
+        code(direct(&mut c, "policy-servicing", &invested, "wd-1", "", "wd-1", "vault/dir-1")),
+        "invalid_payout"
+    );
+    direct(&mut c, "policy-servicing", &invested, "wd-1", "party-oa", "wd-1", "vault/dir-1").unwrap();
+    let events: Vec<_> = c.take_events().into_iter().map(|e| e.event).collect();
+    assert!(events.iter().any(|e| matches!(e,
+        Event::Investment(InvestEvent::PayoutDirected { payee, payment, amount_minor: 100_00, .. }) if payee.0 == "party-oa" && payment == "wd-1")));
+    // Sent again it changes nothing; a second, different direction is refused.
+    direct(&mut c, "policy-servicing", &invested, "wd-1", "party-oa", "wd-1", "vault/dir-1").unwrap();
+    assert!(c.take_events().is_empty());
+    assert_eq!(
+        code(direct(&mut c, "policy-servicing", &invested, "wd-1", "party-owner", "wd-1", "vault/dir-2")),
+        "payout_not_held"
+    );
+    settle(&mut c, &invested, "wd-1").unwrap();
+    assert_eq!((payable(&c), state(&c)), (0, PayoutState::Settled));
+
+    // The bank sends it back: while the interest stands it is directed again, never reinstructed to the owner.
+    c.submit(
+        0,
+        "payments",
+        Command::ReturnPayment {
+            policy: invested.clone(),
+            payment: "wd-1".into(),
+        },
+    )
+    .unwrap();
+    let reinstruct = InvestCommand::ReinstructPayout {
+        policy: invested.clone(),
+        payout: "wd-1".into(),
+        payment: "wd-1b".into(),
+    };
+    assert_eq!(code(c.submit(0, "policy-servicing", Command::Investment(Box::new(reinstruct)))), "payout_held");
+    direct(&mut c, "policy-servicing", &invested, "wd-1", "party-oa", "wd-1b", "vault/dir-1").unwrap();
+    settle(&mut c, &invested, "wd-1b").unwrap();
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // Released on discharge: the owner is paid in the usual way, and nothing is held.
+    release(&mut c, &invested, "oa-1", start(), "vault/discharge-1").unwrap();
+    payout(&mut c, &invested, "wd-2", PayoutReason::Withdrawal).unwrap();
+    assert_eq!(c.state(0).policies[&invested].payouts["wd-2"].state, PayoutState::Owed);
+    assert_eq!(
+        code(direct(&mut c, "policy-servicing", &invested, "wd-2", "party-oa", "wd-2", "vault/dir-1")),
+        "payout_not_held"
+    );
 }

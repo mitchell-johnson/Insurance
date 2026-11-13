@@ -16,6 +16,42 @@ use ic_raft::{ClusterAuth, ClusterClient, NodeId, NodeStatus};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
+/// The schemas the shipped rate tables are validated against.
+const TABLE_SCHEMAS: &str = include_str!("../../../config/finance/tables.star");
+
+/// Who the shipped tables' validations are recorded as.
+pub const SHIPPED_VALIDATOR: &str = "ic-admin-shipped";
+
+/// The shipped configuration in activation order, with each rate table's
+/// validation record proposed just before the table itself, so finance's
+/// close finds every active table validated. The shipped tables are the
+/// synthetic basis described in `docs/products.md`; the manifest says so.
+/// A shipped table that fails validation stops the whole activation.
+pub fn shipped_with_validations() -> Result<Vec<Command>, String> {
+    use ic_finance::tables::{load_schemas, validate, Manifest};
+    let mut activations = ic_sim::config::shipped_activations().map_err(|e| e.to_string())?;
+    activations.extend(ic_sim::config::shipped_fund_activations().map_err(|e| e.to_string())?);
+    let schemas = load_schemas("config/finance/tables.star", TABLE_SCHEMAS).map_err(|e| e.to_string())?;
+    let manifest = Manifest {
+        model: "shipped-synthetic-basis".to_string(),
+        model_version: "1".to_string(),
+        basis_report: "docs/products.md".to_string(),
+        author: "engineering".to_string(),
+    };
+    let mut out = Vec::with_capacity(activations.len() * 2);
+    for command in activations {
+        if let Command::ActivateRateTable { table } = &command {
+            let schema = schemas
+                .get(&table.id)
+                .ok_or_else(|| format!("config/finance/tables.star declares no schema for shipped table {}", table.id))?;
+            let record = validate(table, schema, &manifest, None).record(SHIPPED_VALIDATOR)?;
+            out.push(Command::RecordRateTableValidation(Box::new(record)));
+        }
+        out.push(command);
+    }
+    Ok(out)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AdminCommand {
     /// Form every partition's Raft group from the nodes' configured peers.
@@ -207,8 +243,7 @@ impl Admin {
     /// key is the content, so running it again does nothing, and running a
     /// newer build activates only what changed.
     pub async fn activate_shipped(&self) -> Result<Value, String> {
-        let mut activations = ic_sim::config::shipped_activations().map_err(|e| e.to_string())?;
-        activations.extend(ic_sim::config::shipped_fund_activations().map_err(|e| e.to_string())?);
+        let activations = shipped_with_validations()?;
         let partitions = self.partitions().await?;
         let (mut activated, mut unchanged) = (0u64, 0u64);
         for command in &activations {

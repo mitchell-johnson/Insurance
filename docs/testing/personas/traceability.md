@@ -62,7 +62,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PRD-007 | full | `finance/tests/dry_run.rs::a_proposed_table_is_priced_against_the_book_in_force`<br>`finance/tests/dry_run.rs::the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves` |
 | PRD-008 | part | `api/tests/api.rs::a_quote_prices_without_writing_anything` |
 | PRD-010 | full | `sim/tests/scenarios.rs::health_premium_splits_gst_to_the_tax_account`<br>`product/tests/products.rs::health_premium_carries_gst` |
-| PRD-011 | part | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched`<br>`reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate` |
+| PRD-011 | full | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched`<br>`reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate`<br>`product/tests/products.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate`<br>`sim/tests/personas_spine.rs::a_life_with_no_recorded_sex_is_issued_at_the_lower_premium` |
 | PRD-012 | part | `product/tests/products.rs::rating_refuses_what_it_cannot_price` |
 
 ## BIL Billing and earning
@@ -326,6 +326,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
@@ -544,10 +545,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
 | DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
-<<<<<<< HEAD
-=======
 | DOC-009 | full | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it`<br>`customers/tests/api.rs::a_contact_point_can_be_chosen_for_one_relationship` |
->>>>>>> origin/main
 | DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration

@@ -15,6 +15,7 @@
 - **Pools.** A pool scheme has no files: the employer declares headcount and total salary per pool, each declaration replaces the last from its date, and a declaration that is late is raised.
 - **The scheme year.** Renewal opens at the lead time. Agreed terms take effect on the renewal date. Under a rate guarantee the year rolls on the same terms. With no agreement the scheme runs on old rates for the days allowed, raised to staff, and then ends, or ends at once, as the terms say. Ending a scheme, by staff or by renewal, removes every member on the date (each with a continuation option) and cancels the policy.
 - **Money as the employer sees it.** From the core's events the module keeps each invoice by billing group, retrospective adjustments against the group they belong to, loadings as one total, and the balance. Each invoice also shows what the scheme still owed from before it (`brought_forward_minor`), so a short payment is carried onto the next invoice as one line for the employer and never against a member. A scheme that pays short as many times in a row as its terms allow takes no new joiners until it has paid; existing members are untouched.
+- **The scheme's broker** (`terms.rs` `broker`, `state.rs` `broker_layers`). A scheme placed by a broker names the broker's engagement and book, the commission schedule and option, and the expected annual premium of each cover driven by member data. At registration, or when a broker is first added, the module asks the commission module (`ic-distribution`) to write each scheme cover's layer 0 by that engagement into that book (`write_layer`, caller `group-admin`). A layer the commission module does not know yet (its feed of the core has not reached the scheme) is tried again on a later pass; a refusal a person must put right (broker not authorised, no such book or schedule) raises `broker_not_recorded` for staff. Changing or removing a broker by amending the terms is refused (`broker_change`): it is a dated move of the scheme's book, made in the commission module. A direct scheme names no broker and earns no commission.
 - **Refusals leave no trace.** A refused command changes nothing. A repeated command gets its first result, marked as a repeat.
 
 ## How it runs
@@ -34,6 +35,7 @@ Callers are services, each with its own workload identity. A caller presents an 
 - `POST /v1/schemes/{scheme}/files/{file}` with the file as the body and `x-ic-caller` (`employer-portal` or `group-admin`) and `x-ic-actor`. The bytes are stored in quarantine before the module hears of the file. 202 on success. Limit 32 MB.
 - `POST /v1/commands` with `{key, caller, actor, command}`. The business date is the core's. The driver's commands and `receive_file` are not accepted here.
 - `POST /v1/questions` with a question. The outbox is not served.
+- `POST /v1/schemes/{scheme}/mappings/try` with `{mapping, sample}`, role `group-admin` only: what the sample would do read with the proposed mapping. Nothing is stored.
 - `GET /healthz` (the process is up), `GET /readyz` (the cluster answers; the readiness probe) and `GET /metrics` (Prometheus text: `ic_group_passes_total`, `ic_group_passes_failed_total`, `ic_group_steps_total`, and the gauge `ic_group_waiting`, the steps the last pass could not take). None needs a token. Alert on `ic_group_waiting` staying above zero and on failed passes rising.
 
 422 carries the module's reject code. 503 means nothing is known to have happened: send the same request again with the same key.
@@ -59,6 +61,7 @@ Callers are services, each with its own workload identity. A caller presents an 
 | `IC_GROUP_CUSTOMER_MASTER`, `IC_GROUP_CUSTOMER_MASTER_SCOPE` | Customer master URL and its Entra ID scope | required |
 | `IC_GROUP_REINSURANCE_MODULE` | Name the reinsurance module is hosted under | `reinsurance` |
 | `IC_GROUP_UNDERWRITING_MODULE` | Name the underwriting module is hosted under | `underwriting` |
+| `IC_GROUP_DISTRIBUTION_MODULE` | Name the commission module is hosted under | `distribution` |
 | `IC_GROUP_FINGERPRINT_SALT` or `IC_GROUP_FINGERPRINT_SALT_FILE` | Secret, at least 32 characters, or the file holding it. Never change it: every member would look new | required |
 | `IC_GROUP_AUDIENCE` | Application ID URI of this service's app registration; callers' tokens must be issued for it | required |
 | `AZURE_TENANT_ID` | The tenant whose tokens are accepted (set by workload identity) | required |
