@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 10 | 6 | 2 | 5 |
-| PAY Payment runs and bank connectivity | 13 | 0 | 1 | 0 |
+| PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **292** | **124** | **161** | **121** |
+| **Total** | **293** | **124** | **160** | **121** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 96 | 26 | 20 |
-| C | 165 | 65 | 116 |
+| C | 166 | 65 | 115 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area

@@ -161,7 +161,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-003 | part | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-004 | full | `underwriting/tests/libraries.rs::cedar_policy_enforces_authority_limits`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-005 | full | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
-| UW-006 | part | `underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
+| UW-006 | part | `underwriting/tests/journey.rs::a_declined_cover_is_told_in_its_own_notice_and_the_rest_still_issues`<br>`underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
 | UW-007 | full | `reinsurance/tests/capacity.rs::a_reservation_sees_cover_already_held_on_the_life` |
 | UW-008 | full | `underwriting/tests/casework.rs::nothing_is_offered_above_the_treaty_limit_until_the_reinsurer_has_answered` |
 | UW-009 | full | `reinsurance/tests/capacity.rs::two_proposals_on_one_life_see_each_other`<br>`reinsurance/tests/accumulation.rs::arrival_order_does_not_change_the_cessions` |
@@ -493,6 +493,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PAY-010 | full | `payments/tests/sweep.rs::money_applied_to_another_fund_is_moved_to_its_account`<br>`payments/tests/sweep.rs::a_reversal_or_a_returned_sweep_is_owed_the_right_way`<br>`payments/tests/sweep.rs::a_matched_direct_credit_is_followed_too` |
 | PAY-011 | full | `payments/tests/runs.rs::a_collection_run_draws_on_active_authorities`<br>`payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | PAY-012 | full | `payments/tests/refunds.rs::a_refund_goes_back_to_the_account_it_came_from` |
+| PAY-013 | full | `payments/tests/intake.rs::a_large_admitted_claim_is_flagged_and_forecast`<br>`payments/tests/runs.rs::run_and_day_limits_cap_what_can_be_released` |
 | PAY-014 | full | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected`<br>`payments/tests/runs.rs::a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known` |
 
 ## FIN Finance close, statutory funds and regulatory reporting

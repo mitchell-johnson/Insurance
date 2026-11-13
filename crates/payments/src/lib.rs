@@ -16,6 +16,7 @@ pub mod config;
 mod console;
 mod drill;
 pub mod file;
+pub mod forecast;
 pub mod hold;
 pub mod intake;
 pub mod iso20022;
