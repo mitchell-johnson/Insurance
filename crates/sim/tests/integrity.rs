@@ -535,6 +535,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             amount_minor: 1,
             value_date: d(2027, 1, 1),
             reference: "ref".into(),
+            bank_account: None,
         },
         Command::BeginTransfer {
             policy: p.clone(),

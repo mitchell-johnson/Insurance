@@ -16,6 +16,16 @@ Traffic between the API, the workers and the ledger nodes is HTTP carrying the c
 
 Three ledger nodes across the zones of New Zealand North survive the loss of a zone. Surviving the loss of the region needs voters in two more regions (five voters across three regions keeps a majority after losing any one). The software supports it: nodes are addressed by name and membership is changed with `ic-admin members`. The infrastructure for it is not written, and it means policy data leaving New Zealand, which is a decision for the insurer and its regulator.
 
+### Questions the persona tests raised that the design does not answer
+
+The persona test pack (`docs/testing/personas/`) holds a test open on purpose for each of these until the insurer decides:
+
+1. How sex is captured as a rating factor for a life whose recorded sex is neither option a rate table holds (`PRD-011`).
+2. Whether a payee may decline late-payment interest on a claim, and how that posts (`CLM-037`).
+3. Whether a customer may set their own hold on refunds and surrenders, with a cooling-off before it can be removed (`SVC-022`).
+4. How an insolvency official's claim on a policy's surrender value is recorded and enforced in a bankruptcy (`JNT-029`).
+5. How imprisonment affects an income protection claim in payment (`CLM-040`).
+
 ## Known gaps
 
 ### Callers have roles but no relationships

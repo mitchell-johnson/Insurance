@@ -23,6 +23,7 @@ thiserror.workspace = true
 tokio.workspace = true
 axum.workspace = true
 reqwest.workspace = true
+jsonwebtoken.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
@@ -37,7 +38,6 @@ ic-underwriting = { path = "../underwriting" }
 # The customer master and what its own test harness needs (tests/driver.rs
 # builds it with that harness to run the two services together).
 ic-customers = { path = "../customers" }
-jsonwebtoken.workspace = true
 base64.workspace = true
 rand.workspace = true
 tower.workspace = true

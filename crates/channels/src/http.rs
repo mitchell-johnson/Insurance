@@ -534,6 +534,9 @@ pub fn approval_action(id: &str) -> Value {
 async fn submit_request(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
     let session = s.customer(&headers, &method, &uri, &body).await?;
     let new: NewRequest = parse(&body)?;
+    if new.kind == crate::replacements::DISPUTE {
+        return Err(Problem::bad_request("dispute a replacement from your matches in the adviser portal"));
+    }
     let action = request_action(&new.id, new.policy.as_ref(), &new.kind, &new.payload);
     let signed = redeem(&s, &headers, &session, &action, new.signed).await?;
     let result = s
@@ -734,6 +737,54 @@ async fn book(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: 
 async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
+}
+
+impl AppState {
+    /// The replacement matches on business this party wrote as an adviser.
+    async fn own_matches(&self, party: &PartyId) -> Result<Value, Problem> {
+        let engagements = self.ask(Question::AdviserEngagements { party: party.clone() }).await?;
+        if engagements.as_array().is_none_or(Vec::is_empty) {
+            return Ok(json!([]));
+        }
+        let matches = self
+            .commission
+            .ask(crate::replacements::question())
+            .await
+            .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+        Ok(crate::replacements::for_adviser(&matches, &engagements))
+    }
+}
+
+/// The replacement matches on business this adviser wrote.
+async fn adviser_replacements(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    ok(s.own_matches(&session.party).await?)
+}
+
+/// Dispute one of this adviser's matches: a request new business carries
+/// to the commission module as `DisputeReplacement`, with the request's ID
+/// as the reference. It needs no customer's approval: the commission is
+/// the adviser's.
+async fn adviser_dispute(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, body: Bytes) -> Answer {
+    let session = s.customer(&headers, &method, &uri, &body).await?;
+    let request: Value = parse(&body)?;
+    let theirs = s.own_matches(&session.party).await?;
+    let (id, payload) = crate::replacements::dispute(&request, &theirs).map_err(Problem::bad_request)?;
+    let result = s
+        .propose(
+            key(&headers, &session.party.0)?,
+            Actor::Party(session.party),
+            Command::SubmitRequest {
+                id,
+                policy: None,
+                kind: crate::replacements::DISPUTE.to_string(),
+                module: crate::replacements::DISPUTE_MODULE.to_string(),
+                payload,
+                signed: false,
+            },
+        )
+        .await?;
+    accepted(result)
 }
 
 // --- the employer portal ---
@@ -1281,6 +1332,16 @@ async fn claims_question(
             let (partition, view) = found.ok_or_else(Problem::not_found)?;
             ok(json!({ "partition": partition, "view": view }))
         }
+        Q::PolicyStatus { .. } => {
+            // A policy is on one partition, except for a moment while it moves.
+            let mut rows: Vec<Value> = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::PolicyStatus(found) = reply {
+                    rows.extend(found.into_iter().map(|r| json!({ "partition": p, "status": r })));
+                }
+            }
+            ok(json!({ "rows": rows }))
+        }
         Q::Book | Q::Report => {
             let partitions: Vec<Value> = s
                 .claims_everywhere(&question)
@@ -1697,6 +1758,8 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/devices/{device}", delete(revoke_device))
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
+        .route("/adviser/v1/replacements", get(adviser_replacements))
+        .route("/adviser/v1/replacements/dispute", post(adviser_dispute))
         .route("/employer/v1/schemes", get(schemes))
         .route("/employer/v1/schemes/{policy}/admins/{party}", put(scheme_admin))
         .route("/employer/v1/schemes/{policy}/second-admin", put(scheme_second_admin))

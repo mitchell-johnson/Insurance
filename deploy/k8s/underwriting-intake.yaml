@@ -1,0 +1,184 @@
+# The disclosure intake (docs/underwriting.md, "The disclosure intake"):
+# takes a life's answers from the portal and the new business service,
+# seals them in the clinical store and submits the disclosure to the
+# underwriting module. It runs under the clinical identity from
+# infra/underwriting.bicep, the only identity that may wrap people's keys
+# and write the clinical container. Stateless; any number may run.
+#
+# Set the values marked REPLACE from the outputs of infra/underwriting.bicep
+# and infra/main.bicep.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ic-underwriting-clinical
+  annotations:
+    azure.workload.identity/client-id: REPLACE-clinicalIdentityClientId
+---
+# The cluster token, read under the clinical identity.
+apiVersion: secrets-store.csi.x-k8s.io/v1
+kind: SecretProviderClass
+metadata:
+  name: ic-underwriting-clinical-token
+spec:
+  provider: azure
+  parameters:
+    clientID: REPLACE-clinicalIdentityClientId
+    keyvaultName: REPLACE-keyVaultName
+    tenantId: REPLACE-tenantId
+    objects: |
+      array:
+        - |
+          objectName: cluster-token
+          objectType: secret
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ic-underwriting-intake
+data:
+  # Outputs of infra/underwriting.bicep.
+  IC_CLINICAL_BLOB_ENDPOINT: REPLACE-clinicalBlobEndpoint
+  IC_CLINICAL_CONTAINER: clinical
+  IC_CLINICAL_KEY_VAULT_URL: REPLACE-clinicalKeyVaultUrl
+  IC_CLINICAL_WRAPPING_KEY: REPLACE-clinicalWrappingKey
+  # The Entra ID tenant and the application ID URI callers ask tokens for.
+  # A caller needs the app role new-business.
+  IC_ENTRA_TENANT_ID: REPLACE-tenantId
+  IC_UNDERWRITING_INTAKE_AUDIENCE: REPLACE-underwriting-intake-app-id-uri
+  IC_UNDERWRITING_INTAKE_LISTEN: 0.0.0.0:8080
+  RUST_LOG: info
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ic-underwriting-intake
+spec:
+  selector:
+    app: ic-underwriting-intake
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ic-underwriting-intake
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: ic-underwriting-intake
+  template:
+    metadata:
+      labels:
+        app: ic-underwriting-intake
+        azure.workload.identity/use: "true"
+    spec:
+      serviceAccountName: ic-underwriting-clinical
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: intake
+          image: insurance-core
+          command: ["/usr/local/bin/ic-underwriting-intake"]
+          envFrom:
+            # IC_NODES and IC_CLUSTER_TOKEN_FILE.
+            - configMapRef:
+                name: ic-ledger
+            - configMapRef:
+                name: ic-underwriting-intake
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: cluster-token
+              mountPath: /mnt/cluster-token
+              readOnly: true
+      volumes:
+        - name: cluster-token
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: ic-underwriting-clinical-token
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ic-underwriting-intake
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ic-underwriting-intake
+---
+# Only the portal and the new business service send answers. The token's
+# app role is checked as well; this keeps everything else from reaching it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-underwriting-intake
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-underwriting-intake
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: ["ic-portal", "ic-api"]
+      ports:
+        - port: 8080
+---
+# The ledger nodes also hear from the intake.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ic-node-from-underwriting-intake
+spec:
+  podSelector:
+    matchLabels:
+      app: ic-node
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: ic-underwriting-intake
+      ports:
+        - port: 7000

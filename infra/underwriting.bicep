@@ -11,8 +11,8 @@
 // - The wrapping key is an HSM key that cannot be exported, with only wrap
 //   and unwrap allowed, and the store's identity may do nothing else with it.
 //
-// The clinical identity is for the process that takes disclosures and reads
-// them back for an underwriter. The underwriting driver
+// The clinical identity is for the disclosure intake, the process that takes
+// disclosures and seals them (deploy/k8s/underwriting-intake.yaml). The underwriting driver
 // (deploy/k8s/underwriting.yaml) uses none of it: it talks to the ledger
 // nodes and publishes staff notices to the `underwriting-notices` hub below,
 // under the workers' identity from main.bicep, which may only send to it.
@@ -60,6 +60,7 @@ var roles = {
   // and unwrap. No sign, no encrypt, no delete.
   keyVaultWrapUser: 'e147488a-f6f5-4113-8e2d-b22465e65bf6'
   eventHubsDataSender: '2b629674-e913-4c01-ae53-ef4638d8f975'
+  keyVaultSecretsUser: '4633458b-17de-408a-b874-0445c86b69e6'
 }
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
@@ -153,6 +154,20 @@ resource storeWrap 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultWrapUser)
+  }
+}
+
+// The intake (deploy/k8s/underwriting-intake.yaml) runs under the clinical
+// identity and reads the cluster token, as every process that talks to the
+// ledger nodes does. Granted on the vault, as main.bicep grants the others:
+// the secret is set by hand after the vault exists.
+resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: vault
+  name: guid(vault.id, identity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
   }
 }
 

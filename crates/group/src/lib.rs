@@ -7,6 +7,7 @@
 //! membership in force.
 
 pub mod adapters;
+pub mod auth;
 pub mod benefit;
 pub mod command;
 pub mod csv;

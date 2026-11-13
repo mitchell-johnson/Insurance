@@ -50,6 +50,10 @@ pub enum Question {
         party: PartyId,
         have: Option<u64>,
     },
+    /// The engagements an adviser has held, current or not, by ID.
+    AdviserEngagements {
+        party: PartyId,
+    },
     /// Every policy a party has a relationship with.
     Policies {
         party: PartyId,
@@ -358,6 +362,15 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
             .map(|v| json!({ "id": v.id, "hardware_backed": v.hardware_backed, "enrolled": v.enrolled, "revoked": v.revoked }))
             .collect::<Vec<_>>()),
         Question::HeldBalance { party } => d.workbench.own_held(&party),
+        Question::AdviserEngagements { party } => {
+            json!(d
+                .directory
+                .engagements
+                .values()
+                .filter(|e| e.adviser == party)
+                .map(|e| &e.id)
+                .collect::<Vec<_>>())
+        }
         Question::Authorise { request } => {
             let decision = d.staff.authorise(state.staff_policy(), &request);
             json!({ "decision": decision, "explanation": decision.denied.map(crate::staff::Denial::explain) })
