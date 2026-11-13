@@ -158,6 +158,21 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                     return Err(invalid(file, "discount percent out of range"));
                 }
             }
+            Feature::Composition { core, requires, exclusive } => {
+                let named = core
+                    .iter()
+                    .chain(requires.keys())
+                    .chain(requires.values().flatten())
+                    .chain(exclusive.iter().flatten());
+                for code in named {
+                    if !codes.contains(code.as_str()) {
+                        return Err(invalid(file, format!("composition names cover {code}, which the product does not offer")));
+                    }
+                }
+                if requires.iter().any(|(cover, needed)| needed.contains(cover)) {
+                    return Err(invalid(file, "a cover cannot require itself"));
+                }
+            }
             Feature::Earning { .. } | Feature::Indexation { .. } | Feature::CoolingOff { .. } => {}
         }
     }

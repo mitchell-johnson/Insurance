@@ -178,6 +178,16 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             });
         }
     }
+    for life in lives.keys() {
+        let held: std::collections::BTreeSet<&str> = covers
+            .iter()
+            .filter(|(_, c)| c.layers.iter().any(|l| &l.life == life))
+            .map(|(code, _)| code.as_str())
+            .collect();
+        product
+            .check_composition(&held)
+            .map_err(|e| Reject::new("composition", format!("life {life}: {e}")))?;
+    }
     let policy = Policy {
         id: cmd.policy.clone(),
         number: cmd.number,

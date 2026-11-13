@@ -2685,3 +2685,21 @@ async fn a_vulnerable_customers_request_goes_to_a_person() {
     let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
     assert!(mine.as_array().unwrap().iter().all(|r| r["route_to_person"] == true), "{mine}");
 }
+
+/// Purpose: a disputed match the commission module accepts a decision on is decided from the page; a reinsurance question about
+/// something that does not exist is 404, and the ledger's own refusal for a journal it does not hold is passed on as it is.
+/// Why it matters: these are the answers a person acts on, done or nothing there; a console that called a missing statement an error,
+/// or hid the ledger's own words, would send people to the wrong team.
+#[tokio::test]
+async fn consoles_report_done_and_missing() {
+    let portal = portal();
+    portal.commission.matches(json!([]));
+    let body = json!({ "policy": "pol-9", "cover": "life", "layer": 1, "replacement": false, "purpose": "dispute D-1 upheld" });
+    let (status, done) = portal.write("POST", "sub-wbcon", "/staff/v1/replacements/decide", body).await;
+    assert_eq!((status, &done["accepted"]), (StatusCode::OK, &json!(true)), "{done}");
+
+    let ri = portal.get("sub-riview", "/staff/v1/reinsurance/statement?number=999").await;
+    assert_eq!(ri.0, StatusCode::NOT_FOUND, "{ri:?}");
+    let gl = portal.get("sub-aud", "/staff/v1/finance/journal?id=nope").await;
+    assert_eq!((gl.0, gl.1["detail"].as_str()), (StatusCode::BAD_REQUEST, Some("there is no journal nope")));
+}

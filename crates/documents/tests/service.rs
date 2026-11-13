@@ -204,6 +204,9 @@ async fn the_webhook_records_authenticated_delivery_reports() {
     ));
     // The same report again changes nothing.
     assert_eq!(post(Some(KEY), report).await, (200, json!({ "recorded": 0 })));
+    // A late report that contradicts the recorded outcome is not recorded.
+    let late = json!([{ "eventType": "Microsoft.Communication.EmailDeliveryReportReceived", "data": { "messageId": "ref-n1", "status": "Failed" } }]);
+    assert_eq!(post(Some(KEY), late).await, (200, json!({ "recorded": 0 })));
 
     stop.send(()).unwrap();
     server.await.unwrap().unwrap();

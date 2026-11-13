@@ -458,3 +458,34 @@ fn twelve_monthly_files_on_a_scheme_of_five_thousand() {
     let raised: Vec<_> = h.g.exceptions.values().map(|e| e.kind).collect();
     assert_eq!(raised, vec![ExceptionKind::RenewalNotAgreed]);
 }
+
+/// Purpose: when a file changes something reinsurance prices on (here a member who now
+/// smokes), reinsurance is sent that member's risk factors again; a change of salary alone
+/// sends nothing.
+/// Why it matters: the reinsurance premium for a life is worked out from the factors last
+/// sent. A member recorded as a non-smoker for ever is ceded at the wrong rate, and the
+/// difference is found only when a claim is recovered.
+#[test]
+fn a_change_to_a_priced_detail_is_sent_to_reinsurance_again() {
+    let mut h = Harness::new(terms());
+    h.apply("f1", FileKind::Full, first_file());
+    let factors = |h: &Harness| -> Vec<Option<bool>> {
+        h.notices
+            .iter()
+            .filter_map(|n| match n {
+                ReinsuranceNotice::RecordRiskFactors { life: l, smoker, .. } if *l == life("E002") => Some(*smoker),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(factors(&h), vec![None]);
+
+    let today = h.today();
+    let raise = attrs("staff", 65_000_00, "wlg");
+    h.apply("f2", FileKind::Changes, vec![change(1, "E002", RowChange::Change, today, raise.clone())]);
+    assert_eq!(factors(&h), vec![None], "a raise is not a risk factor");
+
+    let smokes = ic_group::record::MemberAttrs { smoker: Some(true), ..raise };
+    h.apply("f3", FileKind::Changes, vec![change(1, "E002", RowChange::Change, today, smokes)]);
+    assert_eq!(factors(&h), vec![None, Some(true)]);
+}

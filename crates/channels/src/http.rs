@@ -1128,6 +1128,18 @@ impl AppState {
 
 /// What to say when another module would not answer or could not be
 /// reached: its own refusal as `refused`, anything else as unavailable.
+/// Another module's refusal of a person's command: 403 where that module
+/// says the person may not (it keeps its own authority), 404 for a claim it
+/// does not hold, 409 for anything else it refused.
+fn module_refusal(code: &str, message: &str) -> Problem {
+    let status = match code {
+        "unknown_staff" | "authority" | "not_authorised" | "unauthorised" | "not_owner" | "no_access" => StatusCode::FORBIDDEN,
+        "unknown_claim" => StatusCode::NOT_FOUND,
+        _ => StatusCode::CONFLICT,
+    };
+    Problem::new(status, code, message)
+}
+
 fn module_problem(what: &str, refused: StatusCode, reason: String) -> Problem {
     match reason.strip_prefix(crate::forward::REFUSED) {
         Some(why) => Problem::new(refused, "refused", why),
@@ -1386,15 +1398,8 @@ async fn replacement_decide(State(s): State<Shared>, headers: HeaderMap, method:
         .await
         .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
     if let Some(refused) = output["result"].get("Err") {
-        let code = refused["code"].as_str().unwrap_or("refused");
-        let status = if code == "not_authorised" {
-            StatusCode::FORBIDDEN
-        } else {
-            StatusCode::CONFLICT
-        };
-        return Err(Problem::new(
-            status,
-            code,
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
             refused["message"].as_str().unwrap_or("the commission module refused it"),
         ));
     }
@@ -1639,13 +1644,7 @@ async fn claims_command(State(s): State<Shared>, headers: HeaderMap, method: Met
     };
     let proposed = s.claims.propose(partition, crate::claims::envelope(key, command)).await.map_err(claims_down)?;
     if let Some((code, message)) = proposed.rejected {
-        // Authority is the claims module's: someone it does not know, or whose profile does not cover this.
-        let status = match code.as_str() {
-            "unknown_staff" | "authority" | "not_authorised" | "not_owner" | "no_access" => StatusCode::FORBIDDEN,
-            "unknown_claim" => StatusCode::NOT_FOUND,
-            _ => StatusCode::CONFLICT,
-        };
-        return Err(Problem::new(status, &code, message));
+        return Err(module_refusal(&code, &message));
     }
     ok(json!({ "accepted": true, "partition": partition, "duplicate": proposed.duplicate, "events": proposed.events }))
 }
@@ -1671,9 +1670,7 @@ async fn finance_question(
         .ask(question)
         .await
         .map_err(|e| module_problem("finance", StatusCode::BAD_REQUEST, e))?;
-    if answer.is_null() {
-        return Err(Problem::not_found());
-    }
+    // The ledger answers something it does not hold with a refusal that says so, never with nothing.
     ok(answer)
 }
 
@@ -1743,13 +1740,10 @@ async fn pricing_command(State(s): State<Shared>, headers: HeaderMap, method: Me
     let envelope = crate::pricing::envelope(&key, &session.party, &standing["roles"], session.at, command);
     let output = s.pricing.tell(envelope).await.map_err(pricing_down)?;
     if let Some(refused) = output.get("refused") {
-        let code = refused["code"].as_str().unwrap_or("refused");
-        let status = if code == "unauthorised" {
-            StatusCode::FORBIDDEN
-        } else {
-            StatusCode::CONFLICT
-        };
-        return Err(Problem::new(status, code, refused["message"].as_str().unwrap_or("unit pricing refused it")));
+        return Err(module_refusal(
+            refused["code"].as_str().unwrap_or("refused"),
+            refused["message"].as_str().unwrap_or("unit pricing refused it"),
+        ));
     }
     ok(json!({ "accepted": true, "output": output }))
 }

@@ -139,6 +139,12 @@ async fn driver() -> Arc<TestDriver> {
     driver.issue(request("mere-1", "mere", &["tama"], DataClass::Personal)).await.unwrap();
     driver.issue(request("mere-clinical", "mere", &[], DataClass::Clinical)).await.unwrap();
     driver.issue(request("hemi.1", "hemi", &[], DataClass::Personal)).await.unwrap();
+    // A claim letter to someone whose name the typeface cannot draw.
+    let mut chinese = request("wang-1", "wang", &[], DataClass::Personal);
+    chinese.template = "decision".into();
+    chinese.trigger_event = Some("9-1".into());
+    chinese.data["name"] = json!("王芳");
+    driver.issue(chinese).await.unwrap();
     driver
 }
 
@@ -283,9 +289,10 @@ async fn tokens_are_required_and_destroyed_documents_are_gone() {
     assert_eq!(site.status("hemi.1", &["portal"], &[("x-ic-party", "hemi")]).await, 410);
 }
 
-/// Purpose: while the documents module or the tenant's signing keys
-/// cannot be reached the route answers "unavailable", and with downloads
-/// not configured the route does not exist.
+/// Purpose: while the documents module, the vault or the tenant's signing
+/// keys cannot be reached the route answers "unavailable", a document the
+/// typeface cannot set is a server fault, and with downloads not
+/// configured the route does not exist.
 /// Why it matters: an outage must read as one, so the portal tells the
 /// customer to try later instead of that the letter is missing; and a
 /// deployment without Entra settings must not serve documents unchecked.
@@ -317,6 +324,13 @@ async fn outages_are_unavailable_and_an_unconfigured_route_is_absent() {
         .await
         .unwrap();
     assert_eq!(response.status().as_u16(), 503);
+
+    // The vault cannot be read: unavailable, not missing.
+    driver.objects.set_down(true);
+    assert_eq!(site.status("hemi.1", &["portal"], &[("x-ic-party", "hemi")]).await, 503);
+    driver.objects.set_down(false);
+    // A document the typeface cannot set is a fault on our side.
+    assert_eq!(site.status("wang-1", &["portal"], &[("x-ic-party", "wang")]).await, 500);
 
     let off = Site::start(driver, false).await;
     assert_eq!(off.status("hemi.1", &["portal"], &[("x-ic-party", "hemi")]).await, 404);

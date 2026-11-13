@@ -274,7 +274,11 @@ fn ended(proposal: &str, entry: Entry, outcome: &str) -> Effect {
 }
 
 fn excess() -> Entry {
-    Entry::GroupExcess { policy: "POL-1".into() }
+    Entry::GroupExcess {
+        policy: "POL-1".into(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    }
 }
 
 fn alteration() -> Entry {

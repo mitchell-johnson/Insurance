@@ -1274,3 +1274,44 @@ fn a_collection_held_up_by_an_outage_goes_next_window_and_is_found() {
         "before Tuesday's cutoff it goes Tuesday"
     );
 }
+
+/// Purpose: a run takes items and is checked only before it is approved,
+/// and an item naming a payee or authority the module does not know is
+/// refused when it is added.
+/// Why it matters: an approved run is what the approver saw; adding to it
+/// or re-checking it afterwards would send a file nobody approved, and an
+/// item naming an account that is not on record must never reach a bank.
+#[test]
+fn an_approved_run_is_closed_to_change_and_unknown_accounts_are_refused() {
+    let mut desk = Desk::new();
+    desk.payee("p1", PayeeKind::Beneficiary, "0101234567");
+    desk.prepare("r1", RunType::LumpSumClaims, d(2027, 11, 15));
+    desk.add("r1", vec![pay("i1", "p1", 100_00)]);
+    desk.approve("r1");
+    assert_eq!(
+        desk.code(
+            &mia(),
+            Command::AddRunItems {
+                run: run("r1"),
+                items: vec![pay("i2", "p1", 1_00)]
+            }
+        ),
+        "wrong_state"
+    );
+    assert_eq!(desk.code(&mia(), Command::CheckRun { run: run("r1") }), "wrong_state");
+
+    desk.prepare("r2", RunType::LumpSumClaims, d(2027, 11, 15));
+    assert_eq!(
+        desk.code(
+            &mia(),
+            Command::AddRunItems {
+                run: run("r2"),
+                items: vec![pay("i3", "ghost", 100_00)]
+            }
+        ),
+        "unknown_payee"
+    );
+    desk.prepare("r3", RunType::Collection, d(2027, 11, 15));
+    let items = vec![collect("i4", "no-such-authority", "pol-1", 100_00)];
+    assert_eq!(desk.code(&mia(), Command::AddRunItems { run: run("r3"), items }), "unknown_authority");
+}
