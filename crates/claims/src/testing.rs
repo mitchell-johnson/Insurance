@@ -18,6 +18,10 @@ pub struct FakeCore {
     /// Refuse instructions while this is above zero, counting down.
     pub refuse_next: u32,
     pub work: u32,
+    /// The partition the fake stands for.
+    pub partition: u16,
+    /// Commands queued for other partitions, in order.
+    pub sent: Vec<(u16, crate::Command)>,
 }
 
 impl FakeCore {
@@ -62,5 +66,17 @@ impl Core for FakeCore {
 
     fn work(&mut self, units: u32) {
         self.work += units;
+    }
+
+    fn partition(&self) -> u16 {
+        self.partition
+    }
+
+    fn send(&mut self, to_partition: u16, command: crate::Command) -> Result<(), Reject> {
+        if to_partition == self.partition {
+            return Err(Reject::new("same_partition", "a partition does not send itself a message"));
+        }
+        self.sent.push((to_partition, command));
+        Ok(())
     }
 }

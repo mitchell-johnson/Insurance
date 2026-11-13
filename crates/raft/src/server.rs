@@ -17,8 +17,7 @@ use ic_azure::cold_tier::seal_segment;
 use ic_azure::credential::AzureCredential;
 use ic_azure::eventhubs::{EventHubsSink, EventSink};
 use ic_azure::AzureError;
-use ic_core::event::MessageBody;
-use ic_core::{recon, Command, Envelope, Policy};
+use ic_core::{recon, Envelope, Policy};
 use ic_ledger::PartitionId;
 use openraft::raft::ReadPolicy;
 use openraft::BasicNode;
@@ -320,14 +319,10 @@ impl Host {
     async fn deliver(&self, member: &Node, client: &ClusterClient) -> Result<usize, String> {
         let mut delivered = Vec::new();
         for message in member.machine.pending_messages() {
-            let command = match message.body.clone() {
-                MessageBody::TransferRecord(record) => Command::LandTransfer { record },
-                MessageBody::TransferLanded { policy, transfer_id } => Command::CompleteTransfer { policy, transfer_id },
-                MessageBody::TransferRejected { policy, transfer_id, .. } => Command::AbortTransfer { policy, transfer_id },
-            };
+            let (caller, command) = message.body.clone().into_delivery();
             let envelope = Envelope {
                 key: message.id.clone(),
-                caller: "transfer".to_string(),
+                caller: caller.to_string(),
                 // Drawn fresh for each delivery. Only the first delivery
                 // is applied, so only its salt is ever used.
                 salt: crate::client::fresh_salt(),
