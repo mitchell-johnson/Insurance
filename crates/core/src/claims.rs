@@ -221,6 +221,8 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         facts.cover_start = Some(first.max(c.start));
     }
     // The excess level the life held the cover at on the event date.
+    facts.premium_waiver = product.and_then(|pr| pr.cover(cover)).and_then(|def| def.premium_waiver);
+    facts.shared_counter = product.and_then(|pr| pr.cover(cover)).and_then(|def| def.shared_counter.clone());
     // An income benefit's waiting period and what its wording does in custody.
     if let Some(ic_product::Benefit::MonthlyBenefit {
         waiting_days,
@@ -397,6 +399,7 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             open,
         ),
         Instruction::WaivePremium { claim, cover, from, until, .. } => waive(s, p, ctx, &claim, &cover, from, until),
+        Instruction::UnwaivePremium { claim, cover, from, .. } => unwaive(s, p, ctx, &claim, &cover, from),
         Instruction::Close {
             claim, outcome, overpayment, ..
         } => close(&mut s.ledger, p, ctx, &claim, outcome, overpayment),
@@ -904,10 +907,68 @@ fn waive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &
     }
     if let Some(record) = policy.claims.get_mut(claim) {
         record.waived_minor += total;
+        for (id, amount) in &waived {
+            *record.waived.entry(*id).or_default() += amount;
+        }
     }
     ctx.emit(Event::Module {
         module: MODULE.to_string(),
         kind: "premium_waived".to_string(),
+        subject: claim.to_string(),
+        detail: [("policy".to_string(), policy.id.to_string()), ("amount_minor".to_string(), total.to_string())]
+            .into_iter()
+            .chain(net.into_iter().map(|(cover_type, amount)| (format!("net:{cover_type}"), amount.to_string())))
+            .collect(),
+    });
+    if let Some(product) = state.catalog.product(&policy.product_hash) {
+        arrears::refresh(product, policy, ctx);
+    }
+    Ok(())
+}
+
+/// Bill back what a claim's waiver paid for periods starting on or after a
+/// date: the reverse of the waiver's entry, with the receivables outstanding
+/// again and the policy's standing worked out afresh. Asked twice, the
+/// second finds nothing left to bill back.
+fn unwaive(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, cover: &str, from: NaiveDate) -> Result<(), Reject> {
+    let record = known(policy, claim)?;
+    let back: BTreeMap<u32, i64> = record
+        .waived
+        .iter()
+        .filter(|(id, amount)| **amount > 0 && policy.receivables.iter().any(|r| r.id == **id && r.period_start >= from))
+        .map(|(id, amount)| (*id, *amount))
+        .collect();
+    let total: i64 = back.values().sum();
+    if total == 0 {
+        return Ok(());
+    }
+    let net = crate::counterparty::net_by_cover_type(&policy.receivables, &back);
+    let c = policy.currency;
+    let (expense, d) = incurred(policy, cover, "premium_waiver_reversed");
+    let mut set = PostingSet::new();
+    set.debit(accounts::premium_receivable(&policy.id, c), i128::from(total), d.clone());
+    set.credit(expense, i128::from(total), d);
+    post(
+        &mut state.ledger,
+        policy,
+        ctx,
+        "premium_waiver_reversed",
+        set,
+        claim,
+        &[("amount_minor", total.to_string()), ("from", from.to_string())],
+    )?;
+    for r in policy.receivables.iter_mut() {
+        if let Some(amount) = back.get(&r.id) {
+            r.outstanding_minor += amount;
+        }
+    }
+    if let Some(record) = policy.claims.get_mut(claim) {
+        record.waived_minor -= total;
+        record.waived.retain(|id, _| !back.contains_key(id));
+    }
+    ctx.emit(Event::Module {
+        module: MODULE.to_string(),
+        kind: "premium_waiver_reversed".to_string(),
         subject: claim.to_string(),
         detail: [("policy".to_string(), policy.id.to_string()), ("amount_minor".to_string(), total.to_string())]
             .into_iter()
@@ -1289,6 +1350,79 @@ mod tests {
         // What is owed to payees and the bank is asked for agree: nothing is left over.
         let payable = state.ledger.natural_balance(&accounts::benefit_payable(&pol, ic_money::Currency::NZD).id);
         assert_eq!(payable, i128::from(record.payable_minor));
+    }
+
+    /// Purpose: premium a claim's waiver paid is billed back from a date: the waiver's entry
+    /// is reversed under its own posting type, the receivable is outstanding again for
+    /// exactly what was waived, the claim no longer counts it, and commission is told with
+    /// the same breakdown the waiver gave; a date after the waived period, or asking twice,
+    /// bills nothing back.
+    /// Why it matters: an admission reversed on a false declaration leaves the policyholder
+    /// owing the premium the insurer paid for them. Billed back by hand it would miss the
+    /// receivable, the expense or the commission; billed back twice it would charge them
+    /// double.
+    #[test]
+    fn a_waived_premium_is_billed_back_once_for_the_periods_asked() {
+        let (mut state, today) = book();
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let pol = PolicyId("pol-1".to_string());
+        let owed = state.policies[&pol].outstanding_minor();
+        assert!(owed > 0, "the first premium is billed and unpaid");
+        let admit = Instruction::Admit {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            amount_minor: 1_000_00,
+            release_reserve: false,
+            deduct_premium_minor: 0,
+            terminate: None,
+            repay_loan_minor: 0,
+        };
+        execute(&mut state, &mut ctx, admit).unwrap();
+        let waive = Instruction::WaivePremium {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            from: today,
+            until: today + chrono::Days::new(31),
+        };
+        execute(&mut state, &mut ctx, waive).unwrap();
+        let expense = accounts::claims_incurred("term-life", "life", ic_money::Currency::NZD);
+        let spent = state.ledger.natural_balance(&expense.id);
+        assert_eq!(
+            (state.policies[&pol].outstanding_minor(), state.policies[&pol].claims["clm-1"].waived_minor),
+            (0, owed)
+        );
+
+        let unwaive = |from: NaiveDate| Instruction::UnwaivePremium {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            from,
+        };
+        let entries = ctx.entries.len();
+        execute(&mut state, &mut ctx, unwaive(today + chrono::Days::new(1))).unwrap();
+        assert_eq!(ctx.entries.len(), entries, "the waived period began before that date");
+        execute(&mut state, &mut ctx, unwaive(today)).unwrap();
+        let p = &state.policies[&pol];
+        assert_eq!((p.outstanding_minor(), p.claims["clm-1"].waived_minor), (owed, 0));
+        assert!(p.claims["clm-1"].waived.is_empty());
+        assert_eq!(spent - state.ledger.natural_balance(&expense.id), i128::from(owed));
+        let reversal = ctx.entries.last().unwrap();
+        assert_eq!(reversal.body.kind, "premium_waiver_reversed");
+        assert!(reversal
+            .body
+            .postings
+            .iter()
+            .all(|p| p.dims.posting_type.as_deref() == Some("premium_waiver_reversed")));
+        let told = ctx.events.iter().rev().find_map(|e| match e {
+            Event::Module { kind, detail, .. } if kind == "premium_waiver_reversed" => Some(detail.clone()),
+            _ => None,
+        });
+        assert_eq!(told.unwrap()["amount_minor"], owed.to_string());
+        let entries = ctx.entries.len();
+        execute(&mut state, &mut ctx, unwaive(today)).unwrap();
+        assert_eq!(ctx.entries.len(), entries, "asked twice, billed back once");
     }
 
     /// Purpose: a claims command queued for another partition leaves with an

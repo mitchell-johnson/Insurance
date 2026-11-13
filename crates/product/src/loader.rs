@@ -120,6 +120,15 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
         if c.max_sum_insured_minor.is_some_and(|m| m < c.min_sum_insured_minor) || c.min_sum_insured_minor < 0 {
             return Err(invalid(file, format!("cover {}: sum insured limits are inconsistent", c.code)));
         }
+        if c.shared_counter
+            .as_ref()
+            .is_some_and(|name| name.is_empty() || !p.covers.iter().any(|o| o.code != c.code && o.shared_counter == c.shared_counter))
+        {
+            return Err(invalid(
+                file,
+                format!("cover {}: a shared counter is named and shared with another cover", c.code),
+            ));
+        }
         let mut options = BTreeSet::new();
         for o in &c.excess_options {
             if o.code.is_empty() || !options.insert(o.code.as_str()) {

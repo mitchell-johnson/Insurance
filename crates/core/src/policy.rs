@@ -457,6 +457,10 @@ pub struct ClaimLedger {
     /// Premium paid from claims expense under this claim's waiver.
     #[serde(default)]
     pub waived_minor: i64,
+    /// What of it was waived on each receivable, by receivable ID, so that
+    /// a waiver can be billed back period by period.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub waived: BTreeMap<u32, i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

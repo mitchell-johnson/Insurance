@@ -268,6 +268,16 @@ pub enum Instruction {
         /// The first day premiums are no longer waived.
         until: NaiveDate,
     },
+    /// Bill back premium this claim's waiver paid, for periods starting on
+    /// or after `from`: the admission was reversed on a false declaration,
+    /// so the policyholder owes it again. The waiver entries are reversed
+    /// and the receivables are outstanding again.
+    UnwaivePremium {
+        claim: String,
+        policy: String,
+        cover: String,
+        from: NaiveDate,
+    },
     HandlingCost {
         claim: String,
         policy: String,
@@ -343,6 +353,7 @@ impl Instruction {
             | Instruction::ExGratia { policy, .. }
             | Instruction::HandlingCost { policy, .. }
             | Instruction::WaivePremium { policy, .. }
+            | Instruction::UnwaivePremium { policy, .. }
             | Instruction::OpenMigrated { policy, .. }
             | Instruction::Close { policy, .. }
             | Instruction::Reopen { policy, .. }

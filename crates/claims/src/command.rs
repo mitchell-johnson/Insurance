@@ -353,6 +353,13 @@ pub enum Command {
         authority_doc: Option<String>,
         actor: Actor,
     },
+    /// The verified payee's resident withholding tax rate, in basis points,
+    /// as the customer master holds it. `None` clears it.
+    SetWithholdingRate {
+        claim: String,
+        rate_bp: Option<u32>,
+        actor: Actor,
+    },
     Pay {
         claim: String,
         payment_ref: String,
@@ -611,6 +618,7 @@ impl Command {
             Command::Reopen { .. } => "reopen",
             Command::VerifyPayee { .. } => "verify_payee",
             Command::Pay { .. } => "pay",
+            Command::SetWithholdingRate { .. } => "set_withholding_rate",
             Command::PayCost { .. } => "pay_cost",
             Command::StartWaiver { .. } => "start_waiver",
             Command::PayInterest { .. } => "pay_interest",

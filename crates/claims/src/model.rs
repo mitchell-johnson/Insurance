@@ -339,6 +339,10 @@ pub struct Payee {
     pub authority_doc: Option<String>,
     pub verified_on: NaiveDate,
     pub verified_by: StaffId,
+    /// The payee's resident withholding tax rate in basis points, from the
+    /// customer master. Absent: none was given, and the no-declaration rate applies.
+    #[serde(default)]
+    pub withholding_rate_bp: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -361,9 +365,25 @@ pub struct Payment {
     /// Of that interest, what the payee declined: reversed, not paid.
     #[serde(default)]
     pub interest_declined_minor: i64,
+    /// Of that interest, the resident withholding tax kept back for the
+    /// revenue authority.
+    #[serde(default)]
+    pub interest_withheld_minor: i64,
     /// The interested party it went to, where it was not paid to the payee.
     #[serde(default)]
     pub interested_party: Option<String>,
+}
+
+impl Payment {
+    /// The interest that reached the payee: less what they declined and the tax kept back.
+    pub fn interest_paid_minor(&self) -> i64 {
+        self.interest_minor - self.interest_declined_minor - self.interest_withheld_minor
+    }
+
+    /// What the bank was told to pay.
+    pub fn sent_minor(&self) -> i64 {
+        self.amount_minor + self.interest_paid_minor()
+    }
 }
 
 /// What an interested party is owed from this claim's proceeds, fixed at
