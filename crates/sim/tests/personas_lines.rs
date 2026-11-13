@@ -161,6 +161,7 @@ fn a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer
     assert_eq!(checked_sum_insured(&mut c, "clm-1", &id, "pilot-1", today), 750_000_00);
 
     let layer = ExcessLayer {
+        continues: None,
         policy: id.clone(),
         cover: "group-life".into(),
         life: LifeId("pilot-1".into()),

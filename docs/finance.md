@@ -31,12 +31,13 @@ A period moves to closing when its last day has closed on every partition. `conf
 
 | Kind | Checks |
 | --- | --- |
-| Worked out by the ledger | `control_check`, `valuation_extracts`, `unapproved_journals`, `actuarial_journals` (quarter ends), `trial_balance`, `fund_balance`, `migration_control`, `rate_table_validation` |
+| Worked out by the ledger | `control_check`, `valuation_extracts`, `unapproved_journals`, `actuarial_journals` (quarter ends), `trial_balance`, `fund_balance`, `migration_control`, `rate_table_validation`, `tax_posting_types` |
 | Reported by a named caller | `commission_sweep` (commission), `unit_pricing` (unit-pricing), `reinsurance_sweep` (reinsurance, quarter ends), `fund_cash_settlement` (payments), `subledger_reconciliations` (close-workflow), `actuarial_handover` (reporting, quarter ends), `tax_reconciliation` and `analytical_review` (finance-console) |
 | Aged items reported by a named caller | `aged:held_balance` (commission), `aged:unidentified_receipts` (payments), `aged:policy_suspense` (close-workflow, from the ledger's own feed), `aged:pending_investment_cash` (investment) |
 
 - A step is due a number of working days after period end. Weekends and the `holidays` the close configuration lists are skipped. The list holds national public holidays on the day they are observed, a weekend date is refused, and each new year has to be added before it starts (a year with none listed counts weekdays only).
 - `rate_table_validation` lists every rate table version the core has activated by the end of the period with no validation recorded for the same content hash (the core's `RateTableValidated`, recorded with `RecordRateTableValidation`). The core records a validation and does not insist on one, so this is where a table that went live unchecked is seen. It ships as not blocking, because nothing yet records a validation when a table is activated; make it blocking in `config/finance/close.star` once the activation pipeline does.
+- `tax_posting_types` reconciles the tax and levy accounts listed under `tax` in the close configuration (GST payable and levies payable) to posting types. Each is a control account, so only the core moves it; a movement under a posting type not listed for the account, or under none, turns the check red. The workings are the question `{"q":"tax_reconciliation","period"}`: each account's movement by posting type and product. The person's `tax_reconciliation` check remains for agreeing the totals to the tax return.
 - `migration_control` watches the accounts a migration posts its other side to (listed in the close configuration). The first period one is posted to is its cutover; anything posted through it in a later period turns the check red, even where a load and its reversal net to nothing.
 - A blocking check that is red stops sign-off. The finance lead may waive it on the record with a reason, a remediation owner who is someone else, and a date. A waiver never clears the item: the next period's check starts red again and the earlier waiver stays on the dashboard until it is green.
 - Policy suspense is aged by the ledger itself. It follows every posting to the `policy_suspense` role by policy as the feed arrives, so the list is the control account split by policy, and `since` is the day the present holding began (a holding that was used up and paid again starts afresh). The question `{"q":"aged_suspense","as_at"}` answers with the items oldest first, as at the latest day closed on every partition.
@@ -48,7 +49,7 @@ A period moves to closing when its last day has closed on every partition. `conf
 
 ## Reports
 
-All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `return_line`, `work`, `extract`.
+All are questions to the module (`{"q": "..."}`): `status`, `dashboard` (steps by status, owner and due date, blockers, waivers, sign-offs still needed, control days, prior-period items, aged items by party, extracts, journals), `checks`, `trial_balance` (optionally one fund), `movements` (opening, activity, prior-period columns, closing, year to date), `sources` (the partition days behind a period), `backdated`, `journal`, `conduct`, `return`, `return_line`, `tax_reconciliation`, `work`, `extract`.
 
 ## Regulatory returns and conduct
 
