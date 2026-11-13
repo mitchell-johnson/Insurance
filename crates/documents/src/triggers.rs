@@ -22,16 +22,35 @@ fn trigger(record: &EventRecord, policy: &ic_core::PolicyId, kind: DocumentKind,
     }
 }
 
+/// The event a schedule answers: one per policy per business date, however
+/// many changes the day brought.
+pub fn schedule_event(policy: &ic_core::PolicyId, on: chrono::NaiveDate) -> String {
+    format!("schedule:{}:{on}", policy.0)
+}
+
+fn schedule(record: &EventRecord, policy: &ic_core::PolicyId) -> Trigger {
+    let event = schedule_event(policy, record.business_date);
+    Trigger {
+        id: format!("{event}:{:?}", DocumentKind::PolicySchedule),
+        event,
+        ..trigger(record, policy, DocumentKind::PolicySchedule, None)
+    }
+}
+
 pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
     match &record.event {
         // A schedule is issued with the policy and reissued after every
         // change to it: the sequence of schedules is its documentary history.
+        // Cover taken off by a claim or by the owner ends or reduces layers;
+        // a reversed admission writes it back with a layer added.
         Event::PolicyIssued { policy, .. }
         | Event::AnniversaryReached { policy, .. }
         | Event::LayerAdded { policy, .. }
+        | Event::LayerReduced { policy, .. }
+        | Event::LayerEnded { policy, .. }
         | Event::LayersMerged { policy, .. }
         | Event::CoverExpired { policy, .. }
-        | Event::PolicyReinstated { policy } => vec![trigger(record, policy, DocumentKind::PolicySchedule, None)],
+        | Event::PolicyReinstated { policy } => vec![schedule(record, policy)],
         Event::StandingChanged { policy, to, .. } => standing_notice(*to)
             .map(|(kind, purpose)| trigger(record, policy, kind, Some(purpose)))
             .into_iter()
