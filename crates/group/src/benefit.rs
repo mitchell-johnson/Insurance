@@ -35,8 +35,11 @@ pub fn formula_covers(product: &ProductDefinition) -> impl Iterator<Item = &Cove
     product.covers.iter().filter(|c| c.rating.premium_type == PremiumType::GroupUnitRate)
 }
 
+/// A category the scheme's covers know. On a health-only scheme no cover
+/// is driven by category, so any category the employer uses is kept as it
+/// is, for the invoice by category.
 pub fn known_category(product: &ProductDefinition, category: &str) -> bool {
-    formula_covers(product).any(|c| c.categories.iter().any(|k| k.code == category))
+    formula_covers(product).next().is_none() || formula_covers(product).any(|c| c.categories.iter().any(|k| k.code == category))
 }
 
 /// The lowest age at which any of the scheme's covers expires.
