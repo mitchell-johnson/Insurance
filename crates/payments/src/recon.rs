@@ -145,7 +145,23 @@ impl PaymentsState {
                         id.clone(),
                         exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
                     );
-                    if let Some(owed) = repayment.filter(|o| line.amount_minor <= o.outstanding_minor) {
+                    let loan = repayment.as_ref().filter(|o| o.claim.is_empty()).map(|o| o.policy.clone());
+                    if let Some(policy) = loan {
+                        // Interest accrues daily: the core says if it is too much.
+                        self.push_outbox(OutboxEntry {
+                            key: format!("{}{id}", crate::repay::LOAN_REPAID),
+                            instruction: Instruction::CoreAt {
+                                policy: PolicyId::from(policy.as_str()),
+                                caller: "cash-matching".to_string(),
+                                command: Box::new(ic_core::Command::Loan(Box::new(ic_core::loan::LoanCommand::Repay {
+                                    policy: PolicyId::from(policy.as_str()),
+                                    receipt: id.clone(),
+                                    amount: ic_money::Money::new(line.amount_minor, currency),
+                                }))),
+                            },
+                            about: Some(About::Exception(id.clone())),
+                        });
+                    } else if let Some(owed) = repayment.filter(|o| line.amount_minor <= o.outstanding_minor) {
                         self.push_outbox(OutboxEntry {
                             key: format!("{}{id}", crate::repay::REPAID),
                             instruction: Instruction::CoreAt {
@@ -265,6 +281,8 @@ impl PaymentsState {
                     "recorded by reinsurance against its statement"
                 } else if done.key.starts_with(crate::repay::REPAID) {
                     "recorded by claims against its overpayment"
+                } else if done.key.starts_with(crate::repay::LOAN_REPAID) {
+                    "applied to the policy loan"
                 } else {
                     "applied by cash matching"
                 };

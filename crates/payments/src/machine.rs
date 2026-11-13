@@ -212,6 +212,12 @@ pub enum Command {
         #[serde(default)]
         reason: String,
     },
+    /// The core changed what is owed on a policy's loan (`PolicyLoanDrawn`,
+    /// `PolicyLoanRepaid`, `PolicyLoanWrittenOff`).
+    LoanChanged {
+        policy: String,
+        outstanding_minor: i64,
+    },
     /// Claims changed an overpayment (`overpayment_*`), with what is still
     /// owed on it (`repay.rs`).
     OverpaymentChanged {
@@ -795,6 +801,7 @@ impl PaymentsState {
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
             Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
+            Command::LoanChanged { policy, outstanding_minor } => self.loan_changed(tx, &policy, outstanding_minor),
             Command::OverpaymentChanged {
                 claim,
                 overpayment,
