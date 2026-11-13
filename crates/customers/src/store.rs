@@ -794,6 +794,7 @@ impl<W: KeyWrapper> Store<W> {
         let retracted = written.iter().any(|r| matches!(r.body, EventBody::DeathRetracted { .. }));
         if let (true, Change::MarkDeceased { date_of_death }) = (died, change) {
             self.queue_death(&tx, id, *date_of_death, false, now).await?;
+            self.prompt_bereaved(&tx, id, now).await?;
         }
         if let (true, Some(date)) = (retracted, died_on.as_ref().and_then(Value::as_str).and_then(|d| d.parse::<NaiveDate>().ok())) {
             self.queue_death(&tx, id, date, true, now).await?;
@@ -860,6 +861,43 @@ impl<W: KeyWrapper> Store<W> {
         }
         tx.commit().await.map_err(db)?;
         Ok(outcome)
+    }
+
+    /// After a death, a prompt for a person to consider a bereavement
+    /// marker for whoever is left: the other owners of a policy the person
+    /// owned, and a partner recorded either way. Never a marker itself, and
+    /// never a second open prompt for the same reason.
+    async fn prompt_bereaved(&self, tx: &Transaction<'_>, deceased: &PartyId, now: DateTime<Utc>) -> Result<()> {
+        let today = now.date_naive();
+        let rows = tx
+            .query(
+                "select distinct other from ( \
+                   select o.party_id as other from relationships d join relationships o \
+                     on o.target_kind = 'policy' and o.target_id = d.target_id and o.kind = 'owner' \
+                   where d.party_id = $1 and d.kind = 'owner' and d.target_kind = 'policy' \
+                     and (o.valid_to is null or o.valid_to > $2) \
+                   union select target_id from relationships where party_id = $1 and kind = 'partner' and target_kind = 'party' \
+                     and (valid_to is null or valid_to > $2) \
+                   union select party_id from relationships where target_id = $1 and kind = 'partner' and target_kind = 'party' \
+                     and (valid_to is null or valid_to > $2) \
+                 ) left_behind join parties p on p.id = left_behind.other \
+                 where other <> $1 and p.shredded_at is null and p.merged_into is null \
+                   and not exists (select 1 from reviews r where r.party_id = other and r.kind = 'consider_marker' \
+                                   and r.reason = 'bereavement' and r.status = 'open')",
+                &[&deceased.0, &today],
+            )
+            .await
+            .map_err(db)?;
+        for r in rows {
+            let other: String = r.get(0);
+            tx.execute(
+                "insert into reviews (id, party_id, candidates, status, created_at, kind, reason) values ($1, $2, '{}', 'open', $3, 'consider_marker', 'bereavement')",
+                &[&format!("rev_{}", uuid::Uuid::new_v4().simple()), &other, &now],
+            )
+            .await
+            .map_err(db)?;
+        }
+        Ok(())
     }
 
     /// Lock two parties in a fixed order, so two merges of the same pair

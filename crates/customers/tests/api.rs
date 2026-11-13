@@ -962,3 +962,69 @@ async fn representatives_act_only_within_their_authority() {
     let lines = trail["audit"].to_string();
     assert!(lines.contains(&format!("authority:{attorney}:change_beneficiary:route")), "{lines}");
 }
+
+/// Purpose: a death opens a prompt for a person to consider a bereavement marker for
+/// whoever is left (the other owner of a joint policy, and a partner recorded either way),
+/// never a marker itself; an ended co-ownership, an unrelated owner and the person who
+/// died get no prompt, and a second death record does not open a second prompt while one
+/// is open. Persona row VUL-015.
+/// Why it matters: a bereaved joint owner is often vulnerable at exactly the moment the
+/// insurer contacts them about the claim, and a marker set without a person's judgement
+/// would label someone who never asked for it.
+#[tokio::test]
+async fn a_death_prompts_a_person_to_consider_the_bereaved() {
+    let w = world_or_skip!();
+    let died = w.person("Wiremu", "Kingi", "1950-01-01", &[]).await;
+    let joint = w.person("Mere", "Kingi", "1952-02-02", &[]).await;
+    let partner = w.person("Aroha", "Kingi", "1955-03-03", &[]).await;
+    let former = w.person("Rangi", "Kingi", "1951-04-04", &[]).await;
+    let stranger = w.person("Sam", "Other", "1960-05-05", &[]).await;
+    let own = |id: &str, policy: &str, to: Option<&str>| {
+        json!({ "command": "add_relationship", "id": id, "kind": "owner", "target": { "kind": "policy", "id": policy },
+                "valid_from": "2020-01-01", "valid_to": to })
+    };
+    for (who, rel) in [
+        (&died, own("o1", "JP1", None)),
+        (&joint, own("o2", "JP1", None)),
+        (&former, own("o3", "JP1", Some("2021-01-01"))),
+        (&stranger, own("o4", "P9", None)),
+        (
+            &partner,
+            json!({ "command": "add_relationship", "id": "pt", "kind": "partner",
+                    "target": { "kind": "party", "id": died }, "valid_from": "2020-01-01" }),
+        ),
+    ] {
+        let (status, out) = w.command(who, "staff", rel).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let (status, out) = w
+        .command(&died, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-01" }))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let prompted = || async {
+        let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
+        let mut out: Vec<(String, String)> = r["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|r| r["kind"] == "consider_marker")
+            .map(|r| (r["party"].as_str().unwrap().to_string(), r["reason"].as_str().unwrap().to_string()))
+            .collect();
+        out.sort();
+        out
+    };
+    let mut expected = vec![(joint.clone(), "bereavement".to_string()), (partner.clone(), "bereavement".to_string())];
+    expected.sort();
+    assert_eq!(prompted().await, expected);
+    // No marker is set by the prompt.
+    let (_, record) = w.get(&format!("/v1/parties/{joint}"), "staff", "vulnerability_support").await;
+    assert!(record["facts"].get("vulnerability").is_none(), "{record}");
+    // Withdrawn and recorded again: still one prompt each while it is open.
+    let (status, _) = w.command(&died, "claims", json!({ "command": "retract_death", "reason": "wrong date" })).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = w
+        .command(&died, "claims", json!({ "command": "mark_deceased", "date_of_death": "2026-10-02" }))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(prompted().await, expected);
+}
