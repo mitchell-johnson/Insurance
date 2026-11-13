@@ -892,8 +892,10 @@ fn terms_altered(policy: &str, cover: &str, old: u32, new: u32, sum: i64, on: ch
 /// Purpose: when underwriting changes the loadings or exclusions on cover in force, the
 /// layer the core writes in its place keeps the old layer's place in the life's retention
 /// order, so what is retained and ceded on every cover of the life is the same the day
-/// after as the day before; a second change of terms keeps it again. The same pair of
-/// events without the link is new business and goes to the back of the order.
+/// after as the day before; a second change of terms keeps it again, whether the core ends the
+/// old layer before writing the new one or after (group's move of a loading to the member
+/// writes first). The same pair of events without the link is new business and goes to the
+/// back of the order.
 /// Why it matters: under a treaty that reallocates freed retention, treating a change of
 /// terms as an ending and a new start hands the retention to the life's later covers and
 /// cedes the altered cover instead. Nothing about the risk's size changed, yet premiums
@@ -901,7 +903,13 @@ fn terms_altered(policy: &str, cover: &str, old: u32, new: u32, sum: i64, on: ch
 /// listing would show a cancellation and new business that never happened.
 #[test]
 fn a_change_of_underwriting_terms_keeps_the_cover_s_place_in_the_retention() {
-    let run = |continues: bool| {
+    let run = |continues: bool, written_first: bool| {
+        let in_order = |mut events: Vec<Event>| {
+            if written_first {
+                events.reverse();
+            }
+            events
+        };
         let mut b = Bench::empty();
         let source = RETAIL.replace(
             "recapture_after_years = 10,",
@@ -920,9 +928,9 @@ fn a_change_of_underwriting_terms_keeps_the_cover_s_place_in_the_retention() {
         );
         let trauma_before = b.ri.cession_record(&key("P1", "trauma", 1, "L1")).to_vec();
         b.today = d(2027, 9, 1);
-        b.feed(1, terms_altered("P1", "life", 1, 2, 400 * K, d(2027, 9, 1), continues.then_some(1)));
+        b.feed(1, in_order(terms_altered("P1", "life", 1, 2, 400 * K, d(2027, 9, 1), continues.then_some(1))));
         b.today = d(2027, 11, 1);
-        b.feed(1, terms_altered("P1", "life", 2, 3, 400 * K, d(2027, 11, 1), continues.then_some(2)));
+        b.feed(1, in_order(terms_altered("P1", "life", 2, 3, 400 * K, d(2027, 11, 1), continues.then_some(2))));
         b.assert_reconciles();
         assert!(b.ri.cession(&key("P1", "life", 1, "L1"), d(2027, 9, 1)).is_none(), "the old layer has ended");
         assert!(b.ri.cession(&key("P1", "life", 2, "L1"), d(2027, 11, 1)).is_none());
@@ -935,8 +943,9 @@ fn a_change_of_underwriting_terms_keeps_the_cover_s_place_in_the_retention() {
             unchanged,
         )
     };
-    assert_eq!(run(true), (400 * K, 400 * K, 100 * K, true));
-    assert_eq!(run(false), (100 * K, 100 * K, 400 * K, false));
+    assert_eq!(run(true, false), (400 * K, 400 * K, 100 * K, true));
+    assert_eq!(run(true, true), (400 * K, 400 * K, 100 * K, true));
+    assert_eq!(run(false, false), (100 * K, 100 * K, 400 * K, false));
 }
 
 /// Purpose: a layer written again on new terms stays on the treaty version it was ceded

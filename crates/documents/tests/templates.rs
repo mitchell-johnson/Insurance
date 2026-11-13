@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use ic_documents::command::{ApprovalRole, Command, Settings};
 use ic_documents::state::TemplateStatus;
-use ic_documents::template::{AlternateFormat, Part, PartRef, ProductBinding};
+use ic_documents::template::{sha256_hex, AlternateFormat, Part, PartRef, ProductBinding, TemplateRef};
 use ic_documents::{DocumentKind, Event};
 use serde_json::json;
 use support::*;
@@ -689,4 +689,76 @@ fn a_letter_for_no_product_is_tested_in_every_language() {
         },
     );
     kit.ok("config", "product", activate);
+}
+
+/// Purpose: a translation has no version of its own. Changing only the te
+/// reo body of an active template is refused under the same version; as a
+/// new version it carries a new content hash, cannot be activated until it
+/// is approved again and rendered in both languages, and a document issued
+/// in either language names the one template version.
+/// Why it matters: the design requires a translation to be versioned with
+/// its primary, so a customer reading te reo and one reading English were
+/// sent the same reviewed wording. A translation edited on its own would
+/// reach customers unreviewed and unrecorded.
+#[test]
+fn a_translation_is_versioned_with_its_primary() {
+    let mut kit = Kit::new();
+    let data = sample_data();
+    let mut v1 = template("receipt-mi", DocumentKind::PremiumReceipt, "We received {{premium|money}}.");
+    v1.bodies.insert("mi".into(), "Kua tae mai te {{premium|money}}.".into());
+    v1.controlling_statements.insert("mi".into(), "English controls.".into());
+    let in_language = |kit: &Kit, t: &ic_documents::template::Template, language: &str| {
+        let mut case = kit.case_for(t, &data);
+        let text = t.render(&kit.state.parts, language, &data).unwrap();
+        case.language = language.into();
+        case.expected_sha256 = sha256_hex(text.as_bytes());
+        case
+    };
+    let r1 = v1.reference();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(v1.clone())));
+    kit.approve(&r1, &[ApprovalRole::Legal, ApprovalRole::Product]);
+    let cases = vec![in_language(&kit, &v1, "en"), in_language(&kit, &v1, "mi")];
+    kit.ok("config", "author", Command::RunRenderingTests { template: r1.clone(), cases });
+    let activate = |r: &TemplateRef| Command::ActivateTemplate {
+        template: r.clone(),
+        effective_from: date("2027-11-15"),
+    };
+    kit.ok("config", "product", activate(&r1));
+
+    let mut edited = v1.clone();
+    edited.bodies.insert("mi".into(), "Kua riro mai te {{premium|money}}.".into());
+    assert_eq!(submit(&mut kit, edited.clone()), "config_conflict");
+
+    let mut v2 = edited;
+    v2.version = 2;
+    let r2 = v2.reference();
+    kit.ok("config", "author", Command::SubmitTemplate(Box::new(v2.clone())));
+    assert_ne!(kit.state.templates[&r1].content_hash, kit.state.templates[&r2].content_hash);
+    assert_eq!(kit.err("config", "product", activate(&r2)), "not_approved");
+    kit.approve(&r2, &[ApprovalRole::Legal, ApprovalRole::Product]);
+    let only_english = vec![in_language(&kit, &v2, "en")];
+    kit.ok(
+        "config",
+        "author",
+        Command::RunRenderingTests {
+            template: r2.clone(),
+            cases: only_english,
+        },
+    );
+    assert_eq!(kit.err("config", "product", activate(&r2)), "not_tested");
+
+    kit.ok(
+        "documents",
+        "svc",
+        Command::RegisterPartyKey {
+            party: party("aroha"),
+            wrapped_key: "wrapped-aroha".into(),
+        },
+    );
+    for (id, language) in [("r-en", "en"), ("r-mi", "mi")] {
+        let mut spec = kit.issue_spec(id, DocumentKind::PremiumReceipt, "receipt-mi");
+        spec.language = language.into();
+        kit.issue(spec);
+        assert_eq!(kit.state.documents[id].template, Some(r1.clone()));
+    }
 }

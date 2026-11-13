@@ -6,7 +6,7 @@
 
 - **The channel module** (`state.rs`) runs as a Raft group named `channels` on the ledger nodes, registered in `crates/node`. It reads the core's events and is told the rest by the other modules. Nothing in it reads a clock: every command carries its time.
 - **The portal service** (`http.rs`, `main.rs`, binary `ic-portal`) is a gateway with no state of its own. It checks the caller's token, asks the module a question or proposes a command, and answers. Any number of copies can run; losing one loses nothing.
-- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/reinsurance`, `/ops`, `/status`. They load nothing from anywhere else.
+- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/reinsurance`, `/underwriting`, `/ops`, `/status`. They load nothing from anywhere else.
 - **The customer app** is not in this repository. Its whole contract is the `/app/v1` API below, including the offline sync protocol. The native app belongs with the bank's app.
 
 ## Who signs in, and how
@@ -49,7 +49,8 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
 | `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
-| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
+| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`); put a hold on your own money going out (`place_spending_hold`), ask for it to end (`request_hold_removal {verification}`, naming a passed identity check made since the hold and in the last 24 hours, else 422 `verification_needed`) or take that request back (`cancel_hold_removal`). Send `If-Match` with the version you saw. Only legal lifts a hold at once; that command is refused here. |
+| `GET /app/v1/profile/spending-hold` | Where your own hold stands: `{held, placed_at, removal: {requested_at, ends_at} or null}`. |
 | `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
 | `GET /app/v1/documents/{id}/pdf` | One of your own documents (one you own or were sent a copy of), as a PDF. Anyone else's is 404, the same as one that does not exist. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign` | For the person insured on that proposal: what to sign for their answers (`{step, answers, adviser_entered}`, `step` being `disclosure` or `interview`). The underwriting intake checks the answers and keeps nothing. |
@@ -246,6 +247,30 @@ Commands go under the caller `reinsurance-ops` on the latest business date any p
 | `GET /staff/v1/reinsurance/{question}` | `exceptions`, `notices`, `abandoned`, `abandoned_notices`, `sweep_check?period_end=`, `statement?number=`, `notice_retries?seq=`. |
 | `POST /staff/v1/reinsurance/commands` | One of the commands above, in that module's own JSON, with an `Idempotency-Key`. An abandonment answers `{prepared}`. |
 | `POST /staff/v1/reinsurance/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared abandonment. |
+
+
+## The underwriting console
+
+`/underwriting` is how underwriters reach the underwriting module (`docs/underwriting.md`). That module keeps proposals, cases and decisions and checks each underwriter's authority profile itself (grade, accreditation, limits, conflicts); it takes people's commands only from the caller `underwriting-console` and believes the console about who is acting. So every field that names the person acting (`underwriter`, `by`, `of`, `reviewer`, `booked_by`, `decided_by`) is set here to whoever signed in, whatever the page sent. The underwriter IDs in that module's profiles are workforce directory IDs.
+
+| Staff action | What it opens |
+|---|---|
+| `underwriting.work` | Queues, proposals, workload, report, exclusions, parked effects; take, hand over, move, ask for evidence and opinions, record an opinion or an interview, propose or countersign a decision, release documents to a reinsurer, send an issue again, put a parked effect back, declare a conflict, read a life's disclosures. |
+| `underwriting.senior` | All of that, plus peer review (`draw_peer_review_sample`, `record_peer_finding`) and non-disclosure remedies. |
+
+**Two seniors for a remedy.** `record_non_disclosure_outcome` is prepared by one senior and kept in the replicated channel state (`src/countersign.rs`, ids `underwriting:<key>`), with `decided_by` set to them. A different senior signs it, and only then is it sent, with the signer as `countersigned_by`; the page cannot type it. The preparer can take it back until it is signed; an unreachable module leaves it signed for the signer to finish, and a refusal ends it.
+
+**Reading disclosures** goes through the intake (`POST /v1/disclosures/open`, `{request, proposal, life, underwriter, purpose}`), which has the module allow the reading and record `FileAccessed` before any record is opened. The portal's identity needs the intake's app role `underwriting-console` as well as `new-business`. The request ID is the idempotency key, so a repeat is the same reading.
+
+| Route | |
+|---|---|
+| `GET /staff/v1/underwriting/me` | Whether you are a senior, the remedies waiting for a second senior, and the business date. |
+| `GET /staff/v1/underwriting/{question}` | `proposal?proposal=`, `disclosure_basis?proposal=`, `queue?queue=` (as of now), `workload` (your own), `report?from=&to=`, `exclusions?on=`, `parked`. A null answer is 404. |
+| `POST /staff/v1/underwriting/commands` | One command in that module's JSON, with an `Idempotency-Key`. Its events and view come back; a refusal is 403 (`not_authorised`, `not_owner`, ...) or 409 with the module's code. A remedy answers `{prepared}`. |
+| `POST /staff/v1/underwriting/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared remedy. |
+| `POST /staff/v1/underwriting/disclosures` | `{proposal, life, purpose}`: the intake's answer as it gave it. |
+
+Not sent from here: configuration, the driver's own commands (sweep, acknowledgements, parking), and anything from new business, evidence providers, reinsurance, the issuer or claims.
 
 ## The finance console
 

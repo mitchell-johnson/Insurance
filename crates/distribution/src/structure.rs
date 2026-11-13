@@ -234,8 +234,15 @@ impl Structure {
         if self.known(&engagement.adviser)?.kind != PartyKind::Adviser {
             return Err(StructureError::Invalid(format!("{} is not an adviser", engagement.adviser)));
         }
-        if !matches!(self.known(&engagement.with)?.kind, PartyKind::Fap | PartyKind::AuthorisedBody) {
-            return Err(StructureError::Invalid(format!("{} is not a provider or an authorised body", engagement.with)));
+        // A broking firm is a licensed provider too: its people are engaged by it.
+        if !matches!(
+            self.known(&engagement.with)?.kind,
+            PartyKind::Fap | PartyKind::AuthorisedBody | PartyKind::Broker
+        ) {
+            return Err(StructureError::Invalid(format!(
+                "{} is not a provider, a broker or an authorised body",
+                engagement.with
+            )));
         }
         if engagement.to.is_some_and(|t| t <= engagement.from) {
             return Err(StructureError::Invalid("an engagement must last at least a day".into()));

@@ -31,7 +31,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl git git-lfs gnupg jq sudo unzip xz-utils zstd tini \
         build-essential pkg-config libssl-dev clang protobuf-compiler libprotobuf-dev \
-        python3 \
+        mold python3 \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
     && echo "deb [arch=arm64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable" \
@@ -48,6 +48,14 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/v${KUBECTL_V
     && echo "${RUSTUP_SHA256}  /usr/local/bin/rustup-init" | sha256sum -c - \
     && chmod 0755 /usr/local/bin/kubectl /usr/local/bin/bicep /usr/local/bin/rustup-init
 
+# Rust links through clang with mold rather than GNU ld. Every test
+# executable links the whole dependency tree; GNU ld took minutes and
+# gigabytes a binary, and parallel links ran the Docker machine out of memory
+# (the kernel killed the linker). A linker wrapper, not RUSTFLAGS, because
+# cargo llvm-cov sets RUSTFLAGS and the wrapper must still apply.
+RUN printf '#!/bin/sh\nexec clang -fuse-ld=mold "$@"\n' > /usr/local/bin/clang-mold \
+    && chmod 0755 /usr/local/bin/clang-mold
+
 # The runner works as an ordinary user with password-free sudo, as on
 # GitHub's hosted runners. The ubuntu image's own uid 1000 user is removed so
 # the runner can take that uid.
@@ -55,7 +63,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
     && useradd --create-home --uid 1000 --shell /bin/bash runner \
     && echo 'runner ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/runner \
     && chmod 0440 /etc/sudoers.d/runner \
-    && mkdir -p /opt/actions-runner /data \
+    && mkdir -p /opt/actions-runner /data/target \
     && curl -fsSL -o /tmp/runner.tar.gz "https://github.com/actions/runner/releases/download/v${RUNNER_VERSION}/actions-runner-linux-arm64-${RUNNER_VERSION}.tar.gz" \
     && echo "${RUNNER_SHA256}  /tmp/runner.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/runner.tar.gz -C /opt/actions-runner \
@@ -66,6 +74,7 @@ RUN userdel -r ubuntu 2>/dev/null || true \
 
 ENV CARGO_HOME=/data/cargo \
     RUSTUP_HOME=/data/rustup \
+    CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=/usr/local/bin/clang-mold \
     PATH=/data/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     RUNNER_ALLOW_RUNASROOT=0
 

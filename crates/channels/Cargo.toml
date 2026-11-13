@@ -42,6 +42,7 @@ ic-pricing = { path = "../pricing" }
 ic-complaints = { path = "../complaints" }
 ic-finance = { path = "../finance" }
 ic-reinsurance = { path = "../reinsurance" }
+ic-underwriting = { path = "../underwriting" }
 ic-sim.workspace = true
 ic-product.workspace = true
 ic-money.workspace = true
