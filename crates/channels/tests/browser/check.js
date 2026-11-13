@@ -74,32 +74,43 @@ async function say(page, text, hold = 2500) {
 }
 
 async function visit(browser, path, who, steps) {
+  if (process.env.ONLY && process.env.ONLY !== path) return;
   const label = personas[`${path} ${who ? who.subject : "-"}`] || `${path} | ${who ? who.subject : "anyone"}`;
   const [persona, doing] = label.split(" | ");
   const name = `${String(++clip).padStart(2, "0")}-${persona.split(" ")[0]}-${path.replace(/\W/g, "") || "index"}`;
-  const context = await browser.newContext(video ? { recordVideo: { dir: `${video}/${name}`, size: { width: 1280, height: 800 } }, viewport: { width: 1280, height: 800 } } : {});
+  // THEME=dark and WIDTH=390 look at the pages in the dark theme and at phone width.
+  const look = { colorScheme: process.env.THEME === "dark" ? "dark" : "light", viewport: { width: Number(process.env.WIDTH) || 1280, height: 800 } };
+  const context = await browser.newContext(video ? { ...look, recordVideo: { dir: `${video}/${name}`, size: { width: 1280, height: 800 } } } : look);
   const page = await context.newPage();
   const problems = [];
   page.on("pageerror", (e) => problems.push("script error: " + e.message));
   page.on("console", (m) => { if (m.type() === "error" && !m.text().startsWith("Failed to load resource")) problems.push("console: " + m.text()); });
   page.on("response", (r) => { if (r.status() >= 400 && !(steps.expectStatus || []).includes(r.status())) problems.push(`${r.status()} ${r.url()}`); });
-  // Development sign-in asks for a subject and then for roles.
-  const answers = who ? [who.subject, who.roles || ""] : [];
-  page.on("dialog", (d) => d.accept(answers.length ? answers.shift() : "browser check"));
+  // The pages ask their own questions; a browser dialog is a fault.
+  page.on("dialog", (d) => { problems.push("browser dialog: " + d.message()); d.dismiss(); });
   try {
     await page.goto(base + path, { waitUntil: "networkidle" });
+    // Development sign-in: the page asks who the person is before it shows anything.
+    if (who) {
+      await page.fill("#dev-subject", who.subject);
+      await page.fill("#dev-roles", who.roles || "");
+      await page.click("#dev-sign-in button");
+      await page.waitForLoadState("networkidle");
+    }
     await say(page, `${persona}: ${doing}`, 3000);
     await steps.run(page);
     await say(page, `${persona}: ${doing}`, 2000);
   } catch (e) {
     problems.push(String(e.message).split("\n").slice(0, 3).join(" / "));
   }
-  if (process.env.SHOTS) await page.screenshot({ path: `${process.env.SHOTS}/${path.replace(/\W/g, "") || "index"}.png`, fullPage: true });
+  if (process.env.SHOTS) await page.screenshot({ timeout: 10000, path: `${process.env.SHOTS}/${path.replace(/\W/g, "") || "index"}-${who ? who.subject : "anyone"}.png`, fullPage: true }).catch((e) => problems.push("screenshot: " + e.message.split("\n")[0]));
   for (const p of problems) failures.push(`${path}: ${p}`);
   console.log(`${problems.length ? "FAIL" : "ok  "} ${path}`);
   await context.close();
   if (video) require("fs").writeFileSync(`${video}/${name}/caption.txt`, `${persona}\n${doing}\n`);
 }
+// Move to one of a page's views by its tab.
+const tab = (page, name) => page.getByRole("tab", { name, exact: true }).click();
 const sees = async (page, text) => {
   const found = page.getByText(text, { exact: false }).first();
   await found.waitFor({ timeout: 5000 });
@@ -115,7 +126,9 @@ const sees = async (page, text) => {
   await visit(browser, "/ops", { subject: "sub-kiri" }, { expectStatus: [403], run: async (p) => { await p.locator(".banner.bad").first().waitFor(); } });
   await visit(browser, "/adviser", { subject: "sub-adv" }, { expectStatus: [404], run: async (p) => {
     await say(p, "Her commission by provider, and what is held back");
+    await tab(p, "Engagements");
     await sees(p, "fap-1");
+    await tab(p, "Commission");
     await sees(p, "$900.00");
     await p.locator("#matches").getByText("pol-new/life/1").waitFor();
     await say(p, "A new policy was matched as replacing an old one. She disputes it, with a reason");
@@ -124,6 +137,7 @@ const sees = async (page, text) => {
     await p.locator("#dispute button").first().click();
     await sees(p, "Disputed. The commission");
     await say(p, "She opens a client's policy: the proposal, claims, units and documents");
+    await tab(p, "Your book");
     await p.getByRole("button", { name: "Open" }).first().click();
     await p.locator("#detail:not([hidden])").waitFor();
     await p.locator("#rows").getByText("prop-1").waitFor();
@@ -147,6 +161,7 @@ const sees = async (page, text) => {
     await sees(p, "m-1");
     await p.locator("#claims").getByText("No claims.").waitFor();
     // The scheme on the group service: upload a file, see its preview, approve it, open a member's record.
+    await tab(p, "Files and members");
     await p.locator("#group:not([hidden])").waitFor();
     await say(p, "This month's payroll file is uploaded and checked for viruses before anything reads it");
     await p.setInputFiles("#file", { name: "nov 2027.csv", mimeType: "text/csv", buffer: Buffer.from("employee_id,salary\nE001,80000\n") });
@@ -210,23 +225,28 @@ const sees = async (page, text) => {
     await sees(p, "preparer, approver");
     await sees(p, "valuations/bad.csv");
     await say(p, "The fund administrator's valuation for the day");
+    await tab(p, "Prices");
     await p.selectOption("#pfund", "growth"); await p.fill("#pdate", "2027-11-12");
     await p.locator("#show-val").click();
     await sees(p, "1010000");
     await say(p, "The maker prepares the unit price from it");
     await p.locator("#prepare button").first().click();
     await sees(p, "Someone else approves it.");
+    await tab(p, "Work waiting");
     await p.locator("#work").getByText("growth:2027-11-12.1").waitFor();
+    await sees(p, "units on issue");
+    // Opening a price from the work list moves to the Prices view by itself.
     await p.getByRole("button", { name: "Details" }).first().click();
     await p.locator("#detail:not([hidden])").waitFor();
-    await sees(p, "units on issue");
     // The preparer cannot approve their own price.
     await say(p, "The maker cannot approve their own price");
+    await tab(p, "Work waiting");
     await p.getByRole("button", { name: "Approve", exact: true }).click();
     await p.locator("#work-msg .banner.bad").waitFor();
   }, expectStatus: [409] });
   await visit(browser, "/pricing", { subject: "sub-lead" }, { run: async (p) => {
     await sees(p, "lead");
+    await tab(p, "Funds");
     await p.selectOption("#sfund", "cash"); await p.fill("#sfrom", "2027-11-15"); await p.fill("#sreason", "administrator outage");
     await p.locator("#suspend button").click();
     await sees(p, "Suspended.");
@@ -302,6 +322,7 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/payments", { subject: "sub-paycmp" }, { expectStatus: [409], run: async (p) => {
     // Compliance sees the payer cases; clearing one that is not open is refused in plain words.
+    await tab(p, "Controls");
     await p.locator("#aml").getByText("No open cases.").waitFor();
     await p.fill("#aml-case", "c1"); await p.fill("#aml-note", "a parent pays");
     await p.locator("#aml-form button").click();
@@ -310,18 +331,22 @@ const sees = async (page, text) => {
   await visit(browser, "/group", { subject: "sub-grpview" }, { run: async (p) => {
     // A reader sees the queue but is offered nothing to act with.
     await p.locator("#ex").getByText("possible match").waitFor();
+    await tab(p, "Members");
     if (await p.locator("#rm-form").isVisible()) throw new Error("a reader was offered a decision");
   } });
   await visit(browser, "/group", { subject: "sub-grp1" }, { run: async (p) => {
     // Staff decide the possible match, and try a mapping without storing it.
     await p.locator("#ex").getByText("possible match").waitFor();
     await say(p, "A payroll row might be an existing person: staff decide the match");
+    await tab(p, "Members");
     await p.fill("#rm-scheme", "harbour"); await p.fill("#rm-emp", "E002"); await p.fill("#rm-party", "party-x");
     await p.locator("#rm-form button").click();
     await p.locator("#rm-msg").getByText("Recorded.").waitFor();
+    await tab(p, "Work waiting");
     await p.locator("#ex-form button").click();
     await p.locator("#ex").getByText("Nothing is waiting.").waitFor();
     await say(p, "A new file layout is tried against the scheme's mapping, storing nothing");
+    await tab(p, "Files");
     await p.fill("#mp-scheme", "harbour");
     await p.getByRole("button", { name: "Show the mappings in use" }).click();
     await p.locator("#mp").getByText("harbour-freight").first().waitFor();
@@ -332,8 +357,10 @@ const sees = async (page, text) => {
   await visit(browser, "/finance", { subject: "sub-gllead" }, { expectStatus: [409], run: async (p) => {
     // The lead sorts policies into accounting groups, and is told plainly why a cut-over total is refused.
     await p.getByRole("tab", { name: "Aged items and set-up" }).click();
+    await tab(p, "Books");
     await p.locator("#ag-classify").click();
     await sees(p, "Classified.");
+    await tab(p, "Aged items and set-up");
     await p.fill("#co-account", "1999"); await p.fill("#co-currency", "NZD");
     await p.fill("#co-total", "100000"); await p.fill("#co-evidence", "legacy TB");
     await p.locator("#co-send").click();
@@ -341,9 +368,11 @@ const sees = async (page, text) => {
   } });
   await visit(browser, "/claims", { subject: "sub-cllead" }, { run: async (p) => {
     await sees(p, "You act as cl-lead");
+    await tab(p, "Investigations");
     await p.locator("#inv-show").click();
     await p.locator("#inv").getByText("No cases are open to you.").waitFor();
     await say(p, "A trauma claim is notified");
+    await tab(p, "Claim");
     await p.selectOption("#a-command", "notify");
     await p.fill("#f-0", "c-b1"); await p.fill("#f-1", "pol-c1"); await p.fill("#f-2", "trauma");
     await p.selectOption("#f-4", "trauma"); await p.fill("#f-5", "2027-02-20");
@@ -351,8 +380,10 @@ const sees = async (page, text) => {
     await sees(p, "Done: notify.");
     await sees(p, "c-b1: trauma");
     await say(p, "It appears in the lump sum queue and is assigned to an assessor");
+    await tab(p, "Queue");
     await p.selectOption("#q-name", "lump_sum"); await p.locator("#queue button").click();
     await p.locator("#q-rows").getByText("c-b1").waitFor();
+    await tab(p, "Claim");
     await p.fill("#a-purpose", "allocating lump sum work");
     await p.selectOption("#a-command", "assign"); await p.fill("#f-1", "cl-1");
     await p.locator("#act button").click();
@@ -397,25 +428,30 @@ const sees = async (page, text) => {
     await say(p, "She takes the next case from her queues");
     await takeFrom(p, ["medical", "financial", "occupational", "tele_interview"]);
     await say(p, "She proposes standard acceptance, within her authority");
+    await tab(p, "Cases");
     await p.selectOption("#c-what", "propose");
     await p.fill("#cf-cover", "life"); await p.selectOption("#cf-outcome", "accept");
     await p.fill("#cf-reasons", "RC-0101"); await p.fill("#cf-notes", "vault://notes");
     await p.locator("#c-form button").click();
     await p.locator("#c-msg").getByText("Done.").waitFor();
+    await tab(p, "Proposals");
     await p.fill("#p-id", "P2"); await p.locator("#p-form button").first().click();
     await p.locator("#proposal").getByText("P2:").waitFor();
     await say(p, "The applicant's disclosures, read for a stated purpose");
     await p.fill("#d-life", "L1"); await p.fill("#d-purpose", "assess the case"); await p.locator("#d-form button").click();
     await p.locator("#disclosures details").first().waitFor();
+    await tab(p, "Conflicts and reports");
     await p.getByRole("button", { name: "Try again" }).click();
     await sees(p, "is back in the outbox");
     await sees(p, "Nothing is parked.");
+    await tab(p, "Remedies and review");
     if (await p.locator("#senior").isVisible()) throw new Error("amy sees the senior's tools");
   } });
   await visit(browser, "/underwriting", { subject: "sub-sam" }, { run: async (p) => {
     await sees(p, "a senior underwriter");
     await takeFrom(p, ["senior_review"]);
     await say(p, "Non-disclosure found at claim: he varies the cover, and a second senior must sign");
+    await tab(p, "Remedies and review");
     await p.fill("#n-review", "ndr/CLM-1/L1"); await p.selectOption("#n-outcome", "vary");
     await p.fill("#n-reasons", "RC-0980"); await p.fill("#n-cover", "life"); await p.fill("#n-loading", "50");
     await p.locator("#n-form button").click();
@@ -423,6 +459,7 @@ const sees = async (page, text) => {
     await p.getByRole("button", { name: "Withdraw" }).waitFor();
   } });
   await visit(browser, "/underwriting", { subject: "sub-cat" }, { run: async (p) => {
+    await tab(p, "Remedies and review");
     await p.getByRole("button", { name: "Sign and send" }).click();
     await sees(p, "Signed and sent.");
     await sees(p, "Nothing is waiting.");
@@ -436,9 +473,11 @@ const sees = async (page, text) => {
     await sees(p, "Prepared. Add items");
     await p.locator("#run-form button").click();
     await sees(p, "provider payments from sf1");
+    await tab(p, "Controls");
     await p.fill("#raw-cmd", JSON.stringify({ type: "add_run_items", run: "rb1", items: [{ item: "ib1", source: "browser", counterparty: { payee: "p1" }, amount_minor: 1000, policy: null, payable: null, refund: null, represents: null }] }));
     await p.locator("#raw-form button").click();
     await p.locator("#raw-msg").getByText("Done.").waitFor();
+    await tab(p, "Runs");
     await p.locator("#run-form button").click();
     await p.locator("#run").getByText("ib1").waitFor();
     await p.getByRole("button", { name: "Check" }).click();
@@ -448,12 +487,15 @@ const sees = async (page, text) => {
   await visit(browser, "/payments", { subject: "sub-payap" }, { run: async (p) => {
     await sees(p, "approver");
     await say(p, "Treasury reconciles the bank account, then approves the run");
+    await tab(p, "Reconciliation");
     await p.fill("#rec-account", "anz-sf1-claims"); await p.locator("#rec-form button").click();
     await sees(p, "closing 10000000.00");
+    await tab(p, "Runs");
     await p.locator("#runs").getByText("rb1").waitFor();
     await p.locator("#runs").getByRole("button", { name: "Open" }).first().click();
     await p.getByRole("button", { name: "Approve" }).click();
     await p.locator("#run-msg").getByText("Done: approve run.").waitFor();
+    await tab(p, "Payees and refunds");
     await p.fill("#party-id", "party-p1"); await p.locator("#party-form button").click();
     await p.locator("#party").getByText("p1").first().waitFor();
   } });
@@ -462,6 +504,7 @@ const sees = async (page, text) => {
     await sees(p, "Advisers under you");
     await p.locator("#practice").getByText("adv-1").waitFor();
     // The group's own statement, with its overrides totalled.
+    await tab(p, "Commission");
     await p.fill("#st-number", "1"); await p.locator("#st-form button").click();
     await p.locator("#statement").getByText("Override (group)").waitFor();
   } });

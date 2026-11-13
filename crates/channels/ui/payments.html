@@ -1,14 +1,13 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Payments</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Payments</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Payments · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="payments" data-realm="workforce">
+<main><header class="page"><div><h1>Payments</h1><p>Runs, payments waiting, payees, refunds and reconciliation.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 
-<section><h2>Payments waiting</h2><p class="muted">Released by claims, servicing and other modules. A maker takes them into a run; they are checked and approved like any other item.</p>
+<section data-view="Runs"><h2>Payments waiting</h2><p class="muted">Released by claims, servicing and other modules. A maker takes them into a run; they are checked and approved like any other item.</p>
 <div id="w-msg" aria-live="polite"></div><div id="waiting"></div>
 <form id="take" class="maker" hidden><div class="row"><div><label for="t-run">Into run</label><input id="t-run" required></div><button>Take the ticked payments</button></div></form></section>
 
-<section class="maker" hidden><h2>Prepare a run</h2>
+<section data-view="Runs" class="maker" hidden><h2>Prepare a run</h2>
 <form id="prep"><div class="row">
 <div><label for="r-id">Run</label><input id="r-id" required maxlength="31"></div>
 <div><label for="r-type">Type</label><select id="r-type">
@@ -19,41 +18,41 @@
 <div><label for="r-urgent">Urgent</label><select id="r-urgent"><option value="false">No</option><option value="true">Yes, by API</option></select></div>
 <button>Prepare</button></div></form><div id="r-msg" aria-live="polite"></div></section>
 
-<section><h2>Open runs</h2><div id="runs-msg" aria-live="polite"></div><div id="runs"></div></section>
+<section data-view="Runs"><h2>Open runs</h2><div id="runs-msg" aria-live="polite"></div><div id="runs"></div></section>
 
-<section><h2>A run</h2>
+<section data-view="Runs"><h2>A run</h2>
 <form id="run-form"><div class="row"><div><label for="run-id">Run</label><input id="run-id" required></div><button>Open</button></div></form>
 <div id="run-msg" aria-live="polite"></div><div id="run"></div><p id="run-actions"></p></section>
 
-<section><h2>A customer or payee party</h2><p class="muted">Their payees and authorities, with no account details, and whether they have put a hold on their own money going out.</p>
+<section data-view="Payees and refunds"><h2>A customer or payee party</h2><p class="muted">Their payees and authorities, with no account details, and whether they have put a hold on their own money going out.</p>
 <form id="party-form"><div class="row"><div><label for="party-id">Party</label><input id="party-id" required></div><button>Show</button></div></form>
 <div id="party-msg" aria-live="polite"></div><div id="party"></div></section>
 
-<section><h2>A payee</h2>
+<section data-view="Payees and refunds"><h2>A payee</h2>
 <form id="payee-form"><div class="row"><div><label for="payee-id">Payee</label><input id="payee-id" required></div><button>Open</button></div></form>
 <div id="payee-msg" aria-live="polite"></div><div id="payee"></div><p id="payee-actions"></p></section>
 
-<section><h2>A refund</h2>
+<section data-view="Payees and refunds"><h2>A refund</h2>
 <form id="refund-form"><div class="row"><div><label for="refund-id">Refund</label><input id="refund-id" required></div><button>Open</button></div></form>
 <div id="refund-msg" aria-live="polite"></div><div id="refund"></div><p id="refund-actions"></p></section>
 
-<section><h2>Open reconciliation exceptions</h2><div id="exc-msg" aria-live="polite"></div><div id="exceptions"></div></section>
+<section data-view="Reconciliation"><h2>Open reconciliation exceptions</h2><div id="exc-msg" aria-live="polite"></div><div id="exceptions"></div></section>
 
-<section><h2>Reconciliation</h2>
+<section data-view="Reconciliation"><h2>Reconciliation</h2>
 <form id="rec-form"><div class="row"><div><label for="rec-account">Bank account</label><input id="rec-account" required placeholder="anz-sf1-claims"></div><button>Show</button></div></form>
 <div class="row"><div><label for="rec-resolution">How an exception was resolved</label><input id="rec-resolution"></div></div>
 <div id="rec-msg" aria-live="polite"></div><div id="rec"></div></section>
 
-<section><h2>Collections held for a conversation</h2><div id="conv"></div></section>
-<section><h2>Region readiness</h2><div id="ready"></div></section>
+<section data-view="Controls"><h2>Collections held for a conversation</h2><div id="conv"></div></section>
+<section data-view="Controls"><h2>Region readiness</h2><div id="ready"></div></section>
 
-<section class="compliance" hidden><h2>Premium paid by someone else</h2><p class="muted">Cases where a premium came from someone other than the policy owner, oldest first. Clear one by naming the relationship recorded in the customer master, so it never fires again for that payer and owner; without one it is cleared for this month only.</p>
+<section data-view="Controls" class="compliance" hidden><h2>Premium paid by someone else</h2><p class="muted">Cases where a premium came from someone other than the policy owner, oldest first. Clear one by naming the relationship recorded in the customer master, so it never fires again for that payer and owner; without one it is cleared for this month only.</p>
 <div id="aml"></div>
 <form id="aml-form"><div class="row"><div><label for="aml-case">Case</label><input id="aml-case" required></div>
 <div><label for="aml-rel">Relationship in the customer master, as party/id (optional)</label><input id="aml-rel"></div>
 <div><label for="aml-note">Why it is explained</label><input id="aml-note" required></div><button>Clear</button></div></form><div id="aml-msg" aria-live="polite"></div></section>
 
-<section id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
+<section data-view="Controls" id="raw" hidden><h2>Another command</h2><p class="muted">Any command people send, in the payments module's JSON (<code>{"type": "suspend_authority", ...}</code>). The module decides by your roles.</p>
 <form id="raw-form"><textarea id="raw-cmd" rows="5" required></textarea><p><button>Send</button></p></form><div id="raw-msg" aria-live="polite"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -63,7 +62,6 @@ const { h, put, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/payments/";
 let me = {};
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);

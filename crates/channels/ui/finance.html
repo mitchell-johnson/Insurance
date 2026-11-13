@@ -1,21 +1,19 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Finance console</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Finance console</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Your roles</h2><p id="roles" class="muted"></p><div id="status"></div></section>
-<nav class="tabs" role="tablist" aria-label="Sections">
-<button role="tab" data-tab="close" aria-selected="true">Month-end close</button><button role="tab" data-tab="journals" aria-selected="false">Journals</button><button role="tab" data-tab="books" aria-selected="false">Books</button><button role="tab" data-tab="other" aria-selected="false">Aged items and set-up</button></nav>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Finance console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="finance" data-realm="workforce">
+<main><header class="page"><div><h1>Finance console</h1><p>The month-end close, its checks, journals and sign-off.</p></div><p id="roles" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<div id="status"></div>
 
-<div data-panel="close">
+<div data-view="Month-end close">
 <section><h2>Work waiting</h2><div id="work"></div></section>
 <section><h2>A period's close</h2><form id="period"><div class="row"><div><label for="p-id">Period (YYYY-MM, or YYYY-MM-ADJ)</label><input id="p-id" required pattern="\d{4}-\d{2}(-ADJ)?"></div><button>Show</button></div></form><div id="close-msg" aria-live="polite"></div>
 <div id="dash" hidden><h2 id="dash-title"></h2><div id="dash-summary"></div><h2>Checks</h2><div id="dash-steps"></div><h2>Waivers</h2><div id="dash-waivers"></div><h2>Sign-off</h2><div id="dash-signed"></div>
 <p><button class="quiet" id="sign-lead">Sign off as finance lead</button> <button class="quiet" id="sign-actuary">Sign off as appointed actuary</button> <button class="quiet" id="close-period">Close the period</button></p>
 <form id="waive"><div class="row"><div><label for="w-check">Check to waive</label><input id="w-check" required></div><div><label for="w-reason">Reason</label><input id="w-reason" required></div><div><label for="w-owner">Remediation owner</label><input id="w-owner" required></div><div><label for="w-due">Remediation due</label><input id="w-due" type="date" required></div><button>Waive</button></div><p class="muted">Only the finance lead waives a check, and the waiver stays on the period's record.</p></form>
 <form id="report"><div class="row"><div><label for="r-check">Check you are reporting</label><select id="r-check"><option value="tax_reconciliation">Tax reconciliation</option><option value="analytical_review">Analytical review</option></select></div><div><label for="r-result">Result</label><select id="r-result"><option value="green">Done, nothing wrong</option><option value="red">Something is wrong</option></select></div><div><label for="r-items">What is wrong (one per line, if anything)</label><textarea id="r-items" rows="2" cols="40"></textarea></div><div><label for="r-evidence">Evidence reference</label><input id="r-evidence"></div><button>Report</button></div><p class="muted">These checks are done by people; the others are reported by the modules that own them.</p></form>
-<h2>Aged items, extracts and prior periods</h2><pre id="dash-raw"></pre></div></section></div>
+<h2>Aged items, extracts and prior periods</h2><div id="dash-raw"></div></div></section></div>
 
-<div data-panel="journals" hidden>
+<div data-view="Journals">
 <section><h2>Propose a journal</h2><form id="journal"><div class="row">
 <div><label for="j-id">Journal reference</label><input id="j-id" required></div>
 <div><label for="j-kind">Kind</label><select id="j-kind"><option value="accrual">Accrual</option><option value="prepayment">Prepayment</option><option value="intercompany">Intercompany</option><option value="tax">Tax</option><option value="actuarial">Actuarial</option><option value="fund_transfer">Fund transfer</option><option value="reinsurance">Reinsurance</option><option value="opening_balance">Opening balance</option></select></div>
@@ -27,23 +25,23 @@
 <div><label for="j-lines">Lines, one per row: account, amount (debit positive, credit negative), statutory fund</label><textarea id="j-lines" rows="4" cols="60" required placeholder="6500, 250.00, SF1-life&#10;2500, -250.00, SF1-life"></textarea></div>
 <p><button>Propose</button></p><p class="muted">A journal posts only when someone else approves it. An actuarial journal also needs the appointed actuary's signature.</p></form><div id="journal-msg" aria-live="polite"></div></section>
 <section><h2>A journal</h2><form id="jlookup"><div class="row"><div><label for="jl-id">Journal reference</label><input id="jl-id" required></div><button>Show</button></div></form>
-<div id="jview" hidden><pre id="j-raw"></pre><p><button class="quiet" id="j-approve">Approve</button> <button class="quiet" id="j-reject">Reject</button> <button class="quiet" id="j-sign">Sign as appointed actuary</button></p></div><div id="jl-msg" aria-live="polite"></div></section></div>
+<div id="jview" hidden><div id="j-raw"></div><p><button class="quiet" id="j-approve">Approve</button> <button class="quiet" id="j-reject">Reject</button> <button class="quiet" id="j-sign">Sign as appointed actuary</button></p></div><div id="jl-msg" aria-live="polite"></div></section></div>
 
-<div data-panel="books" hidden>
+<div data-view="Books">
 <section><h2>Trial balance, movements and sources</h2><form id="tb"><div class="row"><div><label for="tb-period">Period</label><input id="tb-period" required pattern="\d{4}-\d{2}(-ADJ)?"></div><div><label for="tb-fund">Statutory fund (optional)</label><input id="tb-fund"></div><div><label for="tb-what">Show</label><select id="tb-what"><option value="trial_balance">Trial balance</option><option value="movements">Movements</option><option value="sources">Sources</option><option value="backdated">Backdated entries</option><option value="conduct">Conduct figures</option></select></div><button>Show</button></div></form><div id="tb-msg" aria-live="polite"></div><div id="tb-out"></div></section>
-<section><h2>A return</h2><form id="ret"><div class="row"><div><label for="ret-id">Return reference</label><input id="ret-id" required></div><button>Show</button></div></form><pre id="ret-out"></pre></section></div>
+<section><h2>A return</h2><form id="ret"><div class="row"><div><label for="ret-id">Return reference</label><input id="ret-id" required></div><button>Show</button></div></form><div id="ret-out"></div></section></div>
 
-<div data-panel="other" hidden>
-<section><h2>Aged suspense</h2><form id="aged"><div class="row"><div><label for="ag-date">As at</label><input id="ag-date" type="date" required></div><button>Show</button></div></form><pre id="aged-out"></pre>
+<div data-view="Aged items and set-up">
+<section><h2>Aged suspense</h2><form id="aged"><div class="row"><div><label for="ag-date">As at</label><input id="ag-date" type="date" required></div><button>Show</button></div></form><div id="aged-out"></div>
 <h2>Record what is being done about an aged item</h2><form id="doc"><div class="row"><div><label for="d-kind">Kind</label><input id="d-kind" required></div><div><label for="d-party">Party</label><input id="d-party" required></div><div><label for="d-since">Held since</label><input id="d-since" type="date" required></div><div><label for="d-action">Action</label><input id="d-action" required></div><div><label for="d-owner">Owner</label><input id="d-owner" required></div><button>Record</button></div></form><div id="other-msg" aria-live="polite"></div></section>
 <section><h2>Set-up</h2><form id="config"><div class="row"><div><label for="c-id">Proposed configuration to approve</label><input id="c-id" required></div><button>Approve</button></div></form>
 <form id="retry"><div class="row"><div><label for="r-part">Partition whose feed stalled</label><input id="r-part" type="number" min="0" required></div><button>Retry the feed</button></div></form>
 <p class="muted">A chart of accounts, a close configuration and a return are proposed from their files with the command route; the lead approves them here.</p></section></div>
-<section><h2>Accounting groups</h2><p class="muted">Which accounting group each policy falls in for reporting. Classifying sorts every policy not yet in a group.</p>
+<section data-view="Books"><h2>Accounting groups</h2><p class="muted">Which accounting group each policy falls in for reporting. Classifying sorts every policy not yet in a group.</p>
 <div class="row"><button type="button" id="ag-classify">Classify policies</button></div>
 <form id="ag-form"><div class="row"><div><label for="ag-partition">Partition</label><input id="ag-partition" type="number" min="0" required></div><div><label for="ag-policy">Policy</label><input id="ag-policy" required></div><button>Show its group</button></div></form>
 <div id="ag-msg" aria-live="polite"></div><div id="ag-out"></div></section>
-<section><h2>Migration cut-over total</h2><p class="muted">Finance lead only. The migration check stays red in a cut-over month until the legacy system's total is recorded and agrees.</p>
+<section data-view="Aged items and set-up"><h2>Migration cut-over total</h2><p class="muted">Finance lead only. The migration check stays red in a cut-over month until the legacy system's total is recorded and agrees.</p>
 <form id="co-form"><div class="row"><div><label for="co-account">Account</label><input id="co-account" required></div><div><label for="co-currency">Currency</label><input id="co-currency" required value="NZD"></div>
 <div><label for="co-total">Old system's balance, in cents (debit positive)</label><input id="co-total" required></div><div><label for="co-evidence">Evidence reference</label><input id="co-evidence" required></div><button id="co-send">Record</button></div></form>
 <div id="co-msg" aria-live="polite"></div></section>
@@ -51,11 +49,10 @@
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
-const { h, put, table, say, signIn, signOut, api, run } = portal;
+const { h, put, table, money, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/finance/";
 let roles = [], period = null, journal = null;
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
@@ -66,7 +63,9 @@ const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 function grid(rows) {
   const list = Array.isArray(rows) ? rows : rows == null ? [] : [rows];
   const keys = [...new Set(list.flatMap((r) => (r && typeof r === "object" ? Object.keys(r) : ["value"])))];
-  return table(keys.map(words), list.map((r) => keys.map((k) => cell(r && typeof r === "object" ? r[k] : r))));
+  // The ledger keeps amounts in millionths of a cent; people read dollars.
+  const amount = (k, v) => typeof v === "number" && /^(balance|debit|credit|amount|total|movement|opening|closing)$/.test(k) ? money(v / 1e6) : cell(v);
+  return table(keys.map(words), list.map((r) => keys.map((k) => (r && typeof r === "object" ? amount(k, r[k]) : cell(r)))));
 }
 
 async function dashboard() {
@@ -77,7 +76,7 @@ async function dashboard() {
   put($("dash-steps"), table(["Check", "Name", "Owner", "Due", "Blocking", "Status", "Detail", "Evidence"], d.steps.map((s) => [s.id, s.name, s.owner, s.due + (s.overdue ? " (overdue)" : ""), s.blocking ? "yes" : "", words(s.status), (s.items || []).join("; "), s.evidence || ""])));
   put($("dash-waivers"), grid(d.waivers));
   put($("dash-signed"), table(["Capacity", "By"], d.sign_offs.map((s) => [words(s.capacity), s.by])), h("p", {}, d.sign_offs_needed.length ? "Still needed: " + d.sign_offs_needed.map(words).join(", ") + "." : "Every sign-off is in."));
-  $("dash-raw").textContent = JSON.stringify({ control: d.control, aged: d.aged, extracts: d.extracts, prior_period: d.prior_period, trial_balance_hash: d.trial_balance_hash }, null, 2);
+  portal.put($("dash-raw"), portal.details({ control: d.control, aged: d.aged, extracts: d.extracts, prior_period: d.prior_period, trial_balance_hash: d.trial_balance_hash }));
 }
 async function work() {
   const w = await ask("work");
@@ -95,7 +94,7 @@ $("report").addEventListener("submit", closing("report", () => {
 }, "Reported."));
 $("waive").addEventListener("submit", closing("waive", () => ({ waive_check: { period, check: $("w-check").value, reason: $("w-reason").value, remediation_owner: $("w-owner").value, due: $("w-due").value } }), "Waived."));
 
-async function show(id) { journal = id; const j = await ask("journal", { id }); $("jview").hidden = false; $("j-raw").textContent = JSON.stringify(j, null, 2); }
+async function show(id) { journal = id; const j = await ask("journal", { id }); $("jview").hidden = false; portal.put($("j-raw"), portal.details(j)); }
 $("journal").addEventListener("submit", run($("journal-msg"), async () => {
   const lines = $("j-lines").value.split("\n").map((row) => row.split(",").map((s) => s.trim())).filter((row) => row[0]).map(([account, amount, fund]) => {
     if (!/^-?\d+(\.\d{1,2})?$/.test(amount || "")) throw new Error(`"${amount}" is not an amount: use 250.00 or -250.00.`);
@@ -107,9 +106,9 @@ $("journal").addEventListener("submit", run($("journal-msg"), async () => {
   return `Proposed ${id}. Someone else approves it.`;
 }));
 $("jlookup").addEventListener("submit", run($("jl-msg"), () => show($("jl-id").value)));
-const decide = (command, done) => run($("jl-msg"), async () => { const c = command(); if (!c) return null; await send(c); await show(journal); return done; });
+const decide = (command, done) => run($("jl-msg"), async () => { const c = await command(); if (!c) return null; await send(c); await show(journal); return done; });
 $("j-approve").addEventListener("click", decide(() => ({ approve_journal: { id: journal } }), "Approved and posted."));
-$("j-reject").addEventListener("click", decide(() => { const reason = window.prompt("Reason for rejecting this journal:"); return reason ? { reject_journal: { id: journal, reason } } : null; }, "Rejected."));
+$("j-reject").addEventListener("click", decide(async () => { const reason = await portal.ask({ title: "Reject this journal", label: "Reason for rejecting it", confirm: "Reject", danger: true }); return reason ? { reject_journal: { id: journal, reason } } : null; }, "Rejected."));
 $("j-sign").addEventListener("click", decide(() => ({ sign_actuarial_journal: { id: journal } }), "Signed."));
 
 $("tb").addEventListener("submit", run($("tb-msg"), async () => {
@@ -117,16 +116,12 @@ $("tb").addEventListener("submit", run($("tb-msg"), async () => {
   if (what === "trial_balance" && $("tb-fund").value) fields.fund = $("tb-fund").value;
   put($("tb-out"), grid(await ask(what, fields)));
 }));
-$("ret").addEventListener("submit", run($("tb-msg"), async () => { $("ret-out").textContent = JSON.stringify(await ask("return", { id: $("ret-id").value }), null, 2); }));
-$("aged").addEventListener("submit", run($("other-msg"), async () => { $("aged-out").textContent = JSON.stringify(await ask("aged_suspense", { as_at: $("ag-date").value }), null, 2); }));
+$("ret").addEventListener("submit", run($("tb-msg"), async () => { portal.put($("ret-out"), portal.details(await ask("return", { id: $("ret-id").value }))); }));
+$("aged").addEventListener("submit", run($("other-msg"), async () => { portal.put($("aged-out"), portal.details(await ask("aged_suspense", { as_at: $("ag-date").value }))); }));
 $("doc").addEventListener("submit", run($("other-msg"), async () => { await send({ document_aged_item: { kind: $("d-kind").value, party: $("d-party").value, since: $("d-since").value, action: $("d-action").value, owner: $("d-owner").value } }); return "Recorded."; }));
 $("config").addEventListener("submit", run($("other-msg"), async () => { await send({ approve_config: { id: $("c-id").value } }); return "Approved and in force."; }));
 $("retry").addEventListener("submit", run($("other-msg"), async () => { await send({ retry_feed: { partition: Number($("r-part").value) } }); return "The feed will be tried again."; }));
 
-document.querySelectorAll("[role=tab]").forEach((tab) => tab.addEventListener("click", () => {
-  document.querySelectorAll("[role=tab]").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
-  document.querySelectorAll("[data-panel]").forEach((p) => { p.hidden = p.dataset.panel !== tab.dataset.tab; });
-}));
 async function groups() { put($("ag-out"), grid(await ask("accounting_groups"))); }
 $("ag-classify").addEventListener("click", run($("ag-msg"), async () => { await send("classify_policies"); await groups(); return "Classified."; }));
 $("ag-form").addEventListener("submit", run($("ag-msg"), async () => { put($("ag-out"), grid(await ask("accounting_group", { partition: $("ag-partition").value, policy: $("ag-policy").value.trim() }))); }));

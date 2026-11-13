@@ -1276,7 +1276,10 @@ async fn pages_are_served_locked_down() {
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         let csp = response.headers()["content-security-policy"].to_str().unwrap().to_string();
         assert!(
-            csp.starts_with("default-src 'none'") && csp.contains("frame-ancestors 'none'") && csp.contains("connect-src 'self';"),
+            csp.starts_with("default-src 'none'")
+                && csp.contains("frame-ancestors 'none'")
+                && csp.contains("connect-src 'self';")
+                && csp.contains("font-src 'self';"),
             "{csp}"
         );
         assert!(!csp.contains("unsafe"), "{csp}");
@@ -1286,11 +1289,12 @@ async fn pages_are_served_locked_down() {
         let body = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
         let inline = body.matches("<script>").count();
         assert_eq!(csp.matches("'sha256-").count(), inline, "{path}");
-        assert_eq!(inline, usize::from(path != "/"), "{path}");
+        assert_eq!(inline, 1, "{path}");
     }
     for (path, kind, has) in [
         ("/ui/app.js", "text/javascript", "const portal"),
         ("/ui/app.css", "text/css", "box-sizing"),
+        ("/ui/theme.js", "text/javascript", "dataset.theme"),
         ("/ui/config.json", "application/json", r#"{"mode":"dev"}"#),
     ] {
         let response = portal
@@ -1305,6 +1309,17 @@ async fn pages_are_served_locked_down() {
         let body = String::from_utf8(response.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
         assert!(body.contains(has), "{path}");
     }
+    // The typeface is served from here too, so the pages' policy can name this service alone for fonts.
+    let font = portal
+        .app
+        .clone()
+        .oneshot(Request::builder().uri("/ui/inter.woff2").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(font.status(), StatusCode::OK);
+    assert_eq!(font.headers()["content-type"], "font/woff2");
+    assert_eq!(font.headers()["x-content-type-options"], "nosniff");
+    assert!(font.into_body().collect().await.unwrap().to_bytes().starts_with(b"wOF2"));
 }
 
 /// Purpose: with Entra sign-in the pages are told where to sign in, and may call those authorities and nowhere else.

@@ -1,14 +1,13 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Reinsurance exceptions</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Reinsurance exceptions</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
-<section><h2>Open exceptions</h2><p class="muted">An exception closes itself once its cause is cured. Abandoning something takes a second person.</p><div id="ex-msg" aria-live="polite"></div><div id="exceptions"></div></section>
-<section id="act" hidden><h2 id="act-title"></h2><p id="act-warn" class="banner warn" hidden></p><form id="act-form"><div class="row" id="act-fields"></div><p><button>Send</button> <button class="quiet" type="button" id="act-cancel">Cancel</button></p></form><div id="act-msg" aria-live="polite"></div></section>
-<section><h2>Waiting for a second person</h2><div id="p-msg" aria-live="polite"></div><div id="pending"></div></section>
-<section><h2>Notices for staff</h2><div id="notices"></div></section>
-<section><h2>Abandoned</h2><div id="abandoned"></div></section>
-<section><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Reinsurance exceptions · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="reinsurance" data-realm="workforce">
+<main><header class="page"><div><h1>Reinsurance exceptions</h1><p>Cessions, notices and settlements that need a person.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<section data-view="Exceptions"><h2>Open exceptions</h2><p class="muted">An exception closes itself once its cause is cured. Abandoning something takes a second person.</p><div id="ex-msg" aria-live="polite"></div><div id="exceptions"></div></section>
+<section data-view="Exceptions" id="act" hidden><h2 id="act-title"></h2><p id="act-warn" class="banner warn" hidden></p><form id="act-form"><div class="row" id="act-fields"></div><p><button>Send</button> <button class="quiet" type="button" id="act-cancel">Cancel</button></p></form><div id="act-msg" aria-live="polite"></div></section>
+<section data-view="Exceptions"><h2>Waiting for a second person</h2><div id="p-msg" aria-live="polite"></div><div id="pending"></div></section>
+<section data-view="Notices and abandoned"><h2>Notices for staff</h2><div id="notices"></div></section>
+<section data-view="Notices and abandoned"><h2>Abandoned</h2><div id="abandoned"></div></section>
+<section data-view="Month-end check"><h2>Month-end check</h2><form id="sweep"><div class="row"><div><label for="s-date">Period ending</label><input id="s-date" type="date" required></div><button>Check</button></div></form><div id="s-msg" aria-live="polite"></div><div id="s-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
 <script>
@@ -17,7 +16,6 @@ const { h, put, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/reinsurance/";
 let me = {};
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
@@ -86,7 +84,7 @@ async function refresh() {
   const notices = await ask("notices");
   put($("notices"), notices.length ? table(["Notice", "What"], notices.map(([seq, n]) => [seq, cell(n)])) : h("p", { class: "muted" }, "None waiting."));
   const [abandoned, abandonedNotices] = await Promise.all([ask("abandoned"), ask("abandoned_notices")]);
-  put($("abandoned"), h("pre", {}, JSON.stringify({ instructions: abandoned, notices: abandonedNotices }, null, 2)));
+  put($("abandoned"), portal.details({ instructions: abandoned, notices: abandonedNotices }));
 }
 $("sweep").addEventListener("submit", run($("s-msg"), async () => {
   const check = await ask("sweep_check", { period_end: $("s-date").value });

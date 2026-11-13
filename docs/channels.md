@@ -429,3 +429,7 @@ node crates/channels/tests/browser/check.js
 - **The conduct officer here and there.** The workbench asks for the conduct officer whenever a conduct case is open on the party; the commission module asks by its own rules. The signature is replayed as `conduct_officer`, and where that module did not need it the action carries on with its other signatures.
 - **Routing follows the submitter.** A request an adviser or support person prepares is routed by their marker, not the customer's who approves it. Asking the master again for the customer at approval would close it.
 - **Commission balances are taken to be in one currency** (`IC_PORTAL_CURRENCY`, default NZD), because that module's answers carry none.
+
+## How the screens are built
+
+Every screen uses one design system: tokens, light and dark themes, three page frames (staff consoles with a navigation rail, partner portals, public pages), views as tabs, and shared components. It is described in [design-system.md](design-system.md). The browser check (`tests/browser/check.js`) takes screenshots of every page with `SHOTS=dir`, in the dark theme with `THEME=dark` and at phone width with `WIDTH=390`.

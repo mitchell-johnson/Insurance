@@ -1,17 +1,16 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Underwriting</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Underwriting</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Underwriting · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="underwriting" data-realm="workforce">
+<main data-views="Queues,Cases,Proposals,Remedies and review,Conflicts and reports"><header class="page"><div><h1>Underwriting</h1><p>Queues, cases and decisions, disclosures, remedies and peer review.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 
-<section><h2>Queues</h2>
+<section data-view="Queues"><h2>Queues</h2>
 <form id="q-form"><div class="row"><div><label for="q-name">Queue</label><select id="q-name">
 <option value="medical">Medical</option><option value="financial">Financial</option><option value="occupational">Occupational</option>
 <option value="tele_interview">Tele-interview</option><option value="senior_review">Senior review</option><option value="reinsurer_liaison">Reinsurer liaison</option>
 </select></div><button>Show</button></div></form>
 <div id="q-msg" aria-live="polite"></div><div id="queue"></div></section>
 
-<section><h2>Work a case</h2>
+<section data-view="Cases"><h2>Work a case</h2>
 <p class="muted">Everything you send is recorded as yours. The underwriting module checks your grade, accreditation, limits and any conflict.</p>
 <div class="row"><div><label for="c-case">Case</label><input id="c-case" placeholder="P1/L1/c1"></div>
 <div><label for="c-what">Action</label><select id="c-what">
@@ -22,7 +21,7 @@
 <form id="c-form"><div class="row" id="c-fields"></div><p><button>Send</button></p></form>
 <div id="c-msg" aria-live="polite"></div></section>
 
-<section><h2>A proposal</h2>
+<section data-view="Proposals"><h2>A proposal</h2>
 <form id="p-form"><div class="row"><div><label for="p-id">Proposal</label><input id="p-id" required></div><button>Open</button>
 <button class="quiet" type="button" id="p-retry">Send the issue again</button></div></form>
 <div id="p-msg" aria-live="polite"></div><div id="proposal"></div>
@@ -32,11 +31,11 @@
 <div><label for="d-purpose">Purpose</label><input id="d-purpose" required></div><button>Read</button></div></form>
 <div id="d-msg" aria-live="polite"></div><div id="disclosures"></div></section>
 
-<section><h2>A conflict of interest</h2>
+<section data-view="Conflicts and reports"><h2>A conflict of interest</h2>
 <form id="x-form"><div class="row"><div><label for="x-party">Person you are connected to</label><input id="x-party" required></div><button>Declare</button></div></form>
 <div id="x-msg" aria-live="polite"></div></section>
 
-<section id="senior" hidden><h2>Non-disclosure remedy</h2>
+<section data-view="Remedies and review" id="senior" hidden><h2>Non-disclosure remedy</h2>
 <p class="banner warn">A remedy changes or ends someone's cover. You prepare it, and a second senior signs it before it is sent.</p>
 <form id="n-form"><div class="row">
 <div><label for="n-review">Review</label><input id="n-review" required placeholder="ndr/CLM-1/L1"></div>
@@ -55,9 +54,9 @@
 <div><label for="f-reasons">Reason codes</label><input id="f-reasons"></div><button>Record</button></div></form>
 <div id="r-msg" aria-live="polite"></div></section>
 
-<section><h2>Waiting for a second senior</h2><div id="w-msg" aria-live="polite"></div><div id="pending"></div></section>
-<section><h2>Parked effects</h2><p class="muted">Things the module could not deliver. Put one back once its cause is fixed.</p><div id="e-msg" aria-live="polite"></div><div id="parked"></div></section>
-<section><h2>Report</h2>
+<section data-view="Remedies and review"><h2>Waiting for a second senior</h2><div id="w-msg" aria-live="polite"></div><div id="pending"></div></section>
+<section data-view="Conflicts and reports"><h2>Parked effects</h2><p class="muted">Things the module could not deliver. Put one back once its cause is fixed.</p><div id="e-msg" aria-live="polite"></div><div id="parked"></div></section>
+<section data-view="Conflicts and reports"><h2>Report</h2>
 <form id="m-form"><div class="row"><div><label for="m-from">From</label><input id="m-from" type="date" required></div><div><label for="m-to">To</label><input id="m-to" type="date" required></div><button>Show</button></div></form>
 <div id="m-msg" aria-live="polite"></div><div id="report"></div></section>
 </main>
@@ -68,7 +67,6 @@ const { h, put, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/underwriting/";
 let me = {};
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);

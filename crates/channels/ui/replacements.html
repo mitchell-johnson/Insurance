@@ -1,8 +1,7 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Replacement matches</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Replacement matches</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Replacement matches · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="replacements" data-realm="workforce">
+<main><header class="page"><div><h1>Replacement matches</h1><p>Cover rewritten soon after cover was given up, and disputed matches to decide.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <section><h2>Matches</h2><p class="muted">New cover written on a life soon after cover on that life was given up. The matched amount earns no initial commission. An adviser may dispute a match; the conduct officer decides it.</p><div id="m-msg" aria-live="polite"></div><div id="matches"></div></section>
 <section id="act" hidden><h2 id="act-title"></h2>
 <form id="act-form"><div class="row">
@@ -16,7 +15,6 @@
 const { h, put, money, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/replacements";
-$("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 let current = null;
 // A layer key is policy/cover/layer.

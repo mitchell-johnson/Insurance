@@ -1,17 +1,17 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Employer portal</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Employer portal</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Your schemes</h2><div id="schemes"></div></section>
-<section id="detail" hidden><h2 id="title"></h2><div id="summary"></div><h2>Members</h2><div id="members"></div><h2>Billing</h2><div id="billing"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the member and the claims team.</p><div id="claims"></div></section>
-<section id="manage" hidden><h2>Ask for a change</h2>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Employer portal · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="partner" data-page="employer" data-realm="customers">
+<main data-views="Scheme,Files and members,Changes and administrators"><header class="page"><div><h1>Employer portal</h1><p>Your scheme, its members, its files and its administrators.</p></div></header><div id="msg" aria-live="polite"></div>
+<section data-view="Scheme"><h2>Your schemes</h2><div id="schemes"></div></section>
+<section data-view="Scheme" id="detail" hidden><h2 id="title"></h2><div id="summary"></div><h2>Members</h2><div id="members"></div><h2>Billing</h2><div id="billing"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the member and the claims team.</p><div id="claims"></div></section>
+<section data-view="Changes and administrators" id="manage" hidden><h2>Ask for a change</h2>
   <form id="change"><div class="row"><div><label for="kind">Change</label><select id="kind"><option value="add_member">Add a member</option><option value="remove_member">Remove a member</option><option value="change_salary">Change a member's salary</option></select></div>
   <div><label for="member">Member reference</label><input id="member" required maxlength="64"></div><div><label for="effective">Effective date</label><input id="effective" type="date" required></div><button>Send</button></div></form>
   <div id="change-msg" aria-live="polite"></div>
   <h2>Approve a colleague's change</h2><form id="approve"><div class="row"><div><label for="rid">Request</label><input id="rid" required></div><button>Approve</button></div></form><div id="approve-msg" aria-live="polite"></div>
   <h2>Administrators</h2><form id="admin"><div class="row"><div><label for="who">Person</label><input id="who" required></div><div><label for="is">Access</label><select id="is"><option value="true">Administrator</option><option value="false">Remove</option></select></div><button>Save</button></div></form>
   <form id="second"><label for="kinds">Changes that need a second administrator (comma separated)</label><div class="row"><input id="kinds" placeholder="remove_member, change_salary" size="40"><button>Save</button></div></form><div id="admin-msg" aria-live="polite"></div></section>
-<section id="group" hidden><h2>Membership files</h2>
+<section data-view="Files and members" id="group" hidden><h2>Membership files</h2>
   <p class="muted">Send the scheme's membership file. It is checked for viruses before anything reads it; then its preview shows who joins, leaves and changes, and you approve it.</p>
   <div id="standing"></div>
   <form id="upload"><div class="row"><div><label for="file">File</label><input id="file" type="file" accept=".csv,text/csv" required></div><button>Upload</button></div></form>
@@ -21,7 +21,7 @@
   <form id="lookup"><div class="row"><div><label for="employee">Employee ID</label><input id="employee" required maxlength="64"></div><button>Show</button></div></form>
   <div id="lookup-msg" aria-live="polite"></div><div id="member-view"></div>
   <h2>Invoices</h2><div id="invoices"></div></section>
-<section><h2>Your requests</h2><div id="requests"></div></section></main>
+<section data-view="Changes and administrators"><h2>Your requests</h2><div id="requests"></div></section></main>
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
@@ -29,7 +29,6 @@ const { h, clear, put, money, table, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "customers";
 let scheme = null;
-$("out").addEventListener("click", () => signOut(R));
 async function requests() {
   const list = await api(R, "GET", "/app/v1/requests");
   put($("requests"), table(["Request", "Change", "State", "Approved by"], list.map((r) => [r.id, r.kind, String(r.status).replace(/_/g, " ") + (r.from ? " from a " + String(r.from).replace(/_/g, " ") : ""), r.approved_by || ""])));

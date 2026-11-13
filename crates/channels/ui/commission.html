@@ -1,8 +1,7 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Commission console</title><link rel="stylesheet" href="/ui/app.css"></head>
-<body><header><h1>Commission console</h1><button class="quiet" id="out">Sign out</button></header>
-<main><div id="msg" aria-live="polite"></div>
-<section><h2>Signed in</h2><p id="me" class="muted"></p></section>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Commission console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
+<body data-shell="workforce" data-page="commission" data-realm="workforce">
+<main><header class="page"><div><h1>Commission console</h1><p>Ask the commission module, or send it one command.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <section><h2>Ask</h2><p class="muted">Advisers, payees, statements, cases and what is waiting. Dates are YYYY-MM-DD.</p>
 <form id="ask"><div class="row">
 <div><label for="q">Question</label><select id="q">
@@ -22,7 +21,6 @@
 const { h, put, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/commission";
-$("out").addEventListener("click", () => signOut(R));
 async function load() {
   const me = await api(R, "GET", BASE + "/me");
   $("me").textContent = `${me.staff}: ` + (me.roles.length ? me.roles.map((r) => r.replace(/_/g, " ")).join(", ") : "may look, holds no role that changes anything");
