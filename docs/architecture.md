@@ -325,15 +325,9 @@ Owner thread: "Build documents and correspondence". Detail lives in [documents.m
 - **Customer master seam**: `HttpDirectory` calls `crates/customers` (`GET /v1/parties/{id}/contact-points?purpose=notices&channel=…`), which answers name, destination, language, format and deceased. Nothing is sent to a person recorded as deceased.
 - **`crates/complaints` (module `complaints`)**: register, versioned timers with escalation and automatic deadlock, referral to the scheme, courts and privacy regulator, remediation references, conduct cases including licence events (addendum entry 4) with sampled file review and regulator timers, the report. Idempotency keys in both modules are forgotten after 90 days.
 - **The `ic-documents` service** (`service.rs`, binary is a thin `run_from`): the documents cycle, the delivery-report webhook, and the complaints relay (`complaints_relay.rs`: `Tick`, publish `cmp-*` to hub `complaints-events`, and pull licence cases from module `distribution` into `complaints` as caller `distribution`).
+- **Letters the register owes** (`complaint_letters.rs`, complaints question `letters_due`): acknowledgements, deadlock notices, letters to each customer of a licence case, and progress updates once the update timer warns (`complaint-update:<c>:<n>`, recorded with `RecordUpdate`; a repeated document is refused). Each written outcome is recorded as delivered (`RecordOutcomeDelivered`) once every addressee has it (question `outcomes_awaiting_delivery`); one that cannot be delivered is left for the handler and reported.
 - **Deployment manifests**: `infra/documents.bicep`, `deploy/k8s/documents.yaml`. Never deployed.
 - The complaints and conduct workbench is the portal thread's (`crates/channels`, page `/complaints`); its test runs against `ComplaintsState`, so renaming a complaints command, question or field breaks it.
-
-### In progress when this was written (2026-11-12)
-
-Letters the complaints register owes, on the branch `claude/project-thread-3jubfu` (uncommitted when this section was written; look for it on main before redoing it):
-- `ic-complaints`: question `letters_due` (`ComplaintsState::letters_due`, `LetterDue`, `LetterKind`) lists acknowledgements not issued, deadlock notices not issued, and letters owed to each customer of a completed licence case. Caller `documents` may send `RecordAcknowledgement` and `RecordDeadlockNotice`.
-- `ic-documents`: `complaint_letters.rs` (`LetterIssuer`, `run_letters`) asks for that list, issues each letter from templates `complaint-acknowledgement`, `complaint-deadlock-notice`, `licence-event-notice` with ids `complaint-ack:<c>`, `complaint-deadlock:<c>`, `licence-notice:<case>:<party>`, and records it. `Driver::issue` keys its command on the document id plus a digest of the request, so a refused request that is corrected is judged again.
-- Remaining: a clippy failure in `crates/documents/tests/complaint_letters.rs` (a mutex guard held across an await in `the_step_runs_until_stopped`), then the full checks, coverage and merge.
 
 ### Not built
 
@@ -344,7 +338,7 @@ Letters the complaints register owes, on the branch `claude/project-thread-3jubf
 - **Document download.** Built 2026-11-13: `GET /v1/documents/{id}/pdf` (`service.rs`, `auth.rs`), Entra roles `portal` (with `x-ic-party`, owner or recipient only, else 404) and `staff` (with `x-ic-actor`, `x-ic-purpose`, never clinical). Not done: the Entra app registration, and the portal calling it.
 - **Typeface.** `IC_DOCUMENTS_FONT_REGULAR` / `IC_DOCUMENTS_FONT_BOLD` set the insurer's TrueType faces (checked at start); the faces themselves are the insurer's to supply. Scripts outside the face go as text without a PDF. PDFs are not tagged (PDF/UA).
 - **Audio and braille** are recorded and passed to the print house; not produced here.
-- **Outcome, update and other complaint letters** (`RecordUpdate`, outcome letters, forum bundles) are still issued by handlers through the workbench; only acknowledgement, deadlock and licence letters are automatic.
+- **Outcome letters and forum bundles** are written by handlers (the outcome carries the case's own reasons); only their proof of delivery is automatic.
 - **Loading history.** A module added to a running cluster starts at the oldest event each partition still holds.
 
 ### Needs Mitchell or a named person
@@ -355,7 +349,7 @@ Letters the complaints register owes, on the branch `claude/project-thread-3jubf
 
 ### Working notes
 
-`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates was 98.2 to 98.6 percent before the letters work.
+`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates together was 98.49 percent of lines on 2026-11-13 (`cargo llvm-cov -p ic-complaints -p ic-documents`).
 
 ## Customer master (`ic-customers`)
 
