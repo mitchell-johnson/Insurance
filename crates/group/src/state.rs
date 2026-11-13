@@ -533,17 +533,29 @@ pub(crate) fn broker_layers(
     scheme: &str,
     policy: &PolicyId,
     product: &ProductDefinition,
+    menu: Option<&crate::terms::HealthMenu>,
     broker: &crate::terms::SchemeBroker,
 ) -> Result<Vec<(String, crate::event::CommissionLayer)>, Reject> {
-    let covers: Vec<&str> = crate::benefit::formula_covers(product).map(|c| c.code.as_str()).collect();
-    if broker.expected_annual_premium_minor.keys().any(|c| !covers.contains(&c.as_str())) || covers.len() != broker.expected_annual_premium_minor.len() {
+    // Every formula cover earns commission; a health menu's covers do where
+    // the broker's expected premium names them.
+    let formula: Vec<&str> = crate::benefit::formula_covers(product).map(|c| c.code.as_str()).collect();
+    let menu_covers: BTreeSet<&str> = menu
+        .map(|m| m.plans.iter().flat_map(|p| p.covers.iter().map(|c| c.cover.as_str())).collect())
+        .unwrap_or_default();
+    let named = &broker.expected_annual_premium_minor;
+    let stray = named.keys().any(|c| !formula.contains(&c.as_str()) && !menu_covers.contains(c.as_str()));
+    if stray || formula.iter().any(|c| !named.contains_key(*c)) {
         return Err(Reject::new(
             "invalid_terms",
-            format!("the broker's expected premium is given for exactly the scheme's covers: {}", covers.join(", ")),
+            format!(
+                "the broker's expected premium is given for each of the scheme's covers ({}) and only for those or the health menu's",
+                formula.join(", ")
+            ),
         ));
     }
-    Ok(covers
-        .into_iter()
+    Ok(named
+        .keys()
+        .map(String::as_str)
         .map(|cover| {
             let layer = crate::event::CommissionLayer {
                 policy: policy.clone(),
@@ -770,7 +782,7 @@ impl GroupState {
                 // A broker is added once. Changing or removing one is a dated
                 // move of the scheme's book, made in the commission module.
                 let added = match (&s.terms.broker, &terms.broker) {
-                    (None, Some(b)) => Some(broker_layers(&s.id, &s.policy, &s.product, b)?),
+                    (None, Some(b)) => Some(broker_layers(&s.id, &s.policy, &s.product, terms.health_menu.as_ref(), b)?),
                     (old, new) if old == new => None,
                     _ => {
                         return Err(Reject::new(
@@ -971,7 +983,7 @@ impl GroupState {
             .flatten();
         let pools: BTreeMap<String, NaiveDate> = pools.into_iter().map(|p| (p, inception)).collect();
         let brokered = match &terms.broker {
-            Some(broker) => broker_layers(&id, &policy, &product, broker)?,
+            Some(broker) => broker_layers(&id, &policy, &product, terms.health_menu.as_ref(), broker)?,
             None => Vec::new(),
         };
         let mut scheme = Scheme::new(id, policy, group, employer, inception, product, terms);

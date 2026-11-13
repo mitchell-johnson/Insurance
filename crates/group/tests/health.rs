@@ -418,3 +418,54 @@ fn a_health_only_scheme_runs_on_its_menu_alone() {
     assert_eq!(invoice.members(), 2);
     assert!(invoice.total_minor() > 0, "the employer pays for each member's hospital cover");
 }
+
+/// Purpose: a broker on a scheme with a health menu earns commission on the menu covers
+/// their expected premium names, as well as on every formula cover; on a health-only scheme
+/// that is the menu covers alone; and an expected premium for a cover neither the scheme
+/// nor its menu has, or one missing a formula cover, is refused.
+/// Why it matters: employer health plans are commonly placed by a broker. Without layers
+/// for the menu covers the commission module would never pay the broker on a health-only
+/// scheme, and a layer for a cover the scheme cannot hold would be refused there for good.
+#[test]
+fn a_broker_earns_on_the_menu_covers_their_premium_names() {
+    let broker = |premium: &[(&str, i64)]| ic_group::terms::SchemeBroker {
+        engagement: "eng-broker-x".into(),
+        book: "x-schemes".into(),
+        schedule: "standard".into(),
+        option: "level".into(),
+        expected_annual_premium_minor: premium.iter().map(|(c, m)| (c.to_string(), *m)).collect(),
+    };
+    let mut t = with_menu();
+    t.broker = Some(broker(&[("hospital", 50_000_00), ("specialist", 5_000_00)]));
+    let h = scheme_on_product(t, health_product());
+    let mut written: Vec<String> = h.commission_layers().into_iter().map(|(_, _, l)| l.cover).collect();
+    written.sort();
+    assert_eq!(written, vec!["hospital".to_string(), "specialist".to_string()]);
+
+    let mut h = scheme_on_product(with_menu(), benefits_product());
+    for (wrong, why) in [
+        (broker(&[("hospital", 1)]), "group life is the scheme's own cover"),
+        (broker(&[("group-life", 1), ("optical", 1)]), "optical is on neither"),
+    ] {
+        let mut t = h.scheme().terms.clone();
+        t.broker = Some(wrong);
+        assert_eq!(
+            code(h.staff(GroupCommand::AmendTerms {
+                scheme: SCHEME.into(),
+                terms: Box::new(t),
+            })),
+            "invalid_terms",
+            "{why}"
+        );
+    }
+    let mut t = h.scheme().terms.clone();
+    t.broker = Some(broker(&[("group-life", 30_000_00), ("dental", 2_000_00)]));
+    h.staff(GroupCommand::AmendTerms {
+        scheme: SCHEME.into(),
+        terms: Box::new(t),
+    })
+    .unwrap();
+    let mut written: Vec<String> = h.commission_layers().into_iter().map(|(_, _, l)| l.cover).collect();
+    written.sort();
+    assert_eq!(written, vec!["dental".to_string(), "group-life".to_string()]);
+}

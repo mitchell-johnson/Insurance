@@ -61,7 +61,7 @@ impl GroupState {
             menu.check_product(&s.product).map_err(|e| Reject::new("invalid_terms", e))?;
         }
         if let Some(broker) = &ask.terms.broker {
-            broker_layers(&ask.into, &ask.new_policy, &s.product, broker)?;
+            broker_layers(&ask.into, &ask.new_policy, &s.product, ask.terms.health_menu.as_ref(), broker)?;
         }
         let moving: BTreeSet<&str> = ask.employee_ids.iter().map(String::as_str).collect();
         if moving.is_empty() || moving.len() != ask.employee_ids.len() {
@@ -177,7 +177,7 @@ impl GroupState {
             new.mapping = s.mapping.clone();
             new.second_mapping = s.second_mapping.clone();
             let brokered = match &new.terms.broker {
-                Some(broker) => broker_layers(into, &new_policy, &new.product, broker).unwrap_or_default(),
+                Some(broker) => broker_layers(into, &new_policy, &new.product, new.terms.health_menu.as_ref(), broker).unwrap_or_default(),
                 None => Vec::new(),
             };
             self.open_scheme(new, brokered);
