@@ -438,3 +438,22 @@ async fn the_environment_is_checked_before_anything_starts() {
     let error = run_from(|k| token_file.get(k).cloned(), no_file, async {}).await.unwrap_err();
     assert!(error.contains("/secrets/missing"), "{error}");
 }
+
+/// Purpose: the deployed binary started without its settings exits with a
+/// failure that names the first missing one.
+/// Why it matters: Kubernetes shows a container's exit and its last
+/// words. A binary that started without its settings, or failed without
+/// saying which, would leave the on-call engineer guessing why no letter
+/// is going out.
+#[test]
+fn the_binary_names_a_missing_setting_and_exits() {
+    let mut binary = std::process::Command::new(env!("CARGO_BIN_EXE_ic-documents"));
+    binary.env_clear().env("RUST_LOG", "error");
+    // A coverage run counts the binary too.
+    if let Ok(profile) = std::env::var("LLVM_PROFILE_FILE") {
+        binary.env("LLVM_PROFILE_FILE", profile);
+    }
+    let out = binary.output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("IC_DOCUMENTS_WEBHOOK_KEY is not set"));
+}

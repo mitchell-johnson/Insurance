@@ -8,6 +8,7 @@ pub mod complaints;
 pub mod customers;
 pub mod documents;
 pub mod finance;
+pub mod group;
 pub mod intake;
 pub mod pricing;
 pub mod reinsurance;

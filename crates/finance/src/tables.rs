@@ -555,6 +555,23 @@ pub struct DryRunRequest {
     pub age_at_start: bool,
     pub current: RateTable,
     pub proposed: RateTable,
+    /// The underwriting loadings on the book's layers, read from the core
+    /// for this run by whoever asks. With none, the loaded totals equal the
+    /// base totals. They imply health, so the answer gives only totals and
+    /// nothing here is kept.
+    #[serde(default)]
+    pub loadings: Vec<LayerLoading>,
+}
+
+/// The loadings on one layer, as the core answers them. They add: the
+/// premium is the base times one plus their sum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerLoading {
+    pub partition: PartitionId,
+    pub policy: String,
+    pub cover: String,
+    pub layer: u32,
+    pub loadings: Vec<DecStr>,
 }
 
 /// One rating cell of the book under both versions.
@@ -593,6 +610,15 @@ pub struct DryRun {
     pub current_annual_minor: i64,
     pub proposed_annual_minor: i64,
     pub change_minor: i64,
+    /// Priced covers that carry an underwriting loading.
+    pub loaded_covers: u64,
+    /// The totals with each cover's loadings applied. Before discounts,
+    /// fees and tax.
+    pub loaded_current_annual_minor: i64,
+    pub loaded_proposed_annual_minor: i64,
+    /// Loadings given that could not be read as a fraction; their covers
+    /// are priced without them.
+    pub loadings_unread: u64,
     /// Covers whose life has no age published, so neither version prices them.
     pub no_age: u64,
     /// Covers neither version has a rate for.
@@ -656,6 +682,10 @@ pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -
         current_annual_minor: 0,
         proposed_annual_minor: 0,
         change_minor: 0,
+        loaded_covers: 0,
+        loaded_current_annual_minor: 0,
+        loaded_proposed_annual_minor: 0,
+        loadings_unread: 0,
         no_age: 0,
         no_rate_in_either: 0,
         newly_rated: 0,
@@ -666,6 +696,17 @@ pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -
         passed: true,
     };
     let mut cells: BTreeMap<(u32, String, Option<bool>), DryRunCell> = BTreeMap::new();
+    // One plus the sum of a layer's loadings, at the rate scale.
+    let one = 10i128.pow(SCALE_DP);
+    let mut factors: BTreeMap<(PartitionId, &str, &str, u32), i128> = BTreeMap::new();
+    for l in &request.loadings {
+        let sum: Option<i128> = l.loadings.iter().map(|d| scaled(d.as_str()).map(|(v, _)| v)).sum();
+        match sum {
+            Some(sum) => *factors.entry((l.partition, l.policy.as_str(), l.cover.as_str(), l.layer)).or_insert(one) += sum,
+            None => run.loadings_unread += 1,
+        }
+    }
+    let loaded = |base: i64, factor: i128| i64::try_from((i128::from(base) * factor + one / 2) / one).unwrap_or(i64::MAX);
     for c in book {
         let age = if request.age_at_start { c.age_at_start } else { c.age };
         let Some(age) = age else {
@@ -695,6 +736,12 @@ pub fn dry_run(as_at: NaiveDate, request: &DryRunRequest, book: &[RatedCover]) -
         run.covers += 1;
         run.current_annual_minor = run.current_annual_minor.saturating_add(current);
         run.proposed_annual_minor = run.proposed_annual_minor.saturating_add(proposed);
+        let policy = c.policy.to_string();
+        let factor = c.layer.and_then(|layer| factors.get(&(c.partition, policy.as_str(), c.cover.as_str(), layer)));
+        run.loaded_covers += u64::from(factor.is_some());
+        let factor = factor.copied().unwrap_or(one);
+        run.loaded_current_annual_minor = run.loaded_current_annual_minor.saturating_add(loaded(current, factor));
+        run.loaded_proposed_annual_minor = run.loaded_proposed_annual_minor.saturating_add(loaded(proposed, factor));
         let sex = crate::mart::sex_name(c.sex).to_string();
         let cell = cells.entry((age / 5, sex.clone(), c.smoker)).or_insert_with(|| DryRunCell {
             age_band: crate::mart::age_band(Some(age)),

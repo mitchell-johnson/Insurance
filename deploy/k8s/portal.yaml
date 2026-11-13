@@ -64,6 +64,10 @@ data:
   # documents app's roles "portal" and "staff".
   IC_DOCUMENTS_URL: http://ic-documents
   IC_DOCUMENTS_SCOPE: api://REPLACE-documents-application-id/.default
+  # The group service, for employers' membership files and invoices. The
+  # portal's identity needs its employer-portal app role (docs/group.md).
+  IC_GROUP_URL: http://ic-group
+  IC_GROUP_SCOPE: api://REPLACE-group-application-id/.default
   # With ledger nodes in two regions, name which node is where and which
   # region normally leads, so the operations console and the status page can
   # say when a region is lost (docs/operations.md, "Losing a region"):

@@ -28,6 +28,7 @@ pub mod documents;
 pub mod feed;
 pub mod finance;
 pub mod forward;
+pub mod group;
 pub mod http;
 pub mod identity;
 pub mod ops;

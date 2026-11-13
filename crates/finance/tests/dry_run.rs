@@ -6,7 +6,7 @@ use common::*;
 use ic_core::PolicyId;
 use ic_finance::host;
 use ic_finance::mart::RatedCover;
-use ic_finance::tables::{dry_run, DryRunRequest, DRY_RUN_LISTED};
+use ic_finance::tables::{dry_run, DryRunRequest, LayerLoading, DRY_RUN_LISTED};
 use ic_product::{load_rate_table, RateTable, Sex};
 use serde_json::{json, Value};
 
@@ -48,6 +48,7 @@ fn request(proposed: RateTable) -> DryRunRequest {
         age_at_start: false,
         current: life("", ""),
         proposed,
+        loadings: vec![],
     }
 }
 
@@ -208,4 +209,47 @@ fn the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves() {
     let run = dry_run(as_at, &request(raised()), &small);
     // 388 dollars at 1.2885 per thousand is 49.9938 cents; 1,000 dollars is 128.85 cents.
     assert_eq!(run.current_annual_minor, 129 + 50);
+}
+
+/// Purpose: three covers of $100,000 are repriced with the loadings the core holds for
+/// them. One layer carries loadings of 50% and 25%, one carries a loading that cannot be
+/// read, and a loading for a layer that is not in the book is ignored. The base totals
+/// are as before; the loaded totals add 75% to the one cover under both versions, the
+/// answer counts one loaded cover and one loading it could not read, and nothing in it
+/// says which policy is loaded.
+/// Why it matters: the actuary signs off the movement in what customers will be billed,
+/// and a rate rise falls hardest on loaded lives. The loading itself implies health, so
+/// the answer may carry totals and nothing that points at a person.
+#[test]
+fn a_dry_run_applies_underwriting_loadings_to_its_totals_only() {
+    let as_at = d(2027, 11, 30);
+    let book: Vec<RatedCover> = ["pol-a", "pol-b", "pol-c"].iter().map(|p| cover(p, Some(37), 100_000_00)).collect();
+    let on = |policy: &str, layer: u32, loadings: &[&str]| LayerLoading {
+        partition: 0,
+        policy: policy.to_string(),
+        cover: "life".to_string(),
+        layer,
+        loadings: loadings.iter().map(|l| serde_json::from_value(json!(l)).unwrap()).collect(),
+    };
+    let mut request = request(life("1.2885", "1.4174"));
+    let plain = dry_run(as_at, &request, &book);
+    assert_eq!(
+        (plain.loaded_covers, plain.loaded_current_annual_minor, plain.loaded_proposed_annual_minor),
+        (0, plain.current_annual_minor, plain.proposed_annual_minor)
+    );
+
+    request.loadings = vec![
+        on("pol-a", 1, &["0.5", "0.25"]),
+        on("pol-b", 1, &["-0.1"]),
+        on("pol-a", 2, &["1"]),
+        on("pol-z", 1, &["1"]),
+    ];
+    let run = dry_run(as_at, &request, &book);
+    assert_eq!((run.current_annual_minor, run.proposed_annual_minor), (3 * 128_85, 3 * 141_74));
+    assert_eq!((run.loaded_covers, run.loadings_unread), (1, 1));
+    // $128.85 and $141.74 with 75% added are $225.49 and $248.05, half a cent rounding up.
+    assert_eq!(run.loaded_current_annual_minor, 2 * 128_85 + 225_49);
+    assert_eq!(run.loaded_proposed_annual_minor, 2 * 141_74 + 248_05);
+    let answer = serde_json::to_string(&run).unwrap();
+    assert!(!answer.contains("0.25") && !answer.contains("loadings\":["), "{answer}");
 }

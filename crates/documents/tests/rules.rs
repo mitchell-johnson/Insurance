@@ -258,6 +258,7 @@ fn changes_to_cover_require_a_new_schedule() {
         json!({ "layers_merged": { "policy": "pol-1", "cover": "life", "removed": [2], "into": 1, "sum_insured_minor": 50000000 } }),
         json!({ "cover_expired": { "policy": "pol-1", "cover": "tpd", "on": "2027-11-15" } }),
         json!({ "policy_reinstated": { "policy": "pol-1" } }),
+        json!({ "layer_added": { "policy": "pol-1", "layer": { "cover": "life", "cover_type": "life", "layer": 2, "life": "life-1", "sum_insured_minor": 10000000, "start": "2027-11-15" }, "origin": "increase" } }),
     ];
     for (i, event) in changes.into_iter().enumerate() {
         let found = triggers(&record(i as u64 + 1, event));
