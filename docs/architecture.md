@@ -349,7 +349,7 @@ Owner thread: "Build documents and correspondence". Detail lives in [documents.m
 
 ### Working notes
 
-`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates together was 98.49 percent of lines on 2026-11-13 (`cargo llvm-cov -p ic-complaints -p ic-documents`).
+`protoc` cannot be downloaded in the cloud environment, so local checks run with `--exclude ic-workflows` and CI covers that crate. Coverage for these two crates together was 98.50 percent of lines on 2026-11-13, and every documents persona row (DOC-001 to DOC-010) is fully tested (`cargo llvm-cov -p ic-complaints -p ic-documents`).
 
 ## Customer master (`ic-customers`)
 
@@ -609,7 +609,8 @@ Not done, in order:
 2. **Notice delivery: done** by the documents thread (7e83bf1): its relay issues each notice as document `collections:<id>` and reports `record_notice_sent` and `record_notice_delivery`. Its tests in `crates/documents/tests/collections_notices.rs` borrow `crates/collections/tests/common/mod.rs` by path, so change that file with them in mind. The templates still need wording, and they carry no notice period. The core does not yet pause the lapse step for an undeliverable notice (COL-009 is the core's).
 3. **Sequences for the real products** are not written; until one is set, a product is listed by `unsequenced` and nothing is sent.
 4. **Advisers and lenders** are not told at the call step; vulnerability, recent claims and tenure do not bring the call earlier (premium only). Winback tasks, retention offers, scheme employer arrears and reporting measures are not built.
-5. **Screens.** The portal has no collections screens; the questions and commands exist.
+5. **Reinstatement.** Built: `request_reinstatement` (officer or team lead) posts `Reinstate` to the core, one at a time per policy; a refusal with `underwriting_required` opens a `reinstatement_underwriting` task, any other a `reinstatement` task. Not built: opening the proposal automatically. That needs a driver (the module host posts only to the core): read the policy from the core, build the proposal with `ic_underwriting::reinstatement::reinstatement_proposal`, send `open_proposal` to module underwriting as caller `collections` (`duplicate_proposal` means done). The retry after approval waits for a core event (`ReinstatementApproved`, asked of the core); until then the officer asks again once underwriting's proposal is issued.
+6. **Screens.** The portal has no collections screens; the questions and commands exist.
 
 ### Checks
 
