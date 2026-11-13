@@ -94,6 +94,14 @@ pub enum Question {
     /// same life, with who wrote it, the reason, and whether it is disputed
     /// or was overturned: what oversight and conduct reporting count.
     ReplacementMatches,
+    /// The conduct facts finance counts, dated from `from` to `to`
+    /// inclusive: one for each replacement declared or matched, and one for
+    /// each match a dispute overturned. Each carries an ID unique for ever,
+    /// so the close driver may send the same facts again. Oldest first.
+    ConductFacts {
+        from: NaiveDate,
+        to: NaiveDate,
+    },
     /// Every dated link in the structure: who sits under, is licensed by or
     /// is paid for whom, and from when to when.
     Relations,
@@ -183,6 +191,7 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
                 .collect();
             Ok(Value::Array(rows))
         }
+        Question::ConductFacts { from, to } => Ok(json!(state.conduct_facts(from, to))),
         Question::ConductCases => {
             let structure = &state.config.structure;
             let rows: Vec<Value> = state

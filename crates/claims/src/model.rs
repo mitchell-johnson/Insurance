@@ -90,6 +90,11 @@ pub struct Flags {
     /// A group scheme claim: the employer sees status only.
     #[serde(default)]
     pub group: bool,
+    /// The claimant carries a communication marker: they deal with one
+    /// named owner, a handover is said to them, and the deadlines they have
+    /// to meet are longer.
+    #[serde(default)]
+    pub communication_support: bool,
 }
 
 impl Flags {

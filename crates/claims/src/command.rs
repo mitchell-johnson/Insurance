@@ -244,6 +244,13 @@ pub enum Command {
         to: StaffId,
         actor: Actor,
     },
+    /// The claimant has, or no longer has, a communication marker (from the
+    /// customer master or what they told the owner).
+    RecordCommunicationNeed {
+        claim: String,
+        needed: bool,
+        actor: Actor,
+    },
     RecordContact {
         claim: String,
         actor: Actor,
@@ -553,6 +560,7 @@ impl Command {
             Command::Acknowledge { .. } => "acknowledge",
             Command::Assign { .. } => "assign",
             Command::RecordContact { .. } => "record_contact",
+            Command::RecordCommunicationNeed { .. } => "record_communication_need",
             Command::Escalate { .. } => "escalate",
             Command::IdentifyLife { .. } => "identify_life",
             Command::RecordCause { .. } => "record_cause",

@@ -178,6 +178,46 @@ pub struct LayerRecord {
     /// same life: a replacement nobody declared.
     #[serde(default)]
     pub replacement: Option<ReplacementMatch>,
+    /// What finance's conduct measures count about this layer: each time it
+    /// was declared or matched as a replacement, and each match a dispute
+    /// overturned. Appended to, never changed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conduct: Vec<ConductRecord>,
+}
+
+/// A conduct measure the distribution module reports to finance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConductMeasure {
+    /// New cover written in place of cover given up: declared when the
+    /// layer was written, or matched by the replacement rule.
+    ReplacementWritten,
+    /// A match the writing adviser disputed and won: not a replacement after
+    /// all. Counted on its own, against the date of the match.
+    ReplacementOverturned,
+}
+
+/// One thing that happened to a layer, for the conduct measures. Carries no
+/// personal information: the layer key, a date and the measure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConductRecord {
+    pub measure: ConductMeasure,
+    pub date: NaiveDate,
+    /// For an overturn: the date of the match it undoes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub relates_to: Option<NaiveDate>,
+}
+
+impl ConductRecord {
+    /// The fact's ID, unique for ever: the layer, the measure and the
+    /// record's place in the layer's list, which is only ever appended to.
+    pub fn id(&self, layer: &str, n: usize) -> String {
+        let what = match self.measure {
+            ConductMeasure::ReplacementWritten => "replacement",
+            ConductMeasure::ReplacementOverturned => "overturned",
+        };
+        format!("{layer}/{what}:{n}")
+    }
 }
 
 /// Why the replacement rule matched a new layer to cover given up.

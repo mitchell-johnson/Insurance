@@ -270,6 +270,11 @@ pub struct Rules {
     /// for the funeral or the family's immediate needs. Zero: no advances.
     #[serde(default)]
     pub funeral_advance_max_minor: i64,
+    /// Days added to each deadline the claimant has to meet (evidence asked
+    /// of them, the grace on a review) while they carry a communication
+    /// marker. It is the whole extension: the marker never adds more.
+    #[serde(default)]
+    pub communication_extra_days: u32,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]

@@ -61,15 +61,41 @@ pub struct BenefitLimit {
     pub excess_minor: i64,
 }
 
+/// An income benefit while the life is in custody after sentence.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WhileImprisoned {
+    /// No benefit for whole days in custody; the claim, the premium waiver
+    /// and the cover carry on.
+    #[default]
+    Suspend,
+    /// The benefit is paid as if the life were not in custody.
+    Pay,
+}
+
 /// What a cover pays. Claims assessment is outside the core; the benefit only
 /// says what is payable once an event meets the definition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Benefit {
-    LumpSum { survival_days: u32, ends_cover: bool },
-    MonthlyBenefit { waiting_days: u32, benefit_months: u32 },
-    HealthSchedule { limits: Vec<BenefitLimit> },
-    InvestmentAccount { funds: Vec<String> },
+    LumpSum {
+        survival_days: u32,
+        ends_cover: bool,
+    },
+    MonthlyBenefit {
+        waiting_days: u32,
+        benefit_months: u32,
+        /// What the wording does with the benefit while the life is in
+        /// custody after sentence (`docs/decisions.md`, decision 5).
+        #[serde(default)]
+        benefit_while_imprisoned: WhileImprisoned,
+    },
+    HealthSchedule {
+        limits: Vec<BenefitLimit>,
+    },
+    InvestmentAccount {
+        funds: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
