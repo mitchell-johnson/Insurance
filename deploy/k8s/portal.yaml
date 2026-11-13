@@ -51,6 +51,15 @@ data:
   IC_CUSTOMER_TENANT_ID: REPLACE-external-tenant-id
   IC_CUSTOMER_AUDIENCE: REPLACE-customer-application-id
   IC_CUSTOMER_CLIENT_ID: REPLACE-portal-spa-client-id
+  # The customer master, for a person's own record in the app: its base URL
+  # and the scope of its app registration. The portal's identity needs the
+  # master's app role "portal".
+  IC_CUSTOMERS_URL: http://ic-customers
+  IC_CUSTOMERS_SCOPE: api://REPLACE-customers-application-id/.default
+  # The underwriting intake, for signing disclosures in the app. The portal's
+  # identity needs the intake's app role "new-business".
+  IC_UNDERWRITING_INTAKE_URL: http://ic-underwriting-intake
+  IC_UNDERWRITING_INTAKE_SCOPE: api://REPLACE-underwriting-intake-application-id/.default
   # With ledger nodes in two regions, name which node is where and which
   # region normally leads, so the operations console and the status page can
   # say when a region is lost (docs/operations.md, "Losing a region"):

@@ -56,8 +56,18 @@ async fn main() -> Result<(), String> {
         })),
         None => None,
     };
+    let intake: Option<Arc<dyn ic_channels::disclosures::Intake>> = match &settings.intake {
+        Some((base, scope)) => Some(Arc::new(ic_channels::disclosures::Hosted {
+            base: base.clone(),
+            scope: scope.clone(),
+            credential: ic_azure::credential::AzureCredential::from_env().map_err(|e| format!("underwriting intake credential: {e}"))?,
+            http: ic_azure::http_client(),
+        })),
+        None => None,
+    };
     let state = Arc::new(AppState {
         master,
+        intake,
         channel: channel.clone(),
         customers: settings.customers.auth(),
         workforce: settings.workforce.auth(),
