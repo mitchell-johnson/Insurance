@@ -9,5 +9,6 @@ DEFINITIONS = [
     definition("cancer", 2, "2028-07-01", "Cancer", "The presence of one or more malignant tumours, placeholder wording version 2."),
     definition("heart-attack", 1, "2027-01-01", "Heart attack", "Death of heart muscle due to inadequate blood supply, placeholder wording."),
     definition("stroke", 1, "2027-01-01", "Stroke", "A cerebrovascular event producing neurological deficit, placeholder wording."),
+    definition("total-disability", 1, "2027-01-01", "Total disability", "Unable through illness or injury to work in the life's own occupation for more than ten hours a week, and under the care of a medical practitioner, placeholder wording."),
     definition("pre-existing-condition", 1, "2027-01-01", "Pre-existing condition", "A condition whose signs or symptoms existed before the cover started, placeholder wording."),
 ]

@@ -10,8 +10,13 @@ def dollars(n):
 def lump_sum(survival_days = 0, ends_cover = True):
     return {"kind": "lump_sum", "survival_days": survival_days, "ends_cover": ends_cover}
 
-def monthly_benefit(waiting_days, benefit_months):
-    return {"kind": "monthly_benefit", "waiting_days": waiting_days, "benefit_months": benefit_months}
+def monthly_benefit(waiting_days, benefit_months, benefit_while_imprisoned = "suspend"):
+    return {
+        "kind": "monthly_benefit",
+        "waiting_days": waiting_days,
+        "benefit_months": benefit_months,
+        "benefit_while_imprisoned": benefit_while_imprisoned,
+    }
 
 def benefit_limit(category, per_event = None, per_year = None, excess = 0):
     return {"category": category, "per_event_minor": per_event, "per_year_minor": per_year, "excess_minor": excess}
