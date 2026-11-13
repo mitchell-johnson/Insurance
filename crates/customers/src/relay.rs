@@ -47,6 +47,10 @@ pub fn directory_command(party: &PartyId, relationship: &crate::model::Relations
     let who = ic_core::PartyId(party.0.clone());
     match (relationship.kind, ended) {
         (RelationshipKind::Owner, false) => Some(DirectoryCommand::RecordOwnership { policy, policyholder: who }),
+        // The directory removes an owner only while they are still the one
+        // recorded, so this is safe before or after the next owner arrives.
+        (RelationshipKind::Owner, true) => Some(DirectoryCommand::EndOwnership { policy, party: who }),
+        (RelationshipKind::Dependant, true) => Some(DirectoryCommand::EndDependant { policy, party: who }),
         (RelationshipKind::Assignee, _) => Some(DirectoryCommand::RecordAssignment {
             policy,
             party: who,

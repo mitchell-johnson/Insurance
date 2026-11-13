@@ -19,6 +19,7 @@
 
 pub mod claims;
 pub mod classes;
+pub mod commission;
 pub mod complaints;
 pub mod countersign;
 pub mod customers;

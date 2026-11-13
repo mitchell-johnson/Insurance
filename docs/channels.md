@@ -166,6 +166,16 @@ What the service decides and the person cannot:
 
 That module's refusals come back as `409` with its own code; a file the case has not opened to the person is `403`; no leader is `503 complaints_unavailable`. The portal service holds no complaint data, and the two modules share no code: `tests/http.rs` runs the workbench against that module's own state machine.
 
+## The commission console
+
+`/commission` is the staff screen for the commission module (`distribution`, `docs/distribution.md`), in `src/commission.rs`. Staff actions here give that module's roles: `commission.structure` gives `distribution_admin`, `commission.ops` gives `commission_ops`, `commission.approve` gives `commission_approver`, `commission.compliance` gives `compliance`; `commission.view` opens the console with no role. The workbench actions give the counterparty, legal and conduct roles as before. The person goes to that module as its own description of a member of staff (roles, profile limits, purpose), built here, and that module decides each command with `config/cedar/distribution.cedar` and records the decision.
+
+| Route | What it does |
+| --- | --- |
+| `GET /staff/v1/commission/me` | Who you are and the roles you hold there. |
+| `GET /staff/v1/commission/{question}` | `status`, `open_tasks`, `history`, `conduct_cases`, `relations`, `sweep_check`, `position` and `proof_of_debt` (`party`, `as_at`), `statement` (`payee`, `number`), `held_control`, `month_end_blocks` and `clawback_exposure` (`date`), `aged_held` (`as_at`), `action` and `case` (`id`). Anything not found is 404. |
+| `POST /staff/v1/commission/commands` | `{purpose, command}`: one of `add_party`, `relate`, `end_relation`, `start_engagement`, `end_engagement`, `record_licence`, `mark_ceased`, `register_payee`, `add_payee_account`, `set_payment_hold`, `set_accrual_hold`, `add_payment_instruction`, `remove_payment_instruction`, `propose_change`, `approve_change`, `reject_change`, `cut_statement`, `attach_document`, `complete_task`, `close_case`, with an `Idempotency-Key`. That module's refusal comes back with its code (`not_authorised` is 403). Workbench actions, replacement decisions and policy assignment are refused here: they have their own pages and paths. |
+
 ## The unit pricing console
 
 `/pricing` is the staff screen for the unit pricing module (`docs/unit-pricing.md`): the prices waiting for a person with their checks, valuation files that could not be read, prices overdue, the valuation received for a fund and date, prices in force, funds and their suspensions, and price errors with their corrections and remediation. From it a preparer prepares a price, an approver approves it (accepting each failed check with a reason when it is held) or rejects it, and a lead suspends and resumes a fund, raises and closes a price error, and offers a price again to partitions that refused it.
