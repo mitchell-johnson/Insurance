@@ -60,6 +60,10 @@ data:
   # identity needs the intake's app role "new-business".
   IC_UNDERWRITING_INTAKE_URL: http://ic-underwriting-intake
   IC_UNDERWRITING_INTAKE_SCOPE: api://REPLACE-underwriting-intake-application-id/.default
+  # The documents service, for PDF downloads. The portal's identity needs the
+  # documents app's roles "portal" and "staff".
+  IC_DOCUMENTS_URL: http://ic-documents
+  IC_DOCUMENTS_SCOPE: api://REPLACE-documents-application-id/.default
   # With ledger nodes in two regions, name which node is where and which
   # region normally leads, so the operations console and the status page can
   # say when a region is lost (docs/operations.md, "Losing a region"):

@@ -28,6 +28,44 @@ pub trait Core: Send + Sync {
     fn propose(&self, partition: u16, key: &str, command: &ic_core::Command) -> impl Future<Output = Result<Option<String>, String>> + Send;
 }
 
+/// The channels directory, which decides who sees which policy in the app.
+pub trait Directory: Send + Sync {
+    /// Propose a directory command. `Ok(None)` is accepted, `Ok(Some(why))`
+    /// refused, `Err` not reached.
+    fn direct(&self, key: &str, command: &ic_channels::directory::DirectoryCommand) -> impl Future<Output = Result<Option<String>, String>> + Send;
+}
+
+/// What the directory needs to hear about a relationship change, if
+/// anything: policy ownership, an assignee coming or going, a child with the
+/// date they control their own health information.
+pub fn directory_command(party: &PartyId, relationship: &crate::model::Relationship, ended: bool) -> Option<ic_channels::directory::DirectoryCommand> {
+    use crate::model::{RelationshipKind, Target};
+    use ic_channels::directory::DirectoryCommand;
+    let Target::Policy(policy) = &relationship.target else {
+        return None;
+    };
+    let policy = ic_core::PolicyId(policy.clone());
+    let who = ic_core::PartyId(party.0.clone());
+    match (relationship.kind, ended) {
+        (RelationshipKind::Owner, false) => Some(DirectoryCommand::RecordOwnership { policy, policyholder: who }),
+        (RelationshipKind::Assignee, _) => Some(DirectoryCommand::RecordAssignment {
+            policy,
+            party: who,
+            active: !ended,
+        }),
+        (RelationshipKind::Dependant, false) => relationship
+            .attributes
+            .get("controls_from")
+            .and_then(|v| crate::validate::date(v).ok())
+            .map(|controls_from| DirectoryCommand::RecordDependant {
+                policy,
+                party: who,
+                controls_from,
+            }),
+        _ => None,
+    }
+}
+
 /// The claims command for a death.
 pub fn record_death(party: &PartyId, date_of_death: NaiveDate) -> ic_core::Command {
     ic_core::Command::Claims(Box::new(ic_claims::Command::RecordDeath {
@@ -105,6 +143,30 @@ impl ClusterCore {
             patience,
             partitions: Mutex::new(None),
         })
+    }
+}
+
+impl Directory for ClusterCore {
+    async fn direct(&self, key: &str, command: &ic_channels::directory::DirectoryCommand) -> Result<Option<String>, String> {
+        let envelope = ic_channels::Envelope {
+            key: key.to_string(),
+            at: chrono::Utc::now().timestamp(),
+            actor: ic_channels::Actor::Module(CALLER.to_string()),
+            command: ic_channels::Command::Directory(command.clone()),
+        };
+        let command = serde_json::to_value(&envelope).map_err(|e| e.to_string())?;
+        let reply = self
+            .client
+            .propose_module_until(ic_channels::query::MODULE, &command, self.patience)
+            .await
+            .map_err(|e| e.to_string())?;
+        // The module answers with its own verdict inside: a refusal there
+        // is the directory saying no, not the cluster.
+        let output: ic_channels::state::Output = match reply.result {
+            Ok(v) => serde_json::from_value(v).map_err(|e| format!("the directory's answer was not understood: {e}"))?,
+            Err(e) => return Ok(Some(e)),
+        };
+        Ok(output.result.err().map(|r| format!("{}: {}", r.code, r.message)))
     }
 }
 

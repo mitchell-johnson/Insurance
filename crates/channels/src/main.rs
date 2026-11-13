@@ -65,7 +65,17 @@ async fn main() -> Result<(), String> {
         })),
         None => None,
     };
+    let documents: Option<Arc<dyn ic_channels::documents::Documents>> = match &settings.documents {
+        Some((base, scope)) => Some(Arc::new(ic_channels::documents::Hosted {
+            base: base.clone(),
+            scope: scope.clone(),
+            credential: ic_azure::credential::AzureCredential::from_env().map_err(|e| format!("documents credential: {e}"))?,
+            http: ic_azure::http_client(),
+        })),
+        None => None,
+    };
     let state = Arc::new(AppState {
+        documents,
         master,
         intake,
         channel: channel.clone(),

@@ -89,6 +89,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | COL-009 | full | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows`<br>`documents/tests/delivery.rs::returned_post_makes_the_notice_undeliverable_until_retried` |
 | COL-010 | part | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/underwriting_door.rs::a_long_lapse_is_reinstated_only_on_underwritings_decision_and_on_its_terms` |
 | COL-011 | full | `sim/tests/scenarios.rs::reinstatement_window_closes` |
+| COL-014 | full | `sim/tests/hardship.rs::a_reduced_premium_is_billed_for_its_days_and_ends_early_without_charging_back`<br>`sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies` |
 | COL-015 | full | `sim/tests/arrangement.rs::an_arrangement_that_is_kept_holds_standing_and_stops_the_lapse`<br>`sim/tests/arrangement.rs::a_broken_arrangement_resumes_the_lapse_clock_from_where_it_stood` |
 | COL-016 | full | `payments/tests/runs.rs::a_payer_in_hardship_is_talked_to_before_anything_is_presented_again` |
 | COL-017 | part | `payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
@@ -274,6 +275,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-026 | part | `group/tests/year.rs::a_pool_scheme_is_run_on_declarations` |
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
+| GRP-028 | part | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
 | GRP-032 | part | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |

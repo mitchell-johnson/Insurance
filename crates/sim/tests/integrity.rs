@@ -488,6 +488,17 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             policy: p.clone(),
             arrangement: "a".into(),
         },
+        Command::GrantHardship {
+            policy: p.clone(),
+            hardship: "h".into(),
+            from: d(2027, 1, 1),
+            to: d(2027, 2, 1),
+            share_bps: 0,
+        },
+        Command::EndHardship {
+            policy: p.clone(),
+            hardship: "h".into(),
+        },
         Command::ApplyReceipt {
             policy: p.clone(),
             receipt: "r".into(),
@@ -597,7 +608,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 43, "{names:?}");
+    assert_eq!(names.len(), 45, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail
