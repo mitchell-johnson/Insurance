@@ -66,7 +66,11 @@ fn scheme() -> Harness {
 }
 
 fn scheme_on(t: SchemeTerms) -> Harness {
-    let mut h = Harness::on(t, benefits_product());
+    scheme_on_product(t, benefits_product())
+}
+
+fn scheme_on_product(t: SchemeTerms, product: ic_product::ProductDefinition) -> Harness {
+    let mut h = Harness::on(t, product);
     h.apply(
         "f1",
         FileKind::Full,
@@ -362,4 +366,55 @@ fn moved_choices(h: &Harness, id: &str) -> usize {
         .flat_map(|c| c.layers.iter())
         .filter(|l| l.life == life(id) && l.origin == LayerOrigin::MemberChoice && l.end.is_none_or(|e| e > h.today()))
         .count()
+}
+
+/// Purpose: an employer health plan with no group life is a scheme: it registers on a group
+/// product with only chosen covers when it has a health menu (and is refused without one),
+/// its members join from the employer's file with no cover of their own until the default
+/// plan is set, the employer is invoiced only for what the plan says it pays for, and a
+/// member's choice and dependants work as on any scheme.
+/// Why it matters: Mitchell asked for a health plan menu, and the core thread confirmed a
+/// health-only employer plan exists. Refusing it would leave such employers on paper; and
+/// registering one without a menu would bill members for nothing and cover them for nothing.
+#[test]
+fn a_health_only_scheme_runs_on_its_menu_alone() {
+    // Without a menu there is nothing to cover.
+    let mut h = Harness::new(terms());
+    let refused = GroupCommand::RegisterScheme {
+        scheme: "clinic".into(),
+        policy: ic_core::PolicyId("pol-clinic".into()),
+        group: ic_core::GroupId("grp-clinic".into()),
+        employer: party("employer-clinic"),
+        inception: h.today(),
+        product: Box::new(health_product()),
+        terms: Box::new(terms()),
+        founding: vec![],
+        pools: vec![],
+    };
+    assert_eq!(code(h.staff(refused)), "not_a_scheme");
+
+    let mut h = scheme_on_product(with_menu(), health_product());
+    let standard = ("hospital".to_string(), Some("standard".to_string()), false);
+    assert_eq!(held(&h, "E001"), vec![standard.clone()]);
+    assert_eq!(held(&h, "E002"), vec![standard]);
+    let policy = &h.c.state(h.p).policies[&h.policy];
+    assert!(
+        policy.covers.values().all(|c| c.layers.iter().all(|l| l.origin == LayerOrigin::MemberChoice)),
+        "no cover but what members hold from the menu"
+    );
+
+    let today = h.today();
+    send(
+        &mut h,
+        caller::MEMBER,
+        choose("E002", "plus", HealthTier::Couple, today, vec![dependant("partner", d(1988, 3, 1))]),
+    )
+    .unwrap();
+    assert!(in_core(&h, "E002+partner"));
+    assert_eq!(held(&h, "E002").len(), 2);
+
+    h.days(31);
+    let invoice = h.scheme().invoices.back().cloned().expect("invoiced");
+    assert_eq!(invoice.members(), 2);
+    assert!(invoice.total_minor() > 0, "the employer pays for each member's hospital cover");
 }

@@ -42,6 +42,10 @@ pub fn product() -> ProductDefinition {
 
 /// Workplace Benefits: group life with a health menu (hospital at three
 /// excess levels, specialist which needs hospital, dental).
+pub fn health_product() -> ProductDefinition {
+    load_product("group_health.star", include_str!("../../../../products/group_health.star")).unwrap()
+}
+
 pub fn benefits_product() -> ProductDefinition {
     load_product("group_benefits.star", include_str!("../../../../products/group_benefits.star")).unwrap()
 }
@@ -221,6 +225,10 @@ impl Harness {
         };
         let mut issue = group_scheme(30, d(2027, 11, 1), vec![first]);
         issue.product_code = product.code.clone();
+        // A health-only scheme is issued with no cover: members choose theirs.
+        if ic_group::benefit::formula_covers(&product).next().is_none() {
+            issue.covers.clear();
+        }
         let (p, policy, group) = (c.partition_of(&issue.group), issue.policy.clone(), issue.group.clone());
         c.submit(p, "new-business", issue_command(issue)).unwrap();
         c.take_events();

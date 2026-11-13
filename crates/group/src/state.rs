@@ -942,8 +942,14 @@ impl GroupState {
         if let Some(menu) = &terms.health_menu {
             menu.check_product(&product).map_err(|e| Reject::new("invalid_terms", e))?;
         }
-        if crate::benefit::formula_covers(&product).next().is_none() {
-            return Err(Reject::new("not_a_scheme", "the product has no cover driven by member data"));
+        // A scheme is a group product: cover driven by member data, a
+        // health menu members choose from, or both.
+        let formula = crate::benefit::formula_covers(&product).next().is_some();
+        if product.line != ic_product::LineOfBusiness::Group || !(formula || terms.health_menu.is_some()) {
+            return Err(Reject::new(
+                "not_a_scheme",
+                "a scheme is on a group product with cover driven by member data or a health menu",
+            ));
         }
         let mut membership = Membership::default();
         for member in founding {
