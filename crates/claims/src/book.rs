@@ -285,6 +285,46 @@ impl ClaimsState {
         Ok(())
     }
 
+    /// A person has shown they are alive through the app or the customer
+    /// master. Each open proof of life on a benefit in payment to them is met
+    /// with that evidence, as if the owner had filed it; a held benefit is
+    /// paid again from the next run. Nothing open: nothing to do.
+    pub(crate) fn confirm_alive(&mut self, cx: &mut Cx<'_>, party: &str, source: &str, evidence_ref: String) -> Result<(), Reject> {
+        if party.is_empty() || source.is_empty() || evidence_ref.is_empty() {
+            return Err(Reject::new(
+                "invalid_confirmation",
+                "a confirmation names the person, its source and its evidence",
+            ));
+        }
+        let ids: Vec<String> = self.by_party.get(party).into_iter().flatten().cloned().collect();
+        for id in ids {
+            let Some(mut claim) = self.claims.get(&id).filter(|c| c.status == Status::InPayment).cloned() else {
+                continue;
+            };
+            let open: Vec<String> = claim
+                .tasks
+                .iter()
+                .filter(|t| t.kind == TaskKind::ProofOfLife && t.completed_on.is_none())
+                .map(|t| t.id.clone())
+                .collect();
+            if open.is_empty() {
+                continue;
+            }
+            cx.core.work(1);
+            for task in open {
+                let outcome = format!("confirmed:{source}");
+                let was_overdue = crate::intake::finish_task(&mut claim, &task, cx.today, None, outcome, vec![], Some(evidence_ref.clone()), 0);
+                if let (true, Some(s)) = (was_overdue, claim.schedule.as_mut()) {
+                    s.reviews_overdue = s.reviews_overdue.saturating_sub(1);
+                }
+                note(&mut claim, cx, None, format!("task_completed:{task}:{source}"));
+            }
+            cx.notify("proof_of_life_confirmed", &id, &[("source", source.to_string())]);
+            self.commit(claim);
+        }
+        Ok(())
+    }
+
     /// A death recorded in error. A benefit it was going to end and that is
     /// still running carries on as if nothing happened. A claim it closed
     /// goes to a senior, who reopens it on the basis `DeathRetracted` and

@@ -447,6 +447,17 @@ pub enum Command {
         party: String,
         date_of_death: NaiveDate,
     },
+    /// A person paid a benefit has shown they are alive without a claims
+    /// person filing it: a liveness check in the app (caller `channels`) or
+    /// an identity check in the customer master (caller `customer-master`).
+    /// Every open proof of life on their claims is met with the evidence.
+    ConfirmAlive {
+        party: String,
+        /// Where the confirmation came from, such as `app_liveness`.
+        source: String,
+        /// The record of the check, by its reference in the evidence store.
+        evidence_ref: String,
+    },
     /// A death recorded in error has been withdrawn in the customer master.
     RetractDeath {
         party: String,
@@ -544,6 +555,7 @@ impl Command {
             Command::NonDisclosureOutcome { .. } => &["underwriting"],
             Command::ExclusionControl { .. } | Command::DrainDue => &["claims", "end-of-day"],
             Command::RecordDeath { .. } | Command::RetractDeath { .. } => &["claims", "customer-master"],
+            Command::ConfirmAlive { .. } => &["channels", "customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
             Command::ReferForInvestigation { .. } => &["compliance"],
             Command::OffsetSource { .. } | Command::OffsetTaken { .. } | Command::OffsetReturned { .. } => &["partition"],
@@ -588,6 +600,7 @@ impl Command {
             Command::RaiseOverpayment { .. } => "raise_overpayment",
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
+            Command::ConfirmAlive { .. } => "confirm_alive",
             Command::RecordDeath { .. } => "record_death",
             Command::ReferForInvestigation { .. } => "refer_for_investigation",
             Command::DirectProceeds { .. } => "direct_proceeds",

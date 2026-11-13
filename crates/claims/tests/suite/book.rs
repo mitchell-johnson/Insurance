@@ -1918,3 +1918,45 @@ fn a_funeral_advance_is_paid_early_and_counted_against_the_benefit() {
     let admitted = admitted.last().expect("admitted");
     assert_eq!((admitted["admitted_minor"].as_str(), admitted["advanced_minor"].as_str()), ("200000", "10000"));
 }
+
+/// Purpose: a liveness check in the app or an identity check in the customer master meets every
+/// open proof of life on the person's benefits with its evidence, releasing a held benefit
+/// without a claims person; nothing open means nothing changes, and a confirmation must name
+/// its source and evidence.
+/// Why it matters: proof of life is asked of every person paid a benefit, most of whom can show
+/// it in the app in seconds. A person filing each one by hand delays the payment of someone who
+/// did what was asked.
+#[test]
+fn a_proof_of_life_is_met_by_the_app_or_the_customer_master() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.proof_of_life_months = 3;
+    r.proof_of_life_grace_days = 10;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.benefit_in_payment("ip-1");
+    let alive = |evidence: &str| Command::ConfirmAlive {
+        party: "party-life".into(),
+        source: "app_liveness".into(),
+        evidence_ref: evidence.into(),
+    };
+    // Nothing is open yet.
+    w.ok(alive("vault-live-0"));
+    assert!(w.core.noticed("proof_of_life_confirmed").is_empty());
+    w.on(d(2027, 6, 1));
+    w.ok(Command::DrainDue);
+    w.on(d(2027, 6, 11));
+    w.ok(Command::DrainDue);
+    assert!(w.claim("ip-1").held_for_proof_of_life());
+    assert_eq!(w.refused(alive("")), "invalid_confirmation");
+    w.ok(alive("vault-live-1"));
+    let c = w.claim("ip-1");
+    assert!(!c.held_for_proof_of_life());
+    let t = c.tasks.iter().find(|t| t.kind == TaskKind::ProofOfLife).expect("opened");
+    assert_eq!(
+        (t.outcome.as_deref(), t.vault_ref.as_deref(), t.completed_by.as_deref()),
+        (Some("confirmed:app_liveness"), Some("vault-live-1"), None)
+    );
+    assert_eq!(c.schedule.as_ref().expect("in payment").reviews_overdue, 0);
+    assert_eq!(w.core.noticed("proof_of_life_confirmed")[0]["source"], "app_liveness");
+}

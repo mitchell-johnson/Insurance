@@ -421,6 +421,7 @@ impl ClaimsState {
                 amount_minor,
             } => self.record_repayment(cx, &claim, &overpayment, amount_minor),
             Command::ExclusionControl { after } => self.exclusion_control(cx, after),
+            Command::ConfirmAlive { party, source, evidence_ref } => self.confirm_alive(cx, &party, &source, evidence_ref),
             Command::RecordDeath { party, date_of_death } => self.record_death(cx, &party, date_of_death),
             Command::RetractDeath { party, date_of_death } => self.retract_death(cx, &party, date_of_death),
             Command::DirectProceeds {
