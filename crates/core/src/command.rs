@@ -381,6 +381,21 @@ pub enum Command {
         policy: PolicyId,
         arrangement: String,
     },
+    /// Apply a hardship override: bill `share_bps` of the premium (none,
+    /// for a premium holiday) for the days from `from` up to `to`.
+    GrantHardship {
+        policy: PolicyId,
+        hardship: String,
+        from: NaiveDate,
+        to: NaiveDate,
+        share_bps: u32,
+    },
+    /// End a hardship override today. Nothing is charged for the days
+    /// already behind it.
+    EndHardship {
+        policy: PolicyId,
+        hardship: String,
+    },
     /// Pay a scheme member's credit back to the member.
     RefundMemberCredit {
         policy: PolicyId,
@@ -539,6 +554,7 @@ impl Command {
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
             Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
+            Command::GrantHardship { .. } | Command::EndHardship { .. } => &["collections"],
             Command::RefundMemberCredit { .. } => &["cash-matching", "policy-servicing"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
@@ -586,6 +602,8 @@ impl Command {
             Command::ApplyMemberReceipt { .. } => "apply_member_receipt",
             Command::MakeArrangement { .. } => "make_arrangement",
             Command::EndArrangement { .. } => "end_arrangement",
+            Command::GrantHardship { .. } => "grant_hardship",
+            Command::EndHardship { .. } => "end_hardship",
             Command::RefundMemberCredit { .. } => "refund_member_credit",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",

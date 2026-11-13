@@ -514,6 +514,18 @@ impl CoreState {
                 }
                 Ok(())
             }),
+            Command::GrantHardship {
+                policy,
+                hardship,
+                from,
+                to,
+                share_bps,
+            } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                crate::hardship::grant(&mut s.ledger, &s.catalog, p, ctx, hardship, from, to, share_bps)
+            }),
+            Command::EndHardship { policy, hardship } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                crate::hardship::end(&mut s.ledger, &s.catalog, p, ctx, &hardship)
+            }),
             Command::RefundMemberCredit { policy, life, amount } => {
                 self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
             }
