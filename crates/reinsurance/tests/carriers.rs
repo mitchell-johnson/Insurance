@@ -399,5 +399,12 @@ async fn statements_and_listings_are_left_for_their_reinsurer_to_collect() {
         body: body.clone(),
     };
     assert_eq!(c.hand_on(11, &release_only, on).await, Ok(Handed::Taken));
+    let not_a_statement = Notice::Document {
+        name: "reinsurance/group-life-surplus/reinsurer-north/notes.json".into(),
+        sha256: sha256.clone(),
+        body: body.clone(),
+    };
+    assert_eq!(c.hand_on(12, &not_a_statement, on).await, Ok(Handed::Taken));
+    assert_eq!(drops.store("ri-reinsurer-north").names().len(), 1, "only statements and listings are left");
     assert!(ReinsurerDrops::Off.drop_for("ri-reinsurer-north").is_none());
 }
