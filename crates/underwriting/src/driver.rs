@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use chrono::{DateTime, NaiveDate, Utc};
 use ic_core::event::Event as CoreEvent;
-use ic_core::{home_partition, GroupId};
+use ic_core::{home_partition, GroupId, PolicyId};
 use ic_group::command::{ExcessDecision, GroupCommand};
 use ic_ledger::PartitionId;
 use ic_reinsurance::capacity::{CapacityRequest, Outcome};
@@ -88,6 +88,13 @@ pub struct CoreAnswer {
 /// The core's partitions.
 pub trait Core: Send + Sync {
     fn send(&self, partition: PartitionId, key: &str, caller: &str, command: ic_core::Command) -> impl Future<Output = Result<CoreAnswer, DriverError>> + Send;
+
+    /// Lapsed policies whose reinstatement the core refused for want of
+    /// underwriting's decision, as collections lists them, each as the core
+    /// holds it now. With nothing to ask, there are none.
+    fn lapsed_for_underwriting(&self) -> impl Future<Output = Result<Vec<ic_core::policy::Policy>, DriverError>> + Send {
+        async { Ok(vec![]) }
+    }
 }
 
 /// The group administration module.
@@ -144,12 +151,19 @@ pub struct Pass {
 }
 
 /// What a day's sweep did.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Swept {
     pub pages: u32,
     pub lapsed: u32,
     pub chased: u32,
     pub escalated: u32,
+    /// Reinstatement proposals opened for lapsed policies collections
+    /// listed, and those it listed that could not be opened, with why.
+    pub reinstatements: u32,
+    pub not_reinstated: Vec<(PolicyId, String)>,
+    /// Why collections' list could not be read, when it could not. The
+    /// sweep itself stands; tomorrow's tries again.
+    pub reinstatements_unavailable: Option<String>,
 }
 
 enum Step {
@@ -380,7 +394,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             }) = applied.view
             else {
                 // A repeat older than the results the module keeps: that day's sweep was done long ago.
-                return Ok(total);
+                break;
             };
             total.pages += 1;
             total.lapsed += lapsed;
@@ -388,13 +402,40 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
             total.escalated += escalated;
             match next {
                 Some(next) => after = Some(next),
-                None => return Ok(total),
+                None => break,
             }
         }
+        if let Err(e) = self.reinstatements(today, &mut total).await {
+            total.reinstatements_unavailable = Some(e.to_string());
+        }
+        Ok(total)
     }
 
-    /// Carry the outbox, and sweep once on each new day. `swept` is the
-    /// last day this driver swept on.
+    /// Open a reinstatement proposal, as collections, for each lapsed policy
+    /// collections lists. The proposal's ID comes from the policy and its
+    /// lapse, so a policy already opened is refused `duplicate_proposal`
+    /// and counted as done; any other refusal is kept with the policy for
+    /// the operator and does not stop the rest.
+    async fn reinstatements(&self, today: NaiveDate, total: &mut Swept) -> Result<(), DriverError> {
+        for policy in self.core.lapsed_for_underwriting().await? {
+            let Some(open) = crate::reinstatement::reinstatement_proposal(&policy, today) else {
+                total
+                    .not_reinstated
+                    .push((policy.id.clone(), "not lapsed, or no cover on a named life to underwrite".into()));
+                continue;
+            };
+            let key = format!("collections:{}", open.proposal);
+            match self.tell(key, "collections", Command::OpenProposal(Box::new(open))).await? {
+                Ok(applied) if !applied.duplicate => total.reinstatements += 1,
+                // Opened before, under this key or by anyone under another.
+                Ok(_) => {}
+                Err(r) if r.code == "duplicate_proposal" => {}
+                Err(r) => total.not_reinstated.push((policy.id.clone(), format!("{}: {}", r.code, r.message))),
+            }
+        }
+        Ok(())
+    }
+
     pub async fn cycle(&self, swept: &mut Option<NaiveDate>, page: u32) -> (Result<Pass, DriverError>, Option<Result<Swept, DriverError>>) {
         let today = self.today();
         let sweep = if *swept == Some(today) {

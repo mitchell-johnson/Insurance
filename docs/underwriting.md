@@ -64,7 +64,7 @@ Proposal progress for the portals (`progress.rs`): once the outbox is empty, the
 
 A receiver's refusal that means "already done" or "no longer wanted" is counted as stale and acknowledged. Any other refusal parks the effect. Only a receiver that cannot be reached stops a pass, and the next pass starts from the same effect. Group administration's own driver reads the same outbox without acknowledging and sends the same excess decisions under the same key, so either may arrive first.
 
-Once a day the driver sends `Sweep` as caller `timer`, a page at a time, under keys of the day and the page start.
+Once a day the driver sends `Sweep` as caller `timer`, a page at a time, under keys of the day and the page start. After the sweep it asks the collections module for `reinstatements_for_underwriting` (the lapsed policies whose reinstatement the core refused with `underwriting_required`), reads each policy from the core (on the partition collections names, or by asking each partition), and opens `reinstatement_proposal` for it as caller `collections` under key `collections:{proposal}`. A policy already opened is not opened again; one no longer lapsed is reported in the sweep's result and skipped; and when collections cannot be asked, the sweep still stands and the next day's tries again.
 
 Settings: `IC_NODES` and `IC_EVENT_HUBS_ENDPOINT` (required), the cluster token as for every worker, the workers' Azure identity, `IC_UNDERWRITING_EVENT_HUB` (`underwriting-notices`), `IC_UNDERWRITING_CYCLE_MS` (2000), `IC_UNDERWRITING_PATIENCE_MS` (10000), `IC_UNDERWRITING_BATCH` (100), `IC_UNDERWRITING_SWEEP_PAGE` (200).
 
