@@ -87,6 +87,7 @@ pub fn terms() -> SchemeTerms {
         suspend_joiners_after_short_payments: Some(2),
         broker: None,
         delegated_underwriting: None,
+        health_menu: None,
     }
 }
 
@@ -242,6 +243,7 @@ impl Harness {
                 party: Some(party("party-1")),
                 fingerprint: Some("fp-E001".to_string()),
                 auto_cap_minor: None,
+                health: None,
             }]
         };
         h.staff(GroupCommand::RegisterScheme {

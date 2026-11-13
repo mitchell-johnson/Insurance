@@ -242,6 +242,15 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
                 "hours_hundredths": m.attrs.hours_hundredths,
                 "billing_group": m.attrs.billing_group,
                 "occupation_class": m.attrs.occupation_class,
+                // The plan and tier set the premium; dependants are never named.
+                "health": s.terms.health_menu.as_ref().map(|menu| {
+                    let choice = m.health.as_ref();
+                    json!({
+                        "plan": choice.map_or(menu.default_plan.as_str(), |c| c.plan.as_str()),
+                        "tier": choice.map_or(crate::terms::HealthTier::Single, |c| c.tier),
+                        "since": choice.map(|c| c.effective),
+                    })
+                }),
                 "employment_start": m.attrs.employment_start,
                 "joined": m.joined,
                 "left": m.left,
