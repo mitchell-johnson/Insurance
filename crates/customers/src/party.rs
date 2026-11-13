@@ -487,6 +487,30 @@ impl Party {
                 if serde_json::to_vec(attributes).map_or(0, |b| b.len()) > 4_096 {
                     return Err(reject("invalid", "relationship attributes are limited to 4 KB"));
                 }
+                if kind.represents() {
+                    let listed = |key: &str, allowed: &[&str]| -> Result<(), Reject> {
+                        let values: Vec<&str> = match attributes.get(key) {
+                            Some(Value::Array(a)) => a.iter().filter_map(Value::as_str).collect(),
+                            Some(Value::String(v)) => vec![v.as_str()],
+                            _ => vec![],
+                        };
+                        if values.is_empty() || values.iter().any(|v| !allowed.contains(v)) {
+                            return Err(reject("invalid", format!("a representative needs {key} from {}", allowed.join(", "))));
+                        }
+                        Ok(())
+                    };
+                    listed("scope", &crate::model::REPRESENTATIVE_SCOPES)?;
+                    listed("basis", &crate::model::REPRESENTATIVE_BASES)?;
+                    if attributes.get("scope").is_some_and(|v| !v.is_array()) {
+                        return Err(reject("invalid", "scope is a list"));
+                    }
+                    match attributes.get("document").and_then(Value::as_str) {
+                        Some(d) => {
+                            token("the document reference", d)?;
+                        }
+                        None => return Err(reject("invalid", "a representative needs the document that gives the authority")),
+                    }
+                }
                 if *kind == RelationshipKind::Dependant {
                     let controls = attributes.get("controls_from").and_then(|v| validate::date(v).ok());
                     if controls.is_none() {

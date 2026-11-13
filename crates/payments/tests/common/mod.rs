@@ -77,6 +77,9 @@ pub fn lee() -> Actor {
 pub fn rae() -> Actor {
     person("rae", &[Role::Reconciler])
 }
+pub fn col() -> Actor {
+    person("col", &[Role::Collections])
+}
 pub fn svc() -> Actor {
     person("svc", &[Role::Service])
 }

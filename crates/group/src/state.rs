@@ -206,9 +206,20 @@ pub struct Invoice {
     /// The scheme terms version in force when it was issued, which says how
     /// loadings were billed.
     pub terms_version: u32,
+    /// What the scheme still owed from before this invoice when it was
+    /// issued: earlier invoices paid short or not at all. An overpayment
+    /// shows as a negative amount. It is the scheme's, never a member's.
+    #[serde(default)]
+    pub brought_forward_minor: i64,
 }
 
 impl Invoice {
+    /// What the scheme is asked to pay with this invoice: this period's
+    /// charges and what was left unpaid before it.
+    pub fn amount_due_minor(&self) -> i64 {
+        self.total_minor() + self.brought_forward_minor
+    }
+    /// This period's charges.
     pub fn total_minor(&self) -> i64 {
         self.by_group.values().map(|g| g.total_minor).sum::<i64>()
             + self.adjustments_by_group.values().sum::<i64>()

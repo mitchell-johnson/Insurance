@@ -52,7 +52,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 9 | 5 | 4 | 6 |
 | PRD Products, rating and quotes | 6 | 4 | 2 | 2 |
 | BIL Billing and earning | 6 | 4 | 5 | 5 |
-| COL Collection, cash matching, standing and dunning | 6 | 5 | 17 | 14 |
+| COL Collection, cash matching, standing and dunning | 7 | 5 | 16 | 13 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 5 | 11 | 3 | 9 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
@@ -60,15 +60,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CLM Claims and claims operations | 17 | 14 | 11 | 14 |
 | RI Reinsurance | 13 | 2 | 3 | 1 |
 | INV Unit pricing and the investment ledger | 11 | 3 | 11 | 3 |
-| GRP Group scheme administration | 16 | 7 | 17 | 5 |
+| GRP Group scheme administration | 18 | 10 | 12 | 5 |
 | JNT Joint lives, ownership, assignments and dependants | 1 | 5 | 25 | 15 |
 | ADV Advisers and commission | 21 | 8 | 16 | 7 |
 | HLT Composable health product | 0 | 0 | 11 | 4 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
-| SVC Policy servicing | 3 | 4 | 19 | 6 |
+| SVC Policy servicing | 3 | 5 | 18 | 6 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 2 | 3 | 16 | 9 |
+| VUL Vulnerable customers, support people and representatives | 5 | 5 | 11 | 7 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
 | PAY Payment runs and bank connectivity | 11 | 1 | 2 | 1 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 4 | 4 | 2 | 0 |
 | MIG Migration | 2 | 2 | 14 | 10 |
-| **Total** | **204** | **119** | **254** | **161** |
+| **Total** | **210** | **125** | **242** | **158** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 25 | 29 | 15 |
-| B | 80 | 22 | 40 |
-| C | 97 | 66 | 183 |
+| B | 80 | 23 | 39 |
+| C | 103 | 71 | 172 |
 | D | 2 | 2 | 16 |
 
 ### Priority 1 tests with no built test, by area
@@ -91,21 +91,21 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **POL** (1): POL-002
 - **LED** (2): LED-006, LED-012
 - **BIL** (2): BIL-003, BIL-010
-- **COL** (10): COL-005, COL-012, COL-014, COL-015, COL-016, COL-018, COL-019, COL-023, COL-024, COL-025
+- **COL** (9): COL-005, COL-012, COL-014, COL-015, COL-018, COL-019, COL-023, COL-024, COL-025
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (2): AUD-006, AUD-012
 - **UW** (2): UW-012, UW-030
 - **CLM** (4): CLM-015, CLM-025, CLM-026, CLM-029
 - **INV** (2): INV-018, INV-019
-- **GRP** (3): GRP-013, GRP-017, GRP-028
+- **GRP** (2): GRP-017, GRP-028
 - **JNT** (12): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022, JNT-023, JNT-030
 - **ADV** (4): ADV-005, ADV-007, ADV-027, ADV-028
 - **HLT** (4): HLT-001, HLT-002, HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
-- **SVC** (6): SVC-003, SVC-006, SVC-008, SVC-009, SVC-010, SVC-026
+- **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (3): ANV-001, ANV-006, ANV-014
 - **ANN** (2): ANN-001, ANN-002
-- **VUL** (7): VUL-003, VUL-005, VUL-007, VUL-008, VUL-009, VUL-010, VUL-013
+- **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013
 - **PAY** (1): PAY-010
 - **FIN** (1): FIN-009
@@ -127,12 +127,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **CLM** (10): CLM-002, CLM-003, CLM-008, CLM-009, CLM-012, CLM-016, CLM-017, CLM-028, CLM-033, CLM-039
 - **RI** (1): RI-010
 - **INV** (1): INV-015
-- **GRP** (2): GRP-001, GRP-032
+- **GRP** (3): GRP-001, GRP-013, GRP-032
 - **JNT** (3): JNT-001, JNT-008, JNT-013
 - **ADV** (3): ADV-019, ADV-035, ADV-037
+- **SVC** (1): SVC-008
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
-- **VUL** (2): VUL-002, VUL-004
+- **VUL** (4): VUL-002, VUL-004, VUL-008, VUL-010
 - **STF** (4): STF-002, STF-012, STF-017, STF-018
 - **INC** (2): INC-003, INC-009
 - **MIG** (2): MIG-004, MIG-011
