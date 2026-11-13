@@ -18,13 +18,14 @@ use crate::benefit::{known_category, member_cover};
 use crate::command::{ExcessDecision, GroupCommand, MatchDecision, Resolution};
 use crate::event::{ContinuationExcess, ExceptionKind, GroupEvent, IssueOutcome, MemberLetter, Outbound, ReinsuranceNotice, UnderwritingRequest};
 use crate::mapping::RowReject;
+use crate::model::HealthChoice;
 use crate::model::{ChangeKind, JoinAs, Proposed};
 use crate::record::MemberAttrs;
 use crate::state::{
     CaseStatus, ClassLine, ContinuedExcess, ContinuedStatus, ExcessCase, FileStatus, GroupLine, GroupState, InFlight, Invoice, Offer, OfferStatus, Renewal,
     Scheme, SchemeStatus,
 };
-use crate::terms::{ExcessLoading, MemberBasis, NoAgreement, SchemeTerms};
+use crate::terms::{ExcessLoading, ExcessPath, MemberBasis, NoAgreement, SchemeTerms};
 
 /// The core asks for a retry: nothing is wrong with what was sent.
 const TRANSIENT: [&str; 2] = ["invoice_in_progress", "policy_transferring"];
@@ -943,6 +944,14 @@ impl GroupState {
                 path: s.terms.excess_path,
                 honour_without_evidence_minor: s.terms.takeover.as_ref().and_then(|t| t.honour_excess_up_to_minor),
                 reference: reference.clone(),
+                // A delegate binds only what we could retain: not a facultative
+                // cession, and not a member reinsurance asked us to underwrite.
+                delegated_authority: s
+                    .terms
+                    .delegated_underwriting
+                    .as_ref()
+                    .filter(|_| s.terms.excess_path == ExcessPath::UnderwrittenExcess && reference.is_none())
+                    .map(|d| d.authority.clone()),
             };
             self.send(Outbound::Underwriting {
                 key: format!("grp-uw:{}:{id}", s.id),
@@ -1781,6 +1790,9 @@ impl GroupState {
                     return Err(Reject::new("rate_guarantee", "rates are guaranteed past this renewal"));
                 }
                 terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+                if let Some(menu) = &terms.health_menu {
+                    menu.check_product(&s.product).map_err(|e| Reject::new("invalid_terms", e))?;
+                }
                 if terms.scheme_year_start != renewal_date {
                     return Err(Reject::new("renewal_dates", "the new scheme year must start on the renewal date"));
                 }
@@ -1852,6 +1864,49 @@ impl GroupState {
                 }
                 Ok(())
             }
+            ChooseHealthPlan {
+                scheme,
+                employee_id,
+                plan,
+                tier,
+                effective,
+            } => self.with_scheme(&scheme, |st, s| {
+                let menu = s
+                    .terms
+                    .health_menu
+                    .as_ref()
+                    .ok_or_else(|| Reject::new("no_menu", "this scheme has no health menu"))?;
+                if menu.plan(&plan).is_none() {
+                    return Err(Reject::new("unknown_plan", format!("{plan} is not on the scheme's health menu")));
+                }
+                if !menu.tiers.contains(&tier) {
+                    return Err(Reject::new("tier_not_offered", "the scheme does not offer that tier"));
+                }
+                let earliest = today.checked_sub_days(Days::new(u64::from(menu.choice_backdating_days))).unwrap_or(today);
+                let member = s
+                    .membership
+                    .active(&employee_id)
+                    .ok_or_else(|| Reject::new("unknown_member", format!("{employee_id} is not a member")))?;
+                if effective < earliest.max(member.joined) {
+                    return Err(Reject::new("backdating_limit", "a choice cannot take effect that far back"));
+                }
+                let life = member.life.clone();
+                if let Some(m) = s.membership.members.get_mut(&employee_id) {
+                    m.health = Some(HealthChoice {
+                        plan: plan.clone(),
+                        tier,
+                        effective,
+                    });
+                }
+                st.emit(GroupEvent::HealthPlanChosen {
+                    scheme: s.id.clone(),
+                    life,
+                    plan,
+                    tier,
+                    effective,
+                });
+                Ok(())
+            }),
             RecordContinuedExcess { scheme, offer, outcome } => self.with_scheme(&scheme, |st, s| {
                 let c = s
                     .offers

@@ -19,6 +19,7 @@ fn issued_with_loading(w: &mut World) {
         policy: open.policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     w.disclose(ID, "L1", &yes("heart_condition"));
@@ -196,6 +197,7 @@ fn a_declined_or_expired_offer_leaves_the_terms_and_says_so() {
         policy: open.policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     w.ok("group-admin", Command::OpenProposal(Box::new(open)));
     let standard = Command::ReofferExcessTerms {

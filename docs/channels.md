@@ -409,6 +409,8 @@ cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &
 node crates/channels/tests/browser/check.js
 ```
 
+**Persona demonstration videos.** `crates/channels/tests/browser/record.sh OUT_DIR` starts the seeded portal, walks the same journeys with `VIDEO` set, and writes one captioned MP4 per persona journey with an `index.md` naming the persona (by its ID in `docs/testing/personas/`) and what they do. Because the videos are the browser check, a journey that stops working stops being recorded rather than being shown wrong. Needs ffmpeg. Pages show a service's records as labelled values (`portal.details`), money in dollars, and a page refused outright shows only the refusal.
+
 ## Known gaps
 
 - **No clinical view in the claims console.** Staff work from the claims module's staff view (`work`), which carries nothing clinical. The cause, reason codes and evidence documents stay in that module until it offers a question for them after `open_file`.

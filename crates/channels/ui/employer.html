@@ -3,7 +3,7 @@
 <body><header><h1>Employer portal</h1><button class="quiet" id="out">Sign out</button></header>
 <main><div id="msg" aria-live="polite"></div>
 <section><h2>Your schemes</h2><div id="schemes"></div></section>
-<section id="detail" hidden><h2 id="title"></h2><div id="summary"></div><h2>Members</h2><div id="members"></div><h2>Billing</h2><div id="billing"></div><h3>Claims</h3><p class="muted">Each claim\'s status only. What a claim is about stays between the member and the claims team.</p><div id="claims"></div></section>
+<section id="detail" hidden><h2 id="title"></h2><div id="summary"></div><h2>Members</h2><div id="members"></div><h2>Billing</h2><div id="billing"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the member and the claims team.</p><div id="claims"></div></section>
 <section id="manage" hidden><h2>Ask for a change</h2>
   <form id="change"><div class="row"><div><label for="kind">Change</label><select id="kind"><option value="add_member">Add a member</option><option value="remove_member">Remove a member</option><option value="change_salary">Change a member's salary</option></select></div>
   <div><label for="member">Member reference</label><input id="member" required maxlength="64"></div><div><label for="effective">Effective date</label><input id="effective" type="date" required></div><button>Send</button></div></form>
@@ -41,9 +41,9 @@ async function open(s) {
   $("detail").hidden = false; $("manage").hidden = false;
   $("title").textContent = `Scheme ${s.number}`;
   const sum = of("scheme")[0];
-  put($("summary"), sum ? h("p", {}, `${sum.body.members} members, total cover ${money(sum.body.sum_insured_minor)}.`) : null);
+  put($("summary"), sum ? h("p", {}, `${sum.body.members} ${sum.body.members === 1 ? "member" : "members"}, total cover ${money(sum.body.sum_insured_minor)}.`) : null);
   put($("members"), table(["Member", "Cover", "Sum insured", "In force"], of("member").map((r) => [r.body.life, r.body.cover, money(r.body.sum_insured_minor), r.body.in_force ? "yes" : "no"])));
-  put($("billing"), table(["Item", "Details"], of("billing").map((r) => [r.key.split("/").slice(1).join(" "), h("pre", {}, JSON.stringify(r.body, null, 1))])));
+  put($("billing"), table(["Item", "Details"], of("billing").map((r) => [r.key.split("/").slice(1).join(" "), portal.details(r.body)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(scheme) + "/claims");
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
@@ -56,12 +56,12 @@ async function group() {
     $("group").hidden = false;
     put($("standing"), h("p", {}, `${s.members} members on the group service's record` + (s.outstanding_minor ? `, ${money(s.outstanding_minor)} outstanding.` : ".")));
     const inv = await api(R, "GET", G("invoices"));
-    put($("invoices"), inv.invoices.length ? h("pre", {}, JSON.stringify(inv.invoices, null, 1)) : h("p", { class: "muted" }, "No invoices yet."));
+    put($("invoices"), inv.invoices.length ? portal.details(inv.invoices) : h("p", { class: "muted" }, "No invoices yet."));
   } catch (e) { if (e.status === 404) { $("group").hidden = true; return; } throw e; }
 }
 async function preview() {
   const f = await api(R, "GET", G("file?file=" + encodeURIComponent($("fname").value)));
-  put($("file-view"), h("pre", {}, JSON.stringify(f, null, 1)));
+  put($("file-view"), portal.details(f));
   return `The file is ${String(f.status).replace(/_/g, " ")}.`;
 }
 async function fileCommand(name) {
@@ -97,5 +97,5 @@ $("lookup").addEventListener("submit", run($("lookup-msg"), async () => {
     table(["Cover", "Formula", "Automatic"], m.covers.map((c) => [c.cover, money(c.formula_minor), money(c.automatic_minor)])),
     m.above_automatic.length ? table(["Above automatic", "Asked", "State", "In place"], m.above_automatic.map((a) => [a.cover, money(a.asked_minor), String(a.state).replace(/_/g, " "), a.in_place_minor ? money(a.in_place_minor) : ""])) : null));
 }));
-signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
+signIn(R).then(load).catch(portal.refuse);
 </script></body></html>

@@ -247,6 +247,9 @@ pub fn underwriting_envelope(key: &str, at: DateTime<Utc>, today: NaiveDate, req
     if let Some(reference) = request.reference.as_ref().filter(|r| !r.trim().is_empty()) {
         entry["reinsurance_reference"] = json!(reference);
     }
+    if let Some(authority) = &request.delegated_authority {
+        entry["delegated_authority"] = json!(authority);
+    }
     let proposal = json!({
         "proposal": key,
         "entry": entry,

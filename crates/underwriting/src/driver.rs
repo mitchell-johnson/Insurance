@@ -126,7 +126,7 @@ impl Forward for NothingConnected {
         Ok(Some(
             match effect {
                 Effect::RequestEvidence { .. } | Effect::ChaseEvidence { .. } | Effect::CancelEvidence { .. } => "no evidence provider is connected",
-                Effect::RequestDelegateFile { .. } => "no delegate is connected",
+                Effect::RequestDelegateFile { .. } | Effect::RequestDelegatedDecision { .. } => "no delegate is connected",
                 _ => "correspondence is not connected to underwriting",
             }
             .to_string(),
@@ -639,7 +639,6 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                 entry: entry @ (Entry::Increase { .. } | Entry::Alteration { .. } | Entry::GroupContinuation { .. }),
                 policy,
                 covers,
-                effective,
                 ..
             } => {
                 let increase = !matches!(entry, Entry::Alteration { .. });
@@ -648,16 +647,12 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     Entry::GroupContinuation { .. } => "continuation",
                     _ => "alteration",
                 };
-                // A continued amount covers the leaver from the continuation's inception.
-                // The core starts an added layer on its business date, so one taken up
-                // later waits here rather than leave a gap.
-                if let Entry::GroupContinuation { inception, .. } = entry {
-                    if inception < effective {
-                        return Ok(Step::Park(format!(
-                            "the continued cover must start on {inception}, and the core cannot yet start a layer before its business date"
-                        )));
-                    }
-                }
+                // A continued amount covers the leaver from the continuation's inception,
+                // even when it is taken up later: the core backdates the layer to it.
+                let start = match entry {
+                    Entry::GroupContinuation { inception, .. } => Some(*inception),
+                    _ => None,
+                };
                 let Some(held) = self.proposal(proposal).await? else {
                     return Ok(Step::Park(format!("proposal {proposal} is not known to the module")));
                 };
@@ -672,7 +667,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                     // written is not written again when the rest is tried again.
                     let layer = if increase {
                         ic_core::Command::AddUnderwrittenLayer(Box::new(ic_core::command::UnderwrittenLayer {
-                            start: None,
+                            start,
                             policy: policy.clone(),
                             cover: cover.code.clone(),
                             life: life.clone(),

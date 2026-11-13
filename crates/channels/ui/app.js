@@ -28,6 +28,39 @@ const portal = (() => {
       h("tbody", {}, rows.length ? rows.map((r) => h("tr", {}, r.map((c) => (c && c.nodeType ? h("td", {}, c) : h("td", { class: typeof c === "number" ? "num" : null }, c == null ? "" : c)))))
         : h("tr", {}, h("td", { colspan: headers.length, class: "muted" }, "Nothing to show.")))));
   }
+  // A value from the service in words a person reads: keys as phrases, amounts
+  // in minor units as money, yes and no for flags, nested records as lists.
+  const phrase = (k) => String(k).replace(/_minor$/, "").replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+  function text(v, key) {
+    if (v == null) return "–";
+    if (typeof v === "boolean") return v ? "yes" : "no";
+    if (typeof v === "number" && /_minor$/.test(key || "")) return money(v);
+    if (Array.isArray(v)) return v.map((x) => text(x)).join(", ");
+    if (typeof v === "object") return Object.entries(v).map(([k, x]) => `${phrase(k)}: ${text(x, k)}`).join("; ");
+    // An enumeration value (in_force) reads as words; identifiers stay as they are.
+    return /^[a-z]+(_[a-z]+)+$/.test(v) ? v.replace(/_/g, " ") : String(v);
+  }
+  function details(v, key) {
+    if (v == null || typeof v !== "object") return h("span", {}, text(v, key));
+    if (Array.isArray(v)) {
+      if (!v.length) return h("span", { class: "muted" }, "None.");
+      if (v.every((x) => x && typeof x === "object" && !Array.isArray(x))) {
+        const keys = [...new Set(v.flatMap(Object.keys))];
+        return table(keys.map(phrase), v.map((x) => keys.map((k) => text(x[k], k))));
+      }
+      return h("span", {}, text(v, key));
+    }
+    const entries = Object.entries(v);
+    if (!entries.length) return h("span", { class: "muted" }, "None.");
+    return h("dl", { class: "details" }, entries.flatMap(([k, x]) => [h("dt", {}, phrase(k)), h("dd", {}, x && typeof x === "object" ? details(x, k) : text(x, k))]));
+  }
+  // A page that could not load. Refused outright, it shows nothing else:
+  // forms the person may not use are only noise.
+  function refuse(e) {
+    const out = document.getElementById("msg");
+    say(out, "bad", String(e.message).replace(/^./, (c) => c.toUpperCase()));
+    if (e.status === 403) for (const el of document.querySelectorAll("main > *")) if (el !== out) el.hidden = true;
+  }
   function say(el, kind, text) { put(el, h("div", { class: "banner " + kind, role: kind === "bad" ? "alert" : "status" }, text)); }
 
   async function loadConfig() {
@@ -121,5 +154,5 @@ const portal = (() => {
       catch (e) { say(out, "bad", e.message); }
     };
   }
-  return { h, clear, put, money, table, say, signIn, signOut, api, run, loadConfig, download, documents };
+  return { h, clear, put, money, table, text, details, say, refuse, signIn, signOut, api, run, loadConfig, download, documents };
 })();

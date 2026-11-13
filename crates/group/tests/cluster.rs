@@ -235,6 +235,7 @@ fn excess_request(party_id: Option<&str>) -> UnderwritingRequest {
         path: ic_group::terms::ExcessPath::UnderwrittenExcess,
         honour_without_evidence_minor: None,
         reference: None,
+        delegated_authority: None,
     }
 }
 
@@ -277,6 +278,14 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     taken_over.reference = Some(" ".into());
     assert_eq!(underwriting_envelope(key, at, today, &taken_over).unwrap()["command"], plain["command"]);
 
+    // A scheme whose broker underwrites names the authority on the entry.
+    let mut delegated = excess_request(Some("party-9"));
+    delegated.delegated_authority = Some("auth-harbour-broker".into());
+    let entry = &underwriting_envelope(key, at, today, &delegated).unwrap()["command"]["open_proposal"]["entry"];
+    assert_eq!(entry["delegated_authority"], "auth-harbour-broker");
+    let read: Entry = serde_json::from_value(entry.clone()).unwrap();
+    assert!(matches!(read, Entry::GroupExcess { delegated_authority: Some(a), .. } if a == "auth-harbour-broker"));
+
     let value = underwriting_envelope(key, at, today, &excess_request(Some("party-9"))).unwrap();
     let text = value.to_string();
     assert!(!text.contains("salary") && !text.contains("category"), "{text}");
@@ -291,6 +300,7 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
             policy: open.policy.clone(),
             takeover_accepted_minor: None,
             reinsurance_reference: None,
+            delegated_authority: None,
         }
     );
     assert_eq!(
@@ -375,6 +385,7 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
         policy: policy.clone(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     };
     let terms = |entry: Entry, proposal: &str| Effect::ApplyTerms {
         key: format!("{proposal}/terms"),
@@ -591,6 +602,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             party: Some(party("party-1")),
             fingerprint: None,
             auto_cap_minor: None,
+            health: None,
         }],
         pools: vec![],
     };

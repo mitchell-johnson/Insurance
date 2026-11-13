@@ -37,6 +37,101 @@ pub enum NoAgreement {
     End,
 }
 
+/// Who a member's health plan covers. The employer sees the tier, because
+/// it sets the premium, and never who the dependants are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthTier {
+    Single,
+    Couple,
+    Family,
+}
+
+/// One health plan on a scheme's menu: a set of the product's covers, each
+/// with the excess level chosen for the scheme where the cover offers one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthPlan {
+    pub code: String,
+    pub name: String,
+    pub covers: Vec<MenuCover>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MenuCover {
+    pub cover: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
+}
+
+/// The plans a scheme's members choose from, the plan a member is on until
+/// they choose, and the tiers offered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthMenu {
+    pub plans: Vec<HealthPlan>,
+    pub default_plan: String,
+    pub tiers: Vec<HealthTier>,
+    /// How many days back a member's choice may take effect.
+    #[serde(default)]
+    pub choice_backdating_days: u32,
+}
+
+impl HealthMenu {
+    pub fn plan(&self, code: &str) -> Option<&HealthPlan> {
+        self.plans.iter().find(|p| p.code == code)
+    }
+
+    /// The menu is whole: plans with distinct codes and at least one cover
+    /// each, no cover twice in a plan, the default among them, and tiers
+    /// starting with single.
+    pub fn validate(&self) -> Result<(), String> {
+        let mut codes = std::collections::BTreeSet::new();
+        for p in &self.plans {
+            if p.code.trim().is_empty() || !codes.insert(p.code.as_str()) {
+                return Err(format!("health plan codes must be present and distinct: {:?}", p.code));
+            }
+            let covers: std::collections::BTreeSet<&str> = p.covers.iter().map(|c| c.cover.as_str()).collect();
+            if p.covers.is_empty() || covers.len() != p.covers.len() {
+                return Err(format!("health plan {} needs at least one cover, each once", p.code));
+            }
+        }
+        if self.plan(&self.default_plan).is_none() {
+            return Err(format!("the default health plan {} is not on the menu", self.default_plan));
+        }
+        if !self.tiers.contains(&HealthTier::Single) {
+            return Err("a health menu offers the single tier".to_string());
+        }
+        Ok(())
+    }
+
+    /// Every cover a plan names is one of the product's.
+    pub fn check_product(&self, product: &ic_product::ProductDefinition) -> Result<(), String> {
+        for p in &self.plans {
+            for c in &p.covers {
+                let def = product
+                    .cover(&c.cover)
+                    .ok_or_else(|| format!("health plan {} names {}, which {} does not have", p.code, c.cover, product.code))?;
+                if let Some(option) = &c.excess_option {
+                    if !def.excess_options.iter().any(|o| &o.code == option) {
+                        return Err(format!("{} has no excess option {option}", c.cover));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// A delegated underwriting authority the scheme's excess goes to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DelegatedUnderwriting {
+    /// The underwriting module's `DelegatedAuthority` id.
+    pub authority: String,
+}
+
 /// What happens to cover that takes a life over the insurer's retention.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -180,6 +275,16 @@ pub struct SchemeTerms {
     /// placed direct, which earns no commission.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub broker: Option<SchemeBroker>,
+    /// The employer's broker (or another delegate) underwrites members'
+    /// cover above the automatic limit under this authority, which the
+    /// underwriting module holds and checks every decision against
+    /// (Mitchell, 14 Nov 2026). Absent: our underwriters decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_underwriting: Option<DelegatedUnderwriting>,
+    /// The health plans members choose from (Mitchell, 14 Nov 2026).
+    /// Absent on a scheme with no health cover.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_menu: Option<HealthMenu>,
 }
 
 /// The broker who placed a scheme, as the commission module knows them.
@@ -221,6 +326,12 @@ impl SchemeTerms {
         codes.dedup();
         if codes.len() != self.billing_groups.len() || codes.iter().any(|c| c.is_empty()) {
             return Err("billing group codes must be unique and not empty".to_string());
+        }
+        if let Some(menu) = &self.health_menu {
+            menu.validate()?;
+        }
+        if self.delegated_underwriting.as_ref().is_some_and(|d| d.authority.trim().is_empty()) {
+            return Err("a delegated authority needs the underwriting module's authority id".to_string());
         }
         if let Some(b) = &self.broker {
             if [&b.engagement, &b.book, &b.schedule, &b.option].iter().any(|v| v.trim().is_empty()) {
@@ -327,6 +438,8 @@ pub(crate) mod tests {
             excess_loading_min_count: 0,
             suspend_joiners_after_short_payments: Some(3),
             broker: None,
+            delegated_underwriting: None,
+            health_menu: None,
         }
     }
 
@@ -386,5 +499,69 @@ pub(crate) mod tests {
         assert_eq!(t.cover_end_for(d(2027, 12, 14)), d(2028, 1, 1));
         assert!(t.has_billing_group("wlg") && !t.has_billing_group("chc"));
         assert_eq!(t.default_billing_group(), "akl");
+    }
+
+    fn plan(code: &str, covers: &[(&str, Option<&str>)]) -> HealthPlan {
+        HealthPlan {
+            code: code.into(),
+            name: code.into(),
+            covers: covers
+                .iter()
+                .map(|(c, o)| MenuCover {
+                    cover: (*c).into(),
+                    excess_option: o.map(str::to_string),
+                })
+                .collect(),
+        }
+    }
+
+    /// Purpose: a health menu is accepted whole or not at all: plans with distinct codes, each
+    /// with covers named once, the default plan on the menu and the single tier offered; and
+    /// every cover and excess level a plan names is one of the product's.
+    /// Why it matters: a member can only choose from the menu. A plan naming a cover the product
+    /// lacks, or a default that is not a plan, would leave members on cover nobody can price.
+    #[test]
+    fn a_health_menu_is_checked_whole_and_against_the_product() {
+        let product = ic_product::load_product("health_flex.star", include_str!("../../../products/health_flex.star")).unwrap();
+        let menu = HealthMenu {
+            plans: vec![
+                plan("everyday", &[("dental", None), ("optical", None)]),
+                plan("hospital-plus", &[("hospital", Some("high")), ("specialist", None)]),
+            ],
+            default_plan: "everyday".into(),
+            tiers: vec![HealthTier::Single, HealthTier::Family],
+            choice_backdating_days: 30,
+        };
+        menu.validate().unwrap();
+        menu.check_product(&product).unwrap();
+        let mut t = sample_terms();
+        t.health_menu = Some(menu.clone());
+        t.validate().unwrap();
+
+        let broken = |f: &dyn Fn(&mut HealthMenu)| {
+            let mut m = menu.clone();
+            f(&mut m);
+            m.validate().is_err()
+        };
+        assert!(broken(&|m| m.plans[1].code = "everyday".into()));
+        assert!(broken(&|m| m.plans[0].covers.clear()));
+        assert!(broken(&|m| m.plans[0].covers.push(MenuCover {
+            cover: "dental".into(),
+            excess_option: None
+        })));
+        assert!(broken(&|m| m.default_plan = "gold".into()));
+        assert!(broken(&|m| m.tiers = vec![HealthTier::Family]));
+        let mut t = sample_terms();
+        let mut bad = menu.clone();
+        bad.default_plan = "gold".into();
+        t.health_menu = Some(bad);
+        assert!(t.validate().is_err());
+
+        let mut unknown = menu.clone();
+        unknown.plans[0].covers[0].cover = "maternity".into();
+        assert!(unknown.check_product(&product).is_err());
+        let mut level = menu;
+        level.plans[1].covers[0].excess_option = Some("platinum".into());
+        assert!(level.check_product(&product).is_err());
     }
 }

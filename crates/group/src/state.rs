@@ -690,6 +690,9 @@ impl GroupState {
             } => self.register(scheme, policy, group, employer, inception, *product, *terms, founding, pools),
             AmendTerms { scheme, terms } => self.with_scheme(&scheme, |st, s| {
                 terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+                if let Some(menu) = &terms.health_menu {
+                    menu.check_product(&s.product).map_err(|e| Reject::new("invalid_terms", e))?;
+                }
                 // A broker is added once. Changing or removing one is a dated
                 // move of the scheme's book, made in the commission module.
                 let added = match (&s.terms.broker, &terms.broker) {
@@ -860,6 +863,9 @@ impl GroupState {
             return Err(Reject::new("scheme_exists", "the scheme or its policy is already registered"));
         }
         terms.validate().map_err(|e| Reject::new("invalid_terms", e))?;
+        if let Some(menu) = &terms.health_menu {
+            menu.check_product(&product).map_err(|e| Reject::new("invalid_terms", e))?;
+        }
         if crate::benefit::formula_covers(&product).next().is_none() {
             return Err(Reject::new("not_a_scheme", "the product has no cover driven by member data"));
         }

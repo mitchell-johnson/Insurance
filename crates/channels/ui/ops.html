@@ -32,5 +32,5 @@ async function refresh() {
   } catch (e) { say($("msg"), "bad", e.message); }
   $("checked").textContent = "Last checked " + new Date().toLocaleTimeString() + ". Updates every 10 seconds.";
 }
-signIn("workforce").then(() => { refresh(); setInterval(refresh, 10000); }).catch((e) => say($("msg"), "bad", e.message));
+signIn("workforce").then(() => { refresh(); setInterval(refresh, 10000); }).catch(portal.refuse);
 </script></body></html>

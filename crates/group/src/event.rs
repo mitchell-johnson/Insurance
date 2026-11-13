@@ -157,6 +157,15 @@ pub enum GroupEvent {
         scheme: String,
         terms_version: u32,
     },
+    /// A member chose a health plan and tier. The tier is the employer's to
+    /// see; dependants are never named.
+    HealthPlanChosen {
+        scheme: String,
+        life: LifeId,
+        plan: String,
+        tier: crate::terms::HealthTier,
+        effective: NaiveDate,
+    },
     /// A member's letter could not be asked for; staff are told by the
     /// exception `letter_not_requested`.
     LetterNotRequested {
@@ -445,6 +454,10 @@ pub struct UnderwritingRequest {
     /// up to this amount, under the scheme's takeover terms.
     pub honour_without_evidence_minor: Option<i64>,
     pub reference: Option<String>,
+    /// The delegated authority that decides, where the scheme has one and
+    /// reinsurance did not ask for our own underwriting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegated_authority: Option<String>,
 }
 
 /// What the core made of accepted terms.

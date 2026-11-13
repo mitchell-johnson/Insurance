@@ -21,7 +21,7 @@ $("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
-const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 
 // What a person can do about each kind of exception: [label, command name, fields, build, warning].
 function actionsFor(id) {
@@ -95,5 +95,5 @@ $("sweep").addEventListener("submit", run($("s-msg"), async () => {
 signIn(R).then(async () => {
   await refresh();
   $("me").textContent = `You are ${me.staff}: ${[me.operate ? "you act on exceptions" : null, me.approve ? "you sign abandonments" : null].filter(Boolean).join(", ") || "view only"}. Commands are made on ${me.today || "today's date"}.`;
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

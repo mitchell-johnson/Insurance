@@ -61,7 +61,7 @@ const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new UR
 const send = (command) => api(R, "POST", BASE + "commands", command);
 const can = (role) => roles.includes(role);
 const today = () => new Date().toLocaleDateString("en-CA");
-const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 // A table of whatever rows the ledger answered with.
 function grid(rows) {
   const list = Array.isArray(rows) ? rows : rows == null ? [] : [rows];
@@ -145,5 +145,5 @@ signIn(R).then(async () => {
     s.partitions.some((p) => p.stalled) ? h("div", { class: "banner bad" }, "A feed has stalled: " + s.partitions.filter((p) => p.stalled).map((p) => `partition ${p.partition}: ${p.stalled}`).join("; ")) : null);
   await work();
   await groups();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

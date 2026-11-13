@@ -171,5 +171,5 @@ signIn(R).then(async () => {
   me = await ask("me");
   $("seats").textContent = `${me.seats.map(words).join(", ")}. Authority level ${me.authority}${me.trained ? ", trained to work with vulnerable customers" : ""}.`;
   put($("a-seat"), me.seats.filter((s) => s !== "intake").map((s) => h("option", { value: s }, words(s)))); commands();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

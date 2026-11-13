@@ -375,6 +375,8 @@ impl UnderwritingState {
                 Ok(()) => outside_authority(st, p, &d, cx.today),
             };
             if let Some(why) = why {
+                // Ours to decide from here: the member may now disclose to us.
+                p.delegated_to = None;
                 cx.event(Event::DelegatedDecisionRejected {
                     proposal: p.id.clone(),
                     life: d.life.clone(),
@@ -465,6 +467,7 @@ impl UnderwritingState {
             issue_attempts: 0,
             reoffers: vec![],
             replacement: false,
+            delegated_to: None,
         };
         for l in open.lives {
             let Some(legacy) = m.lives.iter().find(|x| x.life == l.life) else {
@@ -885,4 +888,43 @@ impl UnderwritingState {
             Ok(())
         })
     }
+}
+
+/// A scheme member's excess under the broker's delegated authority goes to
+/// the delegate to decide, when the authority covers the product and the
+/// amount is within its ceiling for the cover. Anything else is ours to
+/// underwrite, as for any excess.
+pub(crate) fn ask_delegate(cfg: &crate::config::Config, p: &mut Proposal, cx: &mut Cx) {
+    let crate::model::Entry::GroupExcess {
+        delegated_authority: Some(authority),
+        takeover_accepted_minor,
+        ..
+    } = &p.entry
+    else {
+        return;
+    };
+    let Some(a) = cfg.delegated_on(authority, cx.today) else { return };
+    let within = a.products.contains(&p.product_code)
+        && p.covers
+            .iter()
+            .all(|c| a.per_life_minor.get(&c.cover_type).is_some_and(|limit| c.sum_insured_minor <= *limit));
+    // A taken-over excess already decided as the proposal opened needs no one.
+    let decided = takeover_accepted_minor.is_some() && p.lives.values().all(|f| !f.decisions.is_empty());
+    if !within || decided {
+        return;
+    }
+    let authority = authority.clone();
+    for c in &p.covers {
+        let Some(f) = p.lives.get(&c.life) else { continue };
+        cx.effect(Effect::RequestDelegatedDecision {
+            proposal: p.id.clone(),
+            life: c.life.clone(),
+            party: f.party.clone(),
+            cover: c.code.clone(),
+            cover_type: c.cover_type.clone(),
+            sum_insured_minor: c.sum_insured_minor,
+            authority: authority.clone(),
+        });
+    }
+    p.delegated_to = Some(authority);
 }

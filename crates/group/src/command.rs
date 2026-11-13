@@ -221,6 +221,15 @@ pub enum GroupCommand {
         employee_id: String,
         party: PartyId,
     },
+    /// A member's choice from the scheme's health menu: a plan and who it
+    /// covers, from a date.
+    ChooseHealthPlan {
+        scheme: String,
+        employee_id: String,
+        plan: String,
+        tier: crate::terms::HealthTier,
+        effective: NaiveDate,
+    },
 
     // --- cover above the automatic amount ---
     RecordExcessDecision {
@@ -351,6 +360,7 @@ impl GroupCommand {
             | Ack { .. }
             | Tick => &[DRIVER],
             SelfRegister { .. } | TakeUpContinuation { .. } => &[MEMBER],
+            ChooseHealthPlan { .. } => &[MEMBER, EMPLOYER, STAFF],
             // The driver carries the underwriting module's answer from its outbox.
             RecordExcessDecision { .. } | RecordContinuedExcess { .. } => &[UNDERWRITING, DRIVER],
             RequireUnderwrittenExcess { .. } => &[REINSURANCE],

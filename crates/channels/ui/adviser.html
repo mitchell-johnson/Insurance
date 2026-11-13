@@ -45,7 +45,7 @@ async function open(policy, canTransact) {
   put($("rows"),
     proposals.length ? [h("h3", {}, "Proposals"), table(["Proposal", "Status", "Waiting on", "Received", "Expires"], proposals.map((r) => [r.body.proposal, words(r.body.status),
       r.body.waiting_on === "applicant" ? "The applicant" : r.body.waiting_on === "insurer" ? "Us" : "", r.body.received_on || "", r.body.expires_on || ""]))] : null,
-    table(["What", "Details"], others.map((r) => [r.kind, h("pre", {}, JSON.stringify(r.body, null, 1))])));
+    table(["What", "Details"], others.map((r) => [r.kind, portal.details(r.body)])));
   const claims = await api(R, "GET", "/app/v1/policies/" + encodeURIComponent(policy.policy) + "/claims");
   put($("claims"), claims.rows.length ? table(["Claim", "Status", "Notified", "Closed"], claims.rows.map((c) => [c.claim, String(c.status).replace(/_/g, " "), c.notified_on, c.closed_on || ""]))
     : h("p", { class: "muted" }, "No claims."));
@@ -94,5 +94,5 @@ $("change").addEventListener("submit", run($("change-msg"), async () => {
   await load();
   return "Sent. The customer has been asked to approve it in their app.";
 }));
-signIn(R).then(load).catch((e) => say($("msg"), "bad", e.message));
+signIn(R).then(load).catch(portal.refuse);
 </script></body></html>

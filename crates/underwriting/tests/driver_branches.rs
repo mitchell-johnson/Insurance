@@ -281,6 +281,7 @@ fn excess() -> Entry {
         policy: "POL-1".into(),
         takeover_accepted_minor: None,
         reinsurance_reference: None,
+        delegated_authority: None,
     }
 }
 
