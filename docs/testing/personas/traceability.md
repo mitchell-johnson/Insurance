@@ -307,7 +307,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
-| GRP-038 | part | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date` |
+| GRP-038 | full | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date`<br>`group/tests/driver.rs::the_driver_asks_for_a_members_letter_and_reports_a_refusal`<br>`group/tests/cluster.rs::a_members_letter_is_a_command_the_documents_module_accepts`<br>`documents/tests/requested_letters.rs::group_asks_for_the_leave_of_absence_letters` |
 
 ## HLT Composable health product
 
