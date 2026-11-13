@@ -668,6 +668,7 @@ impl<U: Underwriting, R: Reinsurer, C: Core, S: Schemes, F: Forward, P: Channels
                         // The cover keeps its sum insured: an alteration changes the terms
                         // on what the life already holds.
                         ic_core::Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+                            occupation_class: None,
                             policy: policy.clone(),
                             cover: cover.code.clone(),
                             life: life.clone(),

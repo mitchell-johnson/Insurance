@@ -308,7 +308,8 @@ fn a_level_premium_keeps_each_layers_rating_age_and_such_layers_do_not_merge() {
 
 /// Purpose: a rate table can carry rows for an occupation class. A life in that class is
 /// priced on its row, a life with no class or another class on the general row, and the
-/// class the life was priced on is published with the policy.
+/// class the life was priced on is published with the policy. A change of occupation after
+/// issue reaches the life with underwriting's altered terms and reprices it from that day.
 /// Why it matters: occupation is a rating factor in the design. A table that could not be
 /// split by it would force every hazardous occupation onto a manual loading, and a life
 /// priced on a class the extracts cannot see could never be checked against experience.
@@ -349,6 +350,37 @@ fn a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class() {
     });
     assert_eq!(published.as_deref(), Some("4"));
     days(&mut c, 2);
+
+    // The office worker goes down the mine. Underwriting alters the terms with the new class
+    // and no other change: the life is rated on class 4 from today, the days left of the
+    // billed month are charged the difference, and the class held before today is kept.
+    let today = c.business_date().unwrap();
+    let reclass = |class: &str| {
+        Command::AlterUnderwrittenTerms(Box::new(ic_core::command::AlteredTerms {
+            policy: office.clone(),
+            cover: "life".into(),
+            life: ic_core::LifeId("life-1".into()),
+            loadings: vec![],
+            exclusions: vec![],
+            reference: "uw-occupation-1".into(),
+            occupation_class: Some(class.into()),
+        }))
+    };
+    assert_eq!(code(c.submit(0, "underwriting", reclass("1"))), "no_change");
+    let owed = outstanding(&c, &office);
+    c.submit(0, "underwriting", reclass("4")).unwrap();
+    assert!(outstanding(&c, &office) > owed, "the rest of the month is billed at the higher rate");
+    let life = &c.state(0).policies[&office].lives[&ic_core::LifeId("life-1".into())];
+    let class_on = |on: NaiveDate| life.factors.as_of(on).and_then(|f| f.occupation_class.clone());
+    assert_eq!(
+        (class_on(today.pred_opt().unwrap()).as_deref(), class_on(today).as_deref()),
+        (Some("1"), Some("4"))
+    );
+    assert_eq!(code(c.submit(0, "underwriting", reclass("4"))), "no_change");
+    // The next full month is billed as the miner's is.
+    days(&mut c, 31);
+    assert_eq!(latest_bill(&c, &office), latest_bill(&c, &miner));
+    assert_eq!(latest_bill(&c, &miner), 111_67 + 6_00);
 }
 
 /// Purpose: cancellation and reinstatement refuse a policy in the wrong state, and every

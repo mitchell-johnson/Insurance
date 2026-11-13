@@ -919,6 +919,7 @@ impl CoreState {
             InvestCommand::ReinstructPayout { policy, payout, payment } => {
                 self.with_policy(&policy, true, |_, p| invest::reinstruct_payout(p, ctx, &payout, payment))
             }
+            InvestCommand::PayoutRejected { policy, payment } => self.with_policy(&policy, true, |_, p| invest::payout_rejected(p, ctx, &payment)),
             InvestCommand::DirectPayout {
                 policy,
                 payout,
