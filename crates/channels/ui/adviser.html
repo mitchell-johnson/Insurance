@@ -7,6 +7,7 @@
 <section><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
   <form id="dispute" hidden><div class="row"><div><label for="d-reason">Why it was not a replacement</label><input id="d-reason" maxlength="500" required></div><button>Dispute</button> <button class="quiet" type="button" id="d-cancel">Cancel</button></div></form><div id="d-msg" aria-live="polite"></div></section>
 <section><h2>Your book</h2><div id="book"></div></section>
+<section id="practice-section" hidden><h2>Advisers under you</h2><p class="muted">The advisers engaged with your practice, or with a provider in your group, and the policies they look after. Health details and claims stay with the adviser and the customer.</p><div id="practice"></div></section>
 <section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Investments</h3><div id="invest"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
@@ -58,6 +59,10 @@ async function load() {
     totals.length ? table(["Period", "Book", "Amount", "Why it is held", "Since"], book.held.entries.map((e) => [e.period || "", e.book || "", money(e.amount_minor, e.currency), String(e.reason || "").replace(/_/g, " "), e.since])) : null);
   put($("book"), table(["Policy", "Product", "Status", "Engagement", ""], book.policies.map((p) => [p.number, p.product, p.ended ? `Ended (${String(p.status).replace(/_/g, " ")})` : String(p.status).replace(/_/g, " "), p.engagement,
     h("button", { class: "quiet", on: { click: run($("msg"), () => open(p, p.can_transact)) } }, "Open")])));
+  const practice = await api(R, "GET", "/adviser/v1/practice");
+  $("practice-section").hidden = !practice.advisers.length;
+  put($("practice"), table(["Adviser", "Provider", "Standing", "Policies"], practice.advisers.map((a) => [a.adviser, a.fap, standing(a.standing),
+    a.policies.map((p) => `${p.number} (${p.product}, ${String(p.status).replace(/_/g, " ")})`).join("; ")])));
   const matches = await api(R, "GET", "/adviser/v1/replacements");
   put($("matches"), matches.length ? table(["Layer", "Matched", "Sum insured", "Reason", "On", "State", ""], matches.map((m) => [m.layer, money(m.matched_minor), money(m.sum_insured_minor), String(m.reason).replace(/_/g, " "), m.on,
     m.overturned ? "Decided: new business" : m.disputed ? "Disputed, waiting for a decision" : "Stands",

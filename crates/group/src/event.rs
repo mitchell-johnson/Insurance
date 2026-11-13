@@ -250,6 +250,15 @@ pub enum GroupEvent {
         life: LifeId,
     },
 
+    /// A member went on a leave of absence (an overseas posting, say). The
+    /// cover continues to `cover_ends` unless they come back before then,
+    /// which is what the member is told.
+    AbsenceStarted {
+        scheme: String,
+        life: LifeId,
+        since: NaiveDate,
+        cover_ends: NaiveDate,
+    },
     AbsenceLimitReached {
         scheme: String,
         life: LifeId,

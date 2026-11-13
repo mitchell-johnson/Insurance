@@ -20,7 +20,7 @@ use ic_sim::Cluster;
 use ic_underwriting::command::{Applied, Command, Effect, Envelope, Reject};
 use ic_underwriting::config::{InterimSettings, Settings};
 use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
-use ic_underwriting::model::{Entry, ProposalStatus, Stage};
+use ic_underwriting::model::{ConsentKind, Entry, ProposalStatus, Stage};
 use ic_underwriting::progress::ProgressRow;
 use ic_underwriting::reinstatement::reinstatement_proposal;
 use ic_underwriting::service::channels_envelope;
@@ -659,6 +659,73 @@ async fn an_accepted_increase_becomes_a_layer_on_the_policy_in_force() {
             layers: vec![2],
         }
     );
+}
+
+/// Purpose: a customer's new adviser replaces their cover and tops it up. The application is
+/// the increase alone, advised as a replacement: once the customer confirms the replacement
+/// disclosure, only the increase is underwritten and the core writes it as a second layer on the
+/// same cover. The cover in force is untouched: same layer, same start, so no gap and no new
+/// waiting period, and the customer holds one cover with one sum insured.
+/// Why it matters: a replacement written as a cancellation and a new policy would leave the
+/// customer uncovered between the two, restart their waiting periods and underwrite what was
+/// already accepted (ADV-027).
+#[tokio::test]
+async fn a_replacement_with_a_top_up_underwrites_only_the_increase_on_the_same_cover() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    let first = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        cluster.state(0).policies[&policy].covers["life"].layers[0].clone()
+    };
+
+    let hash = b.product_hash.clone();
+    b.module.with(|w| {
+        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 200_000_00)], true);
+        open.quote.product_hash = hash;
+        open.entry = Entry::Increase { policy: policy.clone() };
+        open.policy = policy.clone();
+        open.policy_number = number.clone();
+        open.group = group.clone();
+        open.replacement = true;
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        let confirm = w.ok(
+            "new-business",
+            Command::RecordConsent {
+                proposal: "P2".into(),
+                life: "L1".into(),
+                kind: ConsentKind::ReplacementDisclosure,
+                granted: true,
+                signed: Some(signed("consent", &["P2", "L1", "replacement_disclosure"])),
+            },
+        );
+        assert!(!confirm.events.is_empty());
+        let disclosed = w.disclose("P2", "L1", &clean());
+        let sums: Vec<i64> = disclosed
+            .effects
+            .iter()
+            .filter_map(|e| match e {
+                Effect::ReserveCapacity { sum_insured_minor, .. } => Some(*sum_insured_minor),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sums, vec![200_000_00], "only the increase is underwritten and placed");
+    });
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("P2"), ProposalStatus::Issued { .. }), "{:?}", b.status("P2"));
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let held = &cluster.state(0).policies[&policy];
+    assert_eq!(held.covers.keys().collect::<Vec<_>>(), vec!["life"], "one cover");
+    let cover = &held.covers["life"];
+    assert_eq!(cover.layers[0], first, "the cover in force is untouched: no gap, no new waiting period");
+    assert_eq!(cover.layers[1].origin, ic_core::LayerOrigin::Increase);
+    assert_eq!(cover.sum_insured_on(cover.layers[1].start), 700_000_00, "one sum insured");
+    assert!(cluster.reconcile().is_empty());
 }
 
 /// Purpose: a change of terms on cover already in force goes through underwriting and reaches

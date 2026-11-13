@@ -535,7 +535,7 @@ impl ClaimsState {
             crate::overpay::publish(cx, "overpayment_raised", claim, &o, &[("amount_minor", o.amount_minor.to_string())]);
             claim.overpayments.push(o);
         }
-        cx.notify("claim_closed", &claim.id, &[("outcome", status.code().to_string())]);
+        cx.lifecycle(&self.rules, "claim_closed", claim, &[("outcome", status.code().to_string())]);
         Ok(())
     }
 
@@ -622,9 +622,10 @@ impl ClaimsState {
                     );
                 } else if let Some(terms) = periodic {
                     self.start_benefit(claim, cx, terms);
-                    cx.notify(
+                    cx.lifecycle(
+                        &self.rules,
                         "claim_admitted",
-                        &id,
+                        claim,
                         &[("admitted_minor", "0".into()), ("monthly_minor", terms.monthly_minor.to_string())],
                     );
                 } else {
@@ -660,9 +661,10 @@ impl ClaimsState {
                         self.use_health(cx, claim, priced, plan.amount_minor);
                     }
                     self.start_timer(claim, TimerKind::Payment, cx.today);
-                    cx.notify(
+                    cx.lifecycle(
+                        &self.rules,
                         "claim_admitted",
-                        &id,
+                        claim,
                         &[
                             ("admitted_minor", plan.amount_minor.to_string()),
                             ("loan_repaid_minor", plan.loan_minor.to_string()),
