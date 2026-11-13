@@ -201,6 +201,8 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-010 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider` |
 | CLM-011 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
 | CLM-012 | full | `claims/tests/suite/intake.rs::health_invoice_goes_straight_through_inside_the_limits`<br>`claims/tests/suite/covers.rs::the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not` |
+| CLM-013 | full | `claims/tests/suite/intake.rs::pre_approval_is_a_hold_not_a_posting` |
+| CLM-014 | full | `sim/tests/claims.rs::a_health_invoice_goes_straight_through_to_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-015 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider`<br>`sim/tests/claims.rs::a_duplicate_provider_bill_is_recovered_from_the_providers_next_run` |
 | CLM-016 | full | `claims/tests/suite/book.rs::a_benefit_run_is_prepared_by_one_person_and_approved_by_another`<br>`claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/covers.rs::a_benefit_starts_only_after_the_waiting_period` |
 | CLM-017 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`claims/tests/suite/book.rs::other_income_shows_as_its_own_figure_on_each_benefit_line` |
@@ -311,8 +313,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | HLT-001 | full | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life`<br>`product/tests/products.rs::combination_rules_decide_which_sets_of_covers_a_life_may_hold` |
 | HLT-002 | full | `sim/tests/health_flex.rs::any_valid_subset_is_billed_the_sum_of_its_covers_under_the_bundle_discount` |
 | HLT-003 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
+| HLT-004 | full | `claims/tests/suite/covers.rs::an_episode_is_priced_line_by_line_against_each_covers_counters` |
 | HLT-006 | part | `sim/tests/health_flex.rs::a_cover_can_be_added_after_issue_and_is_billed_for_the_days_left` |
 | HLT-008 | part | `sim/tests/health_flex.rs::each_life_holds_its_own_covers_and_the_combination_rules_hold_per_life` |
+| HLT-009 | full | `claims/tests/suite/covers.rs::counters_never_cross_covers_unless_the_shell_shares_one` |
 | HLT-010 | full | `sim/tests/health_flex.rs::an_excess_level_prices_the_cover_and_a_change_starts_a_new_layer`<br>`sim/tests/claims.rs::the_cover_check_reports_the_excess_level_held_on_the_event_date` |
 
 ## JNT Joint lives, ownership, assignments and dependants
@@ -489,6 +493,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PAY-010 | full | `payments/tests/sweep.rs::money_applied_to_another_fund_is_moved_to_its_account`<br>`payments/tests/sweep.rs::a_reversal_or_a_returned_sweep_is_owed_the_right_way`<br>`payments/tests/sweep.rs::a_matched_direct_credit_is_followed_too` |
 | PAY-011 | full | `payments/tests/runs.rs::a_collection_run_draws_on_active_authorities`<br>`payments/tests/runs.rs::a_dishonour_is_presented_once_more_then_the_authority_is_suspended` |
 | PAY-012 | full | `payments/tests/refunds.rs::a_refund_goes_back_to_the_account_it_came_from` |
+| PAY-013 | full | `payments/tests/intake.rs::a_large_admitted_claim_is_flagged_and_forecast`<br>`payments/tests/runs.rs::run_and_day_limits_cap_what_can_be_released` |
 | PAY-014 | full | `payments/tests/runs.rs::the_bank_cutoff_and_calendar_are_respected`<br>`payments/tests/runs.rs::a_run_prepared_after_the_cutoff_goes_next_window_and_the_date_is_known` |
 
 ## FIN Finance close, statutory funds and regulatory reporting
@@ -508,7 +513,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-011 | full | `finance/tests/returns.rs::any_figure_on_a_filed_return_opens_to_what_is_behind_it` |
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
-| FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract` |
+| FIN-017 | part | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
 | FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
 
 ## CFG Configuration operations and the actuary's interface

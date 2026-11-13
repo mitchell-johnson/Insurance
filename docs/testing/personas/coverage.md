@@ -57,13 +57,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 7 | 10 | 2 | 7 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 22 | 7 | 1 | 5 |
-| CLM Claims and claims operations | 26 | 10 | 6 | 7 |
+| CLM Claims and claims operations | 28 | 10 | 4 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 23 | 8 | 9 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
 | ADV Advisers and commission | 42 | 1 | 2 | 3 |
-| HLT Composable health product | 3 | 3 | 5 | 2 |
+| HLT Composable health product | 5 | 3 | 3 | 0 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 6 | 16 | 5 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
@@ -71,19 +71,19 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 10 | 6 | 2 | 5 |
-| PAY Payment runs and bank connectivity | 13 | 0 | 1 | 0 |
+| PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **288** | **124** | **165** | **123** |
+| **Total** | **293** | **124** | **160** | **121** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 92 | 26 | 24 |
-| C | 165 | 65 | 116 |
+| B | 96 | 26 | 20 |
+| C | 166 | 65 | 115 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -97,7 +97,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **GRP** (1): GRP-017
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
 - **ADV** (2): ADV-027, ADV-028
-- **HLT** (2): HLT-004, HLT-009
 - **DSC** (3): DSC-001, DSC-002, DSC-005
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (2): ANV-001, ANV-006
