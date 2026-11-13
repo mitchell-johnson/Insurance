@@ -971,6 +971,73 @@ fn a_duplicate_provider_bill_is_recovered_from_the_providers_next_run() {
     );
 }
 
+/// Purpose: a scheme member whose salary formula gives more cover than the automatic limit is
+/// covered up to the limit, and above it only by an underwritten layer in force on the event date:
+/// a death the day before the layer starts is covered at the limit, a death on its first day at
+/// the limit plus the layer.
+/// Why it matters: persona test CLM-025. A pilot's formula cover above the automatic limit was
+/// never accepted; paying it would pay cover nobody underwrote or charged for, and ignoring an
+/// accepted layer would short-pay a family whose cover was bought.
+#[test]
+fn a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = group_scheme(n, start(), vec![member("pilot-1", d(1975, 1, 1), "executive", 240_000_00)]);
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-p".into(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    days(&mut c, 10);
+    let today = c.business_date().unwrap();
+    let layer = ic_core::command::ExcessLayer {
+        policy: id.clone(),
+        cover: "group-life".into(),
+        life: ic_core::LifeId("pilot-1".into()),
+        start: today,
+        sum_insured_minor: 210_000_00,
+        loadings: vec![],
+        exclusions: vec![],
+        loading_itemised: false,
+        member_pays: Default::default(),
+        reference: "uw-pilot".into(),
+    };
+    c.submit(0, "group-admin", Command::AddExcessLayer(Box::new(layer))).unwrap();
+    let facts = |c: &mut Cluster, claim_id: &str, event: NaiveDate| {
+        let claims::Command::Notify(mut n) = notification(claim_id, &id, "group-life", ClaimType::Death, event) else {
+            unreachable!()
+        };
+        n.life = Some("pilot-1".into());
+        n.flags.group = true;
+        n.notifier = Notifier::Employer;
+        ok(c, claims::Command::Notify(n));
+        ok(
+            c,
+            claims::Command::Assign {
+                claim: claim_id.into(),
+                to: "sam".into(),
+                actor: actor("sam"),
+            },
+        );
+        ok(
+            c,
+            claims::Command::CoverCheck {
+                claim: claim_id.into(),
+                relied_on: vec![],
+                actor: actor("sam"),
+            },
+        );
+        claim(c, claim_id).cover_check.clone().unwrap().facts
+    };
+    let before = facts(&mut c, "clm-p1", today.pred_opt().unwrap());
+    assert_eq!((before.in_force, before.sum_insured_minor), (true, 750_000_00), "the automatic limit");
+    let after = facts(&mut c, "clm-p2", today);
+    assert_eq!((after.in_force, after.sum_insured_minor), (true, 960_000_00), "the limit and the layer");
+}
+
 /// Purpose: the cover check answers from the policy record for a group scheme member: cover by
 /// the scheme's formula on the member's details at the date, no named person until the member
 /// is identified at claim, and a death that does not end the scheme; someone the scheme does
