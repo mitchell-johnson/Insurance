@@ -416,6 +416,8 @@ impl Config {
 /// What a book is to do when its adviser moves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// A request type built once per move: boxing the larger variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum BookOutcome {
     /// The book stays with the previous provider; someone there services it.
     Stays { book: BookId, new_servicing: EngagementId },
