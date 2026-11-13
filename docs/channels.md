@@ -49,7 +49,8 @@ A policy carries its core status and `ended`, true for anything that is no longe
 | `POST /app/v1/challenges` | A challenge to sign. |
 | `GET`, `POST /app/v1/devices`, `DELETE /app/v1/devices/{device}` | Your devices. |
 | `GET /app/v1/profile` | Your own record from the customer master: identity, contact, tax and organisation fields, with its version. |
-| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`). Send `If-Match` with the version you saw. |
+| `POST /app/v1/profile/commands` | From an enrolled device: change your contact details (`{"command":"record","fields":{...}}`) or a consent (`set_consent`); put a hold on your own money going out (`place_spending_hold`), ask for it to end (`request_hold_removal {verification}`, naming a passed identity check made since the hold and in the last 24 hours, else 422 `verification_needed`) or take that request back (`cancel_hold_removal`). Send `If-Match` with the version you saw. Only legal lifts a hold at once; that command is refused here. |
+| `GET /app/v1/profile/spending-hold` | Where your own hold stands: `{held, placed_at, removal: {requested_at, ends_at} or null}`. |
 | `GET /app/v1/profile/export` | From an enrolled device: a copy of everything held about you (a Privacy Act access request). |
 | `GET /app/v1/documents/{id}/pdf` | One of your own documents (one you own or were sent a copy of), as a PDF. Anyone else's is 404, the same as one that does not exist. |
 | `POST /app/v1/proposals/{proposal}/lives/{life}/disclosures/to-sign` | For the person insured on that proposal: what to sign for their answers (`{step, answers, adviser_entered}`, `step` being `disclosure` or `interview`). The underwriting intake checks the answers and keeps nothing. |
