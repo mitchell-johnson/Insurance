@@ -370,7 +370,6 @@ impl Command {
             | Command::AddRepresentative { .. }
             | Command::SetVulnerability { .. }
             | Command::Assign { .. }
-            | Command::RecordUpdate { .. }
             | Command::AskComplainant { .. }
             | Command::RecordComplainantResponse { .. }
             | Command::GrantAccess { .. }
@@ -384,9 +383,10 @@ impl Command {
             | Command::RecordRootCauseReview { .. } => &["complaints"],
             // The documents service issues these letters when nobody has,
             // and records each as a handler would.
-            Command::RecordAcknowledgement { .. } | Command::RecordDeadlockNotice { .. } | Command::RecordOutcomeDelivered { .. } => {
-                &["documents", "complaints"]
-            }
+            Command::RecordAcknowledgement { .. }
+            | Command::RecordUpdate { .. }
+            | Command::RecordDeadlockNotice { .. }
+            | Command::RecordOutcomeDelivered { .. } => &["documents", "complaints"],
             Command::Refer { .. }
             | Command::RecordForumResponse { .. }
             | Command::ReleaseBundle { .. }

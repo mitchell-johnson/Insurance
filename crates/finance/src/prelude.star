@@ -44,5 +44,9 @@ def aged(kind, name, owner, day, by, max_age_days, max_amount_minor, blocking = 
         "blocking": blocking,
     }
 
-def close_config(version, checks, aged = [], holidays = [], migration_control = []):
-    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control}
+def tax_account(account, name, posting_types):
+    """A tax or levy account and the posting types the core may move it with."""
+    return {"account": account, "name": name, "posting_types": posting_types}
+
+def close_config(version, checks, aged = [], holidays = [], migration_control = [], tax = []):
+    return {"version": version, "checks": checks, "aged": aged, "holidays": holidays, "migration_control": migration_control, "tax": tax}

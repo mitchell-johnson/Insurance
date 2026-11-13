@@ -82,6 +82,10 @@ pub enum Question {
     AgedSuspense {
         as_at: NaiveDate,
     },
+    /// The period's tax and levy accounts by posting type and product.
+    TaxReconciliation {
+        period: PeriodId,
+    },
     /// A proposed rate table priced against the book in force on a closed
     /// date, beside the version it replaces.
     TableDryRun {
@@ -138,6 +142,7 @@ pub fn answer(state: &FinanceState, question: Value) -> Result<Value, String> {
         Question::Conduct { period, product } => encode(&state.conduct_report(period, product.as_deref())),
         Question::Work => encode(&state.work()),
         Question::AgedSuspense { as_at } => Ok(state.aged_suspense(as_at)),
+        Question::TaxReconciliation { period } => encode(&state.tax_reconciliation(period)),
         Question::TableDryRun { as_at, request } => {
             let covers = request.covers.iter().cloned().collect();
             let book = state.mart.rated_covers(as_at, &covers).map_err(|e| e.to_string())?;

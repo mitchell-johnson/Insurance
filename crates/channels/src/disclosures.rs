@@ -32,6 +32,9 @@ pub trait Intake: Send + Sync {
     fn to_sign(&self, body: Value) -> Asked<'_>;
     /// The signed answers (`/v1/disclosures`).
     fn submit(&self, body: Value) -> Asked<'_>;
+    /// An underwriter's reading of a life's disclosures
+    /// (`/v1/disclosures/open`), which the module allows and records first.
+    fn open(&self, body: Value) -> Asked<'_>;
 }
 
 /// The intake's request from the page's body, for this proposal and life.
@@ -66,7 +69,8 @@ pub fn signed(mut request: Value, body: &Value, device: &str, public_key: &str) 
 }
 
 /// The intake service, reached with the portal's own Entra token for the
-/// intake's audience, which carries the app role `new-business`.
+/// intake's audience, which carries the app roles `new-business` (a life's
+/// signed answers) and `underwriting-console` (an underwriter's reading).
 pub struct Hosted {
     pub base: String,
     pub scope: String,
@@ -100,5 +104,9 @@ impl Intake for Hosted {
 
     fn submit(&self, body: Value) -> Asked<'_> {
         Box::pin(self.call("/v1/disclosures", body))
+    }
+
+    fn open(&self, body: Value) -> Asked<'_> {
+        Box::pin(self.call("/v1/disclosures/open", body))
     }
 }

@@ -671,6 +671,19 @@ fn reissued_terms_move_a_loading_to_the_member_without_a_gap_in_cover() {
     h.underwriting(second, reissue(210_000_00, Some("0.25"))).unwrap();
     assert_eq!(h.excess_layers("E005"), vec![(210_000_00, Some(moved)), (210_000_00, None)]);
     assert_eq!(payers(&h, "E005"), vec![MemberPays::Nothing, MemberPays::Loading]);
+    // The new layer is written as carrying the old one on, which the core accepts and passes
+    // to reinsurance so that the cession is not started afresh.
+    let old_layer = h.scheme().cases[&second].layer;
+    let carried: Vec<Option<u32>> = h
+        .sent
+        .iter()
+        .filter_map(|(_, c)| match c {
+            ic_core::Command::AddExcessLayer(l) => Some(l.continues),
+            _ => None,
+        })
+        .collect();
+    assert!(old_layer.is_some() && carried.last() == Some(&old_layer), "{carried:?}");
+    assert!(carried[..carried.len() - 1].iter().all(Option::is_none), "a first layer continues nothing");
     assert_eq!(status(&h, second), CaseStatus::Ended);
     let new_case = h.scheme().cases.values().find(|c| c.replaces == Some(second)).unwrap();
     assert_eq!((new_case.status, new_case.effective), (CaseStatus::Accepted, moved));
