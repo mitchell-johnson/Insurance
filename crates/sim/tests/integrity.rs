@@ -412,6 +412,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             party: PartyId::from("party-1"),
         },
         Command::AddExcessLayer(Box::new(ic_core::command::ExcessLayer {
+            continues: None,
             policy: p.clone(),
             cover: "group-life".into(),
             life: LifeId::from("m1"),
@@ -603,7 +604,14 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             effective: d(2027, 11, 15),
             discharge: "vault/d-1".into(),
         })),
+        Command::ChangeExcess(Box::new(ic_core::command::ChangedExcess {
+            policy: p.clone(),
+            cover: "hospital".into(),
+            life: LifeId("life-1".into()),
+            excess_option: "high".into(),
+        })),
         Command::AddCover(Box::new(ic_core::command::AddedCover {
+            excess_option: None,
             policy: p.clone(),
             cover: "dental".into(),
             life: LifeId("life-1".into()),
@@ -634,7 +642,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 48, "{names:?}");
+    assert_eq!(names.len(), 49, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

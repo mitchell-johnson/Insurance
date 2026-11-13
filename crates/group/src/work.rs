@@ -920,6 +920,7 @@ impl GroupState {
         let start = self.today().max(old.effective);
         let id = self.fresh_id();
         let layer = ExcessLayer {
+            continues: None,
             policy: s.policy.clone(),
             cover: old.cover.clone(),
             life: old.life.clone(),
@@ -1026,6 +1027,7 @@ impl GroupState {
                 let has_loading = !loadings.is_empty();
                 c.in_employer_total = has_loading && !member_pays_loading && !itemised_terms;
                 let layer = ExcessLayer {
+                    continues: None,
                     policy,
                     cover: c.cover.clone(),
                     life: c.life.clone(),
@@ -1587,6 +1589,7 @@ impl GroupState {
                         },
                     }],
                     covers: vec![CoverSpec {
+                        excess_option: None,
                         code: cover,
                         life: Some(life),
                         sum_insured_minor,

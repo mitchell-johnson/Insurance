@@ -64,6 +64,7 @@ fn busy() -> Bench {
             commencement: d(2027, 5, 1),
             proposal_expires: d(2027, 12, 31),
             risk_codes: vec![],
+            excess_reference: None,
         })),
     );
     b.ok(
@@ -260,6 +261,7 @@ fn every_command() -> Vec<Command> {
             commencement: d(2027, 2, 1),
             proposal_expires: d(2027, 3, 1),
             risk_codes: vec![],
+            excess_reference: None,
         })),
         Command::ReleaseCapacity {
             reservation_id: "R".into(),

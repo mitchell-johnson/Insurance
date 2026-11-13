@@ -72,13 +72,20 @@ impl DiffContext<'_> {
 
     /// The first day of cover for a joiner: the date the row states,
     /// otherwise the day the waiting period ends (not before the scheme
-    /// started), otherwise the file's date.
+    /// started), otherwise the file's date. On a scheme taken over from a
+    /// previous insurer whose terms waive the waiting period, someone
+    /// employed before the takeover is covered from the takeover date.
     fn join_date(&self, row: &MemberRow) -> NaiveDate {
         row.effective.unwrap_or_else(|| {
-            row.attrs
-                .employment_start
-                .and_then(|s| s.checked_add_days(Days::new(u64::from(self.terms.eligibility.waiting_days))))
-                .map_or(self.file_date, |eligible| eligible.max(self.inception))
+            let Some(started) = row.attrs.employment_start else {
+                return self.file_date;
+            };
+            let taken_over = self.terms.takeover.as_ref().filter(|t| t.waive_waiting_period && started < t.effective);
+            let eligible = match taken_over {
+                Some(t) => Some(t.effective),
+                None => started.checked_add_days(Days::new(u64::from(self.terms.eligibility.waiting_days))),
+            };
+            eligible.map_or(self.file_date, |eligible| eligible.max(self.inception))
         })
     }
 
@@ -86,12 +93,13 @@ impl DiffContext<'_> {
         if self.terms.basis == MemberBasis::Named && row.fingerprint.is_none() {
             return Err(("missing_value", "name"));
         }
-        // Someone coming back served their waiting period long ago: without
-        // a stated date they rejoin from the file's date, not from the day
-        // that first waiting period ended.
+        // Someone coming back without a stated date rejoins from the file's
+        // date, not from the day their first waiting period ended long ago.
+        // If the employer gives a new employment start (a seasonal worker
+        // hired again), the waiting period runs again from it.
         let rejoining = view.has_left(&row.employee_id);
         let effective = if rejoining && row.effective.is_none() {
-            self.file_date
+            self.join_date(row).max(self.file_date)
         } else {
             self.join_date(row)
         };

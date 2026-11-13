@@ -142,6 +142,10 @@ pub enum IntakeError {
     Store(String),
     #[error("{0}")]
     Unavailable(String),
+    #[error("no evidence request {0}")]
+    UnknownRequest(String),
+    #[error("the document: {0}")]
+    Document(String),
 }
 
 impl From<DriverError> for IntakeError {

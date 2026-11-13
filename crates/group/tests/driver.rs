@@ -1287,3 +1287,153 @@ fn the_service_configuration_is_checked_at_start() {
     vars.insert("IC_GROUP_FINGERPRINT_SALT_FILE", "/mnt/secrets/absent");
     assert!(read(&vars).unwrap_err().contains("IC_GROUP_FINGERPRINT_SALT_FILE cannot be read"));
 }
+
+/// Purpose: an employer who sends a monthly full file can also have payroll send changes in
+/// between. The scheme holds a layout for each; a change file is read with the change
+/// layout and a full file with the full one, whichever order they arrive in; a payroll
+/// change is previewed, approved and applied by the same steps as any file; and when the
+/// payroll export changes its column order and date format, a file in the new format has
+/// its rows refused under the old layout and is read only once a later version of the
+/// layout is set, an earlier version being refused.
+/// Why it matters: a change read with the full-file layout would look like a file naming
+/// one member, and everyone else would be taken off cover. And a payroll feed that skipped
+/// the preview and approval would let a salary typed wrong at the employer change cover
+/// and premium with nobody having looked at it.
+#[tokio::test]
+async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
+    use ic_group::record::RowChange;
+
+    let d = rig();
+    let payroll = |version: u32, columns: [&str; 2], date_format: &str| {
+        FileMapping {
+            id: "harbour-payroll".into(),
+            version,
+            kind: FileKind::Changes,
+            delimiter: ',',
+            columns: Columns {
+                employee_id: "Emp No".into(),
+                category: Some("Category".into()),
+                salary: Some("Salary".into()),
+                billing_group: Some("Site".into()),
+                change: Some(columns[0].into()),
+                effective: Some(columns[1].into()),
+                ..Columns::default()
+            },
+            date_format: date_format.into(),
+            salary_unit: SalaryUnit::Major,
+            salary_period: SalaryPeriod::Annual,
+            categories: BTreeMap::new(),
+            change_values: [("UPD".to_string(), RowChange::Change), ("TERM".to_string(), RowChange::Leave)].into(),
+            content_hash: String::new(),
+        }
+        .seal()
+        .unwrap()
+    };
+    let set = |d: &Rig, key: &str, mapping: FileMapping, today: NaiveDate| {
+        let env = Envelope {
+            key: key.into(),
+            caller: caller::STAFF.into(),
+            actor: "ops-ana".into(),
+            today,
+            command: GroupCommand::SetMapping {
+                scheme: SCHEME.into(),
+                mapping: Box::new(mapping),
+            },
+        };
+        d.module.state.lock().unwrap().apply_envelope(env).result.map(|_| ()).map_err(|r| r.code)
+    };
+    let salary = |d: &Rig, id: &str| {
+        d.module.state.lock().unwrap().schemes[SCHEME]
+            .membership
+            .active(id)
+            .and_then(|m| m.attrs.salary_minor)
+    };
+    let members = |d: &Rig| d.module.state.lock().unwrap().schemes[SCHEME].membership.active_count();
+    let file = |d: &Rig, name: &str| d.module.state.lock().unwrap().schemes[SCHEME].files[name].clone();
+    let today = d.core.business_date().await.unwrap().unwrap();
+    through(&d, "nov.csv", FILE).await;
+    assert_eq!((members(&d), salary(&d, "E002")), (3, Some(60_000_00)));
+
+    // Before there is a change layout, a payroll change does not fit and is refused whole.
+    let change = format!(
+        "Emp No,Event,From,Category,Salary,Site\nE002,UPD,{},staff,65000,wlg\n",
+        today.format("%Y-%m-%d")
+    );
+    d.upload(caller::EMPLOYER, "payroll-feed", SCHEME, "early.csv", change.clone().into_bytes())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "early.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(
+        (file(&d, "early.csv").status, file(&d, "early.csv").code.as_deref()),
+        (FileStatus::Refused, Some("missing_column"))
+    );
+
+    // With one, it is previewed as one change, waits for approval, and is applied.
+    set(&d, "map-1", payroll(1, ["Event", "From"], "%Y-%m-%d"), today).unwrap();
+    d.upload(
+        caller::EMPLOYER,
+        "payroll-feed",
+        SCHEME,
+        "pay-1.csv",
+        change.replace("65000", "66000").into_bytes(),
+    )
+    .await
+    .unwrap();
+    d.files.mark(SCHEME, "pay-1.csv", Scan::Clean);
+    settle(&d).await;
+    let preview = file(&d, "pay-1.csv");
+    assert_eq!(
+        (preview.status, preview.summary.changes, preview.summary.leavers),
+        (FileStatus::AwaitingApproval, 1, 0)
+    );
+    assert_eq!(salary(&d, "E002"), Some(60_000_00), "nothing changes before approval");
+    approve(&d, "pay-1.csv").await;
+    settle(&d).await;
+    assert_eq!(
+        (file_status(&d, "pay-1.csv"), salary(&d, "E002"), members(&d)),
+        (FileStatus::Applied, Some(66_000_00), 3)
+    );
+
+    // The next monthly file is still read as a full file.
+    through(
+        &d,
+        "dec.csv",
+        &FILE.replace("E002,Bo,Ngata,02/06/1985,staff,60000", "E002,Bo,Ngata,02/06/1985,staff,67000"),
+    )
+    .await;
+    assert_eq!((members(&d), salary(&d, "E002")), (3, Some(67_000_00)));
+
+    // Payroll changes its export: columns renamed and moved, dates written another way.
+    let moved = format!(
+        "Emp No,Site,Category,Salary,Effective,Type\nE002,wlg,staff,70000,{},UPD\n",
+        today.format("%d/%m/%Y")
+    );
+    d.upload(caller::EMPLOYER, "payroll-feed", SCHEME, "pay-2.csv", moved.clone().into_bytes())
+        .await
+        .unwrap();
+    d.files.mark(SCHEME, "pay-2.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(file_status(&d, "pay-2.csv"), FileStatus::Refused, "the old layouts do not read the new export");
+    assert_eq!(
+        set(&d, "map-old", payroll(1, ["Type", "Effective"], "%d/%m/%Y"), today),
+        Err("mapping_version".to_string())
+    );
+    set(&d, "map-2", payroll(2, ["Type", "Effective"], "%d/%m/%Y"), today).unwrap();
+    through(&d, "pay-3.csv", &moved.replace("70000", "71000")).await;
+    assert_eq!(salary(&d, "E002"), Some(71_000_00));
+    // The old export no longer fits either layout.
+    d.upload(
+        caller::EMPLOYER,
+        "payroll-feed",
+        SCHEME,
+        "pay-4.csv",
+        change.replace("65000", "72000").into_bytes(),
+    )
+    .await
+    .unwrap();
+    d.files.mark(SCHEME, "pay-4.csv", Scan::Clean);
+    settle(&d).await;
+    assert_eq!(file_status(&d, "pay-4.csv"), FileStatus::Refused);
+    assert_eq!(salary(&d, "E002"), Some(71_000_00));
+}

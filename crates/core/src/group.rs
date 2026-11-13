@@ -780,6 +780,14 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
     if spec.member_pays == MemberPays::Loading && spec.loadings.is_empty() {
         return Err(Reject::new("invalid_payer", "the member cannot pay the loading on a layer that has none"));
     }
+    let replaces = |l: &Layer| Some(l.id) == spec.continues && l.life == spec.life && l.origin == LayerOrigin::UnderwrittenExcess;
+    if spec.continues.is_some() && !policy.covers[&spec.cover].layers.iter().any(replaces) {
+        return Err(Reject::new(
+            "unknown_layer",
+            format!("member {} has no underwritten layer of that number on {} to carry on", spec.life, spec.cover),
+        ));
+    }
+    let continues = spec.continues;
     let before = member_layers(policy, &spec.life);
     let id = policy.covers[&spec.cover].layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     let layer = Layer {
@@ -789,6 +797,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
         end: None,
         sum_insured_minor: spec.sum_insured_minor,
         origin: LayerOrigin::UnderwrittenExcess,
+        excess_option: None,
         loadings: spec.loadings,
         exclusions: spec.exclusions,
         loading_itemised: spec.loading_itemised,
@@ -808,7 +817,7 @@ pub(crate) fn add_excess_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &
             policy: policy.id.clone(),
             layer,
             origin: LayerOrigin::UnderwrittenExcess,
-            continues: None,
+            continues,
         });
     }
     post_deltas(ledger, policy, ctx, &spec.life, spec.start, d)

@@ -179,6 +179,10 @@ pub struct Layer {
     /// entry age.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rated_from: Option<NaiveDate>,
+    /// The excess level chosen for this layer, where the cover offers a
+    /// choice. A change of excess is a new layer, so the past keeps its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
     /// What of this layer's premium the member pays for themselves.
     #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
     pub member_pays: MemberPays,
@@ -194,7 +198,12 @@ impl Layer {
     }
     /// Layers are merged when nothing distinguishes them.
     pub fn same_terms(&self, o: &Layer) -> bool {
-        self.life == o.life && self.end == o.end && self.loadings == o.loadings && self.exclusions == o.exclusions && self.member_pays == o.member_pays
+        self.life == o.life
+            && self.end == o.end
+            && self.loadings == o.loadings
+            && self.exclusions == o.exclusions
+            && self.excess_option == o.excess_option
+            && self.member_pays == o.member_pays
     }
 }
 

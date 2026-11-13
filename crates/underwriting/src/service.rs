@@ -41,6 +41,10 @@ pub struct Config {
     pub event_hubs: String,
     /// The hub staff notices are published to.
     pub event_hub: String,
+    /// The hub evidence orders are published to, for the provider's adapter.
+    pub evidence_hub: String,
+    /// The hub requests for a delegate's file are published to.
+    pub delegates_hub: String,
 }
 
 impl Config {
@@ -68,6 +72,8 @@ impl Config {
             sweep_page: number("IC_UNDERWRITING_SWEEP_PAGE", 200, 1_000)? as u32,
             event_hubs: get("IC_EVENT_HUBS_ENDPOINT").ok_or("set IC_EVENT_HUBS_ENDPOINT to the Event Hubs namespace")?,
             event_hub: get("IC_UNDERWRITING_EVENT_HUB").unwrap_or_else(|| "underwriting-notices".into()),
+            evidence_hub: get("IC_UNDERWRITING_EVIDENCE_HUB").unwrap_or_else(|| "underwriting-evidence".into()),
+            delegates_hub: get("IC_UNDERWRITING_DELEGATES_HUB").unwrap_or_else(|| "underwriting-delegates".into()),
         })
     }
 }
@@ -254,7 +260,9 @@ pub async fn serve(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> 
     let credential = AzureCredential::from_lookup(&get).map_err(|e| e.to_string())?;
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
     let notices = Notices {
-        staff: EventHubsSink::new(&config.event_hubs, &config.event_hub, credential),
+        staff: EventHubsSink::new(&config.event_hubs, &config.event_hub, credential.clone()),
+        evidence: EventHubsSink::new(&config.event_hubs, &config.evidence_hub, credential.clone()),
+        delegates: EventHubsSink::new(&config.event_hubs, &config.delegates_hub, credential),
         // Letters go to a module, which needs no partition count.
         letters: Cluster::new(client.clone(), 1, config.patience),
         clock: Utc::now,

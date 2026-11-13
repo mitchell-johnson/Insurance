@@ -71,6 +71,29 @@ pub enum EventBody {
         from: String,
         about: String,
     },
+    /// Whether the person can make their own decisions has been put in
+    /// question. Representatives' acts wait for it to be settled.
+    CapacityQuestioned,
+    /// The question is settled: `has_capacity` or `lacks_capacity`.
+    CapacitySettled {
+        outcome: String,
+    },
+    /// The person put a hold on their own money going out (refunds,
+    /// surrenders, withdrawals, loans, payout account changes).
+    SpendingHoldPlaced,
+    /// The person asked, after a fresh identity check, for the hold to end
+    /// once the cooling-off period has passed.
+    SpendingHoldRemovalRequested {
+        verification: String,
+    },
+    /// The person changed their mind: the hold stays.
+    SpendingHoldRemovalCancelled,
+    /// The hold ended: `cooling_off` when the period passed, or
+    /// `legal_direction` on a court order or legal direction (`reference`).
+    SpendingHoldEnded {
+        reason: String,
+        reference: Option<String>,
+    },
     /// The party's key was destroyed. Written in the clear, with no payload.
     Shredded,
 }
@@ -98,6 +121,12 @@ impl EventBody {
             EventBody::HoldPlaced { .. } => "hold_placed",
             EventBody::HoldReleased { .. } => "hold_released",
             EventBody::ConcernRaised { .. } => "concern_raised",
+            EventBody::CapacityQuestioned => "capacity_questioned",
+            EventBody::CapacitySettled { .. } => "capacity_settled",
+            EventBody::SpendingHoldPlaced => "spending_hold_placed",
+            EventBody::SpendingHoldRemovalRequested { .. } => "spending_hold_removal_requested",
+            EventBody::SpendingHoldRemovalCancelled => "spending_hold_removal_cancelled",
+            EventBody::SpendingHoldEnded { .. } => "spending_hold_ended",
             EventBody::Shredded => "shredded",
         }
     }
@@ -119,7 +148,14 @@ impl EventBody {
     pub fn is_priority(&self) -> bool {
         matches!(
             self,
-            EventBody::RelationshipEnded { .. } | EventBody::Deceased { .. } | EventBody::MergedInto { .. } | EventBody::Unmerged { .. } | EventBody::Shredded
+            EventBody::RelationshipEnded { .. }
+                | EventBody::Deceased { .. }
+                | EventBody::CapacityQuestioned
+                | EventBody::SpendingHoldPlaced
+                | EventBody::SpendingHoldRemovalCancelled
+                | EventBody::MergedInto { .. }
+                | EventBody::Unmerged { .. }
+                | EventBody::Shredded
         ) || matches!(self, EventBody::ConsentSet(c) if !c.granted)
     }
 }

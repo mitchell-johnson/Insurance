@@ -370,3 +370,72 @@ async fn an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logg
         "the record was tampered with"
     );
 }
+
+/// Purpose: an evidence provider's adapter, and only one holding the app role `evidence`,
+/// reports an order acknowledged, sends the report, which is sealed under the person's own name
+/// before the module is told where it is, and may send it again without filing it twice; a
+/// request nobody made, and a report that is not a document, are refused before anything is
+/// stored. A delegate's file is taken only with the role `delegate-api`, sealed the same way, and
+/// passed to the module with its hash.
+/// Why it matters: these are the only ways a medical report or a delegate's file enters the
+/// system. A report the module heard of before it was sealed could point at nothing; one sealed
+/// under the wrong person would be shredded with someone else's records; and a provider that
+/// retries after a lost reply must not leave two copies of someone's medical history.
+#[tokio::test]
+async fn evidence_and_delegate_files_are_sealed_before_the_module_hears_of_them() {
+    use ic_underwriting::model::ConsentKind;
+    let authority = tenant().await;
+    let (intake, module, records) = intake();
+    let request = {
+        let mut w = module.0.lock().unwrap();
+        w.consent("P1", "L1", ConsentKind::ObtainRecords);
+        w.disclose("P1", "L1", &yes("diabetes"));
+        w.p("P1").lives[&"L1".into()].evidence[0].id.clone()
+    };
+    let app = router(intake, Auth::entra_at(&authority, TENANT, AUDIENCE));
+    let provider = token(&authority, &["evidence"]);
+
+    let ack = json!({"outcome": "acknowledged", "request": request, "provider_ref": "LAB-7"});
+    assert_eq!(
+        call(&app, "/v1/evidence", Some(&token(&authority, &["new-business"])), &ack).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(call(&app, "/v1/evidence", Some(&provider), &ack).await.0, StatusCode::OK);
+
+    let report = STANDARD.encode(b"%PDF a report");
+    let unknown = json!({"outcome": "received", "request": "no-such", "report": report, "cost_minor": 12_000});
+    assert_eq!(call(&app, "/v1/evidence", Some(&provider), &unknown).await.0, StatusCode::NOT_FOUND);
+    let garbled = json!({"outcome": "received", "request": request, "report": "%%%", "cost_minor": 12_000});
+    assert_eq!(call(&app, "/v1/evidence", Some(&provider), &garbled).await.0, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(records.names().iter().all(|n| !n.contains("evidence")), "nothing stored for a refusal");
+
+    let received = json!({"outcome": "received", "request": request, "report": report, "cost_minor": 12_000});
+    let (status, filed) = call(&app, "/v1/evidence", Some(&provider), &received).await;
+    assert_eq!(status, StatusCode::OK, "{filed}");
+    let vault_ref = filed["vault_ref"].as_str().unwrap().to_string();
+    assert!(vault_ref.starts_with("clinical://PTY-L1/evidence/"), "{vault_ref}");
+    assert_eq!(filed["duplicate"], json!(false));
+    let (again_status, again) = call(&app, "/v1/evidence", Some(&provider), &received).await;
+    assert_eq!(
+        (again_status, &again["vault_ref"], &again["duplicate"]),
+        (StatusCode::OK, &json!(vault_ref), &json!(true))
+    );
+    {
+        let w = module.0.lock().unwrap();
+        let e = &w.p("P1").lives[&"L1".into()].evidence[0];
+        assert_eq!((e.vault_ref.as_deref(), e.provider_ref.as_deref()), (Some(vault_ref.as_str()), Some("LAB-7")));
+    }
+
+    let file = json!({"proposal": "P1", "life": "L1", "file": STANDARD.encode(b"the delegate's file")});
+    assert_eq!(call(&app, "/v1/delegate-files", Some(&provider), &file).await.0, StatusCode::FORBIDDEN);
+    let delegate = token(&authority, &["delegate-api"]);
+    let mut nobody = file.clone();
+    nobody["proposal"] = json!("P9");
+    assert_eq!(call(&app, "/v1/delegate-files", Some(&delegate), &nobody).await.0, StatusCode::NOT_FOUND);
+    let (status, answered) = call(&app, "/v1/delegate-files", Some(&delegate), &file).await;
+    // No delegate decided this life: the module refuses it, after sealing.
+    assert_eq!(status, StatusCode::CONFLICT, "{answered}");
+    let sent = module.0.lock().unwrap().log.last().unwrap().clone();
+    assert_eq!(sent.caller, "delegate-api");
+    assert!(matches!(sent.command, Command::DelegateFileReceived { ref vault_ref, .. } if vault_ref.starts_with("clinical://PTY-L1/delegate_file/")));
+}
