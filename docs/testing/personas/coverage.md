@@ -62,7 +62,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 26 | 6 | 8 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
-| ADV Advisers and commission | 43 | 2 | 0 | 2 |
+| ADV Advisers and commission | 44 | 1 | 0 | 1 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 6 | 16 | 5 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **317** | **110** | **150** | **114** |
+| **Total** | **318** | **109** | **150** | **113** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 104 | 19 | 19 |
-| C | 182 | 58 | 106 |
+| C | 183 | 57 | 106 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -120,7 +120,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028
 - **JNT** (5): JNT-001, JNT-008, JNT-013, JNT-023, JNT-030
-- **ADV** (2): ADV-028, ADV-035
+- **ADV** (1): ADV-028
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
 - **VUL** (5): VUL-002, VUL-003, VUL-005, VUL-007, VUL-008
