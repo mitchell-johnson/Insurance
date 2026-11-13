@@ -783,6 +783,7 @@ impl ClaimsState {
                     cost_item: None,
                     interest_minor: 0,
                     interest_declined_minor: 0,
+                    interest_withheld_minor: 0,
                     interested_party: None,
                 });
                 cx.paid(claim, payment_ref, *amount_minor, *amount_minor, &payee, None, true, 0);

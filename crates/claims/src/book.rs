@@ -328,6 +328,38 @@ impl ClaimsState {
         Ok(())
     }
 
+    /// Record the verified payee's withholding tax rate.
+    pub(crate) fn set_withholding_rate(&mut self, cx: &mut Cx<'_>, id: &str, rate_bp: Option<u32>, actor: &Actor) -> Result<(), Reject> {
+        let mut claim = self.claim(id)?;
+        self.owner(actor, &claim)?;
+        if rate_bp.is_some_and(|r| r > 10_000) {
+            return Err(Reject::new("invalid_rate", "a withholding rate is between 0 and 10,000 basis points"));
+        }
+        let Some(payee) = claim.payee.as_mut() else {
+            return Err(Reject::new("payee_not_verified", "verify the payee before recording their tax rate"));
+        };
+        payee.withholding_rate_bp = rate_bp;
+        note(&mut claim, cx, Some(actor), "withholding_rate_recorded");
+        self.commit(claim);
+        Ok(())
+    }
+
+    /// Resident withholding tax on `interest`, at the payee's rate or the
+    /// no-declaration rate, rounded down to the cent. Nothing when the rules
+    /// keep none back.
+    fn withholding(&self, claim: &Claim, interest: i64) -> i64 {
+        if !self.rules.interest_withholding || interest <= 0 {
+            return 0;
+        }
+        let rate = claim
+            .payee
+            .as_ref()
+            .and_then(|p| p.withholding_rate_bp)
+            .unwrap_or(self.rules.no_declaration_rate_bp)
+            .min(10_000);
+        (i128::from(interest) * i128::from(rate) / 10_000) as i64
+    }
+
     /// A death recorded in error. A benefit it was going to end and that is
     /// still running carries on as if nothing happened. A claim it closed
     /// goes to a senior, who reopens it on the basis `DeathRetracted` and
@@ -400,6 +432,7 @@ impl ClaimsState {
             authority_doc,
             verified_on: cx.today,
             verified_by: actor.staff.clone(),
+            withholding_rate_bp: None,
         });
         note(&mut claim, cx, Some(actor), "payee_verified");
         self.commit(claim);
@@ -476,8 +509,8 @@ impl ClaimsState {
         let carried = reissue_of
             .as_ref()
             .and_then(|r| claim.payments.iter().filter(came_back).find(|p| &p.payment_ref == r))
-            .filter(|p| p.amount_minor + p.interest_minor - p.interest_declined_minor == amount_minor)
-            .map_or(0, |p| p.interest_minor - p.interest_declined_minor);
+            .filter(|p| p.sent_minor() == amount_minor)
+            .map_or(0, Payment::interest_paid_minor);
         let fresh = match (self.rules.late_interest, claim.admission()) {
             (Some(rate), Some(admission)) if period.is_none() && claim.schedule.is_none() && !claim.payments.iter().any(|p| came_back(&p)) => {
                 rate.on(amount_minor, admission.decided_on, cx.today)
@@ -489,8 +522,10 @@ impl ClaimsState {
         let interest_minor = fresh + owed_again;
         // A payee who was told and declined: worked out, posted, and reversed.
         let declined = if claim.interest_declined.is_some() { fresh } else { 0 };
+        // Resident withholding tax on the interest paid, at the payee's rate.
+        let withheld = self.withholding(&claim, interest_minor - declined);
         cx.core.execute(Instruction::Pay {
-            interest_withheld_minor: 0,
+            interest_withheld_minor: withheld,
             claim: id.to_string(),
             policy: claim.policy.clone(),
             payment_ref: payment_ref.clone(),
@@ -522,6 +557,7 @@ impl ClaimsState {
                 cost_item: None,
                 interest_minor: interest_minor + carried,
                 interest_declined_minor: declined,
+                interest_withheld_minor: withheld,
                 interested_party: None,
             }),
         }
@@ -531,11 +567,11 @@ impl ClaimsState {
             &claim,
             &payment_ref,
             amount_minor - carried,
-            amount_minor + interest_minor - declined,
+            amount_minor + interest_minor - declined - withheld,
             &payee,
             period_end,
             false,
-            interest_minor + carried - declined,
+            interest_minor + carried - declined - withheld,
         );
         if close {
             claim.status = Status::Paid;
@@ -602,6 +638,7 @@ impl ClaimsState {
             cost_item: None,
             interest_minor: 0,
             interest_declined_minor: 0,
+            interest_withheld_minor: 0,
             interested_party: Some(party.to_string()),
         });
         Self::meet_timer(&mut claim, TimerKind::Payment, cx.today);
@@ -697,6 +734,7 @@ impl ClaimsState {
             cost_item: Some(item.to_string()),
             interest_minor: 0,
             interest_declined_minor: 0,
+            interest_withheld_minor: 0,
             interested_party: None,
         });
         note(&mut claim, cx, Some(actor), format!("cost_paid:{item}"));
@@ -740,8 +778,8 @@ impl ClaimsState {
         let mut kind = (false, 0);
         if let Some(p) = lump.and_then(|i| claim.payments.get_mut(i)) {
             p.returned = true;
-            came_back = (p.amount_minor + p.interest_minor - p.interest_declined_minor, p.run.clone());
-            kind = (p.ex_gratia, p.interest_minor - p.interest_declined_minor);
+            came_back = (p.sent_minor(), p.run.clone());
+            kind = (p.ex_gratia, p.interest_paid_minor());
             cost = p.cost_item.as_ref().map_or(0, |_| p.amount_minor);
             // An interested party's payment that came back is owed to them again.
             let (party, amount) = (p.interested_party.clone(), p.amount_minor);
@@ -1088,6 +1126,7 @@ impl ClaimsState {
                 cost_item: None,
                 interest_minor: 0,
                 interest_declined_minor: 0,
+                interest_withheld_minor: 0,
                 interested_party: None,
             });
             claim.payable_minor = 0;
