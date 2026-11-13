@@ -27,6 +27,7 @@ CLOSE = close_config(
         reported("analytical_review", "Movements against prior period and budget explained", "finance_operations", 4, by = "finance-console", blocking = False),
         automatic("trial_balance", "Trial balance: the books balance in every currency and unit", "finance_operations", 5),
         automatic("fund_balance", "Every statutory fund balances on its own", "finance_operations", 5),
+        automatic("migration_control", "Migration control accounts have not moved since the old system was loaded", "finance_operations", 5),
     ],
     aged = [
         aged("unidentified_receipts", "Bank receipts nobody has identified, aged with an owner", "treasury", 2, by = "payments", max_age_days = 30, max_amount_minor = 5000000),
@@ -34,6 +35,7 @@ CLOSE = close_config(
         aged("pending_investment_cash", "Pending investment cash beyond pricing lag", "investment_operations", 2, by = "investment", max_age_days = 5, max_amount_minor = 5000000),
         aged("held_balance", "Held balances aged by party", "counterparty_finance", 2, by = "commission", max_age_days = 90, max_amount_minor = 10000000),
     ],
+    migration_control = ["1420", "1430"],
     holidays = [
         # 2026 (from the first close this configuration serves)
         "2026-12-25", "2026-12-28",

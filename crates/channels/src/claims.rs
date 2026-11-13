@@ -126,6 +126,7 @@ pub fn question(name: &str, field: impl Fn(&str) -> Option<String>) -> Result<Qu
         },
         "claim" => Question::Claim { claim: needs("claim")? },
         "work" => Question::Work { claim: needs("claim")? },
+        "policy" => Question::PolicyStatus { policy: needs("policy")? },
         "book" => Question::Book,
         "report" => Question::Report,
         "remittance" => Question::Remittance { run: needs("run")? },

@@ -3,8 +3,9 @@
 //! It runs the driver's pass on a timer and serves the routes the portals
 //! and the other services use: upload a file, send a command, ask a
 //! question. It holds no state: any number can run, and one that stops is
-//! simply restarted. It sits behind the portal gateway, which has already
-//! established who the person is; callers present the service key.
+//! simply restarted. Its callers are services (the portal, the staff
+//! console, other modules' drivers), which have already established who
+//! the person is; each presents its own Entra ID token ([`crate::auth`]).
 
 use std::future::Future;
 use std::sync::Arc;
@@ -18,8 +19,8 @@ use axum::{Json, Router};
 use ic_azure::credential::AzureCredential;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
+use crate::auth::{AuthError, Caller, Entra};
 use crate::command::{caller, Envelope, GroupCommand, Resolution};
 use crate::driver::{Core, CustomerMaster, Driver, DriverError, FileStore, Module, Pass, Peers};
 use crate::host::Question;
@@ -47,15 +48,18 @@ pub struct Config {
     pub underwriting_module: String,
     /// Salts member fingerprints. It must never change.
     pub fingerprint_salt: String,
-    /// What callers of this service must present.
-    pub api_key: String,
+    /// The Entra ID tenant whose tokens callers present, where it issues
+    /// them, and the audience (this service's application) they are for.
+    pub tenant: String,
+    pub entra_authority: String,
+    pub audience: String,
     pub listen: String,
     pub cycle_every: Duration,
 }
 
 impl std::fmt::Debug for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never the salt or the key.
+        // Never the salt.
         write!(f, "Config(cluster {}, listen {})", self.cluster, self.listen)
     }
 }
@@ -100,7 +104,11 @@ impl Config {
             reinsurance_module: get("IC_GROUP_REINSURANCE_MODULE").unwrap_or_else(|| "reinsurance".into()),
             underwriting_module: get("IC_GROUP_UNDERWRITING_MODULE").unwrap_or_else(|| "underwriting".into()),
             fingerprint_salt: secret("IC_GROUP_FINGERPRINT_SALT")?,
-            api_key: secret("IC_GROUP_API_KEY")?,
+            tenant: need("AZURE_TENANT_ID")?,
+            entra_authority: get("IC_GROUP_ENTRA_AUTHORITY")
+                .or_else(|| get("AZURE_AUTHORITY_HOST"))
+                .unwrap_or_else(|| crate::auth::ENTRA_AUTHORITY.into()),
+            audience: need("IC_GROUP_AUDIENCE")?,
             listen: get("IC_GROUP_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(seconds),
         })
@@ -170,9 +178,8 @@ impl CustomerMaster for HttpCustomerMaster {
 
 struct Web<M, C, P, D, F> {
     driver: Arc<Driver<M, C, P, D, F>>,
-    /// The key callers must present, hashed so that the comparison takes
-    /// the same time whatever was presented.
-    key_hash: [u8; 32],
+    /// Validates callers' Entra ID tokens.
+    entra: Entra,
 }
 
 type Answer = (StatusCode, Json<Value>);
@@ -191,17 +198,24 @@ fn failed(e: DriverError) -> Answer {
 }
 
 impl<M, C, P, D, F> Web<M, C, P, D, F> {
-    fn authorised(&self, headers: &HeaderMap) -> Result<(), Answer> {
-        let presented = headers
-            .get("authorization")
-            .and_then(|v| v.as_bytes().strip_prefix(b"Bearer "))
-            .map(|key| -> [u8; 32] { Sha256::digest(key).into() });
-        if presented == Some(self.key_hash) {
-            Ok(())
-        } else {
-            Err(refused(StatusCode::UNAUTHORIZED, "unauthorised", "the service key is missing or wrong"))
+    /// The calling service, from its token. Which caller names it may use
+    /// is checked where the name is given.
+    async fn authorised(&self, headers: &HeaderMap) -> Result<Caller, Answer> {
+        match self.entra.authenticate(headers).await {
+            Ok(caller) => Ok(caller),
+            // Nothing is known about the token: the caller tries again.
+            Err(AuthError::Keys(e)) => {
+                tracing::warn!(error = %e, "Entra ID signing keys could not be fetched");
+                Err(refused(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "try again shortly"))
+            }
+            Err(e) => Err(refused(StatusCode::UNAUTHORIZED, "unauthorised", &e.to_string())),
         }
     }
+}
+
+/// A caller name the token does not carry as a role.
+fn not_your_role(name: &str) -> Answer {
+    refused(StatusCode::FORBIDDEN, "role_not_held", &format!("the token does not carry the role {name}"))
 }
 
 /// The channels a person or another service reaches the module through.
@@ -232,14 +246,18 @@ where
     D: CustomerMaster + 'static,
     F: FileStore + 'static,
 {
-    if let Err(answer) = web.authorised(&headers) {
-        return answer;
-    }
+    let service = match web.authorised(&headers).await {
+        Ok(service) => service,
+        Err(answer) => return answer,
+    };
     let (Some(who), Some(actor)) = (header(&headers, "x-ic-caller"), header(&headers, "x-ic-actor")) else {
         return refused(StatusCode::BAD_REQUEST, "missing_identity", "x-ic-caller and x-ic-actor say who is uploading");
     };
     if ![caller::EMPLOYER, caller::STAFF].contains(&who) {
         return refused(StatusCode::FORBIDDEN, "caller_not_allowed", "files come from the employer or from staff");
+    }
+    if !service.may_act_as(who) {
+        return not_your_role(who);
     }
     if body.is_empty() {
         return refused(StatusCode::BAD_REQUEST, "empty_file", "the file is empty");
@@ -270,9 +288,10 @@ where
     D: CustomerMaster + 'static,
     F: FileStore + 'static,
 {
-    if let Err(answer) = web.authorised(&headers) {
-        return answer;
-    }
+    let service = match web.authorised(&headers).await {
+        Ok(service) => service,
+        Err(answer) => return answer,
+    };
     let request: Request = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_command", &e.to_string()),
@@ -283,6 +302,9 @@ where
             "caller_not_allowed",
             "a command needs a key, an actor and a caller this service takes",
         );
+    }
+    if !service.may_act_as(&request.caller) {
+        return not_your_role(&request.caller);
     }
     if matches!(request.command, GroupCommand::ReceiveFile { .. }) {
         return refused(StatusCode::BAD_REQUEST, "use_upload", "a file is received by uploading it");
@@ -316,8 +338,12 @@ where
     D: CustomerMaster + 'static,
     F: FileStore + 'static,
 {
-    if let Err(answer) = web.authorised(&headers) {
-        return answer;
+    // Any caller this service knows may ask; what a person may see is the
+    // calling service's to decide.
+    match web.authorised(&headers).await {
+        Ok(service) if OUTSIDE_CALLERS.iter().any(|name| service.may_act_as(name)) => {}
+        Ok(_) => return refused(StatusCode::FORBIDDEN, "role_not_held", "the token carries no role this service takes"),
+        Err(answer) => return answer,
     }
     let question: Question = match serde_json::from_slice(&body) {
         Ok(q) => q,
@@ -336,7 +362,7 @@ where
 
 /// The service's routes: `POST /v1/schemes/{scheme}/files/{file}` to
 /// upload, `POST /v1/commands`, `POST /v1/questions`, and `GET /healthz`.
-pub fn router<M, C, P, D, F>(driver: Arc<Driver<M, C, P, D, F>>, api_key: &str) -> Router
+pub fn router<M, C, P, D, F>(driver: Arc<Driver<M, C, P, D, F>>, entra: Entra) -> Router
 where
     M: Module + 'static,
     C: Core + 'static,
@@ -344,10 +370,7 @@ where
     D: CustomerMaster + 'static,
     F: FileStore + 'static,
 {
-    let web = Arc::new(Web {
-        driver,
-        key_hash: Sha256::digest(api_key.as_bytes()).into(),
-    });
+    let web = Arc::new(Web { driver, entra });
     Router::new()
         .route("/v1/schemes/{scheme}/files/{file}", post(upload::<M, C, P, D, F>))
         .route("/v1/commands", post(command::<M, C, P, D, F>))
