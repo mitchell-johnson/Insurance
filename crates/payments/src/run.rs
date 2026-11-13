@@ -785,7 +785,7 @@ impl PaymentsState {
         for n in settled {
             total += n.amount_minor;
             self.waiting_settled(&n);
-            self.origin_settled(&n, settled_on);
+            self.origin_settled(&n, settled_on, &account);
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }
@@ -943,8 +943,12 @@ impl PaymentsState {
                         reason: "repeated_dishonour".to_string(),
                     });
                 } else if reason == ReturnReason::InsufficientFunds && n.represents.is_none() && active {
-                    // Presented once more, and only once.
-                    self.represent.insert(n.item.clone());
+                    if self.authorities.get(a).is_some_and(|x| x.hardship) {
+                        self.hold_for_conversation(tx, &n.item, a);
+                    } else {
+                        // Presented once more, and only once.
+                        self.represent.insert(n.item.clone());
+                    }
                 }
             }
             Counterparty::Payee(p) if reason.account_unusable() => {

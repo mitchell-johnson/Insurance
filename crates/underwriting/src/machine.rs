@@ -594,6 +594,12 @@ impl UnderwritingState {
                 source_ref,
             } => self.licence_changed(cx, subject, status, effective, &source_ref),
 
+            OpenDisclosures {
+                proposal,
+                life,
+                underwriter,
+                purpose,
+            } => self.open_disclosures(cx, &proposal, &life, &underwriter, &purpose),
             OpenFileForClaim {
                 claim_ref,
                 policy,

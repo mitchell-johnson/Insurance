@@ -90,7 +90,7 @@ A returned settlement is not paid again by itself, because the bank details that
 - **Longevity reinsurance for annuities** is not built: the core has no annuities.
 - **Ceded premium is posted by its own entry**, not as lines in the billing entry as the capacity model in the design notes assumes. The module is the only place that knows the cession, and it runs beside the core, so the posting follows the billing event.
 - **Original premium, gross or net.** The core's billing event carries the premium by cover type after discounts. A treaty priced on the original premium before discounts is priced on the same figure until the core sends both.
-- **Listings are built in one command.** Cutting a statement walks the whole ceded book and returns the listing as one document. A very large book will need the listing cut by partition.
+- **Listings are cut in one command.** Cutting a statement walks the whole ceded book. The listing is filed in parts of at most the treaty's `listing_part_rows` (2,000 unless the treaty says otherwise), each its own record named on the statement with its hash, so no one document grows with the book; the walk itself would need splitting by partition for a book of several hundred thousand covers.
 - **Ceded reserves** are an actuarial figure and are not held here; the exposure view shows balances, open recoverables, disputed items and ceded sums at risk.
 - **Stop loss after catastrophe cover** subtracts the recoveries of catastrophe treaties whose period starts inside the stop loss period. A treaty with a different order of cover needs that said in its terms first.
 
