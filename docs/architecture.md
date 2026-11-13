@@ -193,7 +193,7 @@ Owned by the thread "Build portal and app services". Full description: [channels
 - **Web pages** (`ui/`, compiled in by `src/ui.rs`, run under a strict content security policy): `/adviser`, `/employer`, `/staff` (servicing console and workbench), `/ops` and `/status` (addendum entry 6), and staff consoles for other modules: `/pricing` (unit pricing), `/complaints` (complaints and conduct), `/finance` (month-end close, journals, books), `/claims` (queues, a claim, every claims action), `/reinsurance` (exceptions). The customer app is an API only; the native app belongs with the bank's app (the thread's own decision, not yet confirmed by Mitchell).
 - **Console pattern for other modules.** No crate dependency on the module. `ic-portal` passes whitelisted questions and people's commands to the module on the nodes as JSON (`forward::Source`, `forward::Hosted`), under a console caller, with the person as actor and roles or seat derived from channels staff actions (`unit_pricing.*`, `complaints.*`, `finance.*`, `claims.work`, `reinsurance.*`). Commands only a module's own services send are refused at the portal. `tests/http.rs` runs each console against the module's real state machine through dev-dependencies and doubles in `tests/common/`. Claims are different: they live inside the core, so `src/claims.rs` asks every partition (`claims::Partitions`, needs `IC_PARTITIONS`) and sends `Command::Claims` under the caller `claims` to the partition holding the claim, replacing every `actor` with the signed-in staff ID and purpose.
 - **Commission forwarder** (`src/forward.rs`): reads the commission module (`distribution`) and records engagements, licences, adviser structure, party status, held money, memo lines (claim overpayments, with their recovery status) and open conduct cases in the channel module; replays approved workbench actions there as each signer's own command.
-- **Deployment**: `deploy/k8s/portal.yaml` (AKS, workload identity `portalClientId` in Bicep), compose service on port 8090. Line coverage of the crate 98.50% (2026-11-12); every test has a documented purpose.
+- **Deployment**: `deploy/k8s/portal.yaml` (AKS, workload identity `portalClientId` in Bicep), compose service on port 8090. Line coverage of the crate 98.22% (2026-11-13); every test has a documented purpose.
 
 ### Seams with other areas
 
@@ -201,7 +201,8 @@ Owned by the thread "Build portal and app services". Full description: [channels
 - **Commission (`ic-distribution`)**: JSON contract tested in `tests/forward.rs`; the workbench and that module each count signatures (both ask legal above the threshold, for a new account of a party in liquidation or deceased, and for a release that leaves less held than claims is collecting). A refusal at replay closes the workbench action as failed with that module's code.
 - **Claims**: questions `Queue`, `Claim`, `Work` (staff view), `Book`, `Report`, `Remittance`; StaffId in the claims authority book must equal the workforce directory ID.
 - **Reinsurance**: reads exceptions from the module (not the event hub); abandonments need two people here, sent with `approved_by`.
-- **Finance, unit pricing, complaints**: callers `finance-console`, `unit-pricing-console`, the complaints seats; details in channels.md.
+- **Finance, unit pricing, complaints**: callers `finance-console`, `unit-pricing-console`, the complaints seats; details in channels.md. Finance's `table_dry_run` now takes optional `loadings`; the console does not send them, so its loaded totals equal the base totals (filling them needs the core's loadings read through finance's `ClusterModules::loadings`, totals only on screen).
+- **Group (`ic-group`)**: the group service over HTTP with the portal's Entra token under app role `employer-portal`; questions `scheme_of`, `scheme`, `file`, `invoices`, `member`; commands `approve_file`, `withdraw_file`, `declare_pool`; uploads to `/v1/schemes/{scheme}/files/{file}`. The portal keeps a member's record to `group::MEMBER_FIELDS`.
 
 ### Not finished, in the order to take them
 
@@ -221,7 +222,7 @@ Owned by the thread "Build portal and app services". Full description: [channels
 ### Checks
 
 - `cargo test -p ic-channels`; coverage `cargo llvm-cov -p ic-channels --summary-only` (CI floor 98% workspace-wide).
-- Browser check, not run by CI: `cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &` then `POLICY=pol-00000001 node crates/channels/tests/browser/check.js`. All pages passed on 2026-11-12.
+- Browser check, not run by CI: `cargo test -p ic-channels --test http serve_for_a_browser -- --ignored &` then `POLICY=pol-00000001 node crates/channels/tests/browser/check.js`. All pages passed on 2026-11-13, including the employer's membership file upload and member record.
 - No known failing checks in this crate at hand-over.
 
 ## Unit pricing (`ic-pricing`)
