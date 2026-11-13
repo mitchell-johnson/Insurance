@@ -105,6 +105,15 @@ pub enum DirectoryCommand {
         policy: PolicyId,
         policyholder: PartyId,
     },
+    /// An owner's relationship ended in the customer master with nobody
+    /// named in their place, as when the owner has died and the estate is
+    /// being settled. The policy then has no owner in the app; staff act
+    /// for the estate. Ignored when someone else already owns it, since the
+    /// new owner's `RecordOwnership` may arrive first.
+    EndOwnership {
+        policy: PolicyId,
+        party: PartyId,
+    },
     /// The policyholder authorises an adviser, under one engagement.
     GrantAdviserAuthority {
         policy: PolicyId,
@@ -151,6 +160,12 @@ pub enum DirectoryCommand {
         policy: PolicyId,
         party: PartyId,
         controls_from: NaiveDate,
+    },
+    /// The customer master no longer records this person as a dependant on
+    /// the policy. What they see follows from their cover alone.
+    EndDependant {
+        policy: PolicyId,
+        party: PartyId,
     },
     RecordEngagement {
         engagement: Engagement,
@@ -473,6 +488,19 @@ impl Directory {
         }
     }
 
+    /// What an owner gave ends with their ownership: anyone they let look,
+    /// and every adviser they authorised.
+    fn owner_gone(&mut self, policy: &PolicyId, touched: &mut Touched) {
+        touched.revoked.extend(self.delegates.remove(policy).unwrap_or_default().into_keys());
+        for adviser in self.authorities.remove(policy).unwrap_or_default().into_keys() {
+            if let Some(p) = self.adviser_policies.get_mut(&adviser) {
+                p.remove(policy);
+            }
+            touched.revoked.insert(adviser);
+        }
+        touched.policies.insert(policy.clone());
+    }
+
     fn require_module(actor: &Actor, modules: &[&str]) -> Result<(), Reject> {
         match actor {
             Actor::Module(m) if modules.contains(&m.as_str()) => Ok(()),
@@ -505,16 +533,15 @@ impl Directory {
                 if let Some(old) = self.policyholders.insert(policy.clone(), policyholder) {
                     touched.revoked.insert(old);
                 }
-                // So was anyone they let look.
-                touched.revoked.extend(self.delegates.remove(&policy).unwrap_or_default().into_keys());
-                // An authority was the previous owner's to give.
-                for adviser in self.authorities.remove(&policy).unwrap_or_default().into_keys() {
-                    if let Some(p) = self.adviser_policies.get_mut(&adviser) {
-                        p.remove(&policy);
-                    }
-                    touched.revoked.insert(adviser);
+                self.owner_gone(&policy, &mut touched);
+            }
+            DirectoryCommand::EndOwnership { policy, party } => {
+                Self::require_module(actor, &["customer-master"])?;
+                if self.policyholders.get(&policy) == Some(&party) {
+                    self.policyholders.remove(&policy);
+                    touched.revoked.insert(party);
+                    self.owner_gone(&policy, &mut touched);
                 }
-                touched.policies.insert(policy);
             }
             DirectoryCommand::GrantAdviserAuthority { policy, adviser, engagement } => {
                 let granted_by = self.require_policyholder(actor, &policy)?;
@@ -631,6 +658,16 @@ impl Directory {
                     return Err(reject("policyholder", "the policyholder is not their own dependant"));
                 }
                 self.dependants.entry(policy.clone()).or_default().insert(party, controls_from);
+                touched.policies.insert(policy);
+            }
+            DirectoryCommand::EndDependant { policy, party } => {
+                Self::require_module(actor, &["customer-master"])?;
+                if let Some(set) = self.dependants.get_mut(&policy) {
+                    set.remove(&party);
+                    if set.is_empty() {
+                        self.dependants.remove(&policy);
+                    }
+                }
                 touched.policies.insert(policy);
             }
             DirectoryCommand::RecordEngagement { engagement } => {

@@ -154,6 +154,10 @@ pub struct DocumentsState {
     /// The requests in the order they came, to forget settled ones.
     #[serde(default)]
     letter_log: VecDeque<(NaiveDate, String)>,
+    /// Documents on a policy whose row in the channels' read model is to be
+    /// written (`true`) or taken down (`false`).
+    #[serde(default)]
+    pub listing: BTreeMap<String, bool>,
 }
 
 /// The local date in New Zealand, which is the date notices and retention
@@ -332,6 +336,18 @@ impl DocumentsState {
         Ok(())
     }
 
+    /// A document on a policy is shown in the channels; one on none is not.
+    fn list(&mut self, id: &str, listed: bool) {
+        if self.documents.get(id).is_some_and(|d| d.policies().next().is_some()) {
+            self.listing.insert(id.to_string(), listed);
+        }
+    }
+
+    /// The documents whose channel rows are to be written or taken down.
+    pub fn listing_due(&self, limit: usize) -> Vec<(String, bool)> {
+        self.listing.iter().take(limit).map(|(id, listed)| (id.clone(), *listed)).collect()
+    }
+
     /// A document issued under a requested letter's id settles it.
     fn letter_issued(&mut self, document: &str) {
         let Some(request) = document.strip_prefix("letter:") else { return };
@@ -434,11 +450,26 @@ impl DocumentsState {
                 let id = issue.document.clone();
                 self.issue(*issue, ctx)?;
                 self.letter_issued(&id);
+                self.list(&id, true);
                 Ok(())
             }
             Command::RequestLetter(request) => self.request_letter(request, ctx),
             Command::CancelLetterRequest { request, reason } => self.cancel_letter_request(&request, reason, ctx),
-            Command::ImportLegacy(import) => self.import_legacy(*import, ctx),
+            Command::ImportLegacy(import) => {
+                let id = import.document.clone();
+                self.import_legacy(*import, ctx)?;
+                self.list(&id, true);
+                Ok(())
+            }
+            Command::AckListing { documents } => {
+                for (id, listed) in documents {
+                    // A later change to the same document stays to be done.
+                    if self.listing.get(&id) == Some(&listed) {
+                        self.listing.remove(&id);
+                    }
+                }
+                Ok(())
+            }
             Command::RecordSend {
                 document,
                 party,
@@ -1826,6 +1857,9 @@ impl DocumentsState {
         self.pending_deletes.insert(id.to_string(), doc.blob.clone());
         self.open_deliveries.remove(id);
         let owner = doc.owner.clone();
+        if doc.policies().next().is_some() {
+            self.listing.insert(id.to_string(), false);
+        }
         ctx.events.push(Event::DocumentDestroyed { document: id.to_string() });
         self.finish_shred(&owner, ctx);
     }

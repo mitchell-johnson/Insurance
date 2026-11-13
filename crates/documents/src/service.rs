@@ -30,6 +30,7 @@ use crate::complaints_relay::{run_relay, ClusterComplaints, ClusterLicences, Rel
 use crate::crypto::{KeyVaultWrap, KeyWrap};
 use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
 use crate::kinds::DataClass;
+use crate::listing::{run_listing, ClusterRows};
 use crate::pdf::Fonts;
 use crate::requested_letters::run_requested_letters;
 use crate::vault::{BlobVault, ObjectStore, VaultError};
@@ -470,6 +471,13 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         |_| {},
     ));
     let requested = tokio::spawn(run_requested_letters(driver.clone(), config.cycle_every, until_stopped(), |_| {}));
+    let listing = tokio::spawn(run_listing(
+        driver.clone(),
+        ClusterRows::new(client.clone(), patience),
+        config.cycle_every,
+        until_stopped(),
+        |_| {},
+    ));
     let notices = tokio::spawn(run_notices(
         NoticeRelay {
             collections: ClusterCollections::new(client.clone(), patience),
@@ -489,6 +497,7 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
     letters.await.map_err(|e| e.to_string())?;
     requested.await.map_err(|e| e.to_string())?;
     notices.await.map_err(|e| e.to_string())?;
+    listing.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
 

@@ -738,11 +738,16 @@ async fn approve_request(State(s): State<Shared>, headers: HeaderMap, method: Me
     let session = s.customer(&headers, &method, &uri, &body).await?;
     let approval: Approval = if body.is_empty() { Approval::default() } else { parse(&body)? };
     let signed = redeem(&s, &headers, &session, &approval_action(&id), approval.signed).await?;
+    let routing = match &s.master {
+        Some(master) => Some(master.routing(&session.party).await),
+        None => None,
+    };
+    let route_to_person = crate::customers::route_to_person(routing);
     accepted(
         s.propose(
             key(&headers, &session.party.0)?,
             Actor::Party(session.party),
-            Command::ApproveRequest { id, signed },
+            Command::ApproveRequest { id, signed, route_to_person },
         )
         .await?,
     )

@@ -103,6 +103,8 @@ pub struct LetterPass {
     /// Letters left for a person: no wording, nobody to address, or the
     /// person has died.
     pub left: u32,
+    /// Delivery outcomes reported back to the module that asked.
+    pub reported: u32,
     pub errors: Vec<String>,
 }
 

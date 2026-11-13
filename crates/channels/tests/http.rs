@@ -510,7 +510,7 @@ async fn the_customer_app_reads_syncs_and_requests() {
     assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", other).await.0, StatusCode::NOT_FOUND);
 }
 
-/// Purpose: the customer appoints an adviser, the adviser prepares a change, and the customer approves it only with a signature from their enrolled device over exactly that approval.
+/// Purpose: the customer appoints an adviser, the adviser prepares a change, and the customer approves it only with a signature from their enrolled device over exactly that approval. Once approved, the request is routed by the customer master's answer for the customer, not the adviser.
 /// Why it matters: this is transaction signing end to end over HTTP; an approval without the device's signature, or with a signature for something else, must not release the adviser's request.
 #[tokio::test]
 async fn an_advisers_request_needs_the_customers_signed_approval() {
@@ -588,9 +588,14 @@ async fn an_advisers_request_needs_the_customers_signed_approval() {
         StatusCode::UNAUTHORIZED
     );
 
+    // Kiri needs a person to handle her changes. The adviser prepared this one; once she approves it, it is routed as hers.
+    let routed = || async { portal.local.with(|state| state.data.requests.get("r1").map(|r| r.route_to_person)) };
+    assert_eq!(routed().await, Some(false));
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
     let (status, result) = portal.write("POST", "sub-kiri", "/app/v1/requests/r1/approve", signed.clone()).await;
     assert_eq!(status, StatusCode::ACCEPTED);
     assert!(result["effects"].as_array().unwrap().iter().any(|e| e.get("request_ready").is_some()));
+    assert_eq!(routed().await, Some(true));
     // The challenge is spent.
     assert_eq!(
         portal.write("POST", "sub-kiri", "/app/v1/requests/r1/approve", signed).await.0,
@@ -2106,17 +2111,22 @@ async fn serve_for_a_browser() {
         let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/prop-1"), "policy": retail, "kind": "proposal", "subject": null,
             "sensitive": false, "body": { "proposal": "prop-1", "policy_number": "KTL00000001", "entry": "adviser", "status": "open",
             "waiting_on": "applicant", "received_on": "2027-11-10", "expires_on": "2028-02-08" } }], "remove": [] } });
-        let command: Command = serde_json::from_value(rows).unwrap();
-        let output = state.apply(
-            9_000,
-            ic_channels::Envelope {
-                key: "proposal".into(),
-                at: now,
-                actor: module("underwriting"),
-                command,
-            },
-        );
-        assert!(output.result.is_ok(), "{:?}", output.result);
+        // And the documents module issued the policy schedule.
+        let document = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/documents/doc-1"), "policy": retail, "kind": "document", "subject": null,
+            "sensitive": false, "body": { "document": "doc-1", "title": "Policy schedule", "kind": "schedule", "issued_on": "2027-11-01" } }], "remove": [] } });
+        for (n, (by, rows)) in [("underwriting", rows), ("documents", document)].into_iter().enumerate() {
+            let command: Command = serde_json::from_value(rows).unwrap();
+            let output = state.apply(
+                9_000 + n as u64,
+                ic_channels::Envelope {
+                    key: format!("published-{n}"),
+                    at: now,
+                    actor: module(by),
+                    command,
+                },
+            );
+            assert!(output.result.is_ok(), "{:?}", output.result);
+        }
     });
     // One of the adviser's layers was treated as a replacement.
     portal.commission.matches(

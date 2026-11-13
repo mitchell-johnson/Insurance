@@ -234,6 +234,7 @@ async fn an_acknowledgement_is_issued_and_recorded_once() {
         LetterPass {
             issued: 1,
             left: 0,
+            reported: 0,
             errors: vec![]
         }
     );

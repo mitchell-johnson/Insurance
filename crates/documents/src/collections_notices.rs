@@ -26,7 +26,7 @@ use crate::complaint_letters::{LetterPass, Letters};
 use crate::crypto::KeyWrap;
 use crate::driver::{Driver, DriverError, IssueRequest, Module};
 use crate::kinds::DataClass;
-use crate::model::{Channel, Recipient, RecipientRole};
+use crate::model::{Channel, DeliveryStatus, Recipient, RecipientRole};
 use crate::module::Query;
 use crate::vault::ObjectStore;
 
@@ -257,6 +257,61 @@ impl<K: Collections> NoticeRelay<K> {
             .await
     }
 
+    /// Tell collections how each notice it was told was sent has fared:
+    /// delivered once every addressee's delivery is proven, undeliverable
+    /// as soon as one addressee's has failed for good. A copy to a lender
+    /// does not decide it.
+    async fn report_deliveries<M, S, W, C, D>(&self, driver: &Driver<M, S, W, C, D>, pass: &mut LetterPass)
+    where
+        M: Module,
+        S: ObjectStore,
+        W: KeyWrap,
+        C: Channels,
+        D: ContactDirectory,
+    {
+        let asked = self.collections.ask(json!({ "q": "notices_sent", "limit": self.batch })).await;
+        let sent = asked.and_then(|a| serde_json::from_value::<Vec<Notice>>(a).map_err(|e| DriverError::Answer(e.to_string())));
+        let sent = match sent {
+            Ok(sent) => sent,
+            Err(e) => {
+                pass.errors.push(format!("notices sent: {e}"));
+                return;
+            }
+        };
+        for notice in &sent {
+            let outcome = match driver.document(&document_id(&notice.id)).await {
+                Ok(document) => {
+                    let addressees: Vec<&DeliveryStatus> = document
+                        .deliveries
+                        .iter()
+                        .filter(|d| d.recipient.role == RecipientRole::Addressee)
+                        .map(|d| &d.status)
+                        .collect();
+                    if addressees.iter().any(|s| **s == DeliveryStatus::Undeliverable) {
+                        Some(false)
+                    } else if addressees.iter().all(|s| matches!(s, DeliveryStatus::Delivered { .. })) {
+                        Some(true)
+                    } else {
+                        None
+                    }
+                }
+                Err(e) => {
+                    pass.errors.push(format!("{}: {e}", document_id(&notice.id)));
+                    continue;
+                }
+            };
+            let Some(delivered) = outcome else { continue };
+            let command = Command::RecordNoticeDelivery {
+                notice: notice.id.clone(),
+                delivered,
+            };
+            match self.tell(format!("notice-delivery:{}", notice.id), command).await {
+                Ok(()) => pass.reported += 1,
+                Err(e) => pass.errors.push(format!("{}: {e}", document_id(&notice.id))),
+            }
+        }
+    }
+
     /// One pass over the notices collections has written.
     pub async fn pass<M, S, W, C, D>(&self, driver: &Driver<M, S, W, C, D>) -> LetterPass
     where
@@ -276,6 +331,7 @@ impl<K: Collections> NoticeRelay<K> {
                 return pass;
             }
         };
+        self.report_deliveries(driver, &mut pass).await;
         // A template with no wording is said once, not once a notice.
         let mut no_wording = BTreeSet::new();
         for notice in &due {

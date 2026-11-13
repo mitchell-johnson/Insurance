@@ -7,7 +7,7 @@
 <section><h2>Treated as replacements</h2><p class="muted">New cover you wrote soon after cover on the same life was given up. The matched amount earns no initial commission. If it was not a replacement, dispute it: the commission is held until the conduct officer decides.</p><div id="matches"></div>
   <form id="dispute" hidden><div class="row"><div><label for="d-reason">Why it was not a replacement</label><input id="d-reason" maxlength="500" required></div><button>Dispute</button> <button class="quiet" type="button" id="d-cancel">Cancel</button></div></form><div id="d-msg" aria-live="polite"></div></section>
 <section><h2>Your book</h2><div id="book"></div></section>
-<section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div>
+<section id="detail" hidden><h2 id="detail-title"></h2><div id="rows"></div><h3>Claims</h3><p class="muted">Each claim's status only. What a claim is about stays between the customer and the claims team.</p><div id="claims"></div><h3>Documents</h3><div id="docs"></div><div id="docs-msg" aria-live="polite"></div>
   <form id="change"><h2>Prepare a change for the customer to approve</h2>
   <div class="row"><div><label for="kind">Change</label><select id="kind"><option value="decline_indexation">Decline indexation</option><option value="change_frequency">Change payment frequency</option><option value="cancel_policy">Cancel policy</option></select></div>
   <div><label for="note">Details</label><input id="note" maxlength="200"></div><button id="send">Send to customer</button></div>
@@ -29,7 +29,8 @@ async function open(policy, canTransact) {
   $("detail-title").textContent = `Policy ${policy.number}`;
   const words = (v) => String(v == null ? "" : v).replace(/_/g, " ");
   const proposals = view.rows.filter((r) => r.kind === "proposal");
-  const others = view.rows.filter((r) => r.kind !== "proposal");
+  const others = view.rows.filter((r) => r.kind !== "proposal" && r.kind !== "document");
+  put($("docs"), portal.documents(R, view.rows, $("docs-msg")));
   put($("rows"),
     proposals.length ? [h("h3", {}, "Proposals"), table(["Proposal", "Status", "Waiting on", "Received", "Expires"], proposals.map((r) => [r.body.proposal, words(r.body.status),
       r.body.waiting_on === "applicant" ? "The applicant" : r.body.waiting_on === "insurer" ? "Us" : "", r.body.received_on || "", r.body.expires_on || ""]))] : null,

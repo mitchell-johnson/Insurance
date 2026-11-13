@@ -419,7 +419,11 @@ fn people_the_policyholder_lets_in() {
         w.ch.data.requests["r-help"].status,
         RequestStatus::AwaitingApproval { from: Approver::Customer }
     );
-    let approve = |signed| Command::ApproveRequest { id: "r-help".into(), signed };
+    let approve = |signed| Command::ApproveRequest {
+        id: "r-help".into(),
+        signed,
+        route_to_person: false,
+    };
     assert_eq!(code(w.send(party("moko"), approve(true))), "not_found");
     assert_eq!(code(w.send(party(KIRI), approve(false))), "step_up_required");
     w.send(party(KIRI), approve(true)).unwrap();
@@ -663,9 +667,11 @@ fn employer_changes_can_need_a_second_administrator() {
             from: Approver::SecondAdministrator
         }
     );
+    // The second administrator's own circumstances do not change how a scheme's request is handled.
     let approve = |id: &str| Command::ApproveRequest {
         id: id.to_string(),
         signed: false,
+        route_to_person: true,
     };
     assert_eq!(
         code(w.send(party("hr-1"), approve("r2"))),
@@ -680,6 +686,7 @@ fn employer_changes_can_need_a_second_administrator() {
         module: "group-admin".into()
     }));
     assert_eq!(w.ch.data.requests["r2"].approved_by, Some(p("hr-2")));
+    assert!(!w.ch.data.requests["r2"].route_to_person);
     assert_eq!(code(w.send(party("hr-2"), approve("r2"))), "not_awaiting");
     assert_eq!(code(w.send(party("hr-2"), approve("zz"))), "not_found");
 
@@ -695,6 +702,7 @@ fn employer_changes_can_need_a_second_administrator() {
 
 /// Purpose: an adviser the customer authorised sees the policy and prepares changes the customer approves with a signature; the customer can end the access at once.
 /// Why it matters: adviser access exists only by the customer's authority, and an adviser must never be able to change a policy without the customer's own signed approval.
+/// A request an adviser prepares is routed by the customer who approves it, so a vulnerable customer reaches a person whoever typed it.
 #[test]
 fn an_adviser_acts_by_the_customers_authority() {
     let mut w = World::new();
@@ -734,7 +742,13 @@ fn an_adviser_acts_by_the_customers_authority() {
         .unwrap();
     assert_eq!(w.ch.data.requests["r1"].status, RequestStatus::AwaitingApproval { from: Approver::Customer });
     assert_eq!(w.row(KIRI, &format!("{pol}/request/r1")).unwrap()["state"]["status"], "awaiting_approval");
-    let approve = |signed| Command::ApproveRequest { id: "r1".into(), signed };
+    // Kiri needs a person to handle her changes: the adviser's preparing it does not change that.
+    let approve = |signed| Command::ApproveRequest {
+        id: "r1".into(),
+        signed,
+        route_to_person: true,
+    };
+    assert!(!w.ch.data.requests["r1"].route_to_person);
     assert_eq!(code(w.send(party("adv-1"), approve(true))), "not_found");
     assert_eq!(code(w.send(party(KIRI), approve(false))), "step_up_required");
     let effects = w.send(party(KIRI), approve(true)).unwrap();
@@ -743,6 +757,7 @@ fn an_adviser_acts_by_the_customers_authority() {
         module: "policy-servicing".into()
     }));
     assert!(w.ch.data.requests["r1"].signed);
+    assert!(w.ch.data.requests["r1"].route_to_person, "routed as the customer's");
 
     // The owning module resolves it; the customer's device shows the outcome.
     let resolve = |id: &str, rejected: Option<(&str, &str)>| Command::ResolveRequest {
@@ -1375,4 +1390,79 @@ fn one_person_in_three_roles_sees_each_slice() {
     assert!(rows.iter().all(|r| !r.sensitive && r.kind != "claim"), "{rows:?}");
     assert_eq!(rows.iter().filter(|r| r.kind == "member").count(), 2);
     assert!(w.sees("director-2", &scheme).contains(&format!("{scheme}/claims/c-dir")));
+}
+
+/// Purpose: when the customer master ends an owner's relationship with nobody in their place, the owner loses the owner's view and
+/// everyone they let in goes with it, while their own cover stays; an ending for someone who no longer owns the policy changes
+/// nothing; and when it ends a dependant's record the policyholder stops seeing that child's health information.
+/// Why it matters: the master's relay must be able to take access away as well as give it. An owner who has died, or a child taken
+/// off a parent's policy, must not leave a phone holding what is no longer theirs to see, and a late ending must not undo a transfer.
+#[test]
+fn an_owner_or_a_dependant_ending_in_the_customer_master() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    w.engage("e1", "adv-1", "fap-1", None).unwrap();
+    let grant = DirectoryCommand::GrantAdviserAuthority {
+        policy: pol.clone(),
+        adviser: p("adv-1"),
+        engagement: "e1".into(),
+    };
+    w.dir(party(KIRI), grant).unwrap();
+    let end = |who: &str| DirectoryCommand::EndOwnership {
+        policy: pol.clone(),
+        party: p(who),
+    };
+    assert_eq!(code(w.dir(party(KIRI), end(KIRI))), "forbidden");
+    // Someone who is not the owner: nothing changes.
+    assert!(revoked(&w.dir(module("customer-master"), end("trust-1")).unwrap()).is_empty());
+    assert_eq!(w.ch.data.directory.policyholders.get(&pol), Some(&p(KIRI)));
+
+    let effects = w.dir(module("customer-master"), end(KIRI)).unwrap();
+    assert_eq!(revoked(&effects), [KIRI.to_string(), "adv-1".to_string()].into());
+    assert!(!w.ch.data.directory.policyholders.contains_key(&pol));
+    assert!(w.sees("adv-1", &pol).is_empty());
+    assert_eq!(
+        w.held(KIRI),
+        [format!("{pol}/cover/life/1"), format!("{pol}/cover/trauma/1")],
+        "her own cover stays"
+    );
+
+    // A child's record ends: the parent no longer sees the child's claim.
+    let fam = w.issue(health_family(2, open(), &[d(1985, 1, 1), d(1986, 2, 2), d(2015, 3, 3)], Frequency::Monthly));
+    let (holder, child) = ("party-00000002-1", "party-00000002-3");
+    let claim = format!("{fam}/claims/c9");
+    let row = Row {
+        key: claim.clone(),
+        policy: fam.clone(),
+        kind: "claim".into(),
+        subject: Some(p(child)),
+        sensitive: true,
+        body: json!({ "state": "received" }),
+    };
+    w.send(
+        module("claims"),
+        Command::PublishRows {
+            rows: vec![row],
+            remove: vec![],
+        },
+    )
+    .unwrap();
+    let record = DirectoryCommand::RecordDependant {
+        policy: fam.clone(),
+        party: p(child),
+        controls_from: d(2033, 3, 3),
+    };
+    w.dir(module("customer-master"), record).unwrap();
+    assert!(w.held(holder).contains(&claim));
+    let end = |who: &str| DirectoryCommand::EndDependant {
+        policy: fam.clone(),
+        party: p(who),
+    };
+    assert_eq!(code(w.dir(party(holder), end(child))), "forbidden");
+    w.dir(module("customer-master"), end(child)).unwrap();
+    assert_eq!(w.last_op(holder, &claim), Some(Op::Purge));
+    assert!(!w.ch.data.directory.dependants.contains_key(&fam));
+    assert!(w.held(child).contains(&claim), "it is still the child's own");
+    // Ending a record that is not there is harmless.
+    w.dir(module("customer-master"), end(child)).unwrap();
 }
