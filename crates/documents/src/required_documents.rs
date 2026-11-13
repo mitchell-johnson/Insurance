@@ -27,7 +27,7 @@ use ic_raft::ClusterClient;
 use serde_json::{json, Value};
 
 use crate::channels::{Channels, Contact, ContactDirectory};
-use crate::command::NoticeSpec;
+use crate::command::{Command, NoticeSpec};
 use crate::complaint_letters::{LetterPass, Letters};
 use crate::crypto::KeyWrap;
 use crate::driver::{Driver, DriverError, IssueRequest, Module};
@@ -145,7 +145,7 @@ fn format_of(contact: &Contact) -> Option<AlternateFormat> {
 /// Money owed or paid is financial; a schedule or letter is personal.
 fn class_of(kind: DocumentKind) -> DataClass {
     match kind {
-        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::PremiumReceipt => DataClass::Financial,
+        DocumentKind::LapseNotice | DocumentKind::SuspensionNotice | DocumentKind::PremiumReceipt | DocumentKind::Invoice => DataClass::Financial,
         _ => DataClass::Personal,
     }
 }
@@ -155,6 +155,8 @@ enum Left {
     /// The product has no active template of the kind: said once a pass.
     NoTemplate(DocumentKind, String),
     Said(String),
+    /// A premium notice for a product that sends none: dismissed.
+    NotSent,
 }
 
 impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Driver<M, S, W, C, D> {
@@ -178,6 +180,17 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
         let product = record.policy.product_code.clone();
         let on = trigger.business_date;
         let Some(template) = self.template_for_kind(trigger.kind, &product, on).await? else {
+            // A product sends premium notices by having a template for
+            // them; a bill on one that has none is not a letter owed.
+            if trigger.kind == DocumentKind::Invoice {
+                let reason = format!("product {product} has no premium notice on {on}");
+                let dismiss = Command::DismissTrigger {
+                    trigger: trigger.id.clone(),
+                    reason,
+                };
+                self.send(format!("dismiss:{}", trigger.id), "documents", dismiss).await?;
+                return Ok(Err(Left::NotSent));
+            }
             return Ok(Err(Left::NoTemplate(trigger.kind, product)));
         };
         // A schedule names the wording it is issued under.
@@ -269,6 +282,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
                             .push(format!("product {product} has no active {kind:?} template; its documents are waiting"));
                     }
                 }
+                Ok(Err(Left::NotSent)) => pass.left += 1,
                 Ok(Err(Left::Said(why))) => {
                     pass.left += 1;
                     pass.errors.push(format!("{}: {why}", trigger.id));

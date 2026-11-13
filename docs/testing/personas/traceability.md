@@ -70,7 +70,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period` |
-| BIL-002 | part | `documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
+| BIL-002 | full | `documents/tests/required_documents.rs::a_bill_gets_a_premium_notice_with_its_discount_lines`<br>`documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
 | BIL-005 | full | `sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | BIL-007 | full | `sim/tests/scenarios.rs::money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing` |
 | BIL-008 | full | `sim/tests/scenarios.rs::cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part`<br>`distribution/tests/commission.rs::cancelling_in_cooling_off_reverses_all_commission_from_whoever_received_it` |

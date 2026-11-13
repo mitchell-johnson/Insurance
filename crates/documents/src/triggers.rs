@@ -92,6 +92,32 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
             t.detail.insert("to_suspense".into(), json!(to_suspense_minor));
             vec![t]
         }
+        // A premium notice for each bill on a policy of its own. A scheme's
+        // bill is the employer's invoice, which group schemes sends.
+        Event::PremiumDue {
+            policy,
+            receivable,
+            period_start,
+            period_end,
+            total_minor,
+            members: None,
+            by_cover_type,
+            discounts,
+        } if *total_minor > 0 => {
+            let premium: i64 = by_cover_type.values().sum();
+            let discounted: i64 = discounts.iter().map(|d| d.amount_minor).sum();
+            let lines: Vec<_> = discounts.iter().map(|d| json!({ "name": d.name, "amount": d.amount_minor })).collect();
+            let mut t = trigger(record, policy, DocumentKind::Invoice, None);
+            t.detail.insert("receivable".into(), json!(receivable));
+            t.detail.insert("period_start".into(), json!(period_start.to_string()));
+            t.detail.insert("period_end".into(), json!(period_end.to_string()));
+            t.detail.insert("base".into(), json!(premium + discounted));
+            t.detail.insert("discounts".into(), json!(lines));
+            t.detail.insert("net_premium".into(), json!(premium));
+            t.detail.insert("charges".into(), json!(total_minor - premium));
+            t.detail.insert("total".into(), json!(total_minor));
+            vec![t]
+        }
         _ => vec![],
     }
 }

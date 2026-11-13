@@ -51,7 +51,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
-| BIL Billing and earning | 6 | 5 | 4 | 5 |
+| BIL Billing and earning | 7 | 4 | 4 | 4 |
 | COL Collection, cash matching, standing and dunning | 13 | 8 | 7 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
@@ -77,11 +77,11 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **331** | **100** | **146** | **106** |
+| **Total** | **332** | **99** | **146** | **105** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 32 | 27 | 10 |
+| A | 33 | 26 | 10 |
 | B | 107 | 19 | 16 |
 | C | 190 | 51 | 105 |
 | D | 2 | 3 | 15 |
@@ -110,7 +110,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **POL** (5): POL-001, POL-002, POL-003, POL-005, POL-015
 - **LED** (4): LED-004, LED-007, LED-013, LED-016
 - **PRD** (2): PRD-003, PRD-005
-- **BIL** (3): BIL-001, BIL-002, BIL-013
+- **BIL** (2): BIL-001, BIL-013
 - **COL** (6): COL-003, COL-004, COL-007, COL-010, COL-024, COL-025
 - **XFR** (1): XFR-004
 - **AUD** (4): AUD-002, AUD-003, AUD-010, AUD-017

@@ -64,13 +64,16 @@ impl Policies for Core {
 const SCHEDULE: &str = "Schedule {{policy}} for {{name}}, {{product}} from {{inception|date}}.{{#each covers}} {{cover}} {{sum_insured|money}}.{{/each}}";
 const WORDING: &str = "This policy pays the sum insured.";
 const LAPSE: &str = "Dear {{name}}. Policy {{policy}} is unpaid since {{oldest_unpaid_due|date}}.";
+const PREMIUM: &str = "Premium for {{policy}}, {{period_start|date}} to {{period_end|date}}: {{base|money}}.{{#each discounts}} {{name}} -{{amount|money}}.{{/each}} Premium {{net_premium|money}}, charges {{charges|money}}, total {{total|money}}.";
 const RECEIPT: &str = "Dear {{name}}. We received {{allocated|money}} for policy {{policy}} (receipt {{receipt}}).";
 
 fn sample() -> Value {
     json!({
         "name": "Aroha", "policy": "KTL1", "product": "term-life", "inception": "2027-11-15",
         "covers": [{ "cover": "life", "sum_insured": 50000000 }],
-        "oldest_unpaid_due": "2027-11-15", "allocated": 12345, "receipt": "rc-1"
+        "oldest_unpaid_due": "2027-11-15", "allocated": 12345, "receipt": "rc-1",
+        "period_start": "2027-11-15", "period_end": "2027-12-14", "base": 5000,
+        "discounts": [{ "name": "Multi-policy", "amount": 500 }], "net_premium": 4500, "charges": 0, "total": 4500
     })
 }
 
@@ -280,6 +283,59 @@ async fn an_arrears_notice_and_a_receipt_are_issued_with_their_facts() {
     );
 }
 
+/// Purpose: each bill on a policy of its own gets a premium notice from
+/// the billing event: the premium before discounts, each discount by
+/// name, the premium, the charges and the total, which is the bill's;
+/// a product with no premium notice template sends none, and the bill's
+/// trigger is dismissed rather than left waiting; a scheme's bill and a
+/// credit raise none.
+/// Why it matters: the notice must agree with the receivable to the cent,
+/// and a product that sends no premium notices (paid by direct debit,
+/// say) must not pile up a waiting document every month.
+#[tokio::test]
+async fn a_bill_gets_a_premium_notice_with_its_discount_lines() {
+    let bill = |seq: u64, members: Option<u32>, total: i64| {
+        event(
+            seq,
+            CoreEvent::PremiumDue {
+                policy: the_policy(),
+                receivable: 2,
+                period_start: open(),
+                period_end: NaiveDate::from_ymd_opt(2027, 12, 14).unwrap(),
+                total_minor: total,
+                members,
+                by_cover_type: [("life".to_string(), 4_000), ("trauma".to_string(), 500)].into(),
+                discounts: vec![ic_core::event::DiscountGiven {
+                    code: "multi".into(),
+                    name: "Multi-policy".into(),
+                    posting_type: "discount".into(),
+                    amount_minor: 500,
+                }],
+            },
+        )
+    };
+    let w = World::new(&[("premium", DocumentKind::Invoice, PREMIUM)]).await;
+    w.observe(9, vec![bill(1, None, 4_635), bill(2, Some(12), 9_000), bill(3, None, -100)]).await;
+    let pass = w.pass().await;
+    let notice = w.driver.document("required:9-1:Invoice").await.unwrap();
+    assert_eq!(notice.data_class, DataClass::Financial);
+    assert_eq!(
+        w.driver.read(&notice.id).await.unwrap().text,
+        "Premium for KTL00000001, 15 November 2027 to 14 December 2027: $50.00. Multi-policy -$5.00. Premium $45.00, charges $1.35, total $46.35."
+    );
+    // The policy's first bill and this one; nothing for the scheme or the
+    // credit. Only the policy's schedule waits, for its template.
+    let waiting = vec!["product term-life has no active PolicySchedule template; its documents are waiting".to_string()];
+    assert_eq!((pass.issued, pass.left, pass.errors.clone()), (2, 1, waiting.clone()), "{pass:?}");
+
+    let w = World::new(&[]).await;
+    let pass = w.pass().await;
+    assert_eq!((pass.issued, pass.left, pass.errors.clone()), (0, 2, waiting.clone()), "{pass:?}");
+    assert!(w.driver.module.state().triggers.values().all(|t| t.kind != DocumentKind::Invoice));
+    let pass = w.pass().await;
+    assert_eq!((pass.issued, pass.left, pass.errors), (0, 1, waiting), "the bill is not asked about again");
+}
+
 /// Purpose: a document whose product has no active template of its kind
 /// is left and said once a pass however many policies wait for it; a
 /// schedule with no wording is left the same way; a policyholder with no
@@ -306,7 +362,10 @@ async fn documents_wait_for_templates_and_people_and_survive_outages() {
     w.observe(9, vec![avoided(1, "pol-00000001"), avoided(2, "pol-00000001")]).await;
     let pass = w.pass().await;
     assert_eq!(pass.issued, 0);
-    assert_eq!(pass.left, 3);
+    // Two avoidance letters, the schedule waiting for its wording, and the
+    // first bill's premium notice, which a product with no template for it
+    // does not send.
+    assert_eq!(pass.left, 4);
     assert_eq!(
         pass.errors,
         vec![
