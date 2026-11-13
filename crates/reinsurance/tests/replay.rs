@@ -359,6 +359,7 @@ fn every_command() -> Vec<Command> {
             number: 1,
             payment_ref: "p".into(),
             amount_minor: 0,
+            bank_account: None,
         },
         Command::IssueSupplementaryListing { number: 1, reason: "r".into() },
         Command::ReviewProfitCommission {

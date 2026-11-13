@@ -282,7 +282,8 @@ fn ceded_premium_reaches_the_ledger_and_the_two_balances_agree() {
 
 /// Purpose: a statement that is agreed and sent for payment moves exactly its net amount
 /// from the reinsurer's account to settlement clearing on the partitions that hold it,
-/// and what was billed after the cut stays on the account.
+/// what was billed after the cut stays on the account, and the bank's confirmation clears
+/// settlement clearing to the bank account on every one of those partitions.
 /// Why it matters: this is the step where reinsurance money leaves. Sweeping the balance
 /// of the day, not of the cut, would pay the reinsurer for a period they have not been
 /// sent a statement for.
@@ -322,6 +323,22 @@ fn an_agreed_statement_sweeps_its_net_amount_to_settlement_clearing() {
     assert_eq!(w.ledger("reinsurer-north"), (before - net as i128, net as i128));
     // Until the payment is confirmed the module still shows the statement as owed.
     assert_eq!(w.bench.ri.balance(&retail(), &north()) as i128, before);
+    assert!(w.core.reconcile().is_empty());
+    // Confirmed by the bank: clearing is emptied to the bank account the money left.
+    w.module(
+        "payments",
+        Command::RecordSettlement {
+            number: 1,
+            payment_ref: "ri-stmt-1".into(),
+            amount_minor: net,
+            bank_account: Some("nz-main".into()),
+        },
+    );
+    assert_eq!(w.clearing(), 0, "cleared on every partition that swept");
+    let bank: i128 = (0..PARTITIONS)
+        .map(|p| w.core.state(p).ledger.natural_balance(&accounts::bank("nz-main", NZD).id))
+        .sum();
+    assert_eq!(bank, -(net as i128));
     assert!(w.core.reconcile().is_empty());
     w.days(1);
 }
