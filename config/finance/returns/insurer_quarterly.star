@@ -38,5 +38,6 @@ RETURN = {
         conduct("C7", "Policies lapsed", "policy_lapsed"),
         conduct("C8", "Lapsed policies reinstated", "policy_reinstated"),
         conduct("C9", "Replacement cover written", "replacement_written"),
+        conduct("C10", "Replacement matches overturned on dispute", "replacement_overturned"),
     ],
 }

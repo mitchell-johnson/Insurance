@@ -3,7 +3,7 @@
 
 use ic_claims::command::ReopenBasis;
 use ic_claims::model::{EndReason, OverpaymentCause, RecoveryStatus, RunStatus, TimerKind};
-use ic_claims::{ClaimType, Command, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
+use ic_claims::{ClaimType, Command, CoverFacts, Instruction, PayeeKind, Request, RunKind, Status, TaskKind};
 
 use crate::world::*;
 
@@ -1959,4 +1959,47 @@ fn a_proof_of_life_is_met_by_the_app_or_the_customer_master() {
     );
     assert_eq!(c.schedule.as_ref().expect("in payment").reviews_overdue, 0);
     assert_eq!(w.core.noticed("proof_of_life_confirmed")[0]["source"], "app_liveness");
+}
+
+/// Purpose: where the product says the cover has no premium waiver, a waiver is refused beside a
+/// benefit and a waiver-only claim cannot be admitted; where the product says nothing, the
+/// owner's reading of the wording stands.
+/// Why it matters: a waiver paid on cover without it is claims money spent on premium the
+/// customer owed, found only at audit. The product record is the authority when it speaks.
+#[test]
+fn a_waiver_is_refused_where_the_product_has_none() {
+    let mut w = World::new();
+    w.core.cover(
+        "pol-2",
+        "ip",
+        CoverFacts {
+            sum_insured_minor: 4_000,
+            premium_waiver: Some(false),
+            ..facts("income_protection")
+        },
+    );
+    w.benefit_in_payment("ip-1");
+    let start = Command::StartWaiver {
+        claim: "ip-1".into(),
+        from: d(2027, 3, 1),
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(start), "no_waiver_cover");
+
+    w.ok(Command::Notify(Box::new(World::notification("w-1", "pol-2", "ip", ClaimType::PremiumWaiver))));
+    w.assign("w-1", "ana");
+    w.assess("w-1", "CC-0002");
+    let admit = Request::Admit {
+        amount_minor: None,
+        periodic: Some(ic_claims::command::Periodic {
+            monthly_minor: 0,
+            first_period: d(2027, 3, 1),
+            end: d(2029, 3, 1),
+            expected_end: d(2028, 3, 1),
+        }),
+        exclusion_override: None,
+        exclusion_reviewed: false,
+        payer_deceased: false,
+    };
+    assert_eq!(w.undecided("w-1", "ana", admit, "R-OK"), "no_waiver_cover");
 }
