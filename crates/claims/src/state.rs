@@ -70,6 +70,11 @@ pub struct ClaimsState {
     /// Restricted investigations, by case.
     #[serde(default)]
     pub investigations: BTreeMap<String, crate::investigate::Investigation>,
+    /// Services billed on other partitions' health claims, as they told us:
+    /// date, provider, service code, partition and claim. Kept for ever,
+    /// like the services billed here.
+    #[serde(default)]
+    pub billed_elsewhere: BTreeSet<(NaiveDate, String, String, u16, ClaimId)>,
     /// Overpayments held on other partitions that this partition's benefits
     /// may recover, by `party|partition|overpayment`.
     #[serde(default)]
@@ -454,6 +459,13 @@ impl ClaimsState {
                 overpayment,
                 amount_minor,
             } => self.offset_taken(cx, from, &take_ref, &paid_claim, &claim, &overpayment, amount_minor),
+            Command::BilledElsewhere {
+                from,
+                claim,
+                service_date,
+                provider,
+                service_code,
+            } => self.billed_elsewhere(cx, from, claim, (service_date, provider, service_code)),
             Command::OffsetReturned {
                 from,
                 take_ref,

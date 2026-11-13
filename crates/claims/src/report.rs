@@ -198,6 +198,9 @@ pub struct WorkView {
     pub status: Status,
     pub queue: Queue,
     pub owner: Option<StaffId>,
+    /// The claimant has a communication marker: one named owner, handovers said, longer deadlines.
+    #[serde(default)]
+    pub communication_support: bool,
     pub event_date: NaiveDate,
     pub notified_on: NaiveDate,
     pub closed_on: Option<NaiveDate>,
@@ -339,6 +342,7 @@ impl ClaimsState {
             status: c.status,
             queue: c.queue,
             owner: c.owner.clone(),
+            communication_support: c.flags.communication_support,
             event_date: c.event_date,
             notified_on: c.notified_on,
             closed_on: c.closed_on,

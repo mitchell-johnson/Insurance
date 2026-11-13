@@ -442,7 +442,7 @@ fn each_command_names_who_may_send_it() {
                 evidence_ref: "v".into(),
             },
             "confirm_alive",
-            &["channels", "customer-master"],
+            &["customer-master"],
         ),
         (
             Command::RecordRepaymentLetter {

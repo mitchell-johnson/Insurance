@@ -229,3 +229,65 @@ fn a_claim_soon_after_inception_is_investigated_until_every_case_closes() {
     w.ok(Command::Notify(Box::new(World::notification("c-2", "pol-1", "life", ClaimType::Death))));
     assert!(w.claim("c-2").investigation.is_none());
 }
+
+/// Purpose: a provider billing the same service on the same date on two partitions is caught
+/// either way round: the second partition opens a case when its claim registers, and the first
+/// opens one when it hears of the second; each case names the claim on the other partition,
+/// and a repeated message changes nothing.
+/// Why it matters: members of one provider's practice sit on many partitions, so a rule that
+/// sees one partition's claims lets a provider bill twice simply by billing two members' insurers'
+/// records that happen to be stored apart.
+#[test]
+fn a_service_billed_on_two_partitions_is_investigated_on_both() {
+    let partition = |p: u16| {
+        let mut w = World::new();
+        w.core.partition = p;
+        let mut r = rules();
+        r.version = 2;
+        r.partitions = 2;
+        w.ok(Command::ActivateRules { rules: Box::new(r) });
+        w
+    };
+    let mut a = partition(0);
+    let mut b = partition(1);
+    a.ok(invoice("h-a", "D100", 400));
+    assert!(a.claim("h-a").investigation.is_none(), "nothing elsewhere yet");
+    let told = a.core.sent.clone();
+    assert!(matches!(&told[..], [(1, Command::BilledElsewhere { from: 0, .. })]));
+    // Partition 1 hears first, then registers its own claim for the same service.
+    for (_, c) in told.clone() {
+        b.ok(c);
+    }
+    b.ok(invoice("h-b", "D100", 400));
+    assert_eq!(b.claim("h-b").investigation.as_deref(), Some("investigation/h-b"));
+    assert_eq!(cases(&b, "ivy")[0].elsewhere, vec![(0, "h-a".to_string())]);
+    // Partition 0 hears of it and opens its own case.
+    let back: Vec<_> = b.core.sent.iter().filter(|(p, _)| *p == 0).map(|(_, c)| c.clone()).collect();
+    for c in back.clone() {
+        a.ok(c);
+    }
+    assert_eq!(a.claim("h-a").investigation.as_deref(), Some("investigation/h-a"));
+    assert_eq!(cases(&a, "ivy")[0].elsewhere, vec![(1, "h-b".to_string())]);
+    let opened = a.core.noticed("investigation_opened").len();
+    for c in back {
+        a.ok(c);
+    }
+    assert_eq!(a.core.noticed("investigation_opened").len(), opened);
+    assert!(cases(&a, "ana").is_empty());
+    // A third bill on partition 1: the case already open on partition 0 learns of it.
+    b.core.sent.clear();
+    b.ok(invoice("h-b2", "D100", 400));
+    for (_, c) in b.core.sent.clone() {
+        a.ok(c);
+    }
+    assert_eq!(cases(&a, "ivy")[0].elsewhere, vec![(1, "h-b".to_string()), (1, "h-b2".to_string())]);
+    assert_eq!(a.core.noticed("investigation_opened").len(), opened);
+    let bad = Command::BilledElsewhere {
+        from: 0,
+        claim: "x".into(),
+        service_date: d(2027, 2, 20),
+        provider: "provider-9".into(),
+        service_code: "D100".into(),
+    };
+    assert_eq!(a.refused(bad), "invalid_billing");
+}
