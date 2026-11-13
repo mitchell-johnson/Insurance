@@ -631,3 +631,41 @@ fn the_adviser_portal_disputes_only_for_the_adviser_who_wrote_the_layer() {
         .any(|e| matches!(e, Event::ReplacementDisputed { reference, .. } if reference == "dispute:portal-1")));
     assert_eq!(dispute(&mut w, Some("adviser-b")).unwrap_err().code, "already_disputed");
 }
+
+/// Purpose: a customer moved from two policies to one larger one. The new policy is written
+/// first; as each old policy is cancelled the rule looks back and adds that cover to the same
+/// match, so the one new layer ends up replacing both, with each cover given up named and its
+/// book's share of the trail recorded.
+/// Why it matters: consolidating several policies into one is a common replacement. Treating
+/// the second cancellation as a fresh match would overwrite the first, and the trail and the
+/// clawback owed on the first policy would be lost.
+#[test]
+fn two_covers_given_up_one_after_the_other_are_matched_to_the_same_new_layer() {
+    let (mut w, first, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    let new = w.issue_for(2, PERSON, 700_000_00);
+    w.write(&new, "life", 1, "eng-b-two", "b-at-fap-two", 1_680_00).unwrap();
+    w.pay(&new, "n1");
+    // A later policy of A's is the newer candidate: the older new layer is filled first.
+    w.days(2);
+    let second = w.issue_for(3, PERSON, 200_000_00);
+    w.write(&second, "life", 1, "eng-a-one", "a-at-fap-one", 480_00).unwrap();
+    w.pay(&second, "s1");
+    w.days(10);
+    let before = w.events.len();
+    cancel(&mut w, &first);
+    assert_eq!(matched(&w.events[before..]), Some((500_000_00, MatchReason::RelatedAdviser)));
+    assert!(w.dist.layers[&layer_of(&second)].replacement.is_none(), "nothing was left for the newer layer");
+    w.days(5);
+    cancel(&mut w, &second);
+    w.sync();
+    let m = w.dist.layers[&layer_of(&new)].replacement.clone().expect("matched");
+    assert_eq!(m.matched_minor, 700_000_00);
+    assert_eq!(
+        m.replaced,
+        vec![(layer_of(&first), 500_000_00), (layer_of(&second), 200_000_00)],
+        "both covers given up are named"
+    );
+    assert_eq!(m.books.iter().map(|(_, a)| *a).sum::<i64>(), 700_000_00);
+    w.assert_reconciled();
+}
