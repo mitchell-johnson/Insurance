@@ -23,6 +23,7 @@ pub mod complaints;
 pub mod countersign;
 pub mod customers;
 pub mod directory;
+pub mod disclosures;
 pub mod feed;
 pub mod finance;
 pub mod forward;

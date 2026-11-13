@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::kinds::DocumentKind;
-use crate::model::{AttemptOutcome, Channel, DefectCause, Recipient, RetentionRule};
+use crate::model::{AttemptOutcome, Channel, DefectCause, LetterRequest, Recipient, RetentionRule};
 use crate::template::{AlternateFormat, Part, Template, TemplateRef};
 
 /// What goes into the log.
@@ -278,6 +278,13 @@ pub enum Command {
     },
     /// Crypto-shred a party: destroy what may be destroyed now, and the
     /// rest as each retention period ends.
+    /// A letter another module asks for (`model::REQUESTED_KINDS`).
+    RequestLetter(LetterRequest),
+    /// Drop a requested letter that is still waiting.
+    CancelLetterRequest {
+        request: String,
+        reason: String,
+    },
     ShredParty {
         party: PartyId,
     },
@@ -300,6 +307,8 @@ impl Command {
             Command::RegisterPartyKey { .. } => "register_party_key",
             Command::IssueDocument(_) => "issue_document",
             Command::ImportLegacy(_) => "import_legacy",
+            Command::RequestLetter(_) => "request_letter",
+            Command::CancelLetterRequest { .. } => "cancel_letter_request",
             Command::RecordSend { .. } => "record_send",
             Command::RecordOutcome { .. } => "record_outcome",
             Command::RetryDelivery { .. } => "retry_delivery",
@@ -341,6 +350,8 @@ impl Command {
             Command::DismissTrigger { .. } => &["documents"],
             Command::PlaceLegalHold { .. } | Command::ReleaseLegalHold { .. } => &["legal"],
             Command::ShredParty { .. } => &["privacy"],
+            Command::RequestLetter(_) => &["underwriting", "reinsurance"],
+            Command::CancelLetterRequest { .. } => &["underwriting", "reinsurance", "servicing"],
             Command::AckDeleted { .. } => &["retention"],
         }
     }

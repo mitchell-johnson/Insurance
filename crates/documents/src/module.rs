@@ -26,6 +26,14 @@ pub const MAX_ANSWER: usize = 500;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Query {
+    /// Requested letters still to issue, oldest first.
+    LettersRequested {
+        limit: usize,
+    },
+    /// One requested letter and where it stands.
+    LetterRequest {
+        request: String,
+    },
     /// One document's record.
     Document {
         id: String,
@@ -137,6 +145,8 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::PendingEvents { limit } => json(state.pending_events(cap(limit))),
         Query::CoreOutbox { limit } => json(state.core_outbox.iter().take(cap(limit)).collect::<Vec<_>>()),
         Query::PendingDeletes { limit } => json(state.pending_deletes.iter().take(cap(limit)).collect::<Vec<_>>()),
+        Query::LettersRequested { limit } => json(state.letters_requested(cap(limit))),
+        Query::LetterRequest { request } => json(state.letter_requests.get(&request)),
         Query::Triggers { limit } => json(state.triggers.values().take(cap(limit)).collect::<Vec<_>>()),
         Query::InterestedParties { policy, on } => json(state.interested_parties(&policy, on)),
         Query::Defect { id } => json(state.defects.get(&id)),

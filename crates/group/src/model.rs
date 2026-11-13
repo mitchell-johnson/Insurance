@@ -122,6 +122,11 @@ impl Membership {
         self.members.get(employee_id).filter(|m| m.left.is_none())
     }
 
+    /// Whether this employee was a member before and is not one now.
+    pub fn has_left(&self, employee_id: &str) -> bool {
+        self.active(employee_id).is_none() && (self.members.contains_key(employee_id) || self.past.iter().any(|m| m.employee_id == employee_id))
+    }
+
     pub fn active_members(&self) -> impl Iterator<Item = &Member> {
         self.members.values().filter(|m| m.left.is_none())
     }

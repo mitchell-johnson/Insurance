@@ -30,6 +30,7 @@ use crate::crypto::{KeyVaultWrap, KeyWrap};
 use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
 use crate::kinds::DataClass;
 use crate::pdf::Fonts;
+use crate::requested_letters::run_requested_letters;
 use crate::vault::{BlobVault, ObjectStore, VaultError};
 
 /// Where everything is. Read from the environment; nothing here is secret
@@ -476,11 +477,13 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         until_stopped(),
         |_| {},
     ));
+    let requested = tokio::spawn(run_requested_letters(driver.clone(), config.cycle_every, until_stopped(), |_| {}));
     let publisher = EventHubsPublisher::new(&config.event_hubs_namespace, &config.event_hub, credential);
     let core = ClusterCore::new(client, partitions, patience);
     run_cycles(driver, publisher, Some(core), config.cycle_every, until_stopped(), |_| {}).await;
     complaints.await.map_err(|e| e.to_string())?;
     letters.await.map_err(|e| e.to_string())?;
+    requested.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
 

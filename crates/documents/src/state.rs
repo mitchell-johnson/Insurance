@@ -124,6 +124,12 @@ pub struct DocumentsState {
     /// that the old ones can be forgotten.
     #[serde(default)]
     key_log: VecDeque<(NaiveDate, String)>,
+    /// Letters other modules asked for, by their request id.
+    #[serde(default)]
+    pub letter_requests: BTreeMap<String, LetterRequestRecord>,
+    /// The requests in the order they came, to forget settled ones.
+    #[serde(default)]
+    letter_log: VecDeque<(NaiveDate, String)>,
 }
 
 /// The local date in New Zealand, which is the date notices and retention
@@ -144,6 +150,7 @@ struct Ctx {
     at: DateTime<Utc>,
     today: NaiveDate,
     actor: String,
+    caller: String,
     events: Vec<Event>,
 }
 
@@ -166,6 +173,7 @@ impl StateMachine for DocumentsState {
             at,
             today: nz_date(at),
             actor: env.actor.clone(),
+            caller: env.caller.clone(),
             events: vec![],
         };
         // Core events are de-duplicated by the checkpoint, and letting time
@@ -213,6 +221,7 @@ impl StateMachine for DocumentsState {
             );
         } else if is_tick {
             self.forget_old_keys(today);
+            self.forget_old_letters(today);
         }
         Applied {
             index,
@@ -243,6 +252,102 @@ impl DocumentsState {
         }
     }
 
+    fn request_letter(&mut self, request: LetterRequest, ctx: &mut Ctx) -> Result<(), Reject> {
+        if request.request.trim().is_empty() || request.subject.trim().is_empty() {
+            return reject("no_request", "a letter request names its request and its subject");
+        }
+        let Some(kind) = requested_kind(&ctx.caller, &request.kind) else {
+            return reject(
+                "unknown_letter_kind",
+                format!("{} may not ask for a letter of kind {}", ctx.caller, request.kind),
+            );
+        };
+        if kind.clinical && matches!(request.recipient, LetterRecipient::Adviser { .. }) {
+            return reject("clinical_to_adviser", "a letter about a person's health goes to that person, not their adviser");
+        }
+        if let Some(existing) = self.letter_requests.get(&request.request) {
+            if existing.request == request && existing.caller == ctx.caller {
+                return Ok(());
+            }
+            return reject("request_conflict", format!("request {} was made before with other content", request.request));
+        }
+        let id = request.request.clone();
+        ctx.events.push(Event::LetterRequested {
+            request: id.clone(),
+            caller: ctx.caller.clone(),
+            kind: request.kind.clone(),
+        });
+        self.letter_log.push_back((ctx.today, id.clone()));
+        self.letter_requests.insert(
+            id,
+            LetterRequestRecord {
+                request,
+                caller: ctx.caller.clone(),
+                received: ctx.today,
+                status: LetterRequestStatus::Pending,
+            },
+        );
+        Ok(())
+    }
+
+    fn cancel_letter_request(&mut self, request: &str, reason: String, ctx: &mut Ctx) -> Result<(), Reject> {
+        if reason.trim().is_empty() {
+            return reject("no_reason", "cancelling a letter needs a reason");
+        }
+        let Some(record) = self.letter_requests.get_mut(request) else {
+            return reject("unknown_request", format!("no letter was asked for under {request}"));
+        };
+        if ctx.caller != "servicing" && ctx.caller != record.caller {
+            return reject("not_yours", "only the module that asked, or servicing, may cancel a letter");
+        }
+        if record.status != LetterRequestStatus::Pending {
+            return reject("not_pending", "the letter has already been issued or cancelled");
+        }
+        record.status = LetterRequestStatus::Cancelled { reason };
+        ctx.events.push(Event::LetterRequestCancelled { request: request.to_string() });
+        Ok(())
+    }
+
+    /// A document issued under a requested letter's id settles it.
+    fn letter_issued(&mut self, document: &str) {
+        let Some(request) = document.strip_prefix("letter:") else { return };
+        if let Some(record) = self.letter_requests.get_mut(request) {
+            if record.status == LetterRequestStatus::Pending {
+                record.status = LetterRequestStatus::Issued {
+                    document: document.to_string(),
+                };
+            }
+        }
+    }
+
+    /// The requested letters still to issue, oldest first.
+    pub fn letters_requested(&self, limit: usize) -> Vec<&LetterRequestRecord> {
+        self.letter_log
+            .iter()
+            .filter_map(|(_, id)| self.letter_requests.get(id))
+            .filter(|r| r.status == LetterRequestStatus::Pending)
+            .take(limit)
+            .collect()
+    }
+
+    /// Settled requests are forgotten after the keys are. A request still
+    /// pending is kept, and moved to the back so that it holds up nothing.
+    fn forget_old_letters(&mut self, today: NaiveDate) {
+        for _ in 0..MAX_CHUNK {
+            let Some((stored, id)) = self.letter_log.front().cloned() else { break };
+            if stored + Duration::days(KEEP_KEYS_DAYS) >= today {
+                break;
+            }
+            self.letter_log.pop_front();
+            match self.letter_requests.get(&id).map(|r| &r.status) {
+                Some(LetterRequestStatus::Pending) => self.letter_log.push_back((today, id)),
+                _ => {
+                    self.letter_requests.remove(&id);
+                }
+            }
+        }
+    }
+
     /// How many idempotency keys are remembered.
     pub fn remembered_keys(&self) -> usize {
         self.results.len()
@@ -259,7 +364,14 @@ impl DocumentsState {
             Command::ActivateTemplate { template, effective_from } => self.activate_template(template, effective_from, ctx),
             Command::DisableTemplate { template, reason, case } => self.disable_template(template, reason, case, ctx),
             Command::RegisterPartyKey { party, wrapped_key } => self.register_party_key(party, wrapped_key),
-            Command::IssueDocument(issue) => self.issue(*issue, ctx),
+            Command::IssueDocument(issue) => {
+                let id = issue.document.clone();
+                self.issue(*issue, ctx)?;
+                self.letter_issued(&id);
+                Ok(())
+            }
+            Command::RequestLetter(request) => self.request_letter(request, ctx),
+            Command::CancelLetterRequest { request, reason } => self.cancel_letter_request(&request, reason, ctx),
             Command::ImportLegacy(import) => self.import_legacy(*import, ctx),
             Command::RecordSend {
                 document,
