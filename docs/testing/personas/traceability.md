@@ -159,7 +159,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | UW-001 | full | `underwriting/tests/journey.rs::a_clean_application_is_issued_straight_through`<br>`underwriting/tests/driver.rs::a_clean_application_becomes_a_policy_with_nobody_carrying` |
 | UW-002 | full | `underwriting/tests/journey.rs::a_referred_loading_reaches_the_core_as_a_rate_and_a_reference_only`<br>`underwriting/tests/journey.rs::terms_set_by_the_rules_are_offered_and_issued_once_accepted` |
-| UW-003 | part | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
+| UW-003 | full | `underwriting/tests/journey.rs::one_decision_on_flex_health_writes_different_terms_to_each_component`<br>`underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-004 | full | `underwriting/tests/libraries.rs::cedar_policy_enforces_authority_limits`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-005 | full | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-006 | part | `underwriting/tests/journey.rs::a_declined_cover_is_told_in_its_own_notice_and_the_rest_still_issues`<br>`underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
@@ -374,7 +374,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ADV-032 | full | `distribution/tests/units.rs::a_rule_allocates_every_cent_of_any_amount` |
 | ADV-033 | full | `distribution/tests/units.rs::rule_validation_catches_every_way_a_rule_fails_to_add_up` |
 | ADV-034 | full | `distribution/tests/statements.rs::one_net_payment_covers_credits_and_debts_on_different_partitions`<br>`distribution/tests/statements.rs::a_statement_shows_the_detail_and_its_payment_clears_the_ledger` |
-| ADV-035 | part | `channels/tests/queries.rs::an_advisers_book_shows_standing_and_held_money` |
+| ADV-035 | part | `channels/tests/queries.rs::an_advisers_book_shows_standing_and_held_money`<br>`channels/tests/queries.rs::a_provider_and_its_group_see_the_book_under_them` |
 | ADV-036 | full | `channels/tests/journeys.rs::access_ends_with_the_engagement`<br>`channels/tests/http.rs::an_advisers_request_needs_the_customers_signed_approval` |
 | ADV-037 | full | `distribution/tests/statements.rs::a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement`<br>`distribution/tests/config.rs::the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party`<br>`payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period` |
 | ADV-038 | full | `distribution/tests/commission.rs::a_dry_run_shows_what_a_premium_would_earn_and_changes_nothing` |

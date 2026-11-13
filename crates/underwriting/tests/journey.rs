@@ -5,9 +5,10 @@ mod common;
 
 use common::*;
 use ic_core::LifeId;
+use ic_underwriting::codes::AppliedExclusion;
 use ic_underwriting::command::{Command, Effect, Event, NoticeKind, OfferResponse, Recipient};
 use ic_underwriting::config::{InterimSettings, Settings};
-use ic_underwriting::model::{CoverOutcome, DecisionSource, DecisionStatus, OfferStatus, ProposalStatus, Stage};
+use ic_underwriting::model::{CoverOutcome, CoverTerms, DecisionSource, DecisionStatus, OfferStatus, ProposalStatus, Stage};
 use ic_underwriting::questions::Answer;
 
 fn interim(w: &mut World) {
@@ -415,4 +416,57 @@ fn a_declined_cover_is_told_in_its_own_notice_and_the_rest_still_issues() {
         panic!("life cover still issues")
     };
     assert_eq!(command.covers.iter().map(|c| c.code.as_str()).collect::<Vec<_>>(), vec!["life"]);
+}
+
+/// Purpose: one decision on a Flex Health application (the mix-and-match health product) sets
+/// different terms on each component: an exclusion on hospital, a loading on specialist and
+/// standard terms on dental. Once accepted, the core is sent each cover with its own terms, the
+/// exclusion as its code alone.
+/// Why it matters: a composable product is one application but separate covers; a loading
+/// meant for one component that lands on another misprices both, and an exclusion carried as
+/// wording rather than a code would put clinical text in the core (UW-003).
+#[test]
+fn one_decision_on_flex_health_writes_different_terms_to_each_component() {
+    let mut w = World::new();
+    let mut open = w.open_command(
+        "P1",
+        &["L1"],
+        &[
+            ("L1", "hospital", "health", 300_000_00),
+            ("L1", "specialist", "health", 10_000_00),
+            ("L1", "dental", "health", 1_500_00),
+        ],
+        false,
+    );
+    open.product_code = "health-flex".into();
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    w.disclose("P1", "L1", &yes("hazardous_occupation"));
+    let case = w.take("P1", "L1", "sam");
+    let hospital = CoverTerms {
+        cover: "hospital".into(),
+        outcome: CoverOutcome::Accept {
+            loading_percent: 0,
+            exclusions: vec![AppliedExclusion {
+                code: "EX-2001".into(),
+                from: w.today(),
+                until: None,
+            }],
+            revised_sum_insured_minor: None,
+        },
+    };
+    let decided = w
+        .propose(&case, "sam", vec![hospital, accept("specialist", 50, None), standard("dental")])
+        .unwrap();
+    w.automatic(&decided);
+    let accepted = w.respond("P1", "L1", OfferResponse::Accept);
+    let Some(Effect::IssuePolicy { command, .. }) = accepted.effects.first() else {
+        panic!("no issue")
+    };
+    let terms = |code: &str| {
+        let c = command.covers.iter().find(|c| c.code == code).unwrap();
+        (serde_json::to_value(&c.loadings).unwrap(), c.exclusions.clone())
+    };
+    assert_eq!(terms("hospital"), (serde_json::json!([]), vec!["EX-2001".to_string()]));
+    assert_eq!(terms("specialist"), (serde_json::json!(["0.50"]), vec![]));
+    assert_eq!(terms("dental"), (serde_json::json!([]), vec![]));
 }
