@@ -54,7 +54,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
 | COL Collection, cash matching, standing and dunning | 13 | 8 | 7 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
-| AUD Audience scoping, customer app and identity | 8 | 9 | 2 | 7 |
+| AUD Audience scoping, customer app and identity | 9 | 8 | 2 | 6 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 28 | 1 | 1 | 2 |
 | CLM Claims and claims operations | 32 | 9 | 1 | 7 |
@@ -77,11 +77,11 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **320** | **107** | **150** | **113** |
+| **Total** | **321** | **106** | **150** | **112** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 30 | 29 | 10 |
+| A | 31 | 28 | 10 |
 | B | 104 | 19 | 19 |
 | C | 184 | 56 | 106 |
 | D | 2 | 3 | 15 |
@@ -113,7 +113,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **BIL** (3): BIL-001, BIL-002, BIL-013
 - **COL** (6): COL-003, COL-004, COL-007, COL-010, COL-024, COL-025
 - **XFR** (1): XFR-004
-- **AUD** (6): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-017
+- **AUD** (5): AUD-001, AUD-002, AUD-003, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
 - **CLM** (7): CLM-002, CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039

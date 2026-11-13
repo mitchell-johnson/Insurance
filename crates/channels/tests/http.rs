@@ -3809,3 +3809,37 @@ async fn a_write_answers_with_the_writers_own_version_and_nobody_elses() {
         .with(|s| serde_json::to_value(s.data.feeds[&ic_core::PartyId::from(KIRI)].sync(Some(version - 1))).unwrap());
     assert!(changes.to_string().contains("request/r9"), "{changes}");
 }
+
+/// Purpose: the connection drops after the app submits and before the outcome: the request shows as pending, the app's retry with
+/// the same idempotency key creates nothing new and says it is a repeat, and the outcome appears on the request when the owning
+/// module reports it (AUD-008).
+/// Why it matters: people on a train lose signal mid-change all the time; a retry that made a second cancellation or a second
+/// payment change, or a screen stuck without the outcome, is exactly the failure the asynchronous contract exists to prevent.
+#[tokio::test]
+async fn a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows() {
+    let portal = portal();
+    let keyed = [("x-dev-subject", "sub-kiri".to_string()), ("idempotency-key", "phone-1".to_string())];
+    let request = json!({ "id": "r7", "policy": portal.retail, "kind": "decline_indexation", "module": "policy-servicing" });
+    let (status, first) = portal.send("POST", "/app/v1/requests", &keyed, Some(request.clone())).await;
+    assert_eq!((status, &first["duplicate"]), (StatusCode::ACCEPTED, &json!(false)));
+    // The answer never reached the phone; it sends the same again.
+    let (status, again) = portal.send("POST", "/app/v1/requests", &keyed, Some(request)).await;
+    assert_eq!((status, &again["duplicate"]), (StatusCode::ACCEPTED, &json!(true)));
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let mine: Vec<&Value> = mine.as_array().unwrap().iter().filter(|r| r["id"] == "r7").collect();
+    assert_eq!((mine.len(), &mine[0]["status"]), (1, &json!("pending")));
+
+    // The owning module reports the outcome; the request shows it.
+    let module = [
+        ("x-dev-subject", "svc".to_string()),
+        ("x-dev-roles", "policy-servicing".to_string()),
+        ("x-module", "policy-servicing".to_string()),
+        ("idempotency-key", "done-r7".to_string()),
+    ];
+    let resolve = json!({ "resolve_request": { "id": "r7", "reference": "chg-1", "rejected": null } });
+    let (status, done) = portal.send("POST", "/internal/v1/commands", &module, Some(resolve)).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let (_, mine) = portal.get("sub-kiri", "/app/v1/requests").await;
+    let r7 = mine.as_array().unwrap().iter().find(|r| r["id"] == "r7").unwrap().clone();
+    assert_eq!((&r7["status"], &r7["reference"]), (&json!("applied"), &json!("chg-1")), "{r7}");
+}

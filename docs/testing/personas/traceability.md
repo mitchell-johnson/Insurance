@@ -129,7 +129,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
-| AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
+| AUD-008 | full | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe`<br>`channels/tests/http.rs::a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
 | AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
