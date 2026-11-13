@@ -147,6 +147,24 @@ pub struct UnderwrittenLayer {
     pub reference: String,
 }
 
+/// A cover a life does not hold, added to a retail policy after issue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AddedCover {
+    pub policy: PolicyId,
+    pub cover: String,
+    pub life: LifeId,
+    /// Zero for a cover priced per life, which has no sum insured.
+    #[serde(default)]
+    pub sum_insured_minor: i64,
+    /// Underwriting terms. Sensitive: never copied into an event.
+    #[serde(default)]
+    pub loadings: Vec<DecStr>,
+    #[serde(default)]
+    pub exclusions: Vec<String>,
+    /// The request or the underwriting decision this comes from.
+    pub reference: String,
+}
+
 /// Less cover for one life on a retail policy, at the owner's request.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReduceCover {
@@ -342,6 +360,8 @@ pub enum Command {
     /// the terms underwriting decided. The rest of a period already billed
     /// is billed as an adjustment, due today.
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
+    /// Give a life a cover from the product's menu that it does not hold.
+    AddCover(Box<AddedCover>),
     /// Change the underwriting terms on a life's cover from today. Each
     /// layer ends and is written again with the same sum insured, origin
     /// and rating date and the new terms; the days left of a period already
@@ -583,6 +603,7 @@ impl Command {
             | Command::AvoidPolicy { .. }
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
+            Command::AddCover(_) => &["underwriting", "policy-servicing"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
             Command::Investment(command) => command.allowed_callers(),
@@ -629,6 +650,7 @@ impl Command {
             Command::AddExcessLayer(_) => "add_excess_layer",
             Command::EndExcessLayer { .. } => "end_excess_layer",
             Command::AddUnderwrittenLayer(_) => "add_underwritten_layer",
+            Command::AddCover(_) => "add_cover",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
             Command::AvoidPolicy { .. } => "avoid_policy",

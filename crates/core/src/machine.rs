@@ -517,6 +517,12 @@ impl CoreState {
                     underwritten::alter_terms(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::AddCover(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    underwritten::add_cover(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
             Command::AddUnderwrittenLayer(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
