@@ -25,6 +25,7 @@ pub mod machine;
 pub mod math;
 pub mod outbox;
 pub mod premium;
+pub mod reinsurer_api;
 pub mod service;
 pub mod treaty;
 pub mod views;

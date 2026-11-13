@@ -60,6 +60,15 @@ pub enum Entry {
     /// the excess is underwritten.
     GroupExcess {
         policy: PolicyId,
+        /// The excess a previous insurer had accepted, honoured without
+        /// evidence under the scheme's takeover terms: an excess no larger
+        /// is accepted on standard terms with no disclosure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        takeover_accepted_minor: Option<i64>,
+        /// Reinsurance's reference, when it asked for the member's cover to
+        /// be underwritten because of accumulation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reinsurance_reference: Option<String>,
     },
 }
 
@@ -67,7 +76,7 @@ impl Entry {
     pub fn policy(&self) -> Option<&PolicyId> {
         match self {
             Entry::NewBusiness => None,
-            Entry::Increase { policy } | Entry::Alteration { policy } | Entry::Reinstatement { policy } | Entry::GroupExcess { policy } => Some(policy),
+            Entry::Increase { policy } | Entry::Alteration { policy } | Entry::Reinstatement { policy } | Entry::GroupExcess { policy, .. } => Some(policy),
         }
     }
 }

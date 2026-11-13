@@ -19,7 +19,9 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 COMPOSE=(docker compose -f docker-compose.yml --profile replacement --profile tools)
-API=http://localhost:8080
+# The host ports can be moved, as CI does, with IC_COMPOSE_API_PORT and the
+# other IC_COMPOSE_*_PORT variables in docker-compose.yml.
+API=http://localhost:${IC_COMPOSE_API_PORT:-8080}
 DATE=2027-11-15
 NEXT=2027-11-16
 PARTITIONS=4

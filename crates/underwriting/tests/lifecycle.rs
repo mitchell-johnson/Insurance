@@ -640,6 +640,8 @@ fn a_refused_issue_waits_for_a_person_or_a_new_quote() {
             "P6",
             Entry::GroupExcess {
                 policy: PolicyId::from("POL-P6"),
+                takeover_accepted_minor: None,
+                reinsurance_reference: None,
             },
         ),
     ] {

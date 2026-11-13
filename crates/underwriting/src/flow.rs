@@ -243,6 +243,43 @@ pub(crate) fn route(cfg: &Config, p: &mut Proposal, life: &LifeId, cx: &mut Cx, 
     Ok(())
 }
 
+/// A scheme member's excess that a previous insurer had already accepted is
+/// honoured under the scheme's takeover terms: no larger than the amount
+/// accepted, it is taken on standard terms with no disclosure. Larger, it is
+/// underwritten in full. When reinsurance asked for the cover to be
+/// underwritten because of the member's other cover, it always is.
+pub(crate) fn takeover(cfg: &Config, p: &mut Proposal, cx: &mut Cx) -> Result<(), Reject> {
+    let Entry::GroupExcess {
+        takeover_accepted_minor: Some(honoured),
+        reinsurance_reference: None,
+        ..
+    } = p.entry
+    else {
+        return Ok(());
+    };
+    let lives: Vec<LifeId> = p.lives.keys().cloned().collect();
+    for life in &lives {
+        if p.covers_on(life).any(|c| c.sum_insured_minor > honoured) {
+            continue;
+        }
+        let terms = p
+            .covers_on(life)
+            .map(|c| CoverTerms {
+                cover: c.code.clone(),
+                outcome: CoverOutcome::Accept {
+                    loading_percent: 0,
+                    exclusions: vec![],
+                    revised_sum_insured_minor: None,
+                },
+            })
+            .collect();
+        let decision = new_decision(cfg, p, life_ref(p, life)?, DecisionSource::Rules, terms, set(&[reason::TAKEOVER]), cx);
+        life_mut(p, life)?.decisions.push(decision);
+        after_signed(cfg, p, life, cx)?;
+    }
+    Ok(())
+}
+
 /// A decision with the next reference on the life, not yet in force.
 pub(crate) fn new_decision(
     cfg: &Config,

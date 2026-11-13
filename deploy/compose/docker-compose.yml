@@ -114,7 +114,7 @@ services:
   temporal:
     image: temporalio/temporal:1.10.0
     command: ["server", "start-dev", "--ip", "0.0.0.0"]
-    ports: ["7233:7233", "8233:8233"]
+    ports: ["${IC_COMPOSE_TEMPORAL_PORT:-7233}:7233", "${IC_COMPOSE_TEMPORAL_UI_PORT:-8233}:8233"]
 
   worker-1: *worker
   worker-2: *worker
@@ -130,7 +130,7 @@ services:
       <<: *cluster
       IC_PARTITIONS: "4"
       IC_AUTH: dev
-    ports: ["8080:8080"]
+    ports: ["${IC_COMPOSE_API_PORT:-8080}:8080"]
 
   # The portal service: the customer app's API, the adviser and employer
   # portals, the staff and operations consoles and the status page, at
@@ -145,7 +145,7 @@ services:
     environment:
       <<: *cluster
       IC_AUTH: dev
-    ports: ["8090:8090"]
+    ports: ["${IC_COMPOSE_PORTAL_PORT:-8090}:8090"]
 
   # One-off commands: `docker compose run --rm admin status`,
   # `docker compose run --rm close close 2027-11-15 4`.
