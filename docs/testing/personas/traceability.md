@@ -235,13 +235,13 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | RI-006 | full | `reinsurance/tests/accumulation.rs::layers_are_ceded_one_by_one_and_over_limit_cover_is_never_silent`<br>`reinsurance/tests/premiums.rs::a_backdated_change_posts_only_the_difference` |
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
 | RI-009 | full | `reinsurance/tests/accumulation.rs::membership_events_move_the_cession_on_their_effective_dates`<br>`reinsurance/tests/accumulation.rs::an_identified_member_joins_the_life_and_the_excess_is_ceded_facultatively` |
-| RI-010 | part | `reinsurance/tests/claims.rs::catastrophe_and_stop_loss_respond_to_what_is_kept_across_claims` |
+| RI-010 | full | `reinsurance/tests/claims.rs::catastrophe_and_stop_loss_respond_to_what_is_kept_across_claims`<br>`reinsurance/tests/accumulation.rs::the_underwritten_excess_path_is_flagged_once` |
 | RI-011 | full | `reinsurance/tests/statements.rs::a_statement_nets_the_account_and_lists_only_what_the_treaty_allows`<br>`reinsurance/tests/carriers.rs::statements_and_the_release_log_are_filed_once`<br>`reinsurance/tests/statements.rs::a_long_listing_is_filed_in_parts_the_statement_names`<br>`reinsurance/tests/carriers.rs::statements_and_listings_are_left_for_their_reinsurer_to_collect`<br>`reinsurance/tests/reinsurer_api.rs::a_reinsurer_reads_only_its_own_statements_and_files` |
 | RI-012 | full | `reinsurance/tests/core.rs::an_agreed_statement_sweeps_its_net_amount_to_settlement_clearing`<br>`reinsurance/tests/statements.rs::settlement_is_agreed_checked_and_paid_once`<br>`payments/tests/recon.rs::money_a_reinsurer_pays_is_matched_to_its_statement` |
 | RI-013 | full | `reinsurance/tests/replay.rs::reconciliation_notices_damage` |
 | RI-014 | full | `reinsurance/tests/claims.rs::large_claims_are_notified_and_consent_is_tracked`<br>`claims/tests/suite/controls.rs::a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior` |
 | RI-015 | full | `reinsurance/tests/claims.rs::periodic_and_ex_gratia_payments_follow_the_treaty` |
-| RI-017 | part | `reinsurance/tests/statements.rs::a_treaty_comparison_looks_only_at_cover_on_that_treaty` |
+| RI-017 | full | `reinsurance/tests/statements.rs::a_treaty_comparison_looks_only_at_cover_on_that_treaty`<br>`reinsurance/tests/statements.rs::recapture_and_a_negotiated_move_change_cover_from_a_date` |
 
 ## INV Unit pricing and the investment ledger
 
@@ -492,6 +492,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | INC-003 | part | `sim/tests/group_cover.rs::a_member_removed_in_error_comes_back_with_no_gap` |
 | INC-004 | full | `pricing/tests/errors.rs::material_error_is_corrected_by_a_new_version` |
+| INC-005 | full | `reinsurance/tests/statements.rs::a_change_after_the_listing_was_sent_needs_a_supplementary_listing`<br>`reinsurance/tests/statements.rs::settlement_is_agreed_checked_and_paid_once`<br>`reinsurance/tests/replay.rs::reconciliation_notices_damage` |
 | INC-007 | full | `payments/tests/runs.rs::a_failed_file_is_replaced_never_resent` |
 | INC-008 | full | `documents/tests/templates.rs::a_disabled_template_issues_nothing_more`<br>`documents/tests/defects.rs::the_population_is_found_by_template_version_and_period` |
 | INC-009 | part | `sim/tests/reopen.rs::a_policy_does_not_lapse_before_its_lapse_notice_allows` |
