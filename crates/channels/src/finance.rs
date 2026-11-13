@@ -55,7 +55,7 @@ const SERVICE_ONLY: [&str; 7] = [
 /// whole numbers that may be.
 type Fields = (&'static [&'static str], &'static [&'static str], &'static [&'static str]);
 
-const QUESTIONS: [(&str, Fields); 13] = [
+const QUESTIONS: [(&str, Fields); 15] = [
     ("status", (&[], &[], &[])),
     ("work", (&[], &[], &[])),
     ("dashboard", (&["period", "today"], &[], &[])),
@@ -69,6 +69,10 @@ const QUESTIONS: [(&str, Fields); 13] = [
     ("return", (&["id"], &[], &[])),
     ("aged_suspense", (&["as_at"], &[], &[])),
     ("extract", (&["kind", "period"], &[], &["offset", "limit"])),
+    // How many policies are in each accounting group, and one policy's group
+    // (the partition is a number; the module refuses a question without it).
+    ("accounting_groups", (&[], &[], &[])),
+    ("accounting_group", (&["policy"], &[], &["partition"])),
 ];
 
 /// What a member of staff may do in the console: whether they may open it,
@@ -112,8 +116,18 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
 /// A journal line may give its amount as `signed_minor`, in minor units:
 /// debits positive, credits negative. That module counts in millionths of
 /// a minor unit, which a browser cannot hold exactly, so the conversion is
-/// made here.
+/// made here. A cut-over total may likewise come as `total_minor`.
 fn exact_lines(command: &mut Value) -> Result<(), String> {
+    // A cut-over total is on the trial balance's scale, so it comes as minor units too.
+    if let Some(fields) = command.pointer_mut("/record_cutover_total").and_then(Value::as_object_mut) {
+        if let Some(minor) = fields.remove("total_minor") {
+            let fine = minor
+                .as_i64()
+                .and_then(|m| m.checked_mul(FINE_PER_MINOR))
+                .ok_or("a cut-over total_minor is a whole number of minor units, within range")?;
+            fields.insert("total".to_string(), json!(fine));
+        }
+    }
     // By pointer, not by index: indexing a command of another name would add the key.
     let Some(lines) = command.pointer_mut("/propose_journal/journal/lines").and_then(Value::as_array_mut) else {
         return Ok(());
@@ -137,6 +151,8 @@ fn exact_lines(command: &mut Value) -> Result<(), String> {
 pub fn envelope(key: &str, actor: &PartyId, roles: &Value, mut command: Value) -> Result<Value, String> {
     let name = match &command {
         Value::Object(fields) if fields.len() == 1 => fields.keys().next().cloned(),
+        // A command with no fields may be sent by its name alone.
+        Value::String(name) => Some(name.clone()),
         _ => None,
     }
     .ok_or("a command is one name with its fields")?;
