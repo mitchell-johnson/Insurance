@@ -114,6 +114,14 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
+        "next_value_date" => {
+            let run_type = serde_json::from_value(question["run_type"].clone()).map_err(|_| "the question needs a run_type".to_string())?;
+            let at = question["at"]
+                .as_str()
+                .map(|at| at.parse().map_err(|_| "at is a time like 2026-11-30T16:30:00".to_string()));
+            found(state.next_value_date(run_type, at.transpose()?))
+        }
+        "expected_payment" => Ok(state.expected_payment(text(&question, "payment")?)),
         "open_exceptions" => Ok(state.open_exceptions(question["account"].as_str())),
         "party" => Ok(state.party_summary(text(&question, "party")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
@@ -228,6 +236,15 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             payment,
             amount_minor,
         }) => payout_waiting(policy, policyholder, payout, payment, *amount_minor),
+        // A payout held while the owner is bankrupt is owed to whoever the
+        // legal direction named, a payee verified and screened like any other.
+        ic_core::Event::Investment(ic_core::invest::InvestEvent::PayoutDirected {
+            policy,
+            payee,
+            payout,
+            payment,
+            amount_minor,
+        }) => payout_waiting(policy, payee, payout, payment, *amount_minor),
         _ => return Vec::new(),
     };
     vec![crate::Envelope {

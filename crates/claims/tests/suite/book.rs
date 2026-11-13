@@ -1131,6 +1131,7 @@ fn recorded_interests_are_paid_before_the_claimant() {
     use ic_claims::port::{CoverFacts, Interest};
     let mut w = World::new();
     let interest = |party: &str, extent: Option<i64>, priority: u32| Interest {
+        insolvency: false,
         party: party.into(),
         extent_minor: extent,
         priority,
@@ -1211,6 +1212,7 @@ fn a_whole_interest_takes_all_of_the_proceeds() {
     use ic_claims::port::{CoverFacts, Interest};
     let mut w = World::new();
     let whole = |party: &str, priority: u32| Interest {
+        insolvency: false,
         party: party.into(),
         extent_minor: None,
         priority,
@@ -1496,6 +1498,7 @@ fn a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death() {
             "life",
             CoverFacts {
                 interests: vec![Interest {
+                    insolvency: false,
                     party: "bank".into(),
                     extent_minor: Some(100_000),
                     priority: 1,

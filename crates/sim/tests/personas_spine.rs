@@ -220,3 +220,25 @@ fn paying_the_arrears_while_suspended_restores_the_standing_at_once() {
     days(&mut c, 1);
     assert_eq!(c.state(0).policies[&id].standing, Some(Standing::Paid));
 }
+
+/// Purpose: matrix PRD-011. A policy on a life whose rating sex is not recorded is issued, and
+/// its first bill is the lower of what the same life would be billed as female and as male.
+/// Why it matters: the product crate proves the rate; this proves the whole path from the issue
+/// command to the receivable uses it. Before decision 1 in `docs/decisions.md` the issue was
+/// refused for want of a rate, so a person who is neither male nor female could not be insured
+/// without recording a sex that is not theirs.
+#[test]
+fn a_life_with_no_recorded_sex_is_issued_at_the_lower_premium() {
+    let mut c = cluster(d(2027, 3, 1));
+    let mut billed = |n: u64, sex: Option<Sex>| {
+        let mut p = term_life(n, d(2027, 3, 1), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+        p.lives[0].factors.sex = sex;
+        let id = p.policy.clone();
+        c.submit(0, "new-business", issue_command(p)).unwrap();
+        receivable(c.state(0), &id)
+    };
+    let (female, male, unrecorded) = (billed(1, Some(Sex::Female)), billed(2, Some(Sex::Male)), billed(3, None));
+    assert_ne!(female, male, "the shipped table rates by sex");
+    assert!(unrecorded > 0);
+    assert_eq!(unrecorded, female.min(male));
+}

@@ -469,15 +469,7 @@ impl PaymentsState {
         if self.in_time(tx, &s.channel, due).is_ok() {
             return Ok(());
         }
-        let cfg = self.cfg()?;
-        let cutoff = cfg.channels.get(&s.channel).map(|c| c.cutoff);
-        let mut next = tx.now.date();
-        if cutoff.is_none_or(|c| tx.now.time() > c) {
-            next = next.succ_opt().unwrap_or(next);
-        }
-        while !cfg.is_business_day(next) {
-            next = next.succ_opt().unwrap_or(next);
-        }
+        let next = self.cfg()?.next_window(&s.channel, tx.now);
         let deferred: Vec<(Id, Deferred)> = s
             .items
             .iter()

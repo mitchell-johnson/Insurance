@@ -7,6 +7,13 @@
 //! consent, and a claim pays interested parties first, in the order their
 //! notices arrived.
 //!
+//! An insolvency interest is the same record of a different kind: the
+//! Official Assignee's, on notice that the owner was adjudicated bankrupt.
+//! It is always for the whole of the proceeds, it restricts the owner the
+//! same way, and while it stands money raised to benefit payable is held
+//! until a legal direction says to whom it is paid. Cover, premiums and
+//! claims carry on.
+//!
 //! An interest is dated on both timelines: the date it takes effect and the
 //! business date it was recorded, and the same for its release. Nothing is
 //! deleted, so the question "who had an interest on the day of the event,
@@ -47,6 +54,23 @@ impl RestrictedAction {
     }
 }
 
+/// Why the party has an interest.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InterestKind {
+    /// The policy was assigned, usually to a lender as security.
+    #[default]
+    Assignment,
+    /// The owner is bankrupt and the party is the Official Assignee.
+    Insolvency,
+}
+
+impl InterestKind {
+    fn is_assignment(&self) -> bool {
+        *self == InterestKind::Assignment
+    }
+}
+
 /// The interested party's discharge of its interest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Release {
@@ -60,6 +84,8 @@ pub struct Release {
 /// One interest in a policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Interest {
+    #[serde(default, skip_serializing_if = "InterestKind::is_assignment")]
+    pub kind: InterestKind,
     pub party: PartyId,
     /// The date notice of the assignment reached the insurer. Interests
     /// rank by it.
@@ -91,6 +117,7 @@ impl Interest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ranked {
     pub interest: String,
+    pub kind: InterestKind,
     pub party: PartyId,
     pub extent_minor: Option<i64>,
     /// 1 is paid first.
@@ -104,6 +131,9 @@ pub enum InterestCommand {
     Record {
         policy: PolicyId,
         interest: String,
+        /// Left out, the interest is an assignment.
+        #[serde(default, skip_serializing_if = "InterestKind::is_assignment")]
+        kind: InterestKind,
         party: PartyId,
         notice_received: NaiveDate,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +178,8 @@ pub enum InterestEvent {
     Recorded {
         policy: PolicyId,
         interest: String,
+        #[serde(default)]
+        kind: InterestKind,
         party: PartyId,
         notice_received: NaiveDate,
         extent_minor: Option<i64>,
@@ -179,7 +211,7 @@ fn bad(code: &str, message: impl Into<String>) -> Reject {
 }
 
 /// A reference into the vault or an identifier: short, plain, never free text.
-fn plain(s: &str) -> bool {
+pub(crate) fn plain(s: &str) -> bool {
     !s.is_empty() && s.len() <= 120 && s.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.' | ':' | '/'))
 }
 
@@ -187,6 +219,7 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
     match command {
         InterestCommand::Record {
             interest,
+            kind,
             party,
             notice_received,
             extent_minor,
@@ -194,6 +227,9 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
             notice,
             ..
         } => {
+            if kind == InterestKind::Insolvency && extent_minor.is_some() {
+                return Err(bad("invalid_interest", "an insolvency interest is in the whole of the proceeds"));
+            }
             if !plain(&interest) || !plain(&notice) || party.0.is_empty() {
                 return Err(bad(
                     "invalid_interest",
@@ -207,6 +243,7 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
                 ));
             }
             let record = Interest {
+                kind,
                 party,
                 notice_received,
                 extent_minor,
@@ -232,6 +269,7 @@ pub(crate) fn apply(policy: &mut Policy, ctx: &mut Ctx<'_>, command: InterestCom
             ctx.emit(Event::Interest(InterestEvent::Recorded {
                 policy: policy.id.clone(),
                 interest: interest.clone(),
+                kind,
                 party: record.party.clone(),
                 notice_received,
                 extent_minor,
@@ -319,11 +357,22 @@ pub fn ranked(policy: &Policy, on: NaiveDate) -> Vec<Ranked> {
         .zip(1u32..)
         .map(|((id, i), priority)| Ranked {
             interest: id.clone(),
+            kind: i.kind,
             party: i.party.clone(),
             extent_minor: i.extent_minor,
             priority,
         })
         .collect()
+}
+
+/// The insolvency interest standing on a date, if there is one: money that
+/// becomes payable is then held until a legal direction says to whom.
+pub fn insolvency(policy: &Policy, on: NaiveDate) -> Option<&String> {
+    policy
+        .interests
+        .iter()
+        .find(|(_, i)| i.kind == InterestKind::Insolvency && i.stands_on(on))
+        .map(|(id, _)| id)
 }
 
 /// Refuse a restricted action unless every interest standing today has

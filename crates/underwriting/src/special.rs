@@ -366,8 +366,15 @@ impl UnderwritingState {
             if p.status != ProposalStatus::Open || life_ref(p, &d.life)?.stage != Stage::AwaitingDisclosure {
                 return reject("not_awaiting", "the life is not waiting for a decision");
             }
-            crate::casework::check_terms(st, p, &d.life, &d.terms, cx).map_err(|e| Reject::new("terms", e.message))?;
-            if let Some(why) = outside_authority(st, p, &d, cx.today) {
+            // A code our lists do not hold is not something the delegate can
+            // bind us to: like a decision above the authority, it is
+            // rejected with its reason and the life comes to our queue.
+            let why = match crate::casework::check_terms(st, p, &d.life, &d.terms, cx) {
+                Err(e) if e.code == "unknown_code" => Some(e.message),
+                Err(e) => return Err(Reject::new("terms", e.message)),
+                Ok(()) => outside_authority(st, p, &d, cx.today),
+            };
+            if let Some(why) = why {
                 cx.event(Event::DelegatedDecisionRejected {
                     proposal: p.id.clone(),
                     life: d.life.clone(),

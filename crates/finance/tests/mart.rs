@@ -1326,3 +1326,107 @@ fn the_mart_and_its_files_hold_ids_and_rating_facts_only() {
     let stored = serde_json::to_string(&mart).unwrap();
     assert!(["party-holder-555", "party-life-444", "NUMBER-778899"].iter().all(|p| !stored.contains(p)));
 }
+
+/// Purpose: the conduct measures are read from the feed itself. On a term life policy,
+/// claim c1 is registered on 1 March and admitted on 11 March, then a further amount is
+/// admitted; claim c2 is registered on 1 March and declined on 5 March; c3 is declined on
+/// 9 March and reopened on new evidence; the policy lapses on 20 March and is reinstated
+/// on 25 March. In April c2's decline is overturned on internal review and c1's admission
+/// is reversed. March counts one acceptance taking 10 days, two declines taking 4 and 8,
+/// a lapse and a reinstatement; April counts the overturn and the reversal, each against
+/// March; March's report says one of its declines has since been overturned. Nothing is
+/// counted twice, and the counts are the same for the product and for the whole book.
+/// Why it matters: conduct reporting is a read model of what the systems did, not a
+/// figure someone sends in. If a decision reaches the books it is counted, with the time
+/// it took, and a reopening on new evidence is not dressed up as an overturn.
+#[test]
+fn claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed() {
+    let day = |m: u32, n: u32| d(2028, m, n);
+    let mut s = Stream::new(day(3, 1));
+    s.push(Event::PolicyIssued {
+        policy: PolicyId::from("pol-1"),
+        number: "N".to_string(),
+        group: "grp".into(),
+        policyholder: "party-x".into(),
+        product_code: "term-life".to_string(),
+        product_hash: "h".to_string(),
+        inception: day(3, 1),
+        lives: vec![LifeInfo::new("life-1".into(), None)],
+        layers: vec![layer("life", 1, "life-1", 500_000_00, day(3, 1))],
+        members: vec![],
+    });
+    let registered = [("policy", "pol-1"), ("cover", "life"), ("life", "life-1"), ("event_date", "2028-02-20")];
+    for claim in ["c1", "c2", "c3"] {
+        s.push(claim_fact("claim_reserved", claim, &registered));
+    }
+    s.close(day(3, 5));
+    s.push(claim_fact("claim_closed", "c2", &[("outcome", "declined")]));
+    s.close(day(3, 9));
+    s.push(claim_fact("claim_closed", "c3", &[("outcome", "declined")]));
+    s.push(claim_fact("claim_reopened", "c3", &[("basis", "NewEvidence")]));
+    s.close(day(3, 11));
+    s.push(claim_fact("claim_admitted", "c1", &[("admitted_minor", "100")]));
+    s.push(claim_fact("claim_admitted", "c1", &[("admitted_minor", "20")]));
+    s.push(claim_fact("claim_closed", "c1", &[("outcome", "paid")]));
+    s.close(day(3, 20));
+    s.push(Event::PolicyStatusChanged {
+        policy: PolicyId::from("pol-1"),
+        from: PolicyStatus::InForce,
+        to: PolicyStatus::Lapsed,
+    });
+    s.close(day(3, 25));
+    s.push(Event::PolicyStatusChanged {
+        policy: PolicyId::from("pol-1"),
+        from: PolicyStatus::Lapsed,
+        to: PolicyStatus::InForce,
+    });
+    s.close(day(4, 3));
+    s.push(claim_fact("claim_reopened", "c2", &[("basis", "InternalReview")]));
+    s.push(claim_fact("claim_reopened", "c2", &[("basis", "DisputeScheme")]));
+    s.push(claim_fact("admission_reversed", "c1", &[]));
+    s.close(day(4, 4));
+
+    let mut state = ic_finance::FinanceState::default();
+    state.mart = mart_of(1, &s.events);
+    let (mar, apr) = (period(2028, 3), period(2028, 4));
+    for product in [None, Some("term-life")] {
+        let march = state.conduct_report(mar, product);
+        assert_eq!((march.accepted, march.declined, march.lapsed, march.reinstated), (1, 2, 1, 1), "{product:?}");
+        assert_eq!(
+            (
+                march.accepted_turnaround.decisions,
+                march.accepted_turnaround.total_days,
+                march.accepted_turnaround.max_days
+            ),
+            (1, 10, 10)
+        );
+        assert_eq!(
+            (
+                march.declined_turnaround.decisions,
+                march.declined_turnaround.total_days,
+                march.declined_turnaround.max_days
+            ),
+            (2, 12, 8)
+        );
+        assert_eq!(march.declines_later_overturned, 1);
+        assert!(march.overturned.is_empty() && march.admissions_reversed.is_empty());
+        let april = state.conduct_report(apr, product);
+        assert_eq!((april.accepted, april.declined, april.lapsed), (0, 0, 0));
+        assert_eq!(april.overturned.into_iter().collect::<Vec<_>>(), [(mar, 1)]);
+        assert_eq!(april.admissions_reversed.into_iter().collect::<Vec<_>>(), [(mar, 1)]);
+    }
+    assert_eq!(state.conduct_report(mar, Some("health")), ic_finance::returns::ConductReport::default());
+    // The feed's counts cannot be sent in by any caller.
+    let lapse = ic_finance::returns::ConductFact {
+        id: "x".to_string(),
+        measure: ic_finance::returns::ConductMeasure::PolicyLapsed,
+        date: day(3, 20),
+        product: None,
+        relates_to: None,
+    };
+    let mut books = Books::ready(1);
+    for caller in ["claims", "complaints"] {
+        let refused = books.code(caller, None, FinCommand::RecordConductFacts { facts: vec![lapse.clone()] });
+        assert_eq!(refused, "caller");
+    }
+}
