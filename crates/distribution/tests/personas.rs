@@ -8,9 +8,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::*;
 use ic_core::{Command as CoreCommand, LifeId, PolicyId};
 use ic_distribution::config::{BookOutcome, Change, MoveRequest};
-use ic_distribution::rules::{portion, CommissionType, Component, Line, Share};
+use ic_distribution::rules::{portion, CommissionType, Component, Line, Share, WHOLE};
+use ic_distribution::state::WriteLayer;
 use ic_distribution::structure::PartyKind;
-use ic_distribution::{BookId, EngagementId, Event};
+use ic_distribution::{BookId, Command, EngagementId, Event};
 
 /// What each payee was allocated on one layer since event `from`, by commission type.
 fn on_layer(w: &World, from: usize, layer: &str) -> BTreeMap<(String, CommissionType), i64> {
@@ -366,5 +367,153 @@ fn direct_business_sits_in_no_book_and_earns_nothing() {
         .unwrap();
     assert!(!w.events[before..].iter().any(|e| matches!(e, Event::ClawbackRaised { .. })));
     assert_eq!(w.payable("a-co") + w.payable("fap-one"), 0);
+    w.assert_reconciled();
+}
+
+/// Purpose (ADV-009): A and B wrote a policy together, 60 and 40, each into their own book. When
+/// A moves to FAP Two with the book, only A's share of the layer moves to A's new book under the
+/// new rule; B's book, its rule and B's commission are untouched.
+/// Why it matters: a joint policy is two advisers' business. Moving it whole with one of them
+/// would hand B's trail to A's new provider.
+#[test]
+fn a_joint_policy_moves_only_the_share_of_the_adviser_who_leaves() {
+    let mut w = worked_example();
+    with_adviser_b(&mut w);
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.send(
+        module("new-business"),
+        Command::WriteLayer(Box::new(WriteLayer {
+            policy: policy.clone(),
+            cover: "life".into(),
+            layer: 1,
+            writing: vec![(EngagementId::from("eng-a-one"), pct(60.0)), (EngagementId::from("eng-b-one"), pct(40.0))],
+            books: vec![(BookId::from("a-at-fap-one"), pct(60.0)), (BookId::from("b-at-fap-one"), pct(40.0))],
+            schedule: "standard".into(),
+            option: "upfront".into(),
+            annual_premium_minor: 1_200_00,
+            replacement: false,
+        })),
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    let on = w.today();
+    let b_rule = w.dist.config.books[&BookId::from("b-at-fap-one")].clone();
+    let request = MoveRequest {
+        from_engagement: EngagementId::from("eng-a-one"),
+        new_engagement: EngagementId::from("eng-a-two"),
+        to: party("fap-two"),
+        on,
+        accreditations: BTreeSet::from(["term-life".to_string()]),
+        books: vec![BookOutcome::Moves {
+            book: BookId::from("a-at-fap-one"),
+            policies: None,
+            new_book: BookId::from("a-at-fap-two"),
+            new_book_name: "A at FAP Two".into(),
+            release_ref: "release-signed-by-fap-one".into(),
+            lines: vec![
+                base("a-co", Share::OfRemainder(pct(75.0)), true),
+                base("fap-two", Share::OfRemainder(pct(25.0)), false),
+            ],
+            liability: vec![liable("fap-two")],
+            fragments: vec![],
+            tail: None,
+            examples: vec![],
+        }],
+    };
+    let changes = w.dist.plan_move(&request).unwrap();
+    w.activate("move-a", changes).unwrap();
+    let key = layer(&policy, 1);
+    assert_eq!(
+        w.dist.layers[&key].books_on(on).to_vec(),
+        vec![(BookId::from("a-at-fap-two"), pct(60.0)), (BookId::from("b-at-fap-one"), pct(40.0))]
+    );
+    assert_eq!(w.dist.config.books[&BookId::from("b-at-fap-one")], b_rule, "B's book is untouched");
+
+    let before = w.events.len();
+    w.pay(&policy, "r2");
+    let paid = on_layer(&w, before, &key);
+    let total: i64 = paid.values().sum();
+    let b_side = paid[&("b-co".into(), CommissionType::Renewal)] + portion(portion(total, pct(40.0)), pct(20.0));
+    assert!((b_side * 10 - total * 4).abs() <= 10, "B's book still takes 40%: {paid:?}");
+    assert!(paid.contains_key(&("fap-two".into(), CommissionType::Renewal)));
+    w.assert_reconciled();
+}
+
+/// Purpose (ADV-012): a retiring adviser's book is split between three successors by file. Each
+/// successor's share of the policies moves into a new book of the successor's carrying the
+/// retiring adviser's tail; the successors' existing books, and new business they write there,
+/// pay no tail.
+/// Why it matters: a retirement sale is priced on the tail. Paid on the wrong policies, the
+/// retiring adviser is overpaid out of the successors' own business; missed, they lose what
+/// they sold the book for.
+#[test]
+fn a_retiring_advisers_book_split_between_three_successors_carries_the_tail() {
+    let mut w = worked_example();
+    let today = w.today();
+    let mut policies = vec![];
+    for n in 1..=3 {
+        let (p, _) = w.issue(n, 500_000_00, None);
+        w.write(&p, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+        w.pay(&p, &format!("r{n}"));
+        policies.push(p);
+    }
+    let mut changes = vec![];
+    for (n, successor) in ["s1", "s2", "s3"].into_iter().enumerate() {
+        let (adviser, co, engagement) = (format!("adviser-{successor}"), format!("{successor}-co"), format!("eng-{successor}"));
+        w.add_party(&adviser, PartyKind::Adviser);
+        w.add_party(&co, PartyKind::Company);
+        w.payee(&co);
+        w.account(&co, &format!("acct-{co}"));
+        w.engage(&engagement, &adviser, "fap-one", d(2020, 1, 1));
+        let lines = |tail: bool| {
+            let mut l = vec![
+                base(&co, Share::OfRemainder(pct(75.0)), true),
+                base("fap-one", Share::OfRemainder(pct(25.0)), false),
+            ];
+            if tail {
+                l.push(Line {
+                    commission_type: Some(CommissionType::Renewal),
+                    share: Share::OfComponent(pct(20.0)),
+                    ..base("a-co", Share::OfRemainder(1), false)
+                });
+            }
+            l
+        };
+        for (book, tail) in [(format!("{successor}-own"), false), (format!("{successor}-from-a"), true)] {
+            changes.push(Change::CreateBook {
+                id: BookId::from(book.as_str()),
+                name: book.clone(),
+                engagement: Some(EngagementId::from(engagement.as_str())),
+                owner: Some(party("fap-one")),
+                house: false,
+            });
+            changes.push(Change::ActivateRule(rule(&book, 1, today, lines(tail), vec![liable("fap-one")])));
+        }
+        changes.push(Change::MoveLayers {
+            layers: vec![layer(&policies[n], 1)],
+            to: vec![(BookId::from(format!("{successor}-from-a").as_str()), WHOLE)],
+            from: today,
+        });
+    }
+    w.activate("retirement", changes).unwrap();
+    // Each successor also writes new business of their own.
+    let (own, _) = w.issue(9, 500_000_00, None);
+    w.write(&own, "life", 1, "eng-s1", "s1-own", 1_200_00).unwrap();
+
+    w.days(31);
+    let before = w.events.len();
+    for (n, p) in policies.iter().enumerate() {
+        w.pay(p, &format!("m{n}"));
+    }
+    w.pay(&own, "own1");
+    for (n, p) in policies.iter().enumerate() {
+        let paid = on_layer(&w, before, &layer(p, 1));
+        let whole: i64 = paid.values().sum();
+        assert_eq!(paid[&("a-co".into(), CommissionType::Renewal)], portion(whole, pct(20.0)), "the tail on {p}");
+        assert!(paid.contains_key(&(format!("s{}-co", n + 1), CommissionType::Renewal)));
+    }
+    let paid = on_layer(&w, before, &layer(&own, 1));
+    assert!(paid.keys().all(|(who, _)| who != "a-co"), "no tail on the successor's own business: {paid:?}");
     w.assert_reconciled();
 }
