@@ -49,6 +49,8 @@ const sees = (page, text) => page.getByText(text, { exact: false }).first().wait
     await sees(p, "Disputed. The commission");
     await p.getByRole("button", { name: "Open" }).first().click();
     await p.locator("#detail:not([hidden])").waitFor();
+    await p.locator("#rows").getByText("prop-1").waitFor();
+    await sees(p, "The applicant");
     await p.fill("#note", "customer asked by phone");
     await p.click("#send");
     await sees(p, "Sent");

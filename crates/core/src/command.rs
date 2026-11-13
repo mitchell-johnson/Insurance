@@ -457,6 +457,10 @@ pub enum Command {
         amount_minor: i64,
         value_date: NaiveDate,
         reference: String,
+        /// The bank account a cleared settlement moved through; only for
+        /// `SettlementCleared`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bank_account: Option<String>,
     },
 
     // --- policy transfer between groups ---

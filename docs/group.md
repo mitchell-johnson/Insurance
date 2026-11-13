@@ -28,7 +28,7 @@ Commands are an `Envelope` (`key`, `caller`, `actor`, `today`, `command`). Calle
 
 ### Routes
 
-Callers present the service key as a bearer token. The service sits behind the portal gateway, which has established who the person is.
+Callers are services, each with its own workload identity. A caller presents an Entra ID token issued for this service's application (`IC_GROUP_AUDIENCE`), and the token's app roles are the caller names it may use: `group-admin`, `employer-portal`, `member-portal`, `underwriting`, `reinsurance`, `cash-matching`. A request under a caller name the token does not carry is refused with 403 `role_not_held`; a missing, expired or foreign token is 401; and if Entra ID's signing keys cannot be fetched the answer is 503, because nothing is known about the token. The calling service has established who the person is and names them in `actor`. There is no shared key.
 
 - `POST /v1/schemes/{scheme}/files/{file}` with the file as the body and `x-ic-caller` (`employer-portal` or `group-admin`) and `x-ic-actor`. The bytes are stored in quarantine before the module hears of the file. 202 on success. Limit 32 MB.
 - `POST /v1/commands` with `{key, caller, actor, command}`. The business date is the core's. The driver's commands and `receive_file` are not accepted here.
@@ -43,7 +43,8 @@ Callers present the service key as a bearer token. The service sits behind the p
 - **Microsoft Defender for Storage** scans each blob on upload and writes the result as the index tag `Malware Scanning scan result`. The driver reads the tag: no tag yet means wait, `No threats found` means clean, and anything else refuses the file. The hash taken at upload is checked again when the file is read.
 - **Event Hubs** carries the module's events on `group-events`, one partition, each with `event-id`, `seq`, `module` and `type` properties.
 - **Workload identity** for the service (`AzureCredential::from_env`), with Storage Blob Data Contributor on the container and Event Hubs Data Sender on the hub and nothing else.
-- **Key Vault** holds the two secrets, mounted into the pod: the fingerprint salt and the service key.
+- **Key Vault** holds the fingerprint salt, mounted into the pod with the cluster token.
+- **Entra ID** identifies callers (`auth.rs`). The service's app registration defines one app role per caller name, and each calling service's identity is assigned the roles it needs. Signing keys are fetched from the tenant, kept for an hour, and fetched again when a new key ID appears.
 
 ### Settings
 
@@ -58,11 +59,13 @@ Callers present the service key as a bearer token. The service sits behind the p
 | `IC_GROUP_REINSURANCE_MODULE` | Name the reinsurance module is hosted under | `reinsurance` |
 | `IC_GROUP_UNDERWRITING_MODULE` | Name the underwriting module is hosted under | `underwriting` |
 | `IC_GROUP_FINGERPRINT_SALT` or `IC_GROUP_FINGERPRINT_SALT_FILE` | Secret, at least 32 characters, or the file holding it. Never change it: every member would look new | required |
-| `IC_GROUP_API_KEY` or `IC_GROUP_API_KEY_FILE` | Secret, at least 32 characters, or the file holding it | required |
+| `IC_GROUP_AUDIENCE` | Application ID URI of this service's app registration; callers' tokens must be issued for it | required |
+| `AZURE_TENANT_ID` | The tenant whose tokens are accepted (set by workload identity) | required |
+| `IC_GROUP_ENTRA_AUTHORITY` | Where the tenant issues tokens | `AZURE_AUTHORITY_HOST`, else `https://login.microsoftonline.com` |
 | `IC_GROUP_LISTEN` | Listen address | `0.0.0.0:8080` |
 | `IC_GROUP_CYCLE_SECONDS` | Seconds between passes when idle | `5` |
 
-The cluster token is read as every cluster client reads it (`ClusterAuth::from_lookup`). `deploy/k8s/group.yaml` is the deployment: two replicas, the three secrets mounted from Key Vault, reachable only from the portal service and the API.
+The cluster token is read as every cluster client reads it (`ClusterAuth::from_lookup`). `deploy/k8s/group.yaml` is the deployment: two replicas, the cluster token and the fingerprint salt mounted from Key Vault, reachable only from the portal service and the API.
 
 ## Operating it
 
@@ -85,5 +88,5 @@ The cluster token is read as every cluster client reads it (`ClusterAuth::from_l
 - **A continuation policy carries automatic cover only.** The option is for up to the automatic amount at leaving, on the retail product's standard terms. Underwritten excess and its terms are not carried over.
 - **One file layout per scheme.** A scheme has one mapping, for full files or for change files. Changing between them is a new mapping version.
 - **Not built:** splitting a scheme in two, delegated underwriting authority for an employer's broker, and a menu of health plans for members to choose from.
-- **The service key is one shared key.** Who the person is comes from the gateway in front; the service trusts `caller` and `actor` from any holder of the key. It must not be exposed beyond the gateway and the other services.
+- **The app registration is made by hand.** Callers are identified by Entra ID tokens, but the service's app registration, its six app roles and their assignment to the portal's and other services' identities are not in `infra/group.bicep` (Bicep needs the Microsoft Graph extension for them). They are a deployment step, like the API's in `docs/operations.md`. The person is named by the calling service in `actor` and is not verified again here.
 - **`infra/group.bicep` has not been deployed.** CI compiles it with the other templates, but `main.bicep` does not reference it yet, so it is deployed on its own into the same resource group, and the Defender for Storage resource uses a preview API version. `deploy/k8s/group.yaml` is in the kustomization and has likewise not been applied to a cluster.
