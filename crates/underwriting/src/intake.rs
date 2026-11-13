@@ -40,6 +40,16 @@ impl UnderwritingState {
                 "group administration opens a proposal only for a member's cover above the automatic acceptance limit",
             );
         }
+        if let crate::model::Entry::GroupExcess {
+            takeover_accepted_minor,
+            reinsurance_reference,
+            ..
+        } = &open.entry
+        {
+            if takeover_accepted_minor.is_some_and(|m| m <= 0) || reinsurance_reference.as_ref().is_some_and(|r| r.trim().is_empty()) {
+                return reject("takeover", "a takeover amount is above zero and a reinsurance reference is not blank");
+            }
+        }
         let lives: BTreeSet<&LifeId> = open.lives.iter().map(|l| &l.life).collect();
         if open.lives.is_empty() || lives.len() != open.lives.len() {
             return reject("lives", "a proposal needs at least one life, each named once");
@@ -95,6 +105,7 @@ impl UnderwritingState {
             interim: None,
             migrated: migration,
             issue_attempts: 0,
+            reoffers: vec![],
         };
         cx.event(Event::ProposalReceived {
             proposal: p.id.clone(),
@@ -108,6 +119,7 @@ impl UnderwritingState {
         if p.entry == crate::model::Entry::NewBusiness && !migration {
             flow::interim(&self.config, &mut p, cx);
         }
+        flow::takeover(&self.config, &mut p, cx)?;
         self.store(p);
         Ok(())
     }
@@ -306,6 +318,9 @@ pub(crate) fn respond(
     response: OfferResponse,
     signed: &SignedStep,
 ) -> Result<(), Reject> {
+    if crate::reoffer::is_reoffer(p, offer) {
+        return crate::reoffer::respond(p, cx, life, offer, response, signed);
+    }
     open_only(p)?;
     let proposal = p.id.clone();
     let f = life_mut(p, life)?;

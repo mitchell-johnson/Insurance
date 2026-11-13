@@ -259,6 +259,7 @@ fn terms(proposal: &str, entry: Entry, covers: Vec<CoverSpec>) -> Effect {
         effective: d(2027, 2, 1),
         covers,
         employer_may_see_loading: false,
+        member_pays_loading: false,
     }
 }
 
@@ -273,7 +274,11 @@ fn ended(proposal: &str, entry: Entry, outcome: &str) -> Effect {
 }
 
 fn excess() -> Entry {
-    Entry::GroupExcess { policy: "POL-1".into() }
+    Entry::GroupExcess {
+        policy: "POL-1".into(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    }
 }
 
 fn alteration() -> Entry {
@@ -491,6 +496,18 @@ async fn a_refusal_parks_the_effect_with_who_refused_and_why() {
             Value::Null,
             vec![],
             "not one excess cover on a proposal group administration opened",
+        ),
+        (
+            Effect::ReofferEnded {
+                key: "P1/reoffer/1/ended".into(),
+                proposal: "P1".into(),
+                policy: "POL-1".into(),
+                outcome: "declined".into(),
+            },
+            None,
+            Value::Null,
+            vec![],
+            "not a proposal group administration opened",
         ),
         (
             ended("P1", excess(), "lapsed"),
@@ -792,6 +809,7 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                     effective,
                     covers,
                     employer_may_see_loading: true,
+                    member_pays_loading: false,
                 },
                 other => other,
             },
@@ -802,6 +820,45 @@ async fn each_receiver_is_sent_what_it_expects_from_the_caller_it_allows() {
                 member_consents_to_itemising: true,
                 member_pays_loading: false,
             },
+        ),
+        (
+            match terms("grp-uw:north:shore:12", excess(), vec![cover(300_000_00)]) {
+                Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    ..
+                } => Effect::ApplyTerms {
+                    key,
+                    proposal,
+                    entry,
+                    policy,
+                    effective,
+                    covers,
+                    employer_may_see_loading: false,
+                    member_pays_loading: true,
+                },
+                other => other,
+            },
+            ExcessDecision::Accepted {
+                sum_insured_minor: 300_000_00,
+                loadings: vec![ic_money::DecStr::parse("0.5").unwrap()],
+                exclusions: vec!["EX-BACK".into()],
+                member_consents_to_itemising: false,
+                member_pays_loading: true,
+            },
+        ),
+        (
+            Effect::ReofferEnded {
+                key: "grp-uw:north:shore:12/reoffer/1/ended".into(),
+                proposal: "grp-uw:north:shore:12".into(),
+                policy: "POL-1".into(),
+                outcome: "expired".into(),
+            },
+            ExcessDecision::ReofferDeclined,
         ),
         (ended("grp-uw:north:shore:12", excess(), "declined"), ExcessDecision::Declined),
         (ended("grp-uw:north:shore:12", excess(), "lapsed"), ExcessDecision::NotProceeded),

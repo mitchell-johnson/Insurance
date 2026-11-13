@@ -60,6 +60,15 @@ pub enum Entry {
     /// the excess is underwritten.
     GroupExcess {
         policy: PolicyId,
+        /// The excess a previous insurer had accepted, honoured without
+        /// evidence under the scheme's takeover terms: an excess no larger
+        /// is accepted on standard terms with no disclosure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        takeover_accepted_minor: Option<i64>,
+        /// Reinsurance's reference, when it asked for the member's cover to
+        /// be underwritten because of accumulation.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reinsurance_reference: Option<String>,
     },
 }
 
@@ -67,7 +76,7 @@ impl Entry {
     pub fn policy(&self) -> Option<&PolicyId> {
         match self {
             Entry::NewBusiness => None,
-            Entry::Increase { policy } | Entry::Alteration { policy } | Entry::Reinstatement { policy } | Entry::GroupExcess { policy } => Some(policy),
+            Entry::Increase { policy } | Entry::Alteration { policy } | Entry::Reinstatement { policy } | Entry::GroupExcess { policy, .. } => Some(policy),
         }
     }
 }
@@ -630,9 +639,40 @@ pub struct Proposal {
     pub migrated: bool,
     /// How many times the issue command has been sent to the core.
     pub issue_attempts: u32,
+    /// For a group excess case: offers to move the loading on terms already
+    /// in place from the employer to the member, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reoffers: Vec<Reoffer>,
+}
+
+/// An offer to a scheme member to pay the loading on their excess cover
+/// themselves, on the terms already accepted. Staff ask for it when the
+/// scheme can no longer carry the loading in the employer's total.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Reoffer {
+    pub id: String,
+    pub life: LifeId,
+    /// Why staff asked, in their words. Never clinical.
+    pub reason: String,
+    pub made_at: DateTime<Utc>,
+    pub expires_on: NaiveDate,
+    pub status: OfferStatus,
+    pub responded_at: Option<DateTime<Utc>>,
+    /// The terms with the member paying have been written to the core.
+    #[serde(default)]
+    pub written: bool,
 }
 
 impl Proposal {
+    /// The offer to move a loading to the member that is waiting for them.
+    pub fn open_reoffer(&self) -> Option<&Reoffer> {
+        self.reoffers.last().filter(|r| r.status == OfferStatus::Open)
+    }
+    /// The member agreed to pay their own loading: every issue from then on
+    /// says so.
+    pub fn member_pays_loading(&self) -> bool {
+        self.reoffers.iter().any(|r| r.status == OfferStatus::Accepted)
+    }
     pub fn covers_on<'a>(&'a self, life: &'a LifeId) -> impl Iterator<Item = &'a ProposedCover> {
         self.covers.iter().filter(move |c| &c.life == life)
     }

@@ -188,6 +188,39 @@ impl ClaimsState {
                                         priority: i.priority,
                                         owed_minor: owed,
                                         paid_minor: 0,
+                                        nominated: false,
+                                    });
+                                }
+                            }
+                            if claim.claim_type == ClaimType::Death {
+                                // What is left goes to the nomination in force on the date of
+                                // death, in its shares, after every interest; anything not
+                                // nominated goes to the estate.
+                                let after = facts.interests.iter().map(|i| i.priority).max().unwrap_or(0) + 1;
+                                let total: u32 = facts.nominations.iter().map(|n| n.share_pct).sum();
+                                if total > 100 || facts.nominations.iter().any(|n| n.share_pct == 0) {
+                                    return refuse("invalid_nomination", "the nomination's shares are not between 1 and 100 percent in all");
+                                }
+                                let pool = left;
+                                let mut shares: Vec<(String, i64)> = facts
+                                    .nominations
+                                    .iter()
+                                    .map(|n| (n.party.clone(), pool * i64::from(n.share_pct) / 100))
+                                    .collect();
+                                if total == 100 {
+                                    // Whole shares leave a few cents unshared; the last nominee has them.
+                                    let rounding = pool - shares.iter().map(|(_, a)| a).sum::<i64>();
+                                    if let Some(last) = shares.last_mut() {
+                                        last.1 += rounding;
+                                    }
+                                }
+                                for (party, owed) in shares.into_iter().filter(|(_, a)| *a > 0) {
+                                    plan.interests.push(crate::model::InterestDue {
+                                        party,
+                                        priority: after,
+                                        owed_minor: owed,
+                                        paid_minor: 0,
+                                        nominated: true,
                                     });
                                 }
                             }
@@ -555,10 +588,15 @@ impl ClaimsState {
                     claim.payable_minor += plan.amount_minor - plan.deduct_minor;
                     claim.reserve_minor = 0;
                     for due in &plan.interests {
+                        let basis = if due.nominated { "nomination" } else { "interest" };
                         cx.notify(
                             "interest_to_be_paid",
                             &id,
-                            &[("party", due.party.clone()), ("owed_minor", due.owed_minor.to_string())],
+                            &[
+                                ("party", due.party.clone()),
+                                ("owed_minor", due.owed_minor.to_string()),
+                                ("basis", basis.to_string()),
+                            ],
                         );
                     }
                     claim.interests.extend(plan.interests.iter().cloned());

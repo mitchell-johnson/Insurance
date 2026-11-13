@@ -12,6 +12,7 @@ use tokio::signal::unix::{signal, SignalKind};
 
 use crate::carriers::{Carriers, Outbound, ReinsurerDrops, StaffFeed};
 use crate::driver::{ClusterAudiences, ClusterCore, ClusterModule, Driver};
+use crate::reinsurer_api::{self, Api, ApiConfig, ReinsurerAuth};
 
 /// Settings of the driver process.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,9 @@ pub struct Config {
     /// The SFTP storage account each reinsurer collects its statements and
     /// listings from, one container each. Unset, they are only filed.
     pub drops_endpoint: Option<String>,
+    /// The API reinsurers read their statements and listings from, if it
+    /// is served ([`ApiConfig::from_lookup`]).
+    pub api: Option<ApiConfig>,
 }
 
 impl Config {
@@ -64,6 +68,7 @@ impl Config {
             event_hubs: get("IC_EVENT_HUBS_ENDPOINT").ok_or("set IC_EVENT_HUBS_ENDPOINT to the Event Hubs namespace")?,
             event_hub: get("IC_REINSURANCE_EVENT_HUB").unwrap_or_else(|| "reinsurance-events".into()),
             drops_endpoint: get("IC_REINSURANCE_DROPS_ENDPOINT"),
+            api: ApiConfig::from_lookup(get)?,
         })
     }
 }
@@ -83,17 +88,39 @@ pub fn stop_signals() -> Result<impl Future<Output = ()>, String> {
 }
 
 /// Run the driver against the cluster until `stop` resolves, filing records
-/// in `records` and telling staff through `staff`. The cycle in progress
-/// finishes first.
-pub async fn serve(
+/// in `records` and telling staff through `staff`, and the reinsurer API
+/// beside it when it is configured. The cycle in progress and the requests
+/// in flight finish first. Fails before starting when the API's address
+/// cannot be listened on.
+pub async fn serve<W: WormStore + Clone + 'static>(
     config: Config,
     auth: ClusterAuth,
-    records: impl WormStore,
+    records: W,
     staff: impl StaffFeed,
     outbound: impl Outbound,
     stop: impl Future<Output = ()>,
 ) -> Result<(), String> {
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
+    let (stopping, stopped) = tokio::sync::watch::channel(false);
+    let api = match &config.api {
+        None => None,
+        Some(settings) => {
+            let listener = tokio::net::TcpListener::bind(settings.listen)
+                .await
+                .map_err(|e| format!("cannot listen for the reinsurer API on {}: {e}", settings.listen))?;
+            let app = reinsurer_api::router(Api {
+                module: ClusterModule::new(client.clone(), config.patience),
+                records: records.clone(),
+                auth: ReinsurerAuth::new(settings),
+            });
+            let mut stopped = stopped;
+            let shutdown = async move {
+                let _ = stopped.wait_for(|s| *s).await;
+            };
+            tracing::info!(listen = %settings.listen, "reinsurer API listening");
+            Some(tokio::spawn(async move { axum::serve(listener, app).with_graceful_shutdown(shutdown).await }))
+        }
+    };
     let driver = Driver {
         module: ClusterModule::new(client.clone(), config.patience),
         core: ClusterCore::new(client.clone(), config.patience),
@@ -106,7 +133,16 @@ pub async fn serve(
         outbound,
     };
     tracing::info!(?config, "reinsurance driver started");
+    // The API is told to stop when the driver is, and finishes its requests.
+    let stop = async move {
+        stop.await;
+        let _ = stopping.send(true);
+    };
     driver.run(&audiences, config.cycle_every, stop, |_, _| {}).await;
+    if let Some(api) = api {
+        // Serving returns once the requests in flight are answered.
+        let _ = api.await;
+    }
     tracing::info!("reinsurance driver stopped");
     Ok(())
 }
