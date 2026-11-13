@@ -54,6 +54,7 @@ fn scheme(c: &mut Cluster) -> (PartitionId, PolicyId) {
 /// 210,000 of cover above the automatic amount for exec-1: 25.38 a month at the scheme's rate.
 fn layer(id: &PolicyId, loading: Option<&str>, member_pays: MemberPays) -> Command {
     Command::AddExcessLayer(Box::new(ExcessLayer {
+        continues: None,
         policy: id.clone(),
         cover: "group-life".into(),
         life: exec(),

@@ -17,8 +17,9 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::NaiveDate;
 use chrono::{DateTime, Utc};
-use ic_complaints::model::{LetterDue, LetterKind};
+use ic_complaints::model::{LetterDue, LetterKind, OutcomeAwaitingDelivery};
 use ic_complaints::module::Query;
 use ic_complaints::{Command, Envelope};
 use ic_core::PartyId;
@@ -29,7 +30,7 @@ use crate::complaints_relay::Complaints;
 use crate::crypto::KeyWrap;
 use crate::driver::{Driver, DriverError, IssueRequest, Module};
 use crate::kinds::DataClass;
-use crate::model::{Channel, Document, Recipient, RecipientRole};
+use crate::model::{Channel, DeliveryStatus, Document, Recipient, RecipientRole};
 use crate::template::AlternateFormat;
 use crate::vault::ObjectStore;
 
@@ -39,6 +40,8 @@ pub trait Letters: Send + Sync {
     fn issue(&self, request: IssueRequest) -> impl Future<Output = Result<Document, DriverError>> + Send;
     /// The person's name and needs, from whichever contact point they have.
     fn person(&self, party: &PartyId) -> impl Future<Output = Result<Option<Contact>, DirectoryError>> + Send;
+    /// A document as it stands, with its deliveries.
+    fn document(&self, id: &str) -> impl Future<Output = Result<Document, DriverError>> + Send;
 }
 
 impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Letters for Driver<M, S, W, C, D> {
@@ -54,6 +57,10 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Le
         }
         Ok(None)
     }
+
+    async fn document(&self, id: &str) -> Result<Document, DriverError> {
+        Driver::document(self, id).await
+    }
 }
 
 impl<T: Letters> Letters for Arc<T> {
@@ -64,6 +71,10 @@ impl<T: Letters> Letters for Arc<T> {
     async fn person(&self, party: &PartyId) -> Result<Option<Contact>, DirectoryError> {
         T::person(self, party).await
     }
+
+    async fn document(&self, id: &str) -> Result<Document, DriverError> {
+        T::document(self, id).await
+    }
 }
 
 /// The template each kind of letter is issued from. The wording, its
@@ -73,6 +84,7 @@ pub struct LetterTemplates {
     pub acknowledgement: String,
     pub deadlock_notice: String,
     pub licence_notice: String,
+    pub update: String,
 }
 
 impl Default for LetterTemplates {
@@ -81,6 +93,7 @@ impl Default for LetterTemplates {
             acknowledgement: "complaint-acknowledgement".into(),
             deadlock_notice: "complaint-deadlock-notice".into(),
             licence_notice: "licence-event-notice".into(),
+            update: "complaint-update".into(),
         }
     }
 }
@@ -91,6 +104,7 @@ impl LetterTemplates {
             LetterKind::Acknowledgement => &self.acknowledgement,
             LetterKind::DeadlockNotice => &self.deadlock_notice,
             LetterKind::LicenceNotice => &self.licence_notice,
+            LetterKind::Update => &self.update,
         }
     }
 }
@@ -125,6 +139,10 @@ pub fn document_id(letter: &LetterDue) -> String {
         LetterKind::Acknowledgement => format!("complaint-ack:{}", letter.subject),
         LetterKind::DeadlockNotice => format!("complaint-deadlock:{}", letter.subject),
         LetterKind::LicenceNotice => format!("licence-notice:{}:{}", letter.subject, letter.party),
+        LetterKind::Update => {
+            let number = letter.detail.get("number").map_or("1", String::as_str);
+            format!("complaint-update:{}:{number}", letter.subject)
+        }
     }
 }
 
@@ -204,14 +222,23 @@ impl<M: Complaints, L: Letters> LetterIssuer<M, L> {
                 customer: letter.party.clone(),
                 document,
             },
+            LetterKind::Update => Command::RecordUpdate {
+                complaint: letter.subject.clone(),
+                document,
+            },
         };
+        self.tell(format!("letter:{}", document_id(letter)), command).await
+    }
+
+    /// Send a command to the register as the documents service.
+    async fn tell(&self, key: String, command: Command) -> Result<(), DriverError> {
         let at = (self.clock)();
         let applied = self
             .complaints
             .propose(Envelope {
                 // The attempt is in the key, so a refusal that was right
                 // once is not remembered against a later, different state.
-                key: format!("letter:{}:{}", document_id(letter), at.timestamp()),
+                key: format!("{key}:{}", at.timestamp()),
                 caller: "documents".into(),
                 actor: self.actor.clone(),
                 at,
@@ -221,7 +248,14 @@ impl<M: Complaints, L: Letters> LetterIssuer<M, L> {
         match applied.result {
             Ok(()) => Ok(()),
             // Someone recorded it between the question and now: it is done.
-            Err(reject) if matches!(reject.code.as_str(), "already_recorded" | "no_deadlock" | "not_outstanding" | "closed") => Ok(()),
+            Err(reject)
+                if matches!(
+                    reject.code.as_str(),
+                    "already_recorded" | "no_deadlock" | "not_outstanding" | "closed" | "no_outcome"
+                ) =>
+            {
+                Ok(())
+            }
             Err(reject) => Err(DriverError::Refused(reject)),
         }
     }
@@ -255,20 +289,82 @@ impl<M: Complaints, L: Letters> LetterIssuer<M, L> {
         Ok(true)
     }
 
-    /// One pass over the letters that are due.
+    /// Report each written outcome whose every addressee has it, with the
+    /// day the last of them did. An outcome nobody could be reached with is
+    /// said, and left for the handler.
+    async fn report_outcomes(&self, pass: &mut LetterPass) {
+        let answer = self.complaints.ask(Query::OutcomesAwaitingDelivery { limit: self.batch }).await;
+        let awaiting = answer.and_then(|a| serde_json::from_value::<Vec<OutcomeAwaitingDelivery>>(a).map_err(|e| DriverError::Answer(e.to_string())));
+        let awaiting = match awaiting {
+            Ok(awaiting) => awaiting,
+            Err(e) => {
+                pass.errors.push(format!("outcomes awaiting delivery: {e}"));
+                return;
+            }
+        };
+        for outcome in &awaiting {
+            let document = match self.letters.document(&outcome.document).await {
+                Ok(document) => document,
+                Err(e) => {
+                    pass.errors.push(format!("{}: {e}", outcome.document));
+                    continue;
+                }
+            };
+            let addressees: Vec<&DeliveryStatus> = document
+                .deliveries
+                .iter()
+                .filter(|d| d.recipient.role == RecipientRole::Addressee)
+                .map(|d| &d.status)
+                .collect();
+            if addressees.contains(&&DeliveryStatus::Undeliverable) {
+                pass.errors.push(format!(
+                    "{}: the outcome of {} could not be delivered; left for the handler",
+                    outcome.document, outcome.complaint
+                ));
+                continue;
+            }
+            let days: Option<Vec<NaiveDate>> = addressees
+                .iter()
+                .map(|s| match s {
+                    DeliveryStatus::Delivered { on, .. } => Some(*on),
+                    _ => None,
+                })
+                .collect();
+            // Still on its way, or nobody was addressed.
+            let Some(on) = days.and_then(|d| d.into_iter().max()) else { continue };
+            // Proof cannot come before the decision it proves.
+            let command = Command::RecordOutcomeDelivered {
+                complaint: outcome.complaint.clone(),
+                on: on.max(outcome.decided_on),
+            };
+            match self.tell(format!("outcome-delivered:{}", outcome.complaint), command).await {
+                Ok(()) => pass.reported += 1,
+                Err(e) => pass.errors.push(format!("{}: {e}", outcome.document)),
+            }
+        }
+    }
+
+    /// One pass over the letters that are due, then over the outcomes
+    /// waiting for proof of delivery.
     pub async fn pass(&self) -> LetterPass {
         let mut pass = LetterPass::default();
+        self.issue_due(&mut pass).await;
+        self.report_outcomes(&mut pass).await;
+        pass
+    }
+
+    async fn issue_due(&self, pass: &mut LetterPass) {
         let due: Vec<LetterDue> = match self.complaints.ask(Query::LettersDue { limit: self.batch }).await {
             Ok(answer) => match serde_json::from_value(answer) {
                 Ok(due) => due,
                 Err(e) => {
                     pass.errors.push(format!("letters due: {e}"));
-                    return pass;
+                    return;
                 }
             },
             Err(e) => {
                 pass.errors.push(format!("letters due: {e}"));
-                return pass;
+                return;
             }
         };
         // A kind with no wording is said once, not once a letter.
@@ -278,7 +374,7 @@ impl<M: Complaints, L: Letters> LetterIssuer<M, L> {
                 pass.left += 1;
                 continue;
             }
-            match self.one(letter, &mut pass).await {
+            match self.one(letter, pass).await {
                 Ok(true) => pass.issued += 1,
                 Ok(false) => pass.left += 1,
                 Err(DriverError::NotFound(what)) if what.contains("template") => {
@@ -292,7 +388,6 @@ impl<M: Complaints, L: Letters> LetterIssuer<M, L> {
                 Err(e) => pass.errors.push(format!("{}: {e}", document_id(letter))),
             }
         }
-        pass
     }
 }
 
