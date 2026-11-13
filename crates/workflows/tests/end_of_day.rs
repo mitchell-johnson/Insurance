@@ -555,7 +555,10 @@ async fn the_run_executes_unit_orders_and_replays_a_corrected_price() {
 
     let ledger = Ledger::start("units", 1, 1).await;
     let steps = ledger.steps();
-    let policy = common::first_policy();
+    // Units are held only on a unit-linked policy, so the book gets one.
+    let issue = ic_sim::persona::invest_plan(900, common::opening(), common::d(1985, 6, 1), ic_product::Sex::Male);
+    let policy = issue.policy.clone();
+    ledger.run(0, "issue-units", "new-business", ic_sim::persona::issue_command(issue)).await;
     let growth = FundId("growth".to_string());
     let invest = |command: InvestCommand| Command::Investment(Box::new(command));
     let fund = FundDefinition {

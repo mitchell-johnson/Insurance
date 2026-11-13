@@ -24,6 +24,10 @@ pub struct Target {
     /// The module's code for each of our account numbers at this bank, to
     /// read the bank's statements by.
     pub accounts: BTreeMap<String, String>,
+    /// The client certificate and its key, in PEM, presented to the bank.
+    pub identity: Option<String>,
+    /// The bank's private certificate authority, in PEM, if it has one.
+    pub authority: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -98,15 +102,75 @@ pub trait Bank: Send + Sync {
     fn messages(&self, to: &Target, after: u64) -> impl Future<Output = Result<Vec<Numbered>, ChannelError>> + Send;
 }
 
-/// A bank reached over HTTPS.
+/// A bank reached over HTTPS, presenting a client certificate where the
+/// endpoint has one.
 #[derive(Clone)]
 pub struct HttpBank {
     http: reqwest::Client,
+    /// A client per certificate and authority, by the hash of both, so a
+    /// renewed certificate takes effect on the next request.
+    tls: std::sync::Arc<std::sync::Mutex<BTreeMap<String, reqwest::Client>>>,
 }
 
 impl Default for HttpBank {
     fn default() -> Self {
-        Self { http: ic_azure::http_client() }
+        Self {
+            http: ic_azure::http_client(),
+            tls: Default::default(),
+        }
+    }
+}
+
+/// Why the certificates cannot be used. Nothing was sent.
+fn unusable(e: reqwest::Error) -> ChannelError {
+    ChannelError::NotSent(format!("the certificates cannot be used: {e}"))
+}
+
+impl HttpBank {
+    /// The client for a target: the plain one, or one that presents the
+    /// target's client certificate and trusts the bank's own authority.
+    fn client(&self, to: &Target) -> Result<reqwest::Client, ChannelError> {
+        if to.identity.is_none() && to.authority.is_none() {
+            return Ok(self.http.clone());
+        }
+        let mut hasher = <sha2::Sha256 as sha2::Digest>::new();
+        for part in [&to.identity, &to.authority] {
+            sha2::Digest::update(&mut hasher, part.as_deref().unwrap_or_default().as_bytes());
+            sha2::Digest::update(&mut hasher, [0u8]);
+        }
+        let key = hex::encode(sha2::Digest::finalize(hasher));
+        let mut cache = self
+            .tls
+            .lock()
+            .map_err(|_| ChannelError::NotSent("the TLS client cache is poisoned".to_string()))?;
+        if let Some(client) = cache.get(&key) {
+            return Ok(client.clone());
+        }
+        let mut builder = reqwest::Client::builder()
+            .use_rustls_tls()
+            .connect_timeout(std::time::Duration::from_secs(5))
+            .timeout(std::time::Duration::from_secs(30));
+        if let Some(pem) = &to.identity {
+            if !pem.contains("-----BEGIN CERTIFICATE-----") || !pem.contains("PRIVATE KEY-----") {
+                return Err(ChannelError::NotSent(
+                    "the client certificate cannot be used: it needs a certificate and its private key in PEM".to_string(),
+                ));
+            }
+            let identity = reqwest::Identity::from_pem(pem.as_bytes()).map_err(unusable)?;
+            builder = builder.identity(identity);
+        }
+        if let Some(pem) = &to.authority {
+            if !pem.contains("-----BEGIN CERTIFICATE-----") {
+                return Err(ChannelError::NotSent(
+                    "the bank's certificate authority cannot be used: it needs a certificate in PEM".to_string(),
+                ));
+            }
+            let authority = reqwest::Certificate::from_pem(pem.as_bytes()).map_err(unusable)?;
+            builder = builder.add_root_certificate(authority);
+        }
+        let client = builder.build().map_err(unusable)?;
+        cache.insert(key, client.clone());
+        Ok(client)
     }
 }
 
@@ -155,6 +219,7 @@ impl Bank for HttpBank {
     async fn submit(&self, to: &Target, batch: &Batch, manifest: &Manifest) -> Result<Receipt, ChannelError> {
         // A batch the format cannot carry never leaves.
         let wire = batch.wire().map_err(ChannelError::NotSent)?;
+        let http = self.client(to)?;
         let content_type = match to.format {
             WireFormat::Own => "text/plain",
             WireFormat::Iso20022 => "application/xml",
@@ -162,15 +227,13 @@ impl Bank for HttpBank {
         let request = match (to.kind, to.format) {
             (ChannelKind::File, _) => {
                 let manifest = serde_json::json!(manifest).to_string();
-                self.http
-                    .put(format!("{}/files/{}", to.url, batch.id))
+                http.put(format!("{}/files/{}", to.url, batch.id))
                     .header("x-manifest", base64::engine::general_purpose::STANDARD.encode(manifest))
                     .header("content-type", content_type)
                     .body(wire)
             }
-            (ChannelKind::Api, WireFormat::Own) => self.http.post(format!("{}/batches", to.url)).header("idempotency-key", &batch.id).json(batch),
-            (ChannelKind::Api, WireFormat::Iso20022) => self
-                .http
+            (ChannelKind::Api, WireFormat::Own) => http.post(format!("{}/batches", to.url)).header("idempotency-key", &batch.id).json(batch),
+            (ChannelKind::Api, WireFormat::Iso20022) => http
                 .post(format!("{}/batches", to.url))
                 .header("idempotency-key", &batch.id)
                 .header("content-type", content_type)
@@ -182,7 +245,7 @@ impl Bank for HttpBank {
 
     async fn holds(&self, to: &Target, id: &str) -> Result<Option<String>, ChannelError> {
         let url = format!("{}/{}/{id}", to.url, Self::place(to.kind));
-        let response = self.http.get(url).bearer_auth(&to.token).send().await.map_err(transport)?;
+        let response = self.client(to)?.get(url).bearer_auth(&to.token).send().await.map_err(transport)?;
         if response.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
         }
@@ -192,7 +255,7 @@ impl Bank for HttpBank {
 
     async fn messages(&self, to: &Target, after: u64) -> Result<Vec<Numbered>, ChannelError> {
         let url = format!("{}/messages?after={after}", to.url);
-        let response = self.http.get(url).bearer_auth(&to.token).send().await.map_err(transport)?;
+        let response = self.client(to)?.get(url).bearer_auth(&to.token).send().await.map_err(transport)?;
         match to.format {
             WireFormat::Own => body(checked(response).await?).await,
             WireFormat::Iso20022 => read_documents(body(checked(response).await?).await?, &to.accounts),

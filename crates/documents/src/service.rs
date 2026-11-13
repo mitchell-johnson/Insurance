@@ -1,16 +1,19 @@
 //! The documents service: the driver run as a process.
 //!
-//! It runs the driver's cycle on a timer and listens for the delivery
-//! reports Azure Event Grid posts from Communication Services. It holds no
-//! state: any number can run, and one that stops is simply restarted.
+//! It runs the driver's cycle on a timer, listens for the delivery reports
+//! Azure Event Grid posts from Communication Services, and, where Entra ID
+//! is configured, hands out documents as PDFs to the portal and to staff.
+//! It holds no state: any number can run, and one that stops is simply
+//! restarted.
 
 use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::Bytes;
-use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -19,12 +22,15 @@ use sha2::{Digest, Sha256};
 use ic_azure::credential::AzureCredential;
 use ic_raft::{ClusterAuth, ClusterClient};
 
+use crate::auth::{self, AuthError, Entra};
 use crate::channels::{delivery_reports, subscription_validation, AzureChannels, Channels, ContactDirectory, HttpDirectory};
 use crate::complaint_letters::{run_letters, LetterIssuer, LetterTemplates};
 use crate::complaints_relay::{run_relay, ClusterComplaints, ClusterLicences, Relay};
 use crate::crypto::{KeyVaultWrap, KeyWrap};
 use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverError, EventHubsPublisher, EventPublisher, Module};
-use crate::vault::{BlobVault, ObjectStore};
+use crate::kinds::DataClass;
+use crate::pdf::Fonts;
+use crate::vault::{BlobVault, ObjectStore, VaultError};
 
 /// Where everything is. Read from the environment; nothing here is secret
 /// except the webhook key, which comes from a mounted Key Vault secret.
@@ -54,6 +60,19 @@ pub struct Config {
     pub cycle_every: Duration,
     /// How long start-up waits for a ledger node to answer.
     pub cluster_wait: Duration,
+    /// Entra ID for the download route: authority, tenant and this
+    /// service's app ID URI. None leaves the route off.
+    pub entra: Option<EntraConfig>,
+    /// The insurer's typeface, regular and bold TrueType files. None sets
+    /// documents in the bundled Liberation Sans.
+    pub fonts: Option<(String, String)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntraConfig {
+    pub authority: String,
+    pub tenant: String,
+    pub audience: String,
 }
 
 impl std::fmt::Debug for Config {
@@ -84,6 +103,20 @@ impl Config {
                 .ok_or("IC_DOCUMENTS_CYCLE_SECONDS must be a whole number of seconds above zero")?,
             None => 15,
         };
+        let entra = match (get("IC_ENTRA_TENANT"), get("IC_DOCUMENTS_AUDIENCE")) {
+            (Some(tenant), Some(audience)) => Some(EntraConfig {
+                authority: get("IC_ENTRA_AUTHORITY").unwrap_or_else(|| auth::ENTRA_AUTHORITY.into()),
+                tenant,
+                audience,
+            }),
+            (None, None) => None,
+            _ => return Err("IC_ENTRA_TENANT and IC_DOCUMENTS_AUDIENCE are set together or not at all".into()),
+        };
+        let fonts = match (get("IC_DOCUMENTS_FONT_REGULAR"), get("IC_DOCUMENTS_FONT_BOLD")) {
+            (Some(regular), Some(bold)) => Some((regular, bold)),
+            (None, None) => None,
+            _ => return Err("IC_DOCUMENTS_FONT_REGULAR and IC_DOCUMENTS_FONT_BOLD are set together or not at all".into()),
+        };
         Ok(Self {
             cluster: need("IC_CLUSTER_NODES")?,
             vault_endpoint: need("IC_DOCUMENTS_VAULT_ENDPOINT")?,
@@ -104,8 +137,27 @@ impl Config {
             listen: get("IC_DOCUMENTS_LISTEN").unwrap_or_else(|| "0.0.0.0:8080".into()),
             cycle_every: Duration::from_secs(seconds),
             cluster_wait: Duration::from_secs(60),
+            entra,
+            fonts,
         })
     }
+}
+
+/// Read the insurer's typeface, or the bundled one when none is set.
+pub fn load_fonts(paths: Option<&(String, String)>) -> Result<Fonts, String> {
+    let Some((regular, bold)) = paths else {
+        return Ok(Fonts::bundled());
+    };
+    let read = |path: &str| std::fs::read(path).map_err(|e| format!("font {path}: {e}"));
+    Fonts::new(read(regular)?, read(bold)?).map_err(|e| format!("the typeface cannot be used: {e}"))
+}
+
+/// What the download route needs: who may ask, and the typeface to set
+/// documents in.
+#[derive(Clone)]
+pub struct Downloads {
+    pub entra: Entra,
+    pub fonts: Fonts,
 }
 
 struct Web<M, S, W, C, D> {
@@ -113,6 +165,7 @@ struct Web<M, S, W, C, D> {
     /// The hash of the webhook key: comparing hashes takes the same time
     /// whatever was presented.
     key_hash: [u8; 32],
+    downloads: Option<Downloads>,
 }
 
 fn hash(text: &[u8]) -> [u8; 32] {
@@ -151,6 +204,95 @@ where
     (StatusCode::OK, Json(json!({ "recorded": recorded })))
 }
 
+fn refuse(status: StatusCode, error: impl Into<String>) -> Response {
+    (status, Json(json!({ "error": error.into() }))).into_response()
+}
+
+/// `GET /v1/documents/{id}/pdf`: the document as issued, as a PDF.
+///
+/// The portal asks as a customer, named in `x-ic-party`, who must be the
+/// document's owner or one of its recipients; any other document is not
+/// found, so that the portal cannot learn what exists. Staff ask as a
+/// named person (`x-ic-actor`) for a stated purpose (`x-ic-purpose`), and
+/// never for clinical documents, which are read where the claims team
+/// keeps them. Each download is logged, never its contents.
+async fn download<M, S, W, C, D>(State(web): State<Arc<Web<M, S, W, C, D>>>, Path(id): Path<String>, headers: HeaderMap) -> Response
+where
+    M: Module + 'static,
+    S: ObjectStore + 'static,
+    W: KeyWrap + 'static,
+    C: Channels + 'static,
+    D: ContactDirectory + 'static,
+{
+    let Some(downloads) = &web.downloads else {
+        return refuse(StatusCode::NOT_FOUND, "downloads are not configured");
+    };
+    let caller = match downloads.entra.authenticate(&headers).await {
+        Ok(caller) => caller,
+        Err(e @ AuthError::Keys(_)) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+        Err(e) => return refuse(StatusCode::UNAUTHORIZED, e.to_string()),
+    };
+    let party = auth::header(&headers, "x-ic-party");
+    let actor = auth::header(&headers, "x-ic-actor");
+    let purpose = auth::header(&headers, "x-ic-purpose");
+    match caller.role.as_str() {
+        "portal" if party.is_none() => return refuse(StatusCode::BAD_REQUEST, "x-ic-party names the customer asking"),
+        "staff" if actor.is_none() || purpose.is_none() => return refuse(StatusCode::BAD_REQUEST, "x-ic-actor and x-ic-purpose name who is asking and why"),
+        "portal" | "staff" => {}
+        other => return refuse(StatusCode::FORBIDDEN, format!("the role {other} may not download documents")),
+    }
+    let document = match web.driver.document(&id).await {
+        Ok(document) => document,
+        Err(DriverError::NotFound(_)) => return refuse(StatusCode::NOT_FOUND, "no such document"),
+        Err(e) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    };
+    if let Some(party) = party.filter(|_| caller.role == "portal") {
+        let theirs = document.owner.0 == party || document.deliveries.iter().any(|d| d.recipient.party.0 == party);
+        if !theirs {
+            return refuse(StatusCode::NOT_FOUND, "no such document");
+        }
+    }
+    if caller.role == "staff" && document.data_class == DataClass::Clinical {
+        return refuse(StatusCode::FORBIDDEN, "clinical documents are not downloaded here");
+    }
+    if document.destroyed_on.is_some() {
+        return refuse(StatusCode::GONE, "the document has been destroyed");
+    }
+    let bytes = match web.driver.pdf(&id, &downloads.fonts).await {
+        Ok(bytes) => bytes,
+        Err(DriverError::Vault(VaultError::Destroyed)) => return refuse(StatusCode::GONE, "the document has been destroyed"),
+        Err(e @ (DriverError::Pdf(_) | DriverError::Template(_) | DriverError::Crypto(_))) => {
+            tracing::error!(document = %id, error = %e, "a document could not be set as a PDF");
+            return refuse(StatusCode::INTERNAL_SERVER_ERROR, "the document could not be set as a PDF");
+        }
+        Err(e) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    };
+    tracing::info!(
+        document = %id,
+        role = %caller.role,
+        subject = %caller.subject,
+        party = party.unwrap_or(""),
+        actor = actor.unwrap_or(""),
+        purpose = purpose.unwrap_or(""),
+        "document downloaded"
+    );
+    let file: String = id
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    let disposition = HeaderValue::from_str(&format!("attachment; filename=\"{file}.pdf\"")).unwrap_or(HeaderValue::from_static("attachment"));
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("application/pdf")),
+            (header::CONTENT_DISPOSITION, disposition),
+            (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+        ],
+        bytes,
+    )
+        .into_response()
+}
+
 /// The service's routes: `POST /v1/delivery-reports` for Event Grid, and
 /// `GET /healthz`.
 pub fn router<M, S, W, C, D>(driver: Arc<Driver<M, S, W, C, D>>, webhook_key: &str) -> Router
@@ -161,12 +303,26 @@ where
     C: Channels + 'static,
     D: ContactDirectory + 'static,
 {
+    router_with(driver, webhook_key, None)
+}
+
+/// The routes, with `GET /v1/documents/{id}/pdf` when `downloads` is given.
+pub fn router_with<M, S, W, C, D>(driver: Arc<Driver<M, S, W, C, D>>, webhook_key: &str, downloads: Option<Downloads>) -> Router
+where
+    M: Module + 'static,
+    S: ObjectStore + 'static,
+    W: KeyWrap + 'static,
+    C: Channels + 'static,
+    D: ContactDirectory + 'static,
+{
     let web = Arc::new(Web {
         driver,
         key_hash: hash(webhook_key.as_bytes()),
+        downloads,
     });
     Router::new()
         .route("/v1/delivery-reports", post(reports::<M, S, W, C, D>))
+        .route("/v1/documents/{id}/pdf", get(download::<M, S, W, C, D>))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(web)
 }
@@ -252,6 +408,11 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
     let client = ClusterClient::from_list(&config.cluster)?.with_auth(auth);
     let partitions = client.partitions(config.cluster_wait).await?;
     let patience = Duration::from_secs(10);
+    let fonts = load_fonts(config.fonts.as_ref())?;
+    let downloads = config.entra.as_ref().map(|e| Downloads {
+        entra: Entra::new(&e.authority, &e.tenant, &e.audience),
+        fonts: fonts.clone(),
+    });
     let driver = Arc::new(Driver {
         module: ClusterModule::new(client.clone(), patience),
         objects: BlobVault::new(&config.vault_endpoint, &config.vault_container, credential.clone()),
@@ -262,7 +423,8 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
             &config.sms_from,
             credential.clone(),
             BlobVault::new(&config.vault_endpoint, &config.print_container, credential.clone()),
-        ),
+        )
+        .with_fonts(fonts),
         directory: HttpDirectory::new(&config.customer_master, &config.customer_master_scope, credential.clone()),
         actor: "documents-service".to_string(),
         clock: Arc::new(chrono::Utc::now),
@@ -292,7 +454,7 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         stop.await;
         let _ = stopping.send(true);
     });
-    let web = tokio::spawn(serve(listener, router(driver.clone(), &config.webhook_key), until_stopped()));
+    let web = tokio::spawn(serve(listener, router_with(driver.clone(), &config.webhook_key, downloads), until_stopped()));
     let complaints = tokio::spawn(run_relay(
         relay,
         EventHubsPublisher::new(&config.event_hubs_namespace, &config.complaints_event_hub, credential.clone()),

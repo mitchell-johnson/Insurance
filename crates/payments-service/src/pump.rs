@@ -101,7 +101,13 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             .filter(|(_, a)| a.bank == ch.bank)
             .filter_map(|(code, a)| Some((a.at_bank.as_ref()?.number.clone(), code.clone())))
             .collect();
+        let secret = |name: &Option<String>, what: &str| match name {
+            None => Ok(None),
+            Some(name) => self.secrets.secret(name).map(Some).ok_or_else(|| format!("the {what} {name} is not available")),
+        };
         Ok(Target {
+            identity: secret(&endpoint.client_certificate, "client certificate")?,
+            authority: secret(&endpoint.bank_authority, "bank's certificate authority")?,
             accounts,
             kind: ch.kind,
             format: ch.format,
