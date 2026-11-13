@@ -22,17 +22,31 @@ def health_schedule(limits):
 def investment_account(funds):
     return {"kind": "investment_account", "funds": funds}
 
-def stepped(table):
-    return {"premium_type": "stepped", "table": table, "basis": "per_thousand"}
+def lower_of():
+    """A life whose sex a sex-rated table does not hold pays the lower of its female and male rates."""
+    return {"kind": "lower_of"}
 
-def level(table, to_age):
-    return {"premium_type": "level", "table": table, "basis": "per_thousand", "level_to_age": to_age}
+def blended(female_share):
+    """Such a life pays this share of the female rate and the rest of the male rate."""
+    return {"kind": "blended", "female_share": female_share}
 
-def per_life(table):
-    return {"premium_type": "stepped", "table": table, "basis": "per_life"}
+def stepped(table, unmatched_sex_rating = lower_of()):
+    return {"premium_type": "stepped", "table": table, "basis": "per_thousand", "unmatched_sex_rating": unmatched_sex_rating}
 
-def group_unit_rate(table):
-    return {"premium_type": "group_unit_rate", "table": table, "basis": "per_thousand"}
+def level(table, to_age, unmatched_sex_rating = lower_of()):
+    return {
+        "premium_type": "level",
+        "table": table,
+        "basis": "per_thousand",
+        "level_to_age": to_age,
+        "unmatched_sex_rating": unmatched_sex_rating,
+    }
+
+def per_life(table, unmatched_sex_rating = lower_of()):
+    return {"premium_type": "stepped", "table": table, "basis": "per_life", "unmatched_sex_rating": unmatched_sex_rating}
+
+def group_unit_rate(table, unmatched_sex_rating = lower_of()):
+    return {"premium_type": "group_unit_rate", "table": table, "basis": "per_thousand", "unmatched_sex_rating": unmatched_sex_rating}
 
 def benefit_category(code, salary_multiple, max_sum_insured):
     return {"code": code, "salary_multiple": salary_multiple, "max_sum_insured_minor": max_sum_insured}

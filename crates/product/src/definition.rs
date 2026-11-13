@@ -101,6 +101,25 @@ pub struct Rating {
     pub basis: RateBasis,
     #[serde(default)]
     pub level_to_age: Option<u32>,
+    /// How a life is rated when the table rates by sex and the life's
+    /// rating sex is not recorded, as for a life who is neither male nor
+    /// female (`docs/decisions.md`, decision 1).
+    #[serde(default)]
+    pub unmatched_sex_rating: UnmatchedSexRating,
+}
+
+/// The basis for rating a life whose sex a sex-rated table does not hold.
+/// Gender, what the person tells us, is kept by the customer master and is
+/// never a rating factor; this is about the rating factor being absent.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum UnmatchedSexRating {
+    /// The lower of the table's female and male rates for the life's other
+    /// facts: nobody pays more for not picking a category.
+    #[default]
+    LowerOf,
+    /// `female_share` of the female rate and the rest of the male rate.
+    Blended { female_share: DecStr },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

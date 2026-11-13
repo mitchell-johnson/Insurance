@@ -50,7 +50,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | --- | ---: | ---: | ---: | ---: |
 | POL Policy model and lifecycle | 7 | 7 | 1 | 5 |
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
-| PRD Products, rating and quotes | 6 | 5 | 1 | 2 |
+| PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
 | COL Collection, cash matching, standing and dunning | 13 | 7 | 8 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
@@ -77,12 +77,12 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **246** | **132** | **199** | **136** |
+| **Total** | **247** | **131** | **199** | **136** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 86 | 29 | 27 |
+| B | 87 | 28 | 27 |
 | C | 129 | 70 | 147 |
 | D | 2 | 3 | 15 |
 
