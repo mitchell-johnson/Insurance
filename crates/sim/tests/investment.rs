@@ -15,7 +15,7 @@ use ic_core::{Command, PolicyId, Reject};
 use ic_money::{Currency::NZD, DecStr, FundId, Money, RoundingMode};
 use ic_product::{Frequency, Sex};
 use ic_sim::config::shipped_activations;
-use ic_sim::persona::{issue_command, term_life};
+use ic_sim::persona::{invest_plan, issue_command, term_life};
 use ic_sim::Cluster;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -112,16 +112,16 @@ fn invested() -> (Cluster, PolicyId) {
     for cmd in shipped_activations().unwrap() {
         c.activate_everywhere(cmd).unwrap();
     }
-    for name in ["growth", "bond"] {
+    for name in ["growth", "balanced"] {
         invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(fund(name)))).unwrap();
     }
-    let issue = term_life(1, start(), d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+    let issue = invest_plan(1, start(), d(1990, 3, 10), Sex::Female);
     let policy = issue.policy.clone();
     c.submit(0, "new-business", issue_command(issue)).unwrap();
     let receipt = Command::ApplyReceipt {
         policy: policy.clone(),
         receipt: "r1".to_string(),
-        amount: Money::new(61_84 + 5_000_00, NZD),
+        amount: Money::new(5_000_00, NZD),
     };
     c.submit(0, "cash-matching", receipt).unwrap();
     let allocate = InvestCommand::AllocateCash {
@@ -254,7 +254,7 @@ fn orders_that_cannot_be_honoured_are_refused_when_placed() {
     let buy = |id: &str, minor: i64, date: NaiveDate| order(id, &policy, "growth", Direction::Buy, OrderAmount::Cash { minor }, date);
 
     let mut unknown = buy("o-unknown", 100_00, today);
-    unknown.fund = fund_id("property");
+    unknown.fund = fund_id("cash");
     assert_eq!(code(place(&mut c, unknown)), "unknown_fund");
     assert_eq!(code(place(&mut c, buy("o/slash", 100_00, today))), "invalid_order");
     assert_eq!(code(place(&mut c, buy("o-past", 100_00, d(2027, 11, 12)))), "invalid_order");
@@ -264,7 +264,7 @@ fn orders_that_cannot_be_honoured_are_refused_when_placed() {
     let units_buy = order("o-units", &policy, "growth", Direction::Buy, OrderAmount::Units { micro: 5 }, today);
     assert_eq!(code(place(&mut c, units_buy)), "invalid_order");
     let mut switch_buy = buy("o-switch-buy", 100_00, today);
-    switch_buy.switch_to = Some(fund_id("bond"));
+    switch_buy.switch_to = Some(fund_id("balanced"));
     assert_eq!(code(place(&mut c, switch_buy)), "invalid_order");
     assert_eq!(code(place(&mut c, buy("o-big", 5_000_01, today))), "insufficient_pending_cash");
     let sell = |id: &str, amount: OrderAmount| order(id, &policy, "growth", Direction::Sell, amount, today);
@@ -356,12 +356,12 @@ fn orders_that_cannot_be_honoured_are_refused_when_placed() {
     place(&mut c, sell("s-3", OrderAmount::Cash { minor: 100_00 })).unwrap();
 
     // A fund closed to new money takes no premium, and a policy that is not in force takes no order.
-    let mut closed = fund("bond");
+    let mut closed = fund("balanced");
     closed.version = 2;
     closed.content_hash = "hash-bond-2".to_string();
     closed.open_to_new_money = false;
     invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(closed))).unwrap();
-    let bond = order("b-1", &policy, "bond", Direction::Buy, OrderAmount::Cash { minor: 1_00 }, next);
+    let bond = order("b-1", &policy, "balanced", Direction::Buy, OrderAmount::Cash { minor: 1_00 }, next);
     assert_eq!(code(place(&mut c, bond)), "fund_closed");
     assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
 }
@@ -400,7 +400,7 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     let tuesday = d(2027, 11, 16);
     let mut switch = order("sw-1", &policy, "growth", Direction::Sell, OrderAmount::Units { micro: 500_000_000 }, tuesday);
     switch.kind = OrderKind::SwitchOut;
-    switch.switch_to = Some(fund_id("bond"));
+    switch.switch_to = Some(fund_id("balanced"));
     let mut same = switch.clone();
     same.order_id = "sw-self".to_string();
     same.switch_to = Some(fund_id("growth"));
@@ -412,12 +412,12 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     )
     .unwrap();
     // A second switch, of 100 units, to a fund that does not price on Tuesday or Wednesday.
-    let mut income = fund("income");
+    let mut income = fund("cash");
     income.non_pricing_days = [tuesday, d(2027, 11, 17)].into();
     invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(income))).unwrap();
     let mut second = order("sw-2", &policy, "growth", Direction::Sell, OrderAmount::Units { micro: 100_000_000 }, tuesday);
     second.kind = OrderKind::SwitchOut;
-    second.switch_to = Some(fund_id("income"));
+    second.switch_to = Some(fund_id("cash"));
     place(&mut c, second).unwrap();
     // Bond struck Tuesday's price before growth did. The customer asked for the switch
     // before either price was known, so its buy still takes Tuesday's bond price.
@@ -425,7 +425,7 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     invest(
         &mut c,
         "unit-pricing",
-        InvestCommand::ActivateUnitPrice(Box::new(price("b-tue", "bond", tuesday, "1.0000", "1.0000"))),
+        InvestCommand::ActivateUnitPrice(Box::new(price("b-tue", "balanced", tuesday, "1.0000", "1.0000"))),
     )
     .unwrap();
     invest(
@@ -440,17 +440,17 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
         let on_issue = c.state(0).investment.units_on_issue(&c.state(0).ledger, &fund_id(name));
         (on_issue.executed_through, on_issue.pending)
     };
-    assert_eq!(coming(&c, "bond"), (None, BTreeMap::from([(tuesday, 1)])));
-    assert_eq!(coming(&c, "income"), (None, BTreeMap::from([(d(2027, 11, 18), 1)])));
+    assert_eq!(coming(&c, "balanced"), (None, BTreeMap::from([(tuesday, 1)])));
+    assert_eq!(coming(&c, "cash"), (None, BTreeMap::from([(d(2027, 11, 18), 1)])));
     execute(&mut c, "growth", tuesday).unwrap();
-    assert_eq!(coming(&c, "bond"), (None, BTreeMap::from([(tuesday, 1)])));
+    assert_eq!(coming(&c, "balanced"), (None, BTreeMap::from([(tuesday, 1)])));
     // 500 units at 3.00 = 1,500.00 to bond; 300.00 needs exactly 100 units; 100 units to income.
     assert_eq!(units(&c, &policy, "growth"), 2_000_000_000 - 500_000_000 - 100_000_000 - 100_000_000);
     let second_half = c.state(0).investment.order("sw-1.in").expect("the switch placed its buy").clone();
     assert_eq!(second_half.order.amount, OrderAmount::Cash { minor: 1_500_00 });
     assert_eq!(
         (second_half.order.fund.clone(), second_half.order.pricing_date, second_half.order.kind),
-        (fund_id("bond"), tuesday, OrderKind::SwitchIn)
+        (fund_id("balanced"), tuesday, OrderKind::SwitchIn)
     );
     assert_eq!(second_half.state, OrderState::Pending);
     // The other switch's buy waits for income's next pricing date, Thursday.
@@ -470,10 +470,10 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     // Bond's Tuesday price is in force, so the buy is ready for the run at once.
     let todo = c.state(0).investment.executable();
     assert_eq!(todo.len(), 1);
-    assert_eq!((todo[0].fund.clone(), todo[0].pricing_date, todo[0].pending), (fund_id("bond"), tuesday, 1));
-    execute(&mut c, "bond", tuesday).unwrap();
-    assert_eq!(units(&c, &policy, "bond"), 1_500_000_000);
-    assert_eq!(coming(&c, "bond"), (Some(tuesday), BTreeMap::new()));
+    assert_eq!((todo[0].fund.clone(), todo[0].pricing_date, todo[0].pending), (fund_id("balanced"), tuesday, 1));
+    execute(&mut c, "balanced", tuesday).unwrap();
+    assert_eq!(units(&c, &policy, "balanced"), 1_500_000_000);
+    assert_eq!(coming(&c, "balanced"), (Some(tuesday), BTreeMap::new()));
 
     // Thursday: sell everything in growth twice over. The first takes it all for what it
     // fetches; the cash order asks for more than is left and is cancelled; income's buy executes.
@@ -500,15 +500,15 @@ fn a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run() {
     invest(
         &mut c,
         "unit-pricing",
-        InvestCommand::ActivateUnitPrice(Box::new(price("i-thu", "income", thursday, "1.5000", "1.5000"))),
+        InvestCommand::ActivateUnitPrice(Box::new(price("i-thu", "cash", thursday, "1.5000", "1.5000"))),
     )
     .unwrap();
     c.take_events();
     execute(&mut c, "growth", thursday).unwrap();
-    execute(&mut c, "income", thursday).unwrap();
+    execute(&mut c, "cash", thursday).unwrap();
     // 1,300 units at 1.00: worth less than 9,999.00, so all of it is sold for 1,300.00.
     assert_eq!(units(&c, &policy, "growth"), 0);
-    assert_eq!(units(&c, &policy, "income"), 200_000_000);
+    assert_eq!(units(&c, &policy, "cash"), 200_000_000);
     assert!(matches!(c.state(0).investment.order("z-cash").unwrap().state, OrderState::Cancelled { .. }));
     let events = invest_events(&mut c);
     let executed: Vec<&str> = events
@@ -763,8 +763,8 @@ fn the_book_answers_its_readers_and_reconciles_to_the_ledger() {
     assert_eq!(
         tampered(&|b| {
             let growth = b["funds"]["growth"].clone();
-            b["funds"]["bond"] = growth;
-            b["orders"]["buy-1"]["order"]["fund"] = "bond".into();
+            b["funds"]["balanced"] = growth;
+            b["orders"]["buy-1"]["order"]["fund"] = "balanced".into();
         }),
         ["fund_cash_position", "fund_cash_position"]
     );
@@ -1219,4 +1219,63 @@ fn funds_are_loaded_from_files_and_bad_files_are_refused() {
         broken.to_string().contains("funds/x.star") && broken.to_string().contains("cut-off"),
         "{broken}"
     );
+}
+
+/// Purpose: money goes only into a fund on the menu of the policy's product. A buy, or a
+/// switch into, a fund that is active but not on the menu is refused; a policy whose
+/// product has no investment account can neither set cash aside for investment nor buy;
+/// and a fee rebate may go back into a fund that is no longer on the menu.
+/// Why it matters: the fund menu is what the customer was sold and what the product's
+/// disclosure covers. Units in a fund outside it, or units on a term life policy, would be
+/// an investment the insurer never offered and cannot administer or report.
+#[test]
+fn money_goes_only_into_funds_on_the_products_menu() {
+    let (mut c, policy) = invested();
+    let today = start();
+    invest(&mut c, "config", InvestCommand::ActivateFund(Box::new(fund("property")))).unwrap();
+
+    let off_menu = order("o-property", &policy, "property", Direction::Buy, OrderAmount::Cash { minor: 100_00 }, today);
+    assert_eq!(code(place(&mut c, off_menu.clone())), "fund_not_offered");
+    let mut rebate = off_menu;
+    rebate.kind = OrderKind::FeeRebate;
+    assert_eq!(code(place(&mut c, rebate)), "accepted");
+
+    place(
+        &mut c,
+        order("o-growth", &policy, "growth", Direction::Buy, OrderAmount::Cash { minor: 1_000_00 }, today),
+    )
+    .unwrap();
+    invest(
+        &mut c,
+        "unit-pricing",
+        InvestCommand::ActivateUnitPrice(Box::new(price("g-menu", "growth", today, "2.0000", "2.0000"))),
+    )
+    .unwrap();
+    execute(&mut c, "growth", today).unwrap();
+    let next = d(2027, 11, 16);
+    let mut switch = order("o-switch", &policy, "growth", Direction::Sell, OrderAmount::AllUnits, next);
+    switch.kind = OrderKind::SwitchOut;
+    switch.switch_to = Some(fund_id("property"));
+    assert_eq!(code(place(&mut c, switch.clone())), "fund_not_offered");
+    switch.switch_to = Some(fund_id("balanced"));
+    assert_eq!(code(place(&mut c, switch)), "accepted");
+
+    let issue = term_life(2, start(), d(1985, 6, 1), Sex::Male, false, 500_000_00, None, Frequency::Monthly, None);
+    let term = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: term.clone(),
+        receipt: "r-term".to_string(),
+        amount: Money::new(1_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    let allocate = InvestCommand::AllocateCash {
+        policy: term.clone(),
+        reference: "alloc-term".to_string(),
+        amount_minor: 100_00,
+    };
+    assert_eq!(code(invest(&mut c, "policy-servicing", allocate)), "not_invested");
+    let buy = order("o-term", &term, "growth", Direction::Buy, OrderAmount::Cash { minor: 100_00 }, next);
+    assert_eq!(code(place(&mut c, buy)), "not_invested");
+    assert!(c.reconcile().is_empty());
 }

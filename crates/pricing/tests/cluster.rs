@@ -17,11 +17,11 @@ use ic_pricing::adapters::{BlobInbox, BlobOutbound, ClusterCore, ClusterModule};
 use ic_pricing::command::*;
 use ic_pricing::driver::{Driver, Inbox, Module, Scan};
 use ic_pricing::service::{serve, Config};
-use ic_product::{Frequency, Sex};
+use ic_product::Sex;
 use ic_raft::server::{self, ColdTarget, EventTarget, Settings};
 use ic_raft::{ClusterAuth, ClusterClient};
 use ic_sim::config::shipped_activations;
-use ic_sim::persona::{issue_command, term_life};
+use ic_sim::persona::{invest_plan, issue_command};
 use serde_json::json;
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
@@ -124,7 +124,7 @@ async fn a_valuation_becomes_a_price_an_order_and_an_extract() {
     // The core: a business date, the products, the fund, a policy with cash
     // waiting, and a buy order for today.
     let today = d(2027, 11, 15);
-    let issue = term_life(1, today, d(1990, 3, 10), Sex::Female, false, 500_000_00, None, Frequency::Monthly, None);
+    let issue = invest_plan(1, today, d(1990, 3, 10), Sex::Female);
     let policy = issue.policy.clone();
     let invest = |c: InvestCommand| CoreCommand::Investment(Box::new(c));
     let mut setup = vec![("leader", CoreCommand::OpenBusinessDate { date: today })];
