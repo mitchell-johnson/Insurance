@@ -35,6 +35,21 @@ pub fn start_date() -> NaiveDate {
     d(2027, 11, 15)
 }
 
+/// A local port that no other test in this process has been given. Asking
+/// the system for a free port and letting it go can give two clusters that
+/// start at the same moment the same port: one then fails to listen, and its
+/// nodes send their log to the other cluster's.
+pub fn free_port() -> u16 {
+    static GIVEN: std::sync::Mutex<BTreeSet<u16>> = std::sync::Mutex::new(BTreeSet::new());
+    let mut given = GIVEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        if given.insert(port) {
+            return port;
+        }
+    }
+}
+
 /// A fresh directory for one test's node disks.
 pub fn scratch(name: &str) -> PathBuf {
     let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}-{}", std::process::id(), RUN.fetch_add(1, Ordering::Relaxed)));

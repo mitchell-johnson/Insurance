@@ -72,7 +72,7 @@ impl Cluster {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=3u64)
             .map(|id| {
-                let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+                let port = common::free_port();
                 (id, format!("127.0.0.1:{port}"))
             })
             .collect();

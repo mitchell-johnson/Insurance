@@ -31,7 +31,7 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
     let dir = scratch("catch-up");
     let peers: BTreeMap<NodeId, String> = (1..=3u64)
         .map(|id| {
-            let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+            let port = common::free_port();
             (id, format!("127.0.0.1:{port}"))
         })
         .collect();
@@ -154,7 +154,7 @@ async fn a_node_that_fell_behind_the_log_is_caught_up_by_snapshot_over_http() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn raft_endpoints_refuse_callers_they_cannot_place() {
     let dir = scratch("raft-door");
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = common::free_port();
     let addr = format!("127.0.0.1:{port}");
     let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
     let node = server::start(Settings {

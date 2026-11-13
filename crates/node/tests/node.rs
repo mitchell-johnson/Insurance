@@ -26,7 +26,7 @@ async fn the_deployed_node_hosts_every_module() {
 
     let dir = std::env::temp_dir().join(format!("ic-node-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let auth = ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
     let settings = Settings {
@@ -70,4 +70,17 @@ fn the_binary_says_what_it_needs() {
     assert!(!output.status.success());
     let said = String::from_utf8_lossy(&output.stderr);
     assert!(said.contains("IC_CLUSTER") || said.contains("IC_NODE_ID"), "{said}");
+}
+
+/// A local port that no other test in this process has been given: two
+/// nodes starting at the same moment must not be handed the same one.
+fn free_port() -> u16 {
+    static GIVEN: std::sync::Mutex<std::collections::BTreeSet<u16>> = std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let mut given = GIVEN.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    loop {
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        if given.insert(port) {
+            return port;
+        }
+    }
 }
