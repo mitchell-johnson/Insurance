@@ -4,7 +4,8 @@
 // Action:    Action::"read" on Field::"<field>" (attributes: name, class),
 //            Action::"<command>" on Command::"<command>",
 //            Action::"match" | "search" | "relationships" | "export" | "routing"
-//            | "merge" | "unmerge" | "reviews" | "audit" | "operate" on Party::"party".
+//            | "merge" | "unmerge" | "reviews" | "audit" | "operate" | "authority"
+//            on Party::"party".
 // Context:   purpose (declared by the caller and logged), self (the person the
 //            caller acts for is this party), actor_roles (the kinds of
 //            relationship that person holds to a policy or scheme this party is
@@ -40,6 +41,14 @@ when {
 permit(principal, action == Action::"routing", resource)
 when {
     [Service::"portal", Service::"staff", Service::"claims", Service::"policy-servicing", Service::"complaints"].contains(principal)
+};
+
+// Whether a representative may act for someone: an attorney, a guardian or
+// someone holding a written authority. Answers allow, refuse or route.
+permit(principal, action == Action::"authority", resource)
+when {
+    [Service::"portal", Service::"staff", Service::"claims", Service::"policy-servicing", Service::"payments",
+     Service::"complaints"].contains(principal)
 };
 
 // ---- Reading fields, by purpose ------------------------------------------

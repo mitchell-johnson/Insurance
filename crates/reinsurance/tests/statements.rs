@@ -1166,3 +1166,69 @@ fn a_settlement_recorded_without_its_bank_account_is_cleared_when_it_is_named() 
     assert!(h.ri.exceptions().contains_key("settlement_returned:1"));
     assert_eq!(without_keys(&h.replayed()), without_keys(&h.ri));
 }
+
+/// Purpose: a listing longer than the treaty's part size is filed as numbered parts, each its
+/// own record with its hash, and the statement names every part, its hash and its row count
+/// instead of carrying the rows; the release log names every record released; a treaty asking
+/// for parts of no rows is refused.
+/// Why it matters: each document is held in replicated state until it is filed. One document
+/// the size of the whole ceded book would grow with the book until it slowed every node, and a
+/// reinsurer must be able to check from the statement alone that no part went missing.
+#[test]
+fn a_long_listing_is_filed_in_parts_the_statement_names() {
+    let mut b = Bench::empty();
+    let parted = RETAIL.replace(
+        "statements(\"quarterly\", agree_before_payment = True)",
+        "statements(\"quarterly\", agree_before_payment = True, listing_part_rows = 1)",
+    );
+    assert_ne!(parted, RETAIL, "the shipped treaty's statement terms moved");
+    for (file, source) in [("retail_life_surplus.star", parted.as_str()), ("group_life_surplus.star", GROUP)] {
+        let treaty = Box::new(load_treaty(file, source).unwrap());
+        b.ok("config", Command::ActivateTreaty { treaty });
+    }
+    let table = Box::new(ic_reinsurance::loader::load_rate_table("ri_life_base.star", RATES).unwrap());
+    b.ok("config", Command::ActivateRateTable { table });
+    let none = RETAIL.replace(
+        "statements(\"quarterly\", agree_before_payment = True)",
+        "statements(\"quarterly\", agree_before_payment = True, listing_part_rows = 0)",
+    );
+    assert!(load_treaty("t.star", &none).unwrap_err().to_string().contains("between 1 and 10,000 rows"));
+
+    for (policy, party, dob) in [("P1", "anna", d(1990, 3, 10)), ("P2", "bob", d(1985, 7, 1))] {
+        b.issue(1, policy, party, vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+        b.factors(policy, "L1", dob, false);
+        b.premium_due(1, policy, 1, d(2027, 2, 1), d(2027, 3, 1), &[]);
+    }
+    b.today = d(2027, 4, 2);
+    let applied = b.ok("month-end", cut(d(2027, 3, 31)));
+    let documents: Vec<(&String, &String, serde_json::Value)> = applied
+        .notices
+        .iter()
+        .filter_map(|n| match n {
+            Notice::Document { name, sha256, body } => Some((name, sha256, serde_json::from_str(body).unwrap())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(documents.len(), 3, "two parts and the statement");
+    let statement = &documents[2].2;
+    assert!(statement.get("listing").is_none());
+    let named = statement["listing_parts"].as_array().unwrap();
+    assert_eq!(named.len(), 2);
+    for (i, (name, sha256, part)) in documents[..2].iter().enumerate() {
+        assert_eq!(
+            **name,
+            format!("reinsurance/retail-life-surplus/reinsurer-north/statement-1-listing-{}-of-2.json", i + 1)
+        );
+        assert_eq!(
+            (named[i]["name"].as_str(), named[i]["sha256"].as_str(), named[i]["rows"].as_u64()),
+            (Some(name.as_str()), Some(sha256.as_str()), Some(1))
+        );
+        assert_eq!(
+            (part["part"].as_u64(), part["of"].as_u64(), part["listing"].as_array().map(Vec::len)),
+            (Some(i as u64 + 1), Some(2), Some(1))
+        );
+    }
+    assert_eq!(b.ri.statement(1).unwrap().listing_rows, 2);
+    assert!(applied.notices.iter().any(|n| matches!(n, Notice::ReleaseLogged { .. })));
+    assert_eq!(without_keys(&b.replayed()), without_keys(&b.ri));
+}

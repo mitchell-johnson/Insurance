@@ -50,6 +50,20 @@ pub enum Role {
     Treasury,
     /// The module's own drivers: bank feedback, core results, core events.
     Service,
+    /// Talks to customers in arrears and records what was agreed. Holds the
+    /// ordinary and financial classes only.
+    Collections,
+}
+
+/// What a conversation with a payer decided about a dishonoured collection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationOutcome {
+    /// The payer agreed it may be presented once more.
+    Represent,
+    /// It is not presented again; what is owed is settled another way, such
+    /// as a hardship arrangement.
+    DoNotRepresent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,6 +107,10 @@ pub struct Authority {
     /// Dishonours in a row. A collection still settled when its run closes
     /// resets it.
     pub dishonours: u32,
+    /// The payer is in financial hardship. A dishonour is not presented
+    /// again until someone has talked to them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hardship: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
