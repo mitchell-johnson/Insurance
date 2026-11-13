@@ -54,15 +54,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | BIL Billing and earning | 6 | 5 | 4 | 5 |
 | COL Collection, cash matching, standing and dunning | 13 | 7 | 8 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
-| AUD Audience scoping, customer app and identity | 6 | 11 | 2 | 8 |
+| AUD Audience scoping, customer app and identity | 7 | 10 | 2 | 7 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 21 | 8 | 1 | 6 |
-| CLM Claims and claims operations | 25 | 10 | 7 | 7 |
+| UW Underwriting, underwriting operations and delegated authority | 22 | 7 | 1 | 5 |
+| CLM Claims and claims operations | 26 | 10 | 6 | 7 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
 | GRP Group scheme administration | 23 | 8 | 9 | 3 |
 | JNT Joint lives, ownership, assignments and dependants | 2 | 9 | 20 | 15 |
-| ADV Advisers and commission | 41 | 1 | 3 | 3 |
+| ADV Advisers and commission | 42 | 1 | 2 | 3 |
 | HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
 | SVC Policy servicing | 4 | 6 | 16 | 5 |
@@ -70,20 +70,20 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
-| STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
+| STF Staff authorisation and permissions | 10 | 6 | 2 | 5 |
 | PAY Payment runs and bank connectivity | 13 | 0 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **283** | **126** | **168** | **125** |
+| **Total** | **288** | **124** | **165** | **123** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
-| B | 91 | 27 | 24 |
-| C | 161 | 66 | 119 |
+| B | 92 | 26 | 24 |
+| C | 165 | 65 | 116 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -115,9 +115,9 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **BIL** (3): BIL-001, BIL-002, BIL-013
 - **COL** (5): COL-003, COL-004, COL-007, COL-010, COL-025
 - **XFR** (1): XFR-004
-- **AUD** (7): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-011, AUD-017
+- **AUD** (6): AUD-001, AUD-002, AUD-003, AUD-008, AUD-010, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
-- **UW** (5): UW-002, UW-003, UW-006, UW-014, UW-029
+- **UW** (4): UW-003, UW-006, UW-014, UW-029
 - **CLM** (7): CLM-002, CLM-003, CLM-008, CLM-009, CLM-026, CLM-028, CLM-039
 - **INV** (1): INV-015
 - **GRP** (2): GRP-013, GRP-028

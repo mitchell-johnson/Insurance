@@ -740,7 +740,7 @@ async fn devices_are_managed_by_their_owner() {
     assert_eq!(portal.send("GET", "/app/v1/sync", &fresh, None).await.0, StatusCode::OK);
 }
 
-/// Purpose: over HTTP the policyholder lets a relative look and ends it; the relative reads the policy and can neither let anyone else in nor ask for a change.
+/// Purpose: over HTTP the policyholder lets a relative look and ends it; the relative reads the policy and can neither let anyone else in, ask for a change, appoint or remove an adviser, give consent nor approve a request.
 /// Why it matters: this is the route the app's "share with family" screen calls. A relative who could extend their own access or submit a cancellation would be a second policyholder nobody agreed to.
 #[tokio::test]
 async fn a_relative_is_let_in_to_look_and_no_more() {
@@ -781,6 +781,29 @@ async fn a_relative_is_let_in_to_look_and_no_more() {
         portal.write("PUT", "sub-daughter", &friend, json!({ "access": "viewer" })).await.0,
         StatusCode::FORBIDDEN
     );
+    // Every other command on the policy is refused to a viewer too (AUD-011).
+    let before = portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.1;
+    for (method, path, body) in [
+        (
+            "POST",
+            format!("/app/v1/policies/{policy}/advisers"),
+            json!({ "adviser": "adv-1", "engagement": "e1" }),
+        ),
+        ("DELETE", format!("/app/v1/policies/{policy}/advisers/adv-1"), json!({})),
+        (
+            "PUT",
+            format!("/app/v1/policies/{policy}/consent"),
+            json!({ "party": "daughter", "given": true }),
+        ),
+        ("POST", "/app/v1/requests/r-none/approve".to_string(), json!({})),
+    ] {
+        let (status, answer) = portal.write(method, "sub-daughter", &path, body).await;
+        assert!(
+            status == StatusCode::FORBIDDEN || status == StatusCode::NOT_FOUND || status == StatusCode::BAD_REQUEST,
+            "{method} {path}: {status} {answer}"
+        );
+    }
+    assert_eq!(portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.1, before, "nothing changed");
 
     assert_eq!(portal.write("PUT", "sub-kiri", &path, json!({ "access": null })).await.0, StatusCode::OK);
     assert_eq!(portal.get("sub-daughter", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::NOT_FOUND);
@@ -864,7 +887,13 @@ async fn the_staff_console_asks_the_four_questions() {
         (status, problem["detail"].as_str().unwrap().contains("no staff role")),
         (StatusCode::FORBIDDEN, true)
     );
-    assert_eq!(portal.get("sub-sue", "/staff/v1/me").await.1["templates"], json!(["service"]));
+    // Your own access: your roles, the profile that sets your limits, and (below) your access log with each refusal's reason.
+    let me = portal.get("sub-sue", "/staff/v1/me").await.1;
+    assert_eq!(
+        (&me["staff"], &me["templates"], &me["profile"]["id"], &me["team"]),
+        (&json!(true), &json!(["service"]), &json!("p"), &json!("ops")),
+        "{me}"
+    );
 
     let (status, view) = portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-1&scope=")).await;
     assert_eq!((status, &view["withheld"]), (StatusCode::OK, &json!(0)));

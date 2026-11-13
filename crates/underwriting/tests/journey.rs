@@ -302,3 +302,57 @@ fn an_offer_can_be_declined_expire_or_be_countered() {
     };
     assert_eq!(serde_json::to_value(&command.covers[0].loadings).unwrap(), serde_json::json!(["0.25"]));
 }
+
+/// Purpose: Tom Clarke's application is referred to a person, who accepts it with a 50%
+/// loading. The offer goes to him with reasons in plain words, he accepts with a signed step,
+/// and the core is sent the loading as the fraction it rates with and nothing else from the
+/// file: no reason codes, no notes, no answers. The decision's reference is found from the
+/// policy, life and cover, and the reasons and notes stay with the decision.
+/// Why it matters: the core is read by servicing, payments and every channel. A reason or
+/// clinical note in it would reach people who must not see it, while the loading must be there
+/// for the premium to be right and the decision must still be findable at claim.
+#[test]
+fn a_referred_loading_reaches_the_core_as_a_rate_and_a_reference_only() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    let referred = w.disclose("P1", "L1", &yes("hazardous_occupation"));
+    assert!(referred.events.iter().any(|e| matches!(e, Event::Referred { .. })));
+    assert!(w.p("P1").lives[&LifeId::from("L1")].decisions.is_empty(), "the rules decided nothing");
+    let case = w.take("P1", "L1", "amy");
+    let decided = w.propose(&case, "amy", vec![accept("life", 50, None)]).unwrap();
+    let offered = w.automatic(&decided);
+    let reasons = offered
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Notify {
+                kind: NoticeKind::OfferMade,
+                to: Recipient::Party { .. },
+                reasons,
+                ..
+            } => Some(reasons.clone()),
+            _ => None,
+        })
+        .expect("an offer notice to Tom");
+    assert!(
+        !reasons.is_empty() && reasons.iter().all(|r| !r.starts_with("RC-") && r.ends_with('.')),
+        "{reasons:?}"
+    );
+
+    let accepted = w.respond("P1", "L1", OfferResponse::Accept);
+    let Some(Effect::IssuePolicy { command, .. }) = accepted.effects.first() else {
+        panic!("no issue")
+    };
+    assert_eq!(serde_json::to_value(&command.covers[0].loadings).unwrap(), serde_json::json!(["0.50"]));
+    let sent = serde_json::to_string(command).unwrap();
+    for kept_back in ["RC-", "vault://", "hazardous", "amy"] {
+        assert!(!sent.contains(kept_back), "{kept_back} reached the core: {sent}");
+    }
+
+    let policy = w.p("P1").policy.clone();
+    let terms = w.s.terms_on(&policy, &LifeId::from("L1"), "life").expect("terms on the policy");
+    assert_eq!((terms.decision.as_str(), terms.loading_percent), ("P1/L1/d1", 50));
+    let decision = &w.p("P1").lives[&LifeId::from("L1")].decisions[0];
+    assert!(decision.signatures[0].reasons.contains("RC-0101"));
+    assert_eq!(decision.notes_ref.as_deref(), Some("vault://notes"));
+}
