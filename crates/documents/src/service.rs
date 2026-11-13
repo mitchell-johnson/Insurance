@@ -32,6 +32,7 @@ use crate::driver::{ClusterCore, ClusterModule, CoreLink, Cycle, Driver, DriverE
 use crate::kinds::DataClass;
 use crate::listing::{run_listing, ClusterRows};
 use crate::pdf::Fonts;
+use crate::repayment_letters::{run_repayment_letters, ClusterClaimsLetters, ClusterReferences, RepaymentRelay};
 use crate::requested_letters::run_requested_letters;
 use crate::vault::{BlobVault, ObjectStore, VaultError};
 
@@ -490,6 +491,17 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
         until_stopped(),
         |_| {},
     ));
+    let repayments = tokio::spawn(run_repayment_letters(
+        RepaymentRelay {
+            claims: ClusterClaimsLetters::new(client.clone(), partitions, patience),
+            references: ClusterReferences::new(client.clone()),
+            clock: Arc::new(chrono::Utc::now),
+        },
+        driver.clone(),
+        config.cycle_every,
+        until_stopped(),
+        |_| {},
+    ));
     let publisher = EventHubsPublisher::new(&config.event_hubs_namespace, &config.event_hub, credential);
     let core = ClusterCore::new(client, partitions, patience);
     run_cycles(driver, publisher, Some(core), config.cycle_every, until_stopped(), |_| {}).await;
@@ -497,6 +509,7 @@ pub async fn run(config: Config, credential: AzureCredential, auth: ClusterAuth,
     letters.await.map_err(|e| e.to_string())?;
     requested.await.map_err(|e| e.to_string())?;
     notices.await.map_err(|e| e.to_string())?;
+    repayments.await.map_err(|e| e.to_string())?;
     listing.await.map_err(|e| e.to_string())?;
     web.await.map_err(|e| e.to_string())?.map_err(|e| e.to_string())
 }
