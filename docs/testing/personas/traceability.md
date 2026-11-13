@@ -169,7 +169,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-010 | full | `underwriting/tests/libraries.rs::a_case_tracks_ownership_escalation_and_priority`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
 | UW-012 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
-| UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
+| UW-013 | full | `channels/tests/http.rs::the_person_insured_signs_their_disclosure`<br>`underwriting/tests/lifecycle.rs::preparation_checks_answers_and_runs_the_rules`<br>`underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
 | UW-014 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
 | UW-016 | full | `underwriting/tests/lifecycle.rs::a_life_with_overseas_history_is_decided_on_alternative_evidence_and_the_policy_waits`<br>`underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
@@ -185,7 +185,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-026 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
-| UW-029 | part | `underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
+| UW-029 | full | `underwriting/tests/lifecycle.rs::the_log_of_an_underwriting_run_holds_ids_and_references_only`<br>`underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
 
 ## CLM Claims and claims operations
 
