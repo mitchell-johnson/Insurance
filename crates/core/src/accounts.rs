@@ -38,6 +38,8 @@ pub mod role {
     pub const EARNED_PREMIUM: &str = "earned_premium";
     pub const GST_PAYABLE: &str = "gst_payable";
     pub const LEVY_PAYABLE: &str = "levy_payable";
+    /// Tax kept back from money paid out, owed to the revenue authority.
+    pub const WITHHOLDING_TAX_PAYABLE: &str = "withholding_tax_payable";
     pub const LAPSE_WRITE_OFF: &str = "lapse_write_off";
     pub const AVOIDANCE_PREMIUM_RETAINED: &str = "avoidance_premium_retained";
     pub const ROUNDING: &str = "rounding";
@@ -268,6 +270,16 @@ pub fn levy_payable(code: &str, c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Liability,
         role::LEVY_PAYABLE,
+    )
+}
+/// Tax withheld from a payment, by kind: `rwt` on interest, `benefit` on
+/// an income benefit. Remitted on the revenue authority's cycle.
+pub fn withholding_tax_payable(code: &str, c: Currency) -> Account {
+    acct(
+        format!("int/withholding_tax_payable/{code}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Liability,
+        role::WITHHOLDING_TAX_PAYABLE,
     )
 }
 pub fn lapse_write_off(product: &str, c: Currency) -> Account {

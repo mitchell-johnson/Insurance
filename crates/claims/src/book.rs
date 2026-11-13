@@ -490,6 +490,7 @@ impl ClaimsState {
         // A payee who was told and declined: worked out, posted, and reversed.
         let declined = if claim.interest_declined.is_some() { fresh } else { 0 };
         cx.core.execute(Instruction::Pay {
+            interest_withheld_minor: 0,
             claim: id.to_string(),
             policy: claim.policy.clone(),
             payment_ref: payment_ref.clone(),
@@ -577,6 +578,7 @@ impl ClaimsState {
         }
         let close = claim.payable_minor == amount_minor && claim.status == Status::Admitted;
         cx.core.execute(Instruction::Pay {
+            interest_withheld_minor: 0,
             claim: id.to_string(),
             policy: claim.policy.clone(),
             payment_ref: payment_ref.clone(),
@@ -652,6 +654,7 @@ impl ClaimsState {
         };
         cx.core.execute(if reissue {
             Instruction::Pay {
+                interest_withheld_minor: 0,
                 claim: id.to_string(),
                 policy: claim.policy.clone(),
                 payment_ref: payment_ref.clone(),
@@ -1060,6 +1063,7 @@ impl ClaimsState {
                 return Err(stale());
             }
             cx.core.execute(Instruction::Pay {
+                interest_withheld_minor: 0,
                 claim: claim.id.clone(),
                 policy: claim.policy.clone(),
                 payment_ref: payment_ref.clone(),
@@ -1100,6 +1104,7 @@ impl ClaimsState {
             let last = item.period_end >= s.end;
             if item.gross_minor > 0 || last {
                 cx.core.execute(Instruction::PayBenefit {
+                    tax_withheld_minor: 0,
                     claim: claim.id.clone(),
                     policy: claim.policy.clone(),
                     cover: claim.cover.clone(),

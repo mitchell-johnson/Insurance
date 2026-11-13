@@ -322,6 +322,7 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             close,
             interest_minor,
             interest_declined_minor,
+            interest_withheld_minor,
             offset,
             ..
         } => pay(
@@ -333,7 +334,7 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             amount_minor,
             payee,
             close,
-            (interest_minor, interest_declined_minor),
+            (interest_minor, interest_declined_minor, interest_withheld_minor),
             offset,
         ),
         Instruction::PayBenefit {
@@ -345,8 +346,20 @@ fn execute(state: &mut CoreState, ctx: &mut Ctx<'_>, instruction: Instruction) -
             offset,
             payee,
             close,
+            tax_withheld_minor,
             ..
-        } => pay_benefit(s, p, ctx, &claim, payment_ref, (period_start, period_end), gross_minor, offset, payee, close),
+        } => pay_benefit(
+            s,
+            p,
+            ctx,
+            &claim,
+            payment_ref,
+            (period_start, period_end),
+            (gross_minor, tax_withheld_minor),
+            offset,
+            payee,
+            close,
+        ),
         Instruction::PaymentReturned { claim, payment_ref, .. } => payment_returned(p, &claim, &payment_ref),
         Instruction::ExGratia {
             claim,
@@ -564,10 +577,13 @@ fn pay(
     amount: i64,
     payee: String,
     close: bool,
-    (interest, declined): (i64, i64),
+    (interest, declined, withheld): (i64, i64, i64),
     offset: Option<Offset>,
 ) -> Result<(), Reject> {
     let record = known(policy, claim)?;
+    if !(0..=(interest - declined).max(0)).contains(&withheld) {
+        return invalid("tax is withheld from the interest paid and is no more than it");
+    }
     if !(0..=interest.max(0)).contains(&declined) {
         return invalid("interest declined is no more than the interest owed");
     }
@@ -627,14 +643,31 @@ fn pay(
             &[("payment_ref", payment_ref.clone()), ("reason", "declined_by_payee".to_string())],
         )?;
     }
+    withhold(state, policy, ctx, claim, &payment_ref, "rwt", withheld)?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= reserve;
-        record.payable_minor += interest - declined - taken;
+        record.payable_minor += interest - declined - taken - withheld;
         record.open = !close;
     }
-    instruct(policy, claim, payment_ref, amount - taken + interest - declined, false);
+    instruct(policy, claim, payment_ref, amount - taken + interest - declined - withheld, false);
     reduce_receivable(state, policy, other, offset.as_ref());
     Ok(())
+}
+
+/// Tax kept back from a payment: out of benefit payable, owed to the revenue
+/// authority, in its own entry under its own posting type so the tax
+/// reconciliation can agree the payable to what was withheld.
+fn withhold(state: &mut CoreState, policy: &mut Policy, ctx: &mut Ctx<'_>, claim: &str, payment_ref: &str, code: &str, amount: i64) -> Result<(), Reject> {
+    if amount == 0 {
+        return Ok(());
+    }
+    let c = policy.currency;
+    let d = dims(policy, None, &format!("withholding_{code}"));
+    let mut set = PostingSet::new();
+    set.debit(accounts::benefit_payable(&policy.id, c), i128::from(amount), d.clone());
+    set.credit(accounts::withholding_tax_payable(code, c), i128::from(amount), d);
+    let detail = [("payment_ref", payment_ref.to_string()), ("tax", code.to_string())];
+    post(&mut state.ledger, policy, ctx, "tax_withheld", set, claim, &detail)
 }
 
 /// Where the overpayment an offset recovers is held, when it is on another
@@ -679,7 +712,7 @@ fn pay_benefit(
     claim: &str,
     payment_ref: String,
     period: (NaiveDate, NaiveDate),
-    gross: i64,
+    (gross, withheld): (i64, i64),
     offset: Option<Offset>,
     payee: String,
     close: bool,
@@ -688,6 +721,9 @@ fn pay_benefit(
     let taken = offset.as_ref().map_or(0, |o| o.amount_minor);
     if gross < 0 || !(0..=gross).contains(&taken) || !record.open || record.payments.contains_key(&payment_ref) {
         return invalid("a benefit period is paid once, on an open claim, with an offset no larger than the benefit");
+    }
+    if !(0..=gross - taken).contains(&withheld) {
+        return invalid("tax is withheld from the benefit paid and is no more than it");
     }
     let c = policy.currency;
     // The overpayment an offset recovers may be on another policy of the
@@ -714,12 +750,13 @@ fn pay_benefit(
         ("period_end", period.1.to_string()),
     ];
     post(&mut state.ledger, policy, ctx, "benefit_paid", set, claim, &extra)?;
+    withhold(state, policy, ctx, claim, &payment_ref, "benefit", withheld)?;
     if let Some(record) = policy.claims.get_mut(claim) {
         record.reserve_minor -= drawn + released;
-        record.payable_minor += gross - taken;
+        record.payable_minor += gross - taken - withheld;
         record.open = !close;
     }
-    instruct(policy, claim, payment_ref, gross - taken, false);
+    instruct(policy, claim, payment_ref, gross - taken - withheld, false);
     if !remote {
         reduce_receivable(state, policy, other, offset.as_ref());
     }
@@ -1106,6 +1143,152 @@ mod tests {
             messages: vec![],
             work: 1,
         }
+    }
+
+    /// A partition with the shipped term life product and one policy on it,
+    /// open on 15 November 2027.
+    fn book() -> (CoreState, NaiveDate) {
+        use crate::command::{CoverSpec, Envelope, IssuePolicy, LifeSpec};
+        let today = NaiveDate::from_ymd_opt(2027, 11, 15).unwrap();
+        let mut state = CoreState::new(0);
+        let definitions = ic_product::load_definitions("library.star", include_str!("../../../products/definitions/library.star")).unwrap();
+        let rates = [
+            include_str!("../../../products/rates/life_base.star"),
+            include_str!("../../../products/rates/trauma_base.star"),
+        ];
+        let product = ic_product::load_product("term_life.star", include_str!("../../../products/term_life.star")).unwrap();
+        let life = LifeId("life-1".to_string());
+        let issue = IssuePolicy {
+            policy: PolicyId("pol-1".to_string()),
+            number: "KTL1".to_string(),
+            group: crate::GroupId("grp-1".to_string()),
+            policyholder: crate::PartyId("party-1".to_string()),
+            product_code: "term-life".to_string(),
+            inception: today,
+            frequency: ic_product::Frequency::Monthly,
+            lives: vec![LifeSpec {
+                id: life.clone(),
+                kind: LifeKind::Named {
+                    party: crate::PartyId("party-1".to_string()),
+                },
+                factors: crate::LifeFactors {
+                    date_of_birth: NaiveDate::from_ymd_opt(1988, 6, 2),
+                    sex: Some(ic_product::Sex::Female),
+                    smoker: Some(false),
+                    ..Default::default()
+                },
+            }],
+            covers: vec![CoverSpec {
+                code: "life".to_string(),
+                life: Some(life),
+                sum_insured_minor: 400_000_00,
+                loadings: vec![],
+                exclusions: vec![],
+                excess_option: None,
+            }],
+            migrated: false,
+            continuation_of: None,
+        };
+        let mut commands = vec![
+            ("leader", crate::Command::OpenBusinessDate { date: today }),
+            ("config", crate::Command::ActivateDefinitions { definitions }),
+        ];
+        for source in rates {
+            let table = Box::new(ic_product::load_rate_table("rates.star", source).unwrap());
+            commands.push(("config", crate::Command::ActivateRateTable { table }));
+        }
+        commands.push(("config", crate::Command::ActivateProduct { product: Box::new(product) }));
+        commands.push(("new-business", crate::Command::IssuePolicy(Box::new(issue))));
+        for (index, (caller, command)) in commands.into_iter().enumerate() {
+            let envelope = Envelope {
+                key: format!("k{index}"),
+                caller: caller.to_string(),
+                salt: "s".to_string(),
+                traceparent: None,
+                command,
+            };
+            let applied = state.apply_envelope(index as u64 + 1, envelope);
+            assert_eq!(applied.result, Ok(()), "command {index}");
+        }
+        (state, today)
+    }
+
+    /// Purpose: tax withheld from late-payment interest on a claim, and from an income
+    /// benefit, leaves benefit payable for the withholding tax payable account of its kind in
+    /// its own entry under its own posting type, and the bank is asked for the rest; tax
+    /// larger than the interest or the benefit it is withheld from is refused with nothing
+    /// posted.
+    /// Why it matters: the design posts tax on claim payments at the event. Finance's close
+    /// reconciles the withholding payable to these posting types, and the payee's payment
+    /// plus the tax must equal what the claim cost. Tax netted silently out of a payment
+    /// could never be agreed to a return, and tax above its base would underpay a claimant.
+    #[test]
+    fn tax_withheld_from_interest_and_benefits_is_owed_to_the_revenue_in_its_own_entry() {
+        let (mut state, today) = book();
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let run = |state: &mut CoreState, ctx: &mut Ctx<'_>, instruction| execute(state, ctx, instruction);
+        let pol = PolicyId("pol-1".to_string());
+        let admit = Instruction::Admit {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            amount_minor: 10_000_00,
+            release_reserve: false,
+            deduct_premium_minor: 0,
+            terminate: None,
+            repay_loan_minor: 0,
+        };
+        run(&mut state, &mut ctx, admit).unwrap();
+        let pay = |withheld: i64| Instruction::Pay {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            payment_ref: "pay-1".into(),
+            amount_minor: 4_000_00,
+            payee: "party-1".into(),
+            close: false,
+            interest_minor: 100_00,
+            interest_declined_minor: 0,
+            interest_withheld_minor: withheld,
+            offset: None,
+        };
+        let entries = ctx.entries.len();
+        assert_eq!(run(&mut state, &mut ctx, pay(100_01)).unwrap_err().code, "invalid_amount");
+        assert_eq!(ctx.entries.len(), entries, "a refusal posts nothing");
+        run(&mut state, &mut ctx, pay(33_00)).unwrap();
+        let rwt = accounts::withholding_tax_payable("rwt", ic_money::Currency::NZD);
+        assert_eq!(state.ledger.natural_balance(&rwt.id), 33_00);
+        let record = &state.policies[&pol].claims["clm-1"];
+        assert_eq!(record.payments["pay-1"].amount_minor, 4_000_00 + 100_00 - 33_00);
+        let withheld = ctx.entries.last().unwrap();
+        assert_eq!((withheld.body.kind.as_str(), withheld.body.detail["tax"].as_str()), ("tax_withheld", "rwt"));
+        assert!(withheld.body.postings.iter().all(|p| p.dims.posting_type.as_deref() == Some("withholding_rwt")));
+
+        let benefit = |withheld: i64| Instruction::PayBenefit {
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            payment_ref: "ben-1".into(),
+            period_start: today,
+            period_end: today,
+            gross_minor: 1_000_00,
+            offset: None,
+            payee: "party-1".into(),
+            close: false,
+            tax_withheld_minor: withheld,
+        };
+        assert_eq!(run(&mut state, &mut ctx, benefit(1_000_01)).unwrap_err().code, "invalid_amount");
+        run(&mut state, &mut ctx, benefit(175_00)).unwrap();
+        assert_eq!(
+            state
+                .ledger
+                .natural_balance(&accounts::withholding_tax_payable("benefit", ic_money::Currency::NZD).id),
+            175_00
+        );
+        let record = &state.policies[&pol].claims["clm-1"];
+        assert_eq!(record.payments["ben-1"].amount_minor, 825_00);
+        // What is owed to payees and the bank is asked for agree: nothing is left over.
+        let payable = state.ledger.natural_balance(&accounts::benefit_payable(&pol, ic_money::Currency::NZD).id);
+        assert_eq!(payable, i128::from(record.payable_minor));
     }
 
     /// Purpose: a claims command queued for another partition leaves with an
