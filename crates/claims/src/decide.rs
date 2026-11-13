@@ -657,8 +657,10 @@ impl ClaimsState {
                         &[("admitted_minor", "0".into()), ("monthly_minor", terms.monthly_minor.to_string())],
                     );
                 } else {
+                    // The core takes a lump sum off the life's cover and the covers linked to it.
+                    let life = claim.life.clone().filter(|_| plan.health.is_none());
                     cx.core.execute(Instruction::Admit {
-                        life: None,
+                        life,
                         claim: id.clone(),
                         policy,
                         cover,
