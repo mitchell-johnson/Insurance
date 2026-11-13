@@ -108,7 +108,7 @@ fn the_module_takes_each_request_once_and_by_the_rules() {
         "no_request"
     );
     assert_eq!(
-        kit.err("claims", "c", Command::RequestLetter(letter("c:1", "declined", to("aroha")))),
+        kit.err("finance", "f", Command::RequestLetter(letter("f:1", "declined", to("aroha")))),
         "not_allowed"
     );
     let mut statement = letter("ri:7", "reinsurance_statement", to("reinsurer-a"));
@@ -124,6 +124,7 @@ fn the_module_takes_each_request_once_and_by_the_rules() {
         let prefix = match kind.caller {
             "underwriting" => "uw-",
             "reinsurance" => "ri-",
+            "claims" => "cl-",
             _ => "grp-",
         };
         assert!(kind.template.starts_with(prefix), "{}", kind.template);
@@ -440,4 +441,25 @@ async fn letters_wait_for_wording_and_people_and_survive_outages() {
     run_requested_letters(world.driver.clone(), std::time::Duration::from_millis(5), stop, |_| passes += 1).await;
     assert!(passes >= 2);
     assert_eq!(world.driver.module.state().letters_requested(10).len(), 4, "nothing was lost");
+}
+
+/// Purpose: claims may ask for the overpayment repayment letter only with
+/// the repayment reference payments holds for the overpayment and the
+/// amount; a request missing either, or with one blank, is refused.
+/// Why it matters: a credit that quotes the reference is matched to the
+/// overpayment automatically. A letter without it leaves the person's
+/// repayment sitting unmatched, and they are chased for money they paid.
+#[test]
+fn an_overpayment_letter_needs_its_repayment_reference() {
+    let mut kit = Kit::ready();
+    let mut repay = letter("cl:op:1", "overpayment_repayment", to("aroha"));
+    repay.reasons.clear();
+    repay.subject = "claim-1".into();
+    assert_eq!(kit.err("claims", "claims-driver", Command::RequestLetter(repay.clone())), "missing_detail");
+    repay.detail.insert("amount".into(), "1250.00".into());
+    repay.detail.insert("repayment_reference".into(), " ".into());
+    assert_eq!(kit.err("claims", "claims-driver", Command::RequestLetter(repay.clone())), "missing_detail");
+    repay.detail.insert("repayment_reference".into(), "OP123456".into());
+    kit.ok("claims", "claims-driver", Command::RequestLetter(repay));
+    assert_eq!(kit.state.letter_requests["cl:op:1"].request.detail["repayment_reference"], "OP123456");
 }
