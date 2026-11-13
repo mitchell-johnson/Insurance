@@ -369,8 +369,22 @@ async fn contact_points<W: KeyWrapper, S: WormStore>(
             text(Field::FamilyName).map(|family| first.map_or(family.clone(), |g| format!("{g} {family}")))
         }
     };
+    let as_text = |v: &Value| match v {
+        Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),
+        other => other.as_str().unwrap_or_default().to_string(),
+    };
+    // A contact point the party chose for this relationship comes first.
+    let chosen = q.relationship.as_deref().and_then(|rel| {
+        facts
+            .get(&Field::RelationshipContacts)?
+            .value
+            .as_array()?
+            .iter()
+            .find_map(|c| (c["relationship"] == rel && c["channel"] == q.channel.as_str()).then(|| as_text(&c["destination"])))
+    });
     let destination = match q.channel.as_str() {
         "in_app" | "push" => Some(resolved.0.clone()),
+        _ if chosen.is_some() => chosen,
         _ => fields.iter().find_map(|f| {
             facts.get(f).map(|v| match &v.value {
                 Value::Array(lines) => lines.iter().filter_map(Value::as_str).collect::<Vec<_>>().join("\n"),

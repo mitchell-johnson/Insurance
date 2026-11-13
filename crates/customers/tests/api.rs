@@ -1405,3 +1405,65 @@ async fn risky_acts_by_a_marked_person_are_paused_or_reviewed() {
     let (status, _) = route(&plain, "everything").await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// Purpose: a person can choose a contact point for one relationship (letters about the
+/// claim they make to go to their solicitor's postal address, say, or the trust's email
+/// for policies they hold as trustee); notices about that relationship go there, notices
+/// about anything else go to their own; the choice is checked like the person's own
+/// details, one per relationship and channel, and can be set by the person in the app.
+/// Persona row DOC-009, the master's part.
+/// Why it matters: a person who asks for claim letters to go elsewhere, often because
+/// home is not safe or not where they are, must not have them go home anyway; and the
+/// choice must not redirect every other notice.
+#[tokio::test]
+async fn a_contact_point_can_be_chosen_for_one_relationship() {
+    let w = world_or_skip!();
+    let p = w.person("Sione", "Fifita", "1975-05-05", &[("email", json!("sione@example.nz"))]).await;
+    let choose = |choices: Value| json!({ "command": "record", "facts": [{ "field": "relationship_contacts", "value": choices }] });
+    for bad in [
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "not an email" }]),
+        json!([{ "relationship": "Claimant!", "channel": "email", "destination": "a@b.nz" }]),
+        json!([{ "relationship": "claimant", "channel": "fax", "destination": "1" }]),
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "a@b.nz", "extra": 1 }]),
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "a@b.nz" },
+               { "relationship": "claimant", "channel": "email", "destination": "c@d.nz" }]),
+        json!("claimant"),
+    ] {
+        let (status, _) = w.command(&p, "staff", choose(bad.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    // Chosen in the app by the person.
+    let (status, out) = w
+        .send(Call {
+            method: "POST",
+            path: format!("/v1/parties/{p}/commands"),
+            role: "portal",
+            purpose: Some("self_service"),
+            body: Some(choose(json!([
+                { "relationship": "claimant", "channel": "email", "destination": "Claims@Lawyers.example.nz" },
+                { "relationship": "claimant", "channel": "post", "destination": ["Lawyers Ltd", "1 Queen St", "Auckland 1010"] }
+            ]))),
+            headers: vec![("x-ic-party", p.clone()), ("x-ic-actor", "app-session-1".into())],
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let contact = |channel: &str, relationship: Option<&str>| {
+        let rel = relationship.map(|r| format!("&relationship={r}")).unwrap_or_default();
+        let path = format!("/v1/parties/{p}/contact-points?purpose=notices&channel={channel}{rel}");
+        let w = &w;
+        async move { w.get(&path, "documents", "notices").await }
+    };
+    assert_eq!(contact("email", Some("claimant")).await.1["destination"], "claims@lawyers.example.nz");
+    assert_eq!(
+        contact("post", Some("claimant")).await.1["destination"],
+        "Lawyers Ltd\n1 Queen St\nAuckland 1010"
+    );
+    assert_eq!(contact("email", Some("policyholder")).await.1["destination"], "sione@example.nz");
+    assert_eq!(contact("email", None).await.1["destination"], "sione@example.nz");
+    let (status, _) = contact("post", Some("policyholder")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "no address of his own, and the claim's is not used for other notices"
+    );
+}
