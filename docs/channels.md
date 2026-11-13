@@ -6,7 +6,7 @@
 
 - **The channel module** (`state.rs`) runs as a Raft group named `channels` on the ledger nodes, registered in `crates/node`. It reads the core's events and is told the rest by the other modules. Nothing in it reads a clock: every command carries its time.
 - **The portal service** (`http.rs`, `main.rs`, binary `ic-portal`) is a gateway with no state of its own. It checks the caller's token, asks the module a question or proposes a command, and answers. Any number of copies can run; losing one loses nothing.
-- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/reinsurance`, `/underwriting`, `/ops`, `/status`. They load nothing from anywhere else.
+- **The web pages** (`ui/`) are compiled into the service: `/adviser`, `/employer`, `/staff`, `/pricing`, `/complaints`, `/finance`, `/claims`, `/reinsurance`, `/underwriting`, `/payments`, `/ops`, `/status`. They load nothing from anywhere else.
 - **The customer app** is not in this repository. Its whole contract is the `/app/v1` API below, including the offline sync protocol. The native app belongs with the bank's app.
 
 ## Who signs in, and how
@@ -248,6 +248,27 @@ Commands go under the caller `reinsurance-ops` on the latest business date any p
 | `POST /staff/v1/reinsurance/commands` | One of the commands above, in that module's own JSON, with an `Idempotency-Key`. An abandonment answers `{prepared}`. |
 | `POST /staff/v1/reinsurance/sign/{id}`, `.../withdraw/{id}` | Sign and send, or take back, a prepared abandonment. |
 
+
+## The payments console
+
+`/payments` is how staff reach the payments module (`docs/payments.md`). That module decides each command by the roles it is told the person holds and keeps them apart itself: whoever prepared a run cannot approve it, and an approver who also maintains payees or connectivity is refused everything (`role_conflict`). The console tells it the signed-in workforce ID and the roles their staff actions give, at New Zealand wall-clock time, under the key `console:{key}`.
+
+| Staff action | Role there |
+|---|---|
+| `payments.view` | None: reads runs, payments waiting, open exceptions, a party's payees and authorities, reconciliation and readiness. Never a payee's, authority's or refund's account details, and sends nothing. |
+| `payments.maker` | `maker`: prepare, fill, check, cancel, close and resubmit runs; take waiting payments; request and release refunds. |
+| `payments.approver` | `approver` |
+| `payments.payees` | `payee_maintainer`: authorities and payee accounts. |
+| `payments.connectivity` | `connectivity_admin`: configuration and redirecting a route to the second bank; the only one who reads the configuration. |
+| `payments.legal`, `.reconciler`, `.treasury`, `.collections` | `legal`, `reconciler`, `treasury`, `collections` |
+
+Only people's commands pass (`src/payments.rs`, `COMMANDS`); the banks' answers, screening, the customer's hold as the pump records it, the drill, the core's events, the outbox and pruning are the module's drivers' and are refused here. A held item reads as the customer's own hold (`customer_hold`, or `hold_unconfirmed`, which clears when the maker checks the run again).
+
+| Route | |
+|---|---|
+| `GET /staff/v1/payments/me` | Your roles there. |
+| `GET /staff/v1/payments/{question}` | `open_runs`, `open_exceptions[?account=]`, `party?party=`, `customer_hold?party=`, `waiting`, `run?run=`, `control_totals?run=`, `submission?submission=`, `queued_submissions`, `unconfirmed_submissions`, `authority?authority=`, `payee?payee=`, `refund?refund=`, `awaiting_conversation`, `represent`, `deferred?from=&to=`, `fund_sweep?as_at=`, `fund_cash_settlement?as_at=`, `aged_unidentified_receipts?as_at=`, `reconciliation?account=` and `readiness` (both as of today in New Zealand), `config`. A null answer is 404. |
+| `POST /staff/v1/payments/commands` | One command in that module's JSON (`{"type": ...}`), with an `Idempotency-Key`. Its events come back; a refusal is 403 (`not_permitted`, `role_conflict`, `same_person`, ...) or 409 with the module's code. |
 
 ## The underwriting console
 

@@ -157,6 +157,16 @@ pub enum Command {
         run: String,
         submitted_minor: i64,
     },
+    /// Someone holding a notice's role closes it with what they did.
+    CloseNotice {
+        notice: u64,
+        action: String,
+    },
+    /// Prepare the day's fund settlement runs for what collection accounts
+    /// owe other funds (the pump, each morning).
+    ProposeFundSweep {
+        as_at: NaiveDate,
+    },
     /// Put released payments into a run.
     TakeWaiting {
         run: Id,
@@ -496,6 +506,9 @@ pub enum Event {
         fund: String,
         amount_minor: i64,
     },
+    NoticeClosed {
+        notice: u64,
+    },
     /// The customer master's answer about a party's hold changed.
     CustomerHoldRecorded {
         party: String,
@@ -570,6 +583,9 @@ pub struct PaymentsState {
     /// Cash owed between statutory funds (PAY-010).
     #[serde(default)]
     pub sweeps: crate::sweep::Sweeps,
+    /// Work for people: every notice raised, until closed (`notices.rs`).
+    #[serde(default)]
+    pub notices: crate::notices::Notices,
     /// What the customer master last said about parties' own holds on
     /// money going out (SVC-022).
     #[serde(default)]
@@ -613,6 +629,9 @@ impl PaymentsState {
     }
 
     pub(crate) fn push_outbox(&mut self, entry: OutboxEntry) {
+        if let crate::model::Instruction::Notify { to, subject, detail } = &entry.instruction {
+            self.raise_notice(*to, subject, detail);
+        }
         self.outbox.insert(self.next_outbox, entry);
         self.next_outbox += 1;
     }
@@ -664,6 +683,8 @@ impl PaymentsState {
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
             Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::CloseNotice { notice, action } => self.close_notice(tx, notice, action),
+            Command::ProposeFundSweep { as_at } => self.propose_fund_sweep(tx, as_at),
             Command::ClaimsRunSubmitted { run, submitted_minor } => self.claims_run_submitted(tx, &run, submitted_minor),
             Command::RegisterPayee {
                 payee,

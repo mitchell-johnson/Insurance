@@ -131,7 +131,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
-| AUD-011 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
+| AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
 | AUD-013 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 | AUD-014 | full | `documents/tests/channels.rs::sms_carries_a_pointer_and_asks_for_a_report` |
 | AUD-015 | part | `channels/tests/feed.rs::snapshot_then_changes` |
@@ -157,7 +157,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | UW-001 | full | `underwriting/tests/journey.rs::a_clean_application_is_issued_straight_through`<br>`underwriting/tests/driver.rs::a_clean_application_becomes_a_policy_with_nobody_carrying` |
-| UW-002 | part | `underwriting/tests/journey.rs::terms_set_by_the_rules_are_offered_and_issued_once_accepted` |
+| UW-002 | full | `underwriting/tests/journey.rs::a_referred_loading_reaches_the_core_as_a_rate_and_a_reference_only`<br>`underwriting/tests/journey.rs::terms_set_by_the_rules_are_offered_and_issued_once_accepted` |
 | UW-003 | part | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-004 | full | `underwriting/tests/libraries.rs::cedar_policy_enforces_authority_limits`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-005 | full | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
@@ -224,6 +224,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-037 | full | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit`<br>`claims/tests/suite/book.rs::late_interest_is_offered_and_declined_only_by_an_informed_payee`<br>`sim/tests/claims.rs::declined_late_interest_is_reversed_in_its_own_entry` |
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | part | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death` |
+| CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release` |
 | CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
 
 ## RI Reinsurance
@@ -362,6 +363,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ADV-026 | full | `distribution/tests/commission.rs::replacement_cover_earns_trail_only_and_the_house_book_earns_nothing`<br>`distribution/tests/lifecycle.rs::a_replaced_policys_clawback_carries_to_the_replacement` |
 | ADV-029 | full | `distribution/tests/replacement.rs::cover_rewritten_inside_the_group_after_a_cancellation_is_treated_as_a_replacement`<br>`distribution/tests/replacement.rs::the_rule_matches_the_same_life_the_same_cover_and_a_related_adviser_or_the_same_amount` |
 | ADV-030 | full | `distribution/tests/personas.rs::a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split` |
+| ADV-031 | full | `channels/tests/journeys.rs::an_incoming_broker_sees_the_scheme_from_the_appointment_day` |
 | ADV-032 | full | `distribution/tests/units.rs::a_rule_allocates_every_cent_of_any_amount` |
 | ADV-033 | full | `distribution/tests/units.rs::rule_validation_catches_every_way_a_rule_fails_to_add_up` |
 | ADV-034 | full | `distribution/tests/statements.rs::one_net_payment_covers_credits_and_debts_on_different_partitions`<br>`distribution/tests/statements.rs::a_statement_shows_the_detail_and_its_payment_clears_the_ledger` |
@@ -465,6 +467,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
 | STF-012 | part | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
+| STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | part | `channels/tests/staff.rs::external_source_drives_templates` |
 | STF-017 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |

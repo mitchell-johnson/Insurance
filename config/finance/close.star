@@ -29,8 +29,7 @@ CLOSE = close_config(
         automatic("trial_balance", "Trial balance: the books balance in every currency and unit", "finance_operations", 5),
         automatic("fund_balance", "Every statutory fund balances on its own", "finance_operations", 5),
         automatic("migration_control", "Migration control accounts have not moved since the old system was loaded", "finance_operations", 5),
-        # Not blocking until the pipeline that activates tables also records each validation in the core.
-        automatic("rate_table_validation", "Every rate table activated has a validation recorded for the same content", "appointed_actuary", 5, blocking = False),
+        automatic("rate_table_validation", "Every rate table activated has a validation recorded for the same content", "appointed_actuary", 5),
     ],
     aged = [
         aged("unidentified_receipts", "Bank receipts nobody has identified, aged with an owner", "treasury", 2, by = "payments", max_age_days = 30, max_amount_minor = 5000000),
