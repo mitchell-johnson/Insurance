@@ -281,7 +281,14 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     assert_eq!((envelope.key.as_str(), envelope.at, envelope.today), (key, at, today));
     let Uw::OpenProposal(open) = envelope.command else { panic!("not a proposal") };
     assert_eq!(open.proposal.0, key);
-    assert_eq!(open.entry, Entry::GroupExcess { policy: open.policy.clone() });
+    assert_eq!(
+        open.entry,
+        Entry::GroupExcess {
+            policy: open.policy.clone(),
+            takeover_accepted_minor: None,
+            reinsurance_reference: None,
+        }
+    );
     assert_eq!(
         (open.policy.0.as_str(), open.policyholder, open.product_code.as_str()),
         ("pol-1", party("employer-1"), "group-life")
@@ -360,7 +367,11 @@ fn only_answers_to_scheme_excess_requests_are_read_from_underwriting() {
     use ic_underwriting::model::{Entry, ProposalId};
 
     let policy = ic_core::PolicyId("pol-1".into());
-    let excess = Entry::GroupExcess { policy: policy.clone() };
+    let excess = Entry::GroupExcess {
+        policy: policy.clone(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    };
     let terms = |entry: Entry, proposal: &str| Effect::ApplyTerms {
         key: format!("{proposal}/terms"),
         proposal: ProposalId(proposal.into()),

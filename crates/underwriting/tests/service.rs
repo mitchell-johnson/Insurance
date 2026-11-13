@@ -190,7 +190,11 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     w.disclose("P1", "L1", &clean());
     let mut excess = w.open_command("grp-uw:acme:1", &["L1"], &[("L1", "life", "life", 300_000_00)], false);
     excess.product_code = "group-life".into();
-    excess.entry = Entry::GroupExcess { policy: excess.policy.clone() };
+    excess.entry = Entry::GroupExcess {
+        policy: excess.policy.clone(),
+        takeover_accepted_minor: None,
+        reinsurance_reference: None,
+    };
     w.ok("group-admin", Command::OpenProposal(Box::new(excess)));
     w.ok(
         "group-admin",

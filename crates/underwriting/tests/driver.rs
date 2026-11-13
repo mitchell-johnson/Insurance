@@ -485,7 +485,11 @@ async fn an_excess_decision_reaches_group_administration_under_the_agreed_key() 
         b.module.with(|w| {
             let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 300_000_00)], false);
             open.product_code = "group-life".into();
-            open.entry = Entry::GroupExcess { policy: open.policy.clone() };
+            open.entry = Entry::GroupExcess {
+                policy: open.policy.clone(),
+                takeover_accepted_minor: None,
+                reinsurance_reference: None,
+            };
             w.ok("group-admin", Command::OpenProposal(Box::new(open)));
         })
     };
