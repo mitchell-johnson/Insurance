@@ -10,7 +10,7 @@ use ic_distribution::authority::{Grant, GrantKind, Role};
 use ic_distribution::config::{AdviserChangeMode, AdviserChangeSetting, Change, ChangeState};
 use ic_distribution::model::ScheduleOption;
 use ic_distribution::rules::{CommissionType, Component, Fragment, Line, Rule, Share, WHOLE};
-use ic_distribution::state::WriteLayer;
+use ic_distribution::state::{Settings, WriteLayer};
 use ic_distribution::structure::{Engagement, PartyKind, Relation, RelationKind};
 use ic_distribution::{Actor, BookId, Command, EngagementId, Event, FragmentId};
 
@@ -848,4 +848,26 @@ fn a_rule_activates_only_when_its_worked_examples_come_out_right() {
     assert_eq!(early.code, "rule_examples");
     w.activate("right", with(vec![example("agreement-2", on, 800_00, 200_00)])).unwrap();
     assert!(w.events.iter().any(|e| matches!(e, Event::RuleActivated { .. })));
+}
+
+/// Purpose: settings written by an older build, before the replacement window, the amount
+/// tolerance, worked examples and bounded history existed, are read back with the defaults
+/// for those settings.
+/// Why it matters: a replica restores its state from a snapshot taken by the build before.
+/// If the newer settings were required, an upgrade would fail to start; if they defaulted to
+/// zero, the replacement rule and history bounding would be silently off.
+#[test]
+fn settings_from_an_older_snapshot_take_the_new_defaults() {
+    let mut old = serde_json::to_value(Settings::default()).unwrap();
+    let fields = old.as_object_mut().unwrap();
+    for added in [
+        "replacement_window_months",
+        "replacement_amount_tolerance_ppm",
+        "rule_examples_required",
+        "history_days",
+    ] {
+        assert!(fields.remove(added).is_some(), "{added} is a setting");
+    }
+    let read: Settings = serde_json::from_value(old).unwrap();
+    assert_eq!(read, Settings::default());
 }
