@@ -58,6 +58,17 @@ Relationship changes on a policy go to the channels directory, which decides wha
 
 The schedule is code (`src/retention.rs`, version `SCHEDULE_VERSION`): each field class is kept seven years after the last relationship ends or the last change, verification evidence five, prospects with no relationship two. A legal hold or an unresolved merge stops erasure.
 
+### Changing the index key
+
+Every blind-index entry carries the public id of the key it was made under (the first eight bytes of a MAC under the key, in hex), and `index_state` records which parties have been indexed under which key. To change the key:
+
+1. Put the new key in Key Vault as a second secret and mount it as `IC_CUSTOMERS_NEXT_INDEX_KEY_FILE`. From then on every write indexes under both keys, and the background pass opens up to 200 parties a cycle and indexes them under both. Lookups still use the current key only.
+2. Watch `GET /v1/admin/index` (app role `operations`) until `ready_to_promote` is true (`waiting_next` is 0).
+3. Make the new key `IC_CUSTOMERS_INDEX_KEY_FILE` and remove the next key. Lookups now use only the new key's entries.
+4. The background pass removes entries under keys no longer in use, 5000 a cycle, but only once the current key covers everyone; `retired_entries` reaches 0. Then delete the old secret.
+
+Promoting early loses nothing: anyone the new key has not covered is indexed by the next passes, and old entries stay until then, though such a person is not found by a lookup until they are. Entries made before keys were named are adopted as the current key's once, after one party's entries are checked against it; if they do not match, everyone is indexed afresh.
+
 The sweep runs in every replica (hourly by default) over parties unchanged for 30 days. It writes the batch to the erasure register first, then for each party takes its row lock, checks again, destroys the wrapped key, blanks every payload, deletes its blind indexes and appends a `shredded` tombstone. The chain stays verifiable; the content is gone. Absorbed parties go with their survivor.
 
 **Restoring a backup.** A restore brings erased keys back. The register (`customers-erasures`, write-once blob storage kept longer than any backup) lists every erasure. After any restore, before the service takes traffic, an operator calls `POST /v1/admin/reshred` with the date the backup was taken; every party listed since is erased again.
@@ -73,6 +84,7 @@ The binary is `ic-customers`; settings come from the environment.
 | `IC_CUSTOMERS_POOL_SIZE` | Connections per replica | 16 |
 | `IC_CUSTOMERS_KEY_VAULT`, `IC_CUSTOMERS_KEK` | Key Vault URL and wrapping key | key `customers-kek` |
 | `IC_CUSTOMERS_INDEX_KEY_FILE` (or `IC_CUSTOMERS_INDEX_KEY`) | Blind-index key, 32 characters or more | required |
+| `IC_CUSTOMERS_NEXT_INDEX_KEY_FILE` (or `IC_CUSTOMERS_NEXT_INDEX_KEY`) | The key being changed to, while a change is under way | optional; must differ from the current key |
 | `IC_CUSTOMERS_TENANT`, `IC_CUSTOMERS_AUDIENCE`, `IC_CUSTOMERS_AUTHORITY` | Entra ID token checks | Entra public cloud |
 | `IC_EVENT_HUBS_NAMESPACE`, `IC_CUSTOMERS_EVENT_HUB`, `IC_CUSTOMERS_PRIORITY_HUB`, `IC_CUSTOMERS_HUB_PARTITIONS` | Where events go | `customer-events`, `customer-priority`, 8 |
 | `IC_CUSTOMERS_REGISTER_ENDPOINT`, `IC_CUSTOMERS_REGISTER_CONTAINER` | Erasure register | container `customers-erasures` |
@@ -85,5 +97,4 @@ Tests need a PostgreSQL server named by `IC_TEST_POSTGRES_URL` (CI starts one); 
 
 ## Not built yet
 
-- **Changing the index key** needs a rebuild of every blind index from the decrypted facts; there is no command for it yet.
 - **Locking the register's immutability policy** in prod is a deliberate, irreversible step for a person once the period is agreed.
