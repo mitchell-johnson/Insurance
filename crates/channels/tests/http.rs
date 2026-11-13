@@ -41,6 +41,7 @@ struct Portal {
     pricing: Arc<common::pricing::PricingModule>,
     claims: Arc<common::claims::ClaimsCore>,
     reinsurance: Arc<common::reinsurance::ReinsuranceModule>,
+    underwriting: Arc<common::underwriting::UnderwritingModule>,
     master: Arc<common::customers::MasterDouble>,
     commission: Arc<common::commission::CommissionModule>,
     intake: Arc<common::intake::IntakeDouble>,
@@ -124,6 +125,10 @@ fn portal() -> Portal {
         ("sub-rec", "rec-1"),
         ("sub-dadmin", "da-1"),
         ("sub-dview", "dv-1"),
+        ("sub-amy", "amy"),
+        ("sub-abe", "abe"),
+        ("sub-sam", "sam"),
+        ("sub-cat", "cat"),
     ] {
         w.dir(
             module("identity"),
@@ -215,6 +220,12 @@ fn portal() -> Portal {
                     &[ic_channels::commission::actions::VIEW, ic_channels::commission::actions::STRUCTURE],
                     &[DataClass::Ordinary],
                 ),
+                template("underwriter", &[ic_channels::underwriting::actions::WORK], &[DataClass::InsuranceSensitive]),
+                template(
+                    "senior-underwriter",
+                    &[ic_channels::underwriting::actions::WORK, ic_channels::underwriting::actions::SENIOR],
+                    &[DataClass::InsuranceSensitive],
+                ),
                 template("commission-reader", &[ic_channels::commission::actions::VIEW], &[DataClass::Ordinary]),
                 template(
                     "conduct-officer",
@@ -266,6 +277,10 @@ fn portal() -> Portal {
         ("rec-1", "records"),
         ("da-1", "distribution-admin"),
         ("dv-1", "commission-reader"),
+        ("amy", "underwriter"),
+        ("abe", "underwriter"),
+        ("sam", "senior-underwriter"),
+        ("cat", "senior-underwriter"),
     ] {
         w.send(
             staff("alice"),
@@ -304,6 +319,7 @@ fn portal() -> Portal {
     let finance = Arc::new(common::finance::seeded());
     let claims = Arc::new(common::claims::seeded());
     let reinsurance = Arc::new(common::reinsurance::seeded());
+    let underwriting = Arc::new(common::underwriting::seeded());
     let commission = Arc::new(common::commission::seeded());
     let intake = Arc::new(common::intake::IntakeDouble::default());
     let documents = Arc::new(common::documents::DocumentsDouble::default());
@@ -329,6 +345,7 @@ fn portal() -> Portal {
         finance: finance.clone(),
         claims: claims.clone(),
         reinsurance: reinsurance.clone(),
+        underwriting: underwriting.clone(),
         master: Some(master.clone()),
         intake: Some(intake.clone()),
         documents: Some(documents.clone()),
@@ -346,6 +363,7 @@ fn portal() -> Portal {
         pricing,
         claims,
         reinsurance,
+        underwriting,
         master,
         commission,
         intake,
@@ -844,7 +862,7 @@ async fn the_staff_console_asks_the_four_questions() {
     );
 
     // Administration.
-    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 26);
+    assert_eq!(portal.get("sub-alice", "/staff/v1/admin").await.1["members"].as_array().unwrap().len(), 30);
     assert_eq!(portal.get("sub-sue", "/staff/v1/admin").await.0, StatusCode::FORBIDDEN);
     let path = json!({ "assign_path": { "party": "sue", "scope": "queue:claims" } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", path.clone()).await.0, StatusCode::FORBIDDEN);
@@ -1126,6 +1144,7 @@ async fn pages_are_served_locked_down() {
         "/finance",
         "/claims",
         "/reinsurance",
+        "/underwriting",
         "/replacements",
         "/ops",
         "/status",
@@ -1381,6 +1400,7 @@ async fn the_unit_pricing_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
         documents: None,
@@ -1592,6 +1612,7 @@ async fn the_complaints_and_conduct_workbench() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
         documents: None,
@@ -1689,6 +1710,7 @@ async fn the_reinsurance_exceptions_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
         documents: None,
@@ -1903,6 +1925,7 @@ async fn the_claims_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
         documents: None,
@@ -2077,6 +2100,7 @@ async fn the_finance_console() {
         finance: Arc::new(common::pricing::Down),
         claims: Arc::new(common::claims::Down),
         reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
         master: None,
         intake: None,
         documents: None,
@@ -2223,6 +2247,7 @@ async fn a_person_keeps_their_own_customer_record() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
         documents: None,
@@ -2279,6 +2304,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
         documents: None,
@@ -2544,6 +2570,7 @@ async fn the_person_insured_signs_their_disclosure() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
         documents: None,
@@ -2637,6 +2664,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
         documents: None,
@@ -2871,6 +2899,7 @@ async fn an_employer_runs_the_scheme_membership() {
         finance: Arc::new(common::pricing::Down),
         claims: portal.claims.clone(),
         reinsurance: portal.reinsurance.clone(),
+        underwriting: portal.underwriting.clone(),
         master: None,
         intake: None,
         documents: None,
@@ -2948,4 +2977,202 @@ async fn the_commission_console() {
         assert_eq!(tell("sub-dadmin", "x", command).await.0, StatusCode::BAD_REQUEST);
     }
     assert_eq!(tell("sub-gl1", "x", add).await.0, StatusCode::FORBIDDEN);
+}
+
+/// Purpose: underwriters work cases from the underwriting console: they read queues and proposals, take a case and
+/// decide it, and every command reaches the underwriting module naming whoever signed in, whatever the page typed. Peer
+/// review and non-disclosure remedies are a senior's; a remedy is prepared by one senior and sent only when a different
+/// senior signs it, named as `countersigned_by`. Reading a life's disclosures goes through the intake with a purpose,
+/// and parked effects can be put back.
+/// Why it matters: that module believes the console about who is acting, so a page that could name someone else would
+/// defeat its authority, conflict and separation checks; and a remedy changes or ends someone's cover on a claim, which
+/// must never rest on one person.
+#[tokio::test]
+async fn the_underwriting_console() {
+    use ic_underwriting::command::Command as Uw;
+    let portal = portal();
+    let ask = |who: &'static str, rest: String| {
+        let portal = &portal;
+        async move { portal.get(who, &format!("/staff/v1/underwriting/{rest}")).await }
+    };
+    let tell = |who: &'static str, command: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/underwriting/commands", command).await }
+    };
+    let decide = |who: &'static str, verb: &'static str, id: String| {
+        let portal = &portal;
+        async move { portal.write("POST", who, &format!("/staff/v1/underwriting/{verb}/{id}"), json!({})).await }
+    };
+    let last = || portal.underwriting.log().last().cloned().unwrap();
+
+    // Who gets in, and as what.
+    assert_eq!(ask("sub-gl1", "me".into()).await.0, StatusCode::FORBIDDEN);
+    let (status, me) = ask("sub-amy", "me".into()).await;
+    assert_eq!((status, &me["staff"], &me["senior"]), (StatusCode::OK, &json!("amy"), &json!(false)), "{me}");
+    assert_eq!(ask("sub-sam", "me".into()).await.1["senior"], true);
+
+    // Questions: only the console's, each with its fields.
+    assert_eq!(ask("sub-amy", "outbox".into()).await.0, StatusCode::BAD_REQUEST, "the driver's, not people's");
+    assert_eq!(ask("sub-amy", "queue".into()).await.0, StatusCode::BAD_REQUEST, "which queue");
+    assert_eq!(ask("sub-amy", "proposal?proposal=nope".into()).await.0, StatusCode::NOT_FOUND);
+    let (status, proposal) = ask("sub-amy", "proposal?proposal=P2".into()).await;
+    assert_eq!((status, &proposal["id"]), (StatusCode::OK, &json!("P2")), "{proposal}");
+    let case = portal.underwriting.case("P2", "L1").expect("P2 waits for a person");
+    let mut queued = false;
+    for queue in ["medical", "financial", "occupational", "tele_interview", "senior_review", "reinsurer_liaison"] {
+        let (status, items) = ask("sub-amy", format!("queue?queue={queue}")).await;
+        assert_eq!(status, StatusCode::OK, "{items}");
+        queued |= items.as_array().unwrap().iter().any(|i| i["case"] == case.as_str());
+    }
+    assert!(queued, "the case is in a queue");
+    assert_eq!(ask("sub-amy", "workload".into()).await.1, json!(0));
+
+    // The person acting is whoever signed in, whatever the page says.
+    let (status, taken) = tell("sub-amy", json!({ "take_case": { "case": case, "underwriter": "sam" } })).await;
+    assert_eq!((status, &taken["accepted"]), (StatusCode::OK, &json!(true)), "{taken}");
+    assert_eq!((portal.underwriting.held_by("amy"), portal.underwriting.held_by("sam")), (1, 0));
+    let sent = last();
+    assert_eq!(sent.caller, "underwriting-console");
+    assert!(matches!(&sent.command, Uw::TakeCase { underwriter, .. } if underwriter == "amy"));
+    assert_eq!(ask("sub-amy", "workload".into()).await.1, json!(1));
+    // The module refuses what this person may not do.
+    let (status, problem) = tell("sub-abe", json!({ "take_case": { "case": case } })).await;
+    assert!(status == StatusCode::CONFLICT || status == StatusCode::FORBIDDEN, "{status} {problem}");
+    let standard = json!({ "propose_decision": { "case": case, "terms": [{ "cover": "life", "outcome": { "outcome": "accept" } }],
+        "reasons": ["RC-0101"], "withheld_reasons": [], "notes_ref": "vault://notes", "evidence": [] } });
+    let (status, decided) = tell("sub-amy", standard).await;
+    assert_eq!(
+        (status, decided["events"].as_array().map(Vec::is_empty)),
+        (StatusCode::OK, Some(false)),
+        "{decided}"
+    );
+
+    // What the page may not send.
+    for bad in [
+        json!({ "sweep": { "max": 1 } }),
+        json!({ "open_disclosures": {} }),
+        json!({ "take_case": "x" }),
+        json!("queue"),
+    ] {
+        assert_eq!(tell("sub-amy", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // A senior's commands.
+    let draw = json!({ "draw_peer_review_sample": { "period": "2026-11", "from": "2026-11-01T00:00:00Z", "to": "2026-12-01T00:00:00Z", "seed": 7 } });
+    assert_eq!(tell("sub-amy", draw.clone()).await.0, StatusCode::FORBIDDEN);
+    let (status, drawn) = tell("sub-cat", draw).await;
+    assert_eq!(status, StatusCode::OK, "{drawn}");
+
+    // A non-disclosure remedy: prepared by one senior, sent when another signs.
+    let review = "ndr/CLM-1/L1";
+    assert_eq!(tell("sub-sam", json!({ "take_case": { "case": review } })).await.0, StatusCode::OK);
+    let remedy = |outcome: &str| {
+        json!({ "record_non_disclosure_outcome": { "review": review, "outcome": outcome, "reasons": ["RC-0980"],
+            "varied_terms": [{ "cover": "life", "outcome": { "outcome": "accept", "loading_percent": 50 } }] } })
+    };
+    assert_eq!(tell("sub-amy", remedy("vary")).await.0, StatusCode::FORBIDDEN, "a senior's");
+    let mut typed = remedy("vary");
+    typed["record_non_disclosure_outcome"]["countersigned_by"] = json!("cat");
+    assert_eq!(tell("sub-sam", typed).await.0, StatusCode::BAD_REQUEST, "the second senior is not typed");
+    let (status, prepared) = tell("sub-sam", remedy("vary")).await;
+    assert_eq!(status, StatusCode::OK, "{prepared}");
+    let id = prepared["prepared"].as_str().unwrap().to_string();
+    let waiting = ask("sub-cat", "me".into()).await.1["pending"].clone();
+    assert_eq!((&waiting[0]["id"], &waiting[0]["by"]), (&json!(id), &json!("sam")), "{waiting}");
+    assert!(
+        !matches!(last().command, Uw::RecordNonDisclosureOutcome { .. }),
+        "nothing reached the module yet"
+    );
+    assert_eq!(decide("sub-sam", "sign", id.clone()).await.1["title"], "separation");
+    assert_eq!(decide("sub-amy", "sign", id.clone()).await.0, StatusCode::FORBIDDEN, "a senior signs");
+    assert_eq!(decide("sub-cat", "withdraw", id.clone()).await.0, StatusCode::FORBIDDEN, "only its preparer");
+    assert_eq!(decide("sub-cat", "approve", id.clone()).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(decide("sub-cat", "sign", "nope".into()).await.0, StatusCode::NOT_FOUND);
+    let (status, sent) = decide("sub-cat", "sign", id.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert!(
+        matches!(last().command, Uw::RecordNonDisclosureOutcome { decided_by, countersigned_by: Some(second), .. } if decided_by == "sam" && second == "cat")
+    );
+    assert_eq!(ask("sub-cat", "me".into()).await.1["pending"], json!([]));
+    // One the module refuses is finished with; one taken back never goes.
+    let (_, again) = tell("sub-sam", remedy("no_action")).await;
+    let refused = again["prepared"].as_str().unwrap().to_string();
+    assert_eq!(decide("sub-cat", "sign", refused).await.0, StatusCode::CONFLICT, "the review is closed");
+    assert_eq!(ask("sub-cat", "me".into()).await.1["pending"], json!([]));
+    let (_, again) = tell("sub-sam", remedy("no_action")).await;
+    let taken_back = again["prepared"].as_str().unwrap().to_string();
+    assert_eq!(decide("sub-sam", "withdraw", taken_back).await.0, StatusCode::OK);
+    assert_eq!(ask("sub-cat", "me".into()).await.1["pending"], json!([]));
+
+    // Reading a life's disclosures: through the intake, as the person signed in, with a purpose.
+    let read = |who: &'static str, body: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/underwriting/disclosures", body).await }
+    };
+    let (status, records) = read(
+        "sub-amy",
+        json!({ "proposal": "P2", "life": "L1", "purpose": "assess the case", "underwriter": "sam" }),
+    )
+    .await;
+    assert_eq!((status, records[0]["hash"].as_str()), (StatusCode::OK, Some("hash-1")), "{records}");
+    let asked = portal.intake.received.lock().unwrap().last().cloned().unwrap();
+    assert_eq!((&asked["underwriter"], &asked["purpose"]), (&json!("amy"), &json!("assess the case")));
+    assert_eq!(
+        read("sub-amy", json!({ "proposal": "P2", "life": "L1", "purpose": " " })).await.0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        read("sub-abe", json!({ "proposal": "P2", "life": "L1", "purpose": "curious" })).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Parked effects, and putting one back.
+    let parked = ask("sub-amy", "parked".into()).await.1;
+    let effect = parked[0][0].as_u64().expect("one effect is parked");
+    assert_eq!(tell("sub-amy", json!({ "requeue_effect": { "effect": effect } })).await.0, StatusCode::OK);
+    assert!(matches!(last().command, Uw::RequeueEffect { by, .. } if by == "amy"));
+    assert_eq!(ask("sub-amy", "parked".into()).await.1, json!([]));
+    let (status, report) = ask("sub-sam", "report?from=2026-01-01T00:00:00Z&to=2030-01-01T00:00:00Z".into()).await;
+    assert_eq!((status, report["decisions"].as_u64().map(|n| n >= 1)), (StatusCode::OK, Some(true)), "{report}");
+
+    // The module unreachable, and no intake: the console says so.
+    let now = portal.now();
+    let down = router(Arc::new(AppState {
+        channel: portal.local.clone(),
+        customers: Auth::Dev,
+        workforce: Auth::Dev,
+        clock: Arc::new(move || now),
+        regions: portal.regions.clone(),
+        ui: UiConfig::Dev,
+        pricing: Arc::new(common::pricing::Down),
+        complaints: Arc::new(common::pricing::Down),
+        commission: Arc::new(common::pricing::Down),
+        finance: Arc::new(common::pricing::Down),
+        claims: Arc::new(common::claims::Down),
+        reinsurance: Arc::new(common::pricing::Down),
+        underwriting: Arc::new(common::pricing::Down),
+        master: None,
+        intake: None,
+        documents: None,
+        group: None,
+    }));
+    for (path, body) in [
+        ("/staff/v1/underwriting/parked", None),
+        ("/staff/v1/underwriting/commands", Some(json!({ "retry_issue": { "proposal": "P2" } }))),
+        (
+            "/staff/v1/underwriting/disclosures",
+            Some(json!({ "proposal": "P2", "life": "L1", "purpose": "assess" })),
+        ),
+    ] {
+        let request = Request::builder()
+            .method(if body.is_some() { "POST" } else { "GET" })
+            .uri(path)
+            .header("x-dev-subject", "sub-amy")
+            .header("idempotency-key", "k");
+        let response = down
+            .clone()
+            .oneshot(request.body(Body::from(body.map(|b| b.to_string()).unwrap_or_default())).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
+    }
 }

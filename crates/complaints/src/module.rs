@@ -86,6 +86,10 @@ pub enum Query {
     LettersDue {
         limit: usize,
     },
+    /// Written outcomes not yet proven delivered, for the documents service.
+    OutcomesAwaitingDelivery {
+        limit: usize,
+    },
     StateHash,
 }
 
@@ -108,6 +112,7 @@ pub fn answer(state: &ComplaintsState, question: Value) -> Result<Value, String>
         Query::AdviserView { engagement } => json(state.adviser_view(&engagement)),
         Query::Queue { limit } => json(state.queue(limit.min(MAX_ANSWER))),
         Query::LettersDue { limit } => json(state.letters_due(limit.min(MAX_ANSWER))),
+        Query::OutcomesAwaitingDelivery { limit } => json(state.outcomes_awaiting_delivery(limit.min(MAX_ANSWER))),
         Query::Running { id } => json(state.complaints.get(&id).map(|c| state.running(c))),
         Query::ComplaintsOf { party } => json(state.complaints_of(&party)),
         Query::Register { from, to } => json(state.register(from, to)),

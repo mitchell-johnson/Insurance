@@ -333,6 +333,9 @@ pub struct Complaint {
     pub acknowledgement: Option<String>,
     /// Dates the complainant was updated.
     pub updates: Vec<NaiveDate>,
+    /// The documents those updates were, so the same one is not counted twice.
+    #[serde(default)]
+    pub update_documents: Vec<String>,
     pub awaiting: Option<Awaiting>,
     pub outcome: Option<Outcome>,
     pub remediation: Vec<Remediation>,
@@ -510,6 +513,18 @@ pub enum LetterKind {
     DeadlockNotice,
     /// The letter to a customer affected by a licence event.
     LicenceNotice,
+    /// A progress update, owed when the update timer reaches its warning
+    /// and nobody has written.
+    Update,
+}
+
+/// A written outcome sent and not yet proven delivered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutcomeAwaitingDelivery {
+    pub complaint: String,
+    /// The outcome letter, in the documents module.
+    pub document: String,
+    pub decided_on: NaiveDate,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -525,7 +540,7 @@ pub struct LetterDue {
     pub since: NaiveDate,
     /// The date the letter is due by, where a timer sets one.
     pub due: Option<NaiveDate>,
-    /// A licence event's status and effective date. Never anything about
-    /// the person.
+    /// A licence event's status and effective date, or an update's
+    /// number. Never anything about the person.
     pub detail: BTreeMap<String, String>,
 }
