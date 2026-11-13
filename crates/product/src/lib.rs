@@ -11,6 +11,7 @@
 //! so a quote and a policy can never disagree.
 
 pub mod definition;
+pub mod discount;
 pub mod loader;
 pub mod rating;
 pub mod schedule;

@@ -292,6 +292,17 @@ pub enum Feature {
         min_covers: u32,
         percent: DecStr,
     },
+    /// The product's chain of discounts, in order, and the limits on it
+    /// (see `discount`). Each discount is its own line on the bill.
+    Discounts {
+        chain: Vec<crate::discount::DiscountStep>,
+        /// The most all discounts together take, as a percentage of base premium.
+        #[serde(default)]
+        max_total_percent: Option<DecStr>,
+        /// The least the net annual premium can be, in major currency units.
+        #[serde(default)]
+        min_net_annual: Option<DecStr>,
+    },
     CoolingOff {
         days: u32,
     },
@@ -317,6 +328,7 @@ impl Feature {
         match self {
             Feature::Composition { .. } => 5,
             Feature::MultiCoverDiscount { .. } => 10,
+            Feature::Discounts { .. } => 11,
             Feature::Indexation { .. } => 20,
             Feature::Billing { .. } => 30,
             Feature::Earning { .. } => 40,
