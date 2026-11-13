@@ -943,8 +943,12 @@ impl PaymentsState {
                         reason: "repeated_dishonour".to_string(),
                     });
                 } else if reason == ReturnReason::InsufficientFunds && n.represents.is_none() && active {
-                    // Presented once more, and only once.
-                    self.represent.insert(n.item.clone());
+                    if self.authorities.get(a).is_some_and(|x| x.hardship) {
+                        self.hold_for_conversation(tx, &n.item, a);
+                    } else {
+                        // Presented once more, and only once.
+                        self.represent.insert(n.item.clone());
+                    }
                 }
             }
             Counterparty::Payee(p) if reason.account_unusable() => {
