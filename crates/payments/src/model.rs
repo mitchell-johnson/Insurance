@@ -53,6 +53,9 @@ pub enum Role {
     /// Talks to customers in arrears and records what was agreed. Holds the
     /// ordinary and financial classes only.
     Collections,
+    /// Anti-money-laundering: works cases of premium paid by someone other
+    /// than the policy owner (`aml.rs`).
+    Compliance,
 }
 
 /// What a conversation with a payer decided about a dishonoured collection.

@@ -317,6 +317,7 @@ impl ClaimsState {
             Command::Acknowledge { claim, delivery_ref } => self.acknowledge(cx, &claim, &delivery_ref),
             Command::Assign { claim, to, actor } => self.assign(cx, &claim, &to, &actor),
             Command::RecordContact { claim, actor } => self.record_contact(cx, &claim, &actor),
+            Command::RecordCommunicationNeed { claim, needed, actor } => self.record_communication_need(cx, &claim, needed, &actor),
             Command::Escalate { claim, actor } => self.escalate(cx, &claim, &actor),
             Command::IdentifyLife { claim, party, actor } => self.identify_life(cx, &claim, &party, &actor),
             Command::RecordCause { claim, cause_code, actor } => self.record_cause(cx, &claim, &cause_code, &actor),
@@ -758,6 +759,11 @@ impl ClaimsState {
                     TaskKind::ProofOfLife => (self.rules.proof_of_life_grace_days, self.rules.proof_of_life_months),
                     TaskKind::MedicalReview => (self.rules.review_grace_days, self.rules.medical_review_months),
                     _ => (self.rules.review_grace_days, self.rules.income_declaration_months),
+                };
+                let grace = if claim.flags.communication_support {
+                    grace + self.rules.communication_extra_days
+                } else {
+                    grace
                 };
                 claim.due.insert((plus_days(on, grace), Due::ReviewOverdue(kind)));
                 if let Some(s) = claim.schedule.as_mut() {

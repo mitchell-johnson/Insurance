@@ -991,3 +991,82 @@ fn a_claim_is_never_offered_to_a_relative_in_the_queue() {
         "conflict_of_interest"
     );
 }
+
+/// Purpose: a claimant with a communication marker keeps one named owner, a change of owner is
+/// recorded as a handover with a call to the claimant, and every deadline the claimant has to
+/// meet (evidence asked of them, the grace on a review) moves out by the rules' extension, once,
+/// while deadlines on others stay as they were.
+/// Why it matters: persona test CLM-042. Someone who needs more time or a familiar voice is
+/// otherwise chased on the standard clock and passed between strangers, which is how a claim is
+/// lost for want of a reply rather than for want of cover.
+#[test]
+fn a_communication_marker_gives_one_owner_a_said_handover_and_more_time() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.communication_extra_days = 10;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    w.open_claim("c-1");
+    let ask = |evidence: &str, from: &str| Command::RequestEvidence {
+        claim: "c-1".into(),
+        evidence: evidence.into(),
+        kind: "statement".into(),
+        from: from.into(),
+        actor: actor("ana"),
+    };
+    w.ok(ask("e-1", "claimant"));
+    w.ok(ask("e-2", "treating-doctor"));
+    let due = |w: &World, id: &str| w.claim("c-1").evidence.iter().find(|e| e.id == id).expect("asked").due;
+    let (mine, doctors) = (due(&w, "e-1"), due(&w, "e-2"));
+    let marker = |claim: &str, needed: bool, who: &str| Command::RecordCommunicationNeed {
+        claim: claim.into(),
+        needed,
+        actor: actor(who),
+    };
+    assert_eq!(w.refused(marker("c-1", true, "ben")), "not_owner");
+    w.ok(marker("c-1", true, "ana"));
+    w.ok(marker("c-1", true, "ana"));
+    assert_eq!(due(&w, "e-1"), mine + chrono::Days::new(10), "moved once");
+    assert_eq!(due(&w, "e-2"), doctors, "the doctor's deadline is not the claimant's");
+    w.ok(ask("e-3", "party-claimant"));
+    assert_eq!(due(&w, "e-3"), mine + chrono::Days::new(10));
+    assert_eq!(w.core.noticed("communication_need_recorded").len(), 1);
+
+    // A handover is said: the new owner calls the claimant.
+    w.ok(Command::Assign {
+        claim: "c-1".into(),
+        to: "ben".into(),
+        actor: actor("sam"),
+    });
+    let c = w.claim("c-1");
+    assert!(c
+        .tasks
+        .iter()
+        .any(|t| t.id == "handover/ben/2027-03-01" && t.kind == TaskKind::ClaimantConversation));
+    let told = w.core.noticed("claim_assigned");
+    let told = told.last().expect("told");
+    assert_eq!(
+        (told["owner"].as_str(), told["handover"].as_str(), told["communication_support"].as_str()),
+        ("ben", "true", "true")
+    );
+    // Turned off: nothing already given is shortened.
+    w.ok(marker("c-1", false, "sam"));
+    assert_eq!(due(&w, "e-1"), mine + chrono::Days::new(10));
+
+    // A review's grace: moved when the marker arrives, and longer for the next one.
+    w.benefit_in_payment("ip-1");
+    w.on(d(2027, 6, 1));
+    w.ok(Command::DrainDue);
+    w.ok(marker("ip-1", true, "ana"));
+    w.on(d(2027, 6, 15));
+    w.ok(Command::DrainDue);
+    assert!(w.core.noticed("review_overdue").is_empty(), "the 14 days of grace became 24");
+    w.on(d(2027, 6, 25));
+    w.ok(Command::DrainDue);
+    assert_eq!(w.core.noticed("review_overdue").len(), 1);
+    w.on(d(2027, 9, 1));
+    w.ok(Command::DrainDue);
+    w.on(d(2027, 9, 15));
+    w.ok(Command::DrainDue);
+    assert_eq!(w.core.noticed("review_overdue").len(), 1, "the medical review has 24 days too");
+}

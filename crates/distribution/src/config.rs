@@ -1012,6 +1012,17 @@ impl DistributionState {
                 self.set_servicing(ctx, &w.policy, Some(e), from);
             }
         }
+        if w.replacement {
+            let date = self.today.unwrap_or(from);
+            // A layer is written once, so this is its only declaration.
+            if let Some(l) = self.layers.get_mut(&key) {
+                l.conduct.push(ConductRecord {
+                    measure: ConductMeasure::ReplacementWritten,
+                    date,
+                    relates_to: None,
+                });
+            }
+        }
         if !w.replacement && !self.layers.get(&key).is_some_and(|l| l.indexation) {
             let today = self.date()?;
             self.match_replacement(ctx, &key, today);
