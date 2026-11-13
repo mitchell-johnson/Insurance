@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 4 | 4 | 18 | 5 |
 | ANV The anniversary window | 2 | 2 | 15 | 4 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 5 | 6 | 10 | 7 |
+| VUL Vulnerable customers, support people and representatives | 7 | 7 | 7 | 7 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
 | PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 4 | 2 | 10 | 9 |
 | DOC Policy documents and correspondence | 8 | 2 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **237** | **132** | **208** | **138** |
+| **Total** | **239** | **133** | **205** | **138** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 86 | 28 | 28 |
-| C | 120 | 71 | 155 |
+| C | 122 | 72 | 152 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -150,11 +150,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 
 ## Design gaps the personas expose
 
-- US-P12-2 (P12 Fatima Al-Sayed, 38): tests CLM-037
-- US-P49-2 (P49 Alex Rivera, 29): tests PRD-011
-- US-P52-1 (P52 Caleb Stone, 21): tests SVC-022
-- US-N05-1 (N5 Rob Sutherland, 51, undischarged bankrupt with a WOL0 surrender value): tests JNT-029
-- US-N06-1 (N6 Shane Poutama, 34, in prison for two years, holds TERM0 and IP1): tests CLM-040, VUL-019
+None open. Decided gaps are recorded in `docs/decisions.md`.
 
 ## Situations
 

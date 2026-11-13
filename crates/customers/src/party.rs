@@ -128,7 +128,18 @@ pub enum Change {
         from: String,
         about: String,
     },
+    /// Put in question whether the person can make their own decisions,
+    /// before or after any authority is activated. Representatives' acts
+    /// are routed to a person until it is settled; cover and claims go on.
+    QuestionCapacity,
+    /// Settle the question, with the outcome legal reached.
+    SettleCapacity {
+        outcome: String,
+    },
 }
+
+/// How a capacity question can be settled.
+pub const CAPACITY_OUTCOMES: [&str; 2] = ["has_capacity", "lacks_capacity"];
 
 /// Who may raise a concern about someone.
 pub const CONCERN_FROM: [&str; 6] = ["family", "friend", "carer", "professional", "staff", "other"];
@@ -154,6 +165,8 @@ impl Change {
             Change::PlaceHold { .. } => "place_hold",
             Change::ReleaseHold { .. } => "release_hold",
             Change::RecordConcern { .. } => "record_concern",
+            Change::QuestionCapacity => "question_capacity",
+            Change::SettleCapacity { .. } => "settle_capacity",
         }
     }
 }
@@ -185,6 +198,8 @@ pub struct Party {
     pub merged_into: Option<PartyId>,
     pub absorbed: BTreeSet<PartyId>,
     pub holds: BTreeSet<String>,
+    /// Whether the person's capacity is in question now.
+    pub capacity_in_question: bool,
     pub shredded: bool,
     /// The last sequence number applied.
     pub version: u64,
@@ -301,6 +316,8 @@ impl Party {
                 self.holds.remove(reference);
             }
             EventBody::ConcernRaised { .. } => {}
+            EventBody::CapacityQuestioned => self.capacity_in_question = true,
+            EventBody::CapacitySettled { .. } => self.capacity_in_question = false,
             EventBody::Shredded => {
                 let id = std::mem::take(&mut self.id);
                 *self = Party {
@@ -707,6 +724,20 @@ impl Party {
                     from: pick("from", from, &CONCERN_FROM)?,
                     about: pick("about", about, &CONCERN_ABOUT)?,
                 });
+            }
+            Change::QuestionCapacity => {
+                if !self.capacity_in_question {
+                    events.push(EventBody::CapacityQuestioned);
+                }
+            }
+            Change::SettleCapacity { outcome } => {
+                if !CAPACITY_OUTCOMES.contains(&outcome.as_str()) {
+                    return Err(reject("invalid", format!("outcome is one of {}", CAPACITY_OUTCOMES.join(", "))));
+                }
+                if !self.capacity_in_question {
+                    return Err(reject("not_found", "no capacity question is open"));
+                }
+                events.push(EventBody::CapacitySettled { outcome: outcome.clone() });
             }
         }
         Ok(events)

@@ -395,9 +395,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
+| VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
 
 ## CMP Complaints and disputes
