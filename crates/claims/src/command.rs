@@ -471,6 +471,15 @@ pub enum Command {
         claim: String,
         amount_minor: i64,
     },
+    /// Legal's direction on proceeds held under an insolvency interest: pay
+    /// `party` (who must then be verified as the payee). `direction` is the
+    /// vault reference of the direction itself.
+    DirectProceeds {
+        claim: String,
+        party: String,
+        direction: String,
+        actor: Actor,
+    },
     /// Tell the payee the late payment interest owed on what is payable now.
     OfferLateInterest {
         claim: String,
@@ -566,6 +575,7 @@ impl Command {
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
             Command::ReferForInvestigation { .. } => "refer_for_investigation",
+            Command::DirectProceeds { .. } => "direct_proceeds",
             Command::OfferLateInterest { .. } => "offer_late_interest",
             Command::DeclineLateInterest { .. } => "decline_late_interest",
             Command::WithdrawInterestDecline { .. } => "withdraw_interest_decline",

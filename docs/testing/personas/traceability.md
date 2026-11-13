@@ -327,7 +327,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
-| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
