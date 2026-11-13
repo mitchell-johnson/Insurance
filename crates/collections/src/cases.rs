@@ -137,6 +137,25 @@ impl CollectionsState {
         Ok(())
     }
 
+    /// Ask the core to reinstate a lapsed policy. Each request is its own
+    /// posting, so a request after underwriting's approval is a new one.
+    pub(crate) fn request_reinstatement(&mut self, policy: PolicyId, ctx: &mut Ctx) -> Result<(), Reject> {
+        let p = self.policies.get(&policy).ok_or_else(|| bad("unknown_policy", "no such policy"))?;
+        if !p.ended {
+            return Err(bad("not_lapsed", "only a lapsed policy is reinstated"));
+        }
+        if self
+            .outbox
+            .values()
+            .any(|o| o.policy == policy && matches!(o.command, ic_core::Command::Reinstate { .. }))
+        {
+            return Err(bad("reinstatement_pending", "the core has not answered the last request yet"));
+        }
+        let id = self.next("reinstate");
+        self.post(id, &policy, ic_core::Command::Reinstate { policy: policy.clone() }, ctx);
+        Ok(())
+    }
+
     /// The core's answer to a posting. A refusal is a task: the officer
     /// tells the customer and agrees something else.
     pub(crate) fn core_outcome(&mut self, id: &str, applied: bool, code: Option<String>, message: Option<String>, ctx: &mut Ctx) -> Result<(), Reject> {
@@ -149,6 +168,8 @@ impl CollectionsState {
         }
         let kind = match posting.command {
             ic_core::Command::GrantHardship { .. } | ic_core::Command::EndHardship { .. } => TaskKind::HardshipDecision,
+            ic_core::Command::Reinstate { .. } if code.as_deref() == Some("underwriting_required") => TaskKind::ReinstatementUnderwriting,
+            ic_core::Command::Reinstate { .. } => TaskKind::Reinstatement,
             _ => TaskKind::Arrangement,
         };
         ctx.emit(Event::PostingRefused {

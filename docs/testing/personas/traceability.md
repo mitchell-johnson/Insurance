@@ -167,10 +167,12 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-009 | full | `reinsurance/tests/capacity.rs::two_proposals_on_one_life_see_each_other`<br>`reinsurance/tests/accumulation.rs::arrival_order_does_not_change_the_cessions` |
 | UW-010 | full | `underwriting/tests/libraries.rs::a_case_tracks_ownership_escalation_and_priority`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-011 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent`<br>`underwriting/tests/intake.rs::an_underwriter_on_the_case_reads_the_disclosure_and_the_reading_is_logged` |
+| UW-012 | full | `underwriting/tests/addendum.rs::an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent` |
 | UW-013 | part | `channels/tests/http.rs::the_person_insured_signs_their_disclosure` |
 | UW-014 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
 | UW-015 | full | `underwriting/tests/casework.rs::evidence_that_cannot_be_had_goes_to_a_person_with_the_reason` |
 | UW-016 | part | `underwriting/tests/casework.rs::evidence_is_requested_chased_and_then_read_by_a_person` |
+| UW-017 | full | `underwriting/tests/intake.rs::a_previous_insurers_history_is_ordered_tracked_and_relied_on` |
 | UW-018 | full | `underwriting/tests/driver.rs::interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issued`<br>`sim/tests/underwriting_door.rs::underwriting_can_end_interim_cover` |
 | UW-019 | full | `underwriting/tests/casework.rs::interview_answers_count_only_once_the_life_confirms_them` |
 | UW-020 | part | `underwriting/tests/driver.rs::an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force` |
@@ -180,6 +182,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | UW-024 | full | `underwriting/tests/special.rs::peer_review_samples_decisions_for_a_senior_who_never_touched_them` |
 | UW-025 | full | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-026 | part | `underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
+| UW-027 | full | `underwriting/tests/intake.rs::a_sampled_delegated_decision_brings_the_file_in_under_the_lifes_key`<br>`underwriting/tests/special.rs::a_delegated_decision_is_bound_only_inside_its_authority` |
 | UW-028 | full | `underwriting/tests/journey.rs::an_offer_can_be_declined_expire_or_be_countered` |
 | UW-029 | part | `underwriting/tests/lifecycle.rs::a_capacity_request_carries_the_risk_codes_declared_and_nothing_clinical` |
 
@@ -218,7 +221,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | CLM-033 | full | `claims/tests/suite/intake.rs::a_claim_is_offered_only_to_someone_who_may_work_it`<br>`claims/tests/suite/intake.rs::a_claim_is_never_offered_to_a_relative_in_the_queue` |
 | CLM-035 | full | `claims/tests/suite/book.rs::a_returned_payment_is_owed_again`<br>`payments/tests/intake.rs::claims_is_told_when_the_bank_refuses_a_released_payment` |
 | CLM-036 | full | `claims/tests/suite/decisions.rs::ex_gratia_is_decided_and_paid_apart_from_the_contract` |
-| CLM-037 | part | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit` |
+| CLM-037 | full | `claims/tests/suite/book.rs::a_lump_sum_paid_late_carries_interest`<br>`sim/tests/claims.rs::late_payment_interest_is_its_own_posting_and_settles_with_the_benefit`<br>`claims/tests/suite/book.rs::late_interest_is_offered_and_declined_only_by_an_informed_payee`<br>`sim/tests/claims.rs::declined_late_interest_is_reversed_in_its_own_entry` |
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | part | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death` |
 | CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
@@ -334,31 +337,44 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ADV-002 | full | `distribution/tests/commission.rs::an_adviser_moves_with_the_book_and_the_previous_provider_keeps_a_tail` |
 | ADV-003 | full | `distribution/tests/units.rs::a_tail_that_ends_flows_to_the_ongoing_parties_without_a_new_rule` |
 | ADV-004 | full | `distribution/tests/commission.rs::a_lapse_claws_back_from_the_liable_party_and_reinstatement_restores_it` |
+| ADV-005 | full | `distribution/tests/personas.rs::an_increase_after_a_move_belongs_to_the_new_arrangement_and_pays_no_tail` |
 | ADV-006 | full | `distribution/tests/commission.rs::a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base` |
-| ADV-009 | part | `distribution/tests/config.rs::a_layer_split_between_books_pays_each_book_its_share` |
-| ADV-012 | part | `distribution/tests/edges.rs::a_change_set_restructures_in_one_step_and_refuses_what_cannot_be_carried_out` |
+| ADV-007 | full | `distribution/tests/personas.rs::a_provider_changing_aggregator_keeps_the_old_override_on_existing_books_only` |
+| ADV-008 | full | `distribution/tests/personas.rs::a_second_move_carries_both_tails_each_ending_on_its_own_date` |
+| ADV-009 | full | `distribution/tests/personas.rs::a_joint_policy_moves_only_the_share_of_the_adviser_who_leaves`<br>`distribution/tests/config.rs::a_layer_split_between_books_pays_each_book_its_share` |
+| ADV-010 | full | `distribution/tests/personas.rs::a_cover_another_adviser_adds_earns_in_that_advisers_book_only` |
+| ADV-011 | full | `distribution/tests/personas.rs::an_adviser_with_two_engagements_earns_each_policy_in_the_book_it_was_written_under` |
+| ADV-012 | full | `distribution/tests/personas.rs::a_retiring_advisers_book_split_between_three_successors_carries_the_tail`<br>`distribution/tests/edges.rs::a_change_set_restructures_in_one_step_and_refuses_what_cannot_be_carried_out` |
 | ADV-013 | full | `distribution/tests/commission.rs::a_customers_change_of_adviser_moves_servicing_at_once_and_commission_by_the_setting` |
 | ADV-014 | full | `distribution/tests/commission.rs::a_dishonour_reverses_the_original_lines_whatever_the_rule_says_today` |
+| ADV-015 | full | `distribution/tests/personas.rs::premium_handed_back_across_a_move_reverses_the_lines_each_month_recorded` |
 | ADV-016 | full | `distribution/tests/commission.rs::a_lapse_claws_back_from_the_liable_party_and_reinstatement_restores_it` |
 | ADV-017 | full | `distribution/tests/lifecycle.rs::clawback_by_cause_falls_on_the_engagement_that_submitted_the_alteration` |
-| ADV-019 | part | `distribution/tests/units.rs::a_licence_problem_cascades_through_the_dated_structure`<br>`channels/tests/journeys.rs::a_lost_licence_makes_the_adviser_read_only` |
-| ADV-020 | part | `distribution/tests/workbench.rs::write_offs_follow_the_floor_the_age_and_the_second_signature`<br>`distribution/tests/workbench.rs::an_aged_debt_moves_to_the_guarantor_the_rule_names` |
+| ADV-018 | full | `distribution/tests/personas.rs::a_wrong_commission_option_found_a_year_later_is_corrected_from_the_start` |
+| ADV-019 | full | `distribution/tests/personas.rs::a_provider_losing_its_licence_stops_new_business_holds_commission_and_asks_for_servicing`<br>`distribution/tests/units.rs::a_licence_problem_cascades_through_the_dated_structure`<br>`channels/tests/journeys.rs::a_lost_licence_makes_the_adviser_read_only` |
+| ADV-020 | full | `distribution/tests/workbench.rs::write_offs_follow_the_floor_the_age_and_the_second_signature`<br>`distribution/tests/workbench.rs::an_aged_debt_moves_to_the_guarantor_the_rule_names`<br>`distribution/tests/workbench.rs::a_release_to_a_liquidator_needs_the_appointment_account_and_legal` |
 | ADV-021 | full | `distribution/tests/statements.rs::court_orders_and_assignments_are_paid_first_in_order_of_priority` |
+| ADV-022 | full | `distribution/tests/statements.rs::court_orders_and_assignments_are_paid_first_in_order_of_priority` |
 | ADV-023 | full | `distribution/tests/commission.rs::disputed_lines_and_accrual_holds_earn_into_held_with_their_reason`<br>`distribution/tests/workbench.rs::a_disputed_amount_is_split_between_the_parties_who_agreed_to_it` |
 | ADV-024 | full | `distribution/tests/statements.rs::a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement` |
-| ADV-025 | part | `distribution/tests/commission.rs::a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base` |
+| ADV-025 | full | `distribution/tests/personas.rs::a_referral_partners_fixed_fee_is_its_own_line_and_is_clawed_back`<br>`distribution/tests/commission.rs::a_shared_fragment_pays_overrides_and_a_one_off_fee_on_top_of_base` |
 | ADV-026 | full | `distribution/tests/commission.rs::replacement_cover_earns_trail_only_and_the_house_book_earns_nothing`<br>`distribution/tests/lifecycle.rs::a_replaced_policys_clawback_carries_to_the_replacement` |
 | ADV-029 | full | `distribution/tests/replacement.rs::cover_rewritten_inside_the_group_after_a_cancellation_is_treated_as_a_replacement`<br>`distribution/tests/replacement.rs::the_rule_matches_the_same_life_the_same_cover_and_a_related_adviser_or_the_same_amount` |
+| ADV-030 | full | `distribution/tests/personas.rs::a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split` |
 | ADV-032 | full | `distribution/tests/units.rs::a_rule_allocates_every_cent_of_any_amount` |
 | ADV-033 | full | `distribution/tests/units.rs::rule_validation_catches_every_way_a_rule_fails_to_add_up` |
 | ADV-034 | full | `distribution/tests/statements.rs::one_net_payment_covers_credits_and_debts_on_different_partitions`<br>`distribution/tests/statements.rs::a_statement_shows_the_detail_and_its_payment_clears_the_ledger` |
 | ADV-035 | part | `channels/tests/queries.rs::an_advisers_book_shows_standing_and_held_money` |
 | ADV-036 | full | `channels/tests/journeys.rs::access_ends_with_the_engagement`<br>`channels/tests/http.rs::an_advisers_request_needs_the_customers_signed_approval` |
-| ADV-037 | part | `distribution/tests/statements.rs::a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement`<br>`payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period` |
+| ADV-037 | full | `distribution/tests/statements.rs::a_new_account_and_a_payment_hold_stop_payment_but_not_the_statement`<br>`distribution/tests/config.rs::the_structure_refuses_duplicates_loops_and_the_wrong_kind_of_party`<br>`payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period` |
 | ADV-038 | full | `distribution/tests/commission.rs::a_dry_run_shows_what_a_premium_would_earn_and_changes_nothing` |
-| ADV-039 | part | `distribution/tests/lifecycle.rs::waived_premium_earns_renewal_commission_unless_the_schedule_says_otherwise` |
+| ADV-039 | full | `distribution/tests/personas.rs::premium_paused_in_hardship_earns_nothing_until_billing_resumes`<br>`distribution/tests/lifecycle.rs::waived_premium_earns_renewal_commission_unless_the_schedule_says_otherwise` |
+| ADV-040 | full | `distribution/tests/personas.rs::a_retired_advisers_tail_passes_to_the_estate_from_the_date_of_death` |
+| ADV-041 | full | `distribution/tests/personas.rs::an_authorised_body_that_gains_its_own_licence_leaves_its_providers_cascade` |
 | ADV-042 | full | `distribution/tests/commission.rs::a_backdated_rule_moves_the_difference_between_payees_and_leaves_expense_alone` |
+| ADV-043 | full | `distribution/tests/personas.rs::direct_business_sits_in_no_book_and_earns_nothing`<br>`distribution/tests/commission.rs::replacement_cover_earns_trail_only_and_the_house_book_earns_nothing` |
 | ADV-044 | full | `distribution/tests/commission.rs::a_claim_never_triggers_clawback` |
+| ADV-045 | full | `distribution/tests/personas.rs::a_provider_changing_aggregator_keeps_the_old_override_on_existing_books_only` |
 
 ## SVC Policy servicing
 
@@ -369,9 +385,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
 | SVC-008 | full | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
+| SVC-017 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
-| SVC-022 | part | `customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
+| SVC-022 | part | `payments/tests/hold.rs::only_the_service_records_what_the_master_says`<br>`payments/tests/hold.rs::a_hold_stops_value_leaving_and_nothing_else`<br>`payments/tests/hold.rs::a_refund_is_value_going_out_and_a_claim_is_not`<br>`payments/tests/hold.rs::a_hold_heard_after_the_item_joined_holds_it_at_the_check`<br>`payments/tests/hold.rs::a_payout_waits_for_a_recent_answer_where_one_is_required`<br>`payments/tests/hold.rs::the_pump_watches_every_party_money_is_about_to_go_to`<br>`payments-service/tests/pump.rs::the_pump_hears_a_customers_own_hold_from_the_customer_master`<br>`customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
 | SVC-025 | part | `distribution/tests/replacement.rs::cover_given_up_after_new_cover_was_written_is_matched_looking_back` |
 
 ## ANV The anniversary window
@@ -399,18 +416,24 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
-| VUL-004 | part | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
+| VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-007 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
-| VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
+| VUL-012 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-019 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
+| VUL-021 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
 
 ## CMP Complaints and disputes
 
@@ -521,7 +544,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
 | DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
-| DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it` |
+| DOC-009 | full | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it`<br>`customers/tests/api.rs::a_contact_point_can_be_chosen_for_one_relationship` |
 | DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration

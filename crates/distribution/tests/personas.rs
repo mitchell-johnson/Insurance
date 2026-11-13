@@ -1071,3 +1071,248 @@ fn a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split(
     assert!(after.keys().all(|(who, _)| who == "broker-y") && !after.is_empty(), "{after:?}");
     w.assert_reconciled();
 }
+
+/// Purpose: (ADV-019) FAP One loses its licence. From the date, new business under any
+/// engagement with it is refused; commission still earned on its advisers' existing business,
+/// for FAP One and for the adviser's company, goes to held with the licence as the reason; each
+/// policy it serviced gets a task for a new servicing adviser; and appointing one tells the
+/// customer.
+/// Why it matters: this is the scenario the held balance design exists for. Paying a provider
+/// that may not give advice, or losing the commission it would otherwise have earned, are both
+/// failures a regulator would see.
+#[test]
+fn a_provider_losing_its_licence_stops_new_business_holds_commission_and_asks_for_servicing() {
+    use ic_distribution::structure::LicenceState;
+    let mut w = worked_example();
+    with_adviser_b(&mut w);
+    w.add_party("fap-two-adviser", PartyKind::Adviser);
+    w.engage("eng-c-two", "fap-two-adviser", "fap-two", d(2020, 1, 1));
+    // A's company is paid on A's behalf, so it follows A's licence.
+    let payee_for = ic_distribution::structure::Relation {
+        child: party("a-co"),
+        parent: party("adviser-a"),
+        kind: ic_distribution::structure::RelationKind::PayeeFor,
+        from: d(2020, 1, 1),
+        to: None,
+    };
+    w.send(admin(), Command::Relate(payee_for)).unwrap();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.activate(
+        "servicing",
+        vec![Change::SetServicing {
+            policy: policy.clone(),
+            engagement: Some(EngagementId::from("eng-a-one")),
+        }],
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    w.days(31);
+    let today = w.today();
+    let events = w.licence("fap-one", LicenceState::Revoked, today).unwrap();
+    assert!(events.iter().any(|e| matches!(e, Event::CaseOpened { .. })), "a conduct case opens: {events:?}");
+
+    let (new, _) = w.issue(2, 500_000_00, None);
+    assert_eq!(
+        code(w.write(&new, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00)),
+        "not_authorised_to_advise"
+    );
+    assert_eq!(
+        code(w.write(&new, "life", 1, "eng-b-one", "b-at-fap-one", 1_200_00)),
+        "not_authorised_to_advise"
+    );
+
+    let held_before = (w.held("fap-one"), w.held("a-co"));
+    let payable_before = (w.payable("fap-one"), w.payable("a-co"));
+    w.pay(&policy, "r2");
+    assert!(w.held("fap-one") > held_before.0 && w.held("a-co") > held_before.1, "earned into held");
+    assert_eq!((w.payable("fap-one"), w.payable("a-co")), payable_before, "and nothing to payable");
+    assert!(w
+        .dist
+        .held
+        .iter()
+        .any(|h| h.party == party("fap-one") && h.reason == Some(ic_distribution::rules::HeldReason::SuspendedLicence)));
+
+    let tasks: Vec<_> = w.dist.tasks.values().filter(|t| t.subject.contains(&policy.0) && t.done.is_none()).collect();
+    assert!(!tasks.is_empty(), "the policy needs a new servicing adviser: {:?}", w.dist.tasks);
+    w.activate(
+        "new-servicing",
+        vec![Change::SetServicing {
+            policy: policy.clone(),
+            engagement: Some(EngagementId::from("eng-c-two")),
+        }],
+    )
+    .unwrap();
+    assert!(w.events.iter().any(|e| matches!(e, Event::ServicingChanged { .. })), "the customer is told");
+    assert!(
+        w.dist.tasks.values().filter(|t| t.subject == policy.0).all(|t| t.done.is_some()),
+        "appointing settles the task"
+    );
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-025) a referral partner is paid a fixed fee when a policy is issued from its
+/// referral. The partner is a party with a payee record and an agreement, but no engagement, so
+/// it can write no business; the fee is a line of its own on the book's rule, separate from base
+/// commission; and the fee is clawed back with the initial commission when the policy is
+/// cancelled inside the clawback period.
+/// Why it matters: referral fees are commission in law. Paid without an agreement, or kept when
+/// the business does not stay, they become an inducement the insurer cannot justify.
+#[test]
+fn a_referral_partners_fixed_fee_is_its_own_line_and_is_clawed_back() {
+    let mut w = worked_example();
+    w.add_party("partner", PartyKind::ReferralPartner);
+    w.payee("partner");
+    w.account("partner", "acct-partner");
+    let today = w.today();
+    let fee = Line {
+        component: Component::FixedFee("referral".into()),
+        commission_type: Some(CommissionType::Initial),
+        share: Share::Fixed(150_00),
+        ..base("partner", Share::OfRemainder(1), false)
+    };
+    let mut lines = vec![
+        base("a-co", Share::OfRemainder(pct(75.0)), true),
+        base("fap-one", Share::OfRemainder(pct(25.0)), false),
+    ];
+    lines.push(fee);
+    w.activate(
+        "referral",
+        vec![Change::ActivateRule(rule("a-at-fap-one", 2, today, lines, vec![liable("fap-one")]))],
+    )
+    .unwrap();
+    assert!(!w
+        .dist
+        .config
+        .structure
+        .engagements
+        .values()
+        .any(|e| e.adviser == party("partner") || e.with == party("partner")));
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    let before = w.events.len();
+    w.pay(&policy, "r1");
+    let mut fee_lines = vec![];
+    for e in &w.events[before..] {
+        if let Event::CommissionEarned { reference, .. } = e {
+            fee_lines.extend(w.dist.allocations[reference].lines.iter().filter(|l| l.payee == party("partner")).cloned());
+        }
+    }
+    assert_eq!(fee_lines.len(), 1);
+    assert_eq!(fee_lines[0].component, Some(Component::FixedFee("referral".into())));
+    assert_eq!(fee_lines[0].amount_minor, 150_00);
+    assert_eq!(w.payable("partner"), 150_00);
+    assert!(w.dist.exposures.values().any(|e| e.paid_to == party("partner") && e.amount_minor == 150_00));
+
+    w.days(40);
+    w.core(&policy, "policy-servicing", CoreCommand::CancelPolicy { policy: policy.clone() })
+        .unwrap();
+    let clawed: i64 = w
+        .dist
+        .exposures
+        .values()
+        .filter(|e| e.paid_to == party("partner"))
+        .map(|e| e.clawed_minor)
+        .sum();
+    assert_eq!(clawed, 150_00, "inside the first year the whole fee comes back");
+    w.assert_reconciled();
+}
+
+/// Purpose: (ADV-039) premium paused under a hardship arrangement is not billed, so it earns no
+/// commission while the pause runs; when billing resumes, renewal commission is earned again on
+/// what is paid. (Premium waived during a claim, which does earn, is covered in lifecycle.rs.)
+/// Why it matters: a pause is premium the insurer never receives. Commission on it would be paid
+/// out of nothing and taken back later from an adviser who did nothing wrong.
+#[test]
+fn premium_paused_in_hardship_earns_nothing_until_billing_resumes() {
+    let mut w = worked_example();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.write(&policy, "life", 1, "eng-a-one", "a-at-fap-one", 1_200_00).unwrap();
+    w.pay(&policy, "r1");
+    let from = w.today() + chrono::Duration::days(20);
+    let to = from + chrono::Duration::days(60);
+    w.core(
+        &policy,
+        "collections",
+        CoreCommand::GrantHardship {
+            policy: policy.clone(),
+            hardship: "pause-1".into(),
+            from,
+            to,
+            share_bps: 0,
+        },
+    )
+    .unwrap();
+    let total = |w: &World| w.payable("a-co") + w.payable("fap-one");
+    let before = total(&w);
+    let earned_events = w.events.len();
+    w.days(31);
+    let owed = w.owing(&policy);
+    if owed > 0 {
+        w.pay(&policy, "during");
+    }
+    assert_eq!(owed, 0, "nothing is billed while premium is paused");
+    assert_eq!(total(&w), before, "and nothing is earned");
+    assert!(!w.events[earned_events..].iter().any(|e| matches!(e, Event::CommissionEarned { .. })));
+    w.run_until(to + chrono::Duration::days(1));
+    w.days(31);
+    assert!(w.pay(&policy, "after") > 0, "billing resumes");
+    assert!(total(&w) > before, "and earns again");
+    w.assert_reconciled();
+}
+
+/// Purpose: a correction between options that earlier commission cannot be scaled to is
+/// refused: here the wrong option paid no renewal at all, so there is no record of the premium
+/// the right option's renewal would apply to. A correction to a layer that does not exist, or
+/// was never written, is refused too.
+/// Why it matters: a correction that guessed the basis would post a number nobody can trace to
+/// a premium. Refusing it sends the difference to an adjustment, which a person works out and
+/// signs.
+#[test]
+fn a_correction_the_module_cannot_scale_is_refused() {
+    use ic_distribution::model::ScheduleOption;
+    let mut w = worked_example();
+    let mut alt = schedule();
+    alt.id = "alt".into();
+    alt.options = BTreeMap::from([
+        (
+            "initial-only".to_string(),
+            ScheduleOption {
+                initial_ppm: pct(100.0),
+                renewal_ppm: 0,
+                renewal_from_month: 0,
+            },
+        ),
+        (
+            "trail".to_string(),
+            ScheduleOption {
+                initial_ppm: 0,
+                renewal_ppm: pct(20.0),
+                renewal_from_month: 0,
+            },
+        ),
+    ]);
+    w.activate("alt", vec![Change::ActivateSchedule(alt)]).unwrap();
+    let (policy, _) = w.issue(1, 500_000_00, None);
+    w.send(
+        module("new-business"),
+        Command::WriteLayer(Box::new(WriteLayer {
+            policy: policy.clone(),
+            cover: "life".into(),
+            layer: 1,
+            writing: vec![(EngagementId::from("eng-a-one"), WHOLE)],
+            books: vec![(BookId::from("a-at-fap-one"), WHOLE)],
+            schedule: "alt".into(),
+            option: "initial-only".into(),
+            annual_premium_minor: 1_200_00,
+            replacement: false,
+        })),
+    )
+    .unwrap();
+    w.pay(&policy, "r1");
+    let correct = |layer: String| vec![Change::CorrectTerms { layer, option: "trail".into() }];
+    assert_eq!(code(w.propose("c1", correct(layer(&policy, 1)))), "correction_needs_adjustment");
+    assert_eq!(code(w.propose("c2", correct(layer(&policy, 9)))), "unknown_layer");
+    let (unwritten, _) = w.issue(2, 500_000_00, None);
+    assert_eq!(code(w.propose("c3", correct(layer(&unwritten, 1)))), "layer_not_written");
+}

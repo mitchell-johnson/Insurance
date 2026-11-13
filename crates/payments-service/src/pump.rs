@@ -34,8 +34,18 @@ pub struct Pass {
     pub messages: usize,
     /// Outbox entries finished.
     pub instructions: usize,
+    /// Answers about customers' own holds recorded.
+    pub holds: usize,
     /// What could not be done this time. The next pass tries again.
     pub problems: Vec<String>,
+}
+
+/// How old the record of a party's hold may be before the pump asks the
+/// customer master again: half the age the check accepts, so a record is
+/// renewed before a check would hold anything; fifteen minutes when the
+/// check does not insist.
+pub fn refresh_after(max_age_minutes: Option<u32>) -> Duration {
+    Duration::minutes(max_age_minutes.map_or(15, |m| i64::from(m.div_ceil(2))))
 }
 
 /// The wall clock in New Zealand, which is what cutoffs are measured in.
@@ -62,6 +72,9 @@ pub struct Pump<M, C, B, V, K, S, N> {
     pub grace: Duration,
     /// The last message read from each channel.
     pub cursors: Mutex<BTreeMap<String, u64>>,
+    /// The customer master, asked whether parties' own holds stand
+    /// (SVC-022). None where no master is connected.
+    pub holds: Option<Arc<dyn crate::ports::Holds>>,
 }
 
 impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier> Pump<M, C, B, V, K, S, N> {
@@ -385,7 +398,38 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         if let Err(e) = self.work_outbox(&mut pass).await {
             pass.problems.push(e);
         }
+        if let Err(e) = self.check_holds(&config, &mut pass).await {
+            pass.problems.push(e);
+        }
         pass
+    }
+
+    /// Ask the customer master about each party money taking value out of a
+    /// policy is about to go to, and record what it says. A party asked
+    /// recently enough is not asked again; one the master cannot answer for
+    /// is left, and its payments are held once its record is stale.
+    async fn check_holds(&self, config: &Config, pass: &mut Pass) -> Result<(), String> {
+        let Some(holds) = &self.holds else { return Ok(()) };
+        let watch: BTreeMap<String, Option<ic_payments::hold::HoldRecord>> = self.ask(json!({"q": "hold_watch"})).await?;
+        let now = (self.clock)();
+        let refresh = refresh_after(config.rules.hold_check_max_age_minutes);
+        for (party, record) in watch {
+            if record.as_ref().is_some_and(|r| now - r.checked_at < refresh) {
+                continue;
+            }
+            match holds.held(&party).await {
+                Ok(held) => {
+                    let key = format!("hold:{party}:{}", now.format("%Y%m%dT%H%M%S"));
+                    let command = Command::RecordCustomerHold { party: party.clone(), held };
+                    match self.tell(key, command).await {
+                        Ok(()) => pass.holds += 1,
+                        Err(e) => pass.problems.push(format!("hold for {party}: {e}")),
+                    }
+                }
+                Err(e) => pass.problems.push(format!("hold for {party}: {e}")),
+            }
+        }
+        Ok(())
     }
 
     /// The evacuation drill from this pump's region: a token payment through
@@ -499,7 +543,7 @@ impl DeployedPump {
             vault: ic_azure::blob::BlobContainer::new(&settings.blob_endpoint, &settings.container, credential.clone()),
             keys: crate::ports::VaultKeys {
                 vault: settings.key_vault.clone(),
-                credential,
+                credential: credential.clone(),
             },
             secrets: crate::ports::MountedSecrets(settings.secrets_dir.clone()),
             notifier: crate::ports::LogNotifier,
@@ -508,6 +552,14 @@ impl DeployedPump {
             clock: Arc::new(nz_now),
             grace: settings.grace,
             cursors: Mutex::default(),
+            holds: settings.customers.as_ref().map(|(base, scope)| {
+                Arc::new(crate::ports::MasterHolds {
+                    base: base.clone(),
+                    scope: scope.clone(),
+                    credential: credential.clone(),
+                    http: reqwest::Client::new(),
+                }) as Arc<dyn crate::ports::Holds>
+            }),
         }
     }
 }

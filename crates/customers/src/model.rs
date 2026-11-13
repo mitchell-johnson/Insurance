@@ -142,6 +142,9 @@ fields! {
     PreferredLanguage => "preferred_language", Contact;
     PresentationFormat => "presentation_format", Contact;
     NoticeChannel => "notice_channel", Contact;
+    // Contact points chosen for one relationship: `[{relationship, channel,
+    // destination}]`, used for notices about that relationship only.
+    RelationshipContacts => "relationship_contacts", Contact;
     IrdNumber => "ird_number", Tax;
     TaxResidency => "tax_residency", Tax;
     PrescribedInvestorRate => "prescribed_investor_rate", Tax;

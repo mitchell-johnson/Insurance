@@ -457,6 +457,23 @@ pub enum Command {
         claim: String,
         amount_minor: i64,
     },
+    /// Tell the payee the late payment interest owed on what is payable now.
+    OfferLateInterest {
+        claim: String,
+        actor: Actor,
+    },
+    /// The payee, having been told, declines late payment interest. Their
+    /// decision is on file under `vault_ref`.
+    DeclineLateInterest {
+        claim: String,
+        vault_ref: String,
+        actor: Actor,
+    },
+    /// The payee changes their mind before the claim closes.
+    WithdrawInterestDecline {
+        claim: String,
+        actor: Actor,
+    },
     /// A restricted case over claims, from the compliance module's rules.
     ReferForInvestigation {
         case: String,
@@ -535,6 +552,9 @@ impl Command {
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
             Command::ReferForInvestigation { .. } => "refer_for_investigation",
+            Command::OfferLateInterest { .. } => "offer_late_interest",
+            Command::DeclineLateInterest { .. } => "decline_late_interest",
+            Command::WithdrawInterestDecline { .. } => "withdraw_interest_decline",
             Command::OffsetSource { .. } => "offset_source",
             Command::OffsetTaken { .. } => "offset_taken",
             Command::OffsetReturned { .. } => "offset_returned",

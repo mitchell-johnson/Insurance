@@ -348,6 +348,9 @@ pub struct Payment {
     /// Interest for late payment sent with it, on top of the amount.
     #[serde(default)]
     pub interest_minor: i64,
+    /// Of that interest, what the payee declined: reversed, not paid.
+    #[serde(default)]
+    pub interest_declined_minor: i64,
     /// The interested party it went to, where it was not paid to the payee.
     #[serde(default)]
     pub interested_party: Option<String>,
@@ -663,6 +666,19 @@ pub struct Claim {
     /// Lenders and assignees paid before the claimant, in priority order.
     #[serde(default)]
     pub interests: Vec<InterestDue>,
+    /// Late payment interest as last offered to the payee: the amount and
+    /// the day they were told.
+    #[serde(default)]
+    pub interest_offer: Option<(i64, NaiveDate)>,
+    /// The payee, having been told, declined late payment interest: the
+    /// day and the vault reference of their recorded decision. Until the
+    /// claim closes they can change their mind.
+    #[serde(default)]
+    pub interest_declined: Option<(NaiveDate, String)>,
+    /// Interest declined on earlier payments and owed again because the
+    /// payee changed their mind: it goes out with the next payment.
+    #[serde(default)]
+    pub interest_owed_again_minor: i64,
     /// Premiums for periods starting on or after this date are paid from
     /// claims expense while the benefit runs.
     #[serde(default)]

@@ -111,6 +111,11 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "control_totals" => found(state.control_totals(text(&question, "run")?)),
         "authority" => found(state.authorities.get(text(&question, "authority")?)),
         "payee" => found(state.payees.get(text(&question, "payee")?)),
+        "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
+        "hold_watch" => found(Some(state.hold_watch())),
+        "open_runs" => Ok(state.open_runs()),
+        "open_exceptions" => Ok(state.open_exceptions(question["account"].as_str())),
+        "party" => Ok(state.party_summary(text(&question, "party")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
         "messages_read" => found(Some(&state.messages_read)),
         "awaiting_conversation" => found(Some(&state.awaiting_conversation)),
@@ -146,7 +151,6 @@ fn payout_waiting(policy: &ic_core::PolicyId, policyholder: &ic_core::PartyId, p
             policy: Some(policy.clone()),
             claim: None,
             run: None,
-            run_total_minor: None,
             amount_minor,
             payable: Some(ic_core::PayableKind::Benefit),
         }),
@@ -192,7 +196,6 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                     policy: Some(ic_core::PolicyId::from(field("policy").as_str())),
                     claim: Some(subject.clone()),
                     run: Some(field("run")).filter(|run| !run.is_empty()),
-                    run_total_minor: field("run_total_minor").parse().ok(),
                     // An amount that cannot be read is refused by the
                     // module as not positive; nothing is guessed.
                     amount_minor: field("net_minor").parse().unwrap_or(0),
@@ -200,6 +203,13 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                 }),
             }
         }
+        // Claims submitted a run, with the net total it released.
+        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind == "run_submitted" => crate::Command::ClaimsRunSubmitted {
+            run: subject.clone(),
+            // Unreadable is unknown: the run is then confirmed as before,
+            // when nothing of it is outstanding.
+            submitted_minor: detail.get("submitted_minor").and_then(|v| v.parse().ok()).unwrap_or(0),
+        },
         // A unit-linked payout is owed (a withdrawal, a surrender, a price
         // remediation), or owed again under a new reference after the bank
         // sent it back. It is paid to the policyholder: a payee of that

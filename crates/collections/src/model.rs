@@ -176,6 +176,13 @@ pub enum TaskKind {
     Deceased,
     /// An arrangement the core refused, or that broke.
     Arrangement,
+    /// The core would not reinstate: the arrears are not all in suspense,
+    /// or the window has closed.
+    Reinstatement,
+    /// The lapse has run past the product's evidence-free days: open a
+    /// reinstatement proposal in underwriting, then ask again once it is
+    /// approved.
+    ReinstatementUnderwriting,
 }
 
 impl TaskKind {
