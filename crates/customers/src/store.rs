@@ -1073,12 +1073,26 @@ impl<W: KeyWrapper> Store<W> {
 
     /// The audit trail for a party, newest first.
     pub async fn audit_of(&self, party: &PartyId, limit: i64) -> Result<Vec<(DateTime<Utc>, AuditLine)>> {
+        self.audit_where("party_id = $1", &party.0, limit).await
+    }
+
+    /// Everything one person did or was checked for, across every party:
+    /// what they sent as the actor, and every authority question asked
+    /// about them. Newest first.
+    pub async fn audit_by(&self, actor: &PartyId, limit: i64) -> Result<Vec<(DateTime<Utc>, AuditLine)>> {
+        self.audit_where("(actor = $1 or action like 'authority:' || $1 || ':%')", &actor.0, limit)
+            .await
+    }
+
+    async fn audit_where(&self, filter: &str, value: &str, limit: i64) -> Result<Vec<(DateTime<Utc>, AuditLine)>> {
         let client = self.client().await?;
         let rows = client
             .query(
-                "select at, caller, actor, purpose, party_id, action, fields, decision, policy_version, break_glass from audit \
-                 where party_id = $1 order by id desc limit $2",
-                &[&party.0, &limit],
+                &format!(
+                    "select at, caller, actor, purpose, party_id, action, fields, decision, policy_version, break_glass from audit \
+                     where {filter} order by id desc limit $2"
+                ),
+                &[&value, &limit],
             )
             .await
             .map_err(db)?;

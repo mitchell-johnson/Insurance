@@ -1097,3 +1097,61 @@ async fn a_capacity_question_pauses_representatives() {
         .await;
     assert_eq!(status, StatusCode::NOT_FOUND, "nothing open to settle");
 }
+
+/// Purpose: a welfare guardian's actions under a court order are limited to its scope,
+/// and privacy can produce a dated report of everything the guardian did as the actor
+/// and every authority question asked about them, across the people they act for; no
+/// one else can read it. Persona row VUL-011.
+/// Why it matters: a guardian must be able to account to the court and the family for
+/// every action taken, and the insurer must be able to show it acted only within the
+/// order.
+#[tokio::test]
+async fn a_guardian_gets_a_report_of_their_actions() {
+    let w = world_or_skip!();
+    let michael = w.person("Michael", "Hohaia", "1990-01-01", &[]).await;
+    let guardian = w.person("Huia", "Hohaia", "1962-02-02", &[]).await;
+    let order = json!({ "command": "add_relationship", "id": "wg", "kind": "guardian",
+        "target": { "kind": "party", "id": michael }, "valid_from": "2026-01-01",
+        "attributes": { "basis": "court_order", "document": "doc_order", "scope": ["view", "change_contact_details"] } });
+    let (status, out) = w.command(&guardian, "staff", order).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // A change she sends as the actor, through servicing.
+    let (status, out) = w
+        .send(Call {
+            method: "POST",
+            path: format!("/v1/parties/{michael}/commands"),
+            role: "staff",
+            purpose: None,
+            body: Some(json!({ "command": "record", "facts": [{ "field": "email", "value": "michael@example.nz" }] })),
+            headers: vec![("x-ic-actor", guardian.clone())],
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    // Within the order's scope, and outside it.
+    for (act, decision) in [("change_contact_details", "allow"), ("surrender", "refuse")] {
+        let (_, out) = w
+            .get(
+                &format!("/v1/parties/{michael}/authority?actor={guardian}&act={act}&on=2026-06-01"),
+                "policy-servicing",
+                "servicing",
+            )
+            .await;
+        assert_eq!(out["decision"], decision, "{act}");
+    }
+    let (status, report) = w.get(&format!("/v1/actors/{guardian}/actions"), "privacy", "audit").await;
+    assert_eq!(status, StatusCode::OK, "{report}");
+    let actions: Vec<String> = report["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["line"]["action"].as_str().unwrap().to_string())
+        .collect();
+    assert!(actions.contains(&"record".to_string()), "{actions:?}");
+    assert!(actions.contains(&format!("authority:{guardian}:change_contact_details:allow")), "{actions:?}");
+    assert!(actions.contains(&format!("authority:{guardian}:surrender:refuse")), "{actions:?}");
+    assert!(report["actions"].as_array().unwrap().iter().all(|a| a["at"].is_string()), "every line is dated");
+    let (status, _) = w.get(&format!("/v1/actors/{guardian}/actions"), "staff", "audit").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = w.get("/v1/actors/n%2Fbody/actions", "privacy", "audit").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

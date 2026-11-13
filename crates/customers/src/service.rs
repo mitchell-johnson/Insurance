@@ -586,6 +586,24 @@ async fn audit_trail<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S
     }
 }
 
+/// Every action one person took, or was asked about, with dates: what a
+/// guardian or attorney asks for to show what they did under their
+/// authority. Read by privacy, like a party's own trail.
+async fn actions_by<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>, Path(actor): Path<String>, headers: HeaderMap) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    if !PartyId::plausible(&actor) {
+        return Err(refused(StatusCode::NOT_FOUND, "not_found", "no such party"));
+    }
+    let actor = PartyId(actor);
+    if !app.access.allows(&app.ask(&ctx), "audit") {
+        return Err(app.deny(&ctx, Some(&actor), "actions").await);
+    }
+    app.audit(&ctx, Some(&actor), "actions", vec![], "allow").await?;
+    let lines = app.store.audit_by(&actor, 5_000).await.map_err(failed)?;
+    let lines: Vec<Value> = lines.into_iter().map(|(at, l)| json!({ "at": at, "line": l })).collect();
+    Ok((StatusCode::OK, Json(json!({ "actor": actor, "actions": lines }))))
+}
+
 // ---- Matching, creating and searching ------------------------------------
 
 #[derive(Debug, Deserialize)]
@@ -993,6 +1011,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/authority", get(authority::<W, S>))
         .route("/v1/parties/{id}/export", get(export::<W, S>))
         .route("/v1/parties/{id}/audit", get(audit_trail::<W, S>))
+        .route("/v1/actors/{actor}/actions", get(actions_by::<W, S>))
         .route("/v1/relationships", get(relationships_to::<W, S>))
         .route("/v1/merges", post(merge::<W, S>))
         .route("/v1/unmerges", post(unmerge::<W, S>))
