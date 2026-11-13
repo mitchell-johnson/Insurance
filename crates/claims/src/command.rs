@@ -424,6 +424,18 @@ pub enum Command {
         party: String,
         date_of_death: NaiveDate,
     },
+    /// A restricted case over claims, from the compliance module's rules.
+    ReferForInvestigation {
+        case: String,
+        rule: String,
+        claims: Vec<String>,
+    },
+    /// An investigator closes a case.
+    CloseInvestigation {
+        case: String,
+        outcome: crate::investigate::Outcome,
+        actor: Actor,
+    },
     Reinsurance(ReinsuranceNotice),
     NonDisclosureOutcome {
         claim: String,
@@ -446,6 +458,7 @@ impl Command {
             Command::ExclusionControl { .. } | Command::DrainDue => &["claims", "end-of-day"],
             Command::RecordDeath { .. } | Command::RetractDeath { .. } => &["claims", "customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
+            Command::ReferForInvestigation { .. } => &["compliance"],
             _ => &["claims"],
         }
     }
@@ -487,6 +500,8 @@ impl Command {
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
+            Command::ReferForInvestigation { .. } => "refer_for_investigation",
+            Command::CloseInvestigation { .. } => "close_investigation",
             Command::RetractDeath { .. } => "retract_death",
             Command::LoadMigrated { .. } => "load_migrated",
             Command::Reinsurance(_) => "reinsurance",

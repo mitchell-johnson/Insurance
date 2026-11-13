@@ -1367,6 +1367,20 @@ async fn claims_question(
             let (partition, view) = found.ok_or_else(Problem::not_found)?;
             ok(json!({ "partition": partition, "view": view }))
         }
+        Q::Cases { .. } => {
+            // Restricted: the claims module answers investigators only, and
+            // the person is whoever signed in.
+            let question = Q::Cases {
+                staff: session.party.to_string(),
+            };
+            let mut rows: Vec<Value> = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::Cases(found) = reply {
+                    rows.extend(found.into_iter().map(|r| json!({ "partition": p, "case": r })));
+                }
+            }
+            ok(json!({ "rows": rows }))
+        }
         Q::PolicyStatus { .. } => {
             // A policy is on one partition, except for a moment while it moves.
             let mut rows: Vec<Value> = Vec::new();
