@@ -269,6 +269,7 @@ fn a_disputed_match_holds_the_initial_commission_until_it_is_decided() {
             cover: "life".into(),
             layer: 1,
             reference: reference.into(),
+            adviser: None,
         };
         w.send(module("new-business"), command)
     };
@@ -409,6 +410,7 @@ fn a_decision_between_premiums_and_a_reinstatement_after_a_match_pay_nobody_twic
         cover: "life".into(),
         layer: 1,
         reference: "d-1".into(),
+        adviser: None,
     };
     w.send(module("new-business"), command).unwrap();
     let command = Command::DecideReplacement {
@@ -593,4 +595,39 @@ fn a_partly_matched_cover_gives_back_its_clawback_in_proportion() {
     let lost = before - w.payable("fap-one");
     assert_eq!(lost, 720_00, "the carried 720.00, on its original clock");
     w.assert_reconciled();
+}
+
+/// Purpose: the adviser portal may send a dispute itself, but only naming the
+/// adviser who disputes, and only when that adviser wrote the layer under one
+/// of their engagements. Another adviser, or no adviser, is refused before
+/// anything is held.
+/// Why it matters: the portal is a door the advisers themselves use. The module
+/// checks who is disputing on its own records rather than trusting the portal's
+/// screen, so one adviser cannot freeze another's commission.
+#[test]
+fn the_adviser_portal_disputes_only_for_the_adviser_who_wrote_the_layer() {
+    let (mut w, old, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    cancel(&mut w, &old);
+    w.days(5);
+    let new = w.issue_for(2, PERSON, 500_000_00);
+    w.write(&new, "life", 1, "eng-b-two", "b-at-fap-two", 1_200_00).unwrap();
+    w.sync();
+    let dispute = |w: &mut World, adviser: Option<&str>| {
+        let command = Command::DisputeReplacement {
+            policy: new.clone(),
+            cover: "life".into(),
+            layer: 1,
+            reference: "dispute:portal-1".into(),
+            adviser: adviser.map(party),
+        };
+        w.send(module("adviser-portal"), command)
+    };
+    assert_eq!(dispute(&mut w, None).unwrap_err().code, "adviser_required");
+    assert_eq!(dispute(&mut w, Some("adviser-c")).unwrap_err().code, "not_writing_adviser");
+    let events = dispute(&mut w, Some("adviser-b")).unwrap();
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::ReplacementDisputed { reference, .. } if reference == "dispute:portal-1")));
+    assert_eq!(dispute(&mut w, Some("adviser-b")).unwrap_err().code, "already_disputed");
 }

@@ -340,18 +340,42 @@ impl Reinsurance {
             "net_owed_to_reinsurer_minor": net,
             // What either side quotes when it pays, so the bank line finds the statement.
             "payment_reference": format!("ri-stmt-{number}"),
-            "listing": rows,
-        })
-        .to_string();
+        });
+        // A listing longer than a part is filed in parts, each its own
+        // record, and the statement names them with their hashes.
+        let part_rows = self.latest_treaty(&treaty).map_or(2_000, |t| t.statement.listing_part_rows.max(1)) as usize;
+        let mut parts: Vec<(String, String, String)> = Vec::new();
+        let mut body = body;
+        if rows.len() <= part_rows {
+            body["listing"] = serde_json::json!(rows);
+        } else {
+            let of = rows.len().div_ceil(part_rows);
+            for (i, chunk) in rows.chunks(part_rows).enumerate() {
+                let name = format!("reinsurance/{treaty}/{reinsurer}/statement-{number}-listing-{}-of-{of}.json", i + 1);
+                let part = serde_json::json!({"statement": number, "part": i + 1, "of": of, "listing": chunk}).to_string();
+                parts.push((name, sha256_hex(&part), part));
+            }
+            body["listing_parts"] = serde_json::json!(parts
+                .iter()
+                .zip(rows.chunks(part_rows))
+                .map(|((name, sha, _), chunk)| serde_json::json!({"name": name, "sha256": sha, "rows": chunk.len()}))
+                .collect::<Vec<_>>());
+        }
+        let body = body.to_string();
         let sha256 = sha256_hex(&body);
+        let mut released = vec![document.clone()];
+        released.extend(parts.iter().map(|(name, _, _)| name.clone()));
         self.log_release(
             ctx,
             format!("statement {number}"),
             treaty.clone(),
             reinsurer.clone(),
             "treaty statement and listing".into(),
-            vec![document.clone()],
+            released,
         );
+        for (name, sha256, part) in parts {
+            ctx.notices.push(Notice::Document { name, sha256, body: part });
+        }
         ctx.notices.push(Notice::Document {
             name: document.clone(),
             sha256: sha256.clone(),

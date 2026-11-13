@@ -54,6 +54,8 @@ pub struct PortalSettings {
     pub partitions: ic_ledger::PartitionId,
     /// The customer master's base URL and token scope, for self-service.
     pub master: Option<(String, String)>,
+    /// The underwriting intake's base URL and token scope, for signing disclosures.
+    pub intake: Option<(String, String)>,
 }
 
 impl PortalSettings {
@@ -85,6 +87,8 @@ impl PortalSettings {
     ///   (engagements, licences, held money) are carried to the channels;
     ///   default 15. `IC_PORTAL_CURRENCY`: the currency of those balances;
     ///   default `NZD`.
+    /// - `IC_UNDERWRITING_INTAKE_URL` and `IC_UNDERWRITING_INTAKE_SCOPE`: the
+    ///   underwriting intake and the scope of its audience, for disclosures.
     /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master and
     ///   the scope of its token (`api://<its application>/.default`), set
     ///   together; without them a person's own record answers 503.
@@ -172,12 +176,8 @@ impl PortalSettings {
             heartbeat: Duration::from_secs(seconds("IC_PORTAL_HEARTBEAT_SECS", 15)?),
             ui,
             forward: Duration::from_secs(seconds("IC_PORTAL_FORWARD_SECS", 15)?),
-            master: match (get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE")) {
-                (Some(url), Some(scope)) if url.starts_with("https://") || local(&url) => Some((url, scope)),
-                (Some(url), Some(_)) => return Err(format!("IC_CUSTOMERS_URL must be https, not {url:?}")),
-                (None, None) => None,
-                _ => return Err("set IC_CUSTOMERS_URL and IC_CUSTOMERS_SCOPE together".to_string()),
-            },
+            master: service(get("IC_CUSTOMERS_URL"), get("IC_CUSTOMERS_SCOPE"), "IC_CUSTOMERS")?,
+            intake: service(get("IC_UNDERWRITING_INTAKE_URL"), get("IC_UNDERWRITING_INTAKE_SCOPE"), "IC_UNDERWRITING_INTAKE")?,
             partitions: match get("IC_PARTITIONS") {
                 None => ic_ledger::PARTITION_COUNT,
                 Some(p) => match p.parse::<ic_ledger::PartitionId>() {
@@ -198,8 +198,23 @@ impl PortalSettings {
     }
 }
 
-/// Plain HTTP only to this machine, for a master run beside the portal in development.
+/// Another service's base URL and token scope: both or neither, and https
+/// unless it runs on this machine.
+fn service(url: Option<String>, scope: Option<String>, name: &str) -> Result<Option<(String, String)>, String> {
+    match (url, scope) {
+        (Some(url), Some(scope)) if url.starts_with("https://") || local(&url) => Ok(Some((url, scope))),
+        (Some(url), Some(_)) => Err(format!("{name}_URL must be https, not {url:?}")),
+        (None, None) => Ok(None),
+        _ => Err(format!("set {name}_URL and {name}_SCOPE together")),
+    }
+}
+
+/// Plain HTTP only to this machine or to a service inside the cluster,
+/// named by its single-label service name or its `.svc` name, where the
+/// network policy admits only the portal and traffic does not leave the
+/// cluster's network.
 fn local(url: &str) -> bool {
-    url.strip_prefix("http://localhost")
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(':') || rest.starts_with('/'))
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    let host = rest.split(['/', ':']).next().unwrap_or_default();
+    !host.is_empty() && (host == "localhost" || !host.contains('.') || host.ends_with(".svc") || host.ends_with(".svc.cluster.local"))
 }

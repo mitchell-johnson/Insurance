@@ -456,6 +456,90 @@ async fn routing<W: KeyWrapper, S: WormStore>(State(app): State<Arc<App<W, S>>>,
     Ok((StatusCode::OK, Json(answer)))
 }
 
+#[derive(Debug, Deserialize)]
+struct AuthorityQuery {
+    /// The party acting for this one.
+    actor: String,
+    /// What they want to do: one of `REPRESENTATIVE_SCOPES` except `all`.
+    act: String,
+    /// The day it would happen. Defaults to today.
+    #[serde(default)]
+    on: Option<NaiveDate>,
+    /// The act would benefit the actor: they become the beneficiary, the
+    /// money goes to their account.
+    #[serde(default)]
+    benefits_actor: bool,
+}
+
+/// May `actor` do `act` for this party on `on`? `allow` within an
+/// authority in force that covers it; `refuse` with no authority, before
+/// it starts or after it ends, or outside its scope; `route` to a person
+/// when the act would benefit the representative. Every answer is logged
+/// with the actor.
+async fn authority<W: KeyWrapper, S: WormStore>(
+    State(app): State<Arc<App<W, S>>>,
+    Path(id): Path<String>,
+    Query(q): Query<AuthorityQuery>,
+    headers: HeaderMap,
+) -> Reply {
+    let ctx = app.ctx(&headers, None).await?;
+    if !crate::model::REPRESENTATIVE_SCOPES.contains(&q.act.as_str()) || q.act == "all" {
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "act is one of the representative scopes"));
+    }
+    if !PartyId::plausible(&q.actor) {
+        return Err(refused(StatusCode::BAD_REQUEST, "invalid", "actor is a party ID"));
+    }
+    let (resolved, _) = app.find(&id).await?;
+    if !app.access.allows(&app.ask(&ctx), "authority") {
+        return Err(app.deny(&ctx, Some(&resolved), "authority").await);
+    }
+    let on = q.on.unwrap_or_else(|| Utc::now().date_naive());
+    let target = Target::Party(resolved.clone());
+    let held: Vec<_> = app
+        .store
+        .relationships_of(&PartyId(q.actor.clone()))
+        .await
+        .map_err(failed)?
+        .into_iter()
+        .map(|r| r.relationship)
+        .filter(|r| r.kind.represents() && r.target == target && r.in_force(on))
+        .collect();
+    let covers = |r: &&crate::model::Relationship| {
+        r.attributes
+            .get("scope")
+            .and_then(Value::as_array)
+            .is_some_and(|s| s.iter().any(|v| v == q.act.as_str() || v == "all"))
+    };
+    let (decision, reason, by) = match held.iter().find(covers) {
+        Some(r) if q.benefits_actor && crate::model::SELF_BENEFIT_ACTS.contains(&q.act.as_str()) => ("route", "benefits_representative", Some(r)),
+        Some(r) => ("allow", "within_scope", Some(r)),
+        None if held.is_empty() => ("refuse", "no_authority", None),
+        None => ("refuse", "outside_scope", held.first()),
+    };
+    app.audit(&ctx, Some(&resolved), &format!("authority:{}:{}:{decision}", q.actor, q.act), vec![], "allow")
+        .await?;
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "party": resolved,
+            "actor": q.actor,
+            "act": q.act,
+            "on": on,
+            "decision": decision,
+            "reason": reason,
+            "relationship": by.map(|r| json!({
+                "id": r.id,
+                "kind": r.kind,
+                "basis": r.attributes.get("basis"),
+                "document": r.attributes.get("document"),
+                "scope": r.attributes.get("scope"),
+                "valid_from": r.valid_from,
+                "valid_to": r.valid_to,
+            })),
+        })),
+    ))
+}
+
 async fn export<W: KeyWrapper, S: WormStore>(
     State(app): State<Arc<App<W, S>>>,
     Path(id): Path<String>,
@@ -892,6 +976,7 @@ pub fn router<W: KeyWrapper + 'static, S: WormStore + 'static>(app: Arc<App<W, S
         .route("/v1/parties/{id}/contact-points", get(contact_points::<W, S>))
         .route("/v1/parties/{id}/relationships", get(relationships_of::<W, S>))
         .route("/v1/parties/{id}/routing", get(routing::<W, S>))
+        .route("/v1/parties/{id}/authority", get(authority::<W, S>))
         .route("/v1/parties/{id}/export", get(export::<W, S>))
         .route("/v1/parties/{id}/audit", get(audit_trail::<W, S>))
         .route("/v1/relationships", get(relationships_to::<W, S>))

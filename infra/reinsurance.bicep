@@ -11,6 +11,10 @@
 // - A managed identity for the driver, federated to its Kubernetes service
 //   account, that may write to that container, send to that hub and read
 //   the cluster token. Nothing else.
+// - A storage account with SFTP, where each reinsurer collects its
+//   statements and listings from a container of its own (`ri-<reinsurer>`)
+//   as a local user that can read only that container, by SSH key. The
+//   driver may write to those containers. Listed in `sftpReinsurers`.
 // - Two log alerts on the workspace main.bicep created, which holds the
 //   driver's log through the cluster's monitoring add-on: one for every
 //   exception the module opens, one for delivery that has stopped. They go
@@ -61,6 +65,9 @@ param logAnalyticsWorkspaceName string = '${name}-logs'
 
 @description('Who is told when reinsurance needs a person: the operations on-call addresses.')
 param alertEmails array = []
+
+@description('Reinsurers that collect statements over SFTP: [{ "id": "reinsurer-north", "sshPublicKey": "ssh-ed25519 AAAA..." }]. The id is the reinsurer ID in the treaties; its container is ri-<id> in lower case with underscores as hyphens.')
+param sftpReinsurers array = []
 
 var tags = {
   system: 'insurance-core'
@@ -271,6 +278,74 @@ resource deliveryStopped 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
   }
 }
 
+// --- what reinsurers collect, over SFTP ---------------------------------------------
+
+// SFTP needs a hierarchical namespace, which the ledger's account does not
+// have, so reinsurers collect from an account of their own. No shared keys:
+// the driver writes with its identity and each reinsurer reads with its SSH
+// key as a local user scoped to its own container.
+resource drops 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: take('${toLower(replace(name, '-', ''))}ridrop${uniqueString(resourceGroup().id)}', 24)
+  location: location
+  tags: tags
+  kind: 'StorageV2'
+  sku: { name: environment == 'prod' ? 'Standard_ZRS' : 'Standard_LRS' }
+  properties: {
+    isHnsEnabled: true
+    isSftpEnabled: true
+    isLocalUserEnabled: true
+    allowSharedKeyAccess: false
+    allowBlobPublicAccess: false
+    minimumTlsVersion: 'TLS1_2'
+    supportsHttpsTrafficOnly: true
+  }
+}
+
+resource dropBlobs 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  parent: drops
+  name: 'default'
+}
+
+resource dropContainers 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = [for r in sftpReinsurers: {
+  parent: dropBlobs
+  name: 'ri-${toLower(replace(r.id, '_', '-'))}'
+  properties: { publicAccess: 'None' }
+}]
+
+resource dropUsers 'Microsoft.Storage/storageAccounts/localUsers@2023-05-01' = [for (r, i) in sftpReinsurers: {
+  parent: drops
+  name: take(toLower(replace(replace(r.id, '_', ''), '-', '')), 64)
+  dependsOn: [dropContainers[i]]
+  properties: {
+    homeDirectory: 'ri-${toLower(replace(r.id, '_', '-'))}'
+    permissionScopes: [
+      {
+        permissions: 'rl'
+        service: 'blob'
+        resourceName: 'ri-${toLower(replace(r.id, '_', '-'))}'
+      }
+    ]
+    hasSshKey: true
+    hasSshPassword: false
+    hasSharedKey: false
+    sshAuthorizedKeys: [
+      { description: r.id, key: r.sshPublicKey }
+    ]
+  }
+}]
+
+resource driverDrops 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: drops
+  name: guid(drops.id, identity.id, roles.blobDataContributor)
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.blobDataContributor)
+  }
+}
+
 output reinsuranceIdentityClientId string = identity.properties.clientId
 output recordsContainer string = records.name
 output eventHub string = notices.name
+output dropsBlobEndpoint string = drops.properties.primaryEndpoints.blob
+output dropsSftpHost string = '${drops.name}.blob.${az.environment().suffixes.storage}'

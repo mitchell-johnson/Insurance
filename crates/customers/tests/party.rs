@@ -243,7 +243,7 @@ fn relationships_are_checked() {
     // A relationship to a party does not make anyone a customer.
     let mut q = person();
     assert_eq!(
-        run(&mut q, relationship("a", RelationshipKind::Attorney, Target::Party(PartyId("pty_o".into())))).unwrap(),
+        run(&mut q, relationship("a", RelationshipKind::Partner, Target::Party(PartyId("pty_o".into())))).unwrap(),
         vec!["relationship_added"]
     );
     // Ending: not before it starts, a repeat changes nothing, an unknown one is not found.

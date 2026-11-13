@@ -14,8 +14,8 @@ use ic_money::{Currency, Money};
 
 use crate::machine::{Event, PaymentsState, Tx};
 use crate::model::{
-    About, AccountDetails, AuthorityStatus, Counterparty, Expected, Id, Instruction, Item, ItemStatus, NewItem, OutboxEntry, RefundDestination, RefundStatus,
-    Reject, ReturnReason, Role, Run, RunStatus, RunType, Submission, SubmissionStatus,
+    About, AccountDetails, AuthorityStatus, Counterparty, Deferred, Expected, Id, Instruction, Item, ItemStatus, NewItem, OutboxEntry, RefundDestination,
+    RefundStatus, Reject, ReturnReason, Role, Run, RunStatus, RunType, Submission, SubmissionStatus,
 };
 
 fn no_run(id: &str) -> Reject {
@@ -445,6 +445,67 @@ impl PaymentsState {
         Some(book.closing_minor + settled - with_bank)
     }
 
+    /// A submission taken after the bank's window for its value date has
+    /// closed, as when a channel was down through the cutoff, goes for the
+    /// next window instead. Its items are recorded as deferred, so whatever
+    /// the delay caused can be found and put right (COL-025). An urgent run
+    /// has no window to miss.
+    fn defer_if_late(&mut self, tx: &mut Tx<'_>, id: &str) -> Result<(), Reject> {
+        let s = &self.submissions[id];
+        let Some(run) = self.runs.get(&s.run).filter(|r| !r.urgent) else {
+            return Ok(());
+        };
+        let due = s.deferred_to.unwrap_or(run.value_date);
+        if self.in_time(tx, &s.channel, due).is_ok() {
+            return Ok(());
+        }
+        let cfg = self.cfg()?;
+        let cutoff = cfg.channels.get(&s.channel).map(|c| c.cutoff);
+        let mut next = tx.now.date();
+        if cutoff.is_none_or(|c| tx.now.time() > c) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        while !cfg.is_business_day(next) {
+            next = next.succ_opt().unwrap_or(next);
+        }
+        let deferred: Vec<(Id, Deferred)> = s
+            .items
+            .iter()
+            .filter_map(|item| run.items.get(item).map(|i| (item, i)))
+            .map(|(item, i)| {
+                let d = Deferred {
+                    run: s.run.clone(),
+                    submission: id.to_string(),
+                    run_type: run.run_type,
+                    policy: i.new.policy.clone(),
+                    amount_minor: i.new.amount_minor,
+                    due: run.value_date,
+                    sent_for: next,
+                };
+                (item.clone(), d)
+            })
+            .collect();
+        let (count, total) = (deferred.len(), deferred.iter().map(|(_, d)| d.amount_minor).sum::<i64>());
+        self.deferred.extend(deferred);
+        self.submission_mut(id)?.deferred_to = Some(next);
+        let detail = format!("submission {id} missed the bank's window for {due} and goes for {next}: {count} items, {total} in total");
+        self.push_outbox(OutboxEntry {
+            key: format!("deferred-{id}-{next}"),
+            instruction: Instruction::Notify {
+                to: Role::Maker,
+                subject: "submission_deferred".to_string(),
+                detail,
+            },
+            about: None,
+        });
+        tx.emit(Event::SubmissionDeferred {
+            submission: id.to_string(),
+            from: due,
+            to: next,
+        });
+        Ok(())
+    }
+
     /// The bank still takes work for `value_date` at this moment.
     fn in_time(&self, tx: &Tx<'_>, channel: &str, value_date: NaiveDate) -> Result<(), Reject> {
         let cfg = self.cfg()?;
@@ -484,6 +545,7 @@ impl PaymentsState {
                 content_hash: None,
                 bank_reference: None,
                 settled_on: None,
+                deferred_to: None,
             },
         );
         tx.emit(Event::SubmissionQueued {
@@ -663,6 +725,7 @@ impl PaymentsState {
                 format!("{region} cannot reach channel {} today", s.channel),
             ));
         }
+        self.defer_if_late(tx, id)?;
         let s = self.submission_mut(id)?;
         s.status = SubmissionStatus::Sending;
         s.region = Some(region.clone());
@@ -943,8 +1006,12 @@ impl PaymentsState {
                         reason: "repeated_dishonour".to_string(),
                     });
                 } else if reason == ReturnReason::InsufficientFunds && n.represents.is_none() && active {
-                    // Presented once more, and only once.
-                    self.represent.insert(n.item.clone());
+                    if self.authorities.get(a).is_some_and(|x| x.hardship) {
+                        self.hold_for_conversation(tx, &n.item, a);
+                    } else {
+                        // Presented once more, and only once.
+                        self.represent.insert(n.item.clone());
+                    }
                 }
             }
             Counterparty::Payee(p) if reason.account_unusable() => {

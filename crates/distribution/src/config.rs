@@ -416,6 +416,8 @@ impl Config {
 /// What a book is to do when its adviser moves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+// A request type built once per move: boxing the larger variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum BookOutcome {
     /// The book stays with the previous provider; someone there services it.
     Stays { book: BookId, new_servicing: EngagementId },
@@ -437,6 +439,11 @@ pub enum BookOutcome {
         /// What the previous provider keeps: a share of the whole renewal
         /// commission until a date, or for good.
         tail: Option<(PartyId, u32, Option<NaiveDate>)>,
+        /// Worked examples of what the new book's rule pays, tail
+        /// included. They are checked like any rule's before the move
+        /// activates.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        examples: Vec<crate::rules::RuleExample>,
     },
 }
 
@@ -517,6 +524,7 @@ impl DistributionState {
                     liability,
                     fragments,
                     tail,
+                    examples,
                 } => {
                     if !self.config.books.contains_key(book) {
                         return reject("unknown_book", format!("book {book} does not exist"));
@@ -563,6 +571,7 @@ impl DistributionState {
                         liability: liability.clone(),
                         fragments: fragments.clone(),
                         clawback_by_cause: false,
+                        examples: examples.clone(),
                         instructions_ref: release_ref.clone(),
                     }));
                     // A layer split between books keeps its other books.
@@ -622,6 +631,18 @@ impl DistributionState {
             match change {
                 Change::ActivateRule(rule) => {
                     let fragments: Vec<&Fragment> = rule.fragments.iter().filter_map(|f| trial.fragment_on(f, rule.effective_from)).collect();
+                    if rule.examples.is_empty() && self.settings.rule_examples_required {
+                        return reject("rule_examples", "a rule is activated with worked examples of what it pays");
+                    }
+                    for example in &rule.examples {
+                        if example.on < rule.effective_from {
+                            return reject("rule_examples", format!("example {} is before the rule takes effect", example.name));
+                        }
+                        let fragments: Vec<&Fragment> = rule.fragments.iter().filter_map(|f| trial.fragment_on(f, example.on)).collect();
+                        Composed::of(rule, &fragments)
+                            .check_example(example)
+                            .map_err(|e| Reject::new("rule_examples", e.to_string()))?;
+                    }
                     for payee in Composed::of(rule, &fragments).payees() {
                         if self.payees.get(&payee).is_none_or(|p| p.agreement_ref.is_none()) {
                             return reject("payee_without_agreement", format!("{payee} is not a payee with a current agreement"));

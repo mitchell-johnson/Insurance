@@ -478,6 +478,16 @@ pub enum Command {
         source_ref: String,
     },
 
+    /// An underwriter opens a life's disclosures to read them. Logged with
+    /// the purpose before anything is read; the answer names the records,
+    /// which the intake then opens from the clinical store.
+    OpenDisclosures {
+        proposal: ProposalId,
+        life: LifeId,
+        underwriter: String,
+        purpose: String,
+    },
+
     // --- claims ---
     OpenFileForClaim {
         claim_ref: String,
@@ -579,7 +589,7 @@ impl Command {
             InterimIssued { .. } | PolicyIssued { .. } | IssueRejected { .. } => &["issuer"],
             Sweep { .. } => &["timer"],
             AcknowledgeEffects { .. } | ParkEffect { .. } | ProgressPublished { .. } => &["effects-driver"],
-            RequeueEffect { .. } => &["underwriting-console"],
+            RequeueEffect { .. } | OpenDisclosures { .. } => &["underwriting-console"],
             LicenceChanged { .. } => &["adviser-licensing"],
             OpenFileForClaim { .. } | OpenNonDisclosureReview { .. } => &["claims"],
             DelegatedDecision(_) | DelegateFileReceived { .. } => &["delegate-api"],
@@ -1024,6 +1034,8 @@ pub enum View {
         lives: Vec<AdviserLifeView>,
     },
     ClaimFiles(Vec<ClaimFile>),
+    /// The disclosures an underwriter opened, oldest first.
+    Disclosures(Vec<crate::model::DisclosureRef>),
     Review {
         review: String,
         regime: crate::questions::DisclosureRegime,

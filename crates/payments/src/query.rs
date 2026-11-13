@@ -1,5 +1,7 @@
 //! Questions the module answers from its state. Queries never change it.
 
+use std::collections::BTreeMap;
+
 use chrono::NaiveDate;
 use serde_json::{json, Value};
 
@@ -71,8 +73,12 @@ fn day(question: &Value) -> Result<NaiveDate, String> {
     text(question, "today")?.parse().map_err(|_| "today is a date like 2026-11-11".to_string())
 }
 
+fn date(question: &Value, field: &str) -> Result<NaiveDate, String> {
+    text(question, field)?.parse().map_err(|_| format!("{field} is a date like 2026-11-30"))
+}
+
 fn as_at(question: &Value) -> Result<NaiveDate, String> {
-    text(question, "as_at")?.parse().map_err(|_| "as_at is a date like 2026-11-30".to_string())
+    date(question, "as_at")
 }
 
 fn found<T: serde::Serialize>(what: Option<T>) -> Result<Value, String> {
@@ -107,6 +113,17 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "refund" => found(state.refunds.get(text(&question, "refund")?)),
         "messages_read" => found(Some(&state.messages_read)),
+        "awaiting_conversation" => found(Some(&state.awaiting_conversation)),
+        // The population delayed between two value dates, by item, for
+        // putting right what the delay caused.
+        "deferred" => {
+            let (from, to) = (date(&question, "from")?, date(&question, "to")?);
+            Ok(serde_json::json!(state
+                .deferred
+                .iter()
+                .filter(|(_, d)| d.due >= from && d.due <= to)
+                .collect::<BTreeMap<_, _>>()))
+        }
         "represent" => found(Some(&state.represent)),
         "waiting" => found(Some(state.waiting_payments())),
         "fund_cash_settlement" => Ok(state.fund_cash_settlement(as_at(&question)?)),

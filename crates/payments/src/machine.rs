@@ -60,6 +60,18 @@ pub enum Command {
         authority: Id,
         reason: String,
     },
+    /// Mark or clear financial hardship on a payer's authority.
+    MarkHardship {
+        authority: Id,
+        hardship: bool,
+    },
+    /// What a conversation with a payer in hardship decided about a
+    /// dishonoured collection held for that conversation.
+    RecordConversation {
+        item: Id,
+        outcome: crate::model::ConversationOutcome,
+        note: String,
+    },
     /// The core cancelled the payment authority on a policy because its
     /// payer has died (`Event::PaymentAuthorityCancelled`). Nothing more is
     /// collected from the payer's accounts, and nothing is refunded to an
@@ -275,6 +287,26 @@ pub enum Event {
     AuthorityReinstated {
         authority: Id,
     },
+    /// The bank's window for a submission's value date had passed when a
+    /// driver took it; it goes for the next window.
+    SubmissionDeferred {
+        submission: Id,
+        from: NaiveDate,
+        to: NaiveDate,
+    },
+    HardshipMarked {
+        authority: Id,
+        hardship: bool,
+    },
+    /// A dishonour from a payer in hardship waits for a conversation.
+    ConversationNeeded {
+        item: Id,
+        authority: Id,
+    },
+    ConversationRecorded {
+        item: Id,
+        outcome: crate::model::ConversationOutcome,
+    },
     AuthorityCancelled {
         authority: Id,
         policy: PolicyId,
@@ -479,6 +511,14 @@ pub struct PaymentsState {
     pub submissions: BTreeMap<Id, Submission>,
     /// Dishonoured collections that may be presented once more.
     pub represent: BTreeSet<Id>,
+    /// Dishonoured collections from payers in hardship, waiting for someone
+    /// to talk to the payer before anything is presented again.
+    #[serde(default)]
+    pub awaiting_conversation: BTreeMap<Id, Id>,
+    /// Items that went to the bank later than their run's value date, by
+    /// item, so what the delay caused can be found and reversed.
+    #[serde(default)]
+    pub deferred: BTreeMap<Id, crate::model::Deferred>,
     pub refunds: BTreeMap<Id, Refund>,
     /// Payments other modules released, until they settle.
     #[serde(default)]
@@ -568,6 +608,8 @@ impl PaymentsState {
             Command::SuspendAuthority { authority, reason } => self.suspend_authority(tx, &authority, reason),
             Command::ReinstateAuthority { authority } => self.reinstate_authority(tx, &authority),
             Command::CancelAuthority { authority, reason } => self.cancel_authority(tx, &authority, reason),
+            Command::MarkHardship { authority, hardship } => self.mark_hardship(tx, &authority, hardship),
+            Command::RecordConversation { item, outcome, note } => self.record_conversation(tx, &item, outcome, note),
             Command::PayerDeceased { policy, claim } => self.payer_deceased(tx, &policy, &claim),
             Command::RegisterPayee {
                 payee,

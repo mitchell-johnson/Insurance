@@ -116,6 +116,18 @@ The module host feeds the module every partition's events. `triggers.rs` maps th
 
 **Letters for complaints and conduct cases.** Beside the relay, the service issues the letters the complaints register lists as owed and records each on its complaint or case (`complaint_letters.rs`; `docs/complaints.md`, "Letters").
 
+**Letters other modules ask for** (`requested_letters.rs`). A module that cannot issue a document records `RequestLetter` with the facts: `{request, kind, recipient: {party: {party}} | {adviser: {adviser}}, policy, subject, life, reasons, detail, business_date}`. It sends codes and facts, never wording. The kinds each caller may ask for, and their templates, are `model::REQUESTED_KINDS`:
+
+| Caller | Kind | Template | Class | Proven |
+| --- | --- | --- | --- | --- |
+| underwriting | offer_made | uw-offer-made | clinical | no |
+| underwriting | declined | uw-declined | clinical | yes |
+| underwriting | proposal_lapsed, proposal_withdrawn, policy_issued, interview_to_confirm | uw-<kind with dashes> | personal | no |
+| underwriting | adviser_unavailable | uw-adviser-unavailable | personal | yes |
+| reinsurance | reinsurance_statement | ri-reinsurance-statement | personal | yes |
+
+A clinical letter goes to the person alone (`clinical_to_adviser` otherwise). Other refusals: `unknown_letter_kind`, `no_request`, `request_conflict` (same id, other content; an identical resend is accepted). The service issues each waiting request as document `letter:<request>` to the recipient as addressee, with `name`, `reference` (the subject), `policy`, `life`, `reasons`, `date` and the `detail` entries as data, and the issue marks the request issued. A request whose template has no wording, or whose person has no contact point or has died, waits and is reported every pass; `CancelLetterRequest` (the asking module or servicing, with a reason) drops one. `Query::LetterRequest` says where one stands; settled requests are forgotten after 90 days. An adviser is addressed by their party id in the customer master. Reinsurance listings (personal data) are not attached to email; how they reach a reinsurer is a question for Mitchell.
+
 **Issuing twice.** `Driver::issue` keys the command on the document id and a digest of the request. The same request again changes nothing; a request that was refused and then put right is judged afresh.
 
 ## Not built, or waiting on others
