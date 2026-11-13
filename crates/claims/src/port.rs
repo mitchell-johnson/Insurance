@@ -71,6 +71,19 @@ pub struct CoverFacts {
     /// lender or an assignee, who is paid before the owner.
     #[serde(default)]
     pub interests: Vec<Interest>,
+    /// The nomination in force on the event date as the record knows it
+    /// now: who is to receive the death benefit and in what shares. Paid
+    /// after any interest, before the estate.
+    #[serde(default)]
+    pub nominations: Vec<Nominee>,
+}
+
+/// A person nominated to receive a share of a death benefit.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Nominee {
+    pub party: String,
+    /// Their share of what is left after interests, in whole percent.
+    pub share_pct: u32,
 }
 
 /// A recorded interest in a policy's proceeds.
