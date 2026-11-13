@@ -22,6 +22,7 @@ use ic_underwriting::config::{InterimSettings, Settings};
 use ic_underwriting::driver::{Channels, Core, CoreAnswer, Driver, DriverError, Forward, NothingConnected, Pass, Refusal, Reinsurer, Schemes, Underwriting};
 use ic_underwriting::model::{Entry, ProposalStatus, Stage};
 use ic_underwriting::progress::ProgressRow;
+use ic_underwriting::reinstatement::reinstatement_proposal;
 use ic_underwriting::service::channels_envelope;
 use ic_underwriting::special::{answer, Query};
 use serde_json::Value;
@@ -366,8 +367,8 @@ async fn an_outage_stops_the_pass_and_the_next_one_carries_on() {
     assert_eq!(reserves, 1, "the reservation was sent once: the stop came after it was acknowledged");
 }
 
-/// Purpose: where interim accidental death cover is configured, the driver issues it in the
-/// core when the proposal opens and tells the module it is in force; when the proposal becomes
+/// Purpose: where interim accidental death cover is configured, with the shipped
+/// `interim-accident` product, the driver issues it in the core when the proposal opens and tells the module it is in force; when the proposal becomes
 /// a policy the driver cancels the interim policy in the core. Both are real policies in the
 /// ledger, and at the end only the applied-for policy is in force.
 /// Why it matters: interim cover is a promise made the day the applicant signs. If it were
@@ -380,8 +381,8 @@ async fn interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issu
         let settings = Settings {
             version: 2,
             interim: Some(InterimSettings {
-                product_code: "term-life".into(),
-                cover_code: "life".into(),
+                product_code: "interim-accident".into(),
+                cover_code: "accidental-death".into(),
                 max_sum_insured_minor: 250_000_00,
             }),
             ..Settings::default()
@@ -400,10 +401,13 @@ async fn interim_cover_is_written_at_the_start_and_ended_when_the_policy_is_issu
     assert!(pass.parked.is_empty(), "{pass:?}");
     let interim = b.module.with(|w| w.p("P1").interim.clone().unwrap());
     assert!(interim.issued && !interim.ended);
-    assert_eq!(
-        b.ledger.cluster.lock().unwrap().state(0).policies[&interim.policy].status,
-        PolicyStatus::InForce
-    );
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let written = &cluster.state(0).policies[&interim.policy];
+        assert_eq!(written.status, PolicyStatus::InForce);
+        let covers: Vec<i64> = written.covers.values().map(|c| c.sum_insured_on(c.start)).collect();
+        assert_eq!(covers, vec![250_000_00], "the most interim cover on a life, not the amount applied for");
+    }
 
     b.module.with(|w| w.disclose("P1", "L1", &clean()));
     let pass = b.pass().await;
@@ -719,7 +723,9 @@ async fn an_accepted_alteration_rewrites_the_cover_on_the_policy_in_force() {
     assert!(ri.reservation("P2/L1/life/1").is_none() && ri.reservation("P3/L1/life/1").is_none());
 }
 
-/// Purpose: a lapsed policy goes through underwriting for reinstatement and the decision
+/// Purpose: a lapsed policy goes through underwriting for reinstatement, opened by collections
+/// with the proposal built from the policy as the core holds it (its lives, the cover held the
+/// day before the lapse, its product version; nothing for a policy that is not lapsed), and the decision
 /// reaches the core as an approval recorded against the lapse, carrying the decided loading
 /// and good for as long as the proposal is; no reinsurance capacity is reserved for cover
 /// already ceded; and the proposal ends issued with nothing left in the outbox.
@@ -742,16 +748,34 @@ async fn a_reinstatement_decision_is_recorded_against_the_lapse() {
         }
         assert_eq!(cluster.state(0).policies[&policy].status, PolicyStatus::Lapsed);
     }
-    let hash = b.product_hash.clone();
+    // What collections sends: the proposal built from the lapsed policy as the core holds it.
+    let mut open = {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let lapsed = &cluster.state(0).policies[&policy];
+        let mut in_force = lapsed.clone();
+        in_force.status = PolicyStatus::InForce;
+        assert_eq!(reinstatement_proposal(&in_force, d(2027, 6, 1)), None);
+        reinstatement_proposal(lapsed, d(2027, 6, 1)).expect("a lapsed policy with named lives")
+    };
+    assert!(open.proposal.0.starts_with(&format!("reinstate:{policy}:")));
+    assert_eq!(
+        (open.policy_number.as_str(), &open.group, open.channel.as_str()),
+        (number.as_str(), &group, "collections")
+    );
+    assert_eq!(open.quote.product_hash, b.product_hash);
+    assert_eq!(
+        open.covers
+            .iter()
+            .map(|c| (c.code.as_str(), c.life.0.as_str(), c.sum_insured_minor))
+            .collect::<Vec<_>>(),
+        vec![("life", "L1", 500_000_00)]
+    );
+    assert_eq!(open.lives.len(), 1);
+    // Kept as P2 for the steps below.
+    open.proposal = "P2".into();
     let expires = b.module.with(|w| {
         w.days(95);
-        let mut open = w.open_command("P2", &["L1"], &[("L1", "life", "life", 500_000_00)], false);
-        open.quote.product_hash = hash;
-        open.entry = Entry::Reinstatement { policy: policy.clone() };
-        open.policy = policy.clone();
-        open.policy_number = number;
-        open.group = group;
-        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.ok("collections", Command::OpenProposal(Box::new(open)));
         w.disclose("P2", "L1", &yes("smoked_last_12_months"));
         w.p("P2").expires_on
     });

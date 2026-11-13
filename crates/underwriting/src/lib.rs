@@ -37,6 +37,7 @@ mod casework;
 mod external;
 mod flow;
 mod intake;
+pub mod reinstatement;
 mod reoffer;
 
 pub use host::module_spec;

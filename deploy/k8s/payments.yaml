@@ -27,6 +27,13 @@ data:
   IC_BLOB_ENDPOINT: REPLACE-blobEndpoint
   IC_PAYMENTS_CONTAINER: payments-evidence
   IC_BANK_SECRETS_DIR: /mnt/bank-credentials
+  # The customer master, asked whether a person's own hold on money going
+  # out stands (SVC-022): its base URL and the scope of its app
+  # registration. The pump's identity needs the master's app role
+  # "payments". Set hold_check_max_age_minutes in the payments
+  # configuration so a master that cannot answer holds those payments.
+  IC_CUSTOMERS_URL: http://ic-customers
+  IC_CUSTOMERS_SCOPE: api://REPLACE-customers-application-id/.default
 ---
 # The cluster token from the core's vault and the bank credentials from the
 # payments vault, mounted as files under the pump's identity. Neither

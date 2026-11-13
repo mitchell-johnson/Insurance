@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::NaiveDate;
 use ic_core::{Command as CoreCommand, GroupId, Reject};
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use crate::command::{Envelope, ExcessDecision, GroupCommand, Resolution};
@@ -232,6 +232,28 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
             },
         };
         self.module.propose(envelope).await?.result.map_err(DriverError::Refused)
+    }
+
+    /// Try a proposed mapping against a sample file: what the scheme's
+    /// next file would look like if this mapping were set. Nothing is
+    /// stored, no command is sent and nobody is matched; the answer carries
+    /// counts, row numbers and codes, never a name or a value.
+    pub async fn try_mapping(&self, scheme: &str, mapping: FileMapping, sample: &[u8]) -> Result<Value, DriverError> {
+        let unfit = |code: &str, message: String| DriverError::Refused(Reject::new(code, message));
+        let mapping = mapping.seal().map_err(|e| unfit(mapping_code(&e), e.to_string()))?;
+        let table = csv::parse(sample, mapping.delimiter).map_err(|e| unfit(csv_code(&e), e.to_string()))?;
+        let mapped = mapping
+            .map(&table, &format!("{}:{scheme}", self.salt))
+            .map_err(|e| unfit(mapping_code(&e), e.to_string()))?;
+        let question = Question::Preview {
+            scheme: scheme.to_string(),
+            kind: mapping.kind,
+            rows: mapped.rows,
+            rejected: mapped.rejected,
+        };
+        let mut answer = self.module.ask(question).await?;
+        answer["mapping"] = json!({ "id": mapping.id, "version": mapping.version, "kind": mapping.kind, "content_hash": mapping.content_hash });
+        Ok(answer)
     }
 
     /// One pass over everything outstanding.

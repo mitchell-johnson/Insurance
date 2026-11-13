@@ -6,8 +6,9 @@ use ic_core::Command;
 use ic_money::DecStr;
 use ic_product::{load_definitions, load_product, load_rate_table, LoadError};
 
-const PRODUCTS: [(&str, &str); 5] = [
+const PRODUCTS: [(&str, &str); 6] = [
     ("term_life.star", include_str!("../../../products/term_life.star")),
+    ("interim_accident.star", include_str!("../../../products/interim_accident.star")),
     ("health_plan.star", include_str!("../../../products/health_plan.star")),
     ("group_life.star", include_str!("../../../products/group_life.star")),
     ("invest_plan.star", include_str!("../../../products/invest_plan.star")),

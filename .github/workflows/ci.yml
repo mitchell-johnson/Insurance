@@ -67,6 +67,11 @@ jobs:
     timeout-minutes: 240
     env:
       CARGO_TARGET_DIR: /data/target/test
+      # The Mac's Docker machine has 20 GB for every job at once (the other
+      # ci.yml jobs and the drill's image build included). Each instrumented
+      # test executable links every dependency, and ten links at a time ran
+      # it out of memory; six leave room.
+      CARGO_BUILD_JOBS: "6"
     steps:
       - uses: actions/checkout@v4
       - name: Keep the build output bounded
