@@ -42,6 +42,9 @@ path = "src/bin/ic-documents.rs"
 ic-channels = { path = "../channels" }
 proptest.workspace = true
 rsa = "0.9"
+# A real core, to answer the documents its events require from real policies.
+ic-sim.workspace = true
+ic-product.workspace = true
 
 [lints]
 workspace = true

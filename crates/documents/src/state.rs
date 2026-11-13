@@ -811,6 +811,21 @@ impl DocumentsState {
             .max_by_key(|t| (t.effective_from, t.template.version))
     }
 
+    /// The template a product's document of `kind` is rendered with on a
+    /// date: the active one bound to the product, with the latest effective
+    /// date not after it.
+    pub fn template_for_kind(&self, kind: DocumentKind, product: &str, on: NaiveDate) -> Option<&TemplateRecord> {
+        self.templates
+            .values()
+            .filter(|t| {
+                t.template.kind == kind
+                    && t.status == TemplateStatus::Active
+                    && t.effective_from.is_some_and(|d| d <= on)
+                    && t.template.products.iter().any(|p| p.code == product)
+            })
+            .max_by_key(|t| (t.effective_from, t.template.version))
+    }
+
     // --- documents ---
 
     fn register_party_key(&mut self, party: PartyId, wrapped_key: String) -> Result<(), Reject> {

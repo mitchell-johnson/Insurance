@@ -61,12 +61,43 @@ pub struct Period {
     /// The billing was reversed by an unwind: nothing is charged for it.
     #[serde(default)]
     pub reversed: bool,
-    /// The customer's premium for the period by cover type, where the core
-    /// supplied it. Needed by treaties priced on the original premium.
+    /// The customer's premium for the period by cover type before
+    /// discounts, where the core supplied it ([`before_discounts`]). Needed
+    /// by treaties priced on the original premium.
     #[serde(default)]
     pub by_cover_type: BTreeMap<String, i64>,
     #[serde(with = "pairs")]
     pub charged: BTreeMap<ChargeKey, i64>,
+}
+
+/// The premium by cover type before discounts: the core bills each cover
+/// type after discounts and names the discounts for the whole policy, so
+/// each discount is given back to the cover types in proportion to their
+/// premium, the remainder to the largest. Exact for a flat percentage off
+/// every cover, the only kind shipped. With nothing billed to share it by,
+/// the premium is left as billed.
+pub fn before_discounts(by_cover_type: BTreeMap<String, i64>, discounts_minor: i64) -> BTreeMap<String, i64> {
+    let billed: i64 = by_cover_type.values().sum();
+    if discounts_minor == 0 || billed <= 0 {
+        return by_cover_type;
+    }
+    let mut given = 0;
+    let mut gross: BTreeMap<String, i64> = by_cover_type
+        .iter()
+        .map(|(k, v)| {
+            let share = (discounts_minor as i128 * *v as i128).div_euclid(billed as i128) as i64;
+            given += share;
+            (k.clone(), v + share)
+        })
+        .collect();
+    if let Some(largest) = by_cover_type
+        .iter()
+        .max_by_key(|(k, v)| (**v, std::cmp::Reverse((*k).clone())))
+        .map(|(k, _)| k.clone())
+    {
+        *gross.entry(largest).or_default() += discounts_minor - given;
+    }
+    gross
 }
 
 /// An annual rate per thousand, in millionths, applied to an amount for a

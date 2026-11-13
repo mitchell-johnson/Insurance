@@ -380,8 +380,10 @@ impl Reinsurance {
                 period_start,
                 period_end,
                 by_cover_type,
+                discounts,
                 ..
             } => {
+                let by_cover_type = crate::premium::before_discounts(by_cover_type, discounts.iter().map(|d| d.amount_minor).sum());
                 // A period billed again after an unwind replaces the reversed
                 // billing; what was charged for it stays, to be netted.
                 let charged = self.periods.remove(&(policy.clone(), period_start)).map(|p| p.charged).unwrap_or_default();
