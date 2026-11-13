@@ -558,3 +558,39 @@ fn cover_given_up_after_new_cover_was_written_is_matched_looking_back() {
     assert_eq!(matched(&w.events[before..]), None);
     assert!(w.dist.layers[&layer_of(&new)].replacement.is_none());
 }
+
+/// Purpose: a cancelled policy is replaced by smaller cover, so only part of the cover given up
+/// is matched. The clawback raised on the cancellation is given back in the same proportion,
+/// that share of the exposure carries on under the new layer on its original clock, and the
+/// rest of the clawback stands, because that part of the cover really was given up.
+/// Why it matters: a customer who replaces 500,000 of cover with 300,000 has given up 200,000.
+/// Reversing nothing charges the provider for 300,000 that is still in force; reversing all of
+/// it lets 200,000 of lost cover go unclawed.
+#[test]
+fn a_partly_matched_cover_gives_back_its_clawback_in_proportion() {
+    let (mut w, old, _) = advised_in(scene(Settings::default()));
+    w.days(40);
+    let fap_one = w.payable("fap-one");
+    cancel(&mut w, &old);
+    assert_eq!(w.payable("fap-one"), fap_one - 1_200_00);
+    let new = w.issue_for(2, PERSON, 300_000_00);
+    let events = w.write(&new, "life", 1, "eng-a-one", "a-at-fap-one", 720_00).unwrap();
+    w.sync();
+    assert_eq!(matched(&events), Some((300_000_00, MatchReason::SameAdviser)));
+    assert_eq!(w.payable("fap-one"), fap_one - 480_00, "three fifths of the clawback given back");
+    let carried: Vec<_> = w.dist.exposures.values().filter(|e| e.open && e.amount_minor > e.clawed_minor).collect();
+    assert_eq!(carried.iter().map(|e| e.amount_minor - e.clawed_minor).sum::<i64>(), 720_00);
+    let original = w.dist.layers[&layer_of(&old)].start;
+    assert!(carried.iter().all(|e| e.layer == layer_of(&new) && e.layer_start == original), "{carried:?}");
+    w.assert_reconciled();
+
+    // Cancelled again: the carried share is clawed back once, from the same liable party.
+    w.days(30);
+    let before = w.payable("fap-one");
+    let n = w.events.len();
+    cancel(&mut w, &new);
+    assert_eq!(matched(&w.events[n..]), None, "cover already given up replaces nothing");
+    let lost = before - w.payable("fap-one");
+    assert_eq!(lost, 720_00, "the carried 720.00, on its original clock");
+    w.assert_reconciled();
+}

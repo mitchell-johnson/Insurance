@@ -701,6 +701,37 @@ fn investable(policy: &Policy) -> Result<(), Reject> {
     }
 }
 
+/// The funds the policy's product lets money into: the menus of its
+/// investment accounts. Empty where the product has none, which is every
+/// policy that is not unit-linked.
+pub(crate) fn menu(catalog: &crate::catalog::Catalog, policy: &Policy) -> BTreeSet<String> {
+    let covers = catalog.product(&policy.product_hash).map(|p| p.covers.as_slice()).unwrap_or_default();
+    covers
+        .iter()
+        .filter_map(|c| match &c.benefit {
+            ic_product::Benefit::InvestmentAccount { funds } => Some(funds.iter().cloned()),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Money goes only into a fund the policy's product offers. Selling is never
+/// held to the menu: a fund taken off it must still be possible to leave. A
+/// fee rebate goes back to the fund the fee came from, on the menu or not.
+pub(crate) fn offered(menu: &BTreeSet<String>, order: &NewOrder) -> Result<(), Reject> {
+    let into = match order.direction {
+        Direction::Buy if order.kind == OrderKind::FeeRebate => None,
+        Direction::Buy => Some(&order.fund),
+        Direction::Sell => order.switch_to.as_ref(),
+    };
+    match into {
+        Some(_) if menu.is_empty() => Err(bad("not_invested", "the policy's product has no investment account")),
+        Some(fund) if !menu.contains(&fund.0) => Err(bad("fund_not_offered", format!("fund {} is not on the product's fund menu", fund.0))),
+        _ => Ok(()),
+    }
+}
+
 /// Cash the policy's pending buy orders are counting on.
 fn committed_cash(book: &InvestmentBook, policy: &PolicyId) -> i128 {
     book.pending_of(policy)

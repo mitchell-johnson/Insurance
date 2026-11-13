@@ -140,6 +140,12 @@ struct Everyone;
 
 impl CustomerMaster for Everyone {
     async fn resolve(&self, _scheme: &str, identity: &MemberIdentity) -> Result<Resolution, String> {
+        // Bo may be somebody already known; everybody else is new.
+        if identity.employee_id == "E002" {
+            return Ok(Resolution::Possible {
+                candidates: vec![party("party-known")],
+            });
+        }
         Ok(Resolution::Created {
             party: party(&format!("party-{}", identity.employee_id)),
         })
@@ -622,6 +628,16 @@ E003,Cy,Patel,03/07/1975,executive,240000,wlg\n";
         .collect();
     assert_eq!(kinds, vec!["underwriting"]);
     assert_eq!(pass.failed, 1);
+    // And the notices did what they are for. The possible match is on reinsurance's own
+    // list of exceptions, so the member's cover is known not to be counted against the
+    // other person's retention; and its books still agree with themselves.
+    let reinsurance = |question: serde_json::Value| {
+        let client = client.clone();
+        async move { client.query_module("reinsurance", &question).await.unwrap().unwrap() }
+    };
+    let exceptions = reinsurance(serde_json::json!("exceptions")).await.to_string();
+    assert!(exceptions.contains("possible_match:") && exceptions.contains("party-known"), "{exceptions}");
+    assert_eq!(reinsurance(serde_json::json!("reconcile")).await, serde_json::json!([]));
     // Its outbox holds nothing for us, and withdrawing what it never opened is settled.
     assert_eq!(driver.collect_answers().await.unwrap(), Default::default());
     let answers = driver.peers.underwriting_answers(0, 10).await.unwrap();
