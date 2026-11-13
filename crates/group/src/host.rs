@@ -11,7 +11,9 @@ use serde_json::{json, Value};
 use crate::benefit::member_cover;
 use crate::command::{caller, Envelope, GroupCommand};
 use crate::event::Outbound;
-use crate::state::{CaseStatus, FileStatus, GroupState};
+use crate::mapping::{FileKind, RowReject};
+use crate::record::MemberRow;
+use crate::state::{compare, CaseStatus, FileStatus, GroupState, MAX_ROWS_PER_PART};
 
 /// The module's permanent name on the cluster.
 pub const MODULE: &str = "group";
@@ -87,6 +89,15 @@ pub enum Question {
     /// The mappings a scheme's files are read with: one layout, or one for
     /// full files and one for change files.
     Mapping { scheme: String },
+    /// What a file's rows would do to the scheme as it stands, without
+    /// storing anything: the trial of a proposed mapping against a sample.
+    Preview {
+        scheme: String,
+        kind: FileKind,
+        rows: Vec<MemberRow>,
+        #[serde(default)]
+        rejected: Vec<RowReject>,
+    },
     /// The schemes written on a policy: a portal knows an employer by the
     /// scheme policy it administers.
     SchemeOf { policy: PolicyId },
@@ -176,6 +187,20 @@ pub fn answer(state: &GroupState, question: Value) -> Result<Value, String> {
         Question::Mapping { scheme: id } => {
             let s = scheme(&id)?;
             json!({ "mapping": s.mapping, "second_mapping": s.second_mapping })
+        }
+        Question::Preview {
+            scheme: id,
+            kind,
+            rows,
+            rejected,
+        } => {
+            let s = scheme(&id)?;
+            if rows.len() > MAX_ROWS_PER_PART {
+                return Err(format!("a sample has at most {MAX_ROWS_PER_PART} rows"));
+            }
+            let today = state.today();
+            let compared = compare(s, today, kind, today, &rows, rejected);
+            json!({ "summary": compared.summary, "rejected": compared.rejected, "ambiguities": compared.ambiguities, "would_be_held": compared.held })
         }
         Question::SchemeOf { policy } => {
             let schemes: Vec<&String> = state.by_policy.get(&policy).into_iter().collect();

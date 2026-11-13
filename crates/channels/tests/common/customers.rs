@@ -30,6 +30,8 @@ pub struct MasterDouble {
     pub down: AtomicBool,
     /// Parties whose requests go to a person first.
     pub vulnerable: Mutex<Vec<String>>,
+    /// Each party's own spending hold, as the master answers for it.
+    holds: Mutex<BTreeMap<String, Value>>,
 }
 
 impl MasterDouble {
@@ -90,6 +92,24 @@ impl Master for MasterDouble {
             if version.is_some_and(|v| v != current.to_string()) {
                 return Ok((412, json!({ "title": "version_mismatch" })));
             }
+            // A spending hold, as the master keeps it: removal needs a passed identity check.
+            let mut holds = self.holds.lock().unwrap();
+            let hold = holds
+                .entry(party.0.clone())
+                .or_insert_with(|| json!({ "held": false, "placed_at": null, "removal": null }));
+            match body["command"].as_str() {
+                Some("place_spending_hold") => *hold = json!({ "held": true, "placed_at": "2027-02-01T09:00:00Z", "removal": null }),
+                Some("request_hold_removal") if body["verification"].as_str().is_none() => {
+                    return Ok((422, json!({ "title": "verification_needed" })));
+                }
+                Some("request_hold_removal") if hold["held"] == true => {
+                    hold["removal"] = json!({ "requested_at": "2027-02-02T09:00:00Z", "ends_at": "2027-02-09T09:00:00Z" });
+                }
+                Some("cancel_hold_removal") => hold["removal"] = Value::Null,
+                Some("request_hold_removal") => return Ok((409, json!({ "title": "not_held" }))),
+                _ => {}
+            }
+            drop(holds);
             if let Some(fields) = body.get("fields").and_then(Value::as_object) {
                 for (name, value) in fields {
                     record[name] = value.clone();
@@ -129,6 +149,21 @@ impl Master for MasterDouble {
             let to_person = self.vulnerable.lock().unwrap().contains(&party.0);
             let adjustments = if to_person { json!(["plain_language"]) } else { json!([]) };
             Ok((200, json!({ "route_to_person": to_person, "adjustments": adjustments, "review_on": null })))
+        })
+    }
+
+    fn spending_hold(&self, party: &PartyId) -> Asked<'_> {
+        let party = party.clone();
+        Box::pin(async move {
+            self.note(Call {
+                what: "spending_hold",
+                party: party.0.clone(),
+                version: None,
+                key: None,
+                body: None,
+            })?;
+            let hold = self.holds.lock().unwrap().get(&party.0).cloned();
+            Ok((200, hold.unwrap_or_else(|| json!({ "held": false, "placed_at": null, "removal": null }))))
         })
     }
 }
