@@ -894,3 +894,44 @@ fn a_migration_record_is_loaded_whole_or_refused() {
     assert_eq!(w.state.health_used["pol-1/life-1/dental"], 100);
     assert!(w.claim("c-2").migrated);
 }
+
+/// Purpose: a death claim for someone lost at sea, with no body and no death certificate, is
+/// registered and reserved like any other; the assessor asks the coroner for a finding, which has
+/// its own due date, and when the date arrives the overdue request is published and noted.
+/// Why it matters: persona test CLM-005. A family waiting on a coroner must not be told the
+/// claim cannot be lodged: refusing to register is never a behaviour. The reserve must be in the
+/// books from notification, and an evidence request without a timer is one nobody chases.
+#[test]
+fn a_death_with_no_certificate_is_registered_and_the_coroner_is_chased() {
+    let mut w = World::new();
+    let mut lost = World::notification("c-sea", "pol-1", "life", ClaimType::Death);
+    lost.notifier = ic_claims::model::Notifier::Beneficiary;
+    lost.claimant = Some("party-widow".into());
+    w.ok(Command::Notify(Box::new(lost)));
+    let c = w.claim("c-sea");
+    assert_eq!(c.status, Status::Open);
+    assert!(c.reserve_minor > 0, "reserved from notification");
+    assert!(c.evidence.is_empty(), "nothing is demanded before a claim is registered");
+    w.ok(Command::Acknowledge {
+        claim: "c-sea".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("c-sea", "ana");
+    w.ok(Command::RequestEvidence {
+        claim: "c-sea".into(),
+        evidence: "coroner".into(),
+        kind: "coroner_finding".into(),
+        from: "coroner".into(),
+        actor: actor("ana"),
+    });
+    let due = w.claim("c-sea").evidence[0].due;
+    assert!(due > w.core.today);
+    assert_eq!(w.core.noticed("evidence_requested")[0]["due"], due.to_string());
+    w.on(due.pred_opt().expect("a real date"));
+    w.ok(Command::DrainDue);
+    assert!(w.core.noticed("evidence_overdue").is_empty(), "not chased before its due date");
+    w.on(due);
+    w.ok(Command::DrainDue);
+    assert_eq!(w.core.noticed("evidence_overdue")[0]["evidence"], "coroner");
+    assert_eq!(w.claim("c-sea").status, Status::Open, "the claim waits; it is not declined");
+}

@@ -540,6 +540,10 @@ pub struct Policy {
     pub cancellation: Option<CancellationRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avoidance: Option<AvoidanceRecord>,
+    /// A full surrender of a unit-linked policy that has been asked for.
+    /// While it is set no new money goes in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surrender: Option<crate::invest::SurrenderRequest>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variations: Vec<Variation>,
     #[serde(default, skip_serializing_if = "PrunedPremium::is_empty")]

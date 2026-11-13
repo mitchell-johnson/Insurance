@@ -12,6 +12,9 @@
 //!   bytes the life signs. Nothing is stored.
 //! - `POST /v1/disclosures`: the answers and the signature; seals the record
 //!   and submits the disclosure, and returns where it is sealed.
+//! - `POST /v1/disclosures/open`: an underwriter reads a life's
+//!   disclosures, through the staff console (app role
+//!   `underwriting-console`). The module decides and logs the access first.
 //! - `GET /healthz`.
 
 use std::future::Future;
@@ -32,7 +35,7 @@ use ic_raft::{ClusterAuth, ClusterClient};
 use serde_json::json;
 
 use crate::clinical::ClinicalStore;
-use crate::disclosures::{Answers, Intake, IntakeError, Signed, CALLER};
+use crate::disclosures::{Answers, Intake, IntakeError, OpenRequest, Signed, CALLER, CONSOLE};
 use crate::driver::Underwriting;
 use crate::service::Cluster;
 
@@ -98,7 +101,7 @@ fn refusal(e: IntakeError) -> Response {
             .into_response(),
         IntakeError::Signature => error(StatusCode::BAD_REQUEST, "signature", &e),
         IntakeError::Refused(r) => error(StatusCode::CONFLICT, &r.code, &r.message),
-        IntakeError::Store(_) | IntakeError::Unavailable(_) => {
+        IntakeError::Store(_) | IntakeError::Unavailable(_) | IntakeError::NoView => {
             tracing::warn!(error = %e, "disclosure intake could not finish");
             error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", &e)
         }
@@ -106,17 +109,17 @@ fn refusal(e: IntakeError) -> Response {
 }
 
 impl<U, W, R> App<U, W, R> {
-    async fn allowed(&self, headers: &HeaderMap) -> Result<(), Response> {
+    async fn allowed(&self, headers: &HeaderMap, role: &str) -> Result<(), Response> {
         match self.auth.authenticate(headers).await {
-            Ok(caller) if caller.has_role(CALLER) => Ok(()),
-            Ok(_) => Err(error(StatusCode::FORBIDDEN, "forbidden", format!("the caller needs the app role {CALLER}"))),
+            Ok(caller) if caller.has_role(role) => Ok(()),
+            Ok(_) => Err(error(StatusCode::FORBIDDEN, "forbidden", format!("the caller needs the app role {role}"))),
             Err(e) => Err(error(StatusCode::UNAUTHORIZED, "unauthenticated", e)),
         }
     }
 }
 
 async fn to_sign<U: Underwriting, W: KeyWrapper, R: RecordStore>(State(app): State<Arc<App<U, W, R>>>, headers: HeaderMap, Json(a): Json<Answers>) -> Response {
-    if let Err(r) = app.allowed(&headers).await {
+    if let Err(r) = app.allowed(&headers, CALLER).await {
         return r;
     }
     match app.intake.to_sign(&a).await {
@@ -126,11 +129,25 @@ async fn to_sign<U: Underwriting, W: KeyWrapper, R: RecordStore>(State(app): Sta
 }
 
 async fn submit<U: Underwriting, W: KeyWrapper, R: RecordStore>(State(app): State<Arc<App<U, W, R>>>, headers: HeaderMap, Json(s): Json<Signed>) -> Response {
-    if let Err(r) = app.allowed(&headers).await {
+    if let Err(r) = app.allowed(&headers, CALLER).await {
         return r;
     }
     match app.intake.submit(&s).await {
         Ok(done) => Json(done).into_response(),
+        Err(e) => refusal(e),
+    }
+}
+
+async fn open<U: Underwriting, W: KeyWrapper, R: RecordStore>(
+    State(app): State<Arc<App<U, W, R>>>,
+    headers: HeaderMap,
+    Json(r): Json<OpenRequest>,
+) -> Response {
+    if let Err(refused) = app.allowed(&headers, CONSOLE).await {
+        return refused;
+    }
+    match app.intake.open(&r).await {
+        Ok(records) => Json(records).into_response(),
         Err(e) => refusal(e),
     }
 }
@@ -145,6 +162,7 @@ where
     Router::new()
         .route("/v1/disclosures/to-sign", post(to_sign::<U, W, R>))
         .route("/v1/disclosures", post(submit::<U, W, R>))
+        .route("/v1/disclosures/open", post(open::<U, W, R>))
         .route("/healthz", get(|| async { "ok" }))
         .with_state(Arc::new(App { intake, auth }))
 }

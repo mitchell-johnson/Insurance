@@ -713,8 +713,11 @@ impl CoreState {
                 reference,
                 amount_minor,
             } => self.with_policy(&policy, true, |s, p| {
-                if amount_minor > 0 && invest::menu(&s.catalog, p).is_empty() {
-                    return Err(Reject::new("not_invested", "the policy's product has no investment account"));
+                if amount_minor > 0 {
+                    if invest::menu(&s.catalog, p).is_empty() {
+                        return Err(Reject::new("not_invested", "the policy's product has no investment account"));
+                    }
+                    invest::open_to_money(p)?;
                 }
                 invest::allocate_cash(&mut s.ledger, &mut s.investment, p, ctx, reference, amount_minor)
             }),
@@ -722,6 +725,9 @@ impl CoreState {
                 let id = order.policy.clone();
                 self.with_policy(&id, true, |s, p| {
                     invest::offered(&invest::menu(&s.catalog, p), &order)?;
+                    if order.direction == invest::Direction::Buy || order.switch_to.is_some() {
+                        invest::open_to_money(p)?;
+                    }
                     invest::place_order(&s.ledger, &mut s.investment, p, ctx, *order)
                 })
             }
@@ -747,6 +753,77 @@ impl CoreState {
                 if let Some(action) = restricted {
                     interest::consume(p, ctx, action);
                 }
+                Ok(())
+            }),
+            InvestCommand::Surrender {
+                policy,
+                surrender,
+                pricing_dates,
+            } => self.with_policy(&policy, true, |s, p| {
+                if invest::menu(&s.catalog, p).is_empty() {
+                    return Err(Reject::new("not_invested", "the policy's product has no investment account"));
+                }
+                // A repeat of the surrender already asked for needs no new consent.
+                let fresh = p.surrender.is_none();
+                if fresh {
+                    interest::permit(p, ctx.date, RestrictedAction::Surrender)?;
+                }
+                invest::begin_surrender(&s.ledger, &mut s.investment, p, ctx, surrender, &pricing_dates)?;
+                if fresh {
+                    interest::consume(p, ctx, RestrictedAction::Surrender);
+                }
+                Ok(())
+            }),
+            InvestCommand::CompleteSurrender { policy, payout } => self.with_policy(&policy, true, |s, p| {
+                let Some(request) = p.surrender.clone() else {
+                    return Err(Reject::new("no_surrender", "no surrender of this policy has been asked for"));
+                };
+                if request.completed_on.is_some() {
+                    return Ok(());
+                }
+                let value_minor = invest::surrender_value(&s.ledger, &s.investment, p)?;
+                let product = s
+                    .catalog
+                    .product(&p.product_hash)
+                    .ok_or_else(|| Reject::new("unknown_product", "the policy's product version is not active on this partition"))?
+                    .clone();
+                // The owner's consent holders agreed to the surrender when it
+                // began; the payout is the same action finishing.
+                let paid = value_minor > 0;
+                if paid {
+                    invest::raise_payout(
+                        &mut s.ledger,
+                        &mut s.investment,
+                        p,
+                        ctx,
+                        payout.clone(),
+                        value_minor,
+                        crate::invest::PayoutReason::Surrender,
+                    )?;
+                }
+                if let Some(yesterday) = ctx.date.pred_opt() {
+                    earning::earn_through(&mut s.ledger, p, ctx, yesterday)?;
+                }
+                let detail = std::collections::BTreeMap::from([("surrender".to_string(), request.id.clone())]);
+                lifecycle::close_out(&mut s.ledger, &product, p, ctx, false, "policy_surrendered", ctx.date, ctx.date, detail)?;
+                arrears::set_standing(p, ctx, None);
+                ctx.emit(Event::PolicyStatusChanged {
+                    policy: p.id.clone(),
+                    from: p.status,
+                    to: PolicyStatus::Surrendered,
+                });
+                p.status = PolicyStatus::Surrendered;
+                p.surrender = Some(crate::invest::SurrenderRequest {
+                    completed_on: Some(ctx.date),
+                    payout: paid.then(|| payout.clone()),
+                    ..request.clone()
+                });
+                ctx.emit(Event::Investment(crate::invest::InvestEvent::SurrenderCompleted {
+                    policy: p.id.clone(),
+                    surrender: request.id,
+                    payout: paid.then_some(payout),
+                    value_minor,
+                }));
                 Ok(())
             }),
             InvestCommand::ReinstructPayout { policy, payout, payment } => {

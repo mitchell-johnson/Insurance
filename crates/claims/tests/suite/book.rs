@@ -1427,3 +1427,51 @@ fn a_retracted_death_gives_the_benefit_back() {
     w.pay_run("run-2", d(2027, 4, 1));
     assert_eq!(w.state.runs["run-2"].count, 1, "April, missed while the claim was closed");
 }
+
+/// Purpose: when an income declaration is late, the benefit is still paid on the last confirmed
+/// inputs, a task goes to a senior once the grace passes, and the declaration when it comes is
+/// applied to the periods already paid: what was overpaid is held as an overpayment and the next
+/// benefit is paid on the declared income.
+/// Why it matters: persona test CLM-018. Stopping an income benefit because a form is late leaves
+/// someone off work with nothing to live on; carrying on without adjusting would pay the wrong
+/// benefit for as long as the declaration stays missing.
+#[test]
+fn a_late_income_declaration_does_not_stop_the_benefit() {
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    for (run, on) in [("run-3", d(2027, 3, 1)), ("run-4", d(2027, 4, 1)), ("run-5", d(2027, 5, 1))] {
+        w.on(on);
+        w.pay_run(run, on);
+    }
+    // The declaration due on 1 June does not arrive.
+    w.on(d(2027, 6, 1));
+    w.ok(Command::DrainDue);
+    w.on(d(2027, 6, 15));
+    w.ok(Command::DrainDue);
+    let c = w.claim("ip-1");
+    assert!(c.tasks.iter().any(|t| t.id == "senior-review/overdue/IncomeDeclaration/2027-06-15"));
+    assert_eq!(c.status, Status::InPayment);
+    w.pay_run("run-6", d(2027, 6, 15));
+    assert!(
+        matches!(w.core.instructions.last(), Some(Instruction::PayBenefit { gross_minor: 3_000, .. })),
+        "June is paid in full on the last confirmed inputs"
+    );
+
+    // It arrives late: 500 a month of other income since May.
+    w.on(d(2027, 6, 20));
+    w.ok(income("ip-1", d(2027, 5, 1), 500));
+    let c = w.claim("ip-1");
+    let raised: i64 = c.overpayments.iter().map(|o| o.amount_minor).sum();
+    assert_eq!(raised, 1_000, "May and June were each overpaid by the income");
+    assert!(c.overpayments.iter().all(|o| o.status == RecoveryStatus::Held));
+    w.on(d(2027, 7, 1));
+    w.pay_run("run-7", d(2027, 7, 1));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::PayBenefit {
+            gross_minor: 2_500,
+            offset: None,
+            ..
+        })
+    ));
+}
