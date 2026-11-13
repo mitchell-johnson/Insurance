@@ -785,7 +785,7 @@ impl PaymentsState {
         for n in settled {
             total += n.amount_minor;
             self.waiting_settled(&n);
-            self.origin_settled(&n, settled_on);
+            self.origin_settled(&n, settled_on, &account);
             if let Some(refund) = n.refund.as_ref().and_then(|r| self.refunds.get_mut(r)) {
                 refund.status = RefundStatus::Paid;
             }
