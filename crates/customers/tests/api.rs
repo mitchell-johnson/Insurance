@@ -854,6 +854,20 @@ async fn a_third_party_concern_opens_a_prompt_and_discloses_nothing() {
         let (status, _) = w.command(&p, "staff", bad).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
     }
+    // The children have no authority to limit their parent's withdrawals.
+    let child = w.person("Rangi", "Child", "1975-01-01", &[]).await;
+    let (_, out) = w
+        .get(
+            &format!("/v1/parties/{p}/authority?actor={child}&act=surrender"),
+            "policy-servicing",
+            "servicing",
+        )
+        .await;
+    assert_eq!(
+        (out["decision"].clone(), out["reason"].clone()),
+        (json!("refuse"), json!("no_authority")),
+        "{out}"
+    );
     let (_, r) = w.get("/v1/reviews", "staff", "servicing").await;
     let prompts: Vec<&Value> = r["reviews"].as_array().unwrap().iter().filter(|r| r["kind"] == "consider_marker").collect();
     assert_eq!(prompts.len(), 2, "{r}");
@@ -961,6 +975,11 @@ async fn representatives_act_only_within_their_authority() {
     let (_, trail) = w.get(&format!("/v1/parties/{donor}/audit"), "privacy", "audit").await;
     let lines = trail["audit"].to_string();
     assert!(lines.contains(&format!("authority:{attorney}:change_beneficiary:route")), "{lines}");
+    // Both of the attorney's requests are on record with her as the actor.
+    let (_, report) = w.get(&format!("/v1/actors/{attorney}/actions"), "privacy", "audit").await;
+    let actions = report.to_string();
+    assert!(actions.contains(&format!("authority:{attorney}:change_payment_method:allow")), "{report}");
+    assert!(actions.contains(&format!("authority:{attorney}:change_beneficiary:route")), "{report}");
 }
 
 /// Purpose: a death opens a prompt for a person to consider a bereavement marker for
@@ -1350,4 +1369,258 @@ async fn trustee_changes_are_dated_on_the_resolution() {
     let (_, rels) = w.get(&format!("/v1/relationships?target=party:{trust}"), "staff", "servicing").await;
     let text = rels.to_string();
     assert!(text.contains("2026-03-01") && text.contains(&resigned), "{rels}");
+}
+
+/// Purpose: asked about a particular act, routing tells whoever serves a marked person to
+/// pause a value-moving act (a surrender, a beneficiary or bank change) for a conversation
+/// where the person asked for one, and to have a specialist review it first where the
+/// marker is a risk of financial abuse, without saying which; other acts, and unmarked
+/// people, are not paused; an act that is not one of the known ones is refused. Persona
+/// rows VUL-003 (large surrender paused), VUL-005 (full surrender to a new overseas
+/// account) and VUL-007 (beneficiary changed to a tradesperson), the master's part.
+/// Why it matters: the moment money leaves is when a person at risk is most easily
+/// exploited, and the people serving them need to know to slow down without being told
+/// the person's circumstances.
+#[tokio::test]
+async fn risky_acts_by_a_marked_person_are_paused_or_reviewed() {
+    let w = world_or_skip!();
+    let mark = |kind: &str, adjustments: Value| {
+        json!({ "command": "record", "facts": [{ "field": "vulnerability",
+            "value": { "kind": kind, "review_on": "2027-05-01", "adjustments": adjustments } }] })
+    };
+    let asked = w.person("Grace", "Tane", "1938-01-01", &[]).await;
+    w.command(&asked, "staff", mark("resilience", json!(["pause_before_large_withdrawal"]))).await;
+    let at_risk = w.person("Harold", "Smith", "1935-01-01", &[]).await;
+    w.command(&at_risk, "staff", mark("financial_abuse_risk", json!(["speak_to_trained_person"])))
+        .await;
+    let plain = w.person("Ivy", "Brown", "1980-01-01", &[]).await;
+    let route = |p: &str, act: &str| {
+        let path = format!("/v1/parties/{p}/routing?act={act}");
+        let w = &w;
+        async move {
+            let (status, out) = w.get(&path, "policy-servicing", "servicing").await;
+            (status, out)
+        }
+    };
+    let (_, out) = route(&asked, "surrender").await;
+    assert_eq!(
+        (out["pause_for_conversation"].clone(), out["specialist_review"].clone()),
+        (json!(true), json!(false)),
+        "{out}"
+    );
+    let (_, out) = route(&asked, "view").await;
+    assert!(out.get("pause_for_conversation").is_none(), "{out}");
+    for act in ["change_beneficiary", "change_bank_details", "surrender"] {
+        let (_, out) = route(&at_risk, act).await;
+        assert_eq!(
+            (out["pause_for_conversation"].clone(), out["specialist_review"].clone()),
+            (json!(true), json!(true)),
+            "{act}"
+        );
+        assert!(out.get("kind").is_none(), "the reason is not told: {out}");
+    }
+    let (_, out) = route(&plain, "surrender").await;
+    assert_eq!(out, json!({ "party": plain, "route_to_person": false }));
+    let (status, _) = route(&plain, "everything").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+/// Purpose: a person can choose a contact point for one relationship (letters about the
+/// claim they make to go to their solicitor's postal address, say, or the trust's email
+/// for policies they hold as trustee); notices about that relationship go there, notices
+/// about anything else go to their own; the choice is checked like the person's own
+/// details, one per relationship and channel, and can be set by the person in the app.
+/// Persona row DOC-009, the master's part.
+/// Why it matters: a person who asks for claim letters to go elsewhere, often because
+/// home is not safe or not where they are, must not have them go home anyway; and the
+/// choice must not redirect every other notice.
+#[tokio::test]
+async fn a_contact_point_can_be_chosen_for_one_relationship() {
+    let w = world_or_skip!();
+    let p = w.person("Sione", "Fifita", "1975-05-05", &[("email", json!("sione@example.nz"))]).await;
+    let choose = |choices: Value| json!({ "command": "record", "facts": [{ "field": "relationship_contacts", "value": choices }] });
+    for bad in [
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "not an email" }]),
+        json!([{ "relationship": "Claimant!", "channel": "email", "destination": "a@b.nz" }]),
+        json!([{ "relationship": "claimant", "channel": "fax", "destination": "1" }]),
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "a@b.nz", "extra": 1 }]),
+        json!([{ "relationship": "claimant", "channel": "email", "destination": "a@b.nz" },
+               { "relationship": "claimant", "channel": "email", "destination": "c@d.nz" }]),
+        json!("claimant"),
+    ] {
+        let (status, _) = w.command(&p, "staff", choose(bad.clone())).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    // Chosen in the app by the person.
+    let (status, out) = w
+        .send(Call {
+            method: "POST",
+            path: format!("/v1/parties/{p}/commands"),
+            role: "portal",
+            purpose: Some("self_service"),
+            body: Some(choose(json!([
+                { "relationship": "claimant", "channel": "email", "destination": "Claims@Lawyers.example.nz" },
+                { "relationship": "claimant", "channel": "post", "destination": ["Lawyers Ltd", "1 Queen St", "Auckland 1010"] }
+            ]))),
+            headers: vec![("x-ic-party", p.clone()), ("x-ic-actor", "app-session-1".into())],
+        })
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let contact = |channel: &str, relationship: Option<&str>| {
+        let rel = relationship.map(|r| format!("&relationship={r}")).unwrap_or_default();
+        let path = format!("/v1/parties/{p}/contact-points?purpose=notices&channel={channel}{rel}");
+        let w = &w;
+        async move { w.get(&path, "documents", "notices").await }
+    };
+    assert_eq!(contact("email", Some("claimant")).await.1["destination"], "claims@lawyers.example.nz");
+    assert_eq!(
+        contact("post", Some("claimant")).await.1["destination"],
+        "Lawyers Ltd\n1 Queen St\nAuckland 1010"
+    );
+    assert_eq!(contact("email", Some("policyholder")).await.1["destination"], "sione@example.nz");
+    assert_eq!(contact("email", None).await.1["destination"], "sione@example.nz");
+    let (status, _) = contact("post", Some("policyholder")).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "no address of his own, and the claim's is not used for other notices"
+    );
+}
+
+/// Purpose: a change of legal name is one change to one record: every relationship the
+/// person holds keeps pointing at them and shows the new name, the earlier name stays in
+/// the history, and notices go out under the new name. A person under guardianship sits
+/// in their own group, apart from their guardian's. Persona rows SVC-017 and VUL-012,
+/// the master's part.
+/// Why it matters: a name copied onto each policy would leave some documents in the old
+/// name; and a dependent adult's money and policy must be theirs, not mixed into the
+/// guardian's.
+#[tokio::test]
+async fn a_name_change_reaches_every_relationship_and_groups_stay_apart() {
+    let w = world_or_skip!();
+    let p = w.person("Jane", "Doe", "1970-01-01", &[("email", json!("jane@example.nz"))]).await;
+    for (id, policy) in [("o1", "NP1"), ("o2", "NP2")] {
+        w.command(
+            &p,
+            "staff",
+            json!({ "command": "add_relationship", "id": id, "kind": "owner",
+            "target": { "kind": "policy", "id": policy }, "valid_from": "2020-01-01" }),
+        )
+        .await;
+    }
+    let (status, out) = w
+        .command(
+            &p,
+            "staff",
+            json!({ "command": "record", "facts": [
+            { "field": "family_name", "value": "Smith" }, { "field": "given_name", "value": "Janet" }] }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    for policy in ["NP1", "NP2"] {
+        let (_, rels) = w.get(&format!("/v1/relationships?target=policy:{policy}"), "staff", "servicing").await;
+        assert_eq!(rels["relationships"][0]["party"], p.as_str(), "{rels}");
+    }
+    let (_, c) = w
+        .get(
+            &format!("/v1/parties/{p}/contact-points?purpose=notices&channel=email&relationship=policyholder"),
+            "documents",
+            "notices",
+        )
+        .await;
+    assert_eq!(c["name"], "Janet Smith");
+    let (_, history) = w.get(&format!("/v1/parties/{p}/history"), "staff", "servicing").await;
+    assert!(history.to_string().contains("Doe"), "the earlier name is kept: {history}");
+    // A dependent adult in his own group, apart from his guardian's.
+    let michael = w.person("Michael", "Hohaia", "1990-01-01", &[]).await;
+    let guardian = w.person("Huia", "Hohaia", "1962-02-02", &[]).await;
+    for (who, group) in [(&michael, "grp-michael"), (&guardian, "grp-huia")] {
+        let (status, out) = w.command(who, "staff", json!({ "command": "assign_group", "group": group })).await;
+        assert_eq!(status, StatusCode::OK, "{out}");
+    }
+    let (_, m) = w.get(&format!("/v1/parties/{michael}"), "staff", "servicing").await;
+    let (_, g) = w.get(&format!("/v1/parties/{guardian}"), "staff", "servicing").await;
+    assert_eq!((m["group"].clone(), g["group"].clone()), (json!("grp-michael"), json!("grp-huia")));
+}
+
+/// Purpose: how a person wants to be written to is theirs alone: two people on one policy
+/// keep their own language (Mandarin and English), format and channel, and each notice's
+/// contact point carries that person's; a post-only person gets their address with their
+/// format, and their representative acts only within scope. Persona rows VUL-021 and
+/// VUL-019, the master's part.
+/// Why it matters: a household is not one reader; sending one partner's letter in the
+/// other's language, or emailing someone who can only read post, means they are not told.
+#[tokio::test]
+async fn presentation_preferences_are_per_person() {
+    let w = world_or_skip!();
+    let lin = w
+        .person(
+            "Lin",
+            "Wong",
+            "1960-06-06",
+            &[("email", json!("lin@example.nz")), ("preferred_language", json!("zh-CN"))],
+        )
+        .await;
+    let kevin = w
+        .person(
+            "Kevin",
+            "Wong",
+            "1958-05-05",
+            &[("email", json!("kevin@example.nz")), ("preferred_language", json!("en"))],
+        )
+        .await;
+    let email = |p: &str| format!("/v1/parties/{p}/contact-points?purpose=notices&channel=email&relationship=policyholder");
+    assert_eq!(w.get(&email(&lin), "documents", "notices").await.1["language"], "zh-CN");
+    assert_eq!(w.get(&email(&kevin), "documents", "notices").await.1["language"], "en");
+    // Post only, in large print, with an attorney who may only view.
+    let nan = w
+        .person(
+            "Nan",
+            "Te Huia",
+            "1932-02-02",
+            &[
+                ("postal_address", json!(["12 Kowhai Rd", "Gisborne 4010"])),
+                ("notice_channel", json!("post")),
+                ("presentation_format", json!("large_print")),
+            ],
+        )
+        .await;
+    let (_, c) = w
+        .get(
+            &format!("/v1/parties/{nan}/contact-points?purpose=notices&channel=post"),
+            "documents",
+            "notices",
+        )
+        .await;
+    assert_eq!(
+        (c["destination"].clone(), c["format"].clone()),
+        (json!("12 Kowhai Rd\nGisborne 4010"), json!("large_print"))
+    );
+    let (status, _) = w
+        .get(
+            &format!("/v1/parties/{nan}/contact-points?purpose=notices&channel=email"),
+            "documents",
+            "notices",
+        )
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "no email to send to");
+    let son = w.person("Rawiri", "Te Huia", "1960-03-03", &[]).await;
+    w.command(
+        &son,
+        "staff",
+        json!({ "command": "add_relationship", "id": "epa", "kind": "attorney",
+        "target": { "kind": "party", "id": nan }, "valid_from": "2026-01-01",
+        "attributes": { "basis": "enduring_power_of_attorney", "document": "doc_7", "scope": ["view"] } }),
+    )
+    .await;
+    for (act, decision) in [("view", "allow"), ("change_contact_details", "refuse")] {
+        let (_, out) = w
+            .get(
+                &format!("/v1/parties/{nan}/authority?actor={son}&act={act}&on=2026-06-01"),
+                "policy-servicing",
+                "servicing",
+            )
+            .await;
+        assert_eq!(out["decision"], decision, "{act}");
+    }
 }

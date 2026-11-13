@@ -384,6 +384,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
 | SVC-008 | full | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
+| SVC-017 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | SVC-018 | part | `channels/tests/http.rs::the_staff_console_asks_the_four_questions` |
 | SVC-021 | full | `payments/tests/controls.rs::changed_details_wait_out_the_cooling_off_period`<br>`payments/tests/controls.rs::a_payee_passes_every_control_before_it_can_be_paid` |
 | SVC-022 | part | `payments/tests/hold.rs::only_the_service_records_what_the_master_says`<br>`payments/tests/hold.rs::a_hold_stops_value_leaving_and_nothing_else`<br>`payments/tests/hold.rs::a_refund_is_value_going_out_and_a_claim_is_not`<br>`payments/tests/hold.rs::a_hold_heard_after_the_item_joined_holds_it_at_the_check`<br>`payments/tests/hold.rs::a_payout_waits_for_a_recent_answer_where_one_is_required`<br>`payments/tests/hold.rs::the_pump_watches_every_party_money_is_about_to_go_to`<br>`payments-service/tests/pump.rs::the_pump_hears_a_customers_own_hold_from_the_customer_master`<br>`customers/tests/lifecycle.rs::a_customers_own_spending_hold_ends_only_after_cooling_off` |
@@ -414,18 +415,24 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | --- | --- | --- |
 | VUL-001 | full | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person` |
 | VUL-002 | part | `customers/tests/api.rs::vulnerable_people_are_routed_to_a_person`<br>`channels/tests/http.rs::a_vulnerable_customers_request_goes_to_a_person` |
-| VUL-004 | part | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-003 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
+| VUL-004 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
+| VUL-007 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
-| VUL-010 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |
+| VUL-012 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
 | VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-019 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
+| VUL-021 | part | `customers/tests/api.rs::presentation_preferences_are_per_person` |
 
 ## CMP Complaints and disputes
 
@@ -536,7 +543,10 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | DOC-006 | full | `documents/tests/relationships.rs::one_person_is_written_to_in_each_role_where_she_chose` |
 | DOC-007 | full | `documents/tests/relationships.rs::joint_owners_are_each_addressed_by_their_own_relationship` |
 | DOC-008 | full | `documents/tests/delivery.rs::a_correction_is_a_new_version_and_the_earlier_one_is_kept`<br>`documents/tests/defects.rs::a_defective_notice_is_voided_corrected_and_its_choices_reopened` |
-| DOC-009 | part | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it` |
+<<<<<<< HEAD
+=======
+| DOC-009 | full | `documents/tests/channels.rs::contact_points_come_from_the_customer_master`<br>`documents/tests/relationships.rs::a_changed_contact_point_reaches_every_relationship_that_uses_it`<br>`customers/tests/api.rs::a_contact_point_can_be_chosen_for_one_relationship` |
+>>>>>>> origin/main
 | DOC-010 | full | `documents/tests/templates.rs::a_template_is_composed_from_parts_and_hashed_with_them`<br>`documents/tests/templates.rs::a_changed_clause_shows_every_product_it_reaches` |
 
 ## MIG Migration

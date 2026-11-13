@@ -13,6 +13,7 @@
 
 mod authority;
 pub mod config;
+mod console;
 mod drill;
 pub mod file;
 pub mod hold;

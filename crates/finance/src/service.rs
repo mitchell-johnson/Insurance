@@ -118,6 +118,33 @@ impl ClusterModules {
         Self { client, partitions }
     }
 
+    /// Record on every partition's core that a version of a rate table
+    /// passed validation, so that the close finds the record when the table
+    /// is activated. Safe to send again. Refused for a report that did not
+    /// pass, and by the core where the table is already active with other
+    /// content than the report was run on.
+    pub async fn record_validation(&self, report: &crate::tables::ValidationReport, by: &str, patience: Duration) -> Result<(), DriverError> {
+        let record = report.record(by).map_err(DriverError::Answer)?;
+        for partition in 0..self.partitions {
+            let envelope = ic_core::Envelope {
+                key: format!("table-validation:{}:{}:{}:{partition}", record.id, record.version, record.content_hash),
+                caller: "finance".to_string(),
+                salt: ic_raft::client::fresh_salt(),
+                traceparent: None,
+                command: ic_core::Command::RecordRateTableValidation(Box::new(record.clone())),
+            };
+            let reply = self
+                .client
+                .propose_until(partition, &envelope, patience)
+                .await
+                .map_err(|e| DriverError::Unavailable(e.to_string()))?;
+            if let Some(reject) = reply.rejected {
+                return Err(DriverError::Answer(format!("partition {partition} refused the validation record: {reject}")));
+            }
+        }
+        Ok(())
+    }
+
     /// The underwriting loadings on every layer in force on `as_at`, read
     /// from each partition's core a page of policies at a time, to put on a
     /// table dry run's request. They imply health: pass them on and keep

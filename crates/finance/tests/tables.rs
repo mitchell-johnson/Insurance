@@ -9,6 +9,13 @@ const LIFE: &str = include_str!("../../../products/rates/life_base.star");
 const TRAUMA: &str = include_str!("../../../products/rates/trauma_base.star");
 const HEALTH: &str = include_str!("../../../products/rates/health_base.star");
 const GROUP: &str = include_str!("../../../products/rates/group_life_standard.star");
+const SHIPPED_OTHERS: [(&str, &str); 5] = [
+    ("no_premium.star", include_str!("../../../products/rates/no_premium.star")),
+    ("flex_hospital.star", include_str!("../../../products/rates/flex_hospital.star")),
+    ("flex_specialist.star", include_str!("../../../products/rates/flex_specialist.star")),
+    ("flex_dental.star", include_str!("../../../products/rates/flex_dental.star")),
+    ("flex_optical.star", include_str!("../../../products/rates/flex_optical.star")),
+];
 
 fn schema(id: &str) -> TableSchema {
     load_schemas("tables.star", SCHEMAS).unwrap().remove(id).unwrap()
@@ -58,13 +65,14 @@ const ROW_33_FEMALE: &str = "rate(\"1.2885\", age_from = 33, age_to = 37, sex = 
 #[test]
 fn every_shipped_table_passes_its_schema() {
     let schemas = load_schemas("tables.star", SCHEMAS).unwrap();
-    let shipped = [
+    let mut shipped = vec![
         ("life_base.star", LIFE),
         ("trauma_base.star", TRAUMA),
         ("health_base.star", HEALTH),
         ("group_life_standard.star", GROUP),
     ];
-    for (file, source) in shipped {
+    shipped.extend(SHIPPED_OTHERS);
+    for (file, source) in shipped.iter().copied() {
         let table = load_rate_table(file, source).unwrap();
         let schema = schemas.get(&table.id).unwrap_or_else(|| panic!("no schema is declared for {}", table.id));
         let report = validate(&table, schema, &manifest(), None);
@@ -401,4 +409,124 @@ fn a_table_rated_by_occupation_class_is_checked_class_by_class() {
     let refused = blocked(&unknown, Check::Schema);
     assert_eq!(refused.len(), 2, "{refused:?}");
     assert_eq!(refused[0], ("staff class 9".to_string(), "the schema has no such rating cell".to_string()));
+}
+
+/// Purpose: the table tool reads the shipped life table, the schemas and a manifest from
+/// files and validates. A passed report gives a record for the core naming the table,
+/// version, content hash, schema version, who ran it and the hash of the report; the same
+/// report always hashes the same and a different report differently. A table with a
+/// blocking finding gives no record and says why. Missing arguments, an unknown option,
+/// a table with no schema and an unreadable manifest are each refused with the problem
+/// named, and `--previous` compares against the version it replaces and blocks on
+/// another table.
+/// Why it matters: this is the step that activates a table. The close turns red for a
+/// table activated with no record of a passed validation of the same content, so the
+/// record has to come from the report itself and never exist for a table that failed.
+#[test]
+fn the_table_tool_records_a_passed_validation_and_refuses_a_failed_one() {
+    let manifest_json = serde_json::to_string(&manifest()).unwrap();
+    let broken = LIFE.replacen(ROW_33_FEMALE, &ROW_33_FEMALE.replace("1.2885", "12.885"), 1);
+    let files = |file: &str| -> Result<String, String> {
+        match file {
+            "life.star" => Ok(LIFE.to_string()),
+            "broken.star" => Ok(broken.clone()),
+            "trauma.star" => Ok(TRAUMA.to_string()),
+            "schemas.star" => Ok(SCHEMAS.to_string()),
+            "manifest.json" => Ok(manifest_json.clone()),
+            "bad.json" => Ok("{}".to_string()),
+            "none.star" => Ok("SCHEMAS = {}\nTABLE_SCHEMAS = {}".to_string()),
+            other => Err(format!("{other}: not found")),
+        }
+    };
+    let args = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let run = |list: &[&str]| ic_finance::tables::tool(&args(list), files);
+
+    let passed = run(&["life.star", "schemas.star", "manifest.json", "--record", "pipeline"]).unwrap();
+    assert_eq!(passed.record_as.as_deref(), Some("pipeline"));
+    let record = passed.report.record("pipeline").unwrap();
+    assert_eq!(
+        (
+            record.id.as_str(),
+            record.version,
+            record.content_hash.as_str(),
+            record.schema_version,
+            record.by.as_str()
+        ),
+        ("life-base", 1, life().content_hash.as_str(), 1, "pipeline")
+    );
+    assert_eq!(record.report_hash, passed.report.hash());
+    assert_eq!(record.report_hash.len(), 64);
+    let again = run(&["life.star", "schemas.star", "manifest.json"]).unwrap();
+    assert_eq!((again.record_as, again.report.hash()), (None, passed.report.hash()));
+
+    let failed = run(&["broken.star", "schemas.star", "manifest.json"]).unwrap();
+    assert!(!failed.report.passed());
+    assert_ne!(failed.report.hash(), passed.report.hash());
+    let refused = failed.report.record("pipeline").unwrap_err();
+    assert!(refused.starts_with("rate table life-base version 1 did not pass validation: "), "{refused}");
+
+    let compared = run(&["life.star", "schemas.star", "manifest.json", "--previous", "life.star"]).unwrap();
+    assert_eq!(compared.report.previous_version, Some(1));
+
+    for (list, problem) in [
+        (&["life.star", "schemas.star"][..], "usage"),
+        (&["life.star", "schemas.star", "manifest.json", "--loud", "x"][..], "usage"),
+        (&["life.star", "schemas.star", "manifest.json", "--record"][..], "usage"),
+        (&["missing.star", "schemas.star", "manifest.json"][..], "missing.star: not found"),
+        (&["life.star", "schemas.star", "bad.json"][..], "bad.json"),
+        (&["life.star", "none.star", "manifest.json"][..], "declares no schema for table life-base"),
+    ] {
+        let refused = run(list).unwrap_err();
+        assert!(refused.contains(problem), "{list:?}: {refused}");
+    }
+    // Compared with another table, the report blocks and so gives no record.
+    let mixed = run(&["life.star", "schemas.star", "manifest.json", "--previous", "trauma.star"]).unwrap();
+    assert!(mixed.report.record("pipeline").unwrap_err().contains("different table"));
+}
+
+/// Purpose: the shipped `ic-finance-tables` program, run on the repository's life table,
+/// schemas and a manifest, prints the report and succeeds. Run on a table with a cell
+/// keyed ten times too high it prints the report and fails. Asked to record a passed
+/// validation with no cluster named, it fails saying so rather than succeeding silently.
+/// Why it matters: this is the program the activation pipeline runs. Its exit status is
+/// what stops a failed table, so a failed table must never exit cleanly, and a record
+/// asked for and not made must not look like one that was.
+#[test]
+fn the_table_program_fails_on_a_failed_table_and_on_a_record_it_cannot_make() {
+    let dir = std::env::temp_dir().join(format!("ic-finance-tables-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let manifest_file = dir.join("manifest.json");
+    std::fs::write(&manifest_file, serde_json::to_string(&manifest()).unwrap()).unwrap();
+    let broken_file = dir.join("broken.star");
+    std::fs::write(&broken_file, LIFE.replacen(ROW_33_FEMALE, &ROW_33_FEMALE.replace("1.2885", "12.885"), 1)).unwrap();
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let (life_file, schemas_file) = (format!("{root}/products/rates/life_base.star"), format!("{root}/config/finance/tables.star"));
+    let program = |table: &str, extra: &[&str]| {
+        std::process::Command::new(env!("CARGO_BIN_EXE_ic-finance-tables"))
+            .env_clear()
+            .envs(std::env::vars().filter(|(k, _)| k == "LLVM_PROFILE_FILE"))
+            .args([table, schemas_file.as_str(), manifest_file.to_str().unwrap()])
+            .args(extra)
+            .output()
+            .unwrap()
+    };
+
+    let passed = program(&life_file, &[]);
+    assert!(passed.status.success(), "{}", String::from_utf8_lossy(&passed.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&passed.stdout).unwrap();
+    assert_eq!(
+        (report["table"].as_str(), report["findings"].as_array().map(Vec::len)),
+        (Some("life-base"), Some(0))
+    );
+
+    let failed = program(broken_file.to_str().unwrap(), &[]);
+    assert!(!failed.status.success());
+    assert!(String::from_utf8_lossy(&failed.stderr).contains("did not pass validation"));
+    let report: serde_json::Value = serde_json::from_slice(&failed.stdout).unwrap();
+    assert!(!report["findings"].as_array().unwrap().is_empty());
+
+    let unrecorded = program(&life_file, &["--record", "pipeline"]);
+    assert!(!unrecorded.status.success());
+    assert!(String::from_utf8_lossy(&unrecorded.stderr).contains("IC_CLUSTER_NODES"));
+    std::fs::remove_dir_all(&dir).unwrap();
 }

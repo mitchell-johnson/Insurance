@@ -65,25 +65,25 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ADV Advisers and commission | 41 | 1 | 3 | 3 |
 | HLT Composable health product | 3 | 3 | 5 | 2 |
 | DSC Discounts and pricing components | 0 | 0 | 11 | 3 |
-| SVC Policy servicing | 4 | 5 | 17 | 5 |
+| SVC Policy servicing | 4 | 6 | 16 | 5 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 7 | 7 | 7 | 7 |
+| VUL Vulnerable customers, support people and representatives | 9 | 11 | 1 | 5 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 9 | 6 | 3 | 5 |
 | PAY Payment runs and bank connectivity | 12 | 1 | 1 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 12 | 3 | 3 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
-| DOC Policy documents and correspondence | 9 | 1 | 0 | 0 |
+| DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **276** | **124** | **177** | **129** |
+| **Total** | **279** | **128** | **170** | **127** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 29 | 30 | 10 |
 | B | 90 | 27 | 25 |
-| C | 155 | 64 | 127 |
+| C | 158 | 68 | 120 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -102,7 +102,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
 - **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
-- **VUL** (3): VUL-003, VUL-005, VUL-007
 - **STF** (1): STF-013
 - **CFG** (1): CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
@@ -126,7 +125,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ADV** (1): ADV-035
 - **ANV** (1): ANV-016
 - **ANN** (2): ANN-004, ANN-006
-- **VUL** (4): VUL-002, VUL-004, VUL-008, VUL-010
+- **VUL** (5): VUL-002, VUL-003, VUL-005, VUL-007, VUL-008
 - **STF** (4): STF-002, STF-012, STF-017, STF-018
 - **CFG** (1): CFG-005
 - **INC** (2): INC-003, INC-009

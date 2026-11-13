@@ -113,6 +113,40 @@ fn address(value: &Value) -> Result<Value, Problem> {
     Ok(Value::from(lines))
 }
 
+/// Contact points chosen per relationship: at most one per relationship and
+/// channel, each destination checked as the party's own would be.
+fn relationship_contacts(value: &Value) -> Result<Value, Problem> {
+    let list = value.as_array().ok_or("must be a list of {relationship, channel, destination}")?;
+    if list.len() > 20 {
+        return Err("at most 20 choices".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut out = Vec::new();
+    for item in list {
+        let o = item.as_object().ok_or("each choice is {relationship, channel, destination}")?;
+        if o.len() != 3 {
+            return Err("each choice is {relationship, channel, destination}".into());
+        }
+        let relationship = o.get("relationship").and_then(Value::as_str).unwrap_or_default();
+        if relationship.is_empty() || relationship.len() > 40 || !relationship.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            return Err("relationship is a kind such as policyholder or claimant".into());
+        }
+        let channel = o.get("channel").and_then(Value::as_str).unwrap_or_default();
+        let destination = o.get("destination").cloned().unwrap_or_default();
+        let destination = match channel {
+            "email" => Value::String(email(destination.as_str().ok_or("an email destination is text")?)?),
+            "sms" => Value::String(phone(destination.as_str().ok_or("an sms destination is text")?)?),
+            "post" => address(&destination)?,
+            _ => return Err("channel is email, sms or post".into()),
+        };
+        if !seen.insert((relationship.to_string(), channel.to_string())) {
+            return Err("one choice per relationship and channel".into());
+        }
+        out.push(serde_json::json!({ "relationship": relationship, "channel": channel, "destination": destination }));
+    }
+    Ok(Value::from(out))
+}
+
 fn language(value: &Value) -> Result<Value, Problem> {
     let s = value.as_str().ok_or("must be a language tag")?;
     let (lang, region) = match s.split_once('-') {
@@ -160,6 +194,7 @@ pub fn normalise(field: Field, value: &Value) -> Result<Value, Problem> {
         Field::PreferredLanguage => language(value),
         Field::PresentationFormat => one_of(value, &PRESENTATION_FORMATS),
         Field::NoticeChannel => one_of(value, &NOTICE_CHANNELS),
+        Field::RelationshipContacts => relationship_contacts(value),
         Field::IrdNumber => Ok(Value::String(ird(value.as_str().ok_or("must be text")?)?)),
         Field::TaxResidency => countries(value),
         Field::PrescribedInvestorRate => one_of(value, &PIR_RATES),

@@ -201,6 +201,33 @@ async fn against_a_real_node(temporal: Option<&str>) {
     // Nothing on this book was underwritten with a loading: every page of every partition is read and empty.
     assert_eq!(modules.loadings(day).await.unwrap(), vec![]);
 
+    // A passed validation of the shipped life table is recorded on the core, and again
+    // without harm; a report that did not pass is refused before anything is sent.
+    let life = ic_product::load_rate_table("life_base.star", include_str!("../../../products/rates/life_base.star")).unwrap();
+    let schemas = ic_finance::tables::load_schemas("tables.star", include_str!("../../../config/finance/tables.star")).unwrap();
+    let manifest = ic_finance::tables::Manifest {
+        model: "prophet-term".to_string(),
+        model_version: "2027.2".to_string(),
+        basis_report: "vault://actuarial/basis-2027".to_string(),
+        author: "aroha".to_string(),
+    };
+    let report = ic_finance::tables::validate(&life, &schemas["life-base"], &manifest, None);
+    for _ in 0..2 {
+        modules.record_validation(&report, "pipeline", patience).await.unwrap();
+    }
+    let mut failed = report.clone();
+    failed.manifest.author = String::new();
+    let failed = ic_finance::tables::validate(&life, &schemas["life-base"], &failed.manifest, None);
+    assert!(matches!(
+        modules.record_validation(&failed, "pipeline", patience).await,
+        Err(DriverError::Answer(_))
+    ));
+    // Other content under the active table's ID and version is refused by the core.
+    let mut other = report.clone();
+    other.content_hash = "0".repeat(64);
+    let refused = modules.record_validation(&other, "pipeline", patience).await.unwrap_err();
+    assert!(matches!(&refused, DriverError::Answer(m) if m.contains("other content")), "{refused:?}");
+
     // The core's publisher: the day's signed root, in Blob Storage.
     let fake = FakeAzure::start().await;
     let credential = AzureCredential::static_token(TOKEN);
