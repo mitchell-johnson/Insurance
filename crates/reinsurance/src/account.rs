@@ -123,6 +123,24 @@ pub struct Statement {
     pub cleared: Option<String>,
 }
 
+/// One statement as its reinsurer sees it listed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StatementEntry {
+    pub number: u32,
+    pub treaty: TreatyId,
+    pub period_start: NaiveDate,
+    pub period_end: NaiveDate,
+    pub currency: Currency,
+    /// Positive is owed to the reinsurer.
+    pub net_minor: i64,
+    /// `issued`, `agreed`, `instructed` or `settled`.
+    pub status: String,
+    pub file: String,
+    pub sha256: String,
+    /// Supplementary listings issued since, oldest first.
+    pub supplementary: Vec<String>,
+}
+
 /// The last profit commission review of a treaty with a reinsurer.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PcState {
@@ -231,6 +249,37 @@ impl Reinsurance {
             .map(|s| s.net_minor)
             .sum();
         open + unsettled
+    }
+
+    /// A reinsurer's statements, oldest first, after statement `after`:
+    /// what the reinsurer API lists. Files are named as the reinsurer reads
+    /// them, `<treaty>/<file>`; the statement names its listing's files.
+    pub fn statements_for(&self, reinsurer: &ReinsurerId, after: Option<u32>, limit: usize) -> Vec<StatementEntry> {
+        self.statements
+            .iter()
+            .filter(|s| &s.reinsurer == reinsurer && after.is_none_or(|a| s.number > a))
+            .take(limit)
+            .map(|s| StatementEntry {
+                number: s.number,
+                treaty: s.treaty.clone(),
+                period_start: s.period_start,
+                period_end: s.period_end,
+                currency: s.currency,
+                net_minor: s.net_minor,
+                status: match s.status {
+                    StatementStatus::Issued => "issued",
+                    StatementStatus::Agreed { .. } => "agreed",
+                    StatementStatus::Instructed => "instructed",
+                    StatementStatus::Settled { .. } => "settled",
+                }
+                .to_string(),
+                file: format!("{}/statement-{}.json", s.treaty, s.number),
+                sha256: s.sha256.clone(),
+                supplementary: (1..=s.supplementary_issued)
+                    .map(|k| format!("{}/statement-{}-supplementary-{k}.json", s.treaty, s.number))
+                    .collect(),
+            })
+            .collect()
     }
 
     pub fn statement(&self, number: u32) -> Option<&Statement> {

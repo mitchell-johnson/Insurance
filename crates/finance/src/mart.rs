@@ -39,7 +39,7 @@ use crate::books::ExtractRecord;
 /// The claims module's name on the facts it publishes through the core.
 const CLAIMS_MODULE: &str = "claims";
 
-pub const DEFINITION_VERSION: u32 = 4;
+pub const DEFINITION_VERSION: u32 = 5;
 
 pub const IN_FORCE: &str = "in_force";
 pub const MOVEMENT: &str = "movement";
@@ -91,6 +91,10 @@ struct Factors {
     smoker: Option<bool>,
     #[serde(default)]
     occupation_class: Option<String>,
+    /// The scheme benefit category, where the life is a member of a scheme
+    /// that has them.
+    #[serde(default)]
+    category: Option<String>,
 }
 
 /// A life's factors with the business date each version was recorded on, in
@@ -104,6 +108,7 @@ impl Factors {
             sex: l.sex,
             smoker: l.smoker,
             occupation_class: l.occupation_class.clone(),
+            category: l.category.clone(),
         }
     }
 
@@ -114,8 +119,12 @@ impl Factors {
     /// The occupation class as a column: letters, digits, `-` and `_` only,
     /// so that a class typed with a comma cannot shift the columns after it.
     fn class(&self) -> String {
-        let plain = |c: char| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' };
-        self.occupation_class.as_deref().unwrap_or_default().chars().map(plain).collect()
+        plain(self.occupation_class.as_deref())
+    }
+
+    /// The scheme benefit category as a column, kept to the same characters.
+    fn category(&self) -> String {
+        plain(self.category.as_deref())
     }
 
     /// Age last birthday on a date.
@@ -126,8 +135,21 @@ impl Factors {
     /// The age, sex, smoker status and occupation class columns, each empty
     /// where not known.
     fn columns(&self, on: NaiveDate) -> String {
-        format!("{},{},{},{}", opt(&self.age(on)), sex_name(self.sex), opt(&self.smoker), self.class())
+        format!(
+            "{},{},{},{},{}",
+            opt(&self.age(on)),
+            sex_name(self.sex),
+            opt(&self.smoker),
+            self.class(),
+            self.category()
+        )
     }
+}
+
+/// A code as a column: letters, digits, `-` and `_` only.
+fn plain(code: Option<&str>) -> String {
+    let keep = |c: char| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' };
+    code.unwrap_or_default().chars().map(keep).collect()
 }
 
 pub(crate) fn sex_name(sex: Option<Sex>) -> &'static str {
@@ -153,6 +175,8 @@ pub struct RatedCover {
     pub sex: Option<Sex>,
     pub smoker: Option<bool>,
     pub occupation_class: Option<String>,
+    /// The scheme benefit category, for a member of a scheme that has them.
+    pub category: Option<String>,
     pub sum_insured_minor: i64,
 }
 
@@ -315,6 +339,8 @@ struct EndingClaim {
     smoker: Option<bool>,
     #[serde(default)]
     occupation_class: String,
+    #[serde(default)]
+    category: String,
 }
 
 /// A claim the claims module has registered: the rating cell it falls in,
@@ -328,6 +354,8 @@ struct KnownClaim {
     sex: Option<Sex>,
     smoker: Option<bool>,
     occupation_class: String,
+    #[serde(default)]
+    category: String,
     /// Whether an admission is standing.
     admitted: bool,
     admitted_minor: i64,
@@ -789,6 +817,7 @@ impl Mart {
                             sex: f.sex,
                             smoker: f.smoker,
                             occupation_class: f.class(),
+                            category: f.category(),
                         });
                     }
                 }
@@ -834,6 +863,7 @@ impl Mart {
                     sex: factors.sex,
                     smoker: factors.smoker,
                     occupation_class: factors.class(),
+                    category: factors.category(),
                     ..KnownClaim::default()
                 };
                 self.known_claims.insert(key, known);
@@ -1077,6 +1107,7 @@ impl Mart {
                     sex: factors.sex,
                     smoker: factors.smoker,
                     occupation_class: factors.occupation_class,
+                    category: factors.category,
                     sum_insured_minor: s.sum_insured_minor,
                 });
             }
@@ -1087,8 +1118,10 @@ impl Mart {
     /// Every cover in force as at the close of `as_at`.
     pub fn in_force(&self, as_at: NaiveDate) -> Result<Extract, MartError> {
         self.closed(as_at)?;
-        let mut lines =
-            vec!["partition,policy,product,inception,status,cover,cover_type,layer,life,age,sex,smoker,occupation_class,start,sum_insured_minor".to_string()];
+        let mut lines = vec![
+            "partition,policy,product,inception,status,cover,cover_type,layer,life,age,sex,smoker,occupation_class,category,start,sum_insured_minor"
+                .to_string(),
+        ];
         for ((partition, policy), row) in &self.policies {
             let Some(status) = row.status_at(as_at).filter(|s| provides_cover(*s)) else {
                 continue;
@@ -1169,7 +1202,7 @@ impl Mart {
         // Stable: movements of one policy on one day keep the order they happened in.
         rows.sort_by(|a, b| (a.business_date, a.partition, &a.policy).cmp(&(b.business_date, b.partition, &b.policy)));
         let mut lines = vec![
-            "business_date,partition,policy,product,kind,effective,cover,cover_type,layer,life,age,sex,smoker,occupation_class,policies,covers,sum_insured_minor,premium_minor"
+            "business_date,partition,policy,product,kind,effective,cover,cover_type,layer,life,age,sex,smoker,occupation_class,category,policies,covers,sum_insured_minor,premium_minor"
                 .to_string(),
         ];
         let mut premium: i128 = 0;
@@ -1230,8 +1263,8 @@ impl Mart {
             admitted_monthly_minor: i128,
         }
         // Product, cover type, age band at the end of the period, sex, smoker,
-        // occupation class.
-        type CellKey = (String, String, String, &'static str, String, String);
+        // occupation class, scheme benefit category.
+        type CellKey = (String, String, String, &'static str, String, String, String);
         let mut cells: BTreeMap<CellKey, Cell> = BTreeMap::new();
         for row in self.policies.values() {
             let runs = row.in_force_days(from, to);
@@ -1258,6 +1291,7 @@ impl Mart {
                         sex_name(f.sex),
                         opt(&f.smoker),
                         f.class(),
+                        f.category(),
                     );
                     let cell = cells.entry(key).or_default();
                     cell.cover_days += i128::from(days);
@@ -1273,6 +1307,7 @@ impl Mart {
                 sex_name(claim.sex),
                 opt(&claim.smoker),
                 claim.occupation_class.clone(),
+                claim.category.clone(),
             );
             let cell = cells.entry(key).or_default();
             cell.claims += 1;
@@ -1289,6 +1324,7 @@ impl Mart {
                 sex_name(known.sex),
                 opt(&known.smoker),
                 known.occupation_class.clone(),
+                known.category.clone(),
             );
             let cell = cells.entry(key).or_default();
             cell.admitted_claims += i128::from(a.claims);
@@ -1296,13 +1332,13 @@ impl Mart {
             cell.admitted_monthly_minor += i128::from(a.monthly_minor);
         }
         let mut lines = vec![
-            "product,cover_type,age_band,sex,smoker,occupation_class,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor,admitted_claims,admitted_minor,admitted_monthly_minor"
+            "product,cover_type,age_band,sex,smoker,occupation_class,category,cover_days,sum_insured_days_minor,ending_claims,ending_claim_sum_insured_minor,admitted_claims,admitted_minor,admitted_monthly_minor"
                 .to_string(),
         ];
         let mut control: BTreeMap<String, i128> = BTreeMap::new();
-        for ((product, cover_type, band, sex, smoker, class), c) in &cells {
+        for ((product, cover_type, band, sex, smoker, class, category), c) in &cells {
             lines.push(format!(
-                "{product},{cover_type},{band},{sex},{smoker},{class},{},{},{},{},{},{},{}",
+                "{product},{cover_type},{band},{sex},{smoker},{class},{category},{},{},{},{},{},{},{}",
                 c.cover_days, c.sum_insured_days_minor, c.claims, c.claim_sum_insured_minor, c.admitted_claims, c.admitted_minor, c.admitted_monthly_minor
             ));
             *control.entry("admitted_claims".to_string()).or_insert(0) += c.admitted_claims;

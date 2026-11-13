@@ -75,6 +75,14 @@ pub enum Query {
     Statement {
         number: u32,
     },
+    /// One reinsurer's statements, oldest first, after statement `after`
+    /// when it is given: what the reinsurer API lists.
+    Statements {
+        reinsurer: ReinsurerId,
+        #[serde(default)]
+        after: Option<u32>,
+        limit: usize,
+    },
     Listing {
         treaty: TreatyId,
         reinsurer: ReinsurerId,
@@ -137,6 +145,7 @@ pub fn answer(state: &Reinsurance, question: Value) -> Result<Value, String> {
         Query::Retained { life, on } => json(state.retained_on(&life, on)),
         Query::Balance { treaty, reinsurer } => json(state.balance(&treaty, &reinsurer)),
         Query::Statement { number } => json(state.statement(number)),
+        Query::Statements { reinsurer, after, limit } => json(state.statements_for(&reinsurer, after, limit.min(MAX_ANSWER))),
         Query::Listing {
             treaty,
             reinsurer,

@@ -408,6 +408,7 @@ async fn the_served_loop_stops_when_told_even_with_no_cluster() {
         event_hubs: String::new(),
         event_hub: String::new(),
         drops_endpoint: None,
+        api: None,
     };
     let records = ic_azure::blob::MemoryWormStore::default;
     let staff = || ic_azure::eventhubs::EventHubsSink::new("http://127.0.0.1:1", "h", ic_azure::credential::AzureCredential::static_token("t"));

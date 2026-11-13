@@ -36,6 +36,7 @@ fn cover(policy: &str, age: Option<u32>, sum_insured_minor: i64) -> RatedCover {
         sex: Some(Sex::Female),
         smoker: Some(false),
         occupation_class: None,
+        category: None,
         sum_insured_minor,
     }
 }
@@ -120,7 +121,8 @@ fn a_proposed_table_is_priced_against_the_book_in_force() {
 /// new version rates are counted apart; a rate per life ignores the sum insured; pricing
 /// on the age at start uses the younger row; the covers that move are listed largest
 /// first and the list stops at twenty; a row for one occupation class prices only lives
-/// of that class; and half a cent rounds up.
+/// of that class, and a row for one scheme benefit category only members in it; and half
+/// a cent rounds up.
 /// Why it matters: the totals are what an actuary signs against. A cover silently left
 /// out, or counted in the total under one version and not the other, makes the movement
 /// wrong in a way nobody can see from the summary.
@@ -182,6 +184,24 @@ fn the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves() {
     let run = dry_run(as_at, &request(classed()), &[manual, cover("pol-office", Some(37), 100_000_00)]);
     assert_eq!(run.proposed_annual_minor, 257_70 + 141_74);
     assert_eq!(run.largest_changes[0].policy, "pol-manual");
+
+    // A row for one scheme benefit category rates only members the core published in it.
+    let by_category = || {
+        let mut table = raised();
+        let at = table.rows.iter().position(|r| r.annual_rate.as_str() == "1.4174").unwrap();
+        let mut executive = table.rows[at].clone();
+        executive.category = Some("executive".to_string());
+        executive.annual_rate = serde_json::from_value(json!("0.9000")).unwrap();
+        table.rows.insert(at, executive);
+        table
+    };
+    let mut executive = cover("pol-exec", Some(37), 100_000_00);
+    executive.category = Some("executive".to_string());
+    let mut staff = cover("pol-staff", Some(37), 100_000_00);
+    staff.category = Some("staff".to_string());
+    let run = dry_run(as_at, &request(by_category()), &[executive, staff, cover("pol-none", Some(37), 100_000_00)]);
+    assert_eq!(run.proposed_annual_minor, 90_00 + 2 * 141_74);
+    assert_eq!(run.current_annual_minor, 3 * 128_85);
 
     // A premium is rounded to the nearest cent.
     let small = [cover("a", Some(37), 1_000_00), cover("b", Some(37), 3_88_00)];
