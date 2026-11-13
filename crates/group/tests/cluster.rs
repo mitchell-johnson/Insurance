@@ -272,6 +272,10 @@ fn requests_are_proposals_the_underwriting_module_accepts() {
     );
     serde_json::from_value::<ic_underwriting::command::Envelope>(with_both).unwrap();
     assert_eq!(plain["command"]["open_proposal"]["entry"].as_object().unwrap().len(), 2);
+    // An amount of nothing or a blank reference is none at all: underwriting would refuse it.
+    taken_over.honour_without_evidence_minor = Some(0);
+    taken_over.reference = Some(" ".into());
+    assert_eq!(underwriting_envelope(key, at, today, &taken_over).unwrap()["command"], plain["command"]);
 
     let value = underwriting_envelope(key, at, today, &excess_request(Some("party-9"))).unwrap();
     let text = value.to_string();

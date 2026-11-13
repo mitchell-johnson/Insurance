@@ -159,12 +159,13 @@ pub fn reinsurance_envelope(key: &str, on: NaiveDate, notice: &ReinsuranceNotice
 pub fn underwriting_envelope(key: &str, at: DateTime<Utc>, today: NaiveDate, request: &UnderwritingRequest) -> Option<Value> {
     let party = request.party.as_ref()?;
     // What a previous insurer had accepted (takeover terms) and reinsurance's
-    // own reference for a member it capped, each only where there is one.
+    // own reference for a member it capped, each only where there is one:
+    // underwriting refuses an amount of nothing or a blank reference.
     let mut entry = json!({ "entry": "group_excess", "policy": request.policy });
-    if let Some(minor) = request.honour_without_evidence_minor {
+    if let Some(minor) = request.honour_without_evidence_minor.filter(|minor| *minor > 0) {
         entry["takeover_accepted_minor"] = json!(minor);
     }
-    if let Some(reference) = &request.reference {
+    if let Some(reference) = request.reference.as_ref().filter(|r| !r.trim().is_empty()) {
         entry["reinsurance_reference"] = json!(reference);
     }
     let proposal = json!({
