@@ -298,7 +298,7 @@ Not sent from here: configuration, the driver's own commands (sweep, acknowledge
 
 ## The finance console
 
-`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, and retries a stalled feed.
+`/finance` is the staff screen for the finance ledger (`docs/finance.md`): the month-end close dashboard for a period with its checks, waivers and sign-offs, work waiting, manual journals, the trial balance, movements, sources, backdated entries, conduct figures, returns and aged suspense. From it an operator proposes a journal, someone else approves or rejects it, the appointed actuary signs an actuarial journal and the period, the finance lead waives a check with its remediation owner and date, signs off and closes the period, approves a proposed configuration, records a migration account's cut-over total, and retries a stalled feed. An operator or the lead sorts unplaced policies into accounting groups.
 
 As with the other consoles, the portal service holds none of it. It passes the questions to the `finance` module on the nodes and sends each command as the person who gave it, under the caller `finance-console`:
 
@@ -313,10 +313,10 @@ As with the other consoles, the portal service holds none of it. It passes the q
 | Route | What it does |
 | --- | --- |
 | `GET /staff/v1/finance/me` | Whether you may open the console, and your roles. |
-| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, with that question's fields as query parameters. |
+| `GET /staff/v1/finance/{question}` | One of `status`, `work`, `dashboard`, `checks`, `trial_balance`, `movements`, `sources`, `backdated`, `journal`, `conduct`, `return`, `aged_suspense`, `extract`, `accounting_groups` (counts per group), `accounting_group` (one policy, with `policy` and `partition`; `null` while unplaced), with that question's fields as query parameters. |
 | `POST /staff/v1/finance/commands` | One of that module's commands in its own JSON, with an `Idempotency-Key`. Commands only its own services send (the configuration, the core's event feed, Merkle roots, extracts, conduct facts, and the check and aged item reports other modules make) are refused. |
 
-- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range.
+- **Amounts.** That module counts journal lines in millionths of a minor unit, more than a browser number holds exactly. A line may give `signed_minor` instead (debits positive, credits negative), which the service turns into `signed_fine` exactly, refusing a figure out of range. A cut-over total may likewise come as `total_minor`. A command with no fields, such as `classify_policies`, may be sent as its name alone.
 - **Who may.** The ledger checks every role itself and keeps maker and checker apart whatever roles one person holds. A refusal for want of a role comes back as `403 authority`, any other as `409` with its code, and `503 finance_unavailable` when it has no leader.
 - **Not on the page.** A chart of accounts, a close configuration and a return definition are proposed from their files through the command route; the page only approves them.
 

@@ -266,6 +266,10 @@ pub struct Rules {
     /// decided. Zero: the rule is off.
     #[serde(default)]
     pub early_claim_days: u32,
+    /// The most that may be advanced on a death claim before it is decided,
+    /// for the funeral or the family's immediate needs. Zero: no advances.
+    #[serde(default)]
+    pub funeral_advance_max_minor: i64,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]
