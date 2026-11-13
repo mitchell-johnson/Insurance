@@ -112,6 +112,7 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "authority" => found(state.authorities.get(text(&question, "authority")?)),
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
+        "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
         "open_runs" => Ok(state.open_runs()),
         "incident" => found(state.incidents.get(text(&question, "incident")?)),
@@ -222,6 +223,17 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             claim: subject.clone(),
             amount_minor: detail.get("admitted_minor").and_then(|v| v.parse().ok()).unwrap_or(0),
         },
+        // Every change to an overpayment carries what is still owed on it.
+        ic_core::Event::Module { module, kind, subject, detail } if module == "claims" && kind.starts_with("overpayment_") => {
+            crate::Command::OverpaymentChanged {
+                claim: subject.clone(),
+                overpayment: detail.get("overpayment").cloned().unwrap_or_default(),
+                policy: detail.get("policy").cloned().unwrap_or_default(),
+                // Unreadable is taken as nothing owed: no reference is held
+                // and a repayment goes to a person.
+                outstanding_minor: detail.get("outstanding_minor").and_then(|v| v.parse().ok()).unwrap_or(0),
+            }
+        }
         ic_core::Event::Module { module, kind, subject, .. } if module == "claims" && kind == "claim_closed" => {
             crate::Command::ClaimClosed { claim: subject.clone() }
         }

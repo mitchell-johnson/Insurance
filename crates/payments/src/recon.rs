@@ -102,6 +102,7 @@ impl PaymentsState {
             let id = format!("{account}-{date}-{}", line.id);
             let expected = self.books.get_mut(account).and_then(|b| b.expected.remove(&line.reference));
             let reinsurer = (line.amount_minor > 0).then(|| reinsurer_statement(&line.reference)).flatten();
+            let repayment = (line.amount_minor > 0).then(|| self.repayables.named_by(&line.reference).cloned()).flatten();
             match expected {
                 Some(e) if e.amount_minor == line.amount_minor => {
                     matched += 1;
@@ -134,6 +135,31 @@ impl PaymentsState {
                         },
                         about: Some(About::Exception(id)),
                     });
+                }
+                // Someone paid back a claim overpayment, quoting the
+                // reference they were given. Claims records it; more than
+                // is owed waits for a person.
+                None if repayment.is_some() => {
+                    self.open_exception(
+                        tx,
+                        id.clone(),
+                        exception(ExceptionKind::UnidentifiedReceipt, line.amount_minor, &line.reference),
+                    );
+                    if let Some(owed) = repayment.filter(|o| line.amount_minor <= o.outstanding_minor) {
+                        self.push_outbox(OutboxEntry {
+                            key: format!("{}{id}", crate::repay::REPAID),
+                            instruction: Instruction::CoreAt {
+                                policy: PolicyId::from(owed.policy.as_str()),
+                                caller: "payments".to_string(),
+                                command: Box::new(ic_core::Command::Claims(Box::new(ic_core::claims_module::Command::RecordRepayment {
+                                    claim: owed.claim,
+                                    overpayment: owed.overpayment,
+                                    amount_minor: line.amount_minor,
+                                }))),
+                            },
+                            about: Some(About::Exception(id)),
+                        });
+                    }
                 }
                 None if line.amount_minor > 0 && purpose == Purpose::PremiumCollection => {
                     // A customer paid by direct credit. Cash matching decides
@@ -233,6 +259,8 @@ impl PaymentsState {
             (Some(About::Exception(id)), None) => {
                 let resolution = if done.key.starts_with(RECEIVED_FROM_REINSURER) {
                     "recorded by reinsurance against its statement"
+                } else if done.key.starts_with(crate::repay::REPAID) {
+                    "recorded by claims against its overpayment"
                 } else {
                     "applied by cash matching"
                 };

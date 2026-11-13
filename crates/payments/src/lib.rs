@@ -29,6 +29,7 @@ mod payee;
 pub mod query;
 mod recon;
 mod refund;
+pub mod repay;
 mod run;
 pub mod sweep;
 
