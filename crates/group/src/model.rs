@@ -36,6 +36,22 @@ pub struct Member {
     /// None is the menu's default plan, single.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthChoice>,
+    /// The people the member's health plan covers besides them, each a
+    /// life on the scheme policy that holds only the covers chosen for it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependants: Vec<Dependant>,
+}
+
+/// A member's partner or child on their health plan. The member gives the
+/// date of birth, which prices the cover; nothing else about them is kept.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dependant {
+    /// The member's own name for them: `partner`, `child-1`.
+    pub key: String,
+    /// `{member's life}+{key}`.
+    pub life: LifeId,
+    pub date_of_birth: NaiveDate,
+    pub joined: NaiveDate,
 }
 
 /// A member's choice from the scheme's health menu, from a date.
@@ -151,6 +167,16 @@ impl Membership {
         self.members.values().chain(self.past.iter()).find(|m| &m.life == life)
     }
 
+    /// The member a life belongs to: the member's own, or a dependant's.
+    pub fn holder(&self, life: &LifeId) -> Option<&Member> {
+        self.by_life(life).or_else(|| {
+            self.members
+                .values()
+                .chain(self.past.iter())
+                .find(|m| m.dependants.iter().any(|d| &d.life == life))
+        })
+    }
+
     pub fn by_life_mut(&mut self, life: &LifeId) -> Option<&mut Member> {
         self.members.values_mut().chain(self.past.iter_mut()).find(|m| &m.life == life)
     }
@@ -206,6 +232,7 @@ impl Membership {
                     fingerprint: change.fingerprint.clone(),
                     auto_cap_minor: None,
                     health: None,
+                    dependants: vec![],
                 });
                 true
             }

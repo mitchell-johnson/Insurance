@@ -552,6 +552,7 @@ fn origin_name(origin: LayerOrigin) -> &'static str {
         LayerOrigin::Increase => "increase",
         LayerOrigin::Indexation => "indexation",
         LayerOrigin::UnderwrittenExcess => "underwritten_excess",
+        LayerOrigin::MemberChoice => "member_choice",
     }
 }
 

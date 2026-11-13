@@ -1283,3 +1283,95 @@ fn a_retention_discount_needs_the_approvals_its_size_calls_for_and_runs_for_its_
     assert_eq!(c.state(0).policies[&other].discount_overrides[0].until, stop);
     days(&mut c, 1);
 }
+
+/// Purpose: matrix DSC-008. A discount for covers held across a customer's policies counts
+/// the covers on all of the policyholder's own policies in the group, so a second policy
+/// earns it for itself at issue and for the first policy from its next bill; a scheme the
+/// same party holds as an employer is not counted, another customer's policy is not
+/// counted, and when the second policy is cancelled the first loses the discount from its
+/// next bill.
+/// Why it matters: the discount is sold as "three covers with us". A director whose
+/// company scheme counted would get it for cover the company bought, a count that read
+/// only the one policy would never give it to the customers it is meant for, and one that
+/// never dropped would keep paying for covers no longer held.
+#[test]
+fn a_discount_for_covers_across_a_customers_policies_counts_theirs_and_not_the_scheme() {
+    let mut c = cluster(1);
+    let source = include_str!("../../../products/term_life.star")
+        .replace("code = \"term-life\"", "code = \"term-life-house\"")
+        .replace(
+            "multi_cover_discount(min_covers = 2, percent = \"5\"),",
+            r#"discounts(chain = [discount("household", "Household", "discount_household", percent_off("10"), min_group_covers(3))]),"#,
+        );
+    let product = load_product("term_life_house.star", &source).unwrap();
+    c.activate_everywhere(Command::ActivateProduct { product: Box::new(product) }).unwrap();
+    let (group, holder) = (GroupId("grp-waititi".to_string()), PartyId("party-hone".to_string()));
+    let discounts_on_latest_bill = |c: &mut Cluster, id: &PolicyId| -> Vec<String> {
+        c.take_events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                Event::PremiumDue { policy, discounts, .. } if policy == *id => Some(discounts.into_iter().map(|d| d.code).collect()),
+                _ => None,
+            })
+            .next_back()
+            .expect("the policy was billed")
+    };
+    let policy = |n: u64, trauma: Option<i64>, holder: &PartyId| {
+        let mut p = term_life(n, start(), d(1982, 3, 10), Sex::Male, false, 500_000_00, trauma, Frequency::Monthly, None);
+        p.product_code = "term-life-house".to_string();
+        p.group = group.clone();
+        p.policyholder = holder.clone();
+        p
+    };
+
+    // The company's scheme, held by the same party, and then his own life and trauma cover.
+    let mut scheme = group_scheme(60, start(), vec![member("staff-1", d(1985, 1, 1), "staff", 60_000_00)]);
+    scheme.group = group.clone();
+    scheme.policyholder = holder.clone();
+    c.submit(0, "new-business", issue_command(scheme)).unwrap();
+    let first = policy(61, Some(100_000_00), &holder);
+    let first_id = first.policy.clone();
+    c.take_events();
+    c.submit(0, "new-business", issue_command(first)).unwrap();
+    assert!(
+        discounts_on_latest_bill(&mut c, &first_id).is_empty(),
+        "two covers of his own; the scheme is the company's"
+    );
+
+    // Somebody else's policy in the same group changes nothing for him.
+    let other = policy(62, None, &PartyId("party-other".to_string()));
+    let other_id = other.policy.clone();
+    c.submit(0, "new-business", issue_command(other)).unwrap();
+    assert!(discounts_on_latest_bill(&mut c, &other_id).is_empty());
+
+    // A second policy of his own makes three covers: it has the discount from its first bill.
+    let second = policy(63, None, &holder);
+    let second_id = second.policy.clone();
+    c.submit(0, "new-business", issue_command(second)).unwrap();
+    assert_eq!(discounts_on_latest_bill(&mut c, &second_id), vec!["household".to_string()]);
+    assert_eq!(c.state(0).policies[&second_id].covers_elsewhere, 2);
+
+    // The first policy has it from its next bill, and the other customer still has none.
+    let undiscounted = latest_bill(&c, &first_id);
+    days(&mut c, 30);
+    let seen: Vec<Event> = c.take_events().into_iter().map(|r| r.event).collect();
+    let bill = |id: &PolicyId| {
+        seen.iter()
+            .rev()
+            .find_map(|e| match e {
+                Event::PremiumDue { policy, discounts, .. } if policy == id => Some(discounts.len()),
+                _ => None,
+            })
+            .expect("December was billed")
+    };
+    assert_eq!((bill(&first_id), bill(&second_id), bill(&other_id)), (1, 1, 0));
+    assert!(latest_bill(&c, &first_id) < undiscounted);
+
+    // He cancels the second policy: the first is back to two covers from its next bill.
+    let cancel = Command::CancelPolicy { policy: second_id.clone() };
+    c.submit(0, "policy-servicing", cancel).unwrap();
+    c.take_events();
+    days(&mut c, 31);
+    assert!(discounts_on_latest_bill(&mut c, &first_id).is_empty());
+    assert_eq!(latest_bill(&c, &first_id), undiscounted);
+}

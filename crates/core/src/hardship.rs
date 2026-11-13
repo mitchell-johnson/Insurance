@@ -121,7 +121,7 @@ pub(crate) fn grant(
     if policy.status != PolicyStatus::InForce {
         return Err(bad("not_in_force", "the policy is not in force"));
     }
-    if policy.covers.values().any(|c| c.formula_driven) {
+    if policy.is_scheme() {
         return Err(bad("not_retail", "a scheme's premium is not reduced this way"));
     }
     if from < ctx.date || to <= from || (to - from).num_days() > MAX_DAYS || share_bps as i128 >= WHOLE {

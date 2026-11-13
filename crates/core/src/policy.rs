@@ -66,6 +66,15 @@ pub enum LifeKind {
     UnnamedMember { member_ref: String, linked_party: Option<PartyId> },
     /// Cover expressed in aggregate for a group.
     Pool { headcount: u32, total_salary_minor: i64 },
+    /// A scheme member's partner or child. A dependant has no cover the
+    /// scheme gives automatically, only the covers chosen for them, and
+    /// leaves the scheme when their member does.
+    Dependant {
+        /// The member they are on the scheme through.
+        of: LifeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        party: Option<PartyId>,
+    },
 }
 
 /// Rating attributes of a life. These are insurance facts, not identity.
@@ -127,6 +136,9 @@ pub enum LayerOrigin {
     /// A scheme member's cover above the automatic amount, accepted by
     /// underwriting and written as its own layer on the scheme's cover.
     UnderwrittenExcess,
+    /// A cover a scheme member chose from the scheme's menu, for themselves
+    /// or a dependant: a health plan, or a level of one.
+    MemberChoice,
 }
 
 /// Who pays for an underwritten layer on a scheme member's cover.
@@ -225,6 +237,16 @@ impl Cover {
     /// A cover's sum insured on a date is the sum of its layers in force.
     pub fn sum_insured_on(&self, on: NaiveDate) -> i64 {
         self.layers.iter().filter(|l| l.in_force_on(on)).map(|l| l.sum_insured_minor).sum()
+    }
+    /// Whether a layer is one scheme member's own: cover chosen from the
+    /// scheme's menu, or underwritten cover above the automatic amount. It
+    /// is priced on that member's line and ends when they leave.
+    pub fn members_own(&self, layer: &Layer) -> bool {
+        layer.origin == LayerOrigin::MemberChoice || (self.formula_driven && layer.origin == LayerOrigin::UnderwrittenExcess)
+    }
+    /// A cover on a scheme that members choose, one at a time.
+    pub fn chosen_by_members(&self) -> bool {
+        self.layers.iter().any(|l| l.origin == LayerOrigin::MemberChoice)
     }
 }
 
@@ -603,6 +625,16 @@ pub struct Policy {
     /// Released ones are kept, so the past can still be asked about.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub interests: BTreeMap<String, crate::interest::Interest>,
+    /// Covers in force on the policyholder's other retail policies in the
+    /// same group, as last counted when this policy was last worked on. A
+    /// discount for covers held across a customer's policies reads it.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub covers_elsewhere: u32,
+    /// A group scheme: its lives are members, billed together on one
+    /// invoice. A scheme whose product has only covers that members choose
+    /// (a health-only employer plan) has no formula cover to know it by.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub scheme: bool,
     /// The scheme this one was split from, and the date.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split_from: Option<crate::group::SplitFrom>,
@@ -699,6 +731,25 @@ pub struct PaymentRecord {
 }
 
 impl Policy {
+    /// Whether this is a group scheme rather than a retail policy.
+    pub fn is_scheme(&self) -> bool {
+        self.scheme || self.covers.values().any(|c| c.formula_driven)
+    }
+    /// Who is billed for cover on a life that the member pays for: the life
+    /// itself, or for a dependant the member they are on the scheme through.
+    pub fn payer_of(&self, life: &LifeId) -> LifeId {
+        match self.lives.get(life).map(|l| &l.kind) {
+            Some(LifeKind::Dependant { of, .. }) => of.clone(),
+            _ => life.clone(),
+        }
+    }
+    /// The dependants on the scheme through a member, whether or not they
+    /// have left.
+    pub fn dependants_of<'a>(&'a self, member: &'a LifeId) -> impl Iterator<Item = &'a LifeRecord> + 'a {
+        self.lives
+            .values()
+            .filter(move |l| matches!(&l.kind, LifeKind::Dependant { of, .. } if of == member))
+    }
     pub fn is_frozen(&self) -> bool {
         self.transfer_out.is_some()
     }
@@ -771,4 +822,8 @@ impl Policy {
         self.receipts.retain(|_, r| r.received_on > keep_from);
         self.payments.retain(|_, p| p.settled_on > keep_from);
     }
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }

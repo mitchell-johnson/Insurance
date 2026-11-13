@@ -166,6 +166,13 @@ pub enum GroupEvent {
         tier: crate::terms::HealthTier,
         effective: NaiveDate,
     },
+    /// The core refused a step of a member's health plan; the rest was not
+    /// sent. What was in place before stays, and staff are told.
+    HealthPlanRefused {
+        scheme: String,
+        life: LifeId,
+        code: String,
+    },
     /// A member's letter could not be asked for; staff are told by the
     /// exception `letter_not_requested`.
     LetterNotRequested {
@@ -407,6 +414,35 @@ pub enum GroupEvent {
     SchemeTerminated {
         scheme: String,
         effective: NaiveDate,
+    },
+    /// Staff began moving members of a scheme to a new one.
+    SplitStarted {
+        scheme: String,
+        into: String,
+        new_policy: PolicyId,
+        effective: NaiveDate,
+        members: u32,
+    },
+    /// The core moved a part of the members. The new scheme exists from the
+    /// first part; `moved` counts every member moved so far.
+    MembersMoved {
+        scheme: String,
+        into: String,
+        moved: u32,
+    },
+    SplitCompleted {
+        scheme: String,
+        into: String,
+        effective: NaiveDate,
+        members: u32,
+    },
+    /// The core refused a part of the split. The members moved before it
+    /// stay on the new scheme; the rest stay where they were.
+    SplitRefused {
+        scheme: String,
+        into: String,
+        moved: u32,
+        code: String,
     },
 
     ExceptionRaised {

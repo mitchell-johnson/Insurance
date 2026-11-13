@@ -240,7 +240,9 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                         ));
                     }
                     let counted = match &d.condition {
-                        DiscountCondition::MinCovers { count } | DiscountCondition::MinLives { count } => *count > 0,
+                        DiscountCondition::MinCovers { count } | DiscountCondition::MinGroupCovers { count } | DiscountCondition::MinLives { count } => {
+                            *count > 0
+                        }
                         DiscountCondition::Frequency { frequencies } => !frequencies.is_empty(),
                         DiscountCondition::Entitlement { code } => !code.is_empty(),
                         DiscountCondition::Always => true,

@@ -86,6 +86,13 @@ pub enum ExcessDecision {
     NotProceeded,
 }
 
+/// A dependant as a member names them on a health plan choice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependantSpec {
+    pub key: String,
+    pub date_of_birth: NaiveDate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum MatchDecision {
@@ -229,6 +236,11 @@ pub enum GroupCommand {
         plan: String,
         tier: crate::terms::HealthTier,
         effective: NaiveDate,
+        /// Who else the plan covers: one for couple, at least one for
+        /// family, none for single. The whole list each time; anyone left
+        /// out comes off the plan from the date.
+        #[serde(default)]
+        dependants: Vec<DependantSpec>,
     },
 
     // --- cover above the automatic amount ---
@@ -283,6 +295,24 @@ pub enum GroupCommand {
         scheme: String,
         effective: NaiveDate,
         reason: String,
+    },
+    /// Move some of a scheme's members to a new scheme from the first day
+    /// of a billing period: part of the employer is sold or demerged. The
+    /// members go with their history, the date they joined and their
+    /// underwritten cover; they do not leave. The new scheme has its own
+    /// terms and employer and starts with the old scheme's file layouts.
+    SplitScheme {
+        scheme: String,
+        /// The new scheme's ID in this module.
+        into: String,
+        /// The new scheme policy's ID and number in the core.
+        new_policy: PolicyId,
+        new_number: String,
+        /// The employer of the new scheme: the buyer, or the part demerged.
+        employer: PartyId,
+        effective: NaiveDate,
+        employee_ids: Vec<String>,
+        terms: Box<SchemeTerms>,
     },
 
     // --- money ---
@@ -347,7 +377,8 @@ impl GroupCommand {
             | RequestExcessAgain { .. }
             | ResolveMatch { .. }
             | AgreeRenewal { .. }
-            | Terminate { .. } => &[STAFF],
+            | Terminate { .. }
+            | SplitScheme { .. } => &[STAFF],
             ReceiveFile { .. } | ApproveFile { .. } | WithdrawFile { .. } | DeclarePool { .. } => &[EMPLOYER, STAFF],
             RecordScan { .. }
             | RefuseFile { .. }

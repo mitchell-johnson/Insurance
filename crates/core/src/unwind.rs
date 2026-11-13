@@ -127,7 +127,7 @@ pub(crate) fn unwind_after(
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "only a policy in force can be unwound"));
     }
-    if policy.covers.values().any(|c| c.formula_driven) || policy.pending_invoice.is_some() {
+    if policy.is_scheme() || policy.pending_invoice.is_some() {
         return Err(Reject::new(
             "scheme_policy",
             "a scheme is corrected through its membership file, by effective date; it is not unwound as a whole",

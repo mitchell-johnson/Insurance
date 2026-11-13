@@ -162,6 +162,7 @@ impl ModalPremium {
 /// One period's bill for a policy on one life with no entitlements held.
 pub fn modal_premium(product: &ProductDefinition, annual_by_cover: &BTreeMap<String, Dec>, frequency: Frequency) -> Result<ModalPremium, RatingError> {
     let state = PricingState {
+        covers_elsewhere: 0,
         covers: annual_by_cover.len() as u32,
         lives: 1,
         frequency,

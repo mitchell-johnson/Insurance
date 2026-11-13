@@ -32,6 +32,7 @@ mod arrears;
 mod billing;
 mod cash;
 mod claims;
+pub use claims::cover_facts;
 mod earning;
 mod group;
 pub mod hardship;
@@ -47,7 +48,7 @@ pub mod voluntary;
 
 pub use command::{Command, Envelope};
 pub use event::{Event, EventRecord};
-pub use group::{preview_membership, ChangePreview, MembershipPreview, SplitFrom, SplitScheme};
+pub use group::{preview_membership, ChangePreview, ChosenCover, MembershipPreview, SetMemberCovers, SplitFrom, SplitScheme};
 pub use ic_claims as claims_module;
 pub use ids::*;
 pub use lifecycle::quote;

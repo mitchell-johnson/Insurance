@@ -11,7 +11,7 @@ use ic_product::schedule::{age_on, anniversary, policy_year};
 use ic_product::{CoverDefinition, PremiumType, ProductDefinition, RateBasis};
 
 use crate::catalog::Catalog;
-use crate::policy::{CoverStatus, Layer, LayerOrigin, LifeFactors, LifeRecord, Policy};
+use crate::policy::{CoverStatus, Layer, LifeFactors, LifeKind, LifeRecord, Policy};
 use crate::LifeId;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -86,7 +86,7 @@ pub(crate) fn retail_premium_with(
     let mut annual: BTreeMap<Line, Dec> = BTreeMap::new();
     let mut lives = std::collections::BTreeSet::new();
     for cover in policy.covers.values() {
-        if cover.status != CoverStatus::InForce || cover.formula_driven {
+        if cover.status != CoverStatus::InForce || cover.formula_driven || cover.chosen_by_members() {
             continue;
         }
         let def = product.cover(&cover.code).ok_or_else(|| PremiumError::UnknownCover(cover.code.clone()))?;
@@ -147,6 +147,7 @@ pub(crate) fn retail_premium_with(
     let overrides = crate::discount_override::in_force_on(policy, read_on);
     let covers: std::collections::BTreeSet<&str> = annual.keys().map(|l| l.cover.as_str()).collect();
     let state = PricingState {
+        covers_elsewhere: policy.covers_elsewhere,
         overrides: &overrides,
         covers: covers.len() as u32,
         lives: lives.len() as u32,
@@ -199,15 +200,15 @@ pub enum Loadings {
     ItemisedOnly,
 }
 
-/// A member's underwritten layers in force on a date, with the cover each
-/// sits on.
+/// A member's own layers in force on a date (underwritten cover above the
+/// automatic amount, and covers chosen from the scheme's menu), with the
+/// cover each sits on.
 pub fn excess_layers_on<'a>(policy: &'a Policy, life: &LifeId, on: NaiveDate) -> Vec<(&'a str, &'a Layer)> {
     policy
         .covers
         .values()
-        .filter(|c| c.formula_driven)
-        .flat_map(|c| c.layers.iter().map(move |l| (c.code.as_str(), l)))
-        .filter(|(_, l)| l.life == *life && l.origin == LayerOrigin::UnderwrittenExcess && l.in_force_on(on))
+        .flat_map(|c| c.layers.iter().filter(|l| c.members_own(l)).map(move |l| (c.code.as_str(), l)))
+        .filter(|(_, l)| l.life == *life && l.in_force_on(on))
         .collect()
 }
 
@@ -273,7 +274,13 @@ pub fn member_premium_detail(
 ) -> Result<ModalPremium, PremiumError> {
     let rated_on = rating_date(policy, period_start)?;
     let mut annual: BTreeMap<String, Dec> = BTreeMap::new();
-    for cover in policy.covers.values().filter(|c| c.formula_driven && c.status == CoverStatus::InForce) {
+    // A dependant has no cover the scheme gives automatically.
+    let dependant = policy.lives.get(life_id).is_some_and(|l| matches!(l.kind, LifeKind::Dependant { .. }));
+    for cover in policy
+        .covers
+        .values()
+        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce && !dependant)
+    {
         let def = product.cover(&cover.code).ok_or_else(|| PremiumError::UnknownCover(cover.code.clone()))?;
         let table = catalog
             .rate_table_on(&def.rating.table, rated_on, &policy.group)
@@ -302,6 +309,28 @@ pub fn member_premium_detail(
             premium += cover_premium(def, table, &rf, layer.sum_insured_minor)?;
         }
         annual.insert(cover.code.clone(), premium);
+    }
+    // Covers chosen from the scheme's menu: each is the life's own, at the
+    // level of excess chosen, rated on the life's own details.
+    for (code, layer) in excess {
+        let def = product.cover(code).ok_or_else(|| PremiumError::UnknownCover(code.to_string()))?;
+        if def.rating.premium_type == PremiumType::GroupUnitRate {
+            continue;
+        }
+        let table = catalog
+            .rate_table_on(&def.rating.table, rated_on, &policy.group)
+            .ok_or_else(|| PremiumError::NoRateTable(def.rating.table.clone()))?;
+        let shown = loadings == Loadings::All || layer.loading_itemised;
+        let rf = RatingFactors {
+            age: f.date_of_birth.map_or(0, |dob| age_on(dob, rated_on)),
+            sex: f.sex,
+            smoker: f.smoker,
+            category: f.category.clone(),
+            occupation_class: f.occupation_class.clone(),
+            excess_option: layer.excess_option.clone(),
+            loadings: if shown { layer.loadings.clone() } else { vec![] },
+        };
+        *annual.entry(code.to_string()).or_insert(Dec::from(0i64)) += cover_premium(def, table, &rf, layer.sum_insured_minor)?;
     }
     Ok(modal_premium(product, &annual, policy.frequency)?)
 }

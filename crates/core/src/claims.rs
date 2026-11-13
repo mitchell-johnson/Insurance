@@ -137,7 +137,7 @@ fn status_code(status: PolicyStatus) -> String {
 
 /// The cover check: what the policy record says about a cover and a life on
 /// the event date, as known now. Facts only.
-fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>, on: NaiveDate) -> Result<CoverFacts, Reject> {
+pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>, on: NaiveDate) -> Result<CoverFacts, Reject> {
     let p = state
         .policies
         .get(&PolicyId(policy.to_string()))
@@ -152,15 +152,20 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
     let life_party = record.and_then(|r| match &r.kind {
         LifeKind::Named { party } => Some(party.0.clone()),
         LifeKind::UnnamedMember { linked_party, .. } => linked_party.as_ref().map(|p| p.0.clone()),
+        LifeKind::Dependant { party, .. } => party.as_ref().map(|p| p.0.clone()),
         LifeKind::Pool { .. } => None,
     });
     // Standing on the event date: what is unpaid now was unpaid then. A lapse
     // wrote the unpaid premium off, so for a lapsed policy the question is
     // asked of the receivables as they stood when it lapsed.
     let lapsed = p.lapse.as_ref().filter(|_| p.status == PolicyStatus::Lapsed);
+    // On a scheme, what one member owes for cover of their own (or of their
+    // dependants) is that member's standing and nobody else's.
+    let payer = life_id.as_ref().map(|l| p.payer_of(l));
+    let theirs = |r: &&crate::policy::Receivable| r.payer.is_none() || r.payer == payer;
     let unpaid: Vec<&crate::policy::Receivable> = match lapsed {
         Some(l) => l.receivables_before.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
-        None => p.receivables.iter().filter(|r| !r.closed && r.outstanding_minor > 0).collect(),
+        None => p.receivables.iter().filter(|r| !r.closed && r.outstanding_minor > 0).filter(theirs).collect(),
     };
     // Premium paid since the event for a period that was due by it: owed on
     // the event date, though nothing is owed on it now.
@@ -168,6 +173,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         .receivables
         .iter()
         .filter(|r| !r.closed && r.outstanding_minor == 0 && r.total_minor > 0 && r.due <= on && r.settled_on.is_some_and(|s| s > on))
+        .filter(theirs)
         .collect();
     let oldest = unpaid.iter().chain(&settled_since).map(|r| r.due).min();
     let standing = product.and_then(|pr| pr.arrears()).map(|rules| {
@@ -195,7 +201,7 @@ fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&str>,
         life_on_policy,
         life_party,
         policy_year_start: ic_product::schedule::anniversary(p.inception, ic_product::schedule::policy_year(p.inception, on)),
-        ends_on_death: p.lives.len() == 1 && p.lives.values().all(|l| matches!(l.kind, LifeKind::Named { .. })) && p.covers.values().all(|c| !c.formula_driven),
+        ends_on_death: p.lives.len() == 1 && p.lives.values().all(|l| matches!(l.kind, LifeKind::Named { .. })) && !p.is_scheme(),
         policyholder: p.policyholder.0.clone(),
         product_code: p.product_code.clone(),
         product_version: p.product_hash.clone(),

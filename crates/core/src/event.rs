@@ -477,6 +477,14 @@ pub enum Event {
         receipt: String,
         amount_minor: i64,
     },
+    /// A member moved to another scheme in a split, and the credit they
+    /// held on the old scheme went with them.
+    MemberCreditMoved {
+        policy: PolicyId,
+        new_policy: PolicyId,
+        life: LifeId,
+        amount_minor: i64,
+    },
     /// A member's credit was set against what the member owes.
     MemberCreditApplied {
         policy: PolicyId,
@@ -756,6 +764,19 @@ pub enum Event {
     /// history and underwritten cover: a sale or a demerger. They did not
     /// leave. `layers` names each underwritten layer that moved, as life,
     /// cover and layer ID, the same on both schemes.
+    /// The covers a scheme member chose from the scheme's menu, for
+    /// themselves or a dependant, as they stand from a date. The layers
+    /// that ended and started are in `LayerEnded` and `LayerAdded` before it.
+    MemberCoversSet {
+        policy: PolicyId,
+        life: LifeId,
+        /// Who is billed for the covers the member pays for: the life, or
+        /// for a dependant their member.
+        payer: LifeId,
+        effective: NaiveDate,
+        covers: Vec<crate::group::ChosenCover>,
+        reference: String,
+    },
     SchemeSplit {
         policy: PolicyId,
         new_policy: PolicyId,

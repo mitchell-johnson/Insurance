@@ -302,6 +302,7 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<
             let party = p.lives.get(&layer.life).and_then(|l| match &l.kind {
                 LifeKind::Named { party } => Some(party),
                 LifeKind::UnnamedMember { linked_party, .. } => linked_party.as_ref(),
+                LifeKind::Dependant { party, .. } => party.as_ref(),
                 LifeKind::Pool { .. } => None,
             });
             if may("cover", party, false)? {

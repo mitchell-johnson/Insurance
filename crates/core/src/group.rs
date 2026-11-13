@@ -1,10 +1,11 @@
 //! Group scheme administration in the core: membership as effective-dated
 //! events, scheme billing in chunks, and retrospective premium adjustment.
 
+use std::collections::{BTreeSet, VecDeque};
 use std::ops::Bound;
 
 use chrono::{Days, NaiveDate};
-use ic_ledger::Ledger;
+use ic_ledger::{Dimensions, Ledger};
 use ic_product::schedule::period_start;
 use ic_product::ProductDefinition;
 
@@ -21,6 +22,7 @@ use crate::machine::{CoreState, Ctx, Reject, APPLY_BUDGET, MAX_MEMBERSHIP_CHUNK,
 use crate::policy::{
     CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind, Standing,
 };
+use crate::postings::PostingSet;
 use crate::premium::{add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
 use crate::voluntary;
 use crate::{LifeId, PartyId, PolicyId};
@@ -100,7 +102,8 @@ pub(crate) fn bill_scheme_step(
             (p, line)
         };
         add_premium(&mut priced, &p)?;
-        members += declared.map_or(1, |d| d.headcount);
+        // A dependant is covered but is not a member.
+        members += declared.map_or(u32::from(!matches!(life.kind, LifeKind::Dependant { .. })), |d| d.headcount);
         loading_minor += p.total() - line;
         lines.push((id.clone(), line));
     }
@@ -179,6 +182,8 @@ fn bill_member(
     } else {
         (ReceivableKind::Period, "member_premium_due")
     };
+    // A dependant's cover is billed to the member they are covered through.
+    let life = &policy.payer_of(life);
     if let Some(receivable) = raise_receivable_for(ledger, policy, ctx, bill, kind, period, due, entry, Some(life))? {
         ctx.emit(Event::MemberPremiumBilled {
             policy: policy.id.clone(),
@@ -206,38 +211,45 @@ pub(crate) fn end_member_paid_layers(
     life: &LifeId,
 ) -> Result<(Vec<(String, u32)>, NaiveDate), Reject> {
     let effective = ctx.date;
-    let before = member_layers(policy, life);
-    let mut after = before.clone();
-    let mut ended = Vec::new();
-    for (cover, l) in &mut after {
-        if !l.member_pays.is_nothing() && l.start <= effective && l.end.is_none_or(|e| e > effective) {
-            l.end = Some(effective);
-            ended.push((cover.clone(), l.id, l.sum_insured_minor));
+    // The member's own cover, and their dependants' cover that they pay for.
+    let mut lives = vec![life.clone()];
+    lives.extend(policy.dependants_of(life).map(|l| l.id.clone()));
+    let mut all = Vec::new();
+    for life in &lives {
+        let before = member_layers(policy, life);
+        let mut after = before.clone();
+        let mut ended = Vec::new();
+        for (cover, l) in &mut after {
+            if !l.member_pays.is_nothing() && l.start <= effective && l.end.is_none_or(|e| e > effective) {
+                l.end = Some(effective);
+                ended.push((cover.clone(), l.id, l.sum_insured_minor));
+            }
         }
-    }
-    if ended.is_empty() {
-        return Ok((vec![], effective));
-    }
-    let d = match policy.lives.get(life) {
-        Some(record) => deltas(catalog, product, policy, life, effective, same_details(record), &before, &after)?,
-        None => Deltas::default(),
-    };
-    ctx.work += d.work;
-    for (cover, id, sum_insured_minor) in &ended {
-        if let Some(l) = policy.covers.get_mut(cover).and_then(|c| c.layers.iter_mut().find(|l| l.id == *id)) {
-            l.end = Some(effective);
+        if ended.is_empty() {
+            continue;
         }
-        ctx.emit(Event::LayerEnded {
-            policy: policy.id.clone(),
-            cover: cover.clone(),
-            layer: *id,
-            life: life.clone(),
-            effective,
-            sum_insured_minor: *sum_insured_minor,
-        });
+        let d = match policy.lives.get(life) {
+            Some(record) => deltas(catalog, product, policy, life, effective, same_details(record), &before, &after)?,
+            None => Deltas::default(),
+        };
+        ctx.work += d.work;
+        for (cover, id, sum_insured_minor) in &ended {
+            if let Some(l) = policy.covers.get_mut(cover).and_then(|c| c.layers.iter_mut().find(|l| l.id == *id)) {
+                l.end = Some(effective);
+            }
+            ctx.emit(Event::LayerEnded {
+                policy: policy.id.clone(),
+                cover: cover.clone(),
+                layer: *id,
+                life: life.clone(),
+                effective,
+                sum_insured_minor: *sum_insured_minor,
+            });
+        }
+        post_deltas(ledger, policy, ctx, life, effective, d)?;
+        all.extend(ended.into_iter().map(|(cover, id, _)| (cover, id)));
     }
-    post_deltas(ledger, policy, ctx, life, effective, d)?;
-    Ok((ended.into_iter().map(|(cover, id, _)| (cover, id)).collect(), effective))
+    Ok((all, effective))
 }
 
 /// Billed periods a change effective on `effective` reaches into.
@@ -275,15 +287,15 @@ impl Deltas {
     }
 }
 
-/// A member's underwritten layers on formula-driven cover, with the cover
-/// each sits on, copied out so the policy can change underneath.
+/// A member's own layers (underwritten cover above the automatic amount and
+/// covers chosen from the menu), with the cover each sits on, copied out so
+/// the policy can change underneath.
 fn member_layers(policy: &Policy, life: &LifeId) -> Vec<(String, Layer)> {
     policy
         .covers
         .values()
-        .filter(|c| c.formula_driven)
-        .flat_map(|c| c.layers.iter().map(move |l| (c.code.clone(), l.clone())))
-        .filter(|(_, l)| l.life == *life && l.origin == LayerOrigin::UnderwrittenExcess)
+        .flat_map(|c| c.layers.iter().filter(|l| c.members_own(l)).map(move |l| (c.code.clone(), l.clone())))
+        .filter(|(_, l)| l.life == *life)
         .collect()
 }
 
@@ -397,6 +409,7 @@ fn party_of(kind: &LifeKind) -> Option<PartyId> {
     match kind {
         LifeKind::Named { party } => Some(party.clone()),
         LifeKind::UnnamedMember { linked_party, .. } => linked_party.clone(),
+        LifeKind::Dependant { party, .. } => party.clone(),
         LifeKind::Pool { .. } => None,
     }
 }
@@ -416,7 +429,7 @@ struct Staged {
     /// Underwritten layers that end with a leave: cover, layer, sum insured.
     ended: Vec<(String, u32, i64)>,
     /// Underwritten layers that come back with a reinstatement.
-    restored: Vec<LayerInfo>,
+    restored: Vec<(LayerInfo, LayerOrigin)>,
 }
 
 /// Validate a chunk of membership changes against the policy and price both
@@ -431,7 +444,7 @@ fn stage(
     if policy.status != PolicyStatus::InForce {
         return Err(Reject::new("not_in_force", "membership can only change on a scheme in force"));
     }
-    if !policy.covers.values().any(|c| c.formula_driven) {
+    if !policy.is_scheme() {
         return Err(Reject::new("not_a_scheme", "this policy is not a group scheme"));
     }
     if policy.pending_invoice.is_some() {
@@ -448,7 +461,8 @@ fn stage(
     let mut staged: Vec<Staged> = Vec::new();
     let mut scratch = policy.clone();
     let mut estimated_work = 0u32;
-    for change in changes {
+    let mut queue: VecDeque<MemberChange> = changes.into();
+    while let Some(change) = queue.pop_front() {
         let life_id = match &change {
             MemberChange::Joined { life, .. } => life.id.clone(),
             MemberChange::Left { life, .. } | MemberChange::Changed { life, .. } | MemberChange::Reinstated { life } => life.clone(),
@@ -470,6 +484,15 @@ fn stage(
             MemberChange::Joined { life, .. } => {
                 if existing.is_some() {
                     return Err(Reject::new("member_exists", format!("member {life_id} is already on the scheme")));
+                }
+                if let LifeKind::Dependant { of, .. } = &life.kind {
+                    let member = scratch.lives.get(of).filter(|m| m.in_force_on(effective));
+                    if !member.is_some_and(|m| !matches!(m.kind, LifeKind::Dependant { .. } | LifeKind::Pool { .. })) {
+                        return Err(Reject::new(
+                            "unknown_member",
+                            format!("dependant {life_id} joins through a member of the scheme on {effective}, and {of} is not one"),
+                        ));
+                    }
                 }
                 (None, Some(life.factors.clone()))
             }
@@ -521,12 +544,20 @@ fn stage(
                 if let Some(l) = scratch.lives.get_mut(life) {
                     l.left = Some(*effective);
                 }
-                // Underwritten cover is the member's while they are a member.
-                for cover in scratch.covers.values_mut().filter(|c| c.formula_driven) {
+                // Dependants are on the scheme through their member.
+                for dependant in scratch.dependants_of(life).filter(|d| d.left.is_none()) {
+                    queue.push_back(MemberChange::Left {
+                        life: dependant.id.clone(),
+                        effective: (*effective).max(dependant.joined),
+                    });
+                }
+                // A member's own cover is theirs while they are a member.
+                for cover in scratch.covers.values_mut() {
+                    let formula = cover.formula_driven;
                     for layer in cover
                         .layers
                         .iter_mut()
-                        .filter(|l| l.life == *life && l.origin == LayerOrigin::UnderwrittenExcess)
+                        .filter(|l| l.life == *life && (l.origin == LayerOrigin::MemberChoice || (formula && l.origin == LayerOrigin::UnderwrittenExcess)))
                     {
                         if layer.end.is_none_or(|e| e > *effective) {
                             layer.end = Some((*effective).max(layer.start));
@@ -550,23 +581,30 @@ fn stage(
                     l.left = None;
                     party = party_of(&l.kind);
                 }
-                for cover in scratch.covers.values_mut().filter(|c| c.formula_driven) {
-                    let (code, cover_type) = (cover.code.clone(), cover.cover_type.clone());
+                // Dependants who left with the member come back with them.
+                for dependant in scratch.dependants_of(life).filter(|d| d.left == Some(effective)) {
+                    queue.push_back(MemberChange::Reinstated { life: dependant.id.clone() });
+                }
+                for cover in scratch.covers.values_mut() {
+                    let (code, cover_type, formula) = (cover.code.clone(), cover.cover_type.clone(), cover.formula_driven);
                     for layer in cover
                         .layers
                         .iter_mut()
-                        .filter(|l| l.life == *life && l.origin == LayerOrigin::UnderwrittenExcess)
+                        .filter(|l| l.life == *life && (l.origin == LayerOrigin::MemberChoice || (formula && l.origin == LayerOrigin::UnderwrittenExcess)))
                     {
                         if layer.end == Some(effective) && layer.start < effective {
                             layer.end = None;
-                            restored.push(LayerInfo {
-                                cover: code.clone(),
-                                cover_type: cover_type.clone(),
-                                layer: layer.id,
-                                life: life.clone(),
-                                sum_insured_minor: layer.sum_insured_minor,
-                                start: layer.start,
-                            });
+                            restored.push((
+                                LayerInfo {
+                                    cover: code.clone(),
+                                    cover_type: cover_type.clone(),
+                                    layer: layer.id,
+                                    life: life.clone(),
+                                    sum_insured_minor: layer.sum_insured_minor,
+                                    start: layer.start,
+                                },
+                                layer.origin,
+                            ));
                         }
                     }
                 }
@@ -654,11 +692,11 @@ pub(crate) fn apply_membership(
                 sum_insured_minor,
             });
         }
-        for layer in s.restored {
+        for (layer, origin) in s.restored {
             ctx.emit(Event::LayerAdded {
                 policy: policy.id.clone(),
                 layer,
-                origin: LayerOrigin::UnderwrittenExcess,
+                origin,
                 continues: None,
             });
         }
@@ -985,12 +1023,15 @@ pub(crate) fn split(
         if policy.lives.get(life).is_some_and(|l| matches!(l.kind, LifeKind::Pool { .. })) {
             return Err(Reject::new("pool_life", format!("{life} is a pool of members, which a split cannot divide")));
         }
-        let owes = policy.receivables.iter().any(|r| r.payer.as_ref() == Some(life) && r.outstanding_minor != 0);
-        if owes || ledger.natural_balance(&accounts::member_suspense(&policy.id, life, c).id) != 0 {
-            return Err(Reject::new(
-                "member_money",
-                format!("{life} owes or is owed money for cover they pay for; settle it before the split"),
-            ));
+    }
+    for life in &spec.lives {
+        let through = match policy.lives.get(life).map(|l| &l.kind) {
+            Some(LifeKind::Dependant { of, .. }) => Some(of),
+            _ => None,
+        };
+        let left_behind = policy.dependants_of(life).any(|d| d.in_force_on(spec.effective) && !spec.lives.contains(&d.id));
+        if through.is_some_and(|of| !spec.lives.contains(of)) || left_behind {
+            return Err(Reject::new("dependants", format!("{life}: a member and their dependants move together")));
         }
     }
     let staying = policy
@@ -1020,6 +1061,8 @@ pub(crate) fn split(
     let changes = spec
         .lives
         .iter()
+        // A dependant leaves with their member.
+        .filter(|life| !policy.lives.get(*life).is_some_and(|l| matches!(l.kind, LifeKind::Dependant { .. })))
         .map(|life| MemberChange::Left {
             life: life.clone(),
             effective: spec.effective,
@@ -1058,6 +1101,8 @@ pub(crate) fn split(
                 variations: policy.variations.clone(),
                 declined_anniversaries: policy.declined_anniversaries.clone(),
                 split_from: Some(origin),
+                scheme: policy.scheme,
+                covers_elsewhere: 0,
                 lives: Default::default(),
                 reopen_windows: Default::default(),
                 notices: Default::default(),
@@ -1104,6 +1149,28 @@ pub(crate) fn split(
             cover.layers.push(layer);
         }
     }
+    // A moved member's credit goes with them, to meet their bills on the
+    // new scheme. What they owe for cover the old scheme gave stays owed
+    // there.
+    for life in &spec.lives {
+        let credit = i64::try_from(voluntary::credit_minor(ledger, policy, life)).unwrap_or(0);
+        if credit <= 0 {
+            continue;
+        }
+        new.member_accounts.insert(life.clone());
+        let mut set = PostingSet::new();
+        set.debit(accounts::member_suspense(&policy.id, life, c), credit as i128, Dimensions::default());
+        set.credit(accounts::member_suspense(&new.id, life, c), credit as i128, Dimensions::default());
+        let postings = set.into_postings(ledger)?;
+        let detail = std::collections::BTreeMap::from([("to_policy".to_string(), new.id.to_string())]);
+        ctx.post(ledger, "member_credit_moved", Some(policy), ctx.date, postings, detail)?;
+        ctx.emit(Event::MemberCreditMoved {
+            policy: policy.id.clone(),
+            new_policy: new.id.clone(),
+            life: life.clone(),
+            amount_minor: credit,
+        });
+    }
     ctx.emit(Event::SchemeSplit {
         policy: policy.id.clone(),
         new_policy: new.id.clone(),
@@ -1113,4 +1180,212 @@ pub(crate) fn split(
         layers: moved,
     });
     Ok(new)
+}
+
+/// One cover chosen for a life from a scheme's menu.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChosenCover {
+    pub code: String,
+    /// The level of excess, where the cover offers a choice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excess_option: Option<String>,
+    /// The member pays for this cover themselves. Otherwise the employer
+    /// does, on the scheme's invoice. A dependant's cover the member pays
+    /// for is billed to the member.
+    #[serde(default)]
+    pub member_pays: bool,
+}
+
+/// Set the covers a scheme member has chosen from the scheme's menu, for
+/// themselves or for one dependant: the whole set, from a date. Covers no
+/// longer in the set end that day, new ones start, and a cover whose level
+/// and payer are unchanged carries on untouched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetMemberCovers {
+    pub policy: PolicyId,
+    pub life: LifeId,
+    pub covers: Vec<ChosenCover>,
+    pub effective: NaiveDate,
+    /// The enrolment or change this comes from.
+    pub reference: String,
+}
+
+impl SetMemberCovers {
+    pub fn allowed_callers(&self) -> &'static [&'static str] {
+        &["group-admin"]
+    }
+}
+
+/// Apply [`SetMemberCovers`]. Premium for periods already billed is adjusted
+/// from the date, for whoever pays each cover.
+pub(crate) fn set_member_covers(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: SetMemberCovers) -> Result<(), Reject> {
+    if policy.status != PolicyStatus::InForce {
+        return Err(Reject::new("not_in_force", "cover can only change on a scheme in force"));
+    }
+    if !policy.is_scheme() {
+        return Err(Reject::new("not_a_scheme", "this policy is not a group scheme"));
+    }
+    if policy.pending_invoice.is_some() {
+        return Err(Reject::new("invoice_in_progress", "a scheme invoice is being built; retry shortly"));
+    }
+    if !crate::interest::plain(&spec.reference) {
+        return Err(Reject::new("invalid_choice", "the reference is a plain identifier"));
+    }
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?
+        .clone();
+    let effective = spec.effective;
+    let limit = ctx
+        .date
+        .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))
+        .ok_or_else(|| Reject::new("date", "date out of range"))?;
+    if effective < limit || effective < policy.inception {
+        return Err(Reject::new("backdating_limit", format!("{effective} is outside the backdating limit")));
+    }
+    if effective > ctx.date {
+        return Err(Reject::new("future_dated", format!("{effective} is after the business date")));
+    }
+    let record = policy
+        .lives
+        .get(&spec.life)
+        .filter(|l| l.in_force_on(effective) && !matches!(l.kind, LifeKind::Pool { .. }))
+        .ok_or_else(|| Reject::new("unknown_member", format!("{} is not on the scheme on {effective}", spec.life)))?
+        .clone();
+    let dependant = matches!(record.kind, LifeKind::Dependant { .. });
+    // What the life would hold: the scheme's automatic covers for a member,
+    // and the covers chosen.
+    let mut held: BTreeSet<&str> = policy
+        .covers
+        .values()
+        .filter(|c| c.formula_driven && c.status == CoverStatus::InForce && !dependant)
+        .map(|c| c.code.as_str())
+        .collect();
+    for chosen in &spec.covers {
+        let def = product
+            .cover(&chosen.code)
+            .filter(|d| d.rating.basis == RateBasis::PerLife && d.rating.premium_type != ic_product::PremiumType::GroupUnitRate)
+            .ok_or_else(|| Reject::new("not_on_menu", format!("{} is not a cover this scheme's members choose", chosen.code)))?;
+        if !held.insert(chosen.code.as_str()) {
+            return Err(Reject::new("invalid_choice", format!("{} is chosen twice", chosen.code)));
+        }
+        if !def.accepts_excess(chosen.excess_option.as_deref()) {
+            return Err(Reject::new(
+                "excess_option",
+                format!("cover {}: choose one of the excess levels it offers, or none where it offers none", chosen.code),
+            ));
+        }
+    }
+    product
+        .check_composition(&held)
+        .map_err(|e| Reject::new("composition", format!("{}: {e}", spec.life)))?;
+
+    let before = member_layers(policy, &spec.life);
+    let chosen_layers = || before.iter().filter(|(_, l)| l.origin == LayerOrigin::MemberChoice);
+    if chosen_layers().any(|(_, l)| l.start > effective || l.end.is_some_and(|e| e > effective)) {
+        return Err(Reject::new(
+            "later_change",
+            format!("{}'s covers were set from a later date; a change is made from that date on", spec.life),
+        ));
+    }
+    let mut after = before.clone();
+    let mut kept: BTreeSet<String> = BTreeSet::new();
+    let mut ended: Vec<(String, u32)> = Vec::new();
+    for (code, l) in after.iter_mut().filter(|(_, l)| l.origin == LayerOrigin::MemberChoice && l.end.is_none()) {
+        let same = spec
+            .covers
+            .iter()
+            .any(|c| c.code == *code && c.excess_option == l.excess_option && c.member_pays == (l.member_pays == MemberPays::All));
+        if same {
+            kept.insert(code.clone());
+        } else {
+            l.end = Some(effective);
+            ended.push((code.clone(), l.id));
+        }
+    }
+    let mut added: Vec<(String, Layer)> = Vec::new();
+    for chosen in spec.covers.iter().filter(|c| !kept.contains(&c.code)) {
+        let id = policy.covers.get(&chosen.code).and_then(|c| c.layers.iter().map(|l| l.id).max()).unwrap_or(0) + 1;
+        let layer = Layer {
+            id,
+            life: spec.life.clone(),
+            start: effective,
+            end: None,
+            sum_insured_minor: 0,
+            origin: LayerOrigin::MemberChoice,
+            excess_option: chosen.excess_option.clone(),
+            loadings: vec![],
+            exclusions: vec![],
+            loading_itemised: false,
+            rated_from: None,
+            member_pays: if chosen.member_pays { MemberPays::All } else { MemberPays::Nothing },
+        };
+        after.push((chosen.code.clone(), layer.clone()));
+        added.push((chosen.code.clone(), layer));
+    }
+    if ended.is_empty() && added.is_empty() {
+        // The set already stands: the same command sent again.
+        return Ok(());
+    }
+    // A cover nobody on the scheme has chosen before starts with this choice.
+    let mut new_covers = Vec::new();
+    for (code, _) in added.iter().filter(|(code, _)| !policy.covers.contains_key(code)) {
+        let Some(def) = product.cover(code) else { continue };
+        let mut definitions = Vec::new();
+        for id in &def.definitions {
+            definitions.push(
+                catalog
+                    .bind_definition(id, effective)
+                    .ok_or_else(|| Reject::new("unknown_definition", format!("definition {id} has no version in force on {effective}")))?,
+            );
+        }
+        new_covers.push(crate::policy::Cover {
+            code: def.code.clone(),
+            cover_type: def.cover_type.clone(),
+            status: CoverStatus::InForce,
+            start: effective,
+            definitions,
+            layers: vec![],
+            formula_driven: false,
+        });
+    }
+    let d = deltas(catalog, &product, policy, &spec.life, effective, same_details(&record), &before, &after)?;
+    ctx.work += d.work;
+
+    for cover in new_covers {
+        policy.covers.insert(cover.code.clone(), cover);
+    }
+    for (code, id) in ended {
+        if let Some(l) = policy.covers.get_mut(&code).and_then(|c| c.layers.iter_mut().find(|l| l.id == id)) {
+            l.end = Some(effective);
+            ctx.emit(Event::LayerEnded {
+                policy: policy.id.clone(),
+                cover: code,
+                layer: id,
+                life: spec.life.clone(),
+                effective,
+                sum_insured_minor: 0,
+            });
+        }
+    }
+    for (code, layer) in added {
+        if let Some(cover) = policy.covers.get_mut(&code) {
+            cover.layers.push(layer.clone());
+            ctx.emit(Event::LayerAdded {
+                policy: policy.id.clone(),
+                layer: layer_info(cover, &layer),
+                origin: LayerOrigin::MemberChoice,
+                continues: None,
+            });
+        }
+    }
+    ctx.emit(Event::MemberCoversSet {
+        policy: policy.id.clone(),
+        payer: policy.payer_of(&spec.life),
+        life: spec.life.clone(),
+        effective,
+        covers: spec.covers,
+        reference: spec.reference,
+    });
+    post_deltas(ledger, policy, ctx, &spec.life, effective, d)
 }

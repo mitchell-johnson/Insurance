@@ -41,7 +41,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     let cover = policy
         .covers
         .get(&spec.cover)
-        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
+        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
         .ok_or_else(unknown_cover)?;
     let def = product.cover(&spec.cover).ok_or_else(unknown_cover)?;
     if spec.start.is_some_and(|s| s < policy.inception || s > ctx.date) {
@@ -354,7 +354,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     let cover = policy
         .covers
         .get(spec.cover)
-        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
+        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
         .ok_or_else(|| {
             Reject::new(
                 "unknown_cover",
@@ -497,7 +497,7 @@ pub(crate) fn approve_reinstatement(catalog: &Catalog, policy: &mut Policy, ctx:
         let cover = policy
             .covers
             .get(&t.cover)
-            .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
+            .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
             .ok_or_else(|| Reject::new("unknown_cover", format!("{} is not a cover on this policy that is priced per life", t.cover)))?;
         if !cover.layers.iter().any(|l| l.life == t.life && l.in_force_on(today)) {
             return Err(Reject::new("unknown_life", format!("life {} has no {} cover to reinstate", t.life, t.cover)));

@@ -38,7 +38,7 @@ fn plain(s: &str) -> bool {
 }
 
 fn retail(policy: &Policy) -> Result<(), Reject> {
-    if policy.covers.values().any(|c| c.formula_driven) {
+    if policy.is_scheme() {
         return Err(Reject::new(
             "not_retail",
             "a scheme is not avoided or varied as a whole; the member's own cover is ended or altered",

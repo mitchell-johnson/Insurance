@@ -225,7 +225,11 @@ pub(crate) fn for_claim(
     let before = policy.clone();
     let mut cuts = Vec::new();
     for target in std::iter::once(code).chain(def.reduces.iter().map(String::as_str)) {
-        let Some(cover) = policy.covers.get(target).filter(|c| c.status == CoverStatus::InForce && !c.formula_driven) else {
+        let Some(cover) = policy
+            .covers
+            .get(target)
+            .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
+        else {
             continue;
         };
         let mut lives: Vec<LifeId> = vec![life.clone()];
@@ -336,7 +340,7 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     let cover = policy
         .covers
         .get(&spec.cover)
-        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven)
+        .filter(|c| c.status == CoverStatus::InForce && !c.formula_driven && !c.chosen_by_members())
         .ok_or_else(unknown_cover)?;
     let def = product.cover(&spec.cover).ok_or_else(unknown_cover)?;
     let effective = ctx.date.max(policy.inception);

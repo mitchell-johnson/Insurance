@@ -603,6 +603,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             fingerprint: None,
             auto_cap_minor: None,
             health: None,
+            dependants: vec![],
         }],
         pools: vec![],
     };
@@ -969,4 +970,102 @@ fn a_continued_cover_is_the_proposal_underwriting_agreed() {
     );
     assert_eq!(continuation_answer(&ended("group_excess", "grp-cont:harbour:7")), None);
     assert_eq!(continuation_answer(&ended("group_continuation", "grp-uw:harbour:7")), None);
+}
+
+/// Purpose: the driver's connections to the documents, commission and underwriting modules
+/// reach those modules on a real node and read their real answers: a member's letter is
+/// taken, a scheme layer the commission module cannot place yet is tried again, and a
+/// continuation underwriting cannot open is reported as the module answered it.
+/// Why it matters: the shapes are pinned against each module's types elsewhere; this is
+/// the network path itself. A connection that never reached the module, or misread its
+/// reply, would leave letters unsent, brokers unpaid or leavers' cover unasked with the
+/// outbox looking merely slow.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_driver_reaches_documents_commission_and_underwriting_on_a_real_node() {
+    let dir = std::env::temp_dir().join(format!("ic-group-peers-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let addr = format!("127.0.0.1:{port}");
+    let auth = ClusterAuth::tokens(vec!["test-cluster-token-0123456789abcdef".to_string()]).unwrap();
+    let settings = Settings {
+        id: 1,
+        listen: addr.parse().unwrap(),
+        data_dir: dir.join("node-1"),
+        partitions: 1,
+        peers: BTreeMap::from([(1, addr.clone())]),
+        bootstrap: true,
+        heartbeat_ms: 50,
+        auth: auth.clone(),
+        cold: ColdTarget::Dir(dir.join("cold")),
+        events: EventTarget::Discard,
+        segment_entries: 1000,
+        snapshot_every: 1000,
+    };
+    let modules = vec![
+        ic_documents::module::module_spec().unwrap(),
+        ic_distribution::host::module_spec().unwrap(),
+        ic_underwriting::module_spec().unwrap(),
+    ];
+    let node = server::start_with(settings, modules).await.unwrap();
+    let client = ClusterClient::new(vec![addr.clone()]).with_auth(auth);
+    let fake = FakeAzure::start().await;
+    let credential = AzureCredential::static_token(TOKEN);
+    let peers = ClusterPeers::new(
+        client,
+        Duration::from_secs(20),
+        "reinsurance",
+        "underwriting",
+        "distribution",
+        "documents",
+        EventHubsSink::new(&fake.base, "group-events", credential),
+    );
+    let day = d(2027, 12, 1);
+
+    let letter = ic_group::event::MemberLetter {
+        request: format!("grp:absence_started:harbour:E002:{day}"),
+        kind: "absence_started".into(),
+        party: party("party-E002"),
+        policy: ic_core::PolicyId("pol-1".into()),
+        scheme: "harbour".into(),
+        life: life("E002"),
+        since: day,
+        cover_ends: d(2028, 2, 1),
+        business_date: day,
+    };
+    assert_eq!(peers.letter(&letter).await, Ok(None));
+
+    let layer = ic_group::event::CommissionLayer {
+        policy: ic_core::PolicyId("pol-1".into()),
+        cover: "group-life".into(),
+        engagement: "eng-broker-x".into(),
+        book: "x-schemes".into(),
+        schedule: "standard".into(),
+        option: "level".into(),
+        annual_premium_minor: 24_000_00,
+    };
+    let placed = peers.commission("grp-dist:harbour:group-life", &layer).await;
+    assert!(placed.is_err(), "the commission module has not seen the scheme: {placed:?}");
+
+    let request = ic_group::event::ContinuationExcess {
+        key: "grp-cont:harbour:7".into(),
+        policy: ic_core::PolicyId("pol-cont-7".into()),
+        group: ic_core::GroupId("grp-cont-7".into()),
+        party: party("party-E004"),
+        product_code: "term-life".into(),
+        cover: "life".into(),
+        cover_type: "life".into(),
+        date_of_birth: Some(d(1980, 5, 1)),
+        sex: Some(ic_product::Sex::Female),
+        smoker: Some(false),
+        amount_minor: 150_000_00,
+        inception: day,
+        scheme_policy: ic_core::PolicyId("pol-1".into()),
+        scheme_life: life("E004"),
+        earlier: vec!["grp-uw:harbour:1".into()],
+    };
+    // Underwriting has no earlier proposal to continue: a decision that ends it, not a fault.
+    assert_eq!(peers.continue_excess(day, &request).await, Ok(Some("continuation".to_string())));
+
+    node.stop().await.unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
 }
