@@ -2010,3 +2010,72 @@ fn a_waiver_is_refused_where_the_product_has_none() {
     };
     assert_eq!(w.undecided("w-1", "ana", admit, "R-OK"), "no_waiver_cover");
 }
+
+/// Purpose: where the rules keep back resident withholding tax on late payment interest, each
+/// payment withholds it at the payee's rate (or the no-declaration rate when none was given),
+/// the bank is told the net, and a payment that comes back is sent again for exactly what came
+/// back with nothing withheld twice.
+/// Why it matters: interest paid to a person is taxable income that the payer must withhold and
+/// pay to the revenue authority. Withholding twice on a reissue, or at the wrong rate, takes the
+/// claimant's money or leaves the insurer liable for the tax.
+#[test]
+fn tax_is_withheld_from_late_interest_at_the_payees_rate() {
+    let mut w = World::new();
+    let mut r = rules();
+    r.version = 2;
+    r.late_interest = Some(ic_claims::config::LateInterest {
+        annual_rate_bps: 730,
+        free_days: 10,
+    });
+    r.interest_withholding = true;
+    r.no_declaration_rate_bp = 4_500;
+    w.ok(Command::ActivateRules { rules: Box::new(r) });
+    admitted(&mut w, "c-1", 200_000);
+    let rate = |rate_bp| Command::SetWithholdingRate {
+        claim: "c-1".into(),
+        rate_bp,
+        actor: actor("ana"),
+    };
+    assert_eq!(w.refused(rate(Some(1_050))), "payee_not_verified");
+    w.verify_payee("c-1", "ana");
+    assert_eq!(w.refused(rate(Some(10_001))), "invalid_rate");
+    w.advance(20);
+
+    // No rate given: the no-declaration rate.
+    w.ok(pay("c-1", "ana", "p-1", 100_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            interest_minor: 200,
+            interest_withheld_minor: 90,
+            ..
+        })
+    ));
+    let paid = w.core.noticed("claim_paid")[0].clone();
+    assert_eq!((paid["net_minor"].as_str(), paid["interest_minor"].as_str()), ("100110", "110"));
+
+    w.ok(rate(Some(1_050)));
+    w.ok(pay("c-1", "ana", "p-2", 100_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            interest_withheld_minor: 21,
+            ..
+        })
+    ));
+    // The bank sends it back: sent again for what came back, with nothing more withheld.
+    w.ok(Command::PaymentReturned {
+        claim: "c-1".into(),
+        payment_ref: "p-2".into(),
+    });
+    w.ok(pay("c-1", "ana", "p-3", 100_179, Some("p-2")));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay {
+            interest_minor: 0,
+            interest_withheld_minor: 0,
+            ..
+        })
+    ));
+    assert_eq!(w.state.report().interest_withheld_minor, 111);
+}

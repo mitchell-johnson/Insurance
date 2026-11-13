@@ -375,6 +375,7 @@ impl ClaimsState {
                 authority_doc,
                 actor,
             } => self.verify_payee(cx, &claim, party, kind, account_ref, name_check_ref, screening_ref, authority_doc, &actor),
+            Command::SetWithholdingRate { claim, rate_bp, actor } => self.set_withholding_rate(cx, &claim, rate_bp, &actor),
             Command::Pay {
                 claim,
                 payment_ref,
