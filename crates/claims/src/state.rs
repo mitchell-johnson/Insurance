@@ -375,6 +375,7 @@ impl ClaimsState {
             } => self.record_repayment(cx, &claim, &overpayment, amount_minor),
             Command::ExclusionControl { after } => self.exclusion_control(cx, after),
             Command::RecordDeath { party, date_of_death } => self.record_death(cx, &party, date_of_death),
+            Command::RetractDeath { party, date_of_death } => self.retract_death(cx, &party, date_of_death),
             Command::Reinsurance(notice) => self.reinsurance(cx, notice),
             Command::NonDisclosureOutcome { claim, review_ref, outcome } => self.non_disclosure_outcome(cx, &claim, &review_ref, outcome),
             Command::DrainDue => {

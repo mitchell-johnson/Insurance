@@ -1361,3 +1361,69 @@ fn the_actuarys_valuation_sets_the_reserve_for_claims_in_payment() {
     assert_eq!(w.claim("ip-1").reserve_minor, 85_000);
     assert_eq!(w.refused(apply(valuation(1, 2, &[("ip-1", 1)]))), "config_conflict");
 }
+
+/// Purpose: a death recorded in error and then withdrawn restores a benefit it had not yet
+/// finished ending, sends a claim it closed to a senior, and only then lets that claim be
+/// reopened on the basis that the death was retracted, carrying on from the last period paid;
+/// a death that never ended a claim, or a different date, changes nothing.
+/// Why it matters: death register feeds and people make mistakes. A living claimant whose
+/// income stopped because of a wrong record must get it back with the months they missed, and
+/// that must not be a way to reopen any closed claim without a reason on file.
+#[test]
+fn a_retracted_death_gives_the_benefit_back() {
+    let died = |on: chrono::NaiveDate| Command::RecordDeath {
+        party: "party-life".into(),
+        date_of_death: on,
+    };
+    let undo = |on: chrono::NaiveDate| Command::RetractDeath {
+        party: "party-life".into(),
+        date_of_death: on,
+    };
+    // Not yet past the death date in payment: the benefit simply runs on.
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.on(d(2027, 4, 15));
+    w.ok(died(d(2027, 4, 10)));
+    let s = w.claim("ip-1").schedule.clone().expect("in payment");
+    assert_eq!((s.end, s.ended), (d(2027, 4, 11), Some(EndReason::Death)));
+    w.ok(undo(d(2027, 3, 1)));
+    assert_eq!(
+        w.claim("ip-1").schedule.as_ref().expect("in payment").ended,
+        Some(EndReason::Death),
+        "another date is another death"
+    );
+    w.ok(undo(d(2027, 4, 10)));
+    let c = w.claim("ip-1");
+    let s = c.schedule.as_ref().expect("in payment");
+    assert_eq!((c.status, s.end, s.ended), (Status::InPayment, d(2029, 3, 1), None));
+    assert_eq!(w.core.noticed("death_retracted")[0]["benefit"], "restored");
+
+    // A death that closed the claim: a senior reopens it, and the missed months are paid.
+    let mut w = World::new();
+    w.benefit_in_payment("ip-1");
+    w.pay_run("run-1", d(2027, 3, 1));
+    w.on(d(2027, 4, 20));
+    let reopen = |who: &str| Command::Reopen {
+        claim: "ip-1".into(),
+        basis: ReopenBasis::DeathRetracted,
+        reserve_minor: 20_000,
+        actor: actor(who),
+    };
+    w.ok(died(d(2027, 3, 31)));
+    assert_eq!(w.claim("ip-1").status, Status::Ended);
+    assert_eq!(w.refused(reopen("sam")), "death_not_retracted");
+    w.ok(undo(d(2027, 3, 31)));
+    let c = w.claim("ip-1");
+    assert!(c.tasks.iter().any(|t| t.id == "senior-review/death-retracted"));
+    assert_eq!(w.core.noticed("death_retracted")[0]["benefit"], "to_review");
+    w.ok(reopen("sam"));
+    let c = w.claim("ip-1");
+    let s = c.schedule.as_ref().expect("in payment");
+    assert_eq!(
+        (c.status, s.ended, s.end, s.next_period),
+        (Status::InPayment, None, d(2029, 3, 1), d(2027, 4, 1))
+    );
+    w.pay_run("run-2", d(2027, 4, 1));
+    assert_eq!(w.state.runs["run-2"].count, 1, "April, missed while the claim was closed");
+}

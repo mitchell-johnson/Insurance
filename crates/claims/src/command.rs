@@ -139,6 +139,8 @@ pub enum ReopenBasis {
     /// The same condition came back inside the product's window.
     Recurrence,
     NewEvidence,
+    /// The death that ended the benefit was recorded in error.
+    DeathRetracted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -417,6 +419,11 @@ pub enum Command {
         party: String,
         date_of_death: NaiveDate,
     },
+    /// A death recorded in error has been withdrawn in the customer master.
+    RetractDeath {
+        party: String,
+        date_of_death: NaiveDate,
+    },
     Reinsurance(ReinsuranceNotice),
     NonDisclosureOutcome {
         claim: String,
@@ -437,7 +444,7 @@ impl Command {
             Command::Reinsurance(_) => &["reinsurance"],
             Command::NonDisclosureOutcome { .. } => &["underwriting"],
             Command::ExclusionControl { .. } | Command::DrainDue => &["claims", "end-of-day"],
-            Command::RecordDeath { .. } => &["claims", "customer-master"],
+            Command::RecordDeath { .. } | Command::RetractDeath { .. } => &["claims", "customer-master"],
             Command::LoadMigrated { .. } => &["migration"],
             _ => &["claims"],
         }
@@ -480,6 +487,7 @@ impl Command {
             Command::RecordRepayment { .. } => "record_repayment",
             Command::ExclusionControl { .. } => "exclusion_control",
             Command::RecordDeath { .. } => "record_death",
+            Command::RetractDeath { .. } => "retract_death",
             Command::LoadMigrated { .. } => "load_migrated",
             Command::Reinsurance(_) => "reinsurance",
             Command::NonDisclosureOutcome { .. } => "non_disclosure_outcome",
