@@ -324,6 +324,16 @@ pub enum FinCommand {
     /// of the close configuration now in force. A policy already placed is
     /// never moved.
     ClassifyPolicies,
+    /// The balance the old system says a migration control account should
+    /// hold once it is loaded, on the trial balance's scale, with where the
+    /// figure comes from. It can be replaced until the period the account
+    /// was loaded in closes.
+    RecordCutoverTotal {
+        account: String,
+        unit: BalanceFamily,
+        total: i128,
+        evidence: String,
+    },
 }
 
 impl FinCommand {
@@ -368,6 +378,7 @@ impl FinCommand {
             FinCommand::FileReturn { .. } => "file_return",
             FinCommand::RestateReturn { .. } => "restate_return",
             FinCommand::ClassifyPolicies => "classify_policies",
+            FinCommand::RecordCutoverTotal { .. } => "record_cutover_total",
         }
     }
 }
@@ -498,6 +509,12 @@ pub enum FinEvent {
         placed: u64,
         still_ungrouped: u64,
         rule_version: u32,
+    },
+    CutoverTotalRecorded {
+        account: String,
+        unit: BalanceFamily,
+        total: i128,
+        by: String,
     },
 }
 
@@ -760,6 +777,9 @@ pub struct FinanceState {
     /// Policies issued when no rule named their product, until classified.
     #[serde(default, with = "crate::pairs")]
     pub(crate) ungrouped: BTreeMap<(PartitionId, PolicyId), Ungrouped>,
+    /// The old system's figure for each migration control account and unit.
+    #[serde(default, with = "crate::pairs")]
+    pub cutover_totals: BTreeMap<(String, BalanceFamily), CutoverTotal>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -782,6 +802,15 @@ impl AccountingGroup {
     pub fn id(&self) -> String {
         format!("{}/{}/{}", self.portfolio, self.cohort, self.profitability)
     }
+}
+
+/// The balance the old system says a migration control account holds at
+/// cutover, as the finance lead recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CutoverTotal {
+    pub total: i128,
+    pub evidence: String,
+    pub by: String,
 }
 
 /// A policy waiting for a rule that names its product.
@@ -877,6 +906,7 @@ impl FinanceState {
             rate_tables: BTreeMap::new(),
             accounting_groups: BTreeMap::new(),
             ungrouped: BTreeMap::new(),
+            cutover_totals: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1288,6 +1318,42 @@ impl FinanceState {
                     still_ungrouped: self.ungrouped.len() as u64,
                     rule_version,
                 });
+                Ok(())
+            }
+            FinCommand::RecordCutoverTotal {
+                account,
+                unit,
+                total,
+                evidence,
+            } => {
+                let by = ctx.actor_with(&[ROLE_LEAD])?;
+                let listed = self.close_config.as_ref().is_some_and(|c| c.migration_control.contains(&account));
+                if !listed {
+                    return reject(
+                        "cutover_total",
+                        format!("{account} is not a migration control account in the close configuration"),
+                    );
+                }
+                if evidence.trim().is_empty() {
+                    return reject("cutover_total", "say where the old system's figure comes from");
+                }
+                if let Some(cutover) = self.cutover_period(&account) {
+                    if self.periods.get(&cutover).is_some_and(|p| p.closed.is_some()) {
+                        return reject(
+                            "cutover_total",
+                            format!("{account} was loaded in {cutover}, which is closed: its agreement with the old system stands"),
+                        );
+                    }
+                }
+                self.cutover_totals.insert(
+                    (account.clone(), unit.clone()),
+                    CutoverTotal {
+                        total,
+                        evidence,
+                        by: by.clone(),
+                    },
+                );
+                ctx.events.push(FinEvent::CutoverTotalRecorded { account, unit, total, by });
                 Ok(())
             }
         }
