@@ -122,6 +122,50 @@ pub fn question(name: &str, fields: &BTreeMap<String, String>) -> Result<Value, 
     Ok(json!({ name: out }))
 }
 
+/// A commission statement as its own payee sees it in the adviser portal:
+/// the statement's lines and balances, and the totals by what earned them
+/// (`base`, `override:{level}`, `fee:{name}`), so a group sees its overrides
+/// at a glance. Lines carry policies and amounts, never a claim or its cause.
+pub fn own_statement(statement: &Value) -> Value {
+    const KEEP: [&str; 14] = [
+        "payee",
+        "number",
+        "date",
+        "opening_minor",
+        "lines",
+        "closing_minor",
+        "held_minor",
+        "held_reasons",
+        "retention_minor",
+        "advance_outstanding_minor",
+        "advance_recovered_minor",
+        "payment_held",
+        "payments",
+        "hash",
+    ];
+    let mut out: Map<String, Value> = statement
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(k, _)| KEEP.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let mut totals: BTreeMap<String, i64> = BTreeMap::new();
+    for line in statement["lines"].as_array().into_iter().flatten() {
+        let label = match &line["component"] {
+            Value::String(name) => name.clone(),
+            Value::Object(o) => o.iter().next().map_or_else(String::new, |(kind, level)| {
+                let kind = if kind == "fixed_fee" { "fee" } else { kind.as_str() };
+                format!("{kind}:{}", level.as_str().unwrap_or_default())
+            }),
+            _ => line["kind"].as_str().unwrap_or("other").to_string(),
+        };
+        *totals.entry(label).or_default() += line["amount_minor"].as_i64().unwrap_or(0);
+    }
+    out.insert("totals".to_string(), json!(totals));
+    Value::Object(out)
+}
+
 /// The command's name, if it is one a person may send from the console.
 pub fn console_command(command: &Value) -> Option<&str> {
     let name = command.as_object().filter(|o| o.len() == 1)?.keys().next()?;

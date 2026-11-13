@@ -979,6 +979,24 @@ async fn practice(State(s): State<Shared>, headers: HeaderMap, method: Method, u
     .await?)
 }
 
+/// The signed-in party's own commission statement, by number: an adviser
+/// sees their own lines, a provider or group the lines paid to it, with
+/// totals by component (its overrides among them). Anyone else's
+/// statement cannot be named, and one not yet cut is 404.
+async fn own_statement(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(number): Path<u32>) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let question = json!({ "statement": { "payee": session.party, "number": number } });
+    let answer = s
+        .commission
+        .ask(question)
+        .await
+        .map_err(|e| module_problem("commission", StatusCode::BAD_REQUEST, e))?;
+    if answer.is_null() {
+        return Err(Problem::not_found());
+    }
+    ok(crate::commission::own_statement(&answer))
+}
+
 async fn held_balance(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri) -> Answer {
     let session = s.customer(&headers, &method, &uri, b"").await?;
     ok(s.ask(Question::HeldBalance { party: session.party }).await?)
@@ -2203,10 +2221,8 @@ async fn claims_question(
                 .collect();
             ok(json!({ "partitions": partitions }))
         }
-        // Questions other services ask (the documents service's repayment
-        // letters): `claims::question` never makes one, so none reaches here.
-        #[allow(unreachable_patterns)]
-        _ => Err(Problem::not_found()),
+        // The documents service's question: `claims::question` never makes it.
+        Q::RepaymentLetters => Err(Problem::not_found()),
     }
 }
 
@@ -2612,6 +2628,7 @@ pub fn router(state: Shared) -> Router {
         .route("/adviser/v1/book", get(book))
         .route("/adviser/v1/held-balance", get(held_balance))
         .route("/adviser/v1/practice", get(practice))
+        .route("/adviser/v1/statements/{number}", get(own_statement))
         .route("/adviser/v1/replacements", get(adviser_replacements))
         .route("/app/v1/policies/{policy}/claims", get(policy_claims))
         .route("/adviser/v1/replacements/dispute", post(adviser_dispute))
