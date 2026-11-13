@@ -120,6 +120,7 @@ pub fn attrs(category: &str, salary_minor: i64, group: &str) -> MemberAttrs {
         employment_start: Some(d(2020, 2, 1)),
         actively_at_work: Some(true),
         billing_group: Some(group.to_string()),
+        occupation_class: None,
     }
 }
 
