@@ -162,6 +162,8 @@ impl ClaimsState {
             interest_offer: None,
             interest_declined: None,
             interest_owed_again_minor: 0,
+            insolvency_hold: false,
+            directed_to: None,
             payable_minor: 0,
             cost_payable_minor: 0,
             waiver_from: None,

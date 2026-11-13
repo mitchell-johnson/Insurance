@@ -70,7 +70,7 @@ param indexKey string
 @description('Partitions of each hub. A party always lands on the same one, so this cannot change once events flow.')
 param hubPartitions int = 8
 
-@description('Years the erasure register is kept. Longer than any backup the database can be restored from.')
+@description('Years the erasure register is kept: 10, agreed 2026-11-13. Longer than any backup the database can be restored from. Once the policy is locked it can only grow.')
 param registerYears int = 10
 
 var tags = {
@@ -264,8 +264,8 @@ resource register 'Microsoft.Storage/storageAccounts/blobServices/containers@202
 }
 
 // Write-once: a page, once written, cannot be changed or deleted for the
-// retention period. Locking the policy is a separate, irreversible step
-// taken in prod once the period is agreed (docs/customers.md).
+// retention period (10 years, agreed 2026-11-13). Bicep cannot lock a policy;
+// in prod run tools/lock-erasure-register.sh once after the first deployment.
 resource registerPolicy 'Microsoft.Storage/storageAccounts/blobServices/containers/immutabilityPolicies@2023-05-01' = {
   parent: register
   name: 'default'
@@ -321,4 +321,5 @@ output customersClientId string = identity.properties.clientId
 output customersPrincipalName string = identity.name
 output postgresHost string = postgres.properties.fullyQualifiedDomainName
 output registerEndpoint string = account.properties.primaryEndpoints.blob
+output registerAccountName string = account.name
 output wrappingKeyName string = wrappingKey.name

@@ -302,3 +302,117 @@ fn an_offer_can_be_declined_expire_or_be_countered() {
     };
     assert_eq!(serde_json::to_value(&command.covers[0].loadings).unwrap(), serde_json::json!(["0.25"]));
 }
+
+/// Purpose: Tom Clarke's application is referred to a person, who accepts it with a 50%
+/// loading. The offer goes to him with reasons in plain words, he accepts with a signed step,
+/// and the core is sent the loading as the fraction it rates with and nothing else from the
+/// file: no reason codes, no notes, no answers. The decision's reference is found from the
+/// policy, life and cover, and the reasons and notes stay with the decision.
+/// Why it matters: the core is read by servicing, payments and every channel. A reason or
+/// clinical note in it would reach people who must not see it, while the loading must be there
+/// for the premium to be right and the decision must still be findable at claim.
+#[test]
+fn a_referred_loading_reaches_the_core_as_a_rate_and_a_reference_only() {
+    let mut w = World::new();
+    w.open("P1", 500_000_00);
+    let referred = w.disclose("P1", "L1", &yes("hazardous_occupation"));
+    assert!(referred.events.iter().any(|e| matches!(e, Event::Referred { .. })));
+    assert!(w.p("P1").lives[&LifeId::from("L1")].decisions.is_empty(), "the rules decided nothing");
+    let case = w.take("P1", "L1", "amy");
+    let decided = w.propose(&case, "amy", vec![accept("life", 50, None)]).unwrap();
+    let offered = w.automatic(&decided);
+    let reasons = offered
+        .effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::Notify {
+                kind: NoticeKind::OfferMade,
+                to: Recipient::Party { .. },
+                reasons,
+                ..
+            } => Some(reasons.clone()),
+            _ => None,
+        })
+        .expect("an offer notice to Tom");
+    assert!(
+        !reasons.is_empty() && reasons.iter().all(|r| !r.starts_with("RC-") && r.ends_with('.')),
+        "{reasons:?}"
+    );
+
+    let accepted = w.respond("P1", "L1", OfferResponse::Accept);
+    let Some(Effect::IssuePolicy { command, .. }) = accepted.effects.first() else {
+        panic!("no issue")
+    };
+    assert_eq!(serde_json::to_value(&command.covers[0].loadings).unwrap(), serde_json::json!(["0.50"]));
+    let sent = serde_json::to_string(command).unwrap();
+    for kept_back in ["RC-", "vault://", "hazardous", "amy"] {
+        assert!(!sent.contains(kept_back), "{kept_back} reached the core: {sent}");
+    }
+
+    let policy = w.p("P1").policy.clone();
+    let terms = w.s.terms_on(&policy, &LifeId::from("L1"), "life").expect("terms on the policy");
+    assert_eq!((terms.decision.as_str(), terms.loading_percent), ("P1/L1/d1", 50));
+    let decision = &w.p("P1").lives[&LifeId::from("L1")].decisions[0];
+    assert!(decision.signatures[0].reasons.contains("RC-0101"));
+    assert_eq!(decision.notes_ref.as_deref(), Some("vault://notes"));
+}
+
+/// Purpose: Jordan Lee applies for life and trauma cover; a person declines the trauma cover
+/// and accepts life, and a second underwriter countersigns, keeping one reason back. He is sent
+/// a decline notice of its own, with only the reasons he may be told, beside the offer of
+/// life cover; once he accepts, life cover issues alone.
+/// Why it matters: a decline is a regulated letter (the reasons that may be given and the route
+/// to ask for review) whether it is the whole application or one cover, and declining one cover
+/// must not hold back the cover that was accepted.
+#[test]
+fn a_declined_cover_is_told_in_its_own_notice_and_the_rest_still_issues() {
+    let mut w = World::new();
+    let open = w.open_command(
+        "P1",
+        &["L1"],
+        &[("L1", "life", "life", 400_000_00), ("L1", "trauma", "trauma", 100_000_00)],
+        false,
+    );
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    w.disclose("P1", "L1", &yes("hazardous_occupation"));
+    let case = w.take("P1", "L1", "sam");
+    w.propose(&case, "sam", vec![standard("life"), decline("trauma")]).unwrap();
+    w.take("P1", "L1", "sue");
+    let agreed = w.ok(
+        "underwriting-console",
+        Command::Countersign {
+            case,
+            underwriter: "sue".into(),
+            agree: true,
+            reasons: set(&["RC-0130"]),
+            withheld_reasons: set(&["RC-0190"]),
+        },
+    );
+    let offered = w.automatic(&agreed);
+    let notices: Vec<_> = offered
+        .effects
+        .iter()
+        .filter_map(|e| match e {
+            Effect::Notify {
+                kind,
+                to: Recipient::Party { .. },
+                reasons,
+                ..
+            } => Some((*kind, reasons.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        notices.iter().map(|(k, _)| *k).collect::<Vec<_>>(),
+        vec![NoticeKind::OfferMade, NoticeKind::Declined]
+    );
+    let told = &notices[1].1;
+    assert!(!told.is_empty() && told.iter().all(|r| !r.starts_with("RC-")), "{told:?}");
+    assert_eq!(told, &notices[0].1, "the same reasons, and none that were kept back");
+
+    let accepted = w.respond("P1", "L1", OfferResponse::Accept);
+    let Some(Effect::IssuePolicy { command, .. }) = accepted.effects.first() else {
+        panic!("life cover still issues")
+    };
+    assert_eq!(command.covers.iter().map(|c| c.code.as_str()).collect::<Vec<_>>(), vec!["life"]);
+}

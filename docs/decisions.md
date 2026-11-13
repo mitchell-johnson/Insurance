@@ -181,3 +181,8 @@ The underwriting module decides the remedy on an approved case; the core carries
 
 - Loadings stay off events. Finance reads them with the partition query `Loadings { after, limit, as_at }` (`ClusterClient::loadings`), which walks policies in ID order, at most 500 a page, and returns each loaded layer with its dates and its loadings as stored. Loadings add, so a layer's total is their sum.
 - Not built: a caller check on the query. Partition queries carry no caller today (a policy read by number already returns its loadings), so who may ask is decided by network policy and whatever stands in front of the node. A per-caller check on queries is an open item for the core.
+
+## The erasure register is kept 10 years and locked (13 Nov 2026)
+
+- Mitchell agreed the customer master's erasure register (`customers-erasures`) is kept 10 years (`registerYears`, 3,660 days) and is locked. The register must outlive every database backup, because a restore brings erased keys back and the register is how they are erased again (`POST /v1/admin/reshred`).
+- Bicep cannot lock an immutability policy. `tools/lock-erasure-register.sh` does it once in prod after the first deployment: it refuses unless the policy is the agreed period and unlocked, and asks for the account name. No subscription has been deployed to yet, so it has not been run. Once locked the period can only be lengthened, and the account cannot be deleted while it holds a page inside its period.

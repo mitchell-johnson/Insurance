@@ -131,7 +131,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | AUD-008 | part | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
 | AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
-| AUD-011 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
+| AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
 | AUD-013 | part | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 | AUD-014 | full | `documents/tests/channels.rs::sms_carries_a_pointer_and_asks_for_a_report` |
 | AUD-015 | part | `channels/tests/feed.rs::snapshot_then_changes` |
@@ -157,11 +157,11 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | UW-001 | full | `underwriting/tests/journey.rs::a_clean_application_is_issued_straight_through`<br>`underwriting/tests/driver.rs::a_clean_application_becomes_a_policy_with_nobody_carrying` |
-| UW-002 | part | `underwriting/tests/journey.rs::terms_set_by_the_rules_are_offered_and_issued_once_accepted` |
+| UW-002 | full | `underwriting/tests/journey.rs::a_referred_loading_reaches_the_core_as_a_rate_and_a_reference_only`<br>`underwriting/tests/journey.rs::terms_set_by_the_rules_are_offered_and_issued_once_accepted` |
 | UW-003 | part | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
 | UW-004 | full | `underwriting/tests/libraries.rs::cedar_policy_enforces_authority_limits`<br>`underwriting/tests/casework.rs::referral_queues_have_one_owner_limits_handovers_and_escalation` |
 | UW-005 | full | `underwriting/tests/casework.rs::decisions_are_held_to_authority_and_declines_take_two_signatures` |
-| UW-006 | part | `underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
+| UW-006 | part | `underwriting/tests/journey.rs::a_declined_cover_is_told_in_its_own_notice_and_the_rest_still_issues`<br>`underwriting/tests/libraries.rs::reason_list_is_validated_and_splits_for_the_customer`<br>`underwriting/tests/progress.rs::progress_is_marked_by_version_and_a_decline_is_shown_only_to_the_life`<br>`documents/tests/requested_letters.rs::a_requested_decline_is_issued_once_as_clinical` |
 | UW-007 | full | `reinsurance/tests/capacity.rs::a_reservation_sees_cover_already_held_on_the_life` |
 | UW-008 | full | `underwriting/tests/casework.rs::nothing_is_offered_above_the_treaty_limit_until_the_reinsurer_has_answered` |
 | UW-009 | full | `reinsurance/tests/capacity.rs::two_proposals_on_one_life_see_each_other`<br>`reinsurance/tests/accumulation.rs::arrival_order_does_not_change_the_cessions` |
@@ -327,7 +327,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | JNT-013 | part | `channels/tests/journeys.rs::ownership_change_and_assignment` |
 | JNT-023 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
 | JNT-025 | part | `customers/tests/api.rs::trustee_changes_are_dated_on_the_resolution` |
-| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party` |
+| JNT-029 | full | `sim/tests/interests.rs::a_bankrupt_owners_policy_holds_its_value_until_a_legal_direction`<br>`payments/tests/intake.rs::a_held_payout_waits_only_once_directed_and_for_the_directed_party`<br>`claims/tests/suite/book.rs::proceeds_are_held_under_an_insolvency_interest_until_legal_directs` |
 | JNT-030 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 | JNT-031 | part | `customers/tests/api.rs::due_diligence_covers_an_owner_and_every_trustee` |
 
@@ -363,6 +363,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | ADV-026 | full | `distribution/tests/commission.rs::replacement_cover_earns_trail_only_and_the_house_book_earns_nothing`<br>`distribution/tests/lifecycle.rs::a_replaced_policys_clawback_carries_to_the_replacement` |
 | ADV-029 | full | `distribution/tests/replacement.rs::cover_rewritten_inside_the_group_after_a_cancellation_is_treated_as_a_replacement`<br>`distribution/tests/replacement.rs::the_rule_matches_the_same_life_the_same_cover_and_a_related_adviser_or_the_same_amount` |
 | ADV-030 | full | `distribution/tests/personas.rs::a_scheme_changing_broker_mid_year_moves_its_book_with_a_dated_handover_split` |
+| ADV-031 | full | `channels/tests/journeys.rs::an_incoming_broker_sees_the_scheme_from_the_appointment_day` |
 | ADV-032 | full | `distribution/tests/units.rs::a_rule_allocates_every_cent_of_any_amount` |
 | ADV-033 | full | `distribution/tests/units.rs::rule_validation_catches_every_way_a_rule_fails_to_add_up` |
 | ADV-034 | full | `distribution/tests/statements.rs::one_net_payment_covers_credits_and_debts_on_different_partitions`<br>`distribution/tests/statements.rs::a_statement_shows_the_detail_and_its_payment_clears_the_ledger` |
@@ -466,6 +467,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
 | STF-012 | part | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named` |
+| STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | part | `channels/tests/staff.rs::external_source_drives_templates` |
 | STF-017 | part | `channels/tests/staff.rs::classes_clinical_purpose_and_freshness` |

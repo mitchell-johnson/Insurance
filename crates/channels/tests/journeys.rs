@@ -1612,3 +1612,45 @@ fn units_held_and_orders_waiting_reach_the_policyholder() {
         "fewer units at the higher buy price: {held}"
     );
 }
+
+/// Purpose: a broker taking over a scheme is engaged from the appointment date and authorised by the employer on the scheme
+/// alone: the day before, the broker sees nothing of it; from the day, the scheme; and never a retail policy they hold no
+/// authority on.
+/// Why it matters: persona row ADV-031. A broker change is agreed before it takes effect, and an incoming broker who could read
+/// the scheme early would see members' cover while the outgoing broker still services it.
+#[test]
+fn an_incoming_broker_sees_the_scheme_from_the_appointment_day() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let scheme = w.issue(group_scheme(3, open(), vec![member("m-1", d(1980, 1, 1), "staff", 80_000_00)]));
+    let today = w.ch.today(w.at);
+    let appointed = today.succ_opt().unwrap();
+    w.dir(
+        module("distribution"),
+        DirectoryCommand::RecordEngagement {
+            engagement: ic_channels::directory::Engagement {
+                id: "e-brk".into(),
+                adviser: p("brk-1"),
+                fap: p("brokerage-1"),
+                from: appointed,
+                to: None,
+            },
+        },
+    )
+    .unwrap();
+    w.dir(
+        party("employer-00000003"),
+        DirectoryCommand::GrantAdviserAuthority {
+            policy: scheme.clone(),
+            adviser: p("brk-1"),
+            engagement: "e-brk".into(),
+        },
+    )
+    .unwrap();
+    let rows = |policy: &PolicyId, on| w.ch.visible_rows(&p("brk-1"), policy, on, true).1.len();
+    assert_eq!(rows(&scheme, today), 0, "refused the day before the appointment");
+    assert_eq!(w.ch.data.directory.standing("e-brk", today), AdviserStanding::Ended);
+    assert!(rows(&scheme, appointed) > 0, "scoped to the scheme on the day");
+    assert_eq!(w.ch.data.directory.standing("e-brk", appointed), AdviserStanding::Active);
+    assert_eq!(rows(&pol, appointed), 0, "and to nothing else");
+}

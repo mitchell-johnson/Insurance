@@ -44,6 +44,7 @@ data:
   IC_GROUP_FINGERPRINT_SALT_FILE: /mnt/secrets/group-fingerprint-salt
   # The application ID URI of this service's app registration. Callers'
   # Entra ID tokens are issued for it and carry their caller names as app roles.
+  # Printed by deploy/entra/group-app.sh.
   IC_GROUP_AUDIENCE: REPLACE-group-audience
   IC_CLUSTER_TOKEN_FILE: /mnt/secrets/cluster-token
 ---
