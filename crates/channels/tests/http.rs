@@ -1778,6 +1778,14 @@ async fn the_claims_console() {
         "{work}"
     );
     assert_eq!(ask("sub-cl1", "work?claim=c-404").await.0, StatusCode::NOT_FOUND);
+    // The policy's claims as an adviser or employer would see them: status, never cause.
+    let (status, policy) = ask("sub-cl1", "policy?policy=pol-c1").await;
+    assert_eq!(
+        (status, &policy["rows"][0]["partition"], &policy["rows"][0]["status"]["claim"]),
+        (StatusCode::OK, &json!(1), &json!("c-1")),
+        "{policy}"
+    );
+    assert_eq!(ask("sub-cl1", "policy").await.0, StatusCode::BAD_REQUEST);
     // The assessor records the cause as themselves; a colleague who does not own the claim cannot.
     let cause = json!({ "record_cause": { "claim": "c-1", "cause_code": "CC-0003" } });
     let (status, problem) = tell("sub-cllead", "assessing", cause.clone()).await;

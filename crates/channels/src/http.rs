@@ -1281,6 +1281,16 @@ async fn claims_question(
             let (partition, view) = found.ok_or_else(Problem::not_found)?;
             ok(json!({ "partition": partition, "view": view }))
         }
+        Q::PolicyStatus { .. } => {
+            // A policy is on one partition, except for a moment while it moves.
+            let mut rows: Vec<Value> = Vec::new();
+            for (p, reply) in s.claims_everywhere(&question).await? {
+                if let R::PolicyStatus(found) = reply {
+                    rows.extend(found.into_iter().map(|r| json!({ "partition": p, "status": r })));
+                }
+            }
+            ok(json!({ "rows": rows }))
+        }
         Q::Book | Q::Report => {
             let partitions: Vec<Value> = s
                 .claims_everywhere(&question)
