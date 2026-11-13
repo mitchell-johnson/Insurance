@@ -3436,3 +3436,75 @@ async fn the_payments_console() {
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE, "{path}");
     }
 }
+
+/// Purpose: the life on a proposal gives and withdraws their own consents from the app: what to sign is the underwriting
+/// module's exact message, a consent that needs the life's signed step goes only with the enrolled device's signature over it,
+/// the module (its real state machine) records it from the caller `customer-app` and checks the signature again, and anyone
+/// who is not the life, an unknown kind, a forged signature or a token without a proven device is refused before anything leaves.
+/// Why it matters: these consents let an adviser see a life's answers, let an employer see a loading that implies health, and
+/// confirm a replacement disclosure; each must be the life's own act on a device bound to them.
+#[tokio::test]
+async fn the_life_gives_their_own_consents() {
+    use base64::Engine;
+    use ic_underwriting::command::Command as Uw;
+    let portal = &portal();
+    let now = portal.now();
+    let retail = portal.retail.clone();
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/P3/L1"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "P3", "life": "L1", "stage": "disclosure", "waiting_on": "underwriter" } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(9_002, ic_channels::Envelope { key: "life-row-p2".into(), at: now, actor: module("underwriting"), command });
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    let base = "/app/v1/proposals/P3/lives/L1/consents";
+    let send = |kind: &'static str, body: Value| {
+        let path = format!("{base}/{kind}");
+        let text = body.to_string();
+        let headers = portal.proof(&portal.phone, "POST", &path, &text);
+        async move { portal.send("POST", &path, &headers, Some(body)).await }
+    };
+
+    // What to sign is the module's own message, and only the life may ask.
+    let (status, to_sign) = portal.get("sub-kiri", &format!("{base}/adviser_access/to-sign")).await;
+    assert_eq!((status, &to_sign["signed"]), (StatusCode::OK, &json!(true)), "{to_sign}");
+    let message = base64::engine::general_purpose::STANDARD.decode(to_sign["message"].as_str().unwrap()).unwrap();
+    assert_eq!(message, ic_underwriting::signing::message("consent", &["P3", "L1", "adviser_access"]));
+    assert_eq!(portal.get("sub-adv", &format!("{base}/adviser_access/to-sign")).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-kiri", &format!("{base}/nonsense/to-sign")).await.0, StatusCode::NOT_FOUND);
+
+    // Refused before anything leaves.
+    let before = portal.underwriting.log().len();
+    let (status, problem) = portal
+        .write("POST", "sub-kiri", &format!("{base}/obtain_records"), json!({ "granted": true }))
+        .await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::UNAUTHORIZED, Some("device_required")));
+    assert_eq!(send("adviser_access", json!({ "granted": true })).await.1["title"], "bad_consent", "unsigned");
+    let forged = json!({ "granted": true, "signature": portal.phone.sign(b"something else") });
+    assert_eq!(send("adviser_access", forged).await.1["title"], "bad_consent");
+    assert_eq!(send("nonsense", json!({ "granted": true })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(send("obtain_records", json!({ "granted": "yes" })).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(portal.underwriting.log().len(), before, "nothing reached the module");
+
+    // Given: one with the signed step, one without; the module records both from the app.
+    let (status, done) = send("adviser_access", json!({ "granted": true, "signature": portal.phone.sign(&message) })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    let sent = portal.underwriting.log().last().cloned().unwrap();
+    assert_eq!(sent.caller, "customer-app");
+    assert!(matches!(
+        &sent.command,
+        Uw::RecordConsent {
+            granted: true,
+            signed: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(send("obtain_records", json!({ "granted": true })).await.0, StatusCode::OK);
+    // Withdrawn without a signature.
+    assert_eq!(send("adviser_access", json!({ "granted": false })).await.0, StatusCode::OK);
+    // The module's own refusal: this proposal is not a replacement.
+    let message = ic_underwriting::signing::message("consent", &["P3", "L1", "replacement_disclosure"]);
+    let (status, problem) = send("replacement_disclosure", json!({ "granted": true, "signature": portal.phone.sign(&message) })).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("replacement")), "{problem}");
+}
