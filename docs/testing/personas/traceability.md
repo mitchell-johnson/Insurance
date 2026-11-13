@@ -62,7 +62,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | PRD-007 | full | `finance/tests/dry_run.rs::a_proposed_table_is_priced_against_the_book_in_force`<br>`finance/tests/dry_run.rs::the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves` |
 | PRD-008 | part | `api/tests/api.rs::a_quote_prices_without_writing_anything` |
 | PRD-010 | full | `sim/tests/scenarios.rs::health_premium_splits_gst_to_the_tax_account`<br>`product/tests/products.rs::health_premium_carries_gst` |
-| PRD-011 | part | `reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate` |
+| PRD-011 | part | `customers/tests/api.rs::gender_is_recorded_in_the_persons_words_and_never_matched`<br>`reinsurance/tests/premiums.rs::a_life_whose_sex_the_table_does_not_hold_is_rated_at_the_lower_rate` |
 | PRD-012 | part | `product/tests/products.rs::rating_refuses_what_it_cannot_price` |
 
 ## BIL Billing and earning

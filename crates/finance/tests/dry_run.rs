@@ -85,7 +85,7 @@ fn a_proposed_table_is_priced_against_the_book_in_force() {
     assert_eq!(run["passed"], json!(true));
     assert_eq!(
         run["cells"],
-        json!([{ "age_band": "35-39", "sex": "female", "smoker": false, "covers": 3,
+        json!([{ "age_band": "35-39", "sex": "female", "smoker": false, "occupation_class": "", "category": "", "covers": 3,
                  "current_annual_minor": 3 * 644_25, "proposed_annual_minor": 3 * 708_70 }])
     );
     let moved: Vec<&str> = run["largest_changes"]
@@ -185,6 +185,8 @@ fn the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves() {
     let run = dry_run(as_at, &request(classed()), &[manual, cover("pol-office", Some(37), 100_000_00)]);
     assert_eq!(run.proposed_annual_minor, 257_70 + 141_74);
     assert_eq!(run.largest_changes[0].policy, "pol-manual");
+    let classes: Vec<&str> = run.cells.iter().map(|c| c.occupation_class.as_str()).collect();
+    assert_eq!(classes, ["", "4"]);
 
     // A row for one scheme benefit category rates only members the core published in it.
     let by_category = || {
@@ -203,6 +205,9 @@ fn the_comparison_counts_what_it_cannot_price_and_lists_the_largest_moves() {
     let run = dry_run(as_at, &request(by_category()), &[executive, staff, cover("pol-none", Some(37), 100_000_00)]);
     assert_eq!(run.proposed_annual_minor, 90_00 + 2 * 141_74);
     assert_eq!(run.current_annual_minor, 3 * 128_85);
+    // Each category is a cell of its own, so the movement is seen where it falls.
+    let by_cell: Vec<(&str, i64)> = run.cells.iter().map(|c| (c.category.as_str(), c.proposed_annual_minor)).collect();
+    assert_eq!(by_cell, [("", 141_74), ("executive", 90_00), ("staff", 141_74)]);
 
     // A premium is rounded to the nearest cent.
     let small = [cover("a", Some(37), 1_000_00), cover("b", Some(37), 3_88_00)];

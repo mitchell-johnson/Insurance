@@ -947,6 +947,14 @@ impl DistributionState {
             if book.closed_to_new_from.is_some_and(|c| layer.start >= c) {
                 return reject("book_closed", format!("book {b} is closed to new business"));
             }
+            // An adviser's book takes only what that adviser wrote; a book
+            // with no engagement (a team's, or the house) takes anyone's.
+            if let Some(owner) = book.engagement.as_ref().filter(|e| !w.writing.iter().any(|(x, _)| x == *e)) {
+                return reject(
+                    "book_not_writers",
+                    format!("book {b} belongs to engagement {owner}, which did not write this layer"),
+                );
+            }
             if !book.house && book.rule_on(layer.start).is_none() {
                 return reject("no_rule", format!("book {b} has no distribution rule in force on {}", layer.start));
             }
