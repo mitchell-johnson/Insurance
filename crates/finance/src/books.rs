@@ -344,7 +344,7 @@ impl FinCommand {
             FinCommand::Ingest { .. } | FinCommand::CoreEvent { .. } | FinCommand::RecordMerkleRoot { .. } => &["feed"],
             FinCommand::RetryFeed { .. } => &["operator", "finance-console"],
             FinCommand::RegisterExtract { .. } => &["reporting"],
-            FinCommand::RecordConductFacts { .. } => &["claims", "complaints"],
+            FinCommand::RecordConductFacts { .. } => &["claims", "complaints", "distribution"],
             FinCommand::ClosePeriod { .. } => &["finance-console", "close-workflow"],
             // Who may report which check is declared in the close configuration.
             FinCommand::ReportCheck { .. } | FinCommand::ReportAgedItems { .. } => &[],

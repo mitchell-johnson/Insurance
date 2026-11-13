@@ -520,7 +520,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | FIN-013 | full | `finance/tests/journals.rs::money_moves_between_statutory_funds_only_by_an_approved_transfer` |
 | FIN-014 | part | `finance/tests/edges.rs::tax_accounts_reconcile_to_the_posting_types_that_may_move_them` |
 | FIN-017 | full | `finance/tests/mart.rs::claims_that_leave_the_policy_in_force_are_on_the_experience_extract`<br>`finance/tests/mart.rs::the_real_claims_module_feeds_the_experience_extract`<br>`finance/tests/mart.rs::claims_by_cause_are_categories_with_small_rows_folded_or_withheld` |
-| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed` |
+| FIN-018 | part | `finance/tests/returns.rs::an_overturned_decline_is_reported_apart_from_the_declines`<br>`finance/tests/mart.rs::claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed`<br>`finance/tests/assessed_claim.rs::an_assessed_claim_admitted_paid_and_reversed_reaches_the_mart_and_the_books` |
 
 ## CFG Configuration operations and the actuary's interface
 
