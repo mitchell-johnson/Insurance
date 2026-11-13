@@ -96,10 +96,32 @@ impl GroupState {
             effective: ask.effective,
             members,
         });
-        let parts: Vec<Vec<String>> = ask.employee_ids.chunks(MAX_MEMBERSHIP_CHUNK).map(<[String]>::to_vec).collect();
+        // A member goes with their dependants, and a part holds at most a
+        // chunk of lives.
+        let lives_of = |id: &str| {
+            s.membership
+                .active(id)
+                .map(|m| {
+                    std::iter::once(m.life.clone())
+                        .chain(m.dependants.iter().map(|d| d.life.clone()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        let mut parts: Vec<(Vec<String>, Vec<ic_core::LifeId>)> = vec![(vec![], vec![])];
+        for id in &ask.employee_ids {
+            let lives = lives_of(id);
+            let full = parts.last().is_some_and(|(_, l)| !l.is_empty() && l.len() + lives.len() > MAX_MEMBERSHIP_CHUNK);
+            if full {
+                parts.push((vec![], vec![]));
+            }
+            if let Some((ids, l)) = parts.last_mut() {
+                ids.push(id.clone());
+                l.extend(lives);
+            }
+        }
         let count = parts.len();
-        for (n, employee_ids) in parts.into_iter().enumerate() {
-            let lives = employee_ids.iter().filter_map(|id| s.membership.active(id)).map(|m| m.life.clone()).collect();
+        for (n, (employee_ids, lives)) in parts.into_iter().enumerate() {
             let command = Command::SplitScheme(Box::new(ic_core::SplitScheme {
                 policy: s.policy.clone(),
                 new_policy: ask.new_policy.clone(),
@@ -192,6 +214,9 @@ impl GroupState {
             moved,
         });
         if last {
+            // The new scheme's menu may not be the old one's.
+            self.menu_changed(&mut new, s.terms.health_menu.as_ref(), effective);
+            self.pump(&mut new);
             s.splitting = None;
             self.emit(GroupEvent::SplitCompleted {
                 scheme: s.id.clone(),

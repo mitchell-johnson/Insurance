@@ -63,6 +63,10 @@ pub struct MenuCover {
     pub cover: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excess_option: Option<String>,
+    /// The member pays for this cover on their own life, as an upgrade
+    /// beside what the employer provides. Otherwise the employer pays.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub member_pays: bool,
 }
 
 /// The plans a scheme's members choose from, the plan a member is on until
@@ -76,11 +80,32 @@ pub struct HealthMenu {
     /// How many days back a member's choice may take effect.
     #[serde(default)]
     pub choice_backdating_days: u32,
+    /// The employer pays for dependants' cover as for the member's own.
+    /// Otherwise, as most schemes have it, the member pays for theirs.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub employer_pays_dependants: bool,
 }
 
 impl HealthMenu {
     pub fn plan(&self, code: &str) -> Option<&HealthPlan> {
         self.plans.iter().find(|p| p.code == code)
+    }
+
+    /// The covers a life holds on a plan, each with who pays: the plan's
+    /// own split for the member, and the scheme's rule for a dependant.
+    pub fn covers(&self, plan: &str, dependant: bool) -> Vec<ic_core::ChosenCover> {
+        let plan = self.plan(plan).or_else(|| self.plan(&self.default_plan));
+        plan.map(|p| {
+            p.covers
+                .iter()
+                .map(|c| ic_core::ChosenCover {
+                    code: c.cover.clone(),
+                    excess_option: c.excess_option.clone(),
+                    member_pays: if dependant { !self.employer_pays_dependants } else { c.member_pays },
+                })
+                .collect()
+        })
+        .unwrap_or_default()
     }
 
     /// The menu is whole: plans with distinct codes and at least one cover
@@ -113,6 +138,9 @@ impl HealthMenu {
                 let def = product
                     .cover(&c.cover)
                     .ok_or_else(|| format!("health plan {} names {}, which {} does not have", p.code, c.cover, product.code))?;
+                if crate::benefit::formula_covers(product).any(|f| f.code == c.cover) {
+                    return Err(format!("{} is the scheme's own cover, not one a member chooses", c.cover));
+                }
                 if let Some(option) = &c.excess_option {
                     if !def.excess_options.iter().any(|o| &o.code == option) {
                         return Err(format!("{} has no excess option {option}", c.cover));
@@ -510,6 +538,7 @@ pub(crate) mod tests {
                 .map(|(c, o)| MenuCover {
                     cover: (*c).into(),
                     excess_option: o.map(str::to_string),
+                    member_pays: false,
                 })
                 .collect(),
         }
@@ -531,6 +560,7 @@ pub(crate) mod tests {
             default_plan: "everyday".into(),
             tiers: vec![HealthTier::Single, HealthTier::Family],
             choice_backdating_days: 30,
+            employer_pays_dependants: false,
         };
         menu.validate().unwrap();
         menu.check_product(&product).unwrap();
@@ -547,7 +577,8 @@ pub(crate) mod tests {
         assert!(broken(&|m| m.plans[0].covers.clear()));
         assert!(broken(&|m| m.plans[0].covers.push(MenuCover {
             cover: "dental".into(),
-            excess_option: None
+            excess_option: None,
+            member_pays: false,
         })));
         assert!(broken(&|m| m.default_plan = "gold".into()));
         assert!(broken(&|m| m.tiers = vec![HealthTier::Family]));

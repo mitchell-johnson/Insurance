@@ -69,6 +69,17 @@ pub enum After {
         employee_ids: Vec<String>,
         last: bool,
     },
+    /// A step of a member's health plan: dependants joined or taken off,
+    /// or a life's covers set. The last step of a choice carries it.
+    Health {
+        employee_id: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        joined: Vec<crate::model::Dependant>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        left: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        chosen: Option<HealthChoice>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -129,6 +140,7 @@ impl Item {
                 After::ContinuationIssued { offer } => format!("offer:{offer}"),
                 After::SchemeCancelled { .. } => "scheme".to_string(),
                 After::SplitPart { into, .. } => format!("split:{into}"),
+                After::Health { employee_id, .. } => format!("health:{employee_id}"),
             },
         }
     }
@@ -476,6 +488,13 @@ impl GroupState {
                 self.raise(&s.id, ExceptionKind::RowRefused, &subject);
             }
             Work::Core {
+                then: After::Health { employee_id, .. },
+                ..
+            } => {
+                self.health_refused(s, employee_id, code);
+                self.raise(&s.id, ExceptionKind::RowRefused, &subject);
+            }
+            Work::Core {
                 then: After::SplitPart { into, .. },
                 ..
             } => {
@@ -646,6 +665,12 @@ impl GroupState {
                 }
             }
             After::SplitPart { into, employee_ids, last } => self.split_part_moved(s, &into, &employee_ids, last),
+            After::Health {
+                employee_id,
+                joined,
+                left,
+                chosen,
+            } => self.health_step(s, &employee_id, joined, left, chosen),
             After::SchemeCancelled { effective } => {
                 s.status = SchemeStatus::Terminated { effective };
                 self.emit(GroupEvent::SchemeTerminated {
@@ -777,6 +802,7 @@ impl GroupState {
                 }
                 self.risk_notice(s, &life, &change.attrs);
                 self.excess_check(s, &change.employee_id, change.effective, None);
+                self.enrol_default(s, &change.employee_id, change.effective);
             }
             ChangeKind::Change => {
                 s.membership.apply(&change, None);
@@ -1374,8 +1400,10 @@ impl GroupState {
         let guaranteed = s.terms.rate_guarantee_until.is_some_and(|g| g > renewal_date);
         if agreed.is_some() || guaranteed {
             // Agreed terms, or rates still under guarantee: the year rolls.
+            let menu = s.terms.health_menu.clone();
             s.terms = agreed.map_or_else(|| rolled(&s.terms), |(terms, _)| terms);
             s.terms_version += 1;
+            self.menu_changed(s, menu.as_ref(), renewal_date);
             s.renewal = None;
             if s.terms.basis == MemberBasis::Pool {
                 s.declaration_due = s.terms.scheme_year_start.checked_add_days(Days::new(u64::from(s.terms.declaration_due_days)));
@@ -1427,7 +1455,7 @@ impl GroupState {
         self.with_scheme(&scheme, |st, s| {
             let group_of = |s: &Scheme, life: &LifeId| {
                 s.membership
-                    .by_life(life)
+                    .holder(life)
                     .and_then(|m| m.attrs.billing_group.clone())
                     .filter(|g| s.terms.has_billing_group(g))
                     .unwrap_or_else(|| s.terms.default_billing_group().to_string())
@@ -1450,10 +1478,13 @@ impl GroupState {
                         ..Invoice::default()
                     });
                     for (life, total_minor) in lines {
+                        // A dependant's cover is on their member's line and
+                        // does not count as a member.
+                        let member = u32::from(s.membership.by_life(&life).is_some());
                         let line: &mut GroupLine = invoice.by_group.entry(group_of(s, &life)).or_default();
-                        line.members += 1;
+                        line.members += member;
                         line.total_minor += total_minor;
-                        let attrs = s.membership.by_life(&life).map(|m| &m.attrs);
+                        let attrs = s.membership.holder(&life).map(|m| &m.attrs);
                         let category = attrs.and_then(|a| a.category.clone()).unwrap_or_default();
                         let occupation_class = attrs.and_then(|a| a.occupation_class.clone());
                         let at = invoice
@@ -1470,7 +1501,7 @@ impl GroupState {
                             );
                             i
                         });
-                        invoice.by_class[i].members += 1;
+                        invoice.by_class[i].members += member;
                         invoice.by_class[i].total_minor += total_minor;
                     }
                     invoice.loading_minor += loading_minor;
@@ -1920,42 +1951,19 @@ impl GroupState {
                 plan,
                 tier,
                 effective,
+                dependants,
             } => self.with_scheme(&scheme, |st, s| {
-                let menu = s
-                    .terms
-                    .health_menu
-                    .as_ref()
-                    .ok_or_else(|| Reject::new("no_menu", "this scheme has no health menu"))?;
-                if menu.plan(&plan).is_none() {
-                    return Err(Reject::new("unknown_plan", format!("{plan} is not on the scheme's health menu")));
-                }
-                if !menu.tiers.contains(&tier) {
-                    return Err(Reject::new("tier_not_offered", "the scheme does not offer that tier"));
-                }
-                let earliest = today.checked_sub_days(Days::new(u64::from(menu.choice_backdating_days))).unwrap_or(today);
-                let member = s
-                    .membership
-                    .active(&employee_id)
-                    .ok_or_else(|| Reject::new("unknown_member", format!("{employee_id} is not a member")))?;
-                if effective < earliest.max(member.joined) {
-                    return Err(Reject::new("backdating_limit", "a choice cannot take effect that far back"));
-                }
-                let life = member.life.clone();
-                if let Some(m) = s.membership.members.get_mut(&employee_id) {
-                    m.health = Some(HealthChoice {
-                        plan: plan.clone(),
+                st.choose_health_plan(
+                    s,
+                    today,
+                    crate::health::Choice {
+                        employee_id,
+                        plan,
                         tier,
                         effective,
-                    });
-                }
-                st.emit(GroupEvent::HealthPlanChosen {
-                    scheme: s.id.clone(),
-                    life,
-                    plan,
-                    tier,
-                    effective,
-                });
-                Ok(())
+                        dependants,
+                    },
+                )
             }),
             RecordContinuedExcess { scheme, offer, outcome } => self.with_scheme(&scheme, |st, s| {
                 let c = s

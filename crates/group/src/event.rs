@@ -166,6 +166,13 @@ pub enum GroupEvent {
         tier: crate::terms::HealthTier,
         effective: NaiveDate,
     },
+    /// The core refused a step of a member's health plan; the rest was not
+    /// sent. What was in place before stays, and staff are told.
+    HealthPlanRefused {
+        scheme: String,
+        life: LifeId,
+        code: String,
+    },
     /// A member's letter could not be asked for; staff are told by the
     /// exception `letter_not_requested`.
     LetterNotRequested {

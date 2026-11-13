@@ -40,6 +40,12 @@ pub fn product() -> ProductDefinition {
     load_product("group_life.star", include_str!("../../../../products/group_life.star")).unwrap()
 }
 
+/// Workplace Benefits: group life with a health menu (hospital at three
+/// excess levels, specialist which needs hospital, dental).
+pub fn benefits_product() -> ProductDefinition {
+    load_product("group_benefits.star", include_str!("../../../../products/group_benefits.star")).unwrap()
+}
+
 /// The terms of the fictional employer Harbour Freight's scheme.
 pub fn terms() -> SchemeTerms {
     SchemeTerms {
@@ -178,6 +184,11 @@ impl Harness {
     /// A scheme from 1 November 2027 with one founding member, E001, on
     /// 60,000 in Auckland, registered with the module.
     pub fn new(terms: SchemeTerms) -> Self {
+        Self::on(terms, product())
+    }
+
+    /// As `new`, on another scheme product.
+    pub fn on(terms: SchemeTerms, product: ProductDefinition) -> Self {
         let mut c = Cluster::in_memory(1, 11);
         c.open(d(2027, 11, 1)).unwrap();
         for cmd in shipped_activations().unwrap() {
@@ -208,7 +219,8 @@ impl Harness {
                 factors: founder.factors(),
             }
         };
-        let issue = group_scheme(30, d(2027, 11, 1), vec![first]);
+        let mut issue = group_scheme(30, d(2027, 11, 1), vec![first]);
+        issue.product_code = product.code.clone();
         let (p, policy, group) = (c.partition_of(&issue.group), issue.policy.clone(), issue.group.clone());
         c.submit(p, "new-business", issue_command(issue)).unwrap();
         c.take_events();
@@ -244,6 +256,7 @@ impl Harness {
                 fingerprint: Some("fp-E001".to_string()),
                 auto_cap_minor: None,
                 health: None,
+                dependants: vec![],
             }]
         };
         h.staff(GroupCommand::RegisterScheme {
@@ -252,7 +265,7 @@ impl Harness {
             group,
             employer: party("employer-1"),
             inception: d(2027, 11, 1),
-            product: Box::new(product()),
+            product: Box::new(product),
             terms: Box::new(terms),
             founding,
             pools: if pooled { vec!["seed".to_string()] } else { vec![] },
