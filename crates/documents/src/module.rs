@@ -26,6 +26,11 @@ pub const MAX_ANSWER: usize = 500;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Query {
+    /// Documents whose channel rows are to be written (`true`) or taken
+    /// down (`false`).
+    Listing {
+        limit: usize,
+    },
     /// Where a shared part is used, and the products a new version of it
     /// has not reached.
     PartUsage {
@@ -150,6 +155,7 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::PendingEvents { limit } => json(state.pending_events(cap(limit))),
         Query::CoreOutbox { limit } => json(state.core_outbox.iter().take(cap(limit)).collect::<Vec<_>>()),
         Query::PendingDeletes { limit } => json(state.pending_deletes.iter().take(cap(limit)).collect::<Vec<_>>()),
+        Query::Listing { limit } => json(state.listing_due(cap(limit))),
         Query::PartUsage { part } => json(state.part_usage(&part)),
         Query::LettersRequested { limit } => json(state.letters_requested(cap(limit))),
         Query::LetterRequest { request } => json(state.letter_requests.get(&request)),

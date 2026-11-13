@@ -630,6 +630,15 @@ fn the_adviser_portal_disputes_only_for_the_adviser_who_wrote_the_layer() {
         .iter()
         .any(|e| matches!(e, Event::ReplacementDisputed { reference, .. } if reference == "dispute:portal-1")));
     assert_eq!(dispute(&mut w, Some("adviser-b")).unwrap_err().code, "already_disputed");
+    // Staff may send it too, without naming an adviser; the same checks apply.
+    let by_staff = Command::DisputeReplacement {
+        policy: new.clone(),
+        cover: "life".into(),
+        layer: 1,
+        reference: "dispute:staff".into(),
+        adviser: None,
+    };
+    assert!(w.send(ops(), by_staff).is_err(), "already disputed, or not the caller's to send");
 }
 
 /// Purpose: a customer moved from two policies to one larger one. The new policy is written

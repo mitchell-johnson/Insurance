@@ -338,6 +338,7 @@ Letters the complaints register owes, on the branch `claude/project-thread-3jubf
 ### Not built
 
 - **Letter wording.** The three templates above, and every other template, are content for legal, product and compliance to write and approve; until a template is active its letters are left for people and the pass logs it.
+- **Documents in the channels.** Built 2026-11-13 with the portal thread: each document on a policy is a channel row (`listing.rs`), removed on destruction.
 - **Collections dunning notices.** Built 2026-11-13 with the payments thread: notices issued, reported sent, and their delivery reported back (`collections_notices.rs`). Template wording `collections/<step>` is not written.
 - **Letters other modules ask for.** Built 2026-11-13 (`requested_letters.rs`, `Command::RequestLetter`, agreed with underwriting and reinsurance): kinds and templates in `model::REQUESTED_KINDS`, contract in `docs/documents.md`. Not done: the wording of every template, and the callers' driver sides (theirs). Decided by Mitchell: listings go by SFTP and an API in the reinsurance service, never by email.
 - **Document download.** Built 2026-11-13: `GET /v1/documents/{id}/pdf` (`service.rs`, `auth.rs`), Entra roles `portal` (with `x-ic-party`, owner or recipient only, else 404) and `staff` (with `x-ic-actor`, `x-ic-purpose`, never clinical). Not done: the Entra app registration, and the portal calling it.

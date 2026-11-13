@@ -39,6 +39,7 @@ name = "ic-documents"
 path = "src/bin/ic-documents.rs"
 
 [dev-dependencies]
+ic-channels = { path = "../channels" }
 proptest.workspace = true
 rsa = "0.9"
 
