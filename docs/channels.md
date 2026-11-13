@@ -221,6 +221,9 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.
 
+- **One owner.** The claim view names the owner; where the claims module marks a claimant for communication support it says so in a banner, because a change of owner then needs a handover note and a call.
+- **Proof of life is not sent from the app.** Claims takes `ConfirmAlive` from the caller `channels`, but the portal does not send it: it cannot check a liveness result the app reports, so the evidence would be the device's word. A liveness check the app runs is recorded by the identity provider in the customer master, which relays `ConfirmAlive` to every partition (`docs/customers.md`, "Proof of life"). Questions other services ask the claims module (the documents service's repayment letters) are answered 404 here.
+
 ## The reinsurance exceptions console
 
 `/reinsurance` shows the reinsurance module's open exceptions (`docs/reinsurance.md`) and what a person can do about each. That module is the source of truth: an exception closes itself once its cause is cured, so there is nothing to acknowledge. The portal reads the module itself, not the event hub the exceptions are also sent to.
