@@ -603,6 +603,7 @@ async fn a_file_reaches_the_core_on_a_real_node() {
             fingerprint: None,
             auto_cap_minor: None,
             health: None,
+            dependants: vec![],
         }],
         pools: vec![],
     };

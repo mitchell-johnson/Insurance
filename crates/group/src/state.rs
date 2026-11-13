@@ -782,8 +782,10 @@ impl GroupState {
                 for (key, layer) in added.into_iter().flatten() {
                     st.send(Outbound::Commission { key, layer });
                 }
-                s.terms = *terms;
+                let menu = std::mem::replace(&mut s.terms, *terms).health_menu;
                 s.terms_version += 1;
+                st.menu_changed(s, menu.as_ref(), today);
+                st.pump(s);
                 st.emit(GroupEvent::TermsAmended {
                     scheme: s.id.clone(),
                     terms_version: s.terms_version,
@@ -970,7 +972,17 @@ impl GroupState {
         scheme.membership = membership;
         scheme.pools = pools;
         scheme.declaration_due = declaration_due;
+        let founders: Vec<String> = scheme.membership.active_members().map(|m| m.employee_id.clone()).collect();
+        let id = scheme.id.clone();
         self.open_scheme(scheme, brokered);
+        // Founding members are on the menu's default plan from the start.
+        self.with_scheme(&id, |st, s| {
+            for employee_id in &founders {
+                st.enrol_default(s, employee_id, inception);
+            }
+            st.pump(s);
+            Ok(())
+        })?;
         Ok(())
     }
 

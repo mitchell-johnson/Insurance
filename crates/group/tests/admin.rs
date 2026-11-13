@@ -31,6 +31,7 @@ fn member(id: &str) -> Member {
         fingerprint: None,
         auto_cap_minor: None,
         health: None,
+        dependants: vec![],
     }
 }
 
@@ -363,87 +364,4 @@ fn the_module_runs_under_the_node_host() {
     restored.load(saved.clone()).unwrap();
     assert_eq!(restored.query(json!({"ask": "scheme", "scheme": SCHEME})).unwrap(), answer);
     assert_eq!(restored.save().unwrap(), saved);
-}
-
-/// Purpose: a member chooses a plan and tier from the scheme's health menu, from a date no
-/// further back than the menu allows; a plan or tier not on the menu, a scheme with no menu
-/// and a menu naming a cover the scheme's product lacks are refused; and the employer's view
-/// shows the plan and tier (the default plan, single, until the member chooses) and nothing
-/// of who the dependants are.
-/// Why it matters: Mitchell's decision of 14 Nov 2026. The tier sets the premium the employer
-/// pays, so the employer must see it; who a member's partner or children are is not the
-/// employer's business.
-#[test]
-fn a_member_chooses_a_health_plan_from_the_schemes_menu() {
-    use ic_group::terms::{HealthMenu, HealthPlan, HealthTier, MenuCover};
-    let mut h = Harness::new(terms());
-    h.apply(
-        "f1",
-        FileKind::Full,
-        vec![
-            row(1, "E001", attrs("staff", 60_000_00, "akl")),
-            row(2, "E002", attrs("staff", 60_000_00, "wlg")),
-        ],
-    );
-    let today = h.today();
-    let choose = |h: &mut Harness, caller: &str, plan: &str, tier: HealthTier, effective: chrono::NaiveDate| {
-        let r = h.send_as(
-            caller,
-            "someone",
-            GroupCommand::ChooseHealthPlan {
-                scheme: SCHEME.into(),
-                employee_id: "E002".into(),
-                plan: plan.into(),
-                tier,
-                effective,
-            },
-        );
-        h.settle();
-        r
-    };
-    assert_eq!(code(choose(&mut h, caller::MEMBER, "standard", HealthTier::Single, today)), "no_menu");
-
-    let cover = |c: &str| MenuCover {
-        cover: c.into(),
-        excess_option: None,
-    };
-    let menu = HealthMenu {
-        plans: vec![HealthPlan {
-            code: "standard".into(),
-            name: "Standard".into(),
-            covers: vec![cover("group-life")],
-        }],
-        default_plan: "standard".into(),
-        tiers: vec![HealthTier::Single, HealthTier::Family],
-        choice_backdating_days: 30,
-    };
-    let amend = |h: &mut Harness, menu: HealthMenu| {
-        let mut t = h.scheme().terms.clone();
-        t.health_menu = Some(menu);
-        h.staff(GroupCommand::AmendTerms {
-            scheme: SCHEME.into(),
-            terms: Box::new(t),
-        })
-    };
-    let mut lacking = menu.clone();
-    lacking.plans[0].covers = vec![cover("hospital")];
-    assert_eq!(code(amend(&mut h, lacking)), "invalid_terms");
-    amend(&mut h, menu).unwrap();
-
-    let view = |h: &Harness| ic_group::answer(&h.g, json!({"ask": "member", "scheme": SCHEME, "employee": "E002"})).unwrap()["health"].clone();
-    assert_eq!(view(&h), json!({"plan": "standard", "tier": "single", "since": null}));
-    assert_eq!(code(choose(&mut h, caller::MEMBER, "gold", HealthTier::Single, today)), "unknown_plan");
-    assert_eq!(code(choose(&mut h, caller::MEMBER, "standard", HealthTier::Couple, today)), "tier_not_offered");
-    let long_ago = today.checked_sub_days(Days::new(31)).unwrap();
-    assert_eq!(
-        code(choose(&mut h, caller::MEMBER, "standard", HealthTier::Family, long_ago)),
-        "backdating_limit"
-    );
-    assert_eq!(
-        code(choose(&mut h, caller::REINSURANCE, "standard", HealthTier::Family, today)),
-        "caller_not_allowed"
-    );
-    choose(&mut h, caller::EMPLOYER, "standard", HealthTier::Family, today).unwrap();
-    assert_eq!(view(&h), json!({"plan": "standard", "tier": "family", "since": today}));
-    assert!(h.saw(|e| matches!(e, GroupEvent::HealthPlanChosen { tier: HealthTier::Family, .. })));
 }

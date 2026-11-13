@@ -14,6 +14,7 @@ pub mod csv;
 pub mod diff;
 pub mod driver;
 pub mod event;
+pub mod health;
 pub mod host;
 pub mod mapping;
 pub mod model;

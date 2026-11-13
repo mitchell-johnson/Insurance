@@ -86,6 +86,13 @@ pub enum ExcessDecision {
     NotProceeded,
 }
 
+/// A dependant as a member names them on a health plan choice.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DependantSpec {
+    pub key: String,
+    pub date_of_birth: NaiveDate,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "decision", rename_all = "snake_case")]
 pub enum MatchDecision {
@@ -229,6 +236,11 @@ pub enum GroupCommand {
         plan: String,
         tier: crate::terms::HealthTier,
         effective: NaiveDate,
+        /// Who else the plan covers: one for couple, at least one for
+        /// family, none for single. The whole list each time; anyone left
+        /// out comes off the plan from the date.
+        #[serde(default)]
+        dependants: Vec<DependantSpec>,
     },
 
     // --- cover above the automatic amount ---
