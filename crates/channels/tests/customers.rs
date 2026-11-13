@@ -51,7 +51,7 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
     headers.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
 }
 
-/// Purpose: each of the three calls goes to the master's route for the person signed in, with the portal's token, the purpose the
+/// Purpose: each call (record, commands, export, routing, spending hold) goes to the master's route for the person signed in, with the portal's token, the purpose the
 /// master's policy keys on, the person as both party and actor, and on a change the version and idempotency key; routing is
 /// asked under `self_service` too.
 /// Why it matters: the master decides what the portal may see by these headers alone; a wrong purpose or party would either be
@@ -72,6 +72,10 @@ async fn the_master_is_asked_about_the_person_signed_in() {
     );
     assert_eq!(master.export(&kiri).await.unwrap().0, 200);
     assert_eq!(master.routing(&kiri).await.unwrap(), (200, json!({ "ok": "/v1/parties/party-1/routing" })));
+    assert_eq!(
+        master.spending_hold(&kiri).await.unwrap(),
+        (200, json!({ "ok": "/v1/parties/party-1/spending-hold" }))
+    );
 
     let seen = seen.lock().unwrap();
     let routes: Vec<_> = seen.iter().map(|(m, p, _)| format!("{m} {p}")).collect();
@@ -83,6 +87,7 @@ async fn the_master_is_asked_about_the_person_signed_in() {
             "POST /v1/parties/party-1/commands",
             "GET /v1/parties/party-1/export?purpose=subject_access",
             "GET /v1/parties/party-1/routing",
+            "GET /v1/parties/party-1/spending-hold",
         ]
     );
     for (_, _, headers) in seen.iter() {

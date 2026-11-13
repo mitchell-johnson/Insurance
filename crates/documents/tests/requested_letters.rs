@@ -121,8 +121,57 @@ fn the_module_takes_each_request_once_and_by_the_rules() {
     assert_eq!(kit.state.letter_requests["uw:1"].caller, "underwriting");
     // Every kind names its own template.
     for kind in REQUESTED_KINDS {
-        assert!(kind.template.starts_with(if kind.caller == "underwriting" { "uw-" } else { "ri-" }));
+        let prefix = match kind.caller {
+            "underwriting" => "uw-",
+            "reinsurance" => "ri-",
+            _ => "grp-",
+        };
+        assert!(kind.template.starts_with(prefix), "{}", kind.template);
     }
+}
+
+/// Purpose: group administration may ask for the two leave-of-absence
+/// letters to a member, with the day absence began and the day cover ends,
+/// each one proven delivered; no other module may ask for them, and group
+/// may cancel its own.
+/// Why it matters: a member posted overseas loses cover on a set day if
+/// they are not back (persona GRP-038). Being told that day, provably, is
+/// what lets them arrange their return or other cover; a claim refused
+/// after the limit without that notice is a complaint the insurer loses.
+#[test]
+fn group_asks_for_the_leave_of_absence_letters() {
+    let mut kit = Kit::ready();
+    let mut started = letter("grp:abs:1", "absence_started", to("aroha"));
+    started.policy = Some(policy("scheme-1"));
+    started.subject = "scheme-1".into();
+    started.reasons.clear();
+    started.detail = [
+        ("since".to_string(), "2027-11-01".to_string()),
+        ("cover_ends".to_string(), "2028-11-01".to_string()),
+    ]
+    .into();
+    kit.ok("group", "group-driver", Command::RequestLetter(started.clone()));
+    let kind = REQUESTED_KINDS.iter().find(|k| k.kind == "absence_started").unwrap();
+    assert!(kind.proven && !kind.clinical);
+    assert_eq!(kit.state.letter_requests["grp:abs:1"].request.detail["cover_ends"], "2028-11-01");
+    assert_eq!(
+        kit.err("underwriting", "uw", Command::RequestLetter(letter("uw:9", "absence_started", to("aroha")))),
+        "unknown_letter_kind"
+    );
+    kit.ok(
+        "group",
+        "group-driver",
+        Command::RequestLetter(letter("grp:abs:2", "absence_limit_reached", to("aroha"))),
+    );
+    kit.ok(
+        "group",
+        "group-driver",
+        Command::CancelLetterRequest {
+            request: "grp:abs:2".into(),
+            reason: "back at work".into(),
+        },
+    );
+    assert!(matches!(kit.state.letter_requests["grp:abs:2"].status, LetterRequestStatus::Cancelled { .. }));
 }
 
 /// Purpose: a waiting request can be cancelled, with a reason, by the

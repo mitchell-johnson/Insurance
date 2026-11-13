@@ -40,7 +40,7 @@ async fn intake() -> (Hosted, Seen) {
     (hosted, seen)
 }
 
-/// Purpose: both calls go to the intake's own routes with the portal's token; the intake's answer, including a 422 listing the
+/// Purpose: each call (to sign, submit, and an underwriter's reading) goes to the intake's own routes with the portal's token; the intake's answer, including a 422 listing the
 /// problems, comes back with its status; a 503 or an unreachable intake is an error to retry; and the request carries only the
 /// fields the intake takes, with no adviser-entered questions defaulting to none.
 /// Why it matters: the intake admits only callers holding the app role `new-business`, and the app must be able to tell answers that
@@ -55,6 +55,8 @@ async fn the_intake_is_called_as_the_portal() {
     );
     assert_eq!(intake.to_sign(body.clone()).await.unwrap(), (200, json!({ "at": "/v1/disclosures/to-sign" })));
     assert_eq!(intake.submit(body).await.unwrap(), (200, json!({ "at": "/v1/disclosures" })));
+    let reading = json!({ "request": "k1", "proposal": "prop-1", "life": "life-1", "underwriter": "amy", "purpose": "assess" });
+    assert_eq!(intake.open(reading).await.unwrap(), (200, json!({ "at": "/v1/disclosures/open" })));
     assert!(seen.lock().unwrap().iter().all(|(_, auth)| auth.as_deref() == Some("Bearer portal-token")));
 
     let bad = answers("bad", "life-1", &json!({ "step": "disclosure", "answers": {} })).unwrap();

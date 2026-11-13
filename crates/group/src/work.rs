@@ -773,6 +773,19 @@ impl GroupState {
                     expires,
                 });
             }
+            ChangeKind::AbsenceStart => {
+                s.membership.apply(&change, None);
+                let limit = Days::new(u64::from(s.terms.leave_of_absence_days));
+                let Some(m) = s.membership.active(&change.employee_id) else { return };
+                if let (Some(since), Some(ends)) = (m.absence_since, change.effective.checked_add_days(limit)) {
+                    self.emit(GroupEvent::AbsenceStarted {
+                        scheme: s.id.clone(),
+                        life: m.life.clone(),
+                        since,
+                        cover_ends: s.terms.cover_end_for(ends),
+                    });
+                }
+            }
             _ => {
                 s.membership.apply(&change, None);
             }
@@ -1649,6 +1662,11 @@ impl GroupState {
                     .as_mut()
                     .filter(|_| s.status == SchemeStatus::Active)
                     .ok_or_else(|| Reject::new("renewal_not_open", "the scheme has no renewal open"))?;
+                // A pool is priced on what it declares: its renewal waits for
+                // an overdue declaration.
+                if st.exceptions.values().any(|e| e.scheme == s.id && e.kind == ExceptionKind::DeclarationOverdue) {
+                    return Err(Reject::new("declaration_overdue", "the scheme's declaration is overdue; renewal waits for it"));
+                }
                 renewal.agreed = Some((*terms, rate_table.clone()));
                 st.clear(&s.id, ExceptionKind::RenewalNotAgreed, None);
                 st.emit(GroupEvent::RenewalAgreed {

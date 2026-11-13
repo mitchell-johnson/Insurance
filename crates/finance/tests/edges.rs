@@ -627,3 +627,124 @@ fn tax_accounts_reconcile_to_the_posting_types_that_may_move_them() {
     config.tax[0].posting_types.clear();
     assert!(config.validate().is_err());
 }
+
+/// Purpose: with the financial year ending in March, a term life policy incepting on 28
+/// March 2028 is placed in `individual-life/FY2028/other` on the day it is issued, a
+/// health policy incepting on 5 April in `health/FY2029/other`, and a term life policy
+/// issued in April but backdated to 1 March in FY2028, because the cohort follows
+/// inception. A pet policy no rule names waits, and the close check lists it and is red.
+/// A new close configuration that names pet policies and also moves term life to
+/// another portfolio is approved; classifying then places the pet policy under the new
+/// rule and leaves every policy already placed where it was. Only an operator or the
+/// lead may classify, there is nothing to classify by before a close configuration is
+/// in force, and a rule naming a product twice or an unknown profitability band is
+/// refused.
+/// Why it matters: an accounting group is fixed for the life of the contracts in it.
+/// If a later rule change moved policies already placed, every group's measurement since
+/// inception would silently change; if a policy could stay ungrouped, it would be left
+/// out of every group's figures.
+#[test]
+fn a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved() {
+    let issued = |policy: &str, product: &str, inception: NaiveDate| Event::PolicyIssued {
+        policy: policy.into(),
+        number: policy.to_string(),
+        group: "grp".into(),
+        policyholder: "party-x".into(),
+        product_code: product.to_string(),
+        product_hash: "h".to_string(),
+        inception,
+        lives: vec![],
+        layers: vec![],
+        members: vec![],
+    };
+    let mut s = Stream::open(d(2028, 3, 28));
+    s.push(issued("pol-1", "term-life", d(2028, 3, 28)));
+    s.push(issued("pol-2", "pet-plan", d(2028, 3, 28)));
+    while s.date < d(2028, 4, 5) {
+        s.close();
+    }
+    s.push(issued("pol-3", "health-plan", d(2028, 4, 5)));
+    s.push(issued("pol-4", "term-life", d(2028, 3, 1)));
+    while s.date < d(2028, 5, 2) {
+        s.close();
+    }
+    let mut b = Books::ready(1);
+    b.feed(&s.events).unwrap();
+    let group = |b: &Books, policy: &str| {
+        let g = ic_finance::host::answer(&b.state, serde_json::json!({"q": "accounting_group", "partition": 0, "policy": policy})).unwrap();
+        (
+            g["portfolio"].as_str().map(str::to_string),
+            g["cohort"].as_str().map(str::to_string),
+            g["rule_version"].as_u64(),
+            g["assigned_on"].as_str().map(str::to_string),
+        )
+    };
+    let placed =
+        |portfolio: &str, cohort: &str, version: u64, on: &str| (Some(portfolio.to_string()), Some(cohort.to_string()), Some(version), Some(on.to_string()));
+    assert_eq!(group(&b, "pol-1"), placed("individual-life", "FY2028", 1, "2028-03-28"));
+    assert_eq!(group(&b, "pol-3"), placed("health", "FY2029", 1, "2028-04-05"));
+    assert_eq!(group(&b, "pol-4"), placed("individual-life", "FY2028", 1, "2028-04-05"));
+    assert_eq!(group(&b, "pol-2"), (None, None, None, None));
+    let check = "accounting_groups";
+    for p in [period(2028, 3), period(2028, 4)] {
+        match status(&b, p, check) {
+            CheckStatus::Red { items } => {
+                assert_eq!(items.len(), 1);
+                assert!(
+                    items[0].contains("pol-2") && items[0].contains("pet-plan") && items[0].contains("2028-03-28"),
+                    "{items:?}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    let counts = ic_finance::host::answer(&b.state, serde_json::json!({"q": "accounting_groups"})).unwrap();
+    assert_eq!(
+        counts,
+        serde_json::json!({"groups": [{"group": "health/FY2029/other", "policies": 1}, {"group": "individual-life/FY2028/other", "policies": 2}], "ungrouped": 1})
+    );
+
+    let mut next = close_config();
+    next.version = 2;
+    next.content_hash = "v2".to_string();
+    next.grouping.retain(|g| g.product != "term-life");
+    for (product, portfolio) in [("pet-plan", "pet"), ("term-life", "moved")] {
+        next.grouping.push(ic_finance::close::GroupRule {
+            product: product.to_string(),
+            portfolio: portfolio.to_string(),
+            profitability: "onerous".to_string(),
+        });
+    }
+    b.activate_close(next.clone());
+    assert_eq!(b.console_code("ana", FinCommand::ClassifyPolicies), "authority");
+    b.console("olive", FinCommand::ClassifyPolicies).unwrap();
+    assert_eq!(group(&b, "pol-2"), placed("pet", "FY2028", 2, "2028-05-01"));
+    assert_eq!(group(&b, "pol-1"), placed("individual-life", "FY2028", 1, "2028-03-28"));
+    assert_eq!(status(&b, period(2028, 3), check), CheckStatus::Green);
+    let last = b.applied.last().unwrap();
+    assert!(
+        format!("{:?}", last.events).contains("PoliciesClassified { placed: 1, still_ungrouped: 0, rule_version: 2 }"),
+        "{:?}",
+        last.events
+    );
+
+    let mut bare = Books::empty();
+    bare.send(
+        "operator",
+        None,
+        FinCommand::Configure {
+            partitions: 1,
+            year_end_month: 3,
+        },
+    )
+    .unwrap();
+    assert_eq!(bare.console_code("olive", FinCommand::ClassifyPolicies), "close_config");
+    for bad in ["sometimes", ""] {
+        let mut wrong = next.clone();
+        wrong.grouping[0].profitability = bad.to_string();
+        assert!(wrong.validate().is_err());
+    }
+    let mut twice = next.clone();
+    twice.grouping.push(next.grouping[0].clone());
+    assert!(twice.validate().unwrap_err().to_string().contains("declared twice"));
+}

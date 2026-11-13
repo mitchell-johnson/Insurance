@@ -100,6 +100,16 @@ pub enum Command {
         party: String,
         held: bool,
     },
+    /// The core recorded an insolvency interest naming `owner` as the
+    /// policy owner (`InterestEvent::Recorded`, kind insolvency), or released
+    /// one with effect from `released`.
+    RecordInsolvency {
+        owner: String,
+        policy: String,
+        interest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        released: Option<NaiveDate>,
+    },
 
     // --- accounts that may be paid ---
     RegisterPayee {
@@ -156,6 +166,15 @@ pub enum Command {
     ClaimsRunSubmitted {
         run: String,
         submitted_minor: i64,
+    },
+    /// Many collections failed together for a reason that is not the
+    /// payers' doing (COL-024).
+    DeclareIncident {
+        incident: Id,
+        authorities: BTreeSet<Id>,
+        from: NaiveDate,
+        to: NaiveDate,
+        reason: String,
     },
     /// Claims admitted a claim (`claim_admitted`), for the funding forecast.
     ClaimAdmitted {
@@ -518,10 +537,18 @@ pub enum Event {
     NoticeClosed {
         notice: u64,
     },
+    IncidentDeclared {
+        incident: Id,
+    },
     /// The customer master's answer about a party's hold changed.
     CustomerHoldRecorded {
         party: String,
         held: bool,
+    },
+    /// Whether an insolvency interest stands against a policy owner changed.
+    OwnerInsolvencyChanged {
+        party: String,
+        insolvent: bool,
     },
     DrillStarted {
         drill: Id,
@@ -592,6 +619,9 @@ pub struct PaymentsState {
     /// Cash owed between statutory funds (PAY-010).
     #[serde(default)]
     pub sweeps: crate::sweep::Sweeps,
+    /// Collection incidents (COL-024).
+    #[serde(default)]
+    pub incidents: BTreeMap<Id, crate::incident::Incident>,
     /// Claims admitted and not yet released for payment (PAY-013).
     #[serde(default)]
     pub admitted: BTreeMap<String, crate::forecast::Admitted>,
@@ -602,6 +632,9 @@ pub struct PaymentsState {
     /// money going out (SVC-022).
     #[serde(default)]
     pub customer_holds: BTreeMap<String, crate::hold::HoldRecord>,
+    /// Policy owners with insolvency interests recorded by the core.
+    #[serde(default)]
+    pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
     pub exceptions: BTreeMap<Id, Exception>,
     pub drills: BTreeMap<Id, Drill>,
     /// Work for the drivers, in order. Removed when its result is recorded.
@@ -695,6 +728,19 @@ impl PaymentsState {
                 self.receipt_unfunded(tx, &receipt, amount_minor)
             }
             Command::RecordCustomerHold { party, held } => self.record_customer_hold(tx, &party, held),
+            Command::RecordInsolvency {
+                owner,
+                policy,
+                interest,
+                released,
+            } => self.record_insolvency(tx, &owner, &policy, &interest, released),
+            Command::DeclareIncident {
+                incident,
+                authorities,
+                from,
+                to,
+                reason,
+            } => self.declare_incident(tx, incident, authorities, from, to, reason),
             Command::ClaimAdmitted { claim, amount_minor } => self.claim_admitted(tx, &claim, amount_minor),
             Command::ClaimClosed { claim } => {
                 tx.need(Role::Service)?;

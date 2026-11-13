@@ -19,7 +19,7 @@ use crate::config::{content_hash, eval, ConfigError};
 use crate::period::PeriodId;
 
 /// The checks the finance ledger works out from its own state.
-pub const AUTOMATIC_CHECKS: [&str; 9] = [
+pub const AUTOMATIC_CHECKS: [&str; 10] = [
     CONTROL_CHECK,
     VALUATION_EXTRACTS,
     UNAPPROVED_JOURNALS,
@@ -29,6 +29,7 @@ pub const AUTOMATIC_CHECKS: [&str; 9] = [
     MIGRATION_CONTROL,
     RATE_TABLE_VALIDATION,
     TAX_POSTING_TYPES,
+    ACCOUNTING_GROUPS,
 ];
 pub const CONTROL_CHECK: &str = "control_check";
 pub const VALUATION_EXTRACTS: &str = "valuation_extracts";
@@ -39,6 +40,11 @@ pub const FUND_BALANCE: &str = "fund_balance";
 pub const MIGRATION_CONTROL: &str = "migration_control";
 pub const RATE_TABLE_VALIDATION: &str = "rate_table_validation";
 pub const TAX_POSTING_TYPES: &str = "tax_posting_types";
+pub const ACCOUNTING_GROUPS: &str = "accounting_groups";
+
+/// The profitability bands a group of contracts is placed in at initial
+/// recognition.
+pub const PROFITABILITY: [&str; 3] = ["onerous", "no_significant_risk", "other"];
 
 /// The extract kinds a period needs before it can close.
 pub const REQUIRED_EXTRACTS: [&str; 2] = ["in_force", "movement"];
@@ -99,6 +105,17 @@ pub struct TaxDecl {
     pub posting_types: Vec<String>,
 }
 
+/// The classification rule for one product: the portfolio its policies
+/// are in and the profitability band the appointed actuary set for the
+/// product's new business.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GroupRule {
+    pub product: String,
+    pub portfolio: String,
+    pub profitability: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CloseConfig {
@@ -113,6 +130,9 @@ pub struct CloseConfig {
     /// The tax accounts and the posting types the core may move each with.
     #[serde(default)]
     pub tax: Vec<TaxDecl>,
+    /// How a policy is placed in an accounting group when it is issued.
+    #[serde(default)]
+    pub grouping: Vec<GroupRule>,
     /// Public holidays as observed (a holiday that falls on a weekend is
     /// listed on the weekday it is taken). Step due dates skip them.
     #[serde(default)]
@@ -144,6 +164,22 @@ impl CloseConfig {
         for t in &self.tax {
             if t.account.is_empty() || t.posting_types.is_empty() || !taxed.insert(t.account.as_str()) {
                 return invalid(format!("tax account `{}` is unnamed, declared twice or has no posting types", t.account));
+            }
+        }
+        let mut products = BTreeSet::new();
+        for g in &self.grouping {
+            let plain = |v: &str| !v.is_empty() && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+            if !plain(&g.product) || !plain(&g.portfolio) || !products.insert(g.product.as_str()) {
+                return invalid(format!(
+                    "grouping for product `{}` is unnamed, declared twice or names no plain portfolio",
+                    g.product
+                ));
+            }
+            if !PROFITABILITY.contains(&g.profitability.as_str()) {
+                return invalid(format!(
+                    "grouping for product {} has profitability {}, not one of {PROFITABILITY:?}",
+                    g.product, g.profitability
+                ));
             }
         }
         let mut ids = BTreeSet::new();
@@ -429,6 +465,7 @@ impl FinanceState {
             MIGRATION_CONTROL => self.migration_moves(period),
             RATE_TABLE_VALIDATION => self.unvalidated_tables(period),
             TAX_POSTING_TYPES => self.tax_reconciliation(period).unexplained,
+            ACCOUNTING_GROUPS => self.ungrouped(period),
             // The only other automatic check: the declarations were validated when loaded.
             _ => self.imbalances(period, false),
         };
@@ -541,6 +578,21 @@ impl FinanceState {
             .map(|((id, version, hash), seen)| {
                 let date = seen.activated.map(|d| d.to_string()).unwrap_or_default();
                 format!("rate table {id} version {version} ({hash}) was activated on {date} with no validation recorded for that content")
+            })
+            .collect()
+    }
+
+    /// Every policy issued by the end of the period that has no accounting
+    /// group, because no rule named its product when it was issued.
+    fn ungrouped(&self, period: PeriodId) -> Vec<String> {
+        self.ungrouped
+            .iter()
+            .filter(|(_, u)| u.issued_on <= period.end())
+            .map(|((partition, policy), u)| {
+                format!(
+                    "policy {policy} on partition {partition} (product {}) was issued on {} with no accounting group: add a rule for the product, then classify",
+                    u.product, u.issued_on
+                )
             })
             .collect()
     }

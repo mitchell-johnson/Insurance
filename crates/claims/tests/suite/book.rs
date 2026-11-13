@@ -555,6 +555,16 @@ fn a_benefit_ends_closes_and_can_recur() {
         reserve_minor: 20_000,
         actor: actor(who),
     };
+    // A recurrence inside the window serves no new waiting period, whatever the cover's is.
+    w.core.cover(
+        "pol-2",
+        "ip",
+        ic_claims::port::CoverFacts {
+            sum_insured_minor: 4_000,
+            waiting_days: 91,
+            ..facts("income_protection")
+        },
+    );
     w.on(d(2027, 6, 1));
     w.ok(recur("ben"));
     let c = w.claim("ip-1");
@@ -1821,4 +1831,25 @@ fn proceeds_are_held_under_an_insolvency_interest_until_legal_directs() {
     });
     w.pay_run("run-2", d(2027, 3, 1));
     assert_eq!(w.state.runs["run-2"].count, 1);
+}
+
+/// Purpose: the reserve, admission and closing notices carry the cause category, the top
+/// segment of the first tag of the recorded cause, and leave it out while no cause is recorded.
+/// Why it matters: finance reports claims experience by cause from these notices; a guessed or
+/// blank category would put the cost in the wrong line of the report.
+#[test]
+fn reserve_admission_and_closing_name_the_cause_category() {
+    let mut w = World::new();
+    admitted(&mut w, "c-1", 200_000);
+    let reserved = w.core.noticed("claim_reserved");
+    assert!(!reserved.last().expect("reserved").contains_key("cause_category"));
+    assert_eq!(w.core.noticed("claim_admitted").last().expect("admitted")["cause_category"], "cancer");
+    w.open_claim("c-2");
+    w.assess("c-2", "CC-0002");
+    w.conversation("c-2", "talk-2");
+    w.decided("c-2", "ana", Request::Decline, "R-NO");
+    w.approved("c-2", "ben");
+    let closed = w.core.noticed("claim_closed");
+    let closed = closed.last().expect("closed");
+    assert_eq!((closed["outcome"].as_str(), closed["cause_category"].as_str()), ("declined", "mental"));
 }

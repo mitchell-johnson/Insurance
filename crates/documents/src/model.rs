@@ -451,6 +451,22 @@ pub const REQUESTED_KINDS: &[RequestedKind] = &[
         clinical: false,
         proven: true,
     },
+    // A member who goes on leave of absence is told the day their cover
+    // stops if they are not back, and told again when that day comes.
+    RequestedKind {
+        caller: "group",
+        kind: "absence_started",
+        template: "grp-absence-started",
+        clinical: false,
+        proven: true,
+    },
+    RequestedKind {
+        caller: "group",
+        kind: "absence_limit_reached",
+        template: "grp-absence-limit-reached",
+        clinical: false,
+        proven: true,
+    },
 ];
 
 /// The kind `caller` may ask for under `kind`, if there is one.

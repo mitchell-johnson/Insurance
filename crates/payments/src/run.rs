@@ -157,11 +157,8 @@ impl PaymentsState {
                 return Err(Reject::new("unknown_payee", format!("there is no payee {p}")));
             }
         }
-        if self.hold_reason(n, now, None).is_some() {
-            return Err(Reject::new(
-                crate::hold::HELD,
-                format!("item {}: the customer has a hold on money going out", n.item),
-            ));
+        if let Some(reason) = self.hold_reason(n, now, None) {
+            return Err(Reject::new(reason, format!("item {}: money going out to this party is stopped", n.item)));
         }
         match &n.refund {
             None if matches!(n.counterparty, Counterparty::Authority(_)) => bad("only a refund is paid to the account of an authority"),
@@ -933,7 +930,7 @@ impl PaymentsState {
         }
         let (n, was_settled) = (item.new.clone(), item.was_settled);
         let run = &self.runs[&run_id];
-        let (inbound, run_type) = (run.run_type.inbound(), run.run_type);
+        let (inbound, run_type, value_date) = (run.run_type.inbound(), run.run_type, run.value_date);
         let account = item.submission.as_ref().and_then(|s| self.submissions.get(s)).map(|s| s.account.clone());
         let threshold = self.cfg()?.rules.dishonours_before_suspension;
         if let Some(item) = self.runs.get_mut(&run_id).and_then(|r| r.items.get_mut(item_id)) {
@@ -990,7 +987,17 @@ impl PaymentsState {
                 );
             }
         }
+        let incident = match &n.counterparty {
+            Counterparty::Authority(a) if inbound => self.incident_for(a, value_date),
+            _ => None,
+        };
         match &n.counterparty {
+            // Not the payer's doing: no dishonour, no suspension, no second
+            // presentment; collections asks for new details.
+            Counterparty::Authority(a) if incident.is_some() => {
+                let incident = incident.unwrap_or_default();
+                self.tag_to_incident(&incident, a, &n.item, n.policy.clone(), value_date);
+            }
             Counterparty::Authority(a) if inbound => {
                 let dishonours = self.authorities.get_mut(a).map_or(0, |authority| {
                     authority.dishonours += 1;

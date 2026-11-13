@@ -104,6 +104,10 @@ pub struct CoverFacts {
     /// life is in custody after sentence.
     #[serde(default)]
     pub benefit_while_imprisoned: Imprisonment,
+    /// A health counter this cover shares with others, where the product's
+    /// shell declares one. Absent: the cover's limits count on their own.
+    #[serde(default)]
+    pub shared_counter: Option<String>,
 }
 
 /// The product setting `benefit_while_imprisoned`.

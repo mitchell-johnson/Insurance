@@ -1025,10 +1025,12 @@ fn claims_that_leave_the_policy_in_force_are_on_the_experience_extract() {
     assert_eq!(copy.experience(day(1), day(5)).unwrap().bytes(), whole.bytes());
 }
 
-/// Purpose: the real claims module, hosted in the real core, admits a provider's invoice
-/// of $95 on a health policy straight through, capped at the $60 limit. The mart, fed
-/// only the core's event stream, counts one admitted claim of $60 in the health product's
-/// cell, with the insured's age band, and the policy stays in force.
+/// Purpose: the real claims module, hosted in the real core, admits five provider invoices
+/// of $95 on a health policy straight through, each capped at the $60 limit and each
+/// with the cause code GP-INF (tag `infection.viral`). The mart, fed only the core's
+/// event stream, counts five admitted claims of $300 in the health product's cell, with
+/// the insured's age band, and the policy stays in force; the claims by cause extract
+/// shows them under `infection`, with neither the code nor the lower tag.
 /// Why it matters: the mart reads the claims module's facts by the names of their keys.
 /// The other tests write those facts by hand, so this is the one that fails if the
 /// claims module renames a key or stops publishing a fact, which would otherwise show
@@ -1053,6 +1055,7 @@ fn the_real_claims_module_feeds_the_experience_extract() {
             },
         )]
         .into(),
+        cause_codes: [("GP-INF".to_string(), vec!["infection.viral".to_string()])].into(),
         prepared_by: approved().0,
         approved_by: approved().1,
         ..claims::Rules::default()
@@ -1078,40 +1081,43 @@ fn the_real_claims_module_feeds_the_experience_extract() {
     w.core.submit(p, "new-business", issue_command(issue)).unwrap();
     w.pay(p, &id, "r-h", 2_000_00);
     w.until(d(2027, 11, 25));
-    let invoice = claims::command::Notification {
-        claim: "clm-h".into(),
-        policy: id.0.clone(),
-        cover: "hospital".into(),
-        life: Some("life-1".into()),
-        claim_type: claims::ClaimType::Health,
-        event_date: d(2027, 11, 25),
-        channel: claims::Channel::Provider,
-        notifier: claims::Notifier::Provider,
-        claimant: Some("party-claimant".into()),
-        claimed_minor: None,
-        flags: claims::Flags::default(),
-        health: Some(claims::HealthItem {
-            category: "gp".into(),
-            invoice_minor: 95_00,
-            provider: Some("provider-7".into()),
-            pre_approval_request: false,
-            settles_pre_approval: None,
-            service_code: None,
-            service_date: None,
-        }),
-        underwriters: vec![],
-        catastrophe_event: None,
-        cause_code: None,
-    };
-    w.core.submit(p, "claims", wrap(claims::Command::Notify(Box::new(invoice)))).unwrap();
+    // Five invoices, so that the claims by cause row is large enough to show.
+    for n in 0..5 {
+        let invoice = claims::command::Notification {
+            claim: format!("clm-h{n}"),
+            policy: id.0.clone(),
+            cover: "hospital".into(),
+            life: Some("life-1".into()),
+            claim_type: claims::ClaimType::Health,
+            event_date: d(2027, 11, 25),
+            channel: claims::Channel::Provider,
+            notifier: claims::Notifier::Provider,
+            claimant: Some("party-claimant".into()),
+            claimed_minor: None,
+            flags: claims::Flags::default(),
+            health: Some(claims::HealthItem {
+                category: "gp".into(),
+                invoice_minor: 95_00,
+                provider: Some("provider-7".into()),
+                pre_approval_request: false,
+                settles_pre_approval: None,
+                service_code: None,
+                service_date: None,
+            }),
+            underwriters: vec![],
+            catastrophe_event: None,
+            cause_code: Some("GP-INF".into()),
+        };
+        w.core.submit(p, "claims", wrap(claims::Command::Notify(Box::new(invoice)))).unwrap();
+    }
     w.until(d(2027, 12, 2));
 
     let nov = period(2027, 11);
     let mart = mart_of(2, &w.events);
     let experience = mart.experience(nov.start(), nov.end()).unwrap();
     assert!(experience.reconciled);
-    assert_eq!((total(&experience, "admitted_claims"), total(&experience, "admitted_minor")), (1, 60_00));
-    let cell = rows(&experience).into_iter().find(|r| r["admitted_claims"] == "1").unwrap();
+    assert_eq!((total(&experience, "admitted_claims"), total(&experience, "admitted_minor")), (5, 300_00));
+    let cell = rows(&experience).into_iter().find(|r| r["admitted_claims"] == "5").unwrap();
     assert!(
         !cell["product"].is_empty() && !cell["cover_type"].is_empty(),
         "the claim was not placed: {cell:?}"
@@ -1119,6 +1125,14 @@ fn the_real_claims_module_feeds_the_experience_extract() {
     assert_eq!(cell["age_band"], "35-39");
     assert_ne!(cell["cover_days"], "0", "the policy the claim is on has no exposure in its cell");
     assert_eq!(total(&experience, "ending_claims"), 0);
+    // The cause reaches the mart as its category only.
+    let by_cause = mart.claims_by_cause(nov.start(), nov.end()).unwrap();
+    let row = rows(&by_cause).into_iter().next().unwrap();
+    assert_eq!(
+        (row["cause"].as_str(), row["claims"].as_str(), row["admitted_minor"].as_str()),
+        ("infection", "5", "30000")
+    );
+    assert!(!by_cause.lines.concat().contains("GP-INF") && !by_cause.lines.concat().contains("viral"));
 }
 
 /// Purpose: two policies each billed 60 are avoided for non-disclosure on 3 March, one
@@ -1429,4 +1443,107 @@ fn claims_decisions_lapses_and_their_turnaround_are_counted_from_the_feed() {
         let refused = books.code(caller, None, FinCommand::RecordConductFacts { facts: vec![lapse.clone()] });
         assert_eq!(refused, "caller");
     }
+}
+
+/// Purpose: the claims by cause extract counts each claim registered, admitted or
+/// declined in a period under the top of its cause tree, taken from whichever fact last
+/// carried it; folds rows under five claims into "(other)", then drops their age band
+/// and sex, and withholds what is still small; and keeps a cause typed as words out of
+/// the file.
+/// Why it matters: the appointed actuary studies experience by cause of claim, but a
+/// cause beside a product, age and sex can name a person. Only categories leave the
+/// claims module, and no row a reader could trace to fewer than five claims is shown,
+/// nor any total from which a withheld amount could be worked out.
+#[test]
+fn claims_by_cause_are_categories_with_small_rows_folded_or_withheld() {
+    let day = |m: u32, n: u32| d(2028, m, n);
+    let mut s = Stream::new(day(3, 1));
+    for (policy, product) in [("pol-1", "term-life"), ("pol-2", "trauma")] {
+        s.push(Event::PolicyIssued {
+            policy: PolicyId::from(policy),
+            number: policy.to_string(),
+            group: "grp".into(),
+            policyholder: "party-x".into(),
+            product_code: product.to_string(),
+            product_hash: "h".to_string(),
+            inception: day(3, 1),
+            lives: vec![LifeInfo::new("life-1".into(), None)],
+            layers: vec![layer("life", 1, "life-1", 500_000_00, day(3, 1))],
+            members: vec![],
+        });
+    }
+    let on = |policy: &'static str, cause: &'static str| {
+        let mut detail = vec![("policy", policy), ("cover", "life"), ("life", "life-1"), ("event_date", "2028-02-20")];
+        if !cause.is_empty() {
+            detail.push(("cause_category", cause));
+        }
+        detail
+    };
+    // Six cancer claims, two of them given their cause only when decided.
+    for n in 0..6 {
+        let cause = if n < 4 { "cancer.breast" } else { "" };
+        s.push(claim_fact("claim_reserved", &format!("ca{n}"), &on("pol-1", cause)));
+    }
+    // Three mental, two injury and one typed as words: each too small, six together.
+    for (n, cause) in ["mental", "mental", "mental", "injury.fall", "injury", "Fell off J Smith's roof"]
+        .iter()
+        .enumerate()
+    {
+        s.push(claim_fact("claim_reserved", &format!("o{n}"), &on("pol-1", cause)));
+    }
+    // Two trauma claims: small however they are folded.
+    for n in 0..2 {
+        s.push(claim_fact("claim_reserved", &format!("t{n}"), &on("pol-2", "cardiovascular")));
+    }
+    s.close(day(3, 10));
+    s.push(claim_fact("claim_admitted", "ca4", &[("admitted_minor", "100"), ("cause_category", "cancer")]));
+    s.push(claim_fact("claim_admitted", "ca0", &[("admitted_minor", "50")]));
+    s.push(claim_fact(
+        "claim_closed",
+        "ca5",
+        &[("outcome", "declined"), ("cause_category", "cancer.bowel")],
+    ));
+    s.push(claim_fact("claim_admitted", "t0", &[("admitted_minor", "999")]));
+    s.close(day(3, 20));
+    // A claim decided in April counts in April only.
+    s.close(day(4, 2));
+    s.push(claim_fact("claim_admitted", "ca1", &[("admitted_minor", "7")]));
+    s.close(d(2028, 5, 1));
+    s.close(d(2028, 5, 2));
+
+    let mut state = ic_finance::FinanceState::default();
+    state.mart = mart_of(1, &s.events);
+    let march = state.mart.claims_by_cause(day(3, 1), day(3, 31)).unwrap();
+    assert_eq!(
+        march.lines,
+        [
+            "product,cover_type,age_band,sex,cause,claims,registered,admitted_claims,admitted_minor,declined",
+            "term-life,life-type,,,(other),6,6,0,0,0",
+            "term-life,life-type,,,cancer,6,6,2,150,1",
+        ]
+    );
+    assert!(!march.lines.concat().contains("Smith"));
+    let control: Vec<(&str, i128)> = march.control.iter().map(|(k, v)| (k.as_str(), *v)).collect();
+    assert_eq!(
+        control,
+        [
+            ("admitted_claims", 2),
+            ("admitted_minor", 150),
+            ("claims", 12),
+            ("declined", 1),
+            ("min_cell", 5),
+            ("registered", 12),
+            ("withheld_claims", 2)
+        ]
+    );
+    // April has one claim only, which is withheld; asked through the host as any extract is.
+    let april = ic_finance::host::answer(
+        &state,
+        serde_json::json!({ "q": "extract", "kind": "claims_by_cause", "period": period(2028, 4) }),
+    )
+    .unwrap();
+    assert_eq!(april["total_lines"], 1);
+    assert_eq!(april["control"]["withheld_claims"], 1);
+    assert_eq!(april["control"]["claims"], 0);
+    assert!(state.mart.claims_by_cause(day(3, 31), day(3, 1)).is_err());
 }

@@ -179,10 +179,12 @@ fn an_option_not_taken_up_expires() {
     assert_eq!(code(take_up(&mut h, offer, 1, "term-life", 100_000_00)), "offer_closed");
 }
 
-/// Purpose: a member on leave of absence past the scheme's limit is taken off cover on the
-/// date the terms give, once, with notice published; a member who comes back in time is not.
+/// Purpose: a member going on leave of absence (an overseas posting) is told when it starts
+/// the day their cover ends if they are not back; past the scheme's limit they are taken off
+/// cover on that date, once, with notice published; a member who comes back in time is not.
 /// Why it matters: employers forget to report that someone on long leave has gone. The
-/// limit is in the policy wording, so cover past it is cover the reinsurer will not share.
+/// limit is in the policy wording, so cover past it is cover the reinsurer will not share,
+/// and a member abroad who was never told the date finds out at a claim.
 #[test]
 fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     let mut t = terms();
@@ -209,6 +211,16 @@ fn absence_past_the_limit_ends_cover_on_the_terms_date() {
     );
     assert_eq!(h.scheme().membership.active("E002").unwrap().absence_since, Some(start));
     assert_eq!(h.sent.len(), 1, "an absence is the scheme's business: the core is not told");
+    // Each member is told, at the start, the day the cover ends if they are not back.
+    let told: Vec<chrono::NaiveDate> = h
+        .published
+        .iter()
+        .filter_map(|e| match e {
+            GroupEvent::AbsenceStarted { since, cover_ends, .. } if *since == start => Some(*cover_ends),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(told, vec![d(2028, 1, 1), d(2028, 1, 1)]);
     h.days(10);
     let back = h.today();
     h.apply(
