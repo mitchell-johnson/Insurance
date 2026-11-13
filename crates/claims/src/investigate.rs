@@ -7,11 +7,14 @@
 //! not admitted by the rules and no money leaves for them; to everyone else
 //! they look like claims waiting for an assessor.
 //!
-//! The one rule claims runs itself is duplicate provider billing: the same
-//! provider billing the same service on the same date twice, on one
-//! member's claims or across members. Patterns over many claims (claims soon
-//! after inception, altered documents) belong to the compliance module,
-//! which refers them here with `ReferForInvestigation`.
+//! Claims runs two rules itself, each when a claim is registered: duplicate
+//! provider billing (the same provider billing the same service on the same
+//! date twice, on one member's claims or across members) and an early claim
+//! (an event within `Rules.early_claim_days` of the cover starting). What
+//! needs a person or a pattern over many claims (altered documents, a
+//! network of claimants) belongs to the compliance module, which refers it
+//! here with `ReferForInvestigation`. A claim can be in more than one case;
+//! it stays restricted until the last of them is closed.
 
 use std::collections::BTreeSet;
 
@@ -27,6 +30,9 @@ use crate::ClaimId;
 
 /// The rule that raises a case when a provider bills one service twice.
 pub const DUPLICATE_BILLING: &str = "duplicate_billing";
+
+/// The rule that raises a case when the event falls soon after the cover started.
+pub const EARLY_CLAIM: &str = "early_claim";
 
 /// The key a provider's billed service is known by: the date of service,
 /// the provider and the service code.
@@ -87,10 +93,24 @@ pub(crate) fn billed(c: &Claim) -> Option<Billed> {
 }
 
 impl ClaimsState {
-    /// Run the duplicate billing rule on a claim being registered. Any other
-    /// claim on this partition for the same billed service joins one case
-    /// with it. Returns whether a case is open on the claim.
-    pub(crate) fn screen_billing(&mut self, cx: &mut Cx<'_>, claim: &mut Claim) -> bool {
+    /// Run the rules on a claim being registered. Returns whether a case is
+    /// open on it.
+    pub(crate) fn screen(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, cover_start: Option<NaiveDate>) -> bool {
+        if self.screen_billing(cx, claim) {
+            return true;
+        }
+        let days = self.rules.early_claim_days;
+        let early = cover_start.is_some_and(|start| days > 0 && claim.event_date <= crate::state::plus_days(start, days));
+        if early {
+            let case = format!("investigation/{}", claim.id);
+            self.open_case(cx, &case, EARLY_CLAIM, "claims", [claim.id.clone()].into(), Some(claim));
+        }
+        early
+    }
+
+    /// The duplicate billing rule: any other claim on this partition for the
+    /// same billed service joins one case with this one.
+    fn screen_billing(&mut self, cx: &mut Cx<'_>, claim: &mut Claim) -> bool {
         let Some(key) = billed(claim) else { return false };
         let (date, provider, code) = key;
         let from = (date, provider.clone(), code.clone(), String::new());
@@ -199,7 +219,12 @@ impl ClaimsState {
         for id in &open.claims {
             if let Ok(mut c) = self.claim(id) {
                 if c.investigation.as_deref() == Some(case) {
-                    c.investigation = None;
+                    // Still restricted while another case holds it.
+                    c.investigation = self
+                        .investigations
+                        .values()
+                        .find(|i| i.case != case && i.closed.is_none() && i.claims.contains(id))
+                        .map(|i| i.case.clone());
                 }
                 self.commit(c);
             }

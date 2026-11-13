@@ -261,6 +261,11 @@ pub struct Rules {
     /// A death notified more than this many days after it happened prompts a
     /// check of the death register feed.
     pub late_death_days: u32,
+    /// An event this many days or fewer after the cover started opens a
+    /// restricted investigation (rule `early_claim`) before anything is
+    /// decided. Zero: the rule is off.
+    #[serde(default)]
+    pub early_claim_days: u32,
     /// How often a person paid a benefit is asked to prove they are alive.
     /// Zero: never.
     #[serde(default)]

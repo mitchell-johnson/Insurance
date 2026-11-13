@@ -7,7 +7,8 @@ use std::collections::BTreeSet;
 use chrono::NaiveDate;
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{About, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
+use crate::model::{About, AuthorityStatus, Exception, ExceptionKind, Id, Instruction, OutboxEntry, Purpose, Reject, Role, StatementLine, SubmissionStatus};
+use ic_core::PolicyId;
 
 /// The outbox key prefix for money a reinsurer paid in.
 const RECEIVED_FROM_REINSURER: &str = "reinsurance-received-";
@@ -155,6 +156,7 @@ impl PaymentsState {
                             currency,
                             reference: line.reference.clone(),
                             payer_account: line.payer_account.clone(),
+                            payer_policy: line.payer_account.as_deref().and_then(|a| self.payer_policy(a)),
                             received_on: date,
                         },
                         about: Some(About::Exception(id)),
@@ -333,5 +335,26 @@ impl PaymentsState {
             })
             .collect();
         serde_json::json!({ "kind": "unidentified_receipts", "as_at": as_at, "items": items, "total_minor": total, "count": count })
+    }
+}
+
+/// An account number as banks write it variously: letters and digits only.
+fn account_digits(number: &str) -> String {
+    number.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
+impl PaymentsState {
+    /// The policy whose live authority draws on this account, when exactly
+    /// one policy's does. Several policies on one account are not guessed
+    /// between.
+    pub(crate) fn payer_policy(&self, account: &str) -> Option<PolicyId> {
+        let wanted = account_digits(account);
+        let mut policies = self
+            .authorities
+            .values()
+            .filter(|a| a.status != AuthorityStatus::Cancelled && !wanted.is_empty() && account_digits(&a.account.number) == wanted)
+            .map(|a| &a.policy);
+        let first = policies.next()?.clone();
+        policies.all(|p| *p == first).then_some(first)
     }
 }

@@ -259,6 +259,24 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
             payment,
             amount_minor,
         }) => payout_waiting(policy, payee, payout, payment, *amount_minor),
+        // A bankrupt owner's payout accounts are frozen while the interest
+        // stands (decision 4). Other interests restrict the core's own
+        // commands, not payments.
+        ic_core::Event::Interest(ic_core::interest::InterestEvent::Recorded {
+            policy,
+            interest,
+            kind: ic_core::interest::InterestKind::Insolvency,
+            owner: Some(owner),
+            ..
+        }) => insolvency(owner, policy, interest, None),
+        ic_core::Event::Interest(ic_core::interest::InterestEvent::Released {
+            policy,
+            interest,
+            kind: ic_core::interest::InterestKind::Insolvency,
+            owner: Some(owner),
+            effective,
+            ..
+        }) => insolvency(owner, policy, interest, Some(*effective)),
         _ => return Vec::new(),
     };
     vec![crate::Envelope {
@@ -274,4 +292,13 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
         at: chrono::DateTime::UNIX_EPOCH.naive_utc(),
         command,
     }]
+}
+
+fn insolvency(owner: &ic_core::PartyId, policy: &ic_core::PolicyId, interest: &str, released: Option<chrono::NaiveDate>) -> crate::Command {
+    crate::Command::RecordInsolvency {
+        owner: owner.to_string(),
+        policy: policy.to_string(),
+        interest: interest.to_string(),
+        released,
+    }
 }
