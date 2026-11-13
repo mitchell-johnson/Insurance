@@ -1454,8 +1454,8 @@ async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
 /// rows refused by number and code, whether the safety check would hold it) and which
 /// mapping version was tried; nothing is stored, no file appears, the scheme's mapping and
 /// members are untouched and no name leaves the service. A mapping that cannot be sealed, a
-/// sample that does not fit it, an unknown scheme, and a caller who is not staff are each
-/// refused.
+/// sample that does not fit it, a sample longer than one part of a real file, an unknown
+/// scheme, and a caller who is not staff are each refused.
 /// Why it matters: a mapping is trusted for every file once set. Finding out that the new
 /// version reads the wrong column from the first live file means the employer's real month
 /// is refused, or worse, half read; trying it first on a sample costs nothing.
@@ -1534,6 +1534,18 @@ async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
         attempt(SCHEME, "not-a-token", serde_json::json!({"mapping": next, "sample": sample})).await.0,
         401
     );
+    // A sample is a sample: more rows than one part of a real file is refused, here and by
+    // the module itself if it is asked directly.
+    let long: String = std::iter::once("Staff ID,First,Last,DOB,Category,Salary,Site\n".to_string())
+        .chain((0..2_001).map(|n| format!("X{n},A,B,1990-01-09,staff,55000,akl\n")))
+        .collect();
+    let (status, body) = attempt(SCHEME, &staff, serde_json::json!({"mapping": next, "sample": long})).await;
+    assert_eq!((status, body["error"]["code"].as_str()), (422, Some("too_many_rows")));
+    let rows: Vec<Value> = (0..2_001)
+        .map(|n| serde_json::json!({"row": n, "employee_id": format!("X{n}"), "attrs": {}}))
+        .collect();
+    let direct = ic_group::answer(&before, serde_json::json!({"ask": "preview", "scheme": SCHEME, "kind": "full", "rows": rows}));
+    assert!(direct.unwrap_err().contains("at most"));
     assert!(*d.module.state.lock().unwrap() == before);
 }
 

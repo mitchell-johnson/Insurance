@@ -294,8 +294,8 @@ impl ClaimsState {
                 }
                 self.start_timer(&mut claim, TimerKind::Payment, cx.today);
                 note(&mut claim, cx, None, "admitted_straight_through");
-                cx.notify("claim_reserved", &claim.id, &reserved(&claim, amount));
-                cx.notify("claim_admitted", &claim.id, &[("admitted_minor", amount.to_string())]);
+                cx.lifecycle(&self.rules, "claim_reserved", &claim, &reserved(&claim, amount));
+                cx.lifecycle(&self.rules, "claim_admitted", &claim, &[("admitted_minor", amount.to_string())]);
             }
             (None, _) => {
                 let pct = self.rules.initial_reserve_pct.get(&claim.claim_type).copied().unwrap_or(100);
@@ -308,7 +308,7 @@ impl ClaimsState {
                     reason: "notification".into(),
                 })?;
                 claim.reserve_minor = reserve;
-                cx.notify("claim_reserved", &claim.id, &reserved(&claim, reserve));
+                cx.lifecycle(&self.rules, "claim_reserved", &claim, &reserved(&claim, reserve));
             }
         }
         if claim.claim_type == ClaimType::Death {
