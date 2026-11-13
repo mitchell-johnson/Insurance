@@ -50,5 +50,5 @@ async function refresh() {
     view.decide && m.disputed && !m.overturned ? h("button", { class: "quiet", type: "button", on: { click: () => open(m) } }, "Decide") : ""]))
     : h("p", { class: "muted" }, "The rule has matched nothing."));
 }
-signIn(R).then(refresh).catch((e) => say($("msg"), "bad", e.message));
+signIn(R).then(refresh).catch(portal.refuse);
 </script></body></html>

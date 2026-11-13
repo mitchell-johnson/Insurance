@@ -64,7 +64,7 @@ const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new UR
 const send = (command) => api(R, "POST", BASE + "commands", command);
 const money = (minor) => minor == null ? "" : (Number(minor) / 100).toFixed(2);
 const val = (id) => $(id).value.trim();
-const pairs = (o) => table(["", ""], Object.entries(o || {}).map(([k, v]) => [words(k), v !== null && typeof v === "object" ? JSON.stringify(v) : String(v)]));
+const pairs = (o) => table(["", ""], Object.entries(o || {}).map(([k, v]) => [words(k), portal.text(v, k)]));
 
 async function showExceptions() {
   const scheme = val("ex-scheme");
@@ -99,7 +99,7 @@ async function showFile() {
   put($("fi"), h("p", {}, `${f.file}: ${words(f.status)}${f.code ? ` (${words(f.code)})` : ""}, received ${f.received || ""}.`),
     h("h3", {}, "Summary"), pairs(f.summary),
     (f.rejected || []).length ? [h("h3", {}, "Rows refused when read"), table(["Row", "Why"], f.rejected.map((r) => [r.row, words(r.code)]))] : "",
-    (f.refused || []).length ? [h("h3", {}, "Rows the core refused"), h("pre", {}, JSON.stringify(f.refused, null, 2))] : "");
+    (f.refused || []).length ? [h("h3", {}, "Rows the core refused"), portal.details(f.refused)] : "");
 }
 $("fi-form").addEventListener("submit", run($("fi-msg"), showFile));
 const onFile = (name, extra, done) => run($("fi-msg"), async () => { await send({ [name]: { scheme: val("fi-scheme"), file: val("fi-id"), ...extra } }); await showFile(); return done; });
@@ -155,5 +155,5 @@ signIn(R).then(async () => {
   $("me").textContent = `You are ${me.staff}: ${me.admin ? "group administration" : "view only"}.`;
   document.querySelectorAll(".admin").forEach((e) => { e.hidden = !me.admin; });
   await showExceptions();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>

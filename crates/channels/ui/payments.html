@@ -94,7 +94,7 @@ async function showRun() {
   const id = $("run-id").value.trim();
   const [r, totals] = await Promise.all([ask("run", { run: id }), ask("control_totals", { run: id })]);
   put($("run"), h("p", {}, `${words(r.run_type)} from ${r.fund}, value date ${r.value_date}${r.urgent ? ", urgent" : ""}: ${status(r.status)}. Prepared by ${[...r.makers].join(", ")}${r.approvers.length ? `; approved by ${r.approvers.join(", ")}` : ""}.`),
-    table(["Item", "Who", "Amount", "Status"], Object.entries(r.items).map(([i, it]) => [i, JSON.stringify(it.counterparty), money(it.amount_minor),
+    table(["Item", "Who", "Amount", "Status"], Object.entries(r.items).map(([i, it]) => [i, portal.text(it.counterparty), money(it.amount_minor),
       it.status && it.status.held && holdWords[it.status.held] ? `held: ${holdWords[it.status.held]}` : status(it.status)])),
     table(["Unsent", "At the bank", "Rejected", "Awaiting settlement", "Settled", "Returned"], [[money(totals.unsent), money(totals.awaiting_acknowledgement), money(totals.rejected), money(totals.awaiting_settlement), money(totals.settled), money(totals.returned)]]));
   const out = $("run-msg");
@@ -131,7 +131,7 @@ $("party-form").addEventListener("submit", run($("party-msg"), async () => {
 async function showPayee() {
   const id = $("payee-id").value.trim();
   const p = await ask("payee", { payee: id });
-  put($("payee"), h("p", {}, `${p.party}, ${words(p.kind)}: ${status(p.status)}.`), h("pre", {}, JSON.stringify(p, null, 2)));
+  put($("payee"), h("p", {}, `${p.party}, ${words(p.kind)}: ${status(p.status)}.`), portal.details(p));
   const out = $("payee-msg");
   const act = (type) => async () => { await send({ type, payee: id }); await showPayee(); return `Done: ${words(type)}.`; };
   put($("payee-actions"), [
@@ -145,7 +145,7 @@ $("payee-form").addEventListener("submit", run($("payee-msg"), showPayee));
 async function showRefund() {
   const id = $("refund-id").value.trim();
   const r = await ask("refund", { refund: id });
-  put($("refund"), h("pre", {}, JSON.stringify(r, null, 2)));
+  put($("refund"), portal.details(r));
   put($("refund-actions"), has("maker") ? [button("Release", $("refund-msg"), async () => { await send({ type: "release_refund", refund: id }); await showRefund(); return "Released."; })] : []);
 }
 $("refund-form").addEventListener("submit", run($("refund-msg"), showRefund));
@@ -166,7 +166,7 @@ async function showRec() {
 $("rec-form").addEventListener("submit", run($("rec-msg"), showRec));
 async function showPayerCases() {
   const cases = await ask("payer_cases");
-  put($("aml"), cases.length ? table(["Case", "Detail"], cases.map((c) => [c.case, JSON.stringify(c.detail)])) : h("p", { class: "muted" }, "No open cases."));
+  put($("aml"), cases.length ? table(["Case", "Detail"], cases.map((c) => [c.case, portal.details(c.detail)])) : h("p", { class: "muted" }, "No open cases."));
 }
 $("aml-form").addEventListener("submit", run($("aml-msg"), async () => {
   const relationship = $("aml-rel").value.trim();
@@ -186,8 +186,8 @@ signIn(R).then(async () => {
   await Promise.all([showWaiting(), showRuns(), showExceptions()]);
   const conv = await ask("awaiting_conversation");
   const held = Object.entries(conv || {});
-  put($("conv"), held.length ? table(["Item", "Detail"], held.map(([k, v]) => [k, JSON.stringify(v)])) : h("p", { class: "muted" }, "None."));
+  put($("conv"), held.length ? table(["Item", "Detail"], held.map(([k, v]) => [k, portal.text(v)])) : h("p", { class: "muted" }, "None."));
   const ready = await ask("readiness");
-  put($("ready"), h("pre", {}, JSON.stringify(ready, null, 2)));
-}).catch((e) => say($("msg"), "bad", e.message));
+  put($("ready"), portal.details(ready));
+}).catch(portal.refuse);
 </script></body></html>

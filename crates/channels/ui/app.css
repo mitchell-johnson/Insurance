@@ -28,6 +28,9 @@ form .row { display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; }
 .pill { display:inline-block; border-radius:999px; padding:1px 10px; font-size:13px; background:var(--bg); border:1px solid var(--line); }
 nav.tabs { display:flex; gap:8px; flex-wrap:wrap; margin:0 0 16px; }
 nav.tabs button[aria-selected="false"] { background:transparent; color:var(--accent); border:1px solid var(--line); }
+dl.details { display:grid; grid-template-columns:max-content 1fr; gap:4px 16px; margin:0; }
+dl.details dt { color:var(--muted); font-size:13px; }
+dl.details dd { margin:0; overflow-wrap:anywhere; }
 pre { white-space:pre-wrap; word-break:break-word; margin:0; font-size:13px; }
 a { color:var(--accent); }
 [hidden] { display:none !important; }

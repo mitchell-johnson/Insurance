@@ -72,7 +72,7 @@ $("out").addEventListener("click", () => signOut(R));
 const words = (s) => String(s == null ? "" : s).replace(/_/g, " ");
 const ask = (name, fields) => api(R, "GET", BASE + name + (fields ? "?" + new URLSearchParams(fields) : ""));
 const send = (command) => api(R, "POST", BASE + "commands", command);
-const cell = (v) => v == null ? "" : typeof v === "object" ? JSON.stringify(v) : v;
+const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 const codes = (s) => String(s || "").split(/[\s,]+/).filter(Boolean);
 const iso = (date, end) => new Date(date + (end ? "T23:59:59Z" : "T00:00:00Z")).toISOString();
 const done = (answer) => answer.prepared ? "Prepared. A second senior signs it before it is sent." : answer.duplicate ? "Already done." : "Done.";
@@ -145,7 +145,7 @@ $("p-form").addEventListener("submit", run($("p-msg"), async () => {
 $("p-retry").addEventListener("click", run($("p-msg"), async () => done(await send({ retry_issue: { proposal: $("p-id").value.trim() } }))));
 $("d-form").addEventListener("submit", run($("d-msg"), async () => {
   const records = await api(R, "POST", BASE + "disclosures", { proposal: $("p-id").value.trim(), life: $("d-life").value.trim(), purpose: $("d-purpose").value.trim() });
-  put($("disclosures"), records.length ? records.map((r) => h("details", {}, h("summary", {}, `${r.submitted_at} (${r.hash})`), h("pre", {}, JSON.stringify(r.answers || r, null, 2))))
+  put($("disclosures"), records.length ? records.map((r) => h("details", {}, h("summary", {}, `${r.submitted_at} (${r.hash})`), portal.details(r.answers || r)))
     : h("p", { class: "muted" }, "This life has made no disclosure."));
 }));
 $("x-form").addEventListener("submit", run($("x-msg"), async () => done(await send({ declare_conflict: { party: $("x-party").value.trim() } }))));
@@ -196,5 +196,5 @@ signIn(R).then(async () => {
   $("senior").hidden = !me.senior;
   $("me").textContent = `You are ${me.staff}${me.senior ? ", a senior underwriter" : ""}. You hold ${load} open case${load === 1 ? "" : "s"}. Commands are made on ${me.today || "today's date"}.`;
   showAction();
-}).catch((e) => say($("msg"), "bad", e.message));
+}).catch(portal.refuse);
 </script></body></html>
