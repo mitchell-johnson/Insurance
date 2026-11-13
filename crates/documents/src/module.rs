@@ -105,6 +105,13 @@ pub enum Query {
     Triggers {
         limit: usize,
     },
+    /// The active template a product's document of a kind is rendered
+    /// with on a date, if there is one.
+    TemplateForKind {
+        kind: crate::kinds::DocumentKind,
+        product: String,
+        on: chrono::NaiveDate,
+    },
     /// The parties with an interest in a policy standing on a date, who
     /// are owed a copy of its arrears, suspension and lapse notices.
     InterestedParties {
@@ -160,6 +167,7 @@ pub fn answer(state: &DocumentsState, question: Value) -> Result<Value, String> 
         Query::LettersRequested { limit } => json(state.letters_requested(cap(limit))),
         Query::LetterRequest { request } => json(state.letter_requests.get(&request)),
         Query::Triggers { limit } => json(state.triggers.values().take(cap(limit)).collect::<Vec<_>>()),
+        Query::TemplateForKind { kind, product, on } => json(state.template_for_kind(kind, &product, on).map(|t| t.template.reference())),
         Query::InterestedParties { policy, on } => json(state.interested_parties(&policy, on)),
         Query::Defect { id } => json(state.defects.get(&id)),
         Query::NoticesByTemplate { template, from, to } => json(state.notices_by_template(&template, from, to)),

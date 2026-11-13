@@ -4,7 +4,10 @@
 //! notice is rendered after the fact it reports and can never say
 //! something the ledger does not.
 
+use std::collections::BTreeMap;
+
 use ic_core::{Event, EventRecord, PolicyStatus};
+use serde_json::json;
 
 use crate::kinds::DocumentKind;
 use crate::model::Trigger;
@@ -19,6 +22,7 @@ fn trigger(record: &EventRecord, policy: &ic_core::PolicyId, kind: DocumentKind,
         purpose: purpose.map(str::to_string),
         business_date: record.business_date,
         copy_to: vec![],
+        detail: BTreeMap::new(),
     }
 }
 
@@ -51,19 +55,43 @@ pub fn triggers(record: &EventRecord) -> Vec<Trigger> {
         | Event::LayersMerged { policy, .. }
         | Event::CoverExpired { policy, .. }
         | Event::PolicyReinstated { policy } => vec![schedule(record, policy)],
-        Event::StandingChanged { policy, to, .. } => standing_notice(*to)
-            .map(|(kind, purpose)| trigger(record, policy, kind, Some(purpose)))
+        Event::StandingChanged {
+            policy, to, oldest_unpaid_due, ..
+        } => standing_notice(*to)
+            .map(|(kind, purpose)| {
+                let mut t = trigger(record, policy, kind, Some(purpose));
+                if let Some(due) = oldest_unpaid_due {
+                    t.detail.insert("oldest_unpaid_due".into(), json!(due.to_string()));
+                }
+                t
+            })
             .into_iter()
             .collect(),
         Event::PolicyStatusChanged {
             policy,
-            to: PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured,
+            to: to @ (PolicyStatus::Lapsed | PolicyStatus::Cancelled | PolicyStatus::Expired | PolicyStatus::Surrendered | PolicyStatus::Matured),
             ..
-        } => vec![trigger(record, policy, DocumentKind::GeneralCorrespondence, None)],
+        } => {
+            let mut t = trigger(record, policy, DocumentKind::GeneralCorrespondence, None);
+            t.detail.insert("ended".into(), json!(to));
+            vec![t]
+        }
         // The decision itself, not the change of status that goes with it,
         // so a policy avoided is written to once, with the avoidance letter.
         Event::PolicyAvoided { policy, .. } => vec![trigger(record, policy, DocumentKind::AvoidanceNotice, None)],
-        Event::ReceiptApplied { policy, .. } => vec![trigger(record, policy, DocumentKind::PremiumReceipt, None)],
+        Event::ReceiptApplied {
+            policy,
+            receipt,
+            allocated_minor,
+            to_suspense_minor,
+            ..
+        } => {
+            let mut t = trigger(record, policy, DocumentKind::PremiumReceipt, None);
+            t.detail.insert("receipt".into(), json!(receipt));
+            t.detail.insert("allocated".into(), json!(allocated_minor));
+            t.detail.insert("to_suspense".into(), json!(to_suspense_minor));
+            vec![t]
+        }
         _ => vec![],
     }
 }
