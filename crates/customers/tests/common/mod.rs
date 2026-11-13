@@ -281,6 +281,9 @@ pub struct FakeCore {
     /// The directory refuses commands that mention this party.
     pub refuse_party: std::sync::Mutex<Option<String>>,
     pub directed: std::sync::Mutex<Vec<(String, Value)>>,
+    /// The one partition holding every policy; others answer a hold with
+    /// `unknown_policy`. `None`: every partition takes it.
+    pub policies_on: std::sync::Mutex<Option<u16>>,
     pub proposed: std::sync::Mutex<Vec<(u16, String, Value)>>,
 }
 
@@ -302,6 +305,10 @@ impl ic_customers::relay::Core for FakeCore {
         }
         if *self.refuse.lock().unwrap() == Some(partition) {
             return Ok(Some("not_open".into()));
+        }
+        let elsewhere = self.policies_on.lock().unwrap().is_some_and(|on| on != partition);
+        if elsewhere && matches!(command, ic_core::Command::SetOwnerHold(_)) {
+            return Ok(Some("unknown_policy".into()));
         }
         Ok(None)
     }
