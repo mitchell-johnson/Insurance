@@ -256,9 +256,7 @@ where
     if caller.role == "staff" && document.data_class == DataClass::Clinical {
         return refuse(StatusCode::FORBIDDEN, "clinical documents are not downloaded here");
     }
-    if document.destroyed_on.is_some() {
-        return refuse(StatusCode::GONE, "the document has been destroyed");
-    }
+    // A destroyed document has lost its key, so the vault says so below.
     let bytes = match web.driver.pdf(&id, &downloads.fonts).await {
         Ok(bytes) => bytes,
         Err(DriverError::Vault(VaultError::Destroyed)) => return refuse(StatusCode::GONE, "the document has been destroyed"),
@@ -268,15 +266,8 @@ where
         }
         Err(e) => return refuse(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
     };
-    tracing::info!(
-        document = %id,
-        role = %caller.role,
-        subject = %caller.subject,
-        party = party.unwrap_or(""),
-        actor = actor.unwrap_or(""),
-        purpose = purpose.unwrap_or(""),
-        "document downloaded"
-    );
+    let (party, actor, purpose) = (party.unwrap_or(""), actor.unwrap_or(""), purpose.unwrap_or(""));
+    tracing::info!(document = %id, role = %caller.role, subject = %caller.subject, party, actor, purpose, "document downloaded");
     let file: String = id
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
