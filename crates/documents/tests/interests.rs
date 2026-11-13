@@ -210,7 +210,7 @@ fn the_letter_that_a_policy_ended_is_copied_and_routine_letters_are_not() {
         ],
     );
     assert_eq!(kit.state.triggers["7-2:GeneralCorrespondence"].copy_to, vec![party("lender")]);
-    assert!(kit.state.triggers["7-3:PolicySchedule"].copy_to.is_empty());
+    assert!(kit.state.triggers[&format!("schedule:pol-1:{today}:PolicySchedule")].copy_to.is_empty());
 
     let routine = kit.issue_spec("g1", DocumentKind::GeneralCorrespondence, "letter");
     kit.issue(routine);

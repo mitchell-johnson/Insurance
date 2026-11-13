@@ -125,6 +125,9 @@ pub struct DocumentsState {
     /// The last core event seen from each core partition.
     pub checkpoints: BTreeMap<u16, u64>,
     pub triggers: BTreeMap<String, Trigger>,
+    /// The business date each policy's latest schedule was asked for.
+    #[serde(default)]
+    pub schedules_raised: BTreeMap<PolicyId, NaiveDate>,
     pub core_outbox: BTreeMap<String, CoreInstruction>,
     /// Events not yet on the stream, oldest first.
     unpublished: VecDeque<EventRecord>,
@@ -1727,6 +1730,14 @@ impl DocumentsState {
                 continue;
             }
             for mut trigger in crate::triggers::triggers(&r) {
+                if trigger.kind == DocumentKind::PolicySchedule {
+                    // One schedule a policy a day: the day's later changes
+                    // are in it when it is issued.
+                    if self.schedules_raised.get(&trigger.policy).is_some_and(|d| *d >= trigger.business_date) {
+                        continue;
+                    }
+                    self.schedules_raised.insert(trigger.policy.clone(), trigger.business_date);
+                }
                 if copied_to_interests(trigger.kind) {
                     trigger.copy_to = self.interested_parties(&trigger.policy, trigger.business_date);
                 }
