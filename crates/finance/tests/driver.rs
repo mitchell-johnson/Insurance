@@ -18,6 +18,7 @@ use ic_finance::driver::{
     self, core_sources, distribution_sources, finance_sources, payments_sources, reinsurance_sources, unit_pricing_sources, Driver, DriverError, Pass, Reports,
     Source, SUBLEDGER_CHECK,
 };
+use ic_finance::temporal::CloseSteps;
 use ic_finance::{host, FinCommand, FinEnvelope, PeriodId};
 use ic_ledger::sha256;
 use serde_json::{json, Value};
@@ -541,4 +542,40 @@ fn waiting_cash_from_every_partition_is_one_report_oldest_first() {
     assert_eq!(report["items"].as_array().unwrap().len(), driver::MAX_AGED_ITEMS);
     assert_eq!((report["count"].clone(), report["total_minor"].clone()), (json!(2005), json!(2005)));
     assert_eq!(report["items"][0]["since"], json!("2027-11-24"));
+}
+
+/// Purpose: the same month-end taken one step at a time, through the interface the
+/// Temporal workflow calls. Recording the roots, listing the periods to close and working
+/// November each do their own part: the first working of November registers the three
+/// extracts and closes nothing; once people have finished, it is still held while an
+/// earlier period is open; then it closes; and working a period the ledger no longer
+/// lists reports it closed and does nothing.
+/// Why it matters: the workflow retries and records each step on its own, so each has to
+/// be safe to run alone and again. A step that quietly depended on the one before it in
+/// the same pass would close a month out of order after a retry.
+#[test]
+fn each_step_of_the_close_stands_on_its_own() {
+    let driver = driver_after(d(2027, 12, 3), |_| true);
+    let steps: &dyn CloseSteps = &driver;
+
+    let roots = block(steps.record_roots()).unwrap();
+    assert_eq!(roots.roots_recorded.len(), 18);
+    assert!(roots.extracts_registered.is_empty() && roots.closed.is_empty());
+    assert_eq!(block(steps.record_roots()).unwrap(), Pass::default(), "the roots are recorded once");
+    assert_eq!(block(steps.closing()).unwrap(), [nov()]);
+
+    let (closed, first) = block(steps.work_period(nov(), false)).unwrap();
+    assert!(!closed);
+    assert_eq!(first.extracts_registered.len(), 3);
+    assert!(first.roots_recorded.is_empty());
+
+    people_finish(&driver, nov());
+    let (closed, held) = block(steps.work_period(nov(), true)).unwrap();
+    assert!(!closed && held.closed.is_empty(), "an earlier open period holds the close: {held:?}");
+    let (closed, last) = block(steps.work_period(nov(), false)).unwrap();
+    assert!(closed);
+    assert_eq!(last.closed, [nov()]);
+
+    assert_eq!(block(steps.work_period(nov(), false)).unwrap(), (true, Pass::default()));
+    assert!(block(steps.closing()).unwrap().is_empty());
 }
