@@ -599,7 +599,7 @@ Built 13 November 2026 by agreement with the core thread: the core keeps standin
 
 Not done, in order:
 1. **Arrears age: done.** The module reads the core's `PolicyBalance` (oldest unpaid due date, emitted whenever it moves) beside `StandingChanged`.
-2. **Notice delivery.** Notices wait in the state (`notices_due`, then `notices_sent` until their outcome) for the documents service, which reports `record_notice_sent` and `record_notice_delivery` as caller `delivery`. The documents thread is building that relay (13 November 2026); collections templates carry no notice period, because this module keeps the dunning clock. An undeliverable mandatory notice raises a task, but the core does not yet pause the lapse step for it (COL-009 is the core's).
+2. **Notice delivery: done** by the documents thread (7e83bf1): its relay issues each notice as document `collections:<id>` and reports `record_notice_sent` and `record_notice_delivery`. Its tests in `crates/documents/tests/collections_notices.rs` borrow `crates/collections/tests/common/mod.rs` by path, so change that file with them in mind. The templates still need wording, and they carry no notice period. The core does not yet pause the lapse step for an undeliverable notice (COL-009 is the core's).
 3. **Sequences for the real products** are not written; until one is set, a product is listed by `unsequenced` and nothing is sent.
 4. **Advisers and lenders** are not told at the call step; vulnerability, recent claims and tenure do not bring the call earlier (premium only). Winback tasks, retention offers, scheme employer arrears and reporting measures are not built.
 5. **Screens.** The portal has no collections screens; the questions and commands exist.
