@@ -10,6 +10,11 @@ use common::{d, Ledger, TOKEN};
 use ic_api::admin::{Admin, AdminCommand, AdminSettings, USAGE};
 use serde_json::json;
 
+/// How long the tool keeps offering a command. Generous: on a loaded CI machine running
+/// coverage, a three-node test cluster with a 50 ms heartbeat changes leader often, and a
+/// run that gave up after 20 s of redirects failed a test that had nothing wrong with it.
+const PATIENCE: Duration = Duration::from_secs(90);
+
 fn admin(ledger: &Ledger, patience: Duration) -> Admin {
     Admin::new(&AdminSettings {
         nodes: ledger.nodes(),
@@ -32,7 +37,7 @@ fn args(line: &str) -> Vec<String> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_empty_ledger_is_opened_and_configured_and_the_job_can_run_twice() {
     let ledger = Ledger::start("admin", 3, 2).await;
-    let admin = admin(&ledger, Duration::from_secs(20));
+    let admin = admin(&ledger, PATIENCE);
     assert_eq!(admin.partitions().await, Ok(2));
     // Forming groups that already exist changes nothing.
     let formed = admin.run(AdminCommand::Init).await.unwrap();
@@ -195,7 +200,7 @@ fn the_command_line_is_read_strictly() {
 async fn a_set_up_file_is_applied_in_order_and_can_be_applied_again() {
     use ic_api::admin::SetupFile;
     let ledger = Ledger::start_hosting("setup", 1, 2, || vec![ic_finance::host::module_spec().unwrap()]).await;
-    let admin = admin(&ledger, Duration::from_secs(20));
+    let admin = admin(&ledger, PATIENCE);
     admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
     let chart = ic_finance::Chart::load("chart.star", include_str!("../../../config/finance/chart.star")).unwrap();
     let chart_id = format!("chart:{}:{}", chart.version, chart.content_hash);
@@ -402,7 +407,7 @@ fn migrated(n: u64, owing: i64) -> serde_json::Value {
 async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
     use ic_api::migrate::{CohortFile, MigrateCommand};
     let ledger = Ledger::start_hosting("migrate", 1, 2, || vec![ic_distribution::host::module_spec().unwrap()]).await;
-    let admin = admin(&ledger, Duration::from_secs(20));
+    let admin = admin(&ledger, PATIENCE);
     admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
     admin.run(AdminCommand::ActivateShipped).await.unwrap();
 
@@ -508,7 +513,7 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_register_shows_what_is_in_use_and_where_partitions_differ() {
     let ledger = Ledger::start("register", 1, 2).await;
-    let admin = admin(&ledger, Duration::from_secs(20));
+    let admin = admin(&ledger, PATIENCE);
     admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
     admin.run(AdminCommand::ActivateShipped).await.unwrap();
     let clean = admin.run(AdminCommand::parse(&args("register")).unwrap()).await.unwrap();
@@ -527,11 +532,11 @@ async fn the_register_shows_what_is_in_use_and_where_partitions_differ() {
         traceparent: None,
         command: ic_core::Command::ActivateRateTable { table: Box::new(table) },
     };
-    ledger.client.propose_until(1, &envelope, Duration::from_secs(20)).await.unwrap();
+    ledger.client.propose_until(1, &envelope, PATIENCE).await.unwrap();
     let drifted = admin.register().await.unwrap();
     assert_eq!(drifted["drift"].as_array().unwrap().len(), 1, "{}", drifted["drift"]);
     assert_eq!(drifted["drift"][0]["item"], json!("rate_table/life-base/2"));
     assert_eq!(drifted["drift"][0]["missing_on"], json!([0]));
-    ledger.client.propose_until(0, &envelope, Duration::from_secs(20)).await.unwrap();
+    ledger.client.propose_until(0, &envelope, PATIENCE).await.unwrap();
     assert_eq!(admin.register().await.unwrap()["drift"], json!([]));
 }
