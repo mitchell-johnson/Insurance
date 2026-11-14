@@ -358,6 +358,12 @@ pub enum GroupCommand {
         offer: u64,
         outcome: String,
     },
+    /// Underwriting refused a request in the outbox for a reason a person
+    /// must put right; the request stays and is tried again.
+    UnderwritingHeld {
+        key: String,
+        code: String,
+    },
     /// Outbox entries that were delivered.
     Ack {
         ids: Vec<u64>,
@@ -394,6 +400,7 @@ impl GroupCommand {
             | CommissionRefused { .. }
             | LetterRefused { .. }
             | RecordMappingTrial { .. }
+            | UnderwritingHeld { .. }
             | ObserveCore { .. }
             | Ack { .. }
             | Tick => &[DRIVER],

@@ -439,9 +439,17 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                 };
                 match result {
                     Ok(()) => delivered.push(id),
-                    Err(_) => {
+                    Err(e) => {
                         pass.failed += 1;
                         left += 1;
+                        // A refusal only a person can put right is raised for staff.
+                        if let (Outbound::Underwriting { key, .. }, Some(code)) = (out, e.strip_prefix("underwriting refused: ")) {
+                            let held = GroupCommand::UnderwritingHeld {
+                                key: key.clone(),
+                                code: code.to_string(),
+                            };
+                            self.send(format!("held:{key}:{code}:{today}"), held).await?.map_err(DriverError::Refused)?;
+                        }
                     }
                 }
             }
