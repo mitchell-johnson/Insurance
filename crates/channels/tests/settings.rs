@@ -47,8 +47,8 @@ fn a_laptop_configuration_and_its_guard() {
     assert!(load(&[NODES, OPEN, ("IC_AUTH", "magic")]).unwrap_err().contains("entra or dev"));
 }
 
-/// Purpose: production needs both tenants: the workforce's Entra ID and the customers' External ID with its own authority.
-/// Why it matters (and the public address the MCP endpoint names itself by): validating customer tokens against the workforce tenant, or the other way round, would either lock everyone out or accept the wrong population as staff.
+/// Purpose: production needs both tenants (the workforce's Entra ID and the customers' External ID with its own authority) and the public address the MCP endpoint names itself by.
+/// Why it matters: validating customer tokens against the workforce tenant, or the other way round, would either lock everyone out or accept the wrong population as staff.
 #[test]
 fn production_needs_both_tenants() {
     let workforce = [
