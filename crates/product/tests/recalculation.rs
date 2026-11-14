@@ -9,8 +9,9 @@
 use std::collections::BTreeMap;
 
 use ic_money::{Dec, DecStr, RoundingMode};
+use ic_product::discount::{Discount, DiscountBasis, DiscountCondition, DiscountStep};
 use ic_product::rating::{cover_premium, modal_premium, RatingFactors};
-use ic_product::{load_product, load_rate_table, CoverDefinition, Feature, Frequency, ProductDefinition, RateBasis, RateRow, RateTable, Sex};
+use ic_product::{load_product, load_rate_table, CoverDefinition, Feature, Frequency, Levy, ProductDefinition, RateBasis, RateRow, RateTable, Sex};
 
 const PRODUCTS: [(&str, &str); 4] = [
     ("term_life.star", include_str!("../../../products/term_life.star")),
@@ -350,4 +351,109 @@ fn a_policy_with_every_cover_equals_an_independent_recalculation() {
         }
     }
     assert!(compared > 2_000 && discounted > 500, "{compared} bills compared, {discounted} with a discount");
+}
+
+/// Purpose: with a percentage discount, a fixed yearly discount, a levy and GST added to the
+/// term life product on top of its multi-cover discount, every line of the bill across ages,
+/// sexes, smoking and frequencies equals the integer recalculation: each cover's premium after
+/// the three discounts in order, each discount's own line, the levy and the tax on the
+/// discounted premium, and the lines add up to the cent.
+/// Why it matters: no shipped product yet has a fixed discount or a levy, so the other two
+/// grids never run that arithmetic, and a fixed amount shared between covers in proportion is
+/// a division that does not come out even. These are the lines a product team will switch on
+/// next, and they should be right before anyone is billed with them.
+#[test]
+fn a_chain_of_discounts_a_levy_and_tax_equal_an_independent_recalculation() {
+    let tables = tables();
+    let mut product = load_product(PRODUCTS[0].0, PRODUCTS[0].1).unwrap();
+    let discount = |code: &str, basis| DiscountStep::One {
+        discount: Discount {
+            code: code.to_string(),
+            name: code.to_string(),
+            posting_type: format!("discount_{code}"),
+            covers: vec![],
+            basis,
+            condition: DiscountCondition::Always,
+            max_annual: None,
+        },
+    };
+    let text = |s: &str| DecStr::parse(s).unwrap();
+    product.features.push(Feature::Discounts {
+        chain: vec![
+            discount("loyalty", DiscountBasis::Percent { percent: text("7.5") }),
+            discount("bundle", DiscountBasis::FixedAnnual { amount: text("40.00") }),
+        ],
+        max_total_percent: None,
+        min_net_annual: None,
+        override_single_approver_percent: None,
+        override_max_percent: None,
+    });
+    product.covers[0].levies.push(Levy {
+        code: "fire".to_string(),
+        rate: text("0.0125"),
+    });
+    product.covers[1].gst_rate = Some(text("0.15"));
+    let bill = billing(&product);
+    let (multi, loyalty, bundle) = (Fraction::written("0.05"), Fraction::written("0.075"), Fraction::written("40.00"));
+    let one = Fraction::whole(1);
+    let mut compared = 0;
+    for age in 18u32..=69 {
+        for (sex, smoker) in [(Sex::Female, false), (Sex::Female, true), (Sex::Male, false), (Sex::Male, true)] {
+            let mut years: Vec<Fraction> = vec![];
+            let mut engine_years: BTreeMap<String, Dec> = BTreeMap::new();
+            for cover in &product.covers {
+                let table = &tables[&cover.rating.table];
+                let factors = RatingFactors {
+                    age,
+                    sex: Some(sex),
+                    smoker: Some(smoker),
+                    loadings: loadings()[(age % 4) as usize].clone(),
+                    ..RatingFactors::default()
+                };
+                let sum = sums(cover)[(age as usize) % sums(cover).len()];
+                years.push(annual(cover, row(table, &factors).unwrap(), &factors, sum));
+                engine_years.insert(cover.code.clone(), cover_premium(cover, table, &factors, sum).unwrap());
+            }
+            // The chain on a year's premium: 5% for two covers, 7.5% of what that leaves, then
+            // $40 shared between the covers in proportion to what is left on each.
+            let after_multi: Vec<Fraction> = years.iter().map(|y| y.times(one.less(multi))).collect();
+            let after_loyalty: Vec<Fraction> = after_multi.iter().map(|y| y.times(one.less(loyalty))).collect();
+            let reach = after_loyalty[0].plus(after_loyalty[1]);
+            let share = |y: Fraction| bundle.times(y).times(Fraction::new(reach.bottom, reach.top));
+            let net_years: Vec<Fraction> = after_loyalty.iter().map(|y| y.less(share(*y))).collect();
+            for &frequency in &bill.frequencies {
+                let m = modal(&bill, frequency);
+                let cents = |f: Fraction| f.times(m).cents(product.rounding);
+                let engine = modal_premium(&product, &engine_years, frequency).unwrap();
+                let at = format!("age {age} {sex:?} smoker {smoker} {frequency:?}");
+                let net = [cents(net_years[0]), cents(net_years[1])];
+                let gross = [cents(years[0]), cents(years[1])];
+                assert_eq!([engine.by_cover["life"].minor, engine.by_cover["trauma"].minor], net, "premiums: {at}");
+                assert_eq!(
+                    [engine.gross_by_cover["life"].minor, engine.gross_by_cover["trauma"].minor],
+                    gross,
+                    "before discounts: {at}"
+                );
+                let multi_line = cents(years[0].plus(years[1]).times(multi));
+                let loyalty_line = cents(after_multi[0].plus(after_multi[1]).times(loyalty));
+                let bundle_line = gross[0] + gross[1] - net[0] - net[1] - multi_line - loyalty_line;
+                let lines: Vec<(&str, i64)> = engine.discounts.iter().map(|d| (d.code.as_str(), d.amount.minor)).collect();
+                assert_eq!(
+                    lines,
+                    [("multi-cover", multi_line), ("loyalty", loyalty_line), ("bundle", bundle_line)],
+                    "discount lines: {at}"
+                );
+                // The fixed discount's line is the share of $40 for the period, give or take the rounding it absorbs.
+                assert!((bundle_line - cents(bundle)).abs() <= 2, "the fixed discount: {at}");
+                let levy = Fraction::new(i128::from(net[0]), 100)
+                    .times(Fraction::written("0.0125"))
+                    .cents(product.rounding);
+                let gst = Fraction::new(i128::from(net[1]), 100).times(Fraction::written("0.15")).cents(product.rounding);
+                assert_eq!(engine.levies["fire"].minor, levy, "levy: {at}");
+                assert_eq!(engine.gst["trauma"].minor, gst, "GST: {at}");
+                compared += 1;
+            }
+        }
+    }
+    assert_eq!(compared, 52 * 4 * 3);
 }
