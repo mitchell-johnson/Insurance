@@ -155,6 +155,18 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
         if c.rating.premium_type == PremiumType::GroupUnitRate && c.categories.is_empty() {
             return Err(invalid(file, format!("cover {}: group unit rates need benefit categories", c.code)));
         }
+        for cat in &c.categories {
+            let share = cat.member_share();
+            if cat.member_pays_percent.is_some() && !share.is_some_and(|(top, bottom)| top > 0 && top <= bottom) {
+                return Err(invalid(file, format!("cover {} category {}: member_pays_percent is above 0 and at most 100", c.code, cat.code)));
+            }
+            // A member's part is a share of all their automatic cover, so a category pays
+            // the same share on every cover that has it.
+            let other = p.covers.iter().flat_map(|o| o.categories.iter()).find(|o| o.code == cat.code && o.member_share() != share);
+            if let Some(other) = other {
+                return Err(invalid(file, format!("category {}: covers give it different member shares ({:?} and {:?})", cat.code, share, other.member_share())));
+            }
+        }
         if let UnmatchedSexRating::Blended { female_share } = &c.rating.unmatched_sex_rating {
             if female_share.get() < Dec::from(0i64) || female_share.get() > Dec::from(1i64) {
                 return Err(invalid(file, format!("cover {}: the blended share is a fraction between 0 and 1", c.code)));

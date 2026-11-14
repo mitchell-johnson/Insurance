@@ -165,6 +165,22 @@ pub struct BenefitCategory {
     pub code: String,
     pub salary_multiple: DecStr,
     pub max_sum_insured_minor: i64,
+    /// A part-pay (contributory) scheme: the percentage of this category's
+    /// automatic cover premium that each member pays, billed to the member.
+    /// The employer pays the rest. Absent, the employer pays it all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member_pays_percent: Option<DecStr>,
+}
+
+impl BenefitCategory {
+    /// The member's share as a fraction `(top, bottom)` of whole numbers,
+    /// read from the digits as written so no rounding is involved.
+    pub fn member_share(&self) -> Option<(i128, i128)> {
+        let written = self.member_pays_percent.as_ref()?.as_str();
+        let (whole, fraction) = written.split_once('.').unwrap_or((written, ""));
+        let top: i128 = format!("{whole}{fraction}").parse().ok()?;
+        Some((top, 100 * 10i128.checked_pow(fraction.len() as u32)?))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

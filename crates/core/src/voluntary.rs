@@ -216,6 +216,16 @@ pub fn member_lapse_notice(life: &LifeId) -> String {
     format!("member_lapse:{life}")
 }
 
+/// Whether a member in force on `on` pays a share of their automatic cover.
+fn part_pays(product: &ProductDefinition, policy: &Policy, life: &LifeId, on: chrono::NaiveDate) -> bool {
+    policy
+        .lives
+        .get(life)
+        .filter(|l| l.in_force_on(on))
+        .and_then(|l| crate::premium::factors_on(l, on).ok())
+        .is_some_and(|f| crate::premium::member_share(product, f).is_some())
+}
+
 /// Tell payments that nothing more is to be collected from this member.
 pub(crate) fn end_collection(policy: &Policy, ctx: &mut Ctx<'_>, life: LifeId, reason: &str) {
     ctx.emit(Event::PaymentAuthorityCancelled {
@@ -296,6 +306,13 @@ pub(crate) fn run_arrears(
             Derived::Lapse => {
                 ctx.work += 40;
                 let (layers, effective) = crate::group::end_member_paid_layers(ledger, catalog, product, policy, ctx, &life)?;
+                // On a part-pay scheme the member's automatic cover is theirs in part:
+                // not paying for it ends it, so they leave the scheme's cover today.
+                let left = part_pays(product, policy, &life, effective);
+                if left {
+                    let leave = crate::command::MemberChange::Left { life: life.clone(), effective };
+                    crate::group::apply_membership(ledger, catalog, policy, ctx, vec![leave])?;
+                }
                 let receivables_before: Vec<Receivable> = policy
                     .receivables
                     .iter()
@@ -312,6 +329,7 @@ pub(crate) fn run_arrears(
                             postings,
                             receivables_before,
                             arrears_minor,
+                            left,
                         },
                     );
                 }
@@ -376,7 +394,11 @@ pub(crate) fn reinstate(
         return Err(Reject::new("underwriting_required", "lapsed too long to reinstate on payment alone"));
     }
     // Priced first, with nothing written, so a refusal leaves no trace.
-    let billed = crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, false)?;
+    let billed = if lapse.left {
+        crate::group::rejoin_cost(catalog, policy, ctx.date, ctx.index, &life)?
+    } else {
+        crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, false)?
+    };
     let required = lapse.arrears_minor + billed.max(0);
     let held = credit_minor(ledger, policy, &life);
     if held < i128::from(required) {
@@ -396,7 +418,14 @@ pub(crate) fn reinstate(
             *r = before;
         }
     }
-    let billed = crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, true)?;
+    if lapse.left {
+        // Back as a member from the day they left: their automatic cover and any cover
+        // they pay for, every period since billed as of today.
+        let rejoin = crate::command::MemberChange::Reinstated { life: life.clone() };
+        crate::group::apply_membership(ledger, catalog, policy, ctx, vec![rejoin])?;
+    } else {
+        crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, true)?;
+    }
     policy.member_lapses.remove(&life);
     apply_credit(ledger, policy, ctx, &life)?;
     ctx.emit(Event::MemberCoverReinstated {

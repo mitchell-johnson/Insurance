@@ -402,6 +402,10 @@ pub struct MemberLapse {
     pub receivables_before: Vec<Receivable>,
     /// What was written off, which the member pays to come back.
     pub arrears_minor: i64,
+    /// The member paid part of their automatic cover and left the scheme's
+    /// cover at the lapse; a reinstatement brings them back as a member.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left: bool,
 }
 
 /// Underwriting's decision on a lapsed policy.

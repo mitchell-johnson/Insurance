@@ -181,6 +181,42 @@ pub(crate) fn retail_premium_with(
     })
 }
 
+/// The share of automatic cover a member of this category pays themselves on
+/// a part-pay scheme, as `(top, bottom)`; none where the employer pays it all.
+pub(crate) fn member_share(product: &ProductDefinition, f: &LifeFactors) -> Option<(i128, i128)> {
+    let category = f.category.as_deref()?;
+    product
+        .covers
+        .iter()
+        .flat_map(|c| c.categories.iter())
+        .find(|c| c.code == category)
+        .and_then(|c| c.member_share())
+}
+
+/// Take a member's share of their automatic cover premium (`formula`, the
+/// premium of that cover alone) out of what the employer is billed (`from`),
+/// line by line, each rounded half-even. Returns the member's part.
+pub(crate) fn take_member_share(from: &mut ModalPremium, formula: &ModalPremium, (top, bottom): (i128, i128)) -> ModalPremium {
+    use crate::postings::div_half_even;
+    let part = |v: &ic_money::Money| ic_money::Money::new(div_half_even(v.minor as i128 * top, bottom) as i64, v.currency);
+    let mut theirs = zero_premium(formula.policy_fee.currency);
+    let lines = [
+        (&formula.by_cover, &mut from.by_cover, &mut theirs.by_cover),
+        (&formula.gst, &mut from.gst, &mut theirs.gst),
+        (&formula.levies, &mut from.levies, &mut theirs.levies),
+    ];
+    for (source, employer, member) in lines {
+        for (code, amount) in source {
+            let share = part(amount);
+            if let Some(e) = employer.get_mut(code) {
+                e.minor -= share.minor;
+            }
+            member.insert(code.clone(), share);
+        }
+    }
+    theirs
+}
+
 /// A whole period's premium cut down to `days` of the `whole` days of the
 /// period: the short period before a new billing day. Each line is rounded
 /// half-even; a cent the discount lines no longer account for goes on the

@@ -22,7 +22,10 @@ use crate::policy::{
     CoverStatus, Layer, LayerOrigin, LifeFactors, LifeKind, LifeRecord, MemberPays, PendingInvoice, Policy, PolicyStatus, ReceivableKind, Standing,
 };
 use crate::postings::PostingSet;
-use crate::premium::{add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, zero_premium, Loadings};
+use crate::premium::{
+    add_premium, excess_layers_on, factors_on, member_period_line, member_period_premium, member_premium_detail, member_share, take_member_share, zero_premium,
+    Loadings,
+};
 use crate::voluntary;
 use crate::{LifeId, PartyId, PolicyId};
 use ic_product::RateBasis;
@@ -73,7 +76,7 @@ pub(crate) fn bill_scheme_step(
         }
         ctx.work += 4;
         let excess = excess_layers_on(policy, id, period.0);
-        let (p, line) = if excess.iter().any(|(_, l)| !l.member_pays.is_nothing()) {
+        let (mut p, mut line) = if excess.iter().any(|(_, l)| !l.member_pays.is_nothing()) {
             // Part of this member's cover is paid for by the member. The
             // employer is billed as if that part were not there, and the
             // difference is the member's own bill.
@@ -100,6 +103,14 @@ pub(crate) fn bill_scheme_step(
             };
             (p, line)
         };
+        // On a part-pay scheme the member pays a share of their automatic cover.
+        if let Some((f, share)) = factors_on(life, period.0).ok().and_then(|f| Some((f, member_share(product, f)?))) {
+            ctx.work += 4;
+            let formula = member_premium_detail(catalog, product, policy, id, f, period.0, &[], Loadings::All)?;
+            let theirs = take_member_share(&mut p, &formula, share);
+            line -= theirs.total();
+            member_bills.push((id.clone(), Bill::from_modal(policy, &theirs)));
+        }
         add_premium(&mut priced, &p)?;
         // A dependant is covered but is not a member.
         members += declared.map_or(u32::from(!matches!(life.kind, LifeKind::Dependant { .. })), |d| d.headcount);
@@ -309,6 +320,13 @@ pub(crate) fn restore_member_paid_layers(
     Ok(billed)
 }
 
+/// What a member who left at their lapse is billed on coming back: their
+/// share and any cover they pay for, over the periods billed since.
+pub(crate) fn rejoin_cost(catalog: &Catalog, policy: &Policy, date: NaiveDate, index: u64, life: &LifeId) -> Result<i64, Reject> {
+    let (_, _, staged) = stage(catalog, policy, date, index, vec![MemberChange::Reinstated { life: life.clone() }])?;
+    Ok(staged.iter().flat_map(|s| &s.deltas.member).map(|(_, b)| b.total()).sum())
+}
+
 /// Billed periods a change effective on `effective` reaches into.
 fn affected_periods(policy: &Policy, effective: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     (0..policy.periods_billed)
@@ -385,10 +403,10 @@ fn deltas(
                 &member_premium_detail(catalog, product, policy, life, f, start, &live, view)?,
             ))
         };
-        let full = price(&new, after, Loadings::All)?
+        let mut full = price(&new, after, Loadings::All)?
             .minus(&price(&old, before, Loadings::All)?)
             .scaled(remaining, days);
-        let shown = if hidden {
+        let mut shown = if hidden {
             price(&new, after, Loadings::ItemisedOnly)?
                 .minus(&price(&old, before, Loadings::ItemisedOnly)?)
                 .scaled(remaining, days)
@@ -404,6 +422,21 @@ fn deltas(
             if !member.is_zero() {
                 out.member.push(((from, end), member));
             }
+        }
+        // On a part-pay scheme the member's share of their automatic cover is theirs to
+        // pay on either side of the change, and comes off what the employer is charged.
+        let share = |f: &Option<LifeFactors>| -> Result<Bill, Reject> {
+            match f.as_ref().and_then(|f| member_share(product, f)) {
+                Some((top, bottom)) => Ok(price(f, &[], Loadings::All)?.scaled(top, bottom)),
+                None => Ok(Bill::default()),
+            }
+        };
+        let theirs = share(&new)?.minus(&share(&old)?).scaled(remaining, days);
+        if !theirs.is_zero() {
+            out.work += 12;
+            full = full.minus(&theirs);
+            shown = shown.minus(&theirs);
+            out.member.push(((from, end), theirs));
         }
         let loading = full.minus(&shown);
         if !shown.is_zero() {

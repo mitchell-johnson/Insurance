@@ -54,8 +54,8 @@ def per_life(table, unmatched_sex_rating = lower_of()):
 def group_unit_rate(table, unmatched_sex_rating = lower_of()):
     return {"premium_type": "group_unit_rate", "table": table, "basis": "per_thousand", "unmatched_sex_rating": unmatched_sex_rating}
 
-def benefit_category(code, salary_multiple, max_sum_insured):
-    return {"code": code, "salary_multiple": salary_multiple, "max_sum_insured_minor": max_sum_insured}
+def benefit_category(code, salary_multiple, max_sum_insured, member_pays_percent = None):
+    return {"code": code, "salary_multiple": salary_multiple, "max_sum_insured_minor": max_sum_insured, "member_pays_percent": member_pays_percent}
 
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
