@@ -20,10 +20,10 @@ use crate::catalog::Catalog;
 use crate::command::{AddedCover, AlteredTerms, ChangedExcess, OptionExercise, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
-use ic_product::definition::ANNIVERSARY_EVENT;
 use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, OptionUse, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
 use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 use crate::LifeId;
+use ic_product::definition::ANNIVERSARY_EVENT;
 
 pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: UnderwrittenLayer) -> Result<(), Reject> {
     if policy.status != PolicyStatus::InForce {
@@ -302,7 +302,10 @@ pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &m
         if let Some(feature) = &terms.requires_feature {
             let chose = first.excess_option.as_deref().and_then(|code| def.option(code).ok());
             if !chose.is_some_and(|o| o.has_feature(feature)) {
-                return Err(Reject::new("no_option", format!("the cover for life {} was taken without {feature}", spec.life)));
+                return Err(Reject::new(
+                    "no_option",
+                    format!("the cover for life {} was taken without {feature}", spec.life),
+                ));
             }
         }
     }
