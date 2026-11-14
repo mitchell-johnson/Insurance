@@ -402,8 +402,10 @@ fn a_member_who_does_not_pay_loses_only_the_cover_they_pay_for() {
 #[test]
 fn a_member_who_leaves_has_only_their_own_collection_ended() {
     let ended = |seen: &[Event], reason: &str| {
-        seen.iter().any(|e| matches!(e,
-            Event::PaymentAuthorityCancelled { claim, life: Some(l), .. } if claim == reason && *l == exec()))
+        seen.iter().any(|e| {
+            matches!(e,
+            Event::PaymentAuthorityCancelled { claim, life: Some(l), .. } if claim == reason && *l == exec())
+        })
     };
     // Paid up, then gone.
     let mut c = cluster();
