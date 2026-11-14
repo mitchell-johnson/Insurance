@@ -35,6 +35,7 @@ pub mod state;
 pub mod template;
 pub mod triggers;
 pub mod vault;
+pub mod wordings;
 
 pub use command::{Command, Envelope, Settings};
 pub use event::{Event, EventRecord};
