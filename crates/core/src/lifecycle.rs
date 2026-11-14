@@ -158,6 +158,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             factors: Bitemporal::new(cmd.inception, today, index, l.factors),
             joined: cmd.inception,
             left: None,
+            left_recorded_on: None,
         };
         if lives.insert(l.id.clone(), rec).is_some() {
             return Err(Reject::new("invalid_policy", format!("life {} is listed twice", l.id)));

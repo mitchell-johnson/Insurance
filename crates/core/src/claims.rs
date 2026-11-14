@@ -376,6 +376,50 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
             .collect();
     }
     facts.in_force = covered && c.start <= on && policy_live && !matches!(standing, Some("suspended" | "lapsed"));
+    // The same question as the record stood on the event date: a leave
+    // date or a change of details recorded since is left out. Given only
+    // where the answer differs from today's.
+    if let (Some(r), Some(id)) = (record, life_id.as_ref()) {
+        let left_then = r.left.filter(|_| r.left_recorded_on.is_none_or(|recorded| recorded <= on));
+        // A migrated policy was not on this record before it was loaded: what it
+        // was loaded with stands for what was known.
+        let factors_then = r.factors.as_known(on, on).or_else(|| r.factors.as_of(on).filter(|_| p.migrated));
+        let on_policy_then = factors_then.is_some() && r.joined <= on && left_then.is_none_or(|l| l > on);
+        // Layers the later leave ended were still running as far as anyone knew.
+        let ended_since = |l: &&crate::policy::Layer| left_then.is_none() && r.left.is_some() && l.end == r.left.map(|left| left.max(l.start));
+        let layers_then: Vec<&crate::policy::Layer> = c
+            .layers
+            .iter()
+            .filter(|l| &l.life == id && l.start <= on && (l.end.is_none_or(|e| e > on) || ended_since(l)))
+            .collect();
+        let (sum_then, covered_then) = if c.formula_driven {
+            let amount = match (product, factors_then.filter(|_| on_policy_then)) {
+                (Some(pr), Some(f)) => lifecycle::member_covers(pr, p, id, f)
+                    .into_iter()
+                    .find(|m| m.cover == cover)
+                    .map(|m| m.sum_insured_minor),
+                _ => None,
+            };
+            let excess: i64 = layers_then
+                .iter()
+                .filter(|l| l.origin == LayerOrigin::UnderwrittenExcess)
+                .map(|l| l.sum_insured_minor)
+                .sum();
+            (amount.map_or(0, |a| a + excess), amount.is_some())
+        } else {
+            let now: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
+            let then: i64 = layers_then.iter().map(|l| l.sum_insured_minor).sum();
+            (sum_insured - now + then, !layers_then.is_empty())
+        };
+        let then = ic_claims::port::KnownThen {
+            in_force: covered_then && c.start <= on && policy_live && !matches!(standing, Some("suspended" | "lapsed")),
+            life_on_policy: on_policy_then,
+            sum_insured_minor: sum_then,
+        };
+        if (then.in_force, then.life_on_policy, then.sum_insured_minor) != (facts.in_force, facts.life_on_policy, facts.sum_insured_minor) {
+            facts.known_then = Some(then);
+        }
+    }
     // Whoever holds an assignment standing on the event date is paid first.
     let standing_interests = crate::interest::ranked(p, on).into_iter().map(|i| ic_claims::port::Interest {
         party: i.party.to_string(),
