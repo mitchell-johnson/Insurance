@@ -98,6 +98,11 @@ async fn start(dir: &std::path::Path, file: &std::path::Path) -> (server::Runnin
         snapshot_every: 50,
     };
     let node = server::start_with(settings, vec![ModuleSpec::new("count", count).unwrap()]).await.unwrap();
+    // Wait, as the node itself, until the groups have leaders: a busy machine
+    // can take a while, and a call before then is answered 421, not judged.
+    let as_node = ClusterClient::new(vec![addr.clone()]).with_auth(ClusterAuth::tokens(vec![NODE.to_string()]).unwrap());
+    as_node.propose_module_until("count", &json!({}), Duration::from_secs(60)).await.unwrap();
+    as_node.partitions(Duration::from_secs(60)).await.unwrap();
     (node, addr)
 }
 
@@ -154,9 +159,6 @@ async fn each_workload_may_do_only_what_its_grant_says() {
     let file = dir.join("access.json");
     std::fs::write(&file, map("enforce", "refuse").to_string()).unwrap();
     let (node, addr) = start(&dir, &file).await;
-    // The node reaches itself as a peer: its group forms and a write goes through.
-    let as_node = ClusterClient::new(vec![addr.clone()]).with_auth(ClusterAuth::tokens(vec![NODE.to_string()]).unwrap());
-    as_node.propose_module_until("count", &json!({}), Duration::from_secs(30)).await.unwrap();
 
     let call = Call {
         http: reqwest::Client::new(),
