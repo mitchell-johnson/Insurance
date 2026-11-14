@@ -103,8 +103,23 @@ pub fn fixed(value: Dec, places: u32, mode: FastRounding) -> Result<DecStr, Stri
     if value.is_nan() || value.is_infinite() {
         return Err("the price is not a number".to_string());
     }
-    let scaled = (value * pow10(places)).with_rounding_mode(mode).round(0);
-    let n = scaled.to_i128().map_err(|_| "the price is out of range".to_string())?;
+    // Decide from the whole remainder, not the first dropped digit:
+    // fastnum's `round(0)` looks only at that digit, so 1.00490680 rounded
+    // up to four places came out 1.0049.
+    let scaled = value * pow10(places);
+    let whole = scaled.trunc();
+    let rest = (scaled - whole).abs();
+    let toward = |n: i128| if scaled.is_sign_negative() { n - 1 } else { n + 1 };
+    let n = whole.to_i128().map_err(|_| "the price is out of range".to_string())?;
+    let half = Dec::ONE / Dec::TWO;
+    let away = match mode {
+        _ if rest.is_zero() => false,
+        FastRounding::Up => true,
+        FastRounding::Down => false,
+        FastRounding::HalfEven => rest > half || (rest == half && n % 2 != 0),
+        other => return Err(format!("rounding {other:?} is not used for prices")),
+    };
+    let n = if away { toward(n) } else { n };
     let scale = 10i128.pow(places);
     let sign = if n < 0 { "-" } else { "" };
     let a = n.unsigned_abs();
@@ -453,6 +468,32 @@ mod tests {
         let def = sample("growth");
         assert!(strike(&def, &terms, &valuation("0", 1_000_000), None, None).unwrap_err().contains("zero"));
         assert!(fixed(Dec::NAN, 2, FastRounding::Up).is_err());
+    }
+
+    /// Purpose: rounding looks at every dropped digit, not only the first:
+    /// up rounds any remainder up, down drops it, and half-even rounds a
+    /// remainder above a half up even when the first dropped digit is 5 or 0.
+    /// The cases are the persona suite's (E2E-232).
+    /// Why it matters: the buy price must never be below the exact one, or
+    /// a buyer pays less than the units are worth and the fund's other
+    /// investors carry the difference.
+    #[test]
+    fn rounds_on_the_whole_remainder() {
+        let f = |v: &str, mode| fixed(DecStr::parse(v).unwrap().get(), 4, mode).unwrap().as_str().to_string();
+        assert_eq!(f("1.00490680", FastRounding::Up), "1.0050");
+        assert_eq!(f("1.00170092", FastRounding::Up), "1.0018");
+        assert_eq!(f("1.00490000", FastRounding::Up), "1.0049");
+        assert_eq!(f("1.00499999", FastRounding::Down), "1.0049");
+        assert_eq!(f("1.00125001", FastRounding::HalfEven), "1.0013");
+        assert_eq!(f("1.00125000", FastRounding::HalfEven), "1.0012");
+        assert_eq!(f("1.00135000", FastRounding::HalfEven), "1.0014");
+        assert_eq!(f("1.00124999", FastRounding::HalfEven), "1.0012");
+        assert_eq!(f("-1.00490680", FastRounding::Up), "-1.0050");
+        assert!(fixed(DecStr::parse("1.00001").unwrap().get(), 4, FastRounding::Floor).is_err());
+        // The reported fund: 1,002,400.80 over 1,000,000 units, 25 bps.
+        let def = sample("growth");
+        let struck = strike(&def, &def.terms().unwrap(), &valuation("1002400.80", 1_000_000 * MICRO_PER_UNIT), None, None).unwrap();
+        assert_eq!(struck.buy.as_str(), "1.0050");
     }
 
     /// Purpose: the inputs hash changes when any input changes and is stable otherwise.
