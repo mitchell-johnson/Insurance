@@ -471,7 +471,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-005 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
 | VUL-006 | full | `customers/tests/api.rs::a_third_party_concern_opens_a_prompt_and_discloses_nothing` |
 | VUL-007 | part | `customers/tests/api.rs::risky_acts_by_a_marked_person_are_paused_or_reviewed` |
-| VUL-008 | part | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
+| VUL-008 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority`<br>`channels/tests/http.rs::an_attorney_sees_the_persons_policies_under_their_own_sign_in` |
 | VUL-009 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-010 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-011 | full | `customers/tests/api.rs::a_guardian_gets_a_report_of_their_actions` |

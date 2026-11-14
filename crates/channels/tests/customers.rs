@@ -159,8 +159,20 @@ async fn the_master_is_asked_about_markers_as_the_trained_person() {
             .0,
         200
     );
+    // An attorney's own authority: asked as the portal, for and about the person signed in.
+    assert_eq!(master.represents(&PartyId("party-9".into()), &PartyId("party-1".into())).await.unwrap().0, 200);
     let seen = seen.lock().unwrap();
     assert_eq!(seen[0].1, "/v1/parties/party-1/authority?actor=party2&act=view");
+    assert_eq!(seen[1].1, "/v1/parties/party-1/authority?actor=party-9&act=view");
+    assert_eq!(
+        (
+            header(&seen[1].2, "x-ic-caller"),
+            header(&seen[1].2, "x-ic-purpose"),
+            header(&seen[1].2, "x-ic-actor"),
+            header(&seen[1].2, "x-ic-party")
+        ),
+        (Some("portal"), Some("representative"), Some("party-9"), Some("party-9"))
+    );
     assert_eq!(
         (
             header(&seen[0].2, "x-ic-caller"),

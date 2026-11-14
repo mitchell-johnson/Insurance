@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Finance console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
 <body data-shell="workforce" data-page="finance" data-realm="workforce">
-<main data-views="Month-end close,Journals,Books,Returns,Aged items and set-up"><header class="page"><div><h1>Finance console</h1><p>The month-end close, its checks, journals and sign-off.</p></div><p id="roles" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<main data-views="Month-end close,Journals,Books,Returns,Rate tables,Aged items and set-up"><header class="page"><div><h1>Finance console</h1><p>The month-end close, its checks, journals and sign-off.</p></div><p id="roles" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <div id="status"></div>
 
 <div data-view="Month-end close">
@@ -40,6 +40,12 @@
 <h2>File it again after a restatement</h2><form id="rr"><div class="row"><div><label for="rr-id">Return reference</label><input id="rr-id" required></div><div><label for="rr-def">Definition</label><select id="rr-def" required></select></div><div><label for="rr-reason">Why it is restated</label><input id="rr-reason" required size="32"></div><button id="rr-send">Restate</button></div><p class="muted">Finance lead only. The earlier filing is kept; this adds a version beside it.</p></form><div id="rf-msg" aria-live="polite"></div></section>
 <section><h2>A filed return</h2><form id="ret"><div class="row"><div><label for="ret-id">Return reference</label><input id="ret-id" required></div><button>Show</button></div></form><div id="ret-msg" aria-live="polite"></div><div id="ret-out"></div><div id="ret-line"></div></section></div>
 
+<div data-view="Rate tables">
+<section><h2>Price a proposed rate table against the book</h2><p class="muted">For the finance lead and the appointed actuary. Attach the current and the proposed version as their reviewed files from <code>products/rates</code>. Every cover in force on the date is priced under both, with underwriting loadings applied to the loaded totals. Premiums are annual and before discounts, fees and tax, so this shows the movement and is not a bill.</p>
+<form id="dr"><div class="row"><div><label for="dr-date">Book in force on</label><input id="dr-date" type="date" required></div><div><label for="dr-covers">Cover codes the table rates</label><input id="dr-covers" placeholder="life, life-level" required></div>
+<div><label for="dr-current">Current version (.star)</label><input id="dr-current" type="file" accept=".star" required></div><div><label for="dr-proposed">Proposed version (.star)</label><input id="dr-proposed" type="file" accept=".star" required></div></div>
+<div class="choices"><label><input type="checkbox" id="dr-life"> The rate is an amount per life</label><label><input type="checkbox" id="dr-start"> Price on the age when cover started (level premiums)</label></div>
+<p><button>Price the book</button></p></form><div id="dr-msg" aria-live="polite"></div><div id="dr-out"></div></section></div>
 <div data-view="Aged items and set-up">
 <section><h2>Aged suspense</h2><form id="aged"><div class="row"><div><label for="ag-date">As at</label><input id="ag-date" type="date" required></div><button>Show</button></div></form><div id="aged-out"></div>
 <h2>Record what is being done about an aged item</h2><form id="doc"><div class="row"><div><label for="d-kind">Kind</label><input id="d-kind" required></div><div><label for="d-party">Party</label><input id="d-party" required></div><div><label for="d-since">Held since</label><input id="d-since" type="date" required></div><div><label for="d-action">Action</label><input id="d-action" required></div><div><label for="d-owner">Owner</label><input id="d-owner" required></div><button>Record</button></div></form><div id="other-msg" aria-live="polite"></div></section>
@@ -59,7 +65,7 @@
 <script src="/ui/app.js"></script>
 <script>
 "use strict";
-const { h, put, table, money, say, signIn, signOut, api, run } = portal;
+const { h, put, clear, table, money, say, signIn, signOut, api, run } = portal;
 const $ = (id) => document.getElementById(id);
 const R = "workforce", BASE = "/staff/v1/finance/";
 let roles = [], period = null, journal = null;
@@ -70,6 +76,26 @@ const can = (role) => roles.includes(role);
 const today = () => new Date().toLocaleDateString("en-CA");
 const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 // A table of whatever rows the ledger answered with.
+// ---- A proposed rate table priced against the book.
+$("dr").addEventListener("submit", run($("dr-msg"), async () => {
+  clear($("dr-out")); say($("dr-msg"), "", "Pricing the book. A large book takes a minute.");
+  const [current, proposed] = await Promise.all([$("dr-current").files[0].text(), $("dr-proposed").files[0].text()]);
+  const d = await api(R, "POST", BASE + "table_dry_run", { as_at: $("dr-date").value, covers: $("dr-covers").value.split(",").map((c) => c.trim()).filter(Boolean),
+    per_life: $("dr-life").checked, age_at_start: $("dr-start").checked, current, proposed });
+  const pct = (a, b) => a ? ((b - a) / a * 100).toFixed(2) + "%" : "";
+  say($("dr-msg"), d.passed ? "ok" : "bad", d.passed ? `${d.proposed} may go forward to approval.` : `${d.proposed} leaves ${d.left_without_a_rate} cover(s) priced today without a rate, so it cannot go forward.`);
+  put($("dr-out"),
+    d.loadings_read ? null : h("div", { class: "banner warn", role: "status" }, h("span", {}, "The policy system could not be read for underwriting loadings, so the loaded totals below are the base totals. Run it again before signing off.")),
+    portal.stats([["Covers priced", d.covers], ["Current, a year", money(d.current_annual_minor)], ["Proposed, a year", money(d.proposed_annual_minor), d.change_minor > 0 ? "warn" : "", pct(d.current_annual_minor, d.proposed_annual_minor)],
+      ["With loadings, current", money(d.loaded_current_annual_minor), "", `${d.loaded_covers} loaded cover(s)`], ["With loadings, proposed", money(d.loaded_proposed_annual_minor), "", pct(d.loaded_current_annual_minor, d.loaded_proposed_annual_minor)]]),
+    h("p", { class: "muted" }, `${d.no_age} cover(s) have no age published and ${d.no_rate_in_either} have no rate in either version. ${d.newly_rated} are rated only by the proposed version.` + (d.loadings_unread ? ` ${d.loadings_unread} loading(s) could not be read.` : "") +
+      (d.left_without_a_rate_examples.length ? ` Left without a rate: ${d.left_without_a_rate_examples.join(", ")}.` : "")),
+    h("h2", {}, "Movement by rating cell"),
+    table(["Age", "Sex", "Smoker", "Occupation class", "Scheme category", "Covers", "Current", "Proposed", "Change"], d.cells.map((c) => [c.age_band, words(c.sex), c.smoker == null ? "" : c.smoker ? "yes" : "no", c.occupation_class, c.category, c.covers,
+      money(c.current_annual_minor), money(c.proposed_annual_minor), pct(c.current_annual_minor, c.proposed_annual_minor)])),
+    h("h2", {}, "Covers that move most"),
+    table(["Policy", "Cover", "Layer", "Age", "Current", "Proposed", "Change"], d.largest_changes.map((c) => [c.policy, c.cover, c.layer == null ? "" : c.layer, c.age, money(c.current_annual_minor), money(c.proposed_annual_minor), money(c.proposed_annual_minor - c.current_annual_minor)])));
+}));
 function grid(rows) {
   const list = Array.isArray(rows) ? rows : rows == null ? [] : [rows];
   const keys = [...new Set(list.flatMap((r) => (r && typeof r === "object" ? Object.keys(r) : ["value"])))];

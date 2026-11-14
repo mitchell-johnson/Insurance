@@ -410,6 +410,14 @@ const sees = async (page, text) => {
     await p.locator("#mp-msg").getByText("Nothing was stored.").waitFor();
   } });
   await visit(browser, "/finance", { subject: "sub-gllead" }, { expectStatus: [409], run: async (p) => {
+    await say(p, "A proposed rate table is priced against the book before anyone approves it");
+    await p.getByRole("tab", { name: "Rate tables" }).click();
+    const rates = require("path").join(__dirname, "../../../../products/rates/life_base.star");
+    await p.fill("#dr-date", "2027-10-31"); await p.fill("#dr-covers", "life");
+    await p.setInputFiles("#dr-current", rates); await p.setInputFiles("#dr-proposed", rates);
+    await p.locator("#dr button").click();
+    await p.locator("#dr-msg").getByText("may go forward to approval").waitFor();
+    await sees(p, "Movement by rating cell");
     // The lead sorts policies into accounting groups, and is told plainly why a cut-over total is refused.
     await p.getByRole("tab", { name: "Aged items and set-up" }).click();
     await tab(p, "Books");

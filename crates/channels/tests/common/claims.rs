@@ -184,6 +184,36 @@ impl Partitions for ClaimsCore {
         Box::pin(async move { Ok(held.then_some(partition)) })
     }
 
+    /// Two pages on the first partition and one on the second, so paging is walked.
+    fn loadings(&self, partition: PartitionId, after: Option<PolicyId>, as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage> {
+        use ic_core::loadings::{LoadingRow, LoadingsPage};
+        let row = |policy: &str, loading: &str| LoadingRow {
+            policy: PolicyId::from(policy),
+            cover: "life".into(),
+            layer: 1,
+            start: as_at,
+            end: None,
+            loadings: vec![serde_json::from_value(serde_json::json!(loading)).unwrap()],
+        };
+        let page = match (partition, after.as_ref().map(|p| p.0.as_str())) {
+            (0, None) => LoadingsPage {
+                rows: vec![row("pol-a", "0.5")],
+                next: Some(PolicyId::from("pol-a")),
+            },
+            // No leader for this date once the first page has been read.
+            (0, Some("pol-a")) if as_at.to_string() == "1999-01-01" => return Box::pin(async { Err("no leader".to_string()) }),
+            (0, Some("pol-a")) => LoadingsPage {
+                rows: vec![row("pol-b", "0.25")],
+                next: None,
+            },
+            _ => LoadingsPage {
+                rows: vec![row("pol-z", "1")],
+                next: None,
+            },
+        };
+        Box::pin(async move { Ok(page) })
+    }
+
     fn propose(&self, partition: PartitionId, envelope: Envelope) -> Asked<'_, Proposed> {
         let mut parts = self.0.lock().unwrap();
         let part = &mut parts[usize::from(partition)];
@@ -225,6 +255,10 @@ impl Partitions for Down {
     }
 
     fn locate(&self, _partition: PartitionId, _policy: PolicyId) -> Asked<'_, Option<PartitionId>> {
+        Box::pin(async { Err("no leader".to_string()) })
+    }
+
+    fn loadings(&self, _partition: PartitionId, _after: Option<PolicyId>, _as_at: chrono::NaiveDate) -> Asked<'_, ic_core::loadings::LoadingsPage> {
         Box::pin(async { Err("no leader".to_string()) })
     }
 

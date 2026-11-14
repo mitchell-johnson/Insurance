@@ -2395,7 +2395,7 @@ async fn the_finance_console() {
     assert_eq!(ask("sub-aud", "accounting_group?policy=nope&partition=one").await.0, StatusCode::BAD_REQUEST);
     // Only the console's questions, each with its fields; one the ledger cannot read is its refusal.
     for bad in [
-        "table_dry_run?as_at=2027-11-30",
+        "rate_table?id=life-base",
         "dashboard?period=2027-11",
         "checks?period=November",
         "extract?kind=x&period=2027-11&limit=many",
@@ -2403,6 +2403,9 @@ async fn the_finance_console() {
     ] {
         assert_eq!(ask("sub-aud", bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
+
+    // The dry run is not a question to read: it is posted with the two table files.
+    assert_eq!(ask("sub-aud", "table_dry_run?as_at=2027-11-30").await.0, StatusCode::METHOD_NOT_ALLOWED);
 
     // What is not a person's command never leaves the console.
     for not_theirs in [
@@ -3433,6 +3436,166 @@ async fn a_caller_with_no_authority_is_told_nothing_and_the_contact_is_recorded(
             .0,
         StatusCode::NOT_FOUND
     );
+}
+
+/// Purpose: an attorney whose enduring power has been activated signs in as themselves and sees the policies of the person they act
+/// for, without that person's health information; the person keeps their own sign-in and still sees everything of their own; with
+/// no authority, or for a person who does not exist, the answer is the same 404; while the authority is under review nothing is
+/// shown; and an outage of the customer master shows nothing rather than everything.
+/// Why it matters: an attorney handed the customer's own sign-in would be indistinguishable from the customer in every record, and
+/// the customer would lose the sight of their own affairs that the law leaves them. A relative with no authority must not be able to
+/// tell from the answer whether the person is a customer at all.
+#[tokio::test]
+async fn an_attorney_sees_the_persons_policies_under_their_own_sign_in() {
+    let portal = portal();
+    let policy = portal.retail.to_string();
+    let list = format!("/app/v1/represented/{KIRI}");
+    let one = format!("/app/v1/represented/{KIRI}/policies/{policy}");
+    // The adviser's sign-in stands in for the attorney: a person with a party of their own and no relationship to the policy.
+    assert_eq!(portal.get("sub-adv", &list).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-adv", &one).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(portal.get("sub-adv", "/app/v1/represented/nobody").await.0, StatusCode::NOT_FOUND);
+
+    // Underwriting holds a loading on the person's cover: theirs to see, and nobody else's.
+    let (retail, now) = (portal.retail.clone(), portal.now());
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/loading"), "policy": retail, "kind": "loading",
+            "subject": KIRI, "sensitive": true, "body": { "code": "L150" } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            9_500,
+            ic_channels::Envelope {
+                key: "attorney-loading".into(),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    portal
+        .master
+        .authorities
+        .lock()
+        .unwrap()
+        .insert((KIRI.to_string(), "adv-1".to_string()), "allow");
+    let (status, mine) = portal.get("sub-adv", &list).await;
+    assert_eq!(status, StatusCode::OK, "{mine}");
+    assert_eq!(
+        (mine["party"].as_str(), mine["authority"]["basis"].as_str()),
+        (Some(KIRI), Some("enduring_power_of_attorney"))
+    );
+    assert!(mine["policies"].as_array().unwrap().iter().any(|p| p["policy"] == policy.as_str()), "{mine}");
+    let (status, view) = portal.get("sub-adv", &one).await;
+    assert_eq!((status, view["on_behalf_of"].as_str()), (StatusCode::OK, Some(KIRI)), "{view}");
+    // The person's own view holds more: what is sensitive stays theirs.
+    let own = portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.1;
+    let (shown, theirs) = (view["rows"].as_array().unwrap().len(), own["rows"].as_array().unwrap().len());
+    assert_eq!(shown + view["withheld"].as_u64().unwrap() as usize, theirs, "{view}");
+    assert_eq!(view["withheld"], 1, "{view}");
+    assert!(own["rows"].as_array().unwrap().iter().any(|r| r["kind"] == "loading"), "{own}");
+    assert!(view["rows"].as_array().unwrap().iter().all(|r| r["kind"] != "health" && r["kind"] != "loading"));
+    // The authority is over one person: nothing of the attorney's reach extends to a policy that person is not on.
+    assert_eq!(
+        portal.get("sub-adv", &format!("/app/v1/represented/{KIRI}/policies/{}", portal.scheme)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // The attorney's own app is unchanged: the person's policy is not among their own.
+    assert_eq!(portal.get("sub-adv", &format!("/app/v1/policies/{policy}")).await.0, StatusCode::NOT_FOUND);
+
+    portal
+        .master
+        .authorities
+        .lock()
+        .unwrap()
+        .insert((KIRI.to_string(), "adv-1".to_string()), "route");
+    let (status, problem) = portal.get("sub-adv", &one).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("authority_under_review")));
+    portal.master.down.store(true, Ordering::SeqCst);
+    assert_eq!(portal.get("sub-adv", &list).await.0, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        portal.get("sub-kiri", &format!("/app/v1/policies/{policy}")).await.0,
+        StatusCode::OK,
+        "the person lost their own view"
+    );
+}
+
+/// Purpose: the finance lead prices a proposed rate table against the book from the two reviewed table files; the core's loadings
+/// for the date are gathered from every partition, page by page, and handed to the ledger, and the answer carries totals with no
+/// policy's loading in it; a file that is not a rate table, a missing date or no cover code is refused before anything is read;
+/// people without the role are refused; and when the core cannot be read the run still answers and says the loaded totals are missing.
+/// Why it matters: a new table is approved on what it does to the premiums people actually pay, and those include loadings.
+/// Loadings imply health, so they may pass through for this one sum but must never come back out by policy, and an actuary who
+/// was shown base totals as if they were loaded would sign off the wrong movement.
+#[tokio::test]
+async fn a_proposed_rate_table_is_priced_against_the_book() {
+    let portal = portal();
+    let table = include_str!("../../../products/rates/life_base.star");
+    let ask = |who: &'static str, body: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", who, "/staff/v1/finance/table_dry_run", body).await }
+    };
+    let run = json!({ "as_at": "2027-10-31", "covers": ["life"], "current": table, "proposed": table });
+    for outsider in ["sub-sue", "sub-aud", "sub-gl1"] {
+        assert_eq!(ask(outsider, run.clone()).await.0, StatusCode::FORBIDDEN, "{outsider}");
+    }
+    for (bad, said) in [
+        (json!({ "covers": ["life"], "current": table, "proposed": table }), "date"),
+        (
+            json!({ "as_at": "2027-10-31", "covers": [" "], "current": table, "proposed": table }),
+            "cover code",
+        ),
+        (json!({ "as_at": "2027-10-31", "covers": ["life"], "current": table }), "proposed"),
+        (
+            json!({ "as_at": "2027-10-31", "covers": ["life"], "current": table, "proposed": "RATE_TABLE = 7" }),
+            "does not load",
+        ),
+    ] {
+        let (status, problem) = ask("sub-gllead", bad).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{problem}");
+        assert!(problem["detail"].as_str().unwrap().contains(said), "{problem}");
+    }
+
+    let (status, answer) = ask("sub-gllead", run.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["loadings_read"], true);
+    assert_eq!(
+        (answer["as_at"].as_str(), answer["passed"].as_bool()),
+        (Some("2027-10-31"), Some(true)),
+        "{answer}"
+    );
+    assert!(answer["loaded_current_annual_minor"].is_number() && answer["cells"].is_array());
+    // What came back names no policy the loadings were on.
+    let text = answer.to_string();
+    assert!(!text.contains("pol-a") && !text.contains("pol-z"), "{text}");
+    // The stand-in core was read to the end on both partitions: three loaded layers went to the ledger and none stayed here.
+    let rows = vec![json!({ "partition": 0, "policy": "pol-a", "cover": "life", "layer": 1, "loadings": ["0.5"] })];
+    let question = ic_channels::finance::dry_run(&run, rows).unwrap();
+    assert_eq!(
+        (question["q"].as_str(), question["request"]["current"]["id"].as_str()),
+        (Some("table_dry_run"), Some("life-base"))
+    );
+    assert_eq!(question["request"]["loadings"][0]["policy"], "pol-a");
+    assert_eq!(
+        (question["request"]["per_life"].as_bool(), question["request"]["age_at_start"].as_bool()),
+        (Some(false), Some(false))
+    );
+}
+
+/// Purpose: when no core partition answers, the dry run is still priced on base premiums and the answer says the loadings were
+/// not read.
+/// Why it matters: the actuary must be able to see a table's movement during a core outage, and must not mistake that answer for
+/// one that includes loadings.
+#[tokio::test]
+async fn a_dry_run_without_the_core_says_the_loadings_are_missing() {
+    let portal = portal();
+    let table = include_str!("../../../products/rates/life_base.star");
+    // The stand-in core has no leader for this date, part way through the book.
+    let run = json!({ "as_at": "1999-01-01", "covers": ["life"], "current": table, "proposed": table });
+    let (status, answer) = portal.write("POST", "sub-gllead", "/staff/v1/finance/table_dry_run", run).await;
+    assert_eq!((status, answer["loadings_read"].as_bool()), (StatusCode::OK, Some(false)), "{answer}");
+    assert_eq!(answer["loaded_covers"], 0);
 }
 
 /// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module

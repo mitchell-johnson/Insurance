@@ -96,6 +96,14 @@ pub enum Question {
         policy: PolicyId,
         at: At,
     },
+    /// What a representative (an attorney, a guardian) sees of a policy of
+    /// the person they act for: that person's own view, without the rows
+    /// marked sensitive. The authority is checked by the caller.
+    PolicyFor {
+        represented: PartyId,
+        policy: PolicyId,
+        at: At,
+    },
     /// An adviser's engagements, standing and book.
     /// What an advice provider or a group sees: each adviser engaged under
     /// it today, their standing, and the policies they service, each as
@@ -378,6 +386,22 @@ pub fn ask(state: &ChannelState, question: Question) -> Value {
                 "relationships": relationships,
                 "fresh": is_fresh,
                 "rows": rows.into_iter().map(|r| json!({ "key": r.key, "kind": r.kind, "subject": r.subject, "body": r.body })).collect::<Vec<_>>(),
+            })
+        }
+        Question::PolicyFor { represented, policy, at } => {
+            let is_fresh = fresh(state, at);
+            let (relationships, rows) = state.visible_rows(&represented, &policy, state.today(at), is_fresh);
+            if relationships.is_empty() {
+                return Value::Null;
+            }
+            let withheld = rows.iter().filter(|r| r.sensitive).count();
+            json!({
+                "policy": policy,
+                "on_behalf_of": represented,
+                "relationships": relationships,
+                "fresh": is_fresh,
+                "withheld": withheld,
+                "rows": rows.into_iter().filter(|r| !r.sensitive).map(|r| json!({ "key": r.key, "kind": r.kind, "subject": r.subject, "body": r.body })).collect::<Vec<_>>(),
             })
         }
         Question::Practice { party, at } => {
