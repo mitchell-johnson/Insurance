@@ -88,17 +88,6 @@ pub enum RoundingMode {
     Up,
 }
 
-impl RoundingMode {
-    fn fast(self) -> FastRounding {
-        match self {
-            RoundingMode::HalfUp => FastRounding::HalfUp,
-            RoundingMode::HalfEven => FastRounding::HalfEven,
-            RoundingMode::Down => FastRounding::Down,
-            RoundingMode::Up => FastRounding::Up,
-        }
-    }
-}
-
 /// Whole minor units of one currency.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct Money {
@@ -257,11 +246,30 @@ fn pow10(n: u32) -> Dec {
     Dec::from(10i64.pow(n))
 }
 
-fn round_integer(d: Dec, mode: RoundingMode) -> Result<i128, MoneyError> {
+/// A decimal rounded to a whole number under a rounding mode, exactly.
+///
+/// The decimal library's own `round` decides from the first digit it drops
+/// alone, so 0.2501 at two places is a tie to it and half-even gives 0.2;
+/// rounding up, 1.01 stays 1. Here the number is cut at the point and the
+/// whole of what was cut off is compared with a half.
+pub fn round_integer(d: Dec, mode: RoundingMode) -> Result<i128, MoneyError> {
     if d.is_nan() || d.is_infinite() {
         return Err(MoneyError::InvalidDecimal(d.to_string()));
     }
-    d.with_rounding_mode(mode.fast()).round(0).to_i128().map_err(|_| MoneyError::Overflow)
+    let whole = d.with_rounding_mode(FastRounding::Down).round(0);
+    let cut = whole.to_i128().map_err(|_| MoneyError::Overflow)?;
+    let rest = (d - whole).abs();
+    let half = Dec::from(5i64) / Dec::from(10i64);
+    let away = match mode {
+        RoundingMode::Down => false,
+        RoundingMode::Up => !rest.is_zero(),
+        RoundingMode::HalfUp => rest >= half,
+        RoundingMode::HalfEven => rest > half || (rest == half && cut % 2 != 0),
+    };
+    if !away {
+        return Ok(cut);
+    }
+    cut.checked_add(if d.is_negative() { -1 } else { 1 }).ok_or(MoneyError::Overflow)
 }
 
 /// Parse a decimal from its string form (rates, factors, prices).
@@ -491,6 +499,27 @@ mod tests {
         /// Why it matters: rounding is where money goes missing. This property is why a rounding
         /// difference can always be posted to its own account and the ledger still nets to zero.
         #[test]
+        /// Purpose: rounding a decimal to a whole number gives, for every mode and either sign,
+        /// what integer arithmetic on the same digits gives: down cuts toward zero, up goes away
+        /// from zero whenever anything at all was cut off, and the half modes compare everything
+        /// cut off with a half, so that only an exact half is a tie.
+        /// Why it matters: every premium, tax amount and accrual passes through this one function.
+        /// The decimal library decides from the first dropped digit alone, which made 23.9851
+        /// round to 23.98 and billed about one premium in twenty a cent low.
+        #[test]
+        fn rounding_to_a_whole_number_looks_at_everything_it_drops(units in -1_000_000_000_000i128..1_000_000_000_000i128, places in 1u32..9) {
+            let scale = 10i128.pow(places);
+            let d = dec_i128(units) / dec_i128(scale);
+            let cut = units / scale;
+            let rest = (units % scale).abs();
+            let step = if units < 0 { -1 } else { 1 };
+            let expect = |away: bool| if away { cut + step } else { cut };
+            prop_assert_eq!(round_integer(d, RoundingMode::Down).unwrap(), cut);
+            prop_assert_eq!(round_integer(d, RoundingMode::Up).unwrap(), expect(rest != 0));
+            prop_assert_eq!(round_integer(d, RoundingMode::HalfUp).unwrap(), expect(rest * 2 >= scale));
+            prop_assert_eq!(round_integer(d, RoundingMode::HalfEven).unwrap(), expect(rest * 2 > scale || (rest * 2 == scale && cut % 2 != 0)));
+        }
+
         fn round_to_money_remainder_is_exact(fine in -10_000_000_000_000i128..10_000_000_000_000i128) {
             let a = AccrualAmount::new(fine, Currency::NZD);
             for mode in [RoundingMode::HalfUp, RoundingMode::HalfEven, RoundingMode::Down, RoundingMode::Up] {
