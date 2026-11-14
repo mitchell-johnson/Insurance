@@ -64,16 +64,42 @@ impl Fraction {
         Fraction::new(digits.parse().unwrap(), 10i128.pow(fraction.len() as u32))
     }
     fn times(self, o: Fraction) -> Self {
-        Fraction::new(self.top.checked_mul(o.top).unwrap(), self.bottom.checked_mul(o.bottom).unwrap())
+        // Cross-reduced first, so the products stay inside 128 bits.
+        let (g, h) = (gcd(self.top, o.bottom).max(1), gcd(o.top, self.bottom).max(1));
+        Fraction::new((self.top / g).checked_mul(o.top / h).unwrap(), (self.bottom / h).checked_mul(o.bottom / g).unwrap())
     }
+    /// Over the least common denominator, so long chains of sums stay small.
     fn plus(self, o: Fraction) -> Self {
-        Fraction::new(self.top * o.bottom + o.top * self.bottom, self.bottom.checked_mul(o.bottom).unwrap())
+        let g = gcd(self.bottom, o.bottom);
+        let (a, b) = (o.bottom / g, self.bottom / g);
+        Fraction::new(self.top.checked_mul(a).unwrap() + o.top.checked_mul(b).unwrap(), self.bottom.checked_mul(a).unwrap())
     }
     fn less(self, o: Fraction) -> Self {
-        Fraction::new(self.top * o.bottom - o.top * self.bottom, self.bottom.checked_mul(o.bottom).unwrap())
+        let g = gcd(self.bottom, o.bottom);
+        let (a, b) = (o.bottom / g, self.bottom / g);
+        Fraction::new(self.top.checked_mul(a).unwrap() - o.top.checked_mul(b).unwrap(), self.bottom.checked_mul(a).unwrap())
     }
     fn over(self, n: i128) -> Self {
         Fraction::new(self.top, self.bottom.checked_mul(n).unwrap())
+    }
+    /// The same amount to twelve places of a dollar, for shares split pro rata,
+    /// whose exact denominators would outgrow 128 bits over a chain of steps.
+    /// Twelve places sit ten below the cent, so a cent can only differ on a
+    /// tie the engine's own 76 digits would also have to break.
+    fn near(self) -> Self {
+        const PLACES: i128 = 1_000_000_000_000;
+        if self.bottom <= PLACES {
+            return self;
+        }
+        let (whole, mut rest) = (self.top / self.bottom, self.top % self.bottom);
+        let mut digits = 0i128;
+        for _ in 0..12 {
+            rest = rest.checked_mul(10).unwrap();
+            digits = digits * 10 + rest / self.bottom;
+            rest %= self.bottom;
+        }
+        let up = i128::from(rest.checked_mul(2).unwrap() >= self.bottom);
+        Fraction::new(whole * PLACES + digits + up, PLACES)
     }
     /// Dollars to cents, rounded once by long division.
     fn cents(self, mode: RoundingMode) -> i64 {
@@ -457,6 +483,231 @@ fn a_chain_of_discounts_a_levy_and_tax_equal_an_independent_recalculation() {
         }
     }
     assert_eq!(compared, 52 * 4 * 3);
+}
+
+
+fn less_than(a: Fraction, b: Fraction) -> bool {
+    a.top * b.bottom < b.top * a.bottom
+}
+
+fn min_of(a: Fraction, b: Fraction) -> Fraction {
+    if less_than(b, a) {
+        b
+    } else {
+        a
+    }
+}
+
+fn total(v: &[Fraction]) -> Fraction {
+    v.iter().fold(Fraction::whole(0), |a, b| a.plus(*b))
+}
+
+/// Purpose: the discount chain a product team can build from the other parts of the engine is
+/// recalculated independently in fractions over the grid of ages, sexes and smoker status on a
+/// two-cover policy: a percentage read from the tier of a wellness entitlement; a best-of set
+/// (6% against $60 shared in proportion, whichever takes more); an additive set of 10% capped
+/// at $50 a year and 4%, each on the base premium; then the cap of 20% on all discounts
+/// together and the floor of $150 under the net, taken back from the last discount first.
+/// Every period's premium, premium before discounts and discount line equals the
+/// recalculation to the cent.
+/// Why it matters: tiered and capped discounts were billed by the engine with nothing
+/// independent to check them against. Their arithmetic is where a discount can quietly give
+/// more than its cap, take a share twice, or take back from the wrong discount when the total
+/// is too large, and each of those is a billing error on every policy that has it.
+#[test]
+fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculation() {
+    use ic_product::discount::{Held, Line, PricingState};
+    use ic_product::rating::modal_premium_by_line;
+    let tables = tables();
+    let mut product = load_product(PRODUCTS[0].0, PRODUCTS[0].1).unwrap();
+    product.features.retain(|f| !matches!(f, Feature::MultiCoverDiscount { .. }));
+    let text = |s: &str| DecStr::parse(s).unwrap();
+    let discount = |code: &str, basis, condition, cap: Option<&str>| Discount {
+        code: code.to_string(),
+        name: code.to_string(),
+        posting_type: format!("discount_{code}"),
+        covers: vec![],
+        basis,
+        condition,
+        max_annual: cap.map(text),
+    };
+    let tiers: BTreeMap<String, DecStr> = [("bronze", "2.5"), ("silver", "5"), ("gold", "10")].into_iter().map(|(k, v)| (k.to_string(), text(v))).collect();
+    product.features.push(Feature::Discounts {
+        chain: vec![
+            DiscountStep::One {
+                discount: discount(
+                    "wellness",
+                    DiscountBasis::Tier { percent_by_tier: tiers },
+                    DiscountCondition::Entitlement { code: "vitality".into() },
+                    None,
+                ),
+            },
+            DiscountStep::BestOf {
+                discounts: vec![
+                    discount("loyalty", DiscountBasis::Percent { percent: text("6") }, DiscountCondition::Always, None),
+                    discount("bundle", DiscountBasis::FixedAnnual { amount: text("60.00") }, DiscountCondition::Always, None),
+                ],
+            },
+            DiscountStep::Additive {
+                discounts: vec![
+                    discount("staff", DiscountBasis::Percent { percent: text("10") }, DiscountCondition::Always, Some("50.00")),
+                    discount("promo", DiscountBasis::Percent { percent: text("4") }, DiscountCondition::Always, None),
+                ],
+            },
+        ],
+        max_total_percent: Some(text("20")),
+        min_net_annual: Some(text("150.00")),
+        override_single_approver_percent: None,
+        override_max_percent: None,
+    });
+    let bill = billing(&product);
+    let zero = Fraction::whole(0);
+    let pct = |s: &str| Fraction::written(s).over(100);
+    let (mut compared, mut capped, mut floored, mut bundles, mut staff_capped) = (0, 0, 0, 0, 0);
+    for age in 18u32..=69 {
+        for (sex, smoker) in [(Sex::Female, false), (Sex::Female, true), (Sex::Male, false), (Sex::Male, true)] {
+            let tier = ["", "bronze", "silver", "gold"][(age % 4) as usize];
+            let mut base: Vec<Fraction> = vec![];
+            let mut engine: BTreeMap<Line, Dec> = BTreeMap::new();
+            let mut sums_insured = BTreeMap::new();
+            for cover in &product.covers {
+                let table = &tables[&cover.rating.table];
+                let factors = RatingFactors {
+                    age,
+                    sex: Some(sex),
+                    smoker: Some(smoker),
+                    ..RatingFactors::default()
+                };
+                // Small sums as well as large, so the floor and the fixed share both come into play.
+                let all = sums(cover);
+                let sum = all[(age as usize * 7) % all.len()];
+                base.push(annual(cover, row(table, &factors).unwrap(), &factors, sum));
+                let line = Line {
+                    cover: cover.code.clone(),
+                    life: "a".into(),
+                };
+                engine.insert(line.clone(), cover_premium(cover, table, &factors, sum).unwrap());
+                sums_insured.insert(line, sum);
+            }
+
+            // The chain, again, in fractions. Each step's amount per line, in order.
+            let mut left = base.clone();
+            let mut steps: Vec<(&str, Vec<Fraction>)> = vec![];
+            let take = |left: &mut Vec<Fraction>, taken: &[Fraction]| {
+                for (l, t) in left.iter_mut().zip(taken) {
+                    *l = l.less(*t);
+                }
+            };
+            if !tier.is_empty() {
+                let f = pct(match tier {
+                    "bronze" => "2.5",
+                    "silver" => "5",
+                    _ => "10",
+                });
+                let taken: Vec<Fraction> = left.iter().map(|l| min_of(l.times(f), *l)).collect();
+                take(&mut left, &taken);
+                steps.push(("wellness", taken));
+            }
+            let loyalty: Vec<Fraction> = left.iter().map(|l| min_of(l.times(pct("6")), *l)).collect();
+            let reach = total(&left);
+            let bundle: Vec<Fraction> = left
+                .iter()
+                .map(|l| min_of(l.times(Fraction::written("60.00").times(Fraction::new(reach.bottom, reach.top)).near()).near(), *l))
+                .collect();
+            let (code, best) = if less_than(total(&loyalty), total(&bundle)) { ("bundle", bundle) } else { ("loyalty", loyalty) };
+            bundles += usize::from(code == "bundle");
+            take(&mut left, &best);
+            steps.push((code, best));
+            let mut staff: Vec<Fraction> = base.iter().zip(&left).map(|(b, l)| min_of(b.times(pct("10")), *l)).collect();
+            let cap = Fraction::written("50.00");
+            if less_than(cap, total(&staff)) {
+                let t = total(&staff);
+                let share = cap.times(Fraction::new(t.bottom, t.top)).near();
+                staff = staff.iter().map(|s| s.times(share).near()).collect();
+                staff_capped += 1;
+            }
+            take(&mut left, &staff);
+            steps.push(("staff", staff));
+            let promo: Vec<Fraction> = base.iter().zip(&left).map(|(b, l)| min_of(b.times(pct("4")), *l)).collect();
+            take(&mut left, &promo);
+            steps.push(("promo", promo));
+            // The cap on the total and the floor under the net, from the last discount back.
+            let gross = total(&base);
+            let floor = Fraction::written("150.00");
+            let by_floor = if less_than(floor, gross) { gross.less(floor) } else { zero };
+            let by_cap = gross.times(pct("20"));
+            let allowed = min_of(by_cap, by_floor);
+            let given = steps.iter().fold(zero, |a, (_, v)| a.plus(total(v)));
+            if less_than(allowed, given) {
+                if less_than(by_floor, by_cap) {
+                    floored += 1;
+                } else {
+                    capped += 1;
+                }
+                let mut excess = given.less(allowed);
+                for (_, amounts) in steps.iter_mut().rev() {
+                    let t = total(amounts);
+                    if excess == zero || t == zero {
+                        continue;
+                    }
+                    let back = min_of(excess, t);
+                    let share = back.times(Fraction::new(t.bottom, t.top)).near();
+                    for a in amounts.iter_mut() {
+                        *a = a.less(min_of(a.times(share).near(), *a));
+                    }
+                    excess = excess.less(back);
+                }
+            }
+            // A step the cap or floor took all of may keep a trace from the twelve-place shares.
+            let trace = Fraction::new(1, 1_000_000_000);
+            steps.retain(|(_, v)| less_than(trace, total(v)));
+            let net: Vec<Fraction> = (0..base.len()).map(|i| steps.iter().fold(base[i], |n, (_, v)| n.less(v[i]))).collect();
+
+            let held = [Held {
+                code: "vitality".into(),
+                tier: tier.into(),
+                life: None,
+            }];
+            for &frequency in &bill.frequencies {
+                let state = PricingState {
+                    covers: 2,
+                    covers_elsewhere: 0,
+                    lives: 1,
+                    frequency,
+                    entitlements: if tier.is_empty() { &[] } else { &held },
+                    overrides: &[],
+                    sums_insured: &sums_insured,
+                };
+                let got = modal_premium_by_line(&product, &engine, &state).unwrap();
+                let m = modal(&bill, frequency);
+                let cents = |f: Fraction| f.times(m).cents(product.rounding);
+                let at = format!("age {age} {sex:?} smoker {smoker} tier {tier:?} {frequency:?}");
+                let codes: Vec<&str> = product.covers.iter().map(|c| c.code.as_str()).collect();
+                let nets: Vec<i64> = net.iter().map(|n| cents(*n)).collect();
+                let grosses: Vec<i64> = base.iter().map(|b| cents(*b)).collect();
+                assert_eq!(codes.iter().map(|c| got.by_cover[*c].minor).collect::<Vec<_>>(), nets, "premiums: {at}");
+                if steps.is_empty() {
+                    // Nothing applied (the floor took it all back): no gross lines and no discount lines.
+                    assert!(got.gross_by_cover.is_empty() && got.discounts.is_empty(), "no discount lines: {at}");
+                    assert_eq!(nets, grosses, "net is gross: {at}");
+                    compared += 1;
+                    continue;
+                }
+                assert_eq!(codes.iter().map(|c| got.gross_by_cover[*c].minor).collect::<Vec<_>>(), grosses, "before discounts: {at}");
+                let mut expected: Vec<(String, i64)> = steps.iter().map(|(code, v)| (code.to_string(), cents(total(v)))).collect();
+                // The last line takes what rounding leaves, so the lines add up to the cent.
+                let residual = grosses.iter().sum::<i64>() - nets.iter().sum::<i64>() - expected[..expected.len() - 1].iter().map(|(_, c)| c).sum::<i64>();
+                let own = expected.last().unwrap().1;
+                assert!((residual - own).abs() <= 2, "the last line moves by rounding only: {at}");
+                expected.last_mut().unwrap().1 = residual;
+                let lines: Vec<(String, i64)> = got.discounts.iter().map(|d| (d.code.clone(), d.amount.minor)).collect();
+                assert_eq!(lines, expected, "discount lines: {at}");
+                compared += 1;
+            }
+        }
+    }
+    assert_eq!(compared, 52 * 4 * 3);
+    assert!(capped > 0 && floored > 0 && bundles > 0 && staff_capped > 0, "every branch is reached: cap {capped}, floor {floored}, bundle {bundles}, staff cap {staff_capped}");
 }
 
 const AIA_PRODUCTS: [(&str, &str); 8] = [
