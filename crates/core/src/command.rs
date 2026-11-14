@@ -557,6 +557,13 @@ pub enum Command {
         policy: PolicyId,
         hardship: String,
     },
+    /// Reinstate a scheme member's own cover that lapsed for non-payment,
+    /// paid from the member's credit (`voluntary::reinstate`).
+    ReinstateMemberCover {
+        policy: PolicyId,
+        life: LifeId,
+        reference: String,
+    },
     /// Pay a scheme member's credit back to the member.
     RefundMemberCredit {
         policy: PolicyId,
@@ -754,6 +761,7 @@ impl Command {
             Command::MakeArrangement { .. } | Command::EndArrangement { .. } => &["collections"],
             Command::GrantHardship { .. } | Command::EndHardship { .. } => &["collections"],
             Command::RefundMemberCredit { .. } => &["cash-matching", "policy-servicing"],
+            Command::ReinstateMemberCover { .. } => &["group-admin", "collections"],
             Command::RecordCession { .. } | Command::PostReinsurance { .. } => &["reinsurance"],
             Command::RaiseRefundPayable { .. } | Command::ReleaseRefundPayable { .. } | Command::SettlePayable { .. } | Command::ReturnPayment { .. } => {
                 &["payments"]
@@ -814,6 +822,7 @@ impl Command {
             Command::GrantHardship { .. } => "grant_hardship",
             Command::EndHardship { .. } => "end_hardship",
             Command::RefundMemberCredit { .. } => "refund_member_credit",
+            Command::ReinstateMemberCover { .. } => "reinstate_member_cover",
             Command::Claims(_) => "claims",
             Command::Investment(_) => "investment",
             Command::Interest(_) => "interest",

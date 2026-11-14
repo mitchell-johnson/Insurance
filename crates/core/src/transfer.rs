@@ -40,6 +40,9 @@ pub struct TransferBalance {
     pub unit: AccountUnit,
     /// Signed balance, debits positive, in the account's unit.
     pub balance: i128,
+    /// A scheme member's own money: the member whose credit account it is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<crate::LifeId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -102,7 +105,10 @@ pub(crate) fn begin(
     }
     let mut set = PostingSet::new();
     let mut balances = Vec::new();
-    for account in accounts::transferable_accounts(&policy.id, policy.currency) {
+    // Each member's own money travels as its own line, named by the member.
+    let members = policy.member_accounts.iter().map(|life| (accounts::member_suspense(&policy.id, life, policy.currency), Some(life.clone())));
+    let policy_own = accounts::transferable_accounts(&policy.id, policy.currency).into_iter().map(|a| (a, None));
+    for (account, member) in policy_own.chain(members).collect::<Vec<_>>() {
         let balance = ledger.balance(&account.id);
         if ledger.available(&account.id) != ledger.natural_balance(&account.id) {
             return Err(Reject::new("holds_outstanding", "the policy has holds; release them before transferring"));
@@ -114,6 +120,7 @@ pub(crate) fn begin(
                 role: account.role.clone(),
                 unit: account.unit.clone(),
                 balance,
+                member,
             });
         }
     }
@@ -212,13 +219,21 @@ pub(crate) fn land(state: &mut CoreState, ctx: &mut Ctx<'_>, record: TransferRec
     let always = accounts::policy_accounts(&policy.id, policy.currency).len();
     for (i, account) in accounts::transferable_accounts(&policy.id, policy.currency).into_iter().enumerate() {
         // Accounts opened on first use arrive only if they carry a balance.
-        if i >= always && !record.balances.iter().any(|b| b.role == account.role) {
+        if i >= always && !record.balances.iter().any(|b| b.role == account.role && b.member.is_none()) {
             continue;
         }
         state.ledger.open_account(account.clone())?;
-        if let Some(b) = record.balances.iter().find(|b| b.role == account.role && b.unit == account.unit) {
+        if let Some(b) = record.balances.iter().find(|b| b.role == account.role && b.unit == account.unit && b.member.is_none()) {
             set.debit(account.clone(), b.balance, Dimensions::default());
             set.credit(accounts::transfer_in_transit(&account.unit), b.balance, Dimensions::default());
+        }
+    }
+    for b in &record.balances {
+        if let Some(life) = &b.member {
+            let account = accounts::member_suspense(&policy.id, life, policy.currency);
+            state.ledger.open_account(account.clone())?;
+            set.debit(account, b.balance, Dimensions::default());
+            set.credit(accounts::transfer_in_transit(&b.unit), b.balance, Dimensions::default());
         }
     }
     let postings = set.into_postings(&mut state.ledger)?;

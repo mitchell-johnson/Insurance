@@ -388,6 +388,22 @@ pub struct LapseRecord {
     pub arrears_minor: i64,
 }
 
+/// A scheme member's own cover lapsed for non-payment: what the lapse ended
+/// and wrote off, kept so that a reinstatement inside the product's window
+/// restores exactly that.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberLapse {
+    pub lapsed_on: NaiveDate,
+    /// The layers the lapse ended, the member's dependants' included.
+    pub layers: Vec<(String, u32)>,
+    /// The write-off entry's postings and the member's receivables as they
+    /// stood before it.
+    pub postings: Vec<Posting>,
+    pub receivables_before: Vec<Receivable>,
+    /// What was written off, which the member pays to come back.
+    pub arrears_minor: i64,
+}
+
 /// Underwriting's decision on a lapsed policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReinstatementApproval {
@@ -595,6 +611,9 @@ pub struct Policy {
     /// scheme's standing in both directions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub member_standing: BTreeMap<LifeId, Standing>,
+    /// Members whose own cover lapsed and may still be reinstated.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_lapses: BTreeMap<LifeId, MemberLapse>,
     pub anniversaries_processed: u32,
     pub pending_invoice: Option<PendingInvoice>,
     pub lapse: Option<LapseRecord>,

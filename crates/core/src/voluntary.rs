@@ -19,7 +19,7 @@ use crate::arrears::{self, Derived};
 use crate::cash::{allocate, apply_allocations};
 use crate::event::Event;
 use crate::machine::{Ctx, Reject};
-use crate::policy::{Policy, PolicyStatus, ReceiptRecord, Standing};
+use crate::policy::{MemberLapse, Policy, PolicyStatus, ReceiptRecord, Receivable, Standing};
 use crate::postings::PostingSet;
 use crate::LifeId;
 
@@ -33,11 +33,6 @@ fn credit_account(policy: &mut Policy, life: &LifeId) -> Account {
 /// A member's credit balance.
 pub fn credit_minor(ledger: &Ledger, policy: &Policy, life: &LifeId) -> i128 {
     ledger.available(&accounts::member_suspense(&policy.id, life, policy.currency).id)
-}
-
-/// Whether any member has money of their own held on the policy.
-pub(crate) fn holds_credit(ledger: &Ledger, policy: &Policy) -> bool {
-    policy.member_accounts.iter().any(|life| credit_minor(ledger, policy, life) != 0)
 }
 
 fn member(policy: &Policy, life: &LifeId) -> Result<(), Reject> {
@@ -168,10 +163,21 @@ pub(crate) fn refund_credit(ledger: &mut Ledger, policy: &mut Policy, ctx: &mut 
 /// what is unpaid is written off, and premium the member paid for days not
 /// yet covered goes back to the member's credit. Returns what was owed.
 pub(crate) fn close(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId) -> Result<i64, Reject> {
+    Ok(close_keeping(ledger, product, policy, ctx, life)?.0)
+}
+
+/// [`close`], returning also the entry's postings, for a lapse to keep.
+fn close_keeping(
+    ledger: &mut Ledger,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: &LifeId,
+) -> Result<(i64, Vec<ic_ledger::Posting>), Reject> {
     let c = policy.currency;
     let theirs = |r: &crate::policy::Receivable| r.payer.as_ref() == Some(life);
     if !policy.receivables.iter().any(|r| !r.closed && theirs(r)) {
-        return Ok(0);
+        return Ok((0, vec![]));
     }
     let mut set = PostingSet::new();
     let (owed, leftover_fine) = arrears::write_off(policy, &mut set, theirs);
@@ -182,13 +188,13 @@ pub(crate) fn close(ledger: &mut Ledger, product: &ProductDefinition, policy: &m
     set.credit(accounts::rounding(c), rem.fine, dims(policy, None, "rounding"));
     let postings = set.into_postings(ledger)?;
     if !postings.is_empty() {
-        ctx.post(ledger, "member_cover_closed", Some(policy), ctx.date, postings, BTreeMap::new())?;
+        ctx.post(ledger, "member_cover_closed", Some(policy), ctx.date, postings.clone(), BTreeMap::new())?;
     }
     for r in policy.receivables.iter_mut().filter(|r| !r.closed && r.payer.as_ref() == Some(life)) {
         r.outstanding_minor = 0;
         r.closed = true;
     }
-    Ok(owed)
+    Ok((owed, postings))
 }
 
 /// Close what every member owes, before the scheme itself lapses or ends:
@@ -281,7 +287,25 @@ pub(crate) fn run_arrears(
             Derived::Lapse => {
                 ctx.work += 40;
                 let (layers, effective) = crate::group::end_member_paid_layers(ledger, catalog, product, policy, ctx, &life)?;
-                let arrears_minor = close(ledger, product, policy, ctx, &life)?;
+                let receivables_before: Vec<Receivable> = policy
+                    .receivables
+                    .iter()
+                    .filter(|r| !r.closed && r.payer.as_ref() == Some(&life))
+                    .cloned()
+                    .collect();
+                let (arrears_minor, postings) = close_keeping(ledger, product, policy, ctx, &life)?;
+                if rules.reinstatement_days > 0 {
+                    policy.member_lapses.insert(
+                        life.clone(),
+                        MemberLapse {
+                            lapsed_on: effective,
+                            layers: layers.clone(),
+                            postings,
+                            receivables_before,
+                            arrears_minor,
+                        },
+                    );
+                }
                 announce(policy, ctx, &life, None);
                 ctx.emit(Event::MemberCoverLapsed {
                     policy: policy.id.clone(),
@@ -294,5 +318,82 @@ pub(crate) fn run_arrears(
             }
         }
     }
+    Ok(())
+}
+
+/// Reinstate a member's own cover that lapsed for non-payment, inside the
+/// product's reinstatement window. The member must hold, as credit, what the
+/// lapse wrote off and the premium for every period billed since: the
+/// write-off is reversed, the cover is in force again from the day it ended
+/// (no gap), the periods since are billed to the member, and the credit pays
+/// all of it at once. After the product's evidence-free period it needs
+/// underwriting, which is not built for a member's cover, so it is refused.
+pub(crate) fn reinstate(
+    ledger: &mut Ledger,
+    catalog: &crate::catalog::Catalog,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    life: LifeId,
+    reference: String,
+) -> Result<(), Reject> {
+    member(policy, &life)?;
+    if policy.status != PolicyStatus::InForce {
+        return Err(Reject::new("not_in_force", "the scheme is not in force"));
+    }
+    if reference.trim().is_empty() {
+        return Err(Reject::new("invalid_request", "a reinstatement names its reference"));
+    }
+    let Some(lapse) = policy.member_lapses.get(&life).cloned() else {
+        return Err(Reject::new("not_lapsed", format!("member {life} has no lapsed cover of their own to reinstate")));
+    };
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?
+        .clone();
+    let rules = product.arrears().ok_or_else(|| Reject::new("window_closed", "the product has no reinstatement"))?;
+    let since = (ctx.date - lapse.lapsed_on).num_days();
+    if since > i64::from(rules.reinstatement_days) {
+        return Err(Reject::new("window_closed", "the reinstatement window has closed; the member must apply for cover again"));
+    }
+    if rules.reinstatement_evidence_free_days.is_some_and(|free| since > i64::from(free)) {
+        return Err(Reject::new(
+            "underwriting_required",
+            "the member's cover has been lapsed too long to reinstate on payment alone",
+        ));
+    }
+    // Priced first, with nothing written, so a refusal leaves no trace.
+    let billed = crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, false)?;
+    let required = lapse.arrears_minor + billed.max(0);
+    let held = credit_minor(ledger, policy, &life);
+    if held < i128::from(required) {
+        return Err(Reject::new(
+            "arrears_unpaid",
+            format!("reinstatement needs {required} in the member's credit; the member holds {held}"),
+        ));
+    }
+    if !lapse.postings.is_empty() {
+        let reversal = lapse.postings.iter().map(ic_ledger::Posting::reversed).collect();
+        let mut detail = BTreeMap::new();
+        detail.insert("reference".to_string(), reference.clone());
+        ctx.post(ledger, "member_lapse_reversed", Some(policy), ctx.date, reversal, detail)?;
+    }
+    for before in lapse.receivables_before {
+        if let Some(r) = policy.receivables.iter_mut().find(|r| r.id == before.id) {
+            *r = before;
+        }
+    }
+    let billed = crate::group::restore_member_paid_layers(ledger, catalog, &product, policy, ctx, &lapse.layers, lapse.lapsed_on, true)?;
+    policy.member_lapses.remove(&life);
+    apply_credit(ledger, policy, ctx, &life)?;
+    ctx.emit(Event::MemberCoverReinstated {
+        policy: policy.id.clone(),
+        life: life.clone(),
+        reference,
+        layers: lapse.layers,
+        effective: lapse.lapsed_on,
+        arrears_minor: lapse.arrears_minor,
+        billed_minor: billed,
+    });
+    refresh(&product, policy, ctx, &life);
     Ok(())
 }

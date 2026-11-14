@@ -251,6 +251,81 @@ pub(crate) fn end_member_paid_layers(
     Ok((all, effective))
 }
 
+/// Undo [`end_member_paid_layers`]: the layers a member's lapse ended
+/// (`ended`, the dependants' included) are in force again from the day they
+/// ended, and every period billed since is billed to whoever pays for each,
+/// as of today. Returns what the member is billed. With `apply` false the
+/// policy is left as it was and only the amount is worked out.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn restore_member_paid_layers(
+    ledger: &mut Ledger,
+    catalog: &Catalog,
+    product: &ProductDefinition,
+    policy: &mut Policy,
+    ctx: &mut Ctx<'_>,
+    ended: &[(String, u32)],
+    effective: NaiveDate,
+    apply: bool,
+) -> Result<i64, Reject> {
+    let mut lives: Vec<LifeId> = vec![];
+    for (cover, id) in ended {
+        if let Some(l) = policy.covers.get(cover).and_then(|c| c.layers.iter().find(|l| l.id == *id)) {
+            if !lives.contains(&l.life) {
+                lives.push(l.life.clone());
+            }
+        }
+    }
+    let mut billed = 0i64;
+    for life in &lives {
+        let before = member_layers(policy, life);
+        let mut after = before.clone();
+        let mut restored = Vec::new();
+        for (cover, l) in &mut after {
+            if ended.contains(&(cover.clone(), l.id)) && l.end == Some(effective) {
+                l.end = None;
+                restored.push((cover.clone(), l.id));
+            }
+        }
+        if restored.is_empty() {
+            continue;
+        }
+        let d = match policy.lives.get(life) {
+            Some(record) => deltas(catalog, product, policy, life, effective, same_details(record), &before, &after)?,
+            None => Deltas::default(),
+        };
+        billed += d.member.iter().map(|(_, b)| b.total()).sum::<i64>();
+        ctx.work += d.work;
+        if !apply {
+            continue;
+        }
+        for (cover, id) in &restored {
+            if let Some(c) = policy.covers.get_mut(cover) {
+                let (code, cover_type) = (c.code.clone(), c.cover_type.clone());
+                if let Some(l) = c.layers.iter_mut().find(|l| l.id == *id) {
+                    l.end = None;
+                    let info = LayerInfo {
+                        cover: code,
+                        cover_type,
+                        layer: l.id,
+                        life: l.life.clone(),
+                        sum_insured_minor: l.sum_insured_minor,
+                        start: l.start,
+                        option: l.excess_option.clone(),
+                    };
+                    ctx.emit(Event::LayerAdded {
+                        policy: policy.id.clone(),
+                        layer: info,
+                        origin: l.origin,
+                        continues: None,
+                    });
+                }
+            }
+        }
+        post_deltas(ledger, policy, ctx, life, effective, d)?;
+    }
+    Ok(billed)
+}
+
 /// Billed periods a change effective on `effective` reaches into.
 fn affected_periods(policy: &Policy, effective: NaiveDate) -> Vec<(NaiveDate, NaiveDate)> {
     (0..policy.periods_billed)
@@ -1141,6 +1216,7 @@ pub(crate) fn split(
                 migration: None,
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
+                member_lapses: Default::default(),
                 interests: Default::default(),
                 nominations: vec![],
                 owner_hold: None,

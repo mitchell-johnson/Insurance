@@ -799,6 +799,9 @@ impl CoreState {
                 }
                 crate::hardship::end(&mut s.ledger, &s.catalog, p, ctx, &hardship)
             }),
+            Command::ReinstateMemberCover { policy, life, reference } => {
+                self.with_policy(&policy, true, |s, p| voluntary::reinstate(&mut s.ledger, &s.catalog, p, ctx, life, reference))
+            }
             Command::RefundMemberCredit { policy, life, amount } => {
                 self.with_policy(&policy, true, |s, p| voluntary::refund_credit(&mut s.ledger, p, ctx, life, amount))
             }
@@ -951,12 +954,6 @@ impl CoreState {
                     return Err(Reject::new(
                         "policy_invested",
                         "a policy with units, pending investment cash or pending unit orders cannot change partition yet",
-                    ));
-                }
-                if voluntary::holds_credit(&s.ledger, p) {
-                    return Err(Reject::new(
-                        "member_credit_held",
-                        "a scheme holding a member's own money cannot change partition until it is applied or refunded",
                     ));
                 }
                 transfer::begin(&mut s.ledger, &s.catalog, p, ctx, transfer_id, target_group, target_partition, moved)?;

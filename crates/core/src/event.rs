@@ -466,6 +466,20 @@ pub enum Event {
         /// What the member owed and was written off.
         arrears_minor: i64,
     },
+    /// A member's own cover that lapsed is in force again from the day it
+    /// ended. Each layer also has its `LayerAdded`. What was written off
+    /// is owed again and the periods billed since are billed to the member;
+    /// the member's credit has paid both.
+    MemberCoverReinstated {
+        policy: PolicyId,
+        life: LifeId,
+        reference: String,
+        layers: Vec<(String, u32)>,
+        effective: NaiveDate,
+        arrears_minor: i64,
+        /// Billed to the member for the periods since the lapse.
+        billed_minor: i64,
+    },
     /// Money from a scheme member, set against what the member owes; the
     /// rest is the member's credit.
     MemberReceiptApplied {

@@ -10,7 +10,7 @@ use ic_ledger::PartitionId;
 use ic_money::{Currency::NZD, DecStr, Money};
 use ic_sim::config::shipped_activations;
 use ic_sim::persona::{group_scheme, issue_command, member};
-use ic_sim::Cluster;
+use ic_sim::{Cluster, Delivery};
 
 fn d(y: i32, m: u32, day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(y, m, day).unwrap()
@@ -256,11 +256,10 @@ fn a_loading_the_member_pays_never_reaches_the_employer() {
 
 /// Purpose: when the scheme itself ends, what a member paid ahead for their own cover goes
 /// back to the member's credit and not to the employer; what the member still owed is
-/// written off; and a scheme holding a member's money cannot change partition until that
-/// money is applied or refunded.
+/// written off.
 /// Why it matters: a cancellation refunds unearned premium to whoever paid it. Paying a
-/// member's money to the employer, or leaving it behind when the scheme moves, is the
-/// insurer giving away or losing money that belongs to a named person.
+/// member's money to the employer is the insurer giving away money that belongs to a
+/// named person.
 #[test]
 fn a_members_money_stays_the_members_when_the_scheme_ends() {
     let mut c = cluster();
@@ -268,13 +267,6 @@ fn a_members_money_stays_the_members_when_the_scheme_ends() {
     c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
     c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-1", 30_00)).unwrap();
     assert_eq!(credit(&c, p, &id), 4_62);
-    let transfer = Command::BeginTransfer {
-        policy: id.clone(),
-        transfer_id: "t-1".into(),
-        target_group: GroupId("grp-elsewhere".into()),
-        target_partition: p,
-    };
-    assert_eq!(code(c.submit(p, "transfer", transfer)), "member_credit_held");
 
     days(&mut c, 10);
     c.submit(p, "group-admin", Command::CancelPolicy { policy: id.clone() }).unwrap();
@@ -446,4 +438,139 @@ fn a_member_who_leaves_has_only_their_own_collection_ended() {
     days(&mut c, 150);
     assert_eq!(member_owes(&c, p, &id), 0);
     assert!(ended(&events(&mut c), "member_lapsed"));
+}
+
+/// Purpose: a member whose own cover lapsed for non-payment is reinstated inside the
+/// product's 90-day window once their credit holds what the lapse wrote off and the
+/// premium for the periods since: the cover is in force again from the day it ended,
+/// those periods are billed to the member and paid from the credit, and the member is
+/// paid up. Short of that sum it is refused `arrears_unpaid` with nothing changed; a
+/// member with no lapse is refused `not_lapsed`; after the window, `window_closed`.
+/// Why it matters: a retail policy can be reinstated by paying what it owes, and the
+/// design gives a member's own cover the same standing as a policy of its own. Without
+/// this a member who paid a week late would have to apply and be underwritten again,
+/// and the insurer could not take the money it is owed; and a reinstatement that left a
+/// gap, or did not charge for it, would give cover nobody paid for.
+#[test]
+fn a_lapsed_members_cover_is_reinstated_when_they_pay_what_it_needs() {
+    let mut c = cluster();
+    let (p, id) = scheme(&mut c);
+    c.submit(p, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    let employer_pays = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "emp-1".into(),
+        amount: Money::new(12 * (11_00 + 90_62), NZD),
+    };
+    c.submit(p, "cash-matching", employer_pays).unwrap();
+    let reinstate = |life: LifeId| Command::ReinstateMemberCover {
+        policy: id.clone(),
+        life,
+        reference: "rein-1".into(),
+    };
+    assert_eq!(code(c.submit(p, "group-admin", reinstate(exec()))), "not_lapsed");
+    days(&mut c, 152);
+    let lapsed = c.state(p).policies[&id].member_lapses[&exec()].clone();
+    assert!(lapsed.arrears_minor > 0);
+    assert!(c.state(p).policies[&id].covers["group-life"].layers[0].end.is_some());
+    days(&mut c, 20);
+    c.take_events();
+
+    // A part payment is not enough, and changes nothing.
+    c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-1", lapsed.arrears_minor)).unwrap();
+    let before = c.state(p).policies[&id].clone();
+    assert_eq!(code(c.submit(p, "group-admin", reinstate(exec()))), "arrears_unpaid");
+    assert_eq!(c.state(p).policies[&id], before);
+
+    // The arrears and the month since the lapse, paid: cover again with no gap.
+    c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-2", 2 * 25_38)).unwrap();
+    let paid = lapsed.arrears_minor + 2 * 25_38;
+    c.take_events();
+    c.submit(p, "group-admin", reinstate(exec())).unwrap();
+    let policy = c.state(p).policies[&id].clone();
+    assert_eq!(policy.covers["group-life"].layers[0].end, None, "in force again from the day it ended");
+    assert!(policy.member_lapses.is_empty());
+    assert_eq!(member_owes(&c, p, &id), 0, "the credit paid everything");
+    assert_eq!(policy.member_standing.get(&exec()).copied(), Some(Standing::Paid));
+    let seen = events(&mut c);
+    let billed = seen
+        .iter()
+        .find_map(|e| match e {
+            Event::MemberCoverReinstated {
+                life,
+                layers,
+                effective,
+                arrears_minor,
+                billed_minor,
+                ..
+            } if *life == exec() => {
+                assert_eq!((layers, *effective, *arrears_minor), (&lapsed.layers, lapsed.lapsed_on, lapsed.arrears_minor));
+                Some(*billed_minor)
+            }
+            _ => None,
+        })
+        .expect("the reinstatement is announced");
+    assert!(billed > 0, "the periods since the lapse are charged");
+    assert_eq!(credit(&c, p, &id), i128::from(paid - lapsed.arrears_minor - billed), "the rest stays the member's");
+    assert!(seen.iter().any(|e| matches!(e, Event::LayerAdded { .. })));
+
+    // The member's cover carries on being billed and paid as before.
+    days(&mut c, 31);
+    assert!(c.state(p).policies[&id].covers["group-life"].layers[0].end.is_none());
+
+    // A second lapse, left past the window, cannot be reinstated.
+    days(&mut c, 160);
+    assert!(c.state(p).policies[&id].member_lapses.contains_key(&exec()));
+    days(&mut c, 91);
+    c.submit(p, "cash-matching", member_receipt(&id, &exec(), "m-3", 1_000_00)).unwrap();
+    assert_eq!(code(c.submit(p, "group-admin", reinstate(exec()))), "window_closed");
+}
+
+/// Purpose: a scheme holding a member's own money moves to another partition with that
+/// money as the member's, in an account of the member's own on the target, and the
+/// source keeps none of it; the money still meets the member's next bill there, and the
+/// partitions reconcile.
+/// Why it matters: the transfer used to be refused while any member held credit, so an
+/// employer's change of group could wait on one member's few dollars. Moving the money
+/// as the scheme's would hand a named person's money to the employer; leaving it behind
+/// would strand it on a partition the policy no longer lives on.
+#[test]
+fn a_members_credit_moves_with_the_scheme_to_another_partition() {
+    let mut c = Cluster::in_memory(2, 7);
+    c.open(d(2027, 11, 1)).unwrap();
+    for cmd in shipped_activations().unwrap() {
+        c.activate_everywhere(cmd).unwrap();
+    }
+    let (src, id) = scheme(&mut c);
+    let dst = 1 - src;
+    c.submit(src, "group-admin", layer(&id, None, MemberPays::All)).unwrap();
+    c.submit(src, "cash-matching", member_receipt(&id, &exec(), "m-1", 30_00)).unwrap();
+    assert_eq!(credit(&c, src, &id), 4_62);
+    let target_group = GroupId(
+        (0..)
+            .map(|i| format!("grp-new-{i}"))
+            .find(|g| c.partition_of(&GroupId(g.clone())) == dst)
+            .unwrap(),
+    );
+    let transfer = Command::BeginTransfer {
+        policy: id.clone(),
+        transfer_id: "t-1".into(),
+        target_group,
+        target_partition: dst,
+    };
+    c.submit(src, "transfer", transfer).unwrap();
+    while c.messages_in_flight() > 0 {
+        c.relay_messages(|_| Delivery::Deliver);
+    }
+    assert_eq!(c.state(src).policies[&id].status, PolicyStatus::Transferred);
+    let member_account = accounts::member_suspense(&id, &exec(), NZD).id;
+    assert_eq!(c.state(src).ledger.natural_balance(&member_account), 0, "nothing of the member's stays behind");
+    assert_eq!(credit(&c, dst, &id), 4_62, "the member's money is the member's on the target");
+    assert_eq!(c.state(dst).ledger.natural_balance(&accounts::policy_suspense(&id, NZD).id), 0, "and not the scheme's");
+    assert!(c.reconcile().is_empty(), "{:?}", c.reconcile());
+
+    // December's bill is met first from the credit that moved.
+    days(&mut c, 30);
+    let owes = c.state(dst).policies[&id].member_outstanding_minor(&exec());
+    assert_eq!(owes, 25_38 - 4_62);
+    assert_eq!(credit(&c, dst, &id), 0);
 }
