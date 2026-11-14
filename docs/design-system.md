@@ -123,6 +123,6 @@ A new console is added there once.
 
 `crates/channels/tests/browser/check.js` drives every page as each kind of person in a real
 browser and fails on a script error, a content security policy violation, a browser dialog, or
-missing content. `SHOTS=dir` saves a full-page screenshot of every page; `THEME=dark` and
+missing content. After each journey it audits the page for a screen reader: every control has a label, every button and link a name, every table header cells, icons are hidden or named, IDs are unique, and the page has a language, a title, one main heading and a main region. `SHOTS=dir` saves a full-page screenshot of every page; `THEME=dark` and
 `WIDTH=390` take them in the dark theme and at phone width. Look at the screenshots before
 shipping a change to `app.css`.

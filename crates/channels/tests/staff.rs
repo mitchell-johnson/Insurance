@@ -1459,3 +1459,82 @@ fn builders_and_operators_hold_no_personal_class() {
         assert_eq!(s.authorise(&pol, &r).denied, Some(denied), "{who} {action}");
     }
 }
+
+/// Purpose: the comparison of two versions of the staff policy lists every set of facts the new
+/// one allows and the old one refused, and lists nothing for a change that only narrows.
+/// Why it matters: a one-line edit to a Cedar file can open clinical records to an ad hoc lookup.
+/// The reviewer of a change needs the cases it opens, counted and named, not the diff alone.
+#[test]
+fn a_policy_change_is_measured_by_what_it_opens() {
+    let shipped = policy();
+    // Dropping the rule that keeps clinical information to a task opens clinical reads under a case or a reason.
+    let without_task_rule = DEFAULT_POLICIES.replace(r#"when { context.class == "clinical" && context.purpose_kind != "task" };"#, "when { false };");
+    assert_ne!(without_task_rule, DEFAULT_POLICIES, "the rule this test removes is no longer in the policy");
+    let wider = StaffPolicy::new(&without_task_rule).unwrap();
+    let opened = wider.widened_from(&shipped);
+    assert!(!opened.is_empty());
+    assert!(
+        opened
+            .iter()
+            .all(|c| c.starts_with("clinical, purpose ") && !c.starts_with("clinical, purpose task")),
+        "{opened:?}"
+    );
+    assert!(
+        opened.contains(&"clinical, purpose case: what whose how_much why class_held one_record fresh".to_string()),
+        "{opened:?}"
+    );
+    // The other way round it only narrows.
+    assert!(shipped.widened_from(&wider).is_empty());
+    // A new forbid narrows; it opens nothing.
+    let narrower = StaffPolicy::new(&format!(
+        "{DEFAULT_POLICIES}\nforbid (principal, action, resource) when {{ context.class == \"financial\" }};"
+    ))
+    .unwrap();
+    assert!(narrower.widened_from(&shipped).is_empty());
+}
+
+/// Purpose: the staff policy in the repository is the last version on the approval record, that
+/// record names a proposer and a different approver, and it states exactly how many sets of facts
+/// the version opens that the one before refused (persona row STF-011).
+/// Why it matters: this policy is the last word on every staff action. Changing it must take two
+/// people, and the second must have seen what the change opens. With this test in CI an edit to
+/// the file fails the build until that record is made.
+#[test]
+fn a_policy_change_needs_a_security_approver() {
+    use sha2::{Digest, Sha256};
+    let hash = |text: &str| hex::encode(Sha256::digest(text.as_bytes()));
+    let before = include_str!("../../../config/cedar/staff.approved.cedar");
+    let record: serde_json::Value = serde_json::from_str(include_str!("../../../config/cedar/staff.approval.json")).unwrap();
+    let approved = record["approved"].as_array().unwrap();
+    let last = approved.last().expect("at least one approved version");
+    assert_eq!(
+        last["sha256"],
+        hash(DEFAULT_POLICIES),
+        "config/cedar/staff.cedar has changed: add the new version to staff.approval.json, proposed by you and approved by a security approver"
+    );
+    let previous = if approved.len() > 1 { &approved[approved.len() - 2] } else { last };
+    assert_eq!(
+        previous["sha256"],
+        hash(before),
+        "staff.approved.cedar must hold the version approved before the last"
+    );
+    for entry in approved {
+        let (proposer, approver) = (entry["proposed_by"].as_str().unwrap_or(""), entry["approved_by"].as_str().unwrap_or(""));
+        assert!(
+            !proposer.is_empty() && !approver.is_empty() && proposer != approver,
+            "each version needs a proposer and a different approver: {entry}"
+        );
+        assert!(entry["approved_on"].as_str().is_some_and(|d| d.len() == 10), "{entry}");
+    }
+    let opened = policy().widened_from(&StaffPolicy::new(before).unwrap());
+    assert_eq!(
+        last["widened_cases"],
+        opened.len(),
+        "the approval must state how many sets of facts the change opens; it opens these: {:?}",
+        opened.iter().take(20).collect::<Vec<_>>()
+    );
+    assert!(
+        opened.is_empty() || last["reason"].as_str().is_some_and(|r| !r.trim().is_empty()),
+        "a change that widens access needs its reason recorded"
+    );
+}

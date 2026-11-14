@@ -261,6 +261,7 @@ impl World {
                 .collect(),
             legacy_received_on: None,
             replacement: false,
+            replaces: vec![],
         }
     }
 

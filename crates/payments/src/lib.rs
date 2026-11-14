@@ -16,6 +16,7 @@ mod authority;
 pub mod config;
 mod console;
 mod drill;
+pub mod erase;
 pub mod file;
 pub mod forecast;
 pub mod hold;

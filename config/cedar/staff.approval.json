@@ -1,0 +1,13 @@
+{
+  "about": "Every approved version of config/cedar/staff.cedar, oldest first. A change to that file is refused by the build until its hash is the last entry here, proposed by one person and approved by a security approver who is someone else, with the number of sets of facts it opens that the version before refused (crates/channels/tests/staff.rs). staff.approved.cedar holds the version before the last, which the count is measured against.",
+  "approved": [
+    {
+      "sha256": "67690565253e62a14b42929bdb1f1990cf08e855f18e0597c57292713bc3061e",
+      "proposed_by": "portal-build",
+      "approved_by": "security-approver-to-be-named",
+      "approved_on": "2026-11-14",
+      "widened_cases": 0,
+      "reason": "The policy as first shipped. The approver is a placeholder until a security approver is named."
+    }
+  ]
+}
