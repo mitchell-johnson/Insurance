@@ -76,5 +76,6 @@ pub fn reinstatement_proposal(policy: &Policy, today: NaiveDate) -> Option<OpenP
         covers,
         legacy_received_on: None,
         replacement: false,
+        replaces: vec![],
     })
 }

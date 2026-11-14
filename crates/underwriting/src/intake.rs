@@ -66,8 +66,24 @@ impl UnderwritingState {
         }
         // A replacement keeps the cover in force and adds to it: it is more
         // cover on that policy, and it is advice, so an adviser gives it.
-        if open.replacement && (!matches!(open.entry, crate::model::Entry::Increase { .. }) || open.adviser.is_none()) {
-            return reject("replacement", "a replacement is advised more cover on a policy in force");
+        // Or it is a new policy in place of cover on another of ours, which
+        // the application names cover by cover.
+        let top_up = matches!(open.entry, crate::model::Entry::Increase { .. }) && open.replaces.is_empty();
+        let new_policy = open.entry == crate::model::Entry::NewBusiness && !open.replaces.is_empty();
+        if (open.replacement && (!(top_up || new_policy) || open.adviser.is_none())) || (!open.replacement && !open.replaces.is_empty()) {
+            return reject(
+                "replacement",
+                "a replacement is advised: more cover on a policy in force, or a new policy naming the cover it replaces",
+            );
+        }
+        let named = |r: &crate::model::ReplacedCover| {
+            open.covers.iter().any(|c| c.life == r.life && c.code == r.cover) && r.replaced_sum_insured_minor > 0 && r.replaced_policy != open.policy
+        };
+        if !open.replaces.iter().all(named) {
+            return reject(
+                "replacement",
+                "each replaced cover is on another policy, names a cover on this application and gives up an amount",
+            );
         }
         crate::option::door(&open, cx)?;
         crate::eligibility::check(&self.config.settings.eligibility, &open, cx.today)?;
@@ -138,6 +154,7 @@ impl UnderwritingState {
             issue_attempts: 0,
             reoffers: vec![],
             replacement: open.replacement,
+            replaces: open.replaces,
             delegated_to: None,
         };
         cx.event(Event::ProposalReceived {
@@ -218,6 +235,7 @@ pub(crate) fn consent(
             if !signed.as_ref().is_some_and(|s| s.verifies(&msg)) {
                 return reject("signature", "the replacement disclosure is confirmed with the life's signed step");
             }
+            life_mut(p, life)?.replacement_signed = signed.clone();
         }
         let f = life_mut(p, life)?;
         f.consents.insert(kind, cx.at);

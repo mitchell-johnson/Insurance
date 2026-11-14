@@ -79,6 +79,10 @@ pub struct OpenProposal {
     /// has confirmed the replacement disclosure with a signed step.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replacement: bool,
+    /// A new policy advised as replacing cover on another of our policies:
+    /// which cover it replaces, and how much of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<crate::model::ReplacedCover>,
 }
 
 /// How a record was signed.
@@ -733,6 +737,14 @@ pub enum Effect {
         proposal: ProposalId,
         life: LifeId,
         delegate_ref: String,
+    },
+    /// Tell the core a new policy's cover replaces cover on another of our
+    /// policies, so reinsurance carries the old cession on.
+    RecordReplacement {
+        key: String,
+        proposal: ProposalId,
+        group: GroupId,
+        command: Box<ic_core::command::Replacement>,
     },
     /// A scheme member's excess for the scheme's delegate to decide.
     RequestDelegatedDecision {

@@ -156,6 +156,22 @@ pub struct ProposedCover {
     pub option: Option<String>,
 }
 
+/// Cover on another of our policies that a new policy replaces, as the
+/// adviser's replacement disclosure names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReplacedCover {
+    /// The life and cover on this proposal that take the old cover's place.
+    pub life: LifeId,
+    pub cover: String,
+    pub replaced_policy: PolicyId,
+    /// The same person's life ID on the replaced policy.
+    pub replaced_life: LifeId,
+    pub replaced_cover: String,
+    /// The old cover's sum insured being given up.
+    pub replaced_sum_insured_minor: i64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConsentKind {
@@ -534,6 +550,10 @@ pub struct LifeFile {
     pub factors: LifeFactors,
     pub stage: Stage,
     pub consents: BTreeMap<ConsentKind, DateTime<Utc>>,
+    /// The life's signed step confirming the replacement disclosure: the
+    /// evidence the core records with a replacement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_signed: Option<crate::signing::SignedStep>,
     pub existing_cover: Option<ExistingCoverRead>,
     pub disclosures: Vec<DisclosureRef>,
     pub evidence: Vec<EvidenceRequest>,
@@ -577,6 +597,7 @@ impl LifeFile {
             factors,
             stage,
             consents: BTreeMap::new(),
+            replacement_signed: None,
             existing_cover: None,
             disclosures: vec![],
             evidence: vec![],
@@ -708,6 +729,9 @@ pub struct Proposal {
     /// replacement disclosure before its disclosure is taken.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replacement: bool,
+    /// For a new policy replacing cover on another of ours: what it replaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<ReplacedCover>,
 }
 
 /// An offer to a scheme member to pay the loading on their excess cover
