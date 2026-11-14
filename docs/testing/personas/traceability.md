@@ -345,7 +345,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| JNT-001 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
+| JNT-001 | full | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life`<br>`underwriting/tests/driver.rs::a_joint_cover_carries_each_lifes_own_terms` |
 | JNT-007 | full | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |
 | JNT-008 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases`<br>`sim/tests/reduce_cover.rs::a_reduction_needs_the_consent_of_a_standing_interest` |
 | JNT-009 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |
