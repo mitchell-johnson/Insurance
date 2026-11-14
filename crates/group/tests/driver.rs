@@ -263,6 +263,12 @@ fn rig() -> Rig {
 
 fn rig_with<D: CustomerMaster>(directory: D, mapping: FileMapping) -> RigWith<D> {
     let mut h = Harness::new(terms());
+    // The named layout replaces the harness's, as one that passed a trial.
+    h.driver(GroupCommand::RecordMappingTrial {
+        scheme: SCHEME.into(),
+        content_hash: mapping.content_hash.clone(),
+    })
+    .unwrap();
     h.staff(GroupCommand::SetMapping {
         scheme: SCHEME.into(),
         mapping: Box::new(mapping),
@@ -1454,7 +1460,20 @@ async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
         set(&d, "map-old", payroll(1, ["Type", "Effective"], "%d/%m/%Y"), today),
         Err("mapping_version".to_string())
     );
-    set(&d, "map-2", payroll(2, ["Type", "Effective"], "%d/%m/%Y"), today).unwrap();
+    let new = payroll(2, ["Type", "Effective"], "%d/%m/%Y");
+    assert_eq!(set(&d, "map-2", new.clone(), today), Err("mapping_not_tried".to_string()));
+    let trial = Envelope {
+        key: "trial-2".into(),
+        caller: caller::DRIVER.into(),
+        actor: "group-driver".into(),
+        today,
+        command: GroupCommand::RecordMappingTrial {
+            scheme: SCHEME.into(),
+            content_hash: new.content_hash.clone(),
+        },
+    };
+    d.module.state.lock().unwrap().apply_envelope(trial).result.unwrap();
+    set(&d, "map-2-tried", new, today).unwrap();
     through(&d, "pay-3.csv", &moved.replace("70000", "71000")).await;
     assert_eq!(salary(&d, "E002"), Some(71_000_00));
     // The old export no longer fits either layout.
@@ -1485,6 +1504,7 @@ async fn payroll_changes_and_the_monthly_file_each_use_their_own_layout() {
 /// is refused, or worse, half read; trying it first on a sample costs nothing.
 #[tokio::test]
 async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
+    // (A passed trial is what lets the version replace the one in use: tests/admin.rs.)
     let d = Arc::new(rig());
     through(&d, "nov.csv", FILE).await;
     let (base, authority) = served(d.clone()).await;
@@ -1571,6 +1591,14 @@ async fn a_new_mapping_version_is_tried_on_a_sample_before_it_is_set() {
     let direct = ic_group::answer(&before, serde_json::json!({"ask": "preview", "scheme": SCHEME, "kind": "full", "rows": rows}));
     assert!(direct.unwrap_err().contains("at most"));
     assert!(*d.module.state.lock().unwrap() == before);
+    assert_eq!(tried["passed"], false, "a row the mapping could not read fails the trial");
+
+    // A sample the new version reads whole is a passed trial, and the version may then be set.
+    let clean: String = sample.lines().take(4).map(|l| format!("{l}\n")).collect();
+    let (status, passed) = attempt(SCHEME, &staff, serde_json::json!({"mapping": next, "sample": clean})).await;
+    assert_eq!((status, passed["passed"].as_bool()), (200, Some(true)), "{passed}");
+    let hash = passed["mapping"]["content_hash"].as_str().unwrap().to_string();
+    assert!(d.module.state.lock().unwrap().schemes[SCHEME].tried_mappings.contains(&hash));
 }
 
 /// Purpose: the driver carries a scheme's broker to the commission module and acts on the

@@ -100,13 +100,14 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             wordings: vec![],
             components: vec![],
             notice: None,
+            copy_of: None,
         };
-        match self.issue(request.clone()).await {
-            // Not offered in the format asked for: the ordinary one rather
-            // than none.
-            Err(DriverError::Refused(reject)) if reject.code == "no_format" => self.issue(IssueRequest { format: None, ..request }).await?,
-            other => other?,
-        };
+        if kind.clinical {
+            // A letter about a person's health is theirs alone.
+            self.issue_or_ordinary(request).await?;
+        } else {
+            self.issue_with_representatives(request, letter.business_date).await?;
+        }
         Ok(true)
     }
 
