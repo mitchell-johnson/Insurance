@@ -41,6 +41,8 @@ async function admitted(t, options = {}) {
   await tells(t, cast.st4, { decide: { claim: c.claim, request: { admit: { amount_minor: null } }, reasons: ["R-OK"] } });
   return c;
 }
+// A provider run takes every provider payment due on its partition, whichever test raised it: the tests that pay a
+// provider and the test that expects nothing to be due carry the lock "claims:provider-run" and never overlap.
 const HEALTH = { kind: "health_family", party: "cust-p1", cover: "hospital", type: "health", life: "life-1", who: cast.st3, notifier: "provider", invoice: 1_700_00 };
 async function healthClaim(t, invoice = HEALTH.invoice) {
   const c = await notified(t, { ...HEALTH, invoice });
@@ -541,7 +543,7 @@ test({ id: "E2E-106", area: A, persona: "ST4", story: "US-ST04-1", title: "Premi
   await s.stopped("#act-msg", "premiums are waived beside a benefit in payment", 409);
 });
 
-test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: ["HLT-005"],
+test({ id: "E2E-107", area: A, persona: "ST3", story: "US-PR1-1", title: "A provider is verified and paid a health claim in two payments", matrix: ["HLT-005"], lock: "claims:provider-run",
   purpose: "On an admitted hospital claim, verify the provider as payee and pay the admitted amount in two parts.",
   why: "Providers are paid directly so patients are not out of pocket; part payments must add up to the admitted amount and no further." }, async (t) => {
   const c = await healthClaim(t);
@@ -582,7 +584,7 @@ test({ id: "E2E-108", area: A, persona: "ST3", story: "US-PR2-1", title: "An ove
   await s.stopped("#act-msg", "an overpayment is new, positive and no more than was paid on the claim", 409);
 });
 
-test({ id: "E2E-109", area: A, persona: "ST4", story: "US-ST10-1", title: "A payment run with nothing due is not prepared",
+test({ id: "E2E-109", area: A, persona: "ST4", story: "US-ST10-1", title: "A payment run with nothing due is not prepared", lock: "claims:provider-run",
   purpose: "Prepare a benefit run on a partition for a date on which no benefit is due.",
   why: "An empty run sent for approval wastes an approver's attention and hides the run that matters." }, async (t) => {
   const s = await desk(t, cast.st4);

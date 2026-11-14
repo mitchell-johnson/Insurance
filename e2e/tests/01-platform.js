@@ -70,6 +70,7 @@ test({ id: "E2E-006", area: A, persona: "ST16", story: "US-ST16-1", title: "The 
   purpose: "Read the channel module row on the operations console: business date, policies, feeds, pending requests and state hash.",
   why: "A channel module that has stopped hearing the core shows here first; the row must come from the live module." }, async (t) => {
   const s = await t.open("/ops", cast.st16);
+  await s.sees("State hash", "#channels");
   const [row] = await s.rows("#channels");
   // The core's business date moves when a test runs the day; it never goes behind the opening date.
   if (!/^\d{4}-\d{2}-\d{2}$/.test(row[0]) || row[0] < t.stack.opening) throw new Error(`business date reads "${row[0]}"`);
