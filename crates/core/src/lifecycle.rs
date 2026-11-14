@@ -158,6 +158,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             factors: Bitemporal::new(cmd.inception, today, index, l.factors),
             joined: cmd.inception,
             left: None,
+            left_recorded_on: None,
         };
         if lives.insert(l.id.clone(), rec).is_some() {
             return Err(Reject::new("invalid_policy", format!("life {} is listed twice", l.id)));
@@ -282,6 +283,8 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         payouts: BTreeMap::new(),
         loan: None,
         option_uses: BTreeMap::new(),
+        replaces: Vec::new(),
+        payee_debts: BTreeMap::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),

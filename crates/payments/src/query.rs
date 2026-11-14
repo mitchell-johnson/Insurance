@@ -112,6 +112,8 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "authority" => found(state.authorities.get(text(&question, "authority")?)),
         "payee" => found(state.payees.get(text(&question, "payee")?)),
         "customer_hold" => found(state.customer_holds.get(text(&question, "party")?)),
+        "matches_to_approve" => found(Some(state.matches_to_approve())),
+        "manual_match" => found(state.manual_matches.get(text(&question, "exception")?)),
         "payer_cases" => Ok(json_cases(state.open_payer_cases())),
         "payer_relationships_to_check" => found(Some(state.relationships_to_check())),
         "payer_case" => found(state.payer_checks.cases.get(text(&question, "case")?)),

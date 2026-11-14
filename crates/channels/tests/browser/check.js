@@ -100,6 +100,8 @@ async function visit(browser, path, who, steps) {
     await say(page, `${persona}: ${doing}`, 3000);
     await steps.run(page);
     await say(page, `${persona}: ${doing}`, 2000);
+    // What a screen reader needs of every page, in every view, shown or not (persona row AUD-018).
+    for (const fault of await page.evaluate(audit)) problems.push("accessibility: " + fault);
   } catch (e) {
     problems.push(String(e.message).split("\n").slice(0, 3).join(" / "));
   }
@@ -108,6 +110,32 @@ async function visit(browser, path, who, steps) {
   console.log(`${problems.length ? "FAIL" : "ok  "} ${path}`);
   await context.close();
   if (video) require("fs").writeFileSync(`${video}/${name}/caption.txt`, `${persona}\n${doing}\n`);
+}
+// Runs in the page. Every control has a name a screen reader can say, every table has headers,
+// the page has a language, a title, one main heading and a main region, and no ID is used twice.
+function audit() {
+  const faults = [];
+  const where = (el) => `<${el.tagName.toLowerCase()}${el.id ? ` id="${el.id}"` : ""}${el.name ? ` name="${el.name}"` : ""}>`;
+  const named = (el) => (el.getAttribute("aria-label") || "").trim() || (el.getAttribute("aria-labelledby") || "").split(/\s+/).some((id) => id && document.getElementById(id) && document.getElementById(id).textContent.trim());
+  for (const el of document.querySelectorAll("input, select, textarea")) {
+    if (el.type === "hidden" || el.closest("#demo-bar")) continue;
+    const label = (el.id && document.querySelector(`label[for="${CSS.escape(el.id)}"]`)) || el.closest("label");
+    if (!(label && label.textContent.trim()) && !named(el)) faults.push(`${where(el)} has no label`);
+  }
+  for (const el of document.querySelectorAll("button, a[href], [role=tab]")) {
+    if (el.closest("#demo-bar")) continue;
+    if (!el.textContent.trim() && !named(el) && !(el.getAttribute("title") || "").trim()) faults.push(`${where(el)} has no name`);
+  }
+  for (const t of document.querySelectorAll("table")) if (t.rows.length && !t.querySelector("th")) faults.push("a table has no header cells");
+  for (const svg of document.querySelectorAll("svg")) if (svg.getAttribute("aria-hidden") !== "true" && !named(svg)) faults.push("an icon is neither named nor hidden from the accessibility tree");
+  const ids = [...document.querySelectorAll("[id]")].map((el) => el.id);
+  for (const id of new Set(ids.filter((id, i) => ids.indexOf(id) !== i))) faults.push(`id "${id}" is used more than once`);
+  if (!document.documentElement.lang) faults.push("the page names no language");
+  if (!document.title.trim()) faults.push("the page has no title");
+  if (document.querySelectorAll("h1").length !== 1) faults.push(`the page has ${document.querySelectorAll("h1").length} main headings, not one`);
+  if (!document.querySelector("main")) faults.push("the page has no main region");
+  for (const live of document.querySelectorAll("[role=alert], .banner.bad")) if (!live.closest("[aria-live], [role=alert]")) faults.push("a refusal is not announced: it sits outside a live region");
+  return [...new Set(faults)];
 }
 // Move to one of a page's views by its tab.
 const tab = (page, name) => page.getByRole("tab", { name, exact: true }).click();
@@ -360,6 +388,17 @@ const sees = async (page, text) => {
     await tab(p, "Books");
     await p.locator("#ag-classify").click();
     await sees(p, "Classified.");
+    await say(p, "The tax and levy accounts, reconciled to the posting types that may move them");
+    await p.fill("#tb-period", "2027-11"); await p.selectOption("#tb-what", "tax_reconciliation"); await p.locator("#tb button").click();
+    await p.locator("#tb-out .banner").first().waitFor();
+    await say(p, "A return is filed on a definition kept as reviewed source; an open period is refused");
+    await tab(p, "Returns");
+    await p.locator("#rd-list").getByText("insurer-quarterly@1").waitFor();
+    await p.fill("#rf-id", "q-2027-4"); await p.fill("#rf-period", "2027-11"); await p.locator("#rf-send").click();
+    await p.locator("#rf-msg .banner.bad").waitFor();
+    await tab(p, "Journals");
+    await p.fill("#ye-id", "ye-2027"); await p.fill("#ye-period", "2027-11"); await p.fill("#ye-evidence", "board minute 12"); await p.locator("#ye-send").click();
+    await p.locator("#ye-msg .banner.bad").waitFor();
     await tab(p, "Aged items and set-up");
     await p.fill("#co-account", "1999"); await p.fill("#co-currency", "NZD");
     await p.fill("#co-total", "100000"); await p.fill("#co-evidence", "legacy TB");

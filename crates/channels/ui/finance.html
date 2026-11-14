@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>Finance console · Insurance Core</title><link rel="stylesheet" href="/ui/app.css"><script src="/ui/theme.js"></script></head>
 <body data-shell="workforce" data-page="finance" data-realm="workforce">
-<main><header class="page"><div><h1>Finance console</h1><p>The month-end close, its checks, journals and sign-off.</p></div><p id="roles" class="chip"></p></header><div id="msg" aria-live="polite"></div>
+<main data-views="Month-end close,Journals,Books,Returns,Aged items and set-up"><header class="page"><div><h1>Finance console</h1><p>The month-end close, its checks, journals and sign-off.</p></div><p id="roles" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <div id="status"></div>
 
 <div data-view="Month-end close">
@@ -24,19 +24,29 @@
 <div><label for="j-evidence">Evidence (document references, comma separated)</label><input id="j-evidence" required></div></div>
 <div><label for="j-lines">Lines, one per row: account, amount (debit positive, credit negative), statutory fund</label><textarea id="j-lines" rows="4" cols="60" required placeholder="6500, 250.00, SF1-life&#10;2500, -250.00, SF1-life"></textarea></div>
 <p><button>Propose</button></p><p class="muted">A journal posts only when someone else approves it. An actuarial journal also needs the appointed actuary's signature.</p></form><div id="journal-msg" aria-live="polite"></div></section>
+<section><h2>Close a financial year</h2><p class="muted">Builds the journal that takes the year's income and expense to retained earnings, in the year's adjustment period. It is approved like any other journal.</p>
+<form id="ye"><div class="row"><div><label for="ye-id">Journal reference</label><input id="ye-id" required></div><div><label for="ye-period">Last month of the financial year</label><input id="ye-period" required pattern="\d{4}-\d{2}"></div><div><label for="ye-evidence">Evidence (document references, comma separated)</label><input id="ye-evidence" required></div><button id="ye-send">Propose</button></div></form><div id="ye-msg" aria-live="polite"></div></section>
 <section><h2>A journal</h2><form id="jlookup"><div class="row"><div><label for="jl-id">Journal reference</label><input id="jl-id" required></div><button>Show</button></div></form>
 <div id="jview" hidden><div id="j-raw"></div><p><button class="quiet" id="j-approve">Approve</button> <button class="quiet" id="j-reject">Reject</button> <button class="quiet" id="j-sign">Sign as appointed actuary</button></p></div><div id="jl-msg" aria-live="polite"></div></section></div>
 
 <div data-view="Books">
-<section><h2>Trial balance, movements and sources</h2><form id="tb"><div class="row"><div><label for="tb-period">Period</label><input id="tb-period" required pattern="\d{4}-\d{2}(-ADJ)?"></div><div><label for="tb-fund">Statutory fund (optional)</label><input id="tb-fund"></div><div><label for="tb-what">Show</label><select id="tb-what"><option value="trial_balance">Trial balance</option><option value="movements">Movements</option><option value="sources">Sources</option><option value="backdated">Backdated entries</option><option value="conduct">Conduct figures</option></select></div><button>Show</button></div></form><div id="tb-msg" aria-live="polite"></div><div id="tb-out"></div></section>
-<section><h2>A return</h2><form id="ret"><div class="row"><div><label for="ret-id">Return reference</label><input id="ret-id" required></div><button>Show</button></div></form><div id="ret-out"></div></section></div>
+<section><h2>Trial balance, movements and sources</h2><form id="tb"><div class="row"><div><label for="tb-period">Period</label><input id="tb-period" required pattern="\d{4}-\d{2}(-ADJ)?"></div><div><label for="tb-fund">Statutory fund (optional)</label><input id="tb-fund"></div><div><label for="tb-what">Show</label><select id="tb-what"><option value="trial_balance">Trial balance</option><option value="movements">Movements</option><option value="sources">Sources</option><option value="backdated">Backdated entries</option><option value="conduct">Conduct figures</option><option value="tax_reconciliation">Tax and levy reconciliation</option></select></div><button>Show</button></div></form><div id="tb-msg" aria-live="polite"></div><div id="tb-out"></div></section>
+<section><h2>An extract from the data mart</h2><p class="muted">Cut for a period from the same figures the close used. The control totals come with it, so a reader can check the file they were sent.</p>
+<form id="ex"><div class="row"><div><label for="ex-kind">Extract</label><select id="ex-kind"><option value="in_force">In force</option><option value="movement">Movement</option><option value="experience">Experience</option><option value="claims_by_cause">Claims by cause</option></select></div><div><label for="ex-period">Period</label><input id="ex-period" required pattern="\d{4}-\d{2}(-ADJ)?"></div><button>Show</button></div></form><div id="ex-msg" aria-live="polite"></div><div id="ex-out"></div></section></div>
+
+<div data-view="Returns">
+<section><h2>File a return</h2><p class="muted">A return is worked out from a closed period on a definition kept as reviewed source. Pick the definition; it is not written here.</p><div id="rd-list"></div>
+<form id="rf"><div class="row"><div><label for="rf-id">Return reference</label><input id="rf-id" required></div><div><label for="rf-def">Definition</label><select id="rf-def" required></select></div><div><label for="rf-period">Closed period</label><input id="rf-period" required pattern="\d{4}-\d{2}(-ADJ)?"></div><button id="rf-send">File</button></div></form>
+<h2>File it again after a restatement</h2><form id="rr"><div class="row"><div><label for="rr-id">Return reference</label><input id="rr-id" required></div><div><label for="rr-def">Definition</label><select id="rr-def" required></select></div><div><label for="rr-reason">Why it is restated</label><input id="rr-reason" required size="32"></div><button id="rr-send">Restate</button></div><p class="muted">Finance lead only. The earlier filing is kept; this adds a version beside it.</p></form><div id="rf-msg" aria-live="polite"></div></section>
+<section><h2>A filed return</h2><form id="ret"><div class="row"><div><label for="ret-id">Return reference</label><input id="ret-id" required></div><button>Show</button></div></form><div id="ret-msg" aria-live="polite"></div><div id="ret-out"></div><div id="ret-line"></div></section></div>
 
 <div data-view="Aged items and set-up">
 <section><h2>Aged suspense</h2><form id="aged"><div class="row"><div><label for="ag-date">As at</label><input id="ag-date" type="date" required></div><button>Show</button></div></form><div id="aged-out"></div>
 <h2>Record what is being done about an aged item</h2><form id="doc"><div class="row"><div><label for="d-kind">Kind</label><input id="d-kind" required></div><div><label for="d-party">Party</label><input id="d-party" required></div><div><label for="d-since">Held since</label><input id="d-since" type="date" required></div><div><label for="d-action">Action</label><input id="d-action" required></div><div><label for="d-owner">Owner</label><input id="d-owner" required></div><button>Record</button></div></form><div id="other-msg" aria-live="polite"></div></section>
-<section><h2>Set-up</h2><form id="config"><div class="row"><div><label for="c-id">Proposed configuration to approve</label><input id="c-id" required></div><button>Approve</button></div></form>
+<section><h2>Set-up</h2><p class="muted">A chart of accounts and a close configuration are kept as reviewed source and proposed by an operator's program. The finance lead approves them here, and never their own.</p><div id="props"></div>
+<form id="config"><div class="row"><div><label for="c-id">Or approve a proposal by its reference</label><input id="c-id" required></div><button>Approve</button></div></form>
 <form id="retry"><div class="row"><div><label for="r-part">Partition whose feed stalled</label><input id="r-part" type="number" min="0" required></div><button>Retry the feed</button></div></form>
-<p class="muted">A chart of accounts, a close configuration and a return are proposed from their files with the command route; the lead approves them here.</p></section></div>
+</section></div>
 <section data-view="Books"><h2>Accounting groups</h2><p class="muted">Which accounting group each policy falls in for reporting. Classifying sorts every policy not yet in a group.</p>
 <div class="row"><button type="button" id="ag-classify">Classify policies</button></div>
 <form id="ag-form"><div class="row"><div><label for="ag-partition">Partition</label><input id="ag-partition" type="number" min="0" required></div><div><label for="ag-policy">Policy</label><input id="ag-policy" required></div><button>Show its group</button></div></form>
@@ -63,6 +73,7 @@ const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 function grid(rows) {
   const list = Array.isArray(rows) ? rows : rows == null ? [] : [rows];
   const keys = [...new Set(list.flatMap((r) => (r && typeof r === "object" ? Object.keys(r) : ["value"])))];
+  if (!keys.length) return portal.empty("Nothing to show.");
   // The ledger keeps amounts in millionths of a cent; people read dollars.
   const amount = (k, v) => typeof v === "number" && /^(balance|debit|credit|amount|total|movement|opening|closing)$/.test(k) ? money(v / 1e6) : cell(v);
   return table(keys.map(words), list.map((r) => keys.map((k) => (r && typeof r === "object" ? amount(k, r[k]) : cell(r)))));
@@ -111,18 +122,67 @@ $("j-approve").addEventListener("click", decide(() => ({ approve_journal: { id: 
 $("j-reject").addEventListener("click", decide(async () => { const reason = await portal.ask({ title: "Reject this journal", label: "Reason for rejecting it", confirm: "Reject", danger: true }); return reason ? { reject_journal: { id: journal, reason } } : null; }, "Rejected."));
 $("j-sign").addEventListener("click", decide(() => ({ sign_actuarial_journal: { id: journal } }), "Signed."));
 
+const fine = (v) => money(Number(v) / 1e6);
+// Each tax or levy account: what moved it, by posting type and product, and anything that should not have.
+function tax(t) {
+  return [t.unexplained.length ? h("div", { class: "banner bad" }, "Moved by a posting type not listed for the account: " + t.unexplained.join("; ")) : h("div", { class: "banner ok" }, "Every movement on a tax or levy account is under a posting type listed for it."),
+    t.accounts.length ? null : portal.empty("No tax or levy accounts are set up for this period."),
+    t.accounts.map((a) => [h("h2", {}, `${a.account} ${a.name}: moved ${fine(a.movement)}`), h("p", { class: "muted" }, "Posting types that may move it: " + (a.posting_types.map(words).join(", ") || "none") + "."),
+      a.lines.length ? table(["Posting type", "Product", "Unit", "Movement", "Result"], a.lines.map((l) => [words(l.posting_type) || "none", l.product || "", cell(l.unit), fine(l.movement), l.explained ? "Explained" : "Unexplained"])) : portal.empty("Nothing moved it.")])];
+}
 $("tb").addEventListener("submit", run($("tb-msg"), async () => {
   const what = $("tb-what").value, fields = { period: $("tb-period").value };
   if (what === "trial_balance" && $("tb-fund").value) fields.fund = $("tb-fund").value;
-  put($("tb-out"), grid(await ask(what, fields)));
+  const answer = await ask(what, fields);
+  put($("tb-out"), what === "tax_reconciliation" ? tax(answer) : grid(answer));
 }));
-$("ret").addEventListener("submit", run($("tb-msg"), async () => { portal.put($("ret-out"), portal.details(await ask("return", { id: $("ret-id").value }))); }));
+$("ex").addEventListener("submit", run($("ex-msg"), async () => {
+  const x = await ask("extract", { kind: $("ex-kind").value, period: $("ex-period").value, limit: 200 });
+  const [head, ...lines] = x.lines.map((line) => line.split(","));
+  put($("ex-out"), table(["File", "As at", "Rows", "Agrees with its controls", "Fingerprint"], [[x.name, x.as_at, x.rows, x.reconciled ? "Yes" : "No", h("code", {}, cell(x.content_hash))]]),
+    h("h2", {}, "Control totals"), table(["Control", "Value"], Object.entries(x.control).map(([k, v]) => [words(k), v])),
+    h("h2", {}, x.total_lines > x.lines.length ? `The first ${lines.length} of ${x.total_lines - 1} lines` : "Lines"),
+    head ? table(head.map(words), lines) : portal.empty("The extract has no lines."));
+}));
+
+// Returns: the definitions that may be filed on, filing, restating, and a figure's sources.
+let definitions = [];
+const figure = (line) => line.source && line.source.source === "conduct" ? String(line.value) : fine(line.value);
+async function returned(id) {
+  const versions = await ask("return", { id });
+  put($("ret-line"), null);
+  put($("ret-out"), versions.map((r) => [h("h2", {}, `${r.id}, ${r.period}, version ${r.version}`),
+    h("p", { class: "muted" }, `Filed by ${r.filed_by} on ${r.definition} version ${r.definition_version}.${r.reason ? ` Restated: ${r.reason}.` : ""}${r.restating_entries.length ? ` ${r.restating_entries.length} later entries belong to this period.` : ""}`),
+    table(["Line", "Label", "Figure", ""], r.lines.map((l) => [l.code, l.label, figure(l), h("button", { class: "quiet", type: "button", on: { click: run($("ret-msg"), async () => {
+      const behind = await ask("return_line", { id: r.id, code: l.code, version: r.version });
+      put($("ret-line"), h("h2", {}, `What is behind ${l.code} on version ${r.version}`), portal.details({ figure: figure(behind.line), built_from: behind.line.source, fund: behind.line.fund, as_the_period_closed: behind.line.as_closed, posted_since: behind.line.restated,
+        definition: `${behind.definition} version ${behind.definition_version}`, definition_fingerprint: behind.definition_hash, trial_balance_fingerprint: behind.trial_balance_hash, later_entries_for_the_period: behind.restating_entries, extracts: behind.extracts, the_same_rows_today: behind.query }));
+    }) } }, "What is behind it")]))]));
+}
+$("ret").addEventListener("submit", run($("ret-msg"), () => returned($("ret-id").value.trim())));
+const filing = (command, done) => run($("rf-msg"), async () => { const [id, body] = command(); await send(body); $("ret-id").value = id; await returned(id); return done; });
+$("rf").addEventListener("submit", filing(() => [$("rf-id").value.trim(), { file_return: { id: $("rf-id").value.trim(), definition: $("rf-def").value, period: $("rf-period").value } }], "Filed. It is shown below."));
+$("rr").addEventListener("submit", filing(() => [$("rr-id").value.trim(), { restate_return: { id: $("rr-id").value.trim(), definition: $("rr-def").value, reason: $("rr-reason").value } }], "Filed again. Both versions are shown below."));
+$("ye").addEventListener("submit", run($("ye-msg"), async () => {
+  const id = $("ye-id").value.trim();
+  await send({ propose_year_end_close: { id, year_end: $("ye-period").value, evidence: $("ye-evidence").value.split(",").map((s) => s.trim()).filter(Boolean) } });
+  $("jl-id").value = id; await show(id);
+  return `Proposed ${id}. Someone else approves it.`;
+}));
+$("config").addEventListener("submit", run($("other-msg"), async () => { await send({ approve_config: { id: $("c-id").value } }); await proposals(); return "Approved and in force."; }));
+async function proposals() {
+  const rows = await ask("proposals");
+  put($("props"), rows.length ? table(["Proposal", "Kind", "Version", "Fingerprint", "Proposed by", ""], rows.map((r) => [r.id, words(r.kind), r.version, h("code", {}, cell(r.hash)), r.proposer,
+    h("button", { class: "quiet", type: "button", disabled: !can("finance_lead"), on: { click: run($("other-msg"), async () => { await send({ approve_config: { id: r.id } }); await proposals(); return `Approved ${r.id}. It is in force.`; }) } }, "Approve")])) : portal.empty("Nothing is waiting for approval."));
+}
 $("aged").addEventListener("submit", run($("other-msg"), async () => { portal.put($("aged-out"), portal.details(await ask("aged_suspense", { as_at: $("ag-date").value }))); }));
 $("doc").addEventListener("submit", run($("other-msg"), async () => { await send({ document_aged_item: { kind: $("d-kind").value, party: $("d-party").value, since: $("d-since").value, action: $("d-action").value, owner: $("d-owner").value } }); return "Recorded."; }));
-$("config").addEventListener("submit", run($("other-msg"), async () => { await send({ approve_config: { id: $("c-id").value } }); return "Approved and in force."; }));
 $("retry").addEventListener("submit", run($("other-msg"), async () => { await send({ retry_feed: { partition: Number($("r-part").value) } }); return "The feed will be tried again."; }));
 
-async function groups() { put($("ag-out"), grid(await ask("accounting_groups"))); }
+async function groups() {
+  const g = await ask("accounting_groups");
+  put($("ag-out"), h("p", {}, g.ungrouped ? `${g.ungrouped} policies are waiting for a group.` : "Every policy is in a group."), g.groups.length ? table(["Group", "Policies"], g.groups.map((r) => [r.group, r.policies])) : portal.empty("No policy has been placed in a group yet."));
+}
 $("ag-classify").addEventListener("click", run($("ag-msg"), async () => { await send("classify_policies"); await groups(); return "Classified."; }));
 $("ag-form").addEventListener("submit", run($("ag-msg"), async () => { put($("ag-out"), grid(await ask("accounting_group", { partition: $("ag-partition").value, policy: $("ag-policy").value.trim() }))); }));
 $("co-form").addEventListener("submit", run($("co-msg"), async () => {
@@ -132,7 +192,12 @@ $("co-form").addEventListener("submit", run($("co-msg"), async () => {
 signIn(R).then(async () => {
   const me = await ask("me"); roles = me.roles;
   $("ag-classify").disabled = !(can("finance_operator") || can("finance_lead"));
-  $("co-send").disabled = !can("finance_lead");
+  $("co-send").disabled = $("rr-send").disabled = !can("finance_lead");
+  $("rf-send").disabled = $("ye-send").disabled = !(can("finance_operator") || can("finance_lead"));
+  definitions = (await ask("return_definitions")).rows;
+  put($("rd-list"), definitions.length ? table(["Definition", "Title", "Currency", "Lines", "Used from", "Fingerprint"], definitions.map((d) => [d.name, d.title, d.currency, d.lines.length, d.effective_from || "the start", h("code", {}, d.hash)])) : portal.empty("No return definitions are loaded."));
+  for (const id of ["rf-def", "rr-def"]) put($(id), definitions.map((d) => h("option", { value: d.name }, `${d.title} (${d.name})`)));
+  await proposals();
   $("roles").textContent = roles.length ? roles.map(words).join(", ") : "View only.";
   for (const [id, role] of [["sign-lead", "finance_lead"], ["sign-actuary", "appointed_actuary"], ["close-period", "finance_lead"], ["j-approve", "finance_approver"], ["j-sign", "appointed_actuary"]]) $(id).disabled = !can(role);
   const s = await ask("status");

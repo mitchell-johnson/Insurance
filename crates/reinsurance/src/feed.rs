@@ -178,6 +178,61 @@ impl Reinsurance {
         }
     }
 
+    /// New cover that replaces cover on another policy, on the same life.
+    /// Up to the amount replaced it is not new business: the new layers, in
+    /// layer order, take the treaty version the replaced cover was ceded on
+    /// and its place and age in the life's retention order, as a rewritten
+    /// layer does. A layer above the amount replaced stays on the treaty in
+    /// force for new business. One that crosses it would need a split no
+    /// layer can hold, so it stays new business and a person is asked to
+    /// place the replaced part. The core announces the replacement after the
+    /// new layers, so the cession made for them is moved, and the entries
+    /// that follow post only the difference.
+    fn replace_cover(&mut self, ctx: &mut Ctx, new: (&PolicyId, &str, &ic_core::LifeId), old: (&PolicyId, &str, &ic_core::LifeId), replaced_minor: i64) {
+        let of = |state: &Self, (policy, cover, life): (&PolicyId, &str, &ic_core::LifeId)| -> Vec<RiskKey> {
+            let mut keys: Vec<RiskKey> = state.policy_risks(policy).into_iter().filter(|k| k.cover == cover && &k.life == life).collect();
+            keys.sort_by_key(|k| k.layer);
+            keys
+        };
+        // The replaced cover's first layer: where its cession began.
+        let Some(was) = of(self, old)
+            .into_iter()
+            .filter_map(|k| self.risk(&k).cloned())
+            .min_by_key(|r| (r.began(), r.key.layer))
+        else {
+            let detail = format!("cover {} on {} replaces {} on {}, which is not ceded here", new.1, new.0, old.1, old.0);
+            return self.set_exception(ctx, format!("replacement_unknown:{}/{}", new.0, new.1), "replacement_unknown", Some(detail));
+        };
+        let treaty = was.treaties.last().and_then(|(_, t)| t.clone());
+        let place = was.continues.clone().unwrap_or((was.start, was.key.clone()));
+        let mut left = replaced_minor;
+        for key in of(self, new) {
+            let Some(risk) = self.risk(&key) else { continue };
+            if risk.end.is_some() || left <= 0 {
+                continue;
+            }
+            let amount = risk.amount_on(risk.start);
+            if risk.continues.as_ref() == Some(&place) {
+                // Carried on already: the same replacement told again.
+                left -= amount;
+                continue;
+            }
+            if amount > left {
+                let detail = format!(
+                    "{key} is {amount} of which {left} replaces {} on {}: it is ceded as new business; place the replaced part by hand",
+                    old.1, old.0
+                );
+                self.set_exception(ctx, format!("replacement_part:{key}"), "replacement_part", Some(detail));
+                break;
+            }
+            left -= amount;
+            if let Some(risk) = self.risk_mut(ctx, &key) {
+                risk.treaties = vec![(risk.start, treaty.clone())];
+                risk.continues = Some(place.clone());
+            }
+        }
+    }
+
     /// Members moved to a new scheme split from theirs. The move is neither
     /// an exit nor new business: each of their covers on the old scheme ends
     /// on the day and carries on under the new scheme from it, on the same
@@ -456,6 +511,21 @@ impl Reinsurance {
             // discount on it: the gross change is added to the billed period
             // the change takes effect in, shared across its cover types, so a
             // treaty on original premium cedes from it.
+            Event::CoverReplaced {
+                policy,
+                cover,
+                life,
+                replaced_policy,
+                replaced_cover,
+                replaced_life,
+                replaced_sum_insured_minor,
+                ..
+            } => self.replace_cover(
+                ctx,
+                (&policy, &cover, &life),
+                (&replaced_policy, &replaced_cover, &replaced_life),
+                replaced_sum_insured_minor,
+            ),
             Event::SchemeSplit {
                 policy,
                 new_policy,

@@ -69,11 +69,22 @@ pub struct Settings {
     /// occupation tests, minimum terms and limits by age.
     #[serde(default)]
     pub eligibility: Vec<crate::eligibility::Eligibility>,
+    /// The further days a life marked as needing more time is given on
+    /// what it must do: the offer, the evidence it is asked for, and the
+    /// proposal itself. The insurer's own timers do not move.
+    #[serde(default = "more_time_days")]
+    pub more_time_days: i64,
     pub sample: SampleRates,
     /// Contracts from this date fall under the duty of reasonable care.
     pub reasonable_care_from: NaiveDate,
     /// How far back a delegate's decision may be dated.
     pub delegated_tolerance_days: i64,
+}
+
+/// A placeholder of two weeks, as complaints gives a complainant marked
+/// vulnerable, until the business sets its own.
+fn more_time_days() -> i64 {
+    14
 }
 
 impl Default for Settings {
@@ -92,6 +103,7 @@ impl Default for Settings {
             interim: None,
             interim_by_product: crate::eligibility::shipped_interim(),
             eligibility: crate::eligibility::shipped(),
+            more_time_days: more_time_days(),
             sample: SampleRates {
                 standard_per_mille: 20,
                 non_standard_per_mille: 100,

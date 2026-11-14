@@ -121,6 +121,11 @@ pub struct LifeRecord {
     pub factors: Bitemporal<LifeFactors>,
     pub joined: NaiveDate,
     pub left: Option<NaiveDate>,
+    /// The business date on which the leave date was recorded, so that a
+    /// question about an earlier day can be answered as it was known then.
+    /// Absent on a leave recorded before this was kept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub left_recorded_on: Option<NaiveDate>,
 }
 
 impl LifeRecord {
@@ -637,9 +642,15 @@ pub struct Policy {
     /// bank has settled it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payouts: BTreeMap<String, crate::invest::Payout>,
+    /// Cover on other policies that cover on this one replaces.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<crate::command::Replacement>,
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// What people paid by mistake owe back, by debt ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,
     /// What the owner has borrowed against the policy, once they have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loan: Option<crate::loan::Loan>,

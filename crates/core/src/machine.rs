@@ -564,6 +564,10 @@ impl CoreState {
                     underwritten::change_excess(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::RecordReplacement(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))
+            }
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
@@ -800,6 +804,10 @@ impl CoreState {
                 self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
+            }
+            Command::PayeeDebt(command) => {
+                let id = command.policy().clone();
+                self.with_policy(&id, false, |s, p| crate::payee_debt::apply(&mut s.ledger, p, ctx, *command))
             }
             Command::Loan(command) => {
                 let id = command.policy().clone();

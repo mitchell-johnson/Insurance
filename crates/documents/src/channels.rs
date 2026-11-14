@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use chrono::NaiveDate;
 use ic_azure::credential::AzureCredential;
 use ic_core::PartyId;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,35 @@ pub trait ContactDirectory: Send + Sync {
     /// The contact point for notices to a party under a relationship, on a
     /// channel. `None` when the party has none.
     fn contact(&self, party: &PartyId, relationship: Option<&str>, channel: Channel) -> impl Future<Output = Result<Option<Contact>, DirectoryError>> + Send;
+
+    /// The people who represent a party on `on` and may see what it is
+    /// sent: an attorney, guardian or authorised representative in force
+    /// that day whose scope is `view` or `all`. They get a copy of what the
+    /// party is sent, except anything clinical.
+    fn representatives(&self, party: &PartyId, on: NaiveDate) -> impl Future<Output = Result<Vec<PartyId>, DirectoryError>> + Send;
+}
+
+/// The relationship kinds that represent a party.
+pub const REPRESENTATIVE_KINDS: [&str; 3] = ["attorney", "guardian", "authorised_representative"];
+
+/// From the customer master's `GET /v1/relationships?target=party:<id>`:
+/// the parties holding a representative relationship in force on `on`
+/// whose scope lets them see what the party is sent.
+pub fn representatives_in(answer: &Value, on: NaiveDate) -> Vec<PartyId> {
+    let date = |v: &Value| v.as_str().and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let mut found: Vec<PartyId> = answer["relationships"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["kind"].as_str().is_some_and(|k| REPRESENTATIVE_KINDS.contains(&k)))
+        .filter(|r| date(&r["valid_from"]).is_some_and(|from| from <= on))
+        .filter(|r| date(&r["valid_to"]).is_none_or(|to| on < to))
+        .filter(|r| r["attributes"]["scope"].as_array().is_some_and(|s| s.iter().any(|v| v == "view" || v == "all")))
+        .filter_map(|r| r["party"].as_str().map(|p| PartyId(p.to_string())))
+        .collect();
+    found.sort();
+    found.dedup();
+    found
 }
 
 /// The customer master over HTTP:
@@ -116,6 +146,27 @@ impl ContactDirectory for HttpDirectory {
             s => Err(down(format!("the customer master returned {s}"))),
         }
     }
+
+    async fn representatives(&self, party: &PartyId, on: NaiveDate) -> Result<Vec<PartyId>, DirectoryError> {
+        let down = |e: String| DirectoryError::Unavailable(e);
+        let token = self.credential.token(&self.scope).await.map_err(|e| down(e.to_string()))?;
+        let target = format!("party:{party}");
+        let resp = self
+            .http
+            .get(format!("{}/v1/relationships", self.base))
+            .query(&[("target", target.as_str())])
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| down(e.to_string()))?;
+        match resp.status().as_u16() {
+            s if (200..300).contains(&s) => {
+                let answer: Value = resp.json().await.map_err(|e| down(e.to_string()))?;
+                Ok(representatives_in(&answer, on))
+            }
+            s => Err(down(format!("the customer master returned {s}"))),
+        }
+    }
 }
 
 /// A directory held in memory, for the insurance in a box and tests. Like
@@ -125,6 +176,9 @@ impl ContactDirectory for HttpDirectory {
 pub struct MemoryDirectory {
     contacts: Arc<Mutex<BTreeMap<(String, Channel), Contact>>>,
     for_relationship: Arc<Mutex<BTreeMap<(String, String, Channel), Contact>>>,
+    /// Party to its representatives who may see what it is sent, with the
+    /// days they act: from, and the first day they no longer do.
+    representatives: Arc<Mutex<BTreeMap<String, Vec<(String, NaiveDate, Option<NaiveDate>)>>>>,
     down: Arc<Mutex<bool>>,
 }
 
@@ -160,6 +214,17 @@ impl MemoryDirectory {
             .remove(&(party.to_string(), channel));
     }
 
+    /// `representative` acts for `party` from `from` until `to`, and may
+    /// see what it is sent.
+    pub fn set_representative(&self, party: &str, representative: &str, from: NaiveDate, to: Option<NaiveDate>) {
+        self.representatives
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(party.to_string())
+            .or_default()
+            .push((representative.to_string(), from, to));
+    }
+
     pub fn set_down(&self, down: bool) {
         *self.down.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = down;
     }
@@ -187,6 +252,23 @@ impl ContactDirectory for MemoryDirectory {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&(party.to_string(), channel))
             .cloned())
+    }
+
+    async fn representatives(&self, party: &PartyId, on: NaiveDate) -> Result<Vec<PartyId>, DirectoryError> {
+        if *self.down.lock().unwrap_or_else(std::sync::PoisonError::into_inner) {
+            return Err(DirectoryError::Unavailable("the directory is down".into()));
+        }
+        let held = self.representatives.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut found: Vec<PartyId> = held
+            .get(&party.0)
+            .into_iter()
+            .flatten()
+            .filter(|(_, from, to)| *from <= on && to.is_none_or(|to| on < to))
+            .map(|(r, _, _)| PartyId(r.clone()))
+            .collect();
+        found.sort();
+        found.dedup();
+        Ok(found)
     }
 }
 

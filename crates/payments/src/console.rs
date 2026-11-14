@@ -134,6 +134,8 @@ impl PaymentsState {
             "authorities": authorities,
             "customer_hold": self.customer_holds.get(party),
             "insolvency": self.insolvencies.get(party),
+            // A restricted case is open: staff offer support, nothing more.
+            "support_prompt": self.support_prompt(party),
         })
     }
 }

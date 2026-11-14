@@ -229,7 +229,7 @@ Mitchell answered the four group questions in the group thread.
 - **Source of the text:** the files in `products/wordings/aia/` are the source; `tools/aia_wordings.py` generates the definitions from them, so the text is edited in one place.
 - **Not loaded:** Essentials Life, whose online edition has no text layer, and Corporate Solutions, whose schemes each have their own policy.
 
-## Reinsurance: four open questions set as best estimates (14 Nov 2026)
+## Reinsurance: open questions set as best estimates (14 Nov 2026)
 
 Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders. Each of these is a placeholder for a reinsurance manager to confirm against the signed treaties; where a treaty could reasonably say otherwise, the choice is a treaty setting.
 
@@ -237,6 +237,7 @@ Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders
 - **On avoidance, recoveries already billed are credited back without a disputed item.** A policy avoided for non-disclosure was never on risk, so the reinsurer was never liable and has nothing to dispute. Not a setting yet: a treaty whose errors-and-omissions clause asks for these to go through the disputed item route needs that built.
 - **On avoidance, ceded premium is returned to the reinsurers in full, even when the insurer keeps the customer's premium.** Why: the reinsurer carried no risk, and keeping the customer's premium is the insurer's remedy for the non-disclosure, not the reinsurer's. Not a setting yet: a treaty that shares retained premium is not modelled.
 - **A change of underwriting terms on cover with facultative reinsurance carries on and tells the reinsurer.** The cession continues on the new terms and the exception `facultative_terms_altered:<key>` asks operations to tell the reinsurer; it closes with `facultative_reinsurer_told`. Why: holding the customer's change until a reinsurer answers would leave the customer waiting on something they cannot see, and most facultative acceptances allow a change notified promptly. A reinsurer that declines the new terms is handled as a change of cession by operations.
+- **A continuation policy is ceded as new cover.** A policy that continues a scheme membership is ceded on its own product's treaty from its issue date, and its claims recover on that cession; the scheme's treaty and the member's history are not carried. Why: most group treaties end the reinsurer's liability when the member leaves the scheme, and the continuation option is the insurer's promise to the member, written as new individual cover. A treaty that carries continuations needs that said in its terms and built.
 - **Who gets reinsurance alerts.** The alerts in `infra/reinsurance.bicep` fire whatever the recipients, and show in Azure Monitor. Who is mailed is the deployment parameter `alertEmails`, which is empty until the insurer names its reinsurance operations mailbox; no address is guessed.
 
 ## AIA Vitality is its own module that only tells the core a tier (14 Nov 2026)

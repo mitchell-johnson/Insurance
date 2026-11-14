@@ -1002,3 +1002,79 @@ fn a_split_moves_members_with_their_history_and_bills_each_scheme_its_own() {
     days(&mut c, 30);
     assert_eq!(c.state(p).policies[&new].periods_billed, 3, "and it is billed with the calendar from then on");
 }
+
+/// Purpose: when a scheme learns on 10 December that one member left on 16 November and
+/// that another's salary was lower from 1 November, a cover check for 20 November gives
+/// today's answer (not a member, no cover; the lower sum insured) and beside it the answer
+/// the record gave on 20 November itself (a member in force for the full amount). A member
+/// nothing has changed for gets no second answer, and neither does a date after the news.
+/// Why it matters: a claim is assessed on what is true, but a claim already accepted on
+/// what the record said at the time has to be explained when a backdated change undoes it.
+/// Without the earlier answer nobody can tell a claim that was wrong from one that was right
+/// when it was made.
+#[test]
+fn a_cover_check_also_says_what_the_record_showed_on_the_event_date() {
+    let mut c = cluster(d(2027, 11, 1));
+    let (p, id) = scheme(&mut c);
+    let join = member("staff-2", d(1990, 5, 5), "staff", 60_000_00);
+    let change = |c: &mut Cluster, changes| c.submit(p, "group-admin", Command::ApplyMembership { policy: id.clone(), changes });
+    change(
+        &mut c,
+        vec![MemberChange::Joined {
+            life: join,
+            effective: d(2027, 11, 1),
+        }],
+    )
+    .unwrap();
+    days(&mut c, 39); // 10 December
+    let lower = LifeFactors {
+        salary_minor: Some(200_000_00),
+        ..c.state(p).policies[&id].lives[&life("exec-1")].factors.as_of(d(2027, 11, 1)).unwrap().clone()
+    };
+    change(
+        &mut c,
+        vec![
+            MemberChange::Left {
+                life: life("staff-1"),
+                effective: d(2027, 11, 16),
+            },
+            MemberChange::Changed {
+                life: life("exec-1"),
+                effective: d(2027, 11, 1),
+                factors: lower,
+            },
+        ],
+    )
+    .unwrap();
+    let check = |c: &Cluster, who: &str, on| ic_core::cover_facts(c.state(p), &id.0, "group-life", Some(who), on).unwrap();
+    let then = |f: &ic_core::claims_module::port::CoverFacts| f.known_then.as_ref().map(|k| (k.in_force, k.life_on_policy, k.sum_insured_minor));
+    let event = d(2027, 11, 20);
+
+    let left = check(&c, "staff-1", event);
+    assert_eq!((left.in_force, left.life_on_policy, left.sum_insured_minor), (false, false, 0));
+    assert_eq!(then(&left), Some((true, true, 120_000_00)));
+
+    // 4 x 200,000 is 800,000, still held to the 750,000 limit: nothing to tell apart.
+    assert_eq!(then(&check(&c, "exec-1", event)), None);
+    assert_eq!(then(&check(&c, "staff-2", event)), None);
+    // Asked about a day after the news, the record then and now are the same.
+    assert_eq!(then(&check(&c, "staff-1", d(2027, 12, 10))), None);
+
+    // A change that does move the amount is told apart the same way.
+    let lower = LifeFactors {
+        salary_minor: Some(100_000_00),
+        ..c.state(p).policies[&id].lives[&life("exec-1")].factors.as_of(d(2027, 11, 1)).unwrap().clone()
+    };
+    change(
+        &mut c,
+        vec![MemberChange::Changed {
+            life: life("exec-1"),
+            effective: d(2027, 11, 1),
+            factors: lower,
+        }],
+    )
+    .unwrap();
+    let exec = check(&c, "exec-1", event);
+    assert_eq!((exec.in_force, exec.sum_insured_minor), (true, 400_000_00));
+    assert_eq!(then(&exec), Some((true, true, 750_000_00)));
+}

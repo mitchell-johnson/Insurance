@@ -79,6 +79,10 @@ pub struct OpenProposal {
     /// has confirmed the replacement disclosure with a signed step.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub replacement: bool,
+    /// A new policy advised as replacing cover on another of our policies:
+    /// which cover it replaces, and how much of it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaces: Vec<crate::model::ReplacedCover>,
 }
 
 /// How a record was signed.
@@ -400,6 +404,15 @@ pub enum Command {
         #[serde(default)]
         note: String,
     },
+    /// The life is marked as needing more time, or no longer. Marked, the
+    /// proposal, an open offer and outstanding evidence on the life each
+    /// run the further days the settings give; cleared, nothing is
+    /// shortened.
+    SetMoreTime {
+        proposal: ProposalId,
+        life: LifeId,
+        more_time: bool,
+    },
     ProposeDecision {
         case: String,
         underwriter: String,
@@ -588,6 +601,7 @@ impl Command {
             // above the automatic acceptance limit, and may withdraw it.
             OpenProposal(_) => &["new-business", "migration", "group-admin", "collections"],
             SubmitDisclosure(_) => &["new-business", "migration"],
+            SetMoreTime { .. } => &["new-business", "underwriting-console"],
             Withdraw { .. } => &["new-business", "group-admin"],
             // The life gives or withdraws its own consents in the app; the
             // portal checks the signed-in person is the life, and a consent
@@ -733,6 +747,14 @@ pub enum Effect {
         proposal: ProposalId,
         life: LifeId,
         delegate_ref: String,
+    },
+    /// Tell the core a new policy's cover replaces cover on another of our
+    /// policies, so reinsurance carries the old cession on.
+    RecordReplacement {
+        key: String,
+        proposal: ProposalId,
+        group: GroupId,
+        command: Box<ic_core::command::Replacement>,
     },
     /// A scheme member's excess for the scheme's delegate to decide.
     RequestDelegatedDecision {
@@ -1001,6 +1023,11 @@ pub enum Event {
     },
     ProposalWithdrawn {
         proposal: ProposalId,
+    },
+    MoreTimeSet {
+        proposal: ProposalId,
+        life: LifeId,
+        more_time: bool,
     },
     /// A person checked the proof of the life event for an insurability option.
     OptionEvidenceChecked {

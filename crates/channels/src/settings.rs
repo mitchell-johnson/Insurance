@@ -62,6 +62,8 @@ pub struct PortalSettings {
     pub group: Option<(String, String)>,
     /// Definition libraries beyond the shipped ones: each file's name and source.
     pub definitions: Vec<(String, String)>,
+    /// Return definitions beyond the shipped ones: each file's name and source.
+    pub return_definitions: Vec<(String, String)>,
 }
 
 impl PortalSettings {
@@ -105,6 +107,8 @@ impl PortalSettings {
     /// - `IC_DEFINITIONS`: comma-separated paths of definition libraries
     ///   activated in the core beyond those shipped in the repository, so the
     ///   claims console can show their wording.
+    /// - `IC_RETURN_DEFINITIONS`: comma-separated paths of regulatory return
+    ///   definitions beyond those shipped, which the finance console may file on.
     /// - `IC_PARTITIONS`: how many partitions the ledger has, as the core
     ///   gateway is told; default 64.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
@@ -178,13 +182,18 @@ impl PortalSettings {
             (None, None) => Regions::single(nodes.clone()),
             _ => return Err("set IC_REGIONS and IC_HOME_REGION together".to_string()),
         };
-        let mut definitions = Vec::new();
-        for path in get("IC_DEFINITIONS").iter().flat_map(|v| v.split(',')).map(str::trim).filter(|p| !p.is_empty()) {
-            definitions.push((path.to_string(), read(path).map_err(|e| format!("IC_DEFINITIONS: {path}: {e}"))?));
-        }
+        let files = |key: &str| -> Result<Vec<(String, String)>, String> {
+            let mut found = Vec::new();
+            for path in get(key).iter().flat_map(|v| v.split(',')).map(str::trim).filter(|p| !p.is_empty()) {
+                found.push((path.to_string(), read(path).map_err(|e| format!("{key}: {path}: {e}"))?));
+            }
+            Ok(found)
+        };
+        let (definitions, return_definitions) = (files("IC_DEFINITIONS")?, files("IC_RETURN_DEFINITIONS")?);
         Ok(Self {
             listen,
             definitions,
+            return_definitions,
             customers,
             workforce,
             cluster_auth: ClusterAuth::from_lookup(raw, read)?,

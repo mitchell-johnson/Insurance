@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use serde::Serialize;
 
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{Drill, Id, Probe, Reject, Role};
+use crate::model::{Drill, Expected, Id, Probe, Purpose, Reject, Role};
 
 /// Whether one region could submit to the banks today.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -62,12 +62,50 @@ impl PaymentsState {
         }
         let ok = probe.ok;
         self.open_drill(id)?.probes.insert(channel.clone(), probe);
+        if ok {
+            self.expect_drill_payment(id, &channel, tx.now.date());
+        }
         tx.emit(Event::DrillProbed {
             drill: id.to_string(),
             channel,
             ok,
         });
         Ok(())
+    }
+
+    /// The bank took a drill's token payment: the statements will show it
+    /// leaving the channel's operating account, and arriving in the drill
+    /// account when that is one of the insurer's own, under the batch's
+    /// ID. Expecting both lets reconciliation clear them like any settled
+    /// file, instead of leaving a person two exceptions per channel.
+    fn expect_drill_payment(&mut self, id: &str, channel: &str, on: NaiveDate) {
+        let Some(cfg) = self.config.as_ref() else { return };
+        let Some(bank) = cfg.channels.get(channel).map(|c| c.bank.clone()) else {
+            return;
+        };
+        let amount = cfg.rules.drill_amount_minor;
+        let digits = |n: &str| n.chars().filter(char::is_ascii_alphanumeric).collect::<String>();
+        let to = digits(&cfg.rules.drill_account.number);
+        let from = cfg
+            .accounts
+            .iter()
+            .find(|(_, a)| a.bank == bank && a.purpose == Purpose::Operating)
+            .map(|(code, _)| code.clone());
+        let into = cfg
+            .accounts
+            .iter()
+            .find(|(_, a)| a.at_bank.as_ref().is_some_and(|b| digits(&b.number) == to))
+            .map(|(code, _)| code.clone());
+        let reference = format!("drill-{id}-{channel}");
+        for (account, amount_minor) in [(from, -amount), (into, amount)] {
+            if let Some(account) = account {
+                self.books
+                    .entry(account)
+                    .or_default()
+                    .expected
+                    .insert(reference.clone(), Expected { amount_minor, since: on });
+            }
+        }
     }
 
     pub(crate) fn close_drill(&mut self, tx: &mut Tx<'_>, id: &str) -> Result<(), Reject> {

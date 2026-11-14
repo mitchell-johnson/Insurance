@@ -343,6 +343,16 @@ pub enum Command {
         exception: Id,
         owner: String,
     },
+    /// Apply an unidentified receipt to one or more policies by hand; the
+    /// parts add up to the receipt (COL-020, COL-022).
+    ProposeReceiptMatch {
+        exception: Id,
+        parts: Vec<(PolicyId, i64)>,
+    },
+    /// A second reconciler approves a proposed match.
+    ApproveReceiptMatch {
+        exception: Id,
+    },
     ResolveException {
         exception: Id,
         resolution: String,
@@ -586,6 +596,12 @@ pub enum Event {
         party: String,
         held: bool,
     },
+    ReceiptMatchProposed {
+        exception: Id,
+    },
+    ReceiptMatchApproved {
+        exception: Id,
+    },
     /// Premium was paid by someone other than the policy owner.
     PayerCaseOpened {
         case: String,
@@ -670,6 +686,9 @@ pub struct PaymentsState {
     /// Collection incidents (COL-024).
     #[serde(default)]
     pub incidents: BTreeMap<Id, crate::incident::Incident>,
+    /// Unidentified receipts a person is applying by hand (`manual.rs`).
+    #[serde(default)]
+    pub manual_matches: BTreeMap<Id, crate::manual::Proposal>,
     /// Claims admitted and not yet released for payment (PAY-013).
     #[serde(default)]
     pub admitted: BTreeMap<String, crate::forecast::Admitted>,
@@ -715,7 +734,7 @@ impl Tx<'_> {
         if self.actor.roles.contains(&role) {
             Ok(())
         } else {
-            Err(Reject::new("not_permitted", format!("this needs the {role:?} role")))
+            Err(Reject::new("not_permitted", format!("this needs the {} role", role_words(role))))
         }
     }
     pub fn emit(&mut self, event: Event) {
@@ -873,6 +892,8 @@ impl PaymentsState {
                 lines,
             } => self.record_statement(tx, &account, date, opening_minor, closing_minor, lines),
             Command::AssignException { exception, owner } => self.assign_exception(tx, &exception, owner),
+            Command::ProposeReceiptMatch { exception, parts } => self.propose_receipt_match(tx, &exception, parts),
+            Command::ApproveReceiptMatch { exception } => self.approve_receipt_match(tx, &exception),
             Command::ResolveException { exception, resolution } => self.resolve_exception(tx, &exception, resolution),
             Command::CompleteInstruction { entry, refused } => self.complete_instruction(tx, entry, refused),
             Command::StartDrill { drill, region } => self.start_drill(tx, drill, region),
@@ -956,4 +977,17 @@ impl StateMachine for PaymentsState {
         self.answered.insert(envelope.key, (now.date(), output.clone()));
         output
     }
+}
+
+/// A role as a person reads it: "payee maintainer", not "PayeeMaintainer".
+pub fn role_words(role: Role) -> String {
+    let name = format!("{role:?}");
+    let mut words = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            words.push(' ');
+        }
+        words.push(c.to_ascii_lowercase());
+    }
+    words
 }

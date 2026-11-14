@@ -263,6 +263,7 @@ impl Kit {
             wordings: vec![],
             components: vec![],
             notice: None,
+            copy_of: None,
         }
     }
 
