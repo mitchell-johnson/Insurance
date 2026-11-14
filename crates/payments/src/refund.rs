@@ -84,6 +84,9 @@ impl PaymentsState {
                 status: RefundStatus::Requested,
             },
         );
+        // A refund paid to an estate with a claim is not the owner taking
+        // money back (VUL-020).
+        let by_owner = with_claim.is_none();
         let command = ic_core::Command::RaiseRefundPayable {
             policy: policy.clone(),
             refund: id.clone(),
@@ -91,6 +94,9 @@ impl PaymentsState {
             with_claim,
         };
         self.core(format!("refund-{id}-raise"), command, About::RefundRaise(id.clone()));
+        if by_owner {
+            self.refund_asked(tx, &policy.to_string());
+        }
         tx.emit(Event::RefundRequested {
             refund: id,
             policy,

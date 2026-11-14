@@ -138,6 +138,11 @@ pub struct Rules {
     /// connected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hold_check_max_age_minutes: Option<u32>,
+    /// An unidentified receipt applied by hand at or above this amount
+    /// needs a second person (COL-020). Unset means
+    /// `manual::DEFAULT_SECOND_PERSON_MINOR`, a recorded best estimate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub second_person_match_minor: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,6 +230,9 @@ impl Config {
         }
         if self.rules.hold_check_max_age_minutes.is_some_and(|m| m == 0 || m > 24 * 60) {
             return Err(bad("the customer master is asked about a hold at most a day before the check, and not never"));
+        }
+        if self.rules.second_person_match_minor.is_some_and(|m| m <= 0) {
+            return Err(bad("a second person is needed above a positive amount"));
         }
         if self.funds.is_empty() {
             return Err(bad("at least one statutory fund is needed"));

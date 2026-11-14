@@ -198,6 +198,10 @@ pub struct IssueRequest {
     pub components: Vec<String>,
     #[serde(default)]
     pub notice: Option<NoticeSpec>,
+    /// The document this is a copy of, in another language (see
+    /// [`crate::command::Issue::copy_of`]).
+    #[serde(default)]
+    pub copy_of: Option<String>,
 }
 
 /// What one pass over the outstanding sends did.
@@ -377,6 +381,7 @@ impl<M: Module, S: ObjectStore, W: KeyWrap, C: Channels, D: ContactDirectory> Dr
             wordings: request.wordings,
             components: request.components,
             notice: request.notice,
+            copy_of: request.copy_of,
         };
         if let Err(e) = self.send(key, &request.caller, Command::IssueDocument(Box::new(issue))).await {
             if matches!(e, DriverError::Refused(_)) {

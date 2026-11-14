@@ -80,6 +80,7 @@ async fn driver_with_notice() -> Arc<TestDriver> {
             purpose: "renewal".into(),
             corrects: None,
         }),
+        copy_of: None,
     };
     driver.issue(request).await.unwrap();
     driver

@@ -132,6 +132,12 @@ pub enum GroupCommand {
         mapping: Box<FileMapping>,
     },
     /// Stop taking files while a mistake is put right.
+    /// A proposed mapping read every row of a sample: it may now replace
+    /// the scheme's layout of its kind.
+    RecordMappingTrial {
+        scheme: String,
+        content_hash: String,
+    },
     Freeze {
         scheme: String,
         reason: String,
@@ -387,6 +393,7 @@ impl GroupCommand {
             | CoreResult { .. }
             | CommissionRefused { .. }
             | LetterRefused { .. }
+            | RecordMappingTrial { .. }
             | ObserveCore { .. }
             | Ack { .. }
             | Tick => &[DRIVER],

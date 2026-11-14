@@ -463,3 +463,23 @@ fn an_overpayment_letter_needs_its_repayment_reference() {
     kit.ok("claims", "claims-driver", Command::RequestLetter(repay));
     assert_eq!(kit.state.letter_requests["cl:op:1"].request.detail["repayment_reference"], "OP123456");
 }
+
+/// Purpose: a person's representative (an attorney in force, able to see
+/// what they are sent) is a recipient of an ordinary letter to them, but
+/// never of a decline, which is about their health.
+/// Why it matters: someone who cannot manage their own post relies on
+/// their attorney seeing it (VUL-019); a health decision goes to the
+/// person alone, whoever else acts for them.
+#[tokio::test]
+async fn a_representative_sees_ordinary_letters_and_never_clinical_ones() {
+    let world = World::all().await;
+    world.driver.directory.set("attorney-1", Channel::Post, "Hemi Ngata", "PO Box 1\nWellington");
+    world.driver.directory.set_representative("aroha", "attorney-1", date("2020-01-01"), None);
+    world.ask("underwriting", letter("uw:1", "declined", to("aroha"))).await;
+    world.ask("underwriting", letter("uw:2", "policy_issued", to("aroha"))).await;
+    let pass = world.driver.requested_letters().await;
+    assert_eq!((pass.issued, pass.errors.clone()), (2, vec![]), "{pass:?}");
+    let parties = |d: &ic_documents::model::Document| d.deliveries.iter().map(|d| d.recipient.party.0.clone()).collect::<Vec<_>>();
+    assert_eq!(parties(&world.driver.document("letter:uw:1").await.unwrap()), ["aroha"]);
+    assert_eq!(parties(&world.driver.document("letter:uw:2").await.unwrap()), ["aroha", "attorney-1"]);
+}
