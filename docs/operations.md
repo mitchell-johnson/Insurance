@@ -27,7 +27,21 @@
    az acr build -r <registry> -t insurance-core:$(git rev-parse --short HEAD) .
    ```
 
-4. **Register the API with Entra ID.** Create an app registration for the API, define the app roles callers will hold (`new-business`, `policy-servicing`, `cash-matching`, `group-admin`, `claims`, `collections`, `config`, `operations`), and note its application ID URI.
+4. **Register the applications with Entra ID.** One script makes every registration, its app roles (fixed IDs, so a rerun changes nothing that is assigned) and version 2 access tokens, and prints the values the manifests need:
+
+   ```sh
+   deploy/entra/apps.sh workforce <name> <portal host>      # in the insurer's tenant
+   az login --tenant <external tenant> --allow-no-subscriptions
+   deploy/entra/apps.sh customers <name> <portal host>      # in the External ID tenant
+   ```
+
+   The workforce run makes the core API, the portal service and the staff consoles' single-page application, the customer master, documents, the underwriting intake and the reinsurer API; the customers run makes the customer-facing API and the adviser and employer portals' single-page application. Group schemes has its own script, `deploy/entra/group-app.sh`. Then give each workload's managed identity the roles it calls with, and staff the roles they work under (to a group, not to people one by one):
+
+   ```sh
+   deploy/entra/apps.sh grant api://<name>-customers portal <portal identity principal id>
+   ```
+
+   Each reinsurer that reads its statements by API sends a certificate and gets its own application: `deploy/entra/apps.sh reinsurer <name> <reinsurer id> <certificate.pem>` prints the entry for `IC_REINSURANCE_API_CLIENTS`.
 
 5. **Fill in `deploy/k8s`.** Deploy underwriting's resources first (step 10): its manifests are in the kustomization and need that template's outputs. Replace every `REPLACE-` value in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml`, and in `underwriting-intake.yaml` from step 10. The first business date in `bootstrap.yaml` is set once and can never be changed.
 
