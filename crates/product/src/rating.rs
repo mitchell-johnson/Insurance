@@ -257,7 +257,11 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
     let (left, applied) = discount::apply(&chain, limits, annual, state);
     let net_annual = by_cover(&left);
     let periods = Dec::from(frequency.periods_per_year());
-    let modal = (Dec::from(1i64) + loading) / periods;
+    // One period of a year's amount: multiplied by the loading first and
+    // divided by the periods last, so an amount that divides exactly (a tie
+    // at half a cent included) is never nudged by a rounded 1/26 or 1/12.
+    let loaded = Dec::from(1i64) + loading;
+    let modal = |annual: Dec| annual * loaded / periods;
     let cur = product.currency;
     let mode = product.rounding;
 
@@ -271,7 +275,7 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
     };
     for (code, annual) in &net_annual {
         let cover = product.cover(code).ok_or_else(|| RatingError::UnknownCover(code.clone()))?;
-        let amount = *annual * modal;
+        let amount = modal(*annual);
         let premium = round_to_money(amount, cur, mode)?;
         if let Some(rate) = &cover.gst_rate {
             let gst = round_to_money(premium.to_dec() * rate.get(), cur, mode)?;
@@ -289,7 +293,7 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
     if !applied.is_empty() {
         let mut gross = 0i64;
         for (code, annual) in annual_by_cover {
-            let line = round_to_money(*annual * modal, cur, mode)?;
+            let line = round_to_money(modal(*annual), cur, mode)?;
             gross += line.minor;
             out.gross_by_cover.insert(code.clone(), line);
         }
@@ -298,7 +302,7 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
                 code: d.code.clone(),
                 name: d.name.clone(),
                 posting_type: d.posting_type.clone(),
-                amount: round_to_money(d.total() * modal, cur, mode)?,
+                amount: round_to_money(modal(d.total()), cur, mode)?,
             });
         }
         // Rounding once: the last line that can carry it absorbs the

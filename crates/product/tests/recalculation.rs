@@ -457,3 +457,258 @@ fn a_chain_of_discounts_a_levy_and_tax_equal_an_independent_recalculation() {
     }
     assert_eq!(compared, 52 * 4 * 3);
 }
+
+const AIA_PRODUCTS: [(&str, &str); 8] = [
+    ("aia_living.star", include_str!("../../../products/aia_living.star")),
+    ("aia_living_business.star", include_str!("../../../products/aia_living_business.star")),
+    ("aia_start_up_income.star", include_str!("../../../products/aia_start_up_income.star")),
+    ("aia_cover_for_life.star", include_str!("../../../products/aia_cover_for_life.star")),
+    ("aia_essentials_life.star", include_str!("../../../products/aia_essentials_life.star")),
+    ("aia_starter.star", include_str!("../../../products/aia_starter.star")),
+    ("aia_private_health.star", include_str!("../../../products/aia_private_health.star")),
+    ("aia_cancer_care.star", include_str!("../../../products/aia_cancer_care.star")),
+];
+const AIA_TABLES: [&str; 14] = [
+    include_str!("../../../products/rates/aia_accidental_death.star"),
+    include_str!("../../../products/rates/aia_accidental_injury.star"),
+    include_str!("../../../products/rates/aia_business_continuity.star"),
+    include_str!("../../../products/rates/aia_cancer_care.star"),
+    include_str!("../../../products/rates/aia_family_protection.star"),
+    include_str!("../../../products/rates/aia_income.star"),
+    include_str!("../../../products/rates/aia_life.star"),
+    include_str!("../../../products/rates/aia_private_health.star"),
+    include_str!("../../../products/rates/aia_private_health_plus.star"),
+    include_str!("../../../products/rates/aia_progressive_care.star"),
+    include_str!("../../../products/rates/aia_severe_trauma.star"),
+    include_str!("../../../products/rates/aia_specialist_testing.star"),
+    include_str!("../../../products/rates/aia_tpd.star"),
+    include_str!("../../../products/rates/aia_trauma.star"),
+];
+
+fn aia_tables() -> BTreeMap<String, RateTable> {
+    AIA_TABLES
+        .iter()
+        .map(|s| {
+            let t = load_rate_table("rates", s).unwrap();
+            (t.id.clone(), t)
+        })
+        .collect()
+}
+
+/// The selections tried on a cover with option axes: the first choice on every axis, then each
+/// other choice on its own with the first everywhere else, then the last choice on every axis.
+/// Each is returned with its premium factor, multiplied out here from the factors as written.
+fn aia_selections(cover: &CoverDefinition) -> Vec<(Option<String>, Fraction)> {
+    if cover.option_axes.is_empty() {
+        return excess_choices(cover)
+            .into_iter()
+            .map(|e| {
+                let factor = e.as_ref().map_or(Fraction::whole(1), |c| {
+                    Fraction::written(cover.excess_option(c).unwrap().premium_factor.as_str())
+                });
+                (e, factor)
+            })
+            .collect();
+    }
+    let n = cover.option_axes.len();
+    let mut picks: Vec<Vec<usize>> = vec![vec![0; n]];
+    for (i, axis) in cover.option_axes.iter().enumerate() {
+        for j in 1..axis.choices.len() {
+            let mut p = vec![0; n];
+            p[i] = j;
+            picks.push(p);
+        }
+    }
+    picks.push(cover.option_axes.iter().map(|a| a.choices.len() - 1).collect());
+    picks
+        .into_iter()
+        .filter_map(|p| {
+            let chosen: Vec<_> = cover.option_axes.iter().zip(&p).map(|(a, &j)| (a, &a.choices[j])).collect();
+            // A choice offered only with another is tried only where that other is chosen.
+            let codes: Vec<String> = chosen.iter().map(|(a, c)| format!("{}={}", a.code, c.code)).collect();
+            if chosen
+                .iter()
+                .any(|(_, c)| !c.only_with.is_empty() && !c.only_with.iter().any(|w| codes.contains(w)))
+            {
+                return None;
+            }
+            let factor = chosen
+                .iter()
+                .fold(Fraction::whole(1), |f, (_, c)| f.times(Fraction::written(c.premium_factor.as_str())));
+            Some((Some(codes.join(",")), factor))
+        })
+        .collect()
+}
+
+/// Purpose: for every AIA retail product and cover, every row of its rate table, a spread of
+/// sums insured, a loading and every frequency, each option selection tried (each choice on
+/// each axis, and every excess level) is billed, to the cent, at the rate as written times the
+/// product of the chosen premium factors as written, with the policy fee and GST; and the age
+/// each premium type reads, worked out here from the rule as stated, is the one the engine uses.
+/// Why it matters: an AIA option code multiplies several factors into the premium, which is
+/// where a rounding fault would hide; and a level, level-term or limited-pay premium read at the
+/// wrong age misprices for the life of the policy. This check shares no arithmetic with the
+/// engine's.
+#[test]
+fn every_aia_option_premium_equals_an_independent_recalculation() {
+    use ic_product::options::{pays_premium, rating_age};
+    use ic_product::PremiumBasis;
+    let tables = aia_tables();
+    let (mut compared, mut bases) = (0u32, 0u32);
+    for (file, source) in AIA_PRODUCTS {
+        let product = load_product(file, source).unwrap();
+        let bill = billing(&product);
+        for cover in &product.covers {
+            let table = &tables[&cover.rating.table];
+            let selections = aia_selections(cover);
+            assert!(!selections.is_empty(), "{file} {}", cover.code);
+            for (option, factor) in &selections {
+                // The age the premium type reads, for a life that started at 30 and is now 47.
+                if let Some(basis) = cover.premium_basis(option.as_deref()) {
+                    let (entry, now) = (30u32, 47u32);
+                    let (age, pays) = match basis {
+                        PremiumBasis::Stepped => (now, true),
+                        PremiumBasis::Level { to_age } => (if now >= to_age { now } else { entry }, true),
+                        PremiumBasis::LevelTerm { years } => (entry + (now - entry) / years * years, true),
+                        PremiumBasis::LimitedPay { to_age } => (entry, now < to_age),
+                    };
+                    assert_eq!(
+                        (rating_age(basis, entry, now), pays_premium(basis, now)),
+                        (age, pays),
+                        "{file} {} {option:?}",
+                        cover.code
+                    );
+                    bases += 1;
+                }
+                for (n, rate) in table.rows.iter().enumerate() {
+                    let factors = RatingFactors {
+                        age: rate.age_from,
+                        sex: rate.sex,
+                        smoker: rate.smoker,
+                        category: rate.category.clone(),
+                        occupation_class: rate.occupation_class.clone(),
+                        excess_option: option.clone(),
+                        loadings: loadings()[n % 4].clone(),
+                    };
+                    let found = row(table, &factors).unwrap();
+                    let all = sums(cover);
+                    let sum = all[n % all.len()];
+                    let no_option = RatingFactors {
+                        excess_option: None,
+                        ..factors.clone()
+                    };
+                    let year = annual(cover, found, &no_option, sum).times(*factor);
+                    let engine_year = cover_premium(cover, table, &factors, sum).unwrap();
+                    for &frequency in &bill.frequencies {
+                        let premium = year.times(modal(&bill, frequency)).cents(product.rounding);
+                        let fee = bill.fee.over(periods(frequency)).cents(product.rounding);
+                        let gst = cover.gst_rate.as_ref().map_or(0, |r| {
+                            Fraction::new(i128::from(premium), 100)
+                                .times(Fraction::written(r.as_str()))
+                                .cents(product.rounding)
+                        });
+                        let engine = modal_premium(&product, &BTreeMap::from([(cover.code.clone(), engine_year)]), frequency).unwrap();
+                        let at = format!("{} {} {:?} sum {sum} {frequency:?}", product.code, cover.code, factors);
+                        assert_eq!(engine.by_cover[&cover.code].minor, premium, "premium: {at}");
+                        assert_eq!(engine.policy_fee.minor, fee, "policy fee: {at}");
+                        assert_eq!(engine.gst.get(&cover.code).map_or(0, |g| g.minor), gst, "GST: {at}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert!(compared > 30_000 && bases > 100, "{compared} bills and {bases} premium types compared");
+}
+
+/// Purpose: one AIA Living life holding life, trauma, TPD and income cover at the
+/// Multi-Benefit Discount minimums, across ages, sexes, smoking, occupation classes and
+/// frequencies, is billed 15% off each cover, and each cover's premium, the premium before the
+/// discount and the discount line equal the integer recalculation and add up to the cent;
+/// with TPD and income a dollar under their minimums, only trauma counts beside life cover
+/// and the life gets 10%.
+/// Why it matters: the discount is judged per life on cover amounts and shared over four
+/// covers, so its line has to absorb four roundings; a cent lost there is a cent between the
+/// quote and the ledger on most AIA Living policies.
+#[test]
+fn the_aia_multi_benefit_discount_equals_an_independent_recalculation() {
+    use ic_product::discount::{Line, PricingState};
+    use ic_product::rating::modal_premium_by_line;
+    let tables = aia_tables();
+    let product = load_product(AIA_PRODUCTS[0].0, AIA_PRODUCTS[0].1).unwrap();
+    let bill = billing(&product);
+    let covers = [
+        ("life", 10_000_000i64),
+        ("critical-conditions", 7_500_000),
+        ("tpd-own-occupation", 7_500_000),
+        ("income-indemnity", 200_000),
+    ];
+    let mut compared = 0;
+    for age in 18u32..=60 {
+        for (sex, smoker) in [(Sex::Female, false), (Sex::Male, true)] {
+            for class in ["1", "3", "5"] {
+                for (short, off) in [(0i64, "0.15"), (100, "0.10")] {
+                    let mut years: BTreeMap<String, Fraction> = BTreeMap::new();
+                    let mut engine: BTreeMap<Line, Dec> = BTreeMap::new();
+                    let mut held: BTreeMap<Line, i64> = BTreeMap::new();
+                    for (i, (code, minimum)) in covers.iter().enumerate() {
+                        let cover = product.cover(code).unwrap();
+                        let table = &tables[&cover.rating.table];
+                        // Trauma stays at its minimum; TPD and income fall short in the second case.
+                        let sum = if i >= 2 { minimum - short } else { *minimum };
+                        let (option, factor) = aia_selections(cover).swap_remove(0);
+                        let factors = RatingFactors {
+                            age,
+                            sex: Some(sex),
+                            smoker: Some(smoker),
+                            occupation_class: Some(class.to_string()),
+                            excess_option: option,
+                            ..RatingFactors::default()
+                        };
+                        let found = row(table, &factors).unwrap();
+                        let plain = RatingFactors {
+                            excess_option: None,
+                            ..factors.clone()
+                        };
+                        years.insert(code.to_string(), annual(cover, found, &plain, sum).times(factor));
+                        let line = Line {
+                            cover: code.to_string(),
+                            life: "a".to_string(),
+                        };
+                        engine.insert(line.clone(), cover_premium(cover, table, &factors, sum).unwrap());
+                        held.insert(line, sum);
+                    }
+                    let state = PricingState {
+                        covers_elsewhere: 0,
+                        overrides: &[],
+                        covers: 4,
+                        lives: 1,
+                        frequency: Frequency::Yearly,
+                        entitlements: &[],
+                        sums_insured: &held,
+                    };
+                    let fraction = Fraction::written(off);
+                    for &frequency in &bill.frequencies {
+                        let state = PricingState { frequency, ..state };
+                        let got = modal_premium_by_line(&product, &engine, &state).unwrap();
+                        let m = modal(&bill, frequency);
+                        let at = format!("age {age} {sex:?} smoker {smoker} class {class} short {short} {frequency:?}");
+                        let (mut gross_total, mut net_total) = (0i64, 0i64);
+                        for (code, year) in &years {
+                            let gross = year.times(m).cents(product.rounding);
+                            let net = year.times(Fraction::whole(1).less(fraction)).times(m).cents(product.rounding);
+                            assert_eq!(got.by_cover[code].minor, net, "premium for {code}: {at}");
+                            assert_eq!(got.gross_by_cover[code].minor, gross, "before the discount for {code}: {at}");
+                            gross_total += gross;
+                            net_total += net;
+                        }
+                        let lines: Vec<i64> = got.discounts.iter().map(|d| d.amount.minor).collect();
+                        assert_eq!(lines, vec![gross_total - net_total], "discount: {at}");
+                        compared += 1;
+                    }
+                }
+            }
+        }
+    }
+    assert_eq!(compared, 43 * 2 * 3 * 2 * 5);
+}
