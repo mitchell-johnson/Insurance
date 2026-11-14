@@ -1858,3 +1858,222 @@ async fn a_payer_relationship_is_confirmed_with_the_customer_master() {
     assert!(unknown.cleared.is_none() && unknown.proposed.is_none());
     assert_eq!(pump.pass().await.relationships, 0, "nothing left to ask");
 }
+
+/// Purpose: the pump asks the customer master about each party holding
+/// bank details here, and a 410 Gone (the master's answer for a person it
+/// has erased) makes the module forget that person's details; a master that
+/// cannot answer leaves the party to be asked next pass.
+/// Why it matters: account names and numbers here are not under the
+/// master's per-person key, so this check is the only thing that carries the
+/// master's retention shredding into payments.
+#[tokio::test]
+async fn an_erased_person_is_forgotten_when_the_master_says_so() {
+    use ic_payments_service::fake::FakeMaster;
+    use ic_payments_service::ports::{erased_in, Holds, MasterHolds};
+
+    assert_eq!(erased_in(410), Ok(true));
+    assert_eq!(erased_in(200), Ok(false));
+    assert_eq!(erased_in(404), Ok(false), "a party the master never knew is not erased");
+    assert!(erased_in(503).is_err());
+    let answers: BTreeMap<String, bool> = BTreeMap::new();
+    assert!(answers.erased("party").await.is_err());
+
+    let mut world = World::new().await;
+    world.payee("p1", PayeeKind::Customer);
+    let mut pump = world.pump("akl", "a");
+    pump.holds = Some(Arc::new(answers));
+    let pass = pump.pass().await;
+    assert_eq!(pass.erasures, 0);
+    assert!(pass.problems.iter().any(|p| p.starts_with("erasure of party")), "{:?}", pass.problems);
+
+    let master = FakeMaster::start(&[("party", false)]).await.unwrap();
+    pump.holds = Some(Arc::new(MasterHolds {
+        base: master.url.clone(),
+        scope: "api://ic-customers/.default".to_string(),
+        credential: ic_azure::credential::AzureCredential::static_token("t"),
+        http: reqwest::Client::new(),
+    }));
+    assert_eq!(pump.pass().await.erasures, 1, "still on the master's books");
+    assert!(!world.state().payees["p1"].closed);
+    assert_eq!(pump.pass().await.erasures, 0, "not asked again so soon");
+
+    master.erased.lock().unwrap().insert("party".to_string());
+    world.later(60 * 24 * 31);
+    assert_eq!(pump.pass().await.erasures, 1);
+    let state = world.state();
+    assert!(state.payees["p1"].closed && state.payees["p1"].account.number.is_empty());
+    assert!(state.erasure.erased.contains("party"));
+}
+
+/// Purpose: a refund reported as paid to the wrong account goes to the
+/// real core as a payee debt, which owes the refund again, and to the bank
+/// as a recall under the case's ID, kept in the vault first; a bank that is
+/// down is asked again next pass; the bank's answer is recorded; a recall
+/// the bank refuses is recorded as not sent; and the test bank reads a
+/// recall in either format and refuses one sent under another ID.
+/// Why it matters: CLM-022's recall is a request about real money at a real
+/// bank. It must reach the bank exactly as kept in evidence, and the ledger
+/// must owe the customer again whatever the bank says.
+#[tokio::test]
+async fn a_misdirected_refund_is_recalled_through_the_bank() {
+    use ic_payments::recall::RecallStatus;
+
+    let mut world = World::new().await;
+    let pump = world.pump("akl", "a");
+    let policy = world.policy.clone();
+    let create = Command::CreateAuthority {
+        authority: "a1".to_string(),
+        policy: policy.clone(),
+        party: "payer".to_string(),
+        life: None,
+        account: account("Ana Payer", "0101234567"),
+        sole_name: false,
+    };
+    world.ok(&pam(), create);
+    let mut items = Vec::new();
+    for n in 1..=2 {
+        let request = Command::RequestRefund {
+            refund: format!("rf{n}"),
+            policy: policy.clone(),
+            amount_minor: n * 30_00,
+            currency: NZD,
+            destination: RefundDestination::Source { authority: "a1".to_string() },
+        };
+        world.ok(&mia(), request);
+        items.push(NewItem {
+            item: format!("i{n}"),
+            source: format!("refund-rf{n}"),
+            counterparty: Counterparty::Authority("a1".to_string()),
+            amount_minor: n * 30_00,
+            policy: Some(policy.clone()),
+            payable: Some(PayableKind::Refund),
+            refund: Some(format!("rf{n}")),
+            represents: None,
+        });
+    }
+    pump.pass().await;
+    let s = world.run("r1", RunType::PremiumRefunds, false, items);
+    pump.pass().await;
+    world.bank.acknowledge(&s);
+    world.bank.settle(&s, d(2027, 11, 15));
+    let pass = pump.pass().await;
+    assert!(pass.problems.is_empty(), "{:?}", pass.problems);
+    assert_eq!(world.state().refunds["rf1"].status, RefundStatus::Paid);
+
+    let report = |id: &str, item: &str| Command::ReportMisdirected {
+        misdirection: id.to_string(),
+        item: item.to_string(),
+        amount_minor: 30_00,
+        holder: None,
+        note: "the account was someone else's".to_string(),
+    };
+    world.ok(&rae(), report("md-1", "i1"));
+    world.bank.lock().down = true;
+    let pass = pump.pass().await;
+    assert!(pass.problems.iter().any(|p| p.starts_with("outbox recall-md-1")), "{:?}", pass.problems);
+    assert_eq!(world.state().refunds["rf1"].status, RefundStatus::Raised, "the core owes it again");
+    world.bank.lock().down = false;
+    let pass = pump.pass().await;
+    assert!(pass.problems.is_empty(), "{:?}", pass.problems);
+    assert_eq!(world.bank.lock().recalls["md-1"], ("i1".to_string(), 30_00));
+    let kept = world.vault.get("payments/recalls/md-1/request.json").await.unwrap().expect("kept first");
+    assert!(String::from_utf8(kept).unwrap().contains("\"reason\":\"AC03\""));
+    assert_eq!(world.state().misdirections["md-1"].recall, RecallStatus::Asked);
+    assert!(world.core.cluster.lock().unwrap().reconcile().is_empty());
+
+    world.bank.push(BankMessage::RecallAnswer {
+        recall: "md-1".to_string(),
+        accepted: true,
+        reason: None,
+    });
+    pump.pass().await;
+    assert_eq!(world.state().misdirections["md-1"].recall, RecallStatus::Accepted);
+
+    world.ok(&rae(), report("md-2", "i2"));
+    world.bank.lock().refuse_recall = Some("too late to recall".to_string());
+    pump.pass().await;
+    assert_eq!(
+        world.state().misdirections["md-2"].recall,
+        RecallStatus::NotSent("422 \"too late to recall\"".to_string())
+    );
+
+    // The test bank reads both formats, and only under the recall's own ID.
+    let config = world.state().config.clone().unwrap();
+    let endpoint = &config.channels["anz-api"].endpoints["akl"];
+    let to = |format| Target {
+        kind: ic_payments::config::ChannelKind::Api,
+        format,
+        url: endpoint.url.trim_end_matches('/').to_string(),
+        token: "token-akl".to_string(),
+        accounts: Default::default(),
+        identity: None,
+        authority: None,
+    };
+    let mut recall = ic_payments::file::Recall {
+        id: "md-9".to_string(),
+        channel: "anz-api".to_string(),
+        account: "anz-sf1-refunds".to_string(),
+        submission: s.clone(),
+        item: "i9".to_string(),
+        amount_minor: 1_00,
+        currency: NZD,
+        settled_on: d(2027, 11, 15),
+        reason: "AC03".to_string(),
+        format: Default::default(),
+        ordering: None,
+    };
+    HttpBank::default().recall(&to(Default::default()), &recall).await.unwrap();
+    recall.id = "md-10".to_string();
+    recall.format = ic_payments::config::WireFormat::Iso20022;
+    recall.ordering = Some(ic_payments::iso20022::OrderingAccount {
+        name: "Insurer".to_string(),
+        number: "0100001".to_string(),
+        bic: None,
+    });
+    world.api.lock().iso = true;
+    HttpBank::default().recall(&to(recall.format), &recall).await.unwrap();
+    assert_eq!(world.api.lock().recalls["md-10"], ("i9".to_string(), 1_00));
+    let mut garbled = recall.clone();
+    garbled.ordering = None;
+    assert!(matches!(
+        HttpBank::default().recall(&to(recall.format), &garbled).await,
+        Err(ChannelError::NotSent(_))
+    ));
+    world.api.lock().iso = false;
+    assert!(
+        matches!(
+            HttpBank::default().recall(&to(Default::default()), &recall).await,
+            Err(ChannelError::Refused(_))
+        ),
+        "XML is not JSON"
+    );
+    let wrong = recall.id.replace("10", "11");
+    let mut own = recall.clone();
+    own.format = Default::default();
+    own.id = wrong;
+    let posted = reqwest::Client::new()
+        .post(format!("{}/recalls", to(Default::default()).url))
+        .bearer_auth("token-akl")
+        .header("idempotency-key", "md-12")
+        .body(serde_json::to_string(&own).unwrap())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(posted.status().as_u16(), 400);
+    world.api.lock().down = true;
+    assert!(HttpBank::default().recall(&to(Default::default()), &own).await.is_err());
+
+    // The test bank answers a recall in `camt.029` as a bank would.
+    for (accepted, reason) in [(true, None), (false, Some("NOAS")), (false, None)] {
+        let answer = BankMessage::RecallAnswer {
+            recall: "md-1".to_string(),
+            accepted,
+            reason: reason.map(str::to_string),
+        };
+        let read = ic_payments::iso20022::read_messages(&ic_payments_service::fake::iso_document(&answer, &Default::default()), &Default::default()).unwrap();
+        let BankMessage::RecallAnswer { accepted: read_accepted, .. } = &read[0] else {
+            panic!("a recall answer")
+        };
+        assert_eq!(*read_accepted, accepted);
+    }
+}

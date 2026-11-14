@@ -35,6 +35,7 @@ impl PaymentsState {
     ) -> Result<(), Reject> {
         tx.need(Role::PayeeMaintainer)?;
         check_account(&account)?;
+        self.refuse_if_erased(&party)?;
         if self.authorities.contains_key(&id) {
             return Err(Reject::new("duplicate_authority", format!("authority {id} already exists")));
         }

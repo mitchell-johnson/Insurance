@@ -58,6 +58,10 @@ pub struct Inner {
     /// of the message there: what a bank writes that the module's own
     /// messages cannot say.
     pub documents: BTreeMap<u64, String>,
+    /// Recalls asked for: by case ID, the payment and the amount asked back.
+    pub recalls: BTreeMap<String, (String, i64)>,
+    /// Refuse the next recall with this reason.
+    pub refuse_recall: Option<String>,
 }
 
 #[derive(Clone)]
@@ -214,6 +218,41 @@ async fn post_batch(State(bank): State<FakeBank>, headers: HeaderMap, body: Stri
     }
 }
 
+async fn put_recall(State(bank): State<FakeBank>, Path(id): Path<String>, headers: HeaderMap, body: String) -> Answer {
+    take_recall(&bank, &id, &headers, &body)
+}
+
+async fn post_recall(State(bank): State<FakeBank>, headers: HeaderMap, body: String) -> Answer {
+    let key = headers.get("idempotency-key").and_then(|h| h.to_str().ok()).unwrap_or_default().to_string();
+    take_recall(&bank, &key, &headers, &body)
+}
+
+/// Take a recall the bank can read, sent under its own case ID.
+fn take_recall(bank: &FakeBank, id: &str, headers: &HeaderMap, body: &str) -> Answer {
+    let mut inner = bank.lock();
+    if let Err(no) = admit(&inner, headers) {
+        return no;
+    }
+    if let Some(reason) = inner.refuse_recall.take() {
+        return say(StatusCode::UNPROCESSABLE_ENTITY, json!(reason));
+    }
+    let read = if inner.iso {
+        iso20022::read_recall(body)
+    } else {
+        serde_json::from_str::<ic_payments::file::Recall>(body)
+            .map(|r| (r.id, r.item, r.amount_minor))
+            .map_err(|e| e.to_string())
+    };
+    match read {
+        Ok((case, item, amount)) if case == id => {
+            inner.recalls.insert(case, (item, amount));
+            say(StatusCode::ACCEPTED, json!({"case": id}))
+        }
+        Ok(_) => say(StatusCode::BAD_REQUEST, json!("the recall is sent under its own case ID")),
+        Err(why) => say(StatusCode::UNPROCESSABLE_ENTITY, json!(why)),
+    }
+}
+
 async fn get_held(State(bank): State<FakeBank>, Path(id): Path<String>, headers: HeaderMap) -> Answer {
     let inner = bank.lock();
     if let Err(no) = admit(&inner, &headers) {
@@ -348,6 +387,8 @@ impl FakeBank {
             .route("/batches", post(post_batch))
             .route("/batches/{id}", get(get_held))
             .route("/messages", get(get_messages))
+            .route("/recalls", post(post_recall))
+            .route("/recalls/{id}", put(put_recall))
             .with_state(bank.clone());
         match tls {
             None => {
@@ -429,6 +470,17 @@ pub fn iso_document(message: &BankMessage, numbers: &BTreeMap<String, String>) -
         )
     };
     match message {
+        BankMessage::RecallAnswer { recall, accepted, reason } => {
+            let (status, why) = match (accepted, reason) {
+                (true, _) => ("CNCL", String::new()),
+                (false, Some(code)) => ("RJCR", format!("<CxlDtls><TxInfAndSts><CxlStsRsnInf><Rsn><Cd>{code}</Cd></Rsn></CxlStsRsnInf></TxInfAndSts></CxlDtls>")),
+                (false, None) => ("RJCR", String::new()),
+            };
+            iso_wrap(
+                "camt.029.001.09",
+                format!("<RsltnOfInvstgtn><Assgnmt><Id>A-{recall}</Id></Assgnmt><Case><Id>{recall}</Id></Case><Sts><Conf>{status}</Conf></Sts>{why}</RsltnOfInvstgtn>"),
+            )
+        }
         BankMessage::Acknowledgement { id, refused, rejected } => {
             let group = match refused {
                 Some(reason) => format!("<GrpSts>RJCT</GrpSts><StsRsnInf><Rsn><Cd>NARR</Cd></Rsn><AddtlInf>{reason}</AddtlInf></StsRsnInf>"),
@@ -500,6 +552,8 @@ pub struct FakeMaster {
     pub holds: Arc<Mutex<BTreeMap<String, bool>>>,
     /// Relationship records by `{party}/{id}`.
     pub relationships: Arc<Mutex<BTreeMap<String, Value>>>,
+    /// Parties erased by retention shredding: answered 410 Gone.
+    pub erased: Arc<Mutex<std::collections::BTreeSet<String>>>,
 }
 
 impl FakeMaster {
@@ -509,6 +563,7 @@ impl FakeMaster {
             url: format!("http://{}", listener.local_addr()?),
             holds: Arc::new(Mutex::new(holds.iter().map(|(p, h)| (p.to_string(), *h)).collect())),
             relationships: Arc::default(),
+            erased: Arc::default(),
         };
         let app = Router::new()
             .route("/v1/parties/{id}/spending-hold", get(spending_hold))
@@ -524,6 +579,9 @@ impl FakeMaster {
 async fn spending_hold(State(master): State<FakeMaster>, Path(id): Path<String>, headers: HeaderMap) -> (StatusCode, Json<Value>) {
     if !headers.get("authorization").is_some_and(|v| v.as_bytes().starts_with(b"Bearer ")) {
         return (StatusCode::UNAUTHORIZED, Json(json!({"code": "unauthorised"})));
+    }
+    if master.erased.lock().expect("the fake master's erasures").contains(&id) {
+        return (StatusCode::GONE, Json(json!({"code": "shredded"})));
     }
     let held = master.holds.lock().expect("the fake master's holds").get(&id).copied();
     match held {

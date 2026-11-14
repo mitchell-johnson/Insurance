@@ -436,6 +436,8 @@ pub enum Command {
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
     /// A life uses its cover's future insurability option.
     ExerciseOption(Box<OptionExercise>),
+    /// Stop paying for a limited-pay cover and keep it at a reduced sum insured.
+    MakePaidUp(Box<crate::paid_up::MakePaidUp>),
     /// Record that cover on this policy replaces cover on another.
     RecordReplacement(Box<Replacement>),
     /// Give a life a cover from the product's menu that it does not hold.
@@ -574,6 +576,9 @@ pub enum Command {
     /// The owner borrows against the policy's value, or repays.
     #[serde(rename = "policy_loan")]
     Loan(Box<crate::loan::LoanCommand>),
+    /// A settled payment went to the wrong person: raise what they owe
+    /// back, record what is recovered, write off the rest.
+    PayeeDebt(Box<crate::payee_debt::PayeeDebtCommand>),
     /// An approved, per-policy discount is given, or its end brought forward.
     SetDiscountOverride(Box<crate::discount_override::SetDiscountOverride>),
     // --- payments: money leaving through a payable ---
@@ -700,7 +705,7 @@ impl Command {
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
-            Command::ChangeExcess(_) => &["policy-servicing"],
+            Command::ChangeExcess(_) | Command::MakePaidUp(_) => &["policy-servicing"],
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -712,6 +717,7 @@ impl Command {
             Command::SplitScheme(command) => command.allowed_callers(),
             Command::SetMemberCovers(command) => command.allowed_callers(),
             Command::Loan(command) => command.allowed_callers(),
+            Command::PayeeDebt(_) => &["payments"],
             Command::SetDiscountOverride(command) => command.allowed_callers(),
             Command::RefundSuspense { .. } => &["cash-matching", "policy-servicing", "claims"],
             Command::ApplyMemberReceipt { .. } => &["cash-matching"],
@@ -757,6 +763,7 @@ impl Command {
             Command::AddCover(_) => "add_cover",
             Command::ExerciseOption(_) => "exercise_option",
             Command::ChangeExcess(_) => "change_excess",
+            Command::MakePaidUp(_) => "make_paid_up",
             Command::RecordReplacement(_) => "record_replacement",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",
@@ -781,6 +788,7 @@ impl Command {
             Command::SplitScheme(_) => "split_scheme",
             Command::SetMemberCovers(_) => "set_member_covers",
             Command::Loan(_) => "policy_loan",
+            Command::PayeeDebt(_) => "payee_debt",
             Command::SetDiscountOverride(_) => "set_discount_override",
             Command::RecordCession { .. } => "record_cession",
             Command::PostReinsurance { .. } => "post_reinsurance",

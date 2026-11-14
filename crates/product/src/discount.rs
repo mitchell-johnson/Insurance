@@ -99,12 +99,17 @@ pub struct BenefitCategory {
     /// to count. A monthly benefit counts as its monthly amount.
     #[serde(default)]
     pub min_sum_insured_minor: i64,
+    /// Covers on the life's other policies that count towards the category, as
+    /// `product/cover`: cover the life holds elsewhere can qualify it for the discount on
+    /// this policy's covers, and is not itself discounted here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub elsewhere: Vec<String>,
 }
 
 impl BenefitCategory {
     fn held_by(&self, sums: &BTreeMap<Line, i64>, life: &str) -> bool {
         sums.iter()
-            .any(|(line, si)| line.life == life && self.covers.contains(&line.cover) && *si >= self.min_sum_insured_minor)
+            .any(|(line, si)| line.life == life && (self.covers.contains(&line.cover) || self.elsewhere.contains(&line.cover)) && *si >= self.min_sum_insured_minor)
     }
 }
 

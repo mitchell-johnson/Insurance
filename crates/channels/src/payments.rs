@@ -55,7 +55,7 @@ pub const ROLES: [(&str, &str); 9] = [
 
 /// The commands a person may send. That module decides whether this
 /// person's roles allow it.
-pub const COMMANDS: [&str; 28] = [
+pub const COMMANDS: [&str; 30] = [
     "activate_config",
     "create_authority",
     "suspend_authority",
@@ -83,15 +83,20 @@ pub const COMMANDS: [&str; 28] = [
     "release_refund",
     "assign_exception",
     "resolve_exception",
+    // Money nobody could identify, applied by hand: one reconciler proposes, another approves.
+    "propose_receipt_match",
+    "approve_receipt_match",
     "clear_payer",
 ];
 
 /// The questions the console may put, with their fields. `reconciliation`
 /// and `readiness` are asked as of today; the outbox, messages read and the
 /// trail are the drivers'.
-const QUESTIONS: [(&str, &[&str]); 23] = [
+const QUESTIONS: [(&str, &[&str]); 25] = [
     ("open_runs", &[]),
     ("open_exceptions", &[]),
+    ("matches_to_approve", &[]),
+    ("manual_match", &["exception"]),
     ("party", &["party"]),
     ("customer_hold", &["party"]),
     ("waiting", &[]),

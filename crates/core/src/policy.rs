@@ -219,6 +219,10 @@ pub struct Layer {
     /// What of this layer's premium the member pays for themselves.
     #[serde(default, skip_serializing_if = "MemberPays::is_nothing")]
     pub member_pays: MemberPays,
+    /// The layer was made paid up: it stays in force for its reduced sum
+    /// insured and no more premium is billed for it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub paid_up: bool,
 }
 
 impl Layer {
@@ -237,6 +241,7 @@ impl Layer {
             && self.exclusions == o.exclusions
             && self.excess_option == o.excess_option
             && self.member_pays == o.member_pays
+            && self.paid_up == o.paid_up
     }
 }
 
@@ -648,6 +653,12 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// Each cover made paid up, by the request's reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub paid_up: BTreeMap<String, crate::paid_up::PaidUpRecord>,
+    /// What people paid by mistake owe back, by debt ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,
     /// What the owner has borrowed against the policy, once they have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loan: Option<crate::loan::Loan>,
@@ -660,6 +671,12 @@ pub struct Policy {
     /// discount for covers held across a customer's policies reads it.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub covers_elsewhere: u32,
+    /// What each named life on this policy holds on its other policies in the same group,
+    /// as last counted when this policy was last worked on: by life, the sum insured on each
+    /// cover in force there, keyed `product/cover`. A multi-benefit discount whose categories
+    /// count cover held elsewhere reads it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub sums_elsewhere: BTreeMap<String, BTreeMap<String, i64>>,
     /// A group scheme: its lives are members, billed together on one
     /// invoice. A scheme whose product has only covers that members choose
     /// (a health-only employer plan) has no formula cover to know it by.

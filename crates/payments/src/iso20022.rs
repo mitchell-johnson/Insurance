@@ -152,6 +152,35 @@ pub fn document(batch: &Batch, ordering: &OrderingAccount) -> Result<String, Str
     })
 }
 
+/// A recall as `camt.055.001.08`, the customer's request that its bank
+/// cancel or recall a payment: the case is the recall's ID, and the
+/// underlying payment is named by its batch, end-to-end reference, amount
+/// and the day it settled.
+pub fn recall_document(recall: &crate::file::Recall, ordering: &OrderingAccount) -> Result<String, String> {
+    if recall.amount_minor <= 0 {
+        return Err(format!("recall {} has no positive amount", recall.id));
+    }
+    let case = id("recall ID", &recall.id)?;
+    let batch = id("batch ID", &recall.submission)?;
+    let item = id("item ID", &recall.item)?;
+    let reason = id("reason code", &recall.reason)?;
+    let (own, own_agent) = (name(&ordering.name), agent(ordering));
+    let currency = format!("{:?}", recall.currency);
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:camt.055.001.08\"><CstmrPmtCxlReq>\
+         <Assgnmt><Id>{case}</Id><Assgnr><Pty><Nm>{own}</Nm></Pty></Assgnr><Assgne><Agt>{own_agent}</Agt></Assgne>\
+         <CreDtTm>{}T00:00:00</CreDtTm></Assgnmt><Case><Id>{case}</Id><Cretr><Pty><Nm>{own}</Nm></Pty></Cretr></Case>\
+         <Undrlyg><OrgnlPmtInfAndCxl><OrgnlPmtInfId>{batch}</OrgnlPmtInfId><TxInf><CxlId>{case}</CxlId>\
+         <OrgnlEndToEndId>{item}</OrgnlEndToEndId><OrgnlInstdAmt Ccy=\"{currency}\">{}</OrgnlInstdAmt>\
+         <OrgnlReqdExctnDt><Dt>{}</Dt></OrgnlReqdExctnDt><CxlRsnInf><Rsn><Cd>{reason}</Cd></Rsn></CxlRsnInf></TxInf>\
+         </OrgnlPmtInfAndCxl></Undrlyg></CstmrPmtCxlReq></Document>\n",
+        recall.settled_on,
+        amount(recall.amount_minor),
+        recall.settled_on,
+    ))
+}
+
 /// What a bank reads from a payment or collection initiation: enough to
 /// check it before acting on any line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,6 +255,18 @@ pub fn read_initiation(xml: &str) -> Result<Initiation, String> {
         declared: (count, total),
         items,
     })
+}
+
+/// Read a `camt.055` recall as a bank would: its case ID, the payment's
+/// end-to-end reference and the amount asked back.
+pub fn read_recall(xml: &str) -> Result<(String, String, i64), String> {
+    let doc = parse(xml)?;
+    let body = named(doc.root_element(), "CstmrPmtCxlReq").ok_or("not a payment cancellation request")?;
+    let case = text_at(body, &["Case", "Id"]).ok_or("the request names no case")?;
+    let tx = at(body, &["Undrlyg", "OrgnlPmtInfAndCxl", "TxInf"]).ok_or("the request names no payment")?;
+    let item = text_at(tx, &["OrgnlEndToEndId"]).ok_or("the request names no payment")?;
+    let amount = text_at(tx, &["OrgnlInstdAmt"]).and_then(|a| minor(&a)).ok_or("the request has no amount")?;
+    Ok((case, item, amount))
 }
 
 /// The return reason an ISO 20022 reason code stands for.
@@ -303,12 +344,21 @@ pub fn read_messages(xml: &str, accounts: &std::collections::BTreeMap<String, St
         }
         return Ok(vec![BankMessage::Acknowledgement { id, refused, rejected }]);
     }
+    if let Some(resolution) = named(root, "RsltnOfInvstgtn") {
+        // A `camt.029` answering a recall: confirmed (`CNCL`), or refused
+        // with the reason the bank gives.
+        let recall = text_at(resolution, &["Case", "Id"]).ok_or("a resolution names the case it answers")?;
+        let status = text_at(resolution, &["Sts", "Conf"]).ok_or("a resolution says how the case was resolved")?;
+        let accepted = status == "CNCL";
+        let reason = (!accepted).then(|| text_at(resolution, &["CxlDtls", "TxInfAndSts", "CxlStsRsnInf", "Rsn", "Cd"]).unwrap_or(status));
+        return Ok(vec![BankMessage::RecallAnswer { recall, accepted, reason }]);
+    }
     let (body, part, statement) = if let Some(b) = named(root, "BkToCstmrStmt") {
         (b, "Stmt", true)
     } else if let Some(b) = named(root, "BkToCstmrDbtCdtNtfctn") {
         (b, "Ntfctn", false)
     } else {
-        return Err("not a status report, statement or notification".to_string());
+        return Err("not a status report, statement, notification or resolution".to_string());
     };
     let mut out = Vec::new();
     for report in body.children().filter(|c| c.tag_name().name() == part) {

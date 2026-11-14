@@ -1582,19 +1582,10 @@ impl StaffPolicy {
 
     /// Decide from the facts. Anything that cannot be expressed to Cedar is a denial.
     fn decide(&self, req: &AccessRequest, f: &Facts) -> bool {
-        let uid = |ty: &str, id: &str| {
-            EntityTypeName::from_str(ty)
-                .ok()
-                .map(|t| EntityUid::from_type_name_and_id(t, EntityId::new(id)))
-        };
-        let (Some(principal), Some(action), Some(resource)) = (
-            uid("Staff", &req.staff.0),
-            uid("Action", &req.action),
-            uid("Record", req.record.as_deref().unwrap_or("none")),
-        ) else {
-            return false;
-        };
-        let context = Context::from_json_value(
+        self.permits(
+            &req.staff.0,
+            &req.action,
+            req.record.as_deref().unwrap_or("none"),
             json!({
                 "what": f.what,
                 "whose": f.whose,
@@ -1611,9 +1602,69 @@ impl StaffPolicy {
                 "decides": req.decides,
                 "fresh": req.fresh,
             }),
-            None,
-        );
-        let Ok(context) = context else { return false };
+        )
+    }
+
+    /// Every set of facts this policy allows and `approved` refuses: what a
+    /// change from `approved` to this policy widens. Each is named by its
+    /// facts, in a fixed order, so a reviewer sees exactly what opened. The
+    /// policy decides on the context alone, so every context is tried: the
+    /// twelve yes or no facts, each data class and each kind of purpose.
+    pub fn widened_from(&self, approved: &StaffPolicy) -> Vec<String> {
+        const FACTS: [&str; 12] = [
+            "what",
+            "whose",
+            "how_much",
+            "why",
+            "class_held",
+            "conflict",
+            "is_maker",
+            "break_glass",
+            "granted",
+            "one_record",
+            "decides",
+            "fresh",
+        ];
+        const CLASSES: [&str; 5] = ["ordinary", "personal", "financial", "insurance_sensitive", "clinical"];
+        const PURPOSES: [&str; 4] = ["none", "case", "task", "reason"];
+        // One thread for each class and purpose: the policy is only read.
+        let one = |class: &str, purpose: &str| -> Vec<String> {
+            let mut widened = Vec::new();
+            for bits in 0u32..(1 << FACTS.len()) {
+                let mut context = serde_json::Map::new();
+                context.insert("class".to_string(), json!(class));
+                context.insert("purpose_kind".to_string(), json!(purpose));
+                for (i, fact) in FACTS.iter().enumerate() {
+                    context.insert((*fact).to_string(), json!(bits & (1 << i) != 0));
+                }
+                let context = serde_json::Value::Object(context);
+                if self.permits("any", "any", "any", context.clone()) && !approved.permits("any", "any", "any", context) {
+                    let held: Vec<&str> = FACTS.iter().enumerate().filter(|(i, _)| bits & (1 << i) != 0).map(|(_, f)| *f).collect();
+                    widened.push(format!("{class}, purpose {purpose}: {}", held.join(" ")));
+                }
+            }
+            widened
+        };
+        std::thread::scope(|scope| {
+            let running: Vec<_> = CLASSES
+                .iter()
+                .flat_map(|class| PURPOSES.iter().map(move |purpose| (*class, *purpose)))
+                .map(|(class, purpose)| scope.spawn(move || one(class, purpose)))
+                .collect();
+            running.into_iter().flat_map(|thread| thread.join().unwrap_or_default()).collect()
+        })
+    }
+
+    fn permits(&self, staff: &str, action: &str, record: &str, context: serde_json::Value) -> bool {
+        let uid = |ty: &str, id: &str| {
+            EntityTypeName::from_str(ty)
+                .ok()
+                .map(|t| EntityUid::from_type_name_and_id(t, EntityId::new(id)))
+        };
+        let (Some(principal), Some(action), Some(resource)) = (uid("Staff", staff), uid("Action", action), uid("Record", record)) else {
+            return false;
+        };
+        let Ok(context) = Context::from_json_value(context, None) else { return false };
         let Ok(request) = Request::new(principal, action, resource, context, None) else {
             return false;
         };

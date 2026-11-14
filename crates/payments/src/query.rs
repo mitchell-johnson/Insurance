@@ -118,8 +118,21 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "payer_relationships_to_check" => found(Some(state.relationships_to_check())),
         "payer_case" => found(state.payer_checks.cases.get(text(&question, "case")?)),
         "loan_repayment_reference" => found(state.repayables.references.get(&format!("loan:{}", text(&question, "policy")?))),
+        "misdirection_reference" => found(state.repayables.references.get(&format!("debt:{}", text(&question, "misdirection")?))),
+        "misdirection" => found(state.misdirections.get(text(&question, "misdirection")?)),
+        "open_misdirections" => found(Some(
+            state
+                .misdirections
+                .iter()
+                .filter(|(_, m)| !m.closed)
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        )),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
+        "erasure_watch" => {
+            let now = question.get("now").cloned().and_then(|v| serde_json::from_value(v).ok());
+            found(Some(state.erasure_watch(now)))
+        }
         "open_runs" => Ok(state.open_runs()),
         "incident" => found(state.incidents.get(text(&question, "incident")?)),
         "funding_forecast" => Ok(state.funding_forecast(date(&question, "from")?, date(&question, "to")?)),
@@ -219,6 +232,29 @@ pub fn react(record: &ic_core::EventRecord) -> Vec<crate::Envelope> {
                 outstanding_minor: *outstanding_minor,
             }
         }
+        // What is owed on a payment that went to the wrong account.
+        ic_core::Event::PayeeDebtRaised {
+            policy,
+            debt,
+            outstanding_minor,
+            ..
+        }
+        | ic_core::Event::PayeeDebtRecovered {
+            policy,
+            debt,
+            outstanding_minor,
+            ..
+        }
+        | ic_core::Event::PayeeDebtWrittenOff {
+            policy,
+            debt,
+            outstanding_minor,
+            ..
+        } => crate::Command::PayeeDebtChanged {
+            policy: policy.to_string(),
+            debt: debt.clone(),
+            outstanding_minor: *outstanding_minor,
+        },
         ic_core::Event::PolicyLoanWrittenOff { policy, .. } => crate::Command::LoanChanged {
             policy: policy.to_string(),
             outstanding_minor: 0,

@@ -119,7 +119,7 @@ pub(crate) fn retail_premium_with(
             let basis = def.premium_basis(layer.excess_option.as_deref());
             // A cover whose premiums are all paid stays in force with
             // nothing more to bill.
-            if basis.is_some_and(|b| !ic_product::options::pays_premium(b, attained)) {
+            if layer.paid_up || basis.is_some_and(|b| !ic_product::options::pays_premium(b, attained)) {
                 continue;
             }
             let age = match basis {
@@ -142,6 +142,17 @@ pub(crate) fn retail_premium_with(
             };
             *sums.entry(line.clone()).or_insert(0) += layer.sum_insured_minor;
             *annual.entry(line).or_insert(Dec::from(0i64)) += p;
+        }
+    }
+    // What each life holds on its other policies counts towards a category that names it,
+    // keyed `product/cover` so it is never taken for a cover on this policy.
+    for (life, held) in &policy.sums_elsewhere {
+        for (cover, si) in held {
+            let line = Line {
+                cover: cover.clone(),
+                life: life.clone(),
+            };
+            *sums.entry(line).or_insert(0) += *si;
         }
     }
     // What of the policy's state the product's discounts are judged on.

@@ -217,6 +217,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
+| CLM-022 | full | `payments/tests/recall.rs::a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased`<br>`payments/tests/recall.rs::a_recalled_payment_coming_back_is_recovered_not_retried`<br>`payments-service/tests/pump.rs::a_misdirected_refund_is_recalled_through_the_bank`<br>`sim/tests/payments.rs::a_payment_to_the_wrong_person_is_owed_again_and_owed_back` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
@@ -301,8 +302,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
-| GRP-018 | part | `sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
-| GRP-020 | part | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole`<br>`group/tests/driver.rs::payroll_changes_and_the_monthly_file_each_use_their_own_layout`<br>`group/tests/driver.rs::a_new_mapping_version_is_tried_on_a_sample_before_it_is_set` |
+| GRP-017 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/health_menu.rs::chosen_covers_are_billed_to_whoever_pays_each_and_a_change_touches_only_what_changed` |
+| GRP-018 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
+| GRP-020 | full | `group/src/mapping.rs::mappings_are_checked_and_hashed_when_sealed`<br>`group/src/mapping.rs::a_file_that_does_not_fit_the_mapping_is_refused_whole`<br>`group/tests/driver.rs::payroll_changes_and_the_monthly_file_each_use_their_own_layout`<br>`group/tests/driver.rs::a_new_mapping_version_is_tried_on_a_sample_before_it_is_set`<br>`group/tests/admin.rs::a_scheme_is_registered_once_and_only_if_it_holds_together` |
 | GRP-019 | full | `group/tests/driver.rs::payroll_changes_and_the_monthly_file_each_use_their_own_layout` |
 | GRP-021 | full | `group/tests/year.rs::agreed_terms_take_effect_on_the_renewal_date` |
 | GRP-022 | full | `group/tests/year.rs::without_an_agreement_the_scheme_runs_on_old_rates_and_then_ends`<br>`group/tests/year.rs::a_rate_guarantee_rolls_the_year_without_an_agreement` |
@@ -317,6 +319,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
 | GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
+| GRP-036 | full | `group/tests/reconcile.rs::the_schemes_record_here_matches_the_core_member_for_member`<br>`group/tests/split.rs::a_split_moves_members_with_their_cover_to_a_new_scheme` |
 | GRP-038 | full | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date`<br>`group/tests/driver.rs::the_driver_asks_for_a_members_letter_and_reports_a_refusal`<br>`group/tests/cluster.rs::a_members_letter_is_a_command_the_documents_module_accepts`<br>`documents/tests/requested_letters.rs::group_asks_for_the_leave_of_absence_letters` |
 
 ## HLT Composable health product
@@ -468,9 +471,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
-| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
+| VUL-017 | full | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due`<br>`channels/tests/http.rs::a_trained_person_reviews_vulnerability_markers`<br>`channels/tests/customers.rs::the_master_is_asked_about_markers_as_the_trained_person` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer`<br>`channels/tests/http.rs::the_life_gives_their_own_consents` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |
@@ -503,6 +506,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | STF-008 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`underwriting/tests/special.rs::a_declared_conflict_removes_the_underwriter_from_the_case`<br>`underwriting/tests/special.rs::an_underwriter_never_acts_on_their_own_application` |
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
+| STF-011 | full | `channels/tests/staff.rs::a_policy_change_needs_a_security_approver`<br>`channels/tests/staff.rs::a_policy_change_is_measured_by_what_it_opens` |
 | STF-012 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named`<br>`channels/src/classes.rs::field` |
 | STF-013 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |

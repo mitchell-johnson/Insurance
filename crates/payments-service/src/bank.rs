@@ -11,7 +11,7 @@ use std::future::Future;
 
 use base64::Engine;
 use ic_payments::config::{ChannelKind, WireFormat};
-use ic_payments::file::{BankMessage, Batch, Manifest};
+use ic_payments::file::{BankMessage, Batch, Manifest, Recall};
 use serde::{Deserialize, Serialize};
 
 /// One region's way to one channel, with the secret already fetched.
@@ -100,6 +100,9 @@ pub trait Bank: Send + Sync {
     fn holds(&self, to: &Target, id: &str) -> impl Future<Output = Result<Option<String>, ChannelError>> + Send;
     /// The bank's messages after `after`, in order.
     fn messages(&self, to: &Target, after: u64) -> impl Future<Output = Result<Vec<Numbered>, ChannelError>> + Send;
+    /// Ask the bank to recall a payment. The same recall sent again under
+    /// its ID is answered as the first time.
+    fn recall(&self, to: &Target, recall: &Recall) -> impl Future<Output = Result<(), ChannelError>> + Send;
 }
 
 /// A bank reached over HTTPS, presenting a client certificate where the
@@ -251,6 +254,27 @@ impl Bank for HttpBank {
         }
         let holding: Holding = body(checked(response).await?).await?;
         Ok(Some(holding.sha256))
+    }
+
+    async fn recall(&self, to: &Target, recall: &Recall) -> Result<(), ChannelError> {
+        let wire = recall.wire().map_err(ChannelError::NotSent)?;
+        let content_type = match to.format {
+            WireFormat::Own => "application/json",
+            WireFormat::Iso20022 => "application/xml",
+        };
+        let http = self.client(to)?;
+        let request = match to.kind {
+            ChannelKind::File => http.put(format!("{}/recalls/{}", to.url, recall.id)),
+            ChannelKind::Api => http.post(format!("{}/recalls", to.url)).header("idempotency-key", &recall.id),
+        };
+        let response = request
+            .header("content-type", content_type)
+            .body(wire)
+            .bearer_auth(&to.token)
+            .send()
+            .await
+            .map_err(transport)?;
+        checked(response).await.map(|_| ())
     }
 
     async fn messages(&self, to: &Target, after: u64) -> Result<Vec<Numbered>, ChannelError> {

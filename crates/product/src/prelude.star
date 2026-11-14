@@ -61,8 +61,9 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
           shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None,
-          option_axes = [], min_entry_age = None, max_entry_age = None, built_in = []):
+          option_axes = [], min_entry_age = None, max_entry_age = None, built_in = [], paid_up_option = None):
     return {
+        "paid_up_option": paid_up_option,
         "code": code,
         "cover_type": cover_type,
         "benefit": benefit,
@@ -132,6 +133,11 @@ def built_in(code, name, kind, max = None, percent_of_cover = None, multiple_of_
         "requires_feature": requires,
         "definitions": definitions,
     }
+
+def paid_up_option(min_share_of_term, factor):
+    """A limited-pay cover may stop paying after this share of its premium term and keep
+    the share of the sum insured paid for, times the factor."""
+    return {"min_share_of_term": min_share_of_term, "factor": factor}
 
 def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age):
     """More of a lump sum cover without evidence of health, after an event in the life's own life."""
@@ -232,9 +238,10 @@ def min_lives(count):
 def paid(frequencies):
     return {"kind": "frequency", "frequencies": frequencies}
 
-def discount_category(code, covers, min_sum_insured = 0):
-    """Covers that count as one category towards a multi-benefit discount."""
-    return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured}
+def discount_category(code, covers, min_sum_insured = 0, elsewhere = []):
+    """Covers that count as one category towards a multi-benefit discount; `elsewhere` names
+    covers on the life's other policies that count too, as "product/cover"."""
+    return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured, "elsewhere": elsewhere}
 
 def benefit_categories(required, categories, count):
     """Each life holds a cover from one of the required categories and covers from at least `count` others."""

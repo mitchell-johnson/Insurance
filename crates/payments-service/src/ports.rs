@@ -230,6 +230,20 @@ pub trait Holds: Send + Sync {
     /// `None` when the master has no such relationship, `Err` when it
     /// could not say.
     fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a>;
+
+    /// Whether the master has erased the party (retention shredding).
+    fn erased<'a>(&'a self, party: &'a str) -> HoldAnswer<'a>;
+}
+
+/// Whether the master's answer about a party says it has erased them: a
+/// 410 Gone is erased; a 200, or a 404 for a party it never knew, is not;
+/// anything else is no answer.
+pub fn erased_in(status: u16) -> Result<bool, String> {
+    match status {
+        410 => Ok(true),
+        200 | 404 => Ok(false),
+        status => Err(format!("the customer master answered {status}")),
+    }
 }
 
 /// What an answer about a relationship resolves to.
@@ -291,6 +305,16 @@ pub fn hold_in(status: u16, body: &Value) -> Result<bool, String> {
 
 impl MasterHolds {
     async fn ask(&self, party: &str) -> Result<bool, String> {
+        let (status, body) = self.spending_hold(party).await?;
+        hold_in(status, &body)
+    }
+
+    async fn ask_erased(&self, party: &str) -> Result<bool, String> {
+        let (status, _) = self.spending_hold(party).await?;
+        erased_in(status)
+    }
+
+    async fn spending_hold(&self, party: &str) -> Result<(u16, Value), String> {
         if !plain_party(party) {
             return Err(format!("{party:?} is not a party ID the customer master knows"));
         }
@@ -305,8 +329,7 @@ impl MasterHolds {
             .await
             .map_err(|e| e.to_string())?;
         let status = response.status().as_u16();
-        let body = response.json::<Value>().await.unwrap_or(Value::Null);
-        hold_in(status, &body)
+        Ok((status, response.json::<Value>().await.unwrap_or(Value::Null)))
     }
 }
 
@@ -338,6 +361,10 @@ impl Holds for MasterHolds {
     fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a> {
         Box::pin(self.find_relationship(reference))
     }
+
+    fn erased<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
+        Box::pin(self.ask_erased(party))
+    }
 }
 
 impl Holds for BTreeMap<String, bool> {
@@ -348,5 +375,9 @@ impl Holds for BTreeMap<String, bool> {
 
     fn relationship<'a>(&'a self, reference: &'a str) -> RelationshipAnswer<'a> {
         Box::pin(std::future::ready(Err(format!("no answer for {reference}"))))
+    }
+
+    fn erased<'a>(&'a self, party: &'a str) -> HoldAnswer<'a> {
+        Box::pin(std::future::ready(Err(format!("no answer for {party}"))))
     }
 }

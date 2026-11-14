@@ -222,6 +222,11 @@ pub struct CoreState {
     /// across a customer's policies does not read the whole partition.
     #[serde(default)]
     pub(crate) holders: BTreeMap<String, BTreeSet<PolicyId>>,
+    /// Each named life's policies within a group, by `group|party`: an index over
+    /// `policies`, so that a multi-benefit discount can count what the same person holds on
+    /// their other policies without reading the whole partition.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) life_parties: BTreeMap<String, BTreeSet<PolicyId>>,
 }
 
 /// A closed business day and the head of the ledger chain when it closed.
@@ -248,6 +253,7 @@ impl CoreState {
             investment: Default::default(),
             table_validations: BTreeMap::new(),
             holders: BTreeMap::new(),
+            life_parties: BTreeMap::new(),
         }
     }
 
@@ -259,6 +265,67 @@ impl CoreState {
     /// policyholder.
     pub(crate) fn note_holder(&mut self, policy: &Policy) {
         self.holders.entry(Self::holder_key(policy)).or_default().insert(policy.id.clone());
+        for party in Self::named_parties(policy) {
+            let key = format!("{}|{}", policy.group.0, party.0);
+            self.life_parties.entry(key).or_default().insert(policy.id.clone());
+        }
+    }
+
+    /// The party behind each named life on a retail policy, by life.
+    fn named_parties(policy: &Policy) -> Vec<&crate::PartyId> {
+        if policy.is_scheme() {
+            return vec![];
+        }
+        policy
+            .lives
+            .values()
+            .filter_map(|l| match &l.kind {
+                crate::policy::LifeKind::Named { party } => Some(party),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// What each named life on a policy holds on its other retail policies in force in the
+    /// same group: by life, the sum insured in force on each cover there, keyed
+    /// `product/cover`. A scheme neither counts nor is counted.
+    pub(crate) fn sums_elsewhere(&self, policy: &Policy) -> BTreeMap<String, BTreeMap<String, i64>> {
+        let mut out: BTreeMap<String, BTreeMap<String, i64>> = BTreeMap::new();
+        if policy.is_scheme() {
+            return out;
+        }
+        for (life_id, life) in &policy.lives {
+            let crate::policy::LifeKind::Named { party } = &life.kind else {
+                continue;
+            };
+            let key = format!("{}|{}", policy.group.0, party.0);
+            let others = self.life_parties.get(&key).into_iter().flatten().filter(|id| **id != policy.id);
+            for other in others.filter_map(|id| self.policies.get(id)) {
+                if other.status != PolicyStatus::InForce || other.is_scheme() {
+                    continue;
+                }
+                // The same person may be a different life on the other policy.
+                let theirs: Vec<&crate::LifeId> = other
+                    .lives
+                    .iter()
+                    .filter(|(_, l)| matches!(&l.kind, crate::policy::LifeKind::Named { party: p } if p == party))
+                    .map(|(id, _)| id)
+                    .collect();
+                for cover in other.covers.values().filter(|c| c.status == crate::policy::CoverStatus::InForce) {
+                    let sum: i64 = cover
+                        .layers
+                        .iter()
+                        .filter(|l| l.end.is_none() && theirs.contains(&&l.life))
+                        .map(|l| l.sum_insured_minor)
+                        .sum();
+                    if sum > 0 {
+                        let held = out.entry(life_id.to_string()).or_default();
+                        *held.entry(format!("{}/{}", other.product_code, cover.code)).or_insert(0) += sum;
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// Covers in force on the policyholder's other retail policies in the
@@ -568,6 +635,12 @@ impl CoreState {
                 let policy = spec.policy.clone();
                 self.with_policy(&policy, false, |_, p| underwritten::record_replacement(p, ctx, *spec))
             }
+            Command::MakePaidUp(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    crate::paid_up::make_paid_up(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
@@ -804,6 +877,10 @@ impl CoreState {
                 self.with_policy_tracked(ctx, &id, true, |s, ctx, p| {
                     crate::discount_override::apply(&mut s.ledger, &s.catalog, p, ctx, *command)
                 })
+            }
+            Command::PayeeDebt(command) => {
+                let id = command.policy().clone();
+                self.with_policy(&id, false, |s, p| crate::payee_debt::apply(&mut s.ledger, p, ctx, *command))
             }
             Command::Loan(command) => {
                 let id = command.policy().clone();
@@ -1061,6 +1138,7 @@ impl CoreState {
             // What the policyholder holds elsewhere is counted afresh each
             // time the policy is worked on, before anything prices it.
             policy.covers_elsewhere = self.covers_elsewhere(&policy);
+            policy.sums_elsewhere = self.sums_elsewhere(&policy);
             f(self, &mut policy)
         };
         if let Some(today) = self.business_date {
