@@ -746,6 +746,27 @@ Written 12 November 2026 by the thread "Build claims operations". The full descr
 - The whole workspace suite passed locally before every push from this thread, the last at commit 71af93a. CI on main rarely completes because pushes arrive faster than a run; judge by the latest completed run.
 - Known weak spot outside claims' crates: `AbortTransfer` on the source is accepted while the transfer record may still be in flight to the target (reported to the core thread).
 
+## Area: AIA New Zealand products
+
+- **What exists (14 Nov 2026):**
+  - The AIA NZ range as ten products: AIA Living personal and business, Start-Up IP, Cover for Life, Essentials Life, Starter, Interim Cover, Private Health (with Plus), Cancer Care, and Corporate Solutions.
+  - 19 placeholder rate tables, each with a finance schema.
+  - AIA definitions citing each wording (`products/definitions/aia.star`), accounting groups in `close.star`, and underwriting rules and authority grades that include them.
+  - Everything is shipped through `crates/sim/src/config.rs`.
+  - Sources, the mapping to system constructs, every placeholder and the gaps are in `docs/aia-products.md`.
+- **Engine features added for them**, in `ic-product` (design in docs/decisions.md, 14 Nov):
+  - Option axes per cover, with premium bases: stepped, level to an age, level for blocks of years, and limited pay.
+  - Entry ages, built-in benefits, the per-life multi-benefit discount (`benefit_categories`), any-of cover rules (`requires_any`), lifetime health limits, and cover types `tpd` and `accidental_injury`.
+  - Core changes:
+    - Entry ages are checked at issue and when a cover is added.
+    - The option's waiting period and excess go into the claim facts.
+    - Expiry follows the option's age or term.
+    - The premium basis comes from the option, and limited pay stops billing.
+    - Each life's sums insured are passed to the discount chain.
+- **Tests:** `crates/product/tests/aia.rs` (products, menus, loader refusals, discount) and `crates/sim/tests/aia.rs` (issue, five years of billing and expiry, limited pay, discount on the bill, claim facts).
+- **Left for other owners:** see "Not built yet" in `docs/aia-products.md`. This covers claims enforcing the option terms and built-in benefits, the underwriting occupation and age tests, a Vitality wellness module, Cover for Life paid-up and premium suspension in the core, and reinsurance treaties for the AIA products.
+- **Needs Mitchell:** the real rates and factors, and the right to use AIA's names.
+
 ## Area: group scheme administration (`ic-group`)
 
 State as at 13 November 2026. The full description (what it does, routes, settings, operating it) is [group.md](group.md); this section is the handover: what is built and where, what is not, and what somebody finishing it needs to know.
