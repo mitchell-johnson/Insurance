@@ -1,0 +1,131 @@
+// Starts the whole system on one machine as real processes, wired together
+// as they are in production, and seeds it with the persona cast:
+//
+//   three ledger nodes (every partition and every module, replicated with
+//   Raft), the API, the portal, the group service, the customer master with
+//   its PostgreSQL, the documents service, the underwriting intake, and the
+//   drivers that carry work between modules (underwriting, reinsurance, unit
+//   pricing, payments). Azure is the stand-in in `azure.js`.
+//
+//   node e2e/stack/stack.js            start, seed, then wait until stopped
+//   node e2e/stack/stack.js --no-seed  start only
+//
+// The binaries come from `IC_BIN` (default `target/debug`): build them first
+// with `cargo build --bins`. Everything it writes goes under `IC_E2E_RUN`
+// (default `e2e/.run`): data, logs, and `stack.json`, which tells the tests
+// where each service listens. Nothing here is a mock of our own code.
+"use strict";
+const fs = require("fs");
+const path = require("path");
+const { spawn, spawnSync } = require("child_process");
+const azure = require("./azure");
+
+const root = path.resolve(__dirname, "../..");
+const bin = path.resolve(root, process.env.IC_BIN || "target/debug");
+const run = path.resolve(root, process.env.IC_E2E_RUN || "e2e/.run");
+const P = Number(process.env.IC_E2E_PORT || 17000);
+const ports = { nodes: [P + 1, P + 2, P + 3], api: P + 80, portal: P + 90, azure: P + 100, group: P + 110, customers: P + 120, documents: P + 130, intake: P + 140, postgres: P + 432 };
+const TENANT = "e2e-tenant";
+const TOKEN = "e2e-only-cluster-token-0123456789abcdef";
+const PARTITIONS = 4;
+const OPENING = process.env.IC_E2E_OPENING_DATE || "2027-11-15";
+const local = (port) => `127.0.0.1:${port}`;
+const url = (port) => `http://${local(port)}`;
+const NODES = ports.nodes.map(local).join(",");
+
+// The app registrations: each service's audience, and the roles each calling
+// workload has been assigned on it. This is the role assignment a deployment
+// makes in Entra (docs/channels.md, docs/group.md, docs/customers.md,
+// docs/documents.md, docs/underwriting.md); a role missing here fails the
+// same way it would there.
+const AUD = { group: "api://ic-group", customers: "api://ic-customers", documents: "api://ic-documents", intake: "api://ic-underwriting-intake" };
+const roles = {
+  "ic-portal": { [AUD.group]: ["employer-portal", "group-admin"], [AUD.customers]: ["portal"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
+  "ic-group": { [AUD.customers]: ["group-admin"] },
+  "ic-documents": { [AUD.customers]: ["documents"] },
+  "ic-payments": { [AUD.customers]: ["payments"] },
+  "e2e-seed": { [AUD.group]: ["group-admin", "employer-portal"], [AUD.customers]: ["portal", "group-admin", "identity", "staff", "new-business", "claims"], [AUD.documents]: ["portal", "staff"], [AUD.intake]: ["new-business", "underwriting-console"] },
+};
+
+const children = [];
+let stopping = false;
+function start(name, exe, env, args = []) {
+  fs.mkdirSync(path.join(run, "logs"), { recursive: true });
+  const out = fs.openSync(path.join(run, "logs", `${name}.log`), "a");
+  const child = spawn(path.join(bin, exe), args, { env: { PATH: process.env.PATH, RUST_LOG: process.env.RUST_LOG || "info", ...env }, stdio: ["ignore", out, out] });
+  child.on("exit", (code, signal) => { if (!stopping) console.error(`${name} exited (${code ?? signal}); see ${path.join(run, "logs", name + ".log")}`); });
+  children.push({ name, child });
+  return child;
+}
+function once(exe, args, env) {
+  const r = spawnSync(path.join(bin, exe), args, { env: { PATH: process.env.PATH, ...env }, encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`${exe} ${args.join(" ")} failed: ${r.stderr || r.stdout}`);
+  return r.stdout;
+}
+async function until(what, check, seconds = 120) {
+  const end = Date.now() + seconds * 1000;
+  let last = "";
+  while (Date.now() < end) {
+    try { if (await check()) return; } catch (e) { last = String(e.message || e); }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  throw new Error(`timed out waiting for ${what}${last ? ": " + last : ""}`);
+}
+const ok = async (address) => (await fetch(address)).ok;
+
+// Each workload's identity, as the AKS workload identity webhook injects it.
+function identity(client) {
+  const file = path.join(run, "identity", client);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, `federated-token-of-${client}`);
+  return { AZURE_FEDERATED_TOKEN_FILE: file, AZURE_TENANT_ID: TENANT, AZURE_CLIENT_ID: client, AZURE_AUTHORITY_HOST: url(ports.azure) };
+}
+const cluster = { IC_NODES: NODES, IC_CLUSTER_NODES: NODES, IC_CLUSTER_TOKEN: TOKEN };
+
+async function up() {
+  if (fs.existsSync(run)) fs.rmSync(run, { recursive: true, force: true });
+  fs.mkdirSync(run, { recursive: true });
+  const az = await azure.start({ port: ports.azure, roles });
+
+  // The ledger: three nodes, two regions (two in the home region), every module hosted.
+  const peers = ports.nodes.map((p, i) => `${i + 1}=${local(p)}`).join(",");
+  ports.nodes.forEach((p, i) => start(`node-${i + 1}`, "ic-node", {
+    ...cluster, IC_NODE_ID: String(i + 1), IC_NODE_PEERS: peers, IC_NODE_LISTEN: local(p), IC_NODE_DATA_DIR: path.join(run, "data", `node-${i + 1}`),
+    IC_PARTITIONS: String(PARTITIONS), IC_COLD_DIR: path.join(run, "cold"), IC_EVENT_SINK: "discard", IC_NODE_BOOTSTRAP: i === 0 ? "true" : "false",
+  }));
+  const admin = { ...cluster, IC_LEDGER_PATIENCE_SECS: "120" };
+  await until("the ledger nodes", async () => { once("ic-admin", ["init"], admin); return true; }, 60);
+  once("ic-admin", ["open", OPENING], admin);
+  once("ic-admin", ["activate-shipped"], admin);
+
+  start("api", "ic-api", { ...cluster, IC_PARTITIONS: String(PARTITIONS), IC_AUTH: "dev", IC_LISTEN: local(ports.api) });
+  start("portal", "ic-portal", {
+    ...cluster, ...identity("ic-portal"), IC_AUTH: "dev", IC_PORTAL_LISTEN: local(ports.portal), IC_PARTITIONS: String(PARTITIONS),
+    IC_REGIONS: `auckland=${local(ports.nodes[0])},${local(ports.nodes[1])};sydney=${local(ports.nodes[2])}`, IC_HOME_REGION: "auckland",
+    IC_PORTAL_HEARTBEAT_SECS: "5", IC_PORTAL_FORWARD_SECS: "2",
+  });
+  await until("the API", () => ok(url(ports.api) + "/readyz"));
+  await until("the portal", () => ok(url(ports.portal) + "/readyz"));
+
+  const stack = { portal: url(ports.portal), api: url(ports.api), azure: az.base, nodes: ports.nodes.map(url), token: TOKEN, tenant: TENANT, partitions: PARTITIONS, opening: OPENING, audiences: AUD, run };
+  fs.writeFileSync(path.join(run, "stack.json"), JSON.stringify(stack, null, 2));
+  return { stack, az };
+}
+
+async function down() {
+  stopping = true;
+  for (const { child } of children.reverse()) child.kill("SIGTERM");
+  await new Promise((r) => setTimeout(r, 1500));
+  for (const { child } of children) if (child.exitCode === null) child.kill("SIGKILL");
+}
+
+module.exports = { up, down, ports, roles, AUD, TENANT, TOKEN, url };
+
+if (require.main === module) {
+  process.on("SIGINT", () => down().then(() => process.exit(0)));
+  process.on("SIGTERM", () => down().then(() => process.exit(0)));
+  up().then(async ({ stack }) => {
+    if (!process.argv.includes("--no-seed")) await require("./seed").seed(stack);
+    console.log(`ready ${stack.portal}`);
+  }).catch(async (e) => { console.error(String(e.stack || e)); await down(); process.exit(1); });
+}

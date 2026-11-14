@@ -1,0 +1,15 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Thank you for applying for cover. We are sorry, but we cannot offer you some or all of the cover you asked for in application {{reference}}.
+
+{{#if reasons}}We made this decision for these reasons:{{#each reasons}}
+- {{this}}{{/each}}{{/if}}{{#unless reasons}}We cannot give you all our reasons in this letter. You can ask your own doctor, or ask us to send the reasons to a doctor you choose.{{/unless}}
+
+You can ask us to review this decision. Write to us or call us within 30 days and tell us why you think we should look again. You can send us new facts, such as a report from your doctor. A different underwriter will review it.
+
+You can ask us for the information we used. If you are not happy with how we dealt with your application, you can make a complaint. We will tell you how our complaints process works, and about the free and independent dispute resolution scheme we belong to.
+
+Yours sincerely,
+New Business

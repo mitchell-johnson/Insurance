@@ -746,6 +746,12 @@ impl DocumentsState {
             TemplateStatus::Draft => {}
             _ => return reject("config_conflict", "an active or disabled template version is immutable; submit a new version"),
         }
+        if crate::placeholders::is_placeholder(&record.template) {
+            return reject(
+                "placeholder_wording",
+                "the wording is a placeholder for legal review; rewrite it and submit a new version",
+            );
+        }
         let mut needed = vec![ApprovalRole::Legal, ApprovalRole::Product];
         if record.template.kind.needs_compliance_approval() {
             needed.push(ApprovalRole::Compliance);

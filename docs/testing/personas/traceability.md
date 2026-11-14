@@ -245,6 +245,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 | RI-005 | full | `reinsurance/tests/accumulation.rs::a_lapse_suspends_the_cession_and_reinstatement_restores_it`<br>`reinsurance/tests/premiums.rs::lapse_and_unwind_take_ceded_premium_back` |
 | RI-006 | full | `reinsurance/tests/accumulation.rs::layers_are_ceded_one_by_one_and_over_limit_cover_is_never_silent`<br>`reinsurance/tests/premiums.rs::a_backdated_change_posts_only_the_difference` |
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
+| RI-008 | part | `reinsurance/tests/accumulation.rs::a_joint_cover_counts_in_full_against_each_life` |
 | RI-009 | full | `reinsurance/tests/accumulation.rs::membership_events_move_the_cession_on_their_effective_dates`<br>`reinsurance/tests/accumulation.rs::an_identified_member_joins_the_life_and_the_excess_is_ceded_facultatively` |
 | RI-010 | full | `reinsurance/tests/claims.rs::catastrophe_and_stop_loss_respond_to_what_is_kept_across_claims`<br>`reinsurance/tests/accumulation.rs::the_underwritten_excess_path_is_flagged_once` |
 | RI-011 | full | `reinsurance/tests/statements.rs::a_statement_nets_the_account_and_lists_only_what_the_treaty_allows`<br>`reinsurance/tests/carriers.rs::statements_and_the_release_log_are_filed_once`<br>`reinsurance/tests/statements.rs::a_long_listing_is_filed_in_parts_the_statement_names`<br>`reinsurance/tests/carriers.rs::statements_and_listings_are_left_for_their_reinsurer_to_collect`<br>`reinsurance/tests/reinsurer_api.rs::a_reinsurer_reads_only_its_own_statements_and_files` |
@@ -345,7 +346,7 @@ Hand-maintained. Each row says which built tests (paths under `crates/`) carry o
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
-| JNT-001 | part | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life` |
+| JNT-001 | full | `underwriting/tests/lifecycle.rs::a_joint_application_is_settled_life_by_life`<br>`underwriting/tests/driver.rs::a_joint_cover_carries_each_lifes_own_terms` |
 | JNT-007 | full | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |
 | JNT-008 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases`<br>`sim/tests/reduce_cover.rs::a_reduction_needs_the_consent_of_a_standing_interest` |
 | JNT-009 | part | `sim/tests/interests.rs::an_interest_restricts_the_owner_until_its_holder_consents_or_releases` |

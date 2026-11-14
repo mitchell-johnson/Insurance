@@ -391,8 +391,7 @@ pub(crate) fn end_of_day(ledger: &mut Ledger, catalog: &Catalog, book: &Investme
         loan.capitalised_year = loan.capitalised_year.max(year);
         let rate = rate_code.as_deref().and_then(|code| catalog.index_rate_on(code, day)).map(|r| r.get());
         if let Some(rate) = rate {
-            let daily = dec_i128(loan.principal_minor as i128) * rate / Dec::from(365i64);
-            loan.carry_fine += round_minor_to_fine(daily, c).map(|a| a.fine)?;
+            loan.carry_fine += day_interest_fine(loan.principal_minor, rate, c)?;
             let whole = (loan.carry_fine / FINE_PER_MINOR) as i64;
             loan.carry_fine -= whole as i128 * FINE_PER_MINOR;
             loan.interest_minor += whole;
@@ -428,4 +427,45 @@ pub(crate) fn end_of_day(ledger: &mut Ledger, catalog: &Catalog, book: &Investme
 /// What the ledger must hold for the policy's loan.
 pub(crate) fn expected_balance(policy: &Policy) -> i128 {
     policy.loan.as_ref().map_or(0, |l| l.outstanding_minor() as i128)
+}
+
+/// One day's interest on a principal at a yearly rate, in fine units: a 365th
+/// of a year's interest, to the nearest millionth of a cent.
+fn day_interest_fine(principal_minor: i64, rate: Dec, currency: ic_money::Currency) -> Result<i128, ic_money::MoneyError> {
+    let daily = dec_i128(principal_minor as i128) * rate / Dec::from(365i64);
+    round_minor_to_fine(daily, currency).map(|a| a.fine)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Purpose: a day's loan interest, across principals from a cent to ten million dollars
+    /// and rates from a hundredth of a percent to 25%, equals what integer long division
+    /// gives from the same digits: principal times rate over 365, to the nearest millionth
+    /// of a cent, with an exact half going to the even side.
+    /// Why it matters: the interest is added every day for as long as a loan runs, so an
+    /// error in the last place repeats thousands of times on every loan. The check uses no
+    /// decimal arithmetic, so a fault in the decimal library cannot be on both sides of it.
+    #[test]
+    fn a_days_loan_interest_equals_integer_long_division() {
+        let mut compared = 0;
+        for principal in [1i64, 99, 10_000, 123_457, 2_500_000, 33_333_333, 99_999_999, 1_000_000_000] {
+            for rate_bp in (1i128..=2500).step_by(7).chain([795, 1000, 2500]) {
+                let rate = ic_money::dec(&format!("0.{rate_bp:04}")).unwrap();
+                // principal (cents) * rate (ten-thousandths) * a million fine units, over 365.
+                let top = i128::from(principal) * rate_bp * FINE_PER_MINOR;
+                let bottom = 10_000 * 365;
+                let (cut, rest) = (top / bottom, top % bottom);
+                let up = rest * 2 > bottom || (rest * 2 == bottom && cut % 2 == 1);
+                assert_eq!(
+                    day_interest_fine(principal, rate, ic_money::Currency::NZD).unwrap(),
+                    cut + i128::from(up),
+                    "principal {principal} at {rate_bp} basis points"
+                );
+                compared += 1;
+            }
+        }
+        assert!(compared > 2_000);
+    }
 }

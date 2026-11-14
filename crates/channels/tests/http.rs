@@ -3246,6 +3246,37 @@ async fn an_employer_runs_the_scheme_membership() {
     assert_eq!(bare.oneshot(request).await.unwrap().status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
+/// Purpose: every action and question the commission page offers is one the console route accepts.
+/// Why it matters: the page once offered appointing a policy's adviser, which the route always refuses; a form that can only fail teaches staff to distrust the screen.
+#[test]
+fn the_commission_page_offers_only_what_its_route_accepts() {
+    let page = ic_channels::ui::COMMISSION;
+    let offered = |list: &str| -> Vec<String> {
+        let from = page.find(&format!("const {list} = {{")).expect("the list is on the page");
+        page[from..]
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.starts_with("};"))
+            .filter_map(|line| {
+                line.strip_prefix("  ")
+                    .filter(|rest| !rest.starts_with(' '))
+                    .and_then(|rest| rest.split_once(':'))
+                    .map(|(name, _)| name.to_string())
+            })
+            .collect()
+    };
+    let actions = offered("ACTIONS");
+    assert!(actions.len() >= 10, "{actions:?}");
+    for action in &actions {
+        assert!(
+            ic_channels::commission::COMMANDS.contains(&action.as_str()),
+            "the page offers {action}, which the route refuses"
+        );
+    }
+    let questions = offered("QUESTIONS");
+    assert!(questions.contains(&"position".to_string()), "{questions:?}");
+}
+
 /// Purpose: a member of staff whose templates give the commission module's distribution admin role opens the commission console,
 /// asks its questions with the fields each needs, and sends a structure command as themselves with a purpose, which the commission
 /// module's own policy allows; someone who may only look is refused by that module; and commands that have their own paths
@@ -3767,6 +3798,49 @@ async fn the_life_gives_their_own_consents() {
     let message = ic_underwriting::signing::message("consent", &["P3", "L1", "replacement_disclosure"]);
     let (status, problem) = send("replacement_disclosure", json!({ "granted": true, "signature": portal.phone.sign(&message) })).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("replacement")), "{problem}");
+
+    // Before signing a replacement disclosure the life reads what it means. This proposal replaces nothing, so there is no statement.
+    let statement = format!("{base}/replacement_disclosure/statement");
+    let (status, problem) = portal.get("sub-kiri", &statement).await;
+    assert_eq!((status, problem["title"].as_str()), (StatusCode::CONFLICT, Some("replacement")), "{problem}");
+    // Underwriting publishes what the proposal adds; the portal sets it beside the cover and premium the core holds.
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": format!("{retail}/underwriting/P3/L1"), "policy": retail, "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "P3", "life": "L1", "stage": "disclosure", "waiting_on": "applicant",
+                "replacement": { "cover": "life", "sum_insured_minor": 250_000_00i64, "premium_minor": 91_20 } } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let output = state.apply(
+            9_003,
+            ic_channels::Envelope {
+                key: "life-row-p3-replacement".into(),
+                at: now,
+                actor: module("underwriting"),
+                command,
+            },
+        );
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    let (status, shown) = portal.get("sub-kiri", &statement).await;
+    assert_eq!(status, StatusCode::OK, "{shown}");
+    assert_eq!(
+        (&shown["replaced_policy"], &shown["gained"], &shown["lost"], &shown["new_premium_minor"]),
+        (
+            &json!(retail),
+            &json!({ "cover": "life", "sum_insured_minor": 250_000_00i64 }),
+            &json!([]),
+            &json!(91_20)
+        ),
+        "{shown}"
+    );
+    assert_eq!(
+        (shown["kept"][0]["cover"].as_str(), shown["kept"][0]["sum_insured_minor"].as_i64()),
+        (Some("life"), Some(500_000_00)),
+        "{shown}"
+    );
+    assert!(shown["old_premium"]["total_minor"].as_i64().is_some_and(|total| total > 0), "{shown}");
+    // It is the life's own: the adviser on the policy is told there is no such thing.
+    assert_eq!(portal.get("sub-adv", &statement).await.0, StatusCode::NOT_FOUND);
 }
 
 /// Purpose: group administration staff work a scheme from the group console against the group module's own state machine:

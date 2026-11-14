@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We need to talk with you about your application ({{reference}}) before we can make a decision.
+
+Please call us, or reply to this letter, to choose a time that suits you. The call takes about 20 minutes. We will ask about some of your answers. You can have someone with you.
+
+Yours sincerely,
+New Business

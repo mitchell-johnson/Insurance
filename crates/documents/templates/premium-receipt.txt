@@ -1,0 +1,8 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Thank you. We received {{allocated|money}} for policy {{policy}} (receipt {{receipt}}) on {{date|date}}.
+
+Yours sincerely,
+Customer Care

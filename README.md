@@ -57,6 +57,7 @@ Needs Rust (the toolchain is pinned in `rust-toolchain.toml`), `clang`, `protoc`
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo test --workspace --locked
+python3 tools/check_rounding.py
 python3 tools/check_test_docs.py
 ```
 

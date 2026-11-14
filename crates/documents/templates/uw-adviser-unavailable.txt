@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+The adviser who was helping you with your application ({{reference}}) can no longer act for you.
+
+Your application is still open. You can keep going with us directly, or choose another adviser. Please call us to tell us what you would like to do. Until then, we will not make any changes to your application.
+
+Yours sincerely,
+New Business

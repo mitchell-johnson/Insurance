@@ -91,3 +91,29 @@ fn a_replacement_waits_for_the_signed_replacement_disclosure() {
         "replacement"
     );
 }
+
+/// Purpose: the life's progress row on a replacement carries what the replacement adds (the
+/// cover, its sum insured and the premium quoted), which the portal puts in the disclosure
+/// statement the life signs; a row on any other proposal carries none.
+/// Why it matters: the portal has no other customer-facing read of the proposal. Without these
+/// figures the statement could not say what the customer gains or will pay, and they would be
+/// asked to sign a replacement disclosure that does not disclose it.
+#[test]
+fn a_replacements_progress_shows_what_it_adds() {
+    let mut w = World::new();
+    let mut open = w.open_command("P1", &["L1"], &[("L1", "life", "life", 200_000_00)], true);
+    open.entry = Entry::Increase {
+        policy: PolicyId::from("POL-P0"),
+    };
+    open.replacement = true;
+    w.ok("new-business", Command::OpenProposal(Box::new(open)));
+    w.open("P2", 200_000_00);
+    let rows = |w: &World, id: &str| ic_underwriting::progress::rows(w.p(id));
+    let life = rows(&w, "P1").into_iter().find(|r| r.kind == "proposal_life").unwrap();
+    assert_eq!(
+        life.body["replacement"],
+        serde_json::json!({"cover": "life", "sum_insured_minor": 200_000_00, "premium_minor": 85_00})
+    );
+    let other = rows(&w, "P2").into_iter().find(|r| r.kind == "proposal_life").unwrap();
+    assert!(other.body.get("replacement").is_none());
+}

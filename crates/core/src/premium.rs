@@ -422,4 +422,85 @@ mod tests {
         let too_much = bill("life", i64::MAX, 0, 0, 0);
         assert!(add_premium(&mut total, &too_much).is_err(), "an overflow is an error, never a wrapped amount");
     }
+    /// Purpose: for both benefit categories of the shipped group life product and salaries
+    /// from a dollar to two million, round and awkward, alone and as a declared pool, the
+    /// member's sum insured and the month's premium equal what integer long division gives
+    /// from the multiple, the limits and the rate as written in the product files.
+    /// Why it matters: a scheme bills thousands of members with this one calculation, and the
+    /// engine's other tests compare it with figures the engine produced. A rounding fault in
+    /// the decimal library once billed retail premiums a cent low unseen; this check shares
+    /// no arithmetic with the engine, so the same fault here would fail it.
+    #[test]
+    fn a_scheme_members_premium_equals_integer_long_division() {
+        let product = ic_product::load_product("group_life.star", include_str!("../../../products/group_life.star")).unwrap();
+        let table = ic_product::load_rate_table("group", include_str!("../../../products/rates/group_life_standard.star")).unwrap();
+        let def = &product.covers[0];
+        // A decimal as written: its digits as an integer and what to divide by.
+        let written = |s: &str| {
+            let (whole, fraction) = s.split_once('.').unwrap_or((s, ""));
+            (format!("{whole}{fraction}").parse::<i128>().unwrap(), 10i128.pow(fraction.len() as u32))
+        };
+        let nearest = |top: i128, bottom: i128| {
+            let (cut, rest) = (top / bottom, top % bottom);
+            let up = match product.rounding {
+                RoundingMode::Down => false,
+                RoundingMode::Up => rest != 0,
+                RoundingMode::HalfUp => rest * 2 >= bottom,
+                RoundingMode::HalfEven => rest * 2 > bottom || (rest * 2 == bottom && cut % 2 == 1),
+            };
+            i64::try_from(cut + i128::from(up)).unwrap()
+        };
+        let life = LifeId::from("member");
+        let mut compared = 0;
+        for cat in &def.categories {
+            let (multiple, multiple_over) = written(cat.salary_multiple.as_str());
+            let rate = table.rows.iter().find(|r| r.category.as_deref() == Some(cat.code.as_str())).unwrap();
+            let (rate, rate_over) = written(rate.annual_rate.as_str());
+            for salary in [
+                100i64,
+                4_567_89,
+                33_333_33,
+                61_234_56,
+                99_999_99,
+                187_500_00,
+                187_500_01,
+                375_000_00,
+                812_345_67,
+                2_000_000_00,
+            ] {
+                for headcount in [None, Some(1u32), Some(7), Some(250)] {
+                    let lives = i64::from(headcount.unwrap_or(1));
+                    let f = LifeFactors {
+                        category: Some(cat.code.clone()),
+                        salary_minor: headcount.is_none().then_some(salary),
+                        pool: headcount.map(|headcount| crate::policy::PoolAggregate {
+                            headcount,
+                            total_salary_minor: salary * lives,
+                        }),
+                        ..LifeFactors::default()
+                    };
+                    let limit = cat.max_sum_insured_minor.min(def.automatic_acceptance_limit_minor.unwrap());
+                    let sum = nearest(i128::from(salary * lives) * multiple, multiple_over).min(limit * lives);
+                    assert_eq!(
+                        member_sum_insured(def, &f, &life, product.rounding, product.currency).unwrap(),
+                        sum,
+                        "sum insured: {} {salary} {headcount:?}",
+                        cat.code
+                    );
+                    // Cents a month: the sum in thousands of dollars times the rate, in cents, over twelve.
+                    let month = nearest(i128::from(sum) * rate, 1_000 * rate_over * 12);
+                    let rf = RatingFactors {
+                        category: f.category.clone(),
+                        ..RatingFactors::default()
+                    };
+                    let annual = cover_premium(def, &table, &rf, sum).unwrap();
+                    let bill = modal_premium(&product, &BTreeMap::from([(def.code.clone(), annual)]), ic_product::Frequency::Monthly).unwrap();
+                    assert_eq!(bill.by_cover[&def.code].minor, month, "premium: {} {salary} {headcount:?}", cat.code);
+                    assert!(bill.gst.is_empty() && bill.policy_fee.is_zero());
+                    compared += 1;
+                }
+            }
+        }
+        assert_eq!(compared, 80);
+    }
 }

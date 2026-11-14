@@ -1117,6 +1117,18 @@ impl CoreState {
             }
             return Ok(());
         }
+        // A policy whose unpaid premium is past its lapse period is looked at
+        // before anything new is billed: one that lapses today is not also
+        // sent a bill today.
+        if arrears::overdue_to_lapse(&product, policy, ctx.date) {
+            if let Some(closed_day) = ctx.date.pred_opt() {
+                earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;
+            }
+            arrears::run(&mut self.ledger, &product, policy, ctx)?;
+            if policy.status != PolicyStatus::InForce {
+                return Ok(());
+            }
+        }
         billing::bill_due_periods(&mut self.ledger, &self.catalog, &product, policy, ctx)?;
         if let Some(closed_day) = ctx.date.pred_opt() {
             earning::earn_through(&mut self.ledger, policy, ctx, closed_day)?;

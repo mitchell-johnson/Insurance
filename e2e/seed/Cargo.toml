@@ -1,0 +1,59 @@
+# The end-to-end stack's configuration reader. It loads the configuration the
+# repository ships as Starlark (the finance chart and close configuration,
+# the underwriting libraries, the reinsurance treaties) with each module's
+# own loader and prints it as JSON, for `e2e/stack/seed.js` to activate on
+# the running system through each module's own commands.
+#
+# It is deliberately not a member of the main workspace: it is test tooling,
+# and must not count towards the workspace's coverage floor or change the
+# features the shipped binaries are built with. `e2e/build.sh` builds it into
+# the main target directory, so the module crates are not compiled twice.
+[package]
+name = "ic-e2e-config"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "UNLICENSED"
+
+[[bin]]
+name = "ic-e2e-config"
+path = "src/main.rs"
+
+[[bin]]
+name = "ic-e2e-close"
+path = "src/bin/ic-e2e-close.rs"
+
+[workspace]
+
+[dependencies]
+ic-finance = { path = "../../crates/finance" }
+ic-underwriting = { path = "../../crates/underwriting" }
+ic-reinsurance = { path = "../../crates/reinsurance" }
+ic-sim = { path = "../../crates/sim" }
+ic-product = { path = "../../crates/product" }
+ic-workflows = { path = "../../crates/workflows" }
+ic-raft = { path = "../../crates/raft" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde = "1"
+serde_json = "1"
+
+[profile.dev]
+debug = false
+incremental = false
+[profile.dev.package.rsa]
+opt-level = 3
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
+# The same lints as the workspace, which this package stands outside.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+# Amounts in minor units are written dollars_cents, for example 500_000_00.
+inconsistent_digit_grouping = "allow"
+type_complexity = "allow"
+too_many_arguments = "allow"

@@ -4,7 +4,8 @@
 //! needs from the data can be read off the template itself:
 //!
 //! - `{{path.to.field}}` writes a value. `|money` formats integer minor
-//!   units as dollars, `|date` formats an ISO date in words.
+//!   units (a number, or the text of one) as dollars, `|date` formats an
+//!   ISO date in words.
 //! - `{{#each items}} ... {{/each}}` repeats for each element of a list.
 //!   Inside, paths are relative to the element, `this` is the element, and
 //!   `@root.path` reaches the top of the data.
@@ -347,7 +348,12 @@ fn write_value(path: &str, format: Format, value: &Value, out: &mut String) -> R
         wanted,
     };
     match format {
-        Format::Money => out.push_str(&money(value.as_i64().ok_or_else(|| wrong("money (whole minor units)"))?)),
+        // Whole minor units, as a number or as the text of one (a requested
+        // letter's detail is text).
+        Format::Money => {
+            let minor = value.as_i64().or_else(|| value.as_str().and_then(|s| s.parse().ok()));
+            out.push_str(&money(minor.ok_or_else(|| wrong("money (whole minor units)"))?))
+        }
         Format::Date => out.push_str(&value.as_str().and_then(date_in_words).ok_or_else(|| wrong("a date (YYYY-MM-DD)"))?),
         Format::Plain => match value {
             Value::String(s) => out.push_str(s),

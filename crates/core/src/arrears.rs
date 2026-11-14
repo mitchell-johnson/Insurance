@@ -75,6 +75,13 @@ pub(crate) fn refresh(product: &ProductDefinition, policy: &mut Policy, ctx: &mu
 }
 
 /// The end-of-day arrears run for one policy.
+/// Whether the oldest unpaid premium is past the product's lapse period
+/// today. The policy then lapses in the arrears run unless an arrangement
+/// or an unproven notice holds it.
+pub(crate) fn overdue_to_lapse(product: &ProductDefinition, policy: &Policy, on: NaiveDate) -> bool {
+    product.arrears().is_some_and(|rules| matches!(derive(policy, rules, on), Derived::Lapse))
+}
+
 pub(crate) fn run(ledger: &mut Ledger, product: &ProductDefinition, policy: &mut Policy, ctx: &mut Ctx<'_>) -> Result<(), Reject> {
     if policy.status != PolicyStatus::InForce {
         return Ok(());

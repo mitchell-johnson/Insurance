@@ -1,0 +1,11 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Our records show a premium on your policy is unpaid ({{reference}}).{{#each policies}}
+Policy: {{this}}{{/each}}
+
+If you have paid in the last few days, thank you. If not, please pay now so your cover continues. If you are finding it hard to pay, please call us. We can help.
+
+Yours sincerely,
+Customer Care

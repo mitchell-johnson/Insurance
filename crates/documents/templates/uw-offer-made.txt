@@ -1,0 +1,13 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Thank you for applying for cover. We have looked at your application ({{reference}}) and we can offer you cover.
+
+The offer may not be on the terms you asked for. Your offer sets out the cover, any changes to it and the premium.{{#if reasons}} We made these changes:{{#each reasons}}
+- {{this}}{{/each}}{{/if}}
+
+You do not have to accept. If you want to, tell us or your adviser before the offer ends. If you have questions, or you think we have something wrong, please call us. You can ask us to review our decision.
+
+Yours sincerely,
+New Business

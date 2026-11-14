@@ -1,0 +1,16 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Policy schedule
+
+Policyholder: {{name}}
+Policy: {{policy}}
+Product: {{product}}
+Started: {{inception|date}}
+Schedule date: {{date|date}}
+Premium frequency: {{frequency}}
+{{#if premium}}Premium: {{premium|money}}
+{{/if}}
+Your cover:{{#each covers}}
+- {{cover}} ({{type}}): {{sum_insured|money}}, from {{start|date}}{{/each}}
+
+This schedule forms part of your policy and replaces any earlier schedule. Read it with your policy wording.

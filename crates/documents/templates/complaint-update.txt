@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+This is update {{number}} on your complaint ({{reference}}). We are still looking into it.
+
+We will write to you again by {{due|date}}, or sooner if we have an answer. If you have anything more to tell us, please get in touch.
+
+You can take your complaint to our free and independent dispute resolution scheme if we have not answered within two months of receiving it.
+
+Yours sincerely,
+Customer Care

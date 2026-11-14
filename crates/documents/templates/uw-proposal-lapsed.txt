@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We have closed your application ({{reference}}) because we did not get what we needed to finish it in time.
+
+You are not covered under this application. If you still want cover, you or your adviser can apply again at any time.
+
+Yours sincerely,
+New Business

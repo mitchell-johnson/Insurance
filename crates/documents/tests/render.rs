@@ -53,7 +53,8 @@ fn a_template_renders_values_lists_and_conditions() {
 }
 
 /// Purpose: a value the template needs and the data lacks is an error naming the field, and
-/// a value of the wrong type for its format is an error; nothing is rendered blank.
+/// a value of the wrong type for its format is an error (money is whole minor units, as a
+/// number or the text of one); nothing is rendered blank.
 /// Why it matters: a notice with a blank where the premium should be is a defective notice.
 /// Failing the render is the only safe behaviour.
 #[test]
@@ -65,10 +66,15 @@ fn a_missing_or_mistyped_value_fails_the_render() {
         render("{{#each covers}}x{{/each}}", json!({"covers": 3})),
         Err(RenderError::WrongType { .. })
     ));
-    assert!(matches!(
-        render("{{premium|money}}", json!({"premium": "12"})),
-        Err(RenderError::WrongType { .. })
-    ));
+    // Whole minor units written as text (a requested letter's detail) are
+    // money; anything else in text is not.
+    assert_eq!(render("{{premium|money}}", json!({"premium": "1250"})).unwrap(), "$12.50");
+    for text in ["12.50", "twelve", ""] {
+        assert!(matches!(
+            render("{{premium|money}}", json!({ "premium": text })),
+            Err(RenderError::WrongType { .. })
+        ));
+    }
     assert!(matches!(
         render("{{start|date}}", json!({"start": "15/11/2027"})),
         Err(RenderError::WrongType { .. })

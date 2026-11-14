@@ -14,7 +14,7 @@ use std::fmt;
 use std::str::FromStr;
 
 use fastnum::decimal::Context;
-pub use fastnum::decimal::RoundingMode as FastRounding;
+use fastnum::decimal::RoundingMode as FastRounding;
 pub use fastnum::D256 as Dec;
 use serde::{Deserialize, Serialize};
 
@@ -493,23 +493,58 @@ mod tests {
         assert_eq!(dec_i128(-42).to_string(), "-42");
     }
 
+    /// A decimal written out digit by digit from an integer count of its last place, so
+    /// that the tests below start from numbers no library arithmetic has touched.
+    fn text(units: i128, places: u32) -> String {
+        let sign = if units < 0 { "-" } else { "" };
+        let digits = format!("{:0>width$}", units.unsigned_abs(), width = places as usize + 1);
+        let (whole, fraction) = digits.split_at(digits.len() - places as usize);
+        if places == 0 {
+            format!("{sign}{whole}")
+        } else {
+            format!("{sign}{whole}.{fraction}")
+        }
+    }
+
+    /// Purpose: the few fixed facts about the decimal library that the engine leans on: a
+    /// number equals itself written with more zeros, a half built by division is exactly a
+    /// half, a third is held to far more places than money has, and a whole number converts
+    /// to an integer without change.
+    /// Why it matters: these were assumed, not checked, and one assumption of this kind
+    /// (that the library's rounding looked at every digit) was wrong and billed premiums a
+    /// cent low. If a library upgrade changes any of them this fails in the money crate,
+    /// before a single premium is calculated.
+    #[test]
+    fn the_decimal_library_behaves_as_the_engine_assumes() {
+        assert_eq!(dec("1.50").unwrap(), dec("1.5").unwrap());
+        assert_eq!(dec("0").unwrap(), dec("-0.000").unwrap());
+        assert_eq!(Dec::from(5i64) / Dec::from(10i64), dec("0.5").unwrap());
+        assert_eq!(dec("0.1").unwrap() * Dec::from(10i64), Dec::from(1i64));
+        assert_eq!(dec("0.1").unwrap() + dec("0.2").unwrap(), dec("0.3").unwrap());
+        let third = Dec::from(1i64) / Dec::from(3i64);
+        assert_eq!(
+            round_integer(third * dec_i128(10i128.pow(30)), RoundingMode::Down).unwrap(),
+            (10i128.pow(30)) / 3
+        );
+        assert_eq!(dec("-7").unwrap().to_i128().unwrap(), -7);
+        assert_eq!(pow10(8), dec("100000000").unwrap());
+        assert!(dec("2.5").unwrap() > dec("2.4999999999999999999").unwrap());
+    }
+
     proptest! {
-        /// Purpose: for any accrual amount and every rounding mode, the rounded cents plus the
-        /// remainder equal the original amount exactly, and the remainder is less than a cent.
-        /// Why it matters: rounding is where money goes missing. This property is why a rounding
-        /// difference can always be posted to its own account and the ledger still nets to zero.
-        #[test]
         /// Purpose: rounding a decimal to a whole number gives, for every mode and either sign,
         /// what integer arithmetic on the same digits gives: down cuts toward zero, up goes away
         /// from zero whenever anything at all was cut off, and the half modes compare everything
-        /// cut off with a half, so that only an exact half is a tie.
+        /// cut off with a half, so that only an exact half is a tie. The decimal is written out
+        /// from its digits, so the check does not rest on the library's own division.
         /// Why it matters: every premium, tax amount and accrual passes through this one function.
         /// The decimal library decides from the first dropped digit alone, which made 23.9851
         /// round to 23.98 and billed about one premium in twenty a cent low.
         #[test]
         fn rounding_to_a_whole_number_looks_at_everything_it_drops(units in -1_000_000_000_000i128..1_000_000_000_000i128, places in 1u32..9) {
             let scale = 10i128.pow(places);
-            let d = dec_i128(units) / dec_i128(scale);
+            let d = dec(&text(units, places)).unwrap();
+            prop_assert_eq!(d, dec_i128(units) / dec_i128(scale));
             let cut = units / scale;
             let rest = (units % scale).abs();
             let step = if units < 0 { -1 } else { 1 };
@@ -520,6 +555,67 @@ mod tests {
             prop_assert_eq!(round_integer(d, RoundingMode::HalfEven).unwrap(), expect(rest * 2 > scale || (rest * 2 == scale && cut % 2 != 0)));
         }
 
+        /// Purpose: adding, subtracting, multiplying and comparing two decimals gives exactly
+        /// what integer arithmetic on their digits gives, and dividing them gives the true
+        /// quotient to at least twelve places, for any pair of amounts and rates of the sizes
+        /// the engine handles.
+        /// Why it matters: the engine treats decimal arithmetic as exact and rounds once at the
+        /// end. That is only sound if the library really is exact for sums and products and
+        /// carries division far past the last place anything is rounded to. This is the check
+        /// of the library against arithmetic done a different way, which the suite lacked when
+        /// the rounding fault got through.
+        #[test]
+        fn decimal_arithmetic_agrees_with_integer_arithmetic(
+            a in -1_000_000_000_000i128..1_000_000_000_000i128,
+            b in -1_000_000_000_000i128..1_000_000_000_000i128,
+            p in 0u32..7,
+            q in 0u32..7,
+        ) {
+            let (x, y) = (dec(&text(a, p)).unwrap(), dec(&text(b, q)).unwrap());
+            let places = p.max(q);
+            let (a_common, b_common) = (a * 10i128.pow(places - p), b * 10i128.pow(places - q));
+            prop_assert_eq!(x + y, dec(&text(a_common + b_common, places)).unwrap());
+            prop_assert_eq!(x - y, dec(&text(a_common - b_common, places)).unwrap());
+            prop_assert_eq!(x * y, dec(&text(a * b, p + q)).unwrap());
+            prop_assert_eq!(x.partial_cmp(&y), a_common.partial_cmp(&b_common));
+            prop_assert_eq!(x == y, a_common == b_common);
+            if b != 0 {
+                // (a / 10^p) / (b / 10^q), carried to twelve places and cut, both ways.
+                let exact = (a * 10i128.pow(q) * 10i128.pow(12)) / (b * 10i128.pow(p));
+                prop_assert_eq!(round_integer((x / y) * dec_i128(10i128.pow(12)), RoundingMode::Down).unwrap(), exact);
+            }
+        }
+
+        /// Purpose: a chain of factors multiplied together, as a premium is (rate, sum insured,
+        /// loadings, discounts, frequency factor), is exact while it fits in an integer, and
+        /// gives the same amount of money in whichever order the factors are taken.
+        /// Why it matters: a premium is a product of half a dozen figures with several decimal
+        /// places each. If the library quietly dropped digits partway through, two paths to the
+        /// same premium (a quote and a bill, say) could differ by a cent.
+        #[test]
+        fn a_chain_of_factors_is_exact_in_any_order(
+            sum in 1i128..100_000_000_000i128,
+            rate in 1i128..10_000_000i128,
+            loading in 1i128..5_000_000i128,
+            discount in 1i128..1_000_000i128,
+            frequency in 1i128..2_000_000i128,
+        ) {
+            let factors = [dec(&text(sum, 2)).unwrap(), dec(&text(rate, 6)).unwrap(), dec(&text(loading, 6)).unwrap(), dec(&text(discount, 6)).unwrap(), dec(&text(frequency, 6)).unwrap()];
+            let forward = factors.iter().fold(Dec::from(1i64), |acc, f| acc * *f);
+            let backward = factors.iter().rev().fold(Dec::from(1i64), |acc, f| acc * *f);
+            prop_assert_eq!(forward, backward);
+            // sum * rate * loading fits an integer; check those three exactly.
+            prop_assert_eq!(factors[0] * factors[1] * factors[2], dec(&text(sum * rate * loading, 14)).unwrap());
+            for mode in [RoundingMode::HalfUp, RoundingMode::HalfEven, RoundingMode::Down, RoundingMode::Up] {
+                prop_assert_eq!(round_to_money(forward, Currency::NZD, mode).unwrap(), round_to_money(backward, Currency::NZD, mode).unwrap());
+            }
+        }
+
+        /// Purpose: for any accrual amount and every rounding mode, the rounded cents plus the
+        /// remainder equal the original amount exactly, and the remainder is less than a cent.
+        /// Why it matters: rounding is where money goes missing. This property is why a rounding
+        /// difference can always be posted to its own account and the ledger still nets to zero.
+        #[test]
         fn round_to_money_remainder_is_exact(fine in -10_000_000_000_000i128..10_000_000_000_000i128) {
             let a = AccrualAmount::new(fine, Currency::NZD);
             for mode in [RoundingMode::HalfUp, RoundingMode::HalfEven, RoundingMode::Down, RoundingMode::Up] {

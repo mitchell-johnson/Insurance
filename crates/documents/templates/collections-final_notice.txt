@@ -1,0 +1,11 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+This is our final notice ({{reference}}). Your premium is still unpaid.{{#each policies}}
+Policy: {{this}}{{/each}}
+
+If we do not receive payment, your cover will end and you will not be covered for any claim. You may not be able to get the same cover again. Please pay now, or call us today if you need help.
+
+Yours sincerely,
+Customer Care

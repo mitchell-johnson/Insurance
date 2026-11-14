@@ -1259,3 +1259,63 @@ async fn the_run_loop_reports_parked_and_failed_cycles_and_carries_on() {
     assert!(cycles > 1, "carried on after a failed cycle");
     assert!(failed_passes > 0 && failed_sweeps > 0, "a cycle that cannot reach the module is reported");
 }
+
+/// Purpose: a joint first-event cover is underwritten life by life: each life has its own
+/// decision, a loading on one life stays on that life's part of the one cover, and the policy
+/// is issued only once both lives are settled. In the real core the cover holds a layer per
+/// life on that life's own terms and reports both lives as sharing it.
+/// Why it matters: a joint cover pays once for the first event, but each person is rated on
+/// their own health. A loading spread over both lives would overcharge the healthy partner;
+/// one dropped would undercharge the risk; and a policy issued before the second life is
+/// decided would cover a person nobody had underwritten (JNT-001).
+#[tokio::test]
+async fn a_joint_cover_carries_each_lifes_own_terms() {
+    let b = bench(TakesAll::default());
+    let joint = include_str!("../../../products/term_life.star")
+        .replace("version = 1,", "version = 2,")
+        .replace("code = \"life\",", "code = \"life\",\n            joint_first_event = True,");
+    let hash = {
+        let mut cluster = b.ledger.cluster.lock().unwrap();
+        let product = ic_product::loader::load_product("term_life.star", &joint).unwrap();
+        cluster
+            .activate_everywhere(ic_core::Command::ActivateProduct { product: Box::new(product) })
+            .unwrap();
+        let held = cluster.state(0).catalog.product_on("term-life", start()).unwrap();
+        assert!(held.cover("life").unwrap().joint_first_event);
+        held.content_hash.clone()
+    };
+    let policy = b.module.with(|w| {
+        let mut open = w.open_command(
+            "J1",
+            &["L1", "L2"],
+            &[("L1", "life", "life", 400_000_00), ("L2", "life", "life", 400_000_00)],
+            false,
+        );
+        open.quote.product_hash = hash;
+        open.group = ic_core::GroupId::from("grp-J1");
+        let policy = open.policy.clone();
+        w.ok("new-business", Command::OpenProposal(Box::new(open)));
+        w.disclose("J1", "L1", &clean());
+        policy
+    });
+    b.pass().await;
+    assert_eq!(b.status("J1"), ProposalStatus::Open, "waits for the second life");
+    b.module.with(|w| w.disclose("J1", "L2", &yes("smoked_last_12_months")));
+    b.pass().await;
+    b.module.with(|w| w.respond("J1", "L2", ic_underwriting::command::OfferResponse::Accept));
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("J1"), ProposalStatus::Issued { .. }), "{:?}", b.status("J1"));
+
+    let cluster = b.ledger.cluster.lock().unwrap();
+    let state = cluster.state(0);
+    let layers = &state.policies[&policy].covers["life"].layers;
+    let terms: Vec<(String, Vec<String>)> = layers
+        .iter()
+        .map(|l| (l.life.to_string(), l.loadings.iter().map(|x| x.as_str().to_string()).collect()))
+        .collect();
+    assert_eq!(terms, vec![("L1".to_string(), vec![]), ("L2".to_string(), vec!["0.50".to_string()])]);
+    let facts = ic_core::cover_facts(state, &policy.0, "life", Some("L2"), start()).unwrap();
+    assert_eq!(facts.joint_lives, vec!["L1".to_string(), "L2".to_string()]);
+    assert!(cluster.reconcile().is_empty());
+}
