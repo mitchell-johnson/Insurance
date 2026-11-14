@@ -263,6 +263,10 @@ section.gate h2 { font-size: var(--t-xl); border: 0; padding: 0; margin: 0 0 var
 h2.group { font-size: var(--t-xs); font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin: 0 0 var(--s3); }
 
 /* Lists of plain statements, as on the status page. */
+fieldset { border: 1px solid var(--line); border-radius: var(--r-s); padding: var(--s3) var(--s4); margin: var(--s4) 0; min-width: 0; }
+legend { font-weight: 600; padding: 0 var(--s2); }
+.choices { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s5); }
+.choices label { display: inline-flex; gap: var(--s2); align-items: center; font-weight: 400; }
 ul.checks { list-style: none; padding: 0; margin: 0; }
 ul.checks li { display: flex; gap: var(--s3); align-items: center; padding: var(--s3) 0; border-bottom: 1px solid var(--line); }
 ul.checks li:last-child { border-bottom: 0; }

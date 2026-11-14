@@ -103,6 +103,74 @@ async fn the_master_is_asked_about_the_person_signed_in() {
     assert_eq!(header(&seen[3].2, "x-ic-purpose"), Some("subject_access"));
 }
 
+/// Purpose: what a trained member of staff asks about markers goes to the master as staff, under the purpose its policy keeps for
+/// vulnerability support, with the member of staff as the actor and no party header; a marker change carries its idempotency key.
+/// Why it matters: the master shows a marker's kind and takes a change to it only for that purpose and a staff caller. Sent as the
+/// portal's self-service it would be refused, and sent with the customer as actor the master's record of who changed it would be wrong.
+#[tokio::test]
+async fn the_master_is_asked_about_markers_as_the_trained_person() {
+    use ic_channels::customers::Care;
+    let (master, seen) = master().await;
+    let staff = PartyId("hcs-1".into());
+    let body = json!({ "command": "record", "reason": "remove at review rv-1", "facts": [{ "field": "vulnerability", "value": false }] });
+    for call in [
+        Care::Reviews,
+        Care::Routing(PartyId("party-1".into())),
+        Care::Marker {
+            party: PartyId("party-1".into()),
+            key: "k9".into(),
+            body,
+        },
+        Care::Dismiss("rv/1".into()),
+    ] {
+        assert_eq!(master.care(&staff, call).await.unwrap().0, 200);
+    }
+    let seen = seen.lock().unwrap().clone();
+    let routes: Vec<_> = seen.iter().map(|(m, p, _)| format!("{m} {p}")).collect();
+    assert_eq!(
+        routes,
+        [
+            "GET /v1/reviews",
+            "GET /v1/parties/party-1/routing",
+            "POST /v1/parties/party-1/commands",
+            "POST /v1/reviews/rv1/dismiss"
+        ]
+    );
+    for (_, _, headers) in seen.iter() {
+        assert_eq!(
+            (
+                header(headers, "x-ic-caller"),
+                header(headers, "x-ic-purpose"),
+                header(headers, "x-ic-actor"),
+                header(headers, "x-ic-party")
+            ),
+            (Some("staff"), Some("vulnerability_support"), Some("hcs-1"), None)
+        );
+    }
+    assert_eq!(header(&seen[2].2, "idempotency-key"), Some("k9"));
+
+    // Whether a caller may be told about someone: asked as staff too, for the act `view`.
+    let (master, seen) = self::master().await;
+    assert_eq!(
+        master
+            .speaks_for(&staff, &PartyId("party-1".into()), &PartyId("party/2".into()))
+            .await
+            .unwrap()
+            .0,
+        200
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].1, "/v1/parties/party-1/authority?actor=party2&act=view");
+    assert_eq!(
+        (
+            header(&seen[0].2, "x-ic-caller"),
+            header(&seen[0].2, "x-ic-purpose"),
+            header(&seen[0].2, "x-ic-actor")
+        ),
+        (Some("staff"), Some("caller_check"), Some("hcs-1"))
+    );
+}
+
 /// Purpose: a party ID cannot steer the request elsewhere on the master; a 503 is an error to retry; a body that is not JSON is
 /// read as null with its status; an unreachable master is an error; and the portal's own check lets through only the two commands
 /// a person sends about themselves; and a request goes to a person first when the master says so or cannot say.

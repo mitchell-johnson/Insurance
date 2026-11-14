@@ -42,6 +42,116 @@ pub trait Master: Send + Sync {
     /// Where the person's own hold on money going out stands:
     /// `{held, placed_at, removal}`.
     fn spending_hold(&self, party: &PartyId) -> Asked<'_>;
+    /// A trained member of staff's work on vulnerability markers. The
+    /// master is asked as `staff` with that person as the actor and the
+    /// purpose `vulnerability_support`, and decides by its own policy.
+    fn care(&self, staff: &PartyId, call: Care) -> Asked<'_>;
+    /// Whether `caller` holds an authority to be told about `party`'s
+    /// affairs (an attorney, a guardian, a written authority that covers
+    /// `view`): the master's `allow`, `refuse` or `route`. Asked as `staff`
+    /// for the member of staff who took the call, and logged there.
+    fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_>;
+}
+
+/// What a member of staff may do with someone who has called about a
+/// policy, from who owns it and the master's answers about the caller for
+/// each owner. An owner is spoken to. Someone else is spoken to only with
+/// an authority from every owner, since what is said about a joint policy
+/// is said about each of them. Where the master says a person must decide
+/// (capacity in question), the call is referred. Anything else, a caller
+/// nobody identified, and a master that could not answer are all refused
+/// alike, so that the refusal itself tells the caller nothing.
+pub fn caller_outcome(owner: bool, answers: &[Option<Result<Answered, String>>]) -> &'static str {
+    if owner {
+        return "discuss";
+    }
+    let decision = |a: &Option<Result<Answered, String>>| match a {
+        Some(Ok((200, body))) => body["decision"].as_str().unwrap_or("refuse").to_string(),
+        _ => "refuse".to_string(),
+    };
+    let decisions: Vec<String> = answers.iter().map(decision).collect();
+    if decisions.is_empty() || decisions.iter().any(|d| d != "allow" && d != "route") {
+        "refuse"
+    } else if decisions.iter().any(|d| d == "route") {
+        "refer"
+    } else {
+        "discuss"
+    }
+}
+
+/// What a trained member of staff asks of the master about markers.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Care {
+    /// The open prompts to consider or review a marker.
+    Reviews,
+    /// How to serve one person, with the marker's kind.
+    Routing(PartyId),
+    /// Set, change or remove a person's marker.
+    Marker { party: PartyId, key: String, body: Value },
+    /// Close a prompt once it is decided.
+    Dismiss(String),
+}
+
+/// The kinds a marker may name and what may be done differently, as the
+/// master lists them. They are offered on the review screen; the master
+/// checks what is sent, so a list that has fallen behind refuses nothing
+/// the master would take and lets nothing through that it would not.
+pub const MARKER_KINDS: [&str; 7] = [
+    "health",
+    "life_event",
+    "bereavement",
+    "resilience",
+    "capability",
+    "financial_abuse_risk",
+    "other",
+];
+/// See [`MARKER_KINDS`].
+pub const ADJUSTMENTS: [&str; 9] = [
+    "more_time",
+    "plain_language",
+    "large_print",
+    "speak_to_trained_person",
+    "pause_before_large_withdrawal",
+    "no_phone_calls",
+    "support_person_present",
+    "written_follow_up",
+    "check_understanding",
+];
+
+/// The outcomes of reviewing a marker.
+pub const OUTCOMES: [&str; 4] = ["renew", "change", "remove", "no_marker"];
+
+/// The master's command for a review's outcome, or `None` where the
+/// outcome changes nothing on the person's record (`no_marker`: a prompt
+/// looked at, with no marker needed). A marker is a kind, a review date
+/// and adjustments from the master's fixed lists; it has no free text, and
+/// the master checks the lists. The reason recorded is the outcome and the
+/// prompt, never anything about the person.
+pub fn marker_command(review: &str, decision: &Value) -> Result<Option<Value>, String> {
+    let outcome = decision["outcome"]
+        .as_str()
+        .filter(|o| OUTCOMES.contains(o))
+        .ok_or("the outcome is renew, change, remove or no_marker")?;
+    let reason = format!("{outcome} at review {review}");
+    let value = match outcome {
+        "no_marker" => return Ok(None),
+        "remove" => Value::Bool(false),
+        _ => {
+            let kind = decision["kind"].as_str().filter(|k| !k.is_empty()).ok_or("a marker has a kind")?;
+            let review_on = decision["review_on"]
+                .as_str()
+                .filter(|d| d.parse::<chrono::NaiveDate>().is_ok())
+                .ok_or("a marker has the date it is next reviewed")?;
+            let adjustments = decision["adjustments"]
+                .as_array()
+                .filter(|a| a.iter().all(Value::is_string))
+                .ok_or("a marker lists its adjustments")?;
+            serde_json::json!({ "kind": kind, "review_on": review_on, "adjustments": adjustments })
+        }
+    };
+    Ok(Some(
+        serde_json::json!({ "command": "record", "reason": reason, "facts": [{ "field": "vulnerability", "value": value }] }),
+    ))
 }
 
 /// Whether a request goes to a person first, from the master's routing
@@ -85,15 +195,34 @@ impl Hosted {
         extra: Vec<(&'static str, String)>,
         body: Option<Value>,
     ) -> Result<Answered, String> {
+        self.call_as("portal", Some(party), party, method, path, purpose, extra, body).await
+    }
+
+    /// One call to the master in the role `caller`, for `actor`, about
+    /// themselves (`acting`) or as staff.
+    #[allow(clippy::too_many_arguments)]
+    async fn call_as(
+        &self,
+        caller: &str,
+        acting: Option<&PartyId>,
+        actor: &PartyId,
+        method: reqwest::Method,
+        path: String,
+        purpose: &str,
+        extra: Vec<(&'static str, String)>,
+        body: Option<Value>,
+    ) -> Result<Answered, String> {
         let token = self.credential.token(&self.scope).await.map_err(|e| e.to_string())?;
         let mut request = self
             .http
             .request(method, format!("{}{path}", self.base.trim_end_matches('/')))
             .bearer_auth(token)
-            .header("x-ic-caller", "portal")
+            .header("x-ic-caller", caller)
             .header("x-ic-purpose", purpose)
-            .header("x-ic-party", &party.0)
-            .header("x-ic-actor", &party.0);
+            .header("x-ic-actor", &actor.0);
+        if let Some(party) = acting {
+            request = request.header("x-ic-party", &party.0);
+        }
         for (name, value) in extra {
             request = request.header(name, value);
         }
@@ -192,6 +321,40 @@ impl Master for Hosted {
                 None,
             )
             .await
+        })
+    }
+
+    fn care(&self, staff: &PartyId, call: Care) -> Asked<'_> {
+        let staff = staff.clone();
+        Box::pin(async move {
+            let (method, path, extra, body) = match call {
+                Care::Reviews => (reqwest::Method::GET, "/v1/reviews".to_string(), vec![], None),
+                Care::Routing(party) => (reqwest::Method::GET, format!("/v1/parties/{}/routing", encode(&party)), vec![], None),
+                Care::Marker { party, key, body } => (
+                    reqwest::Method::POST,
+                    format!("/v1/parties/{}/commands", encode(&party)),
+                    vec![("idempotency-key", key)],
+                    Some(body),
+                ),
+                Care::Dismiss(review) => (
+                    reqwest::Method::POST,
+                    format!("/v1/reviews/{}/dismiss", encode(&PartyId::from(review.as_str()))),
+                    vec![],
+                    None,
+                ),
+            };
+            self.call_as("staff", None, &staff, method, path, "vulnerability_support", extra, body).await
+        })
+    }
+
+    fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_> {
+        let (staff, path) = (
+            staff.clone(),
+            format!("/v1/parties/{}/authority?actor={}&act=view", encode(party), encode(caller)),
+        );
+        Box::pin(async move {
+            self.call_as("staff", None, &staff, reqwest::Method::GET, path, "caller_check", vec![], None)
+                .await
         })
     }
 }

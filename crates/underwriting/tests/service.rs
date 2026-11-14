@@ -112,7 +112,8 @@ fn settings_have_defaults_and_bad_ones_are_refused_by_name() {
 /// ledger: commands as JSON through Raft, the reinsurance module's capacity question, the
 /// core's reply with the layers it wrote. A group excess answer for a case group administration
 /// does not know is refused by that module and parked with its reason. The channel module
-/// takes the proposal's progress rows under this module's name. The daily sweep runs
+/// takes the proposal's progress rows under this module's name. The commission module takes
+/// an adviser's new business advice once and refuses it by code otherwise. The daily sweep runs
 /// once for the day. With no node to reach the pass stops as unavailable. The driver reads
 /// collections' list of lapsed policies through the core in either shape it may come in. The
 /// process itself refuses to start without its settings, runs its cycles and stops when told; and the shipped
@@ -147,6 +148,8 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
         ic_reinsurance::host::module_spec().unwrap(),
         ic_group::module_spec().unwrap(),
         ic_channels::query::module_spec().unwrap(),
+        ic_distribution::host::module_spec().unwrap(),
+        ic_documents::module::module_spec().unwrap(),
         ic_raft::module::ModuleSpec::new("collections", || Box::new(Collections::default())).unwrap(),
     ];
     let node = server::start_with(settings, modules).await.unwrap();
@@ -289,6 +292,27 @@ async fn the_driver_carries_a_proposal_to_a_policy_on_a_real_node() {
     assert!(pass.published >= 1 && pass.progress_refused == 0, "{pass:?}");
     // Letters to the customer and adviser have no receiver yet.
     assert!(pass.parked.iter().any(|(_, why)| why == "correspondence is not connected to underwriting"));
+
+    // The hosted commission module reads the advice in the shape the driver sends: taken once,
+    // then refused as already advised, which the driver counts as delivered; advice it cannot
+    // use is refused by its code.
+    let advice = |premiums: serde_json::Value| {
+        serde_json::json!({"advise_new_business": {"policy": "POL-ADVISED", "advice": {
+            "adviser": "adv-1", "provider": "fap-1", "option": "upfront", "replacement": false, "premiums": premiums}}})
+    };
+    let advise = |key: &'static str, command| ic_underwriting::notices::Letters::advise(&cluster, key, clock(), command);
+    assert_eq!(advise("uw-nb:A1", advice(serde_json::json!({"life": 900_00}))).await, Ok(Ok(())));
+    let again = advise("uw-nb:A2", advice(serde_json::json!({"life": 900_00}))).await.unwrap().unwrap_err();
+    assert_eq!(again.code, "already_advised");
+    let empty = advise("uw-nb:A3", advice(serde_json::json!({}))).await.unwrap().unwrap_err();
+    assert_eq!(empty.code, "invalid_new_business");
+
+    // The hosted documents module reads a letter request and answers by its own rules.
+    let letter = serde_json::json!({"request_letter": {"request": "uw:999", "kind": "no_such_kind",
+        "recipient": {"party": {"party": "PTY-L1"}}, "policy": null, "subject": "P1", "life": "L1",
+        "reasons": [], "detail": {}, "business_date": clock().date_naive()}});
+    let answered = ic_underwriting::notices::Letters::request(&cluster, "uw:999", clock(), letter).await;
+    assert!(matches!(answered, Ok(Err(_))), "{answered:?}");
 
     // The same day again: no sweep, nothing to carry.
     let (pass, sweep) = carrier.cycle(&mut swept, config.sweep_page).await;

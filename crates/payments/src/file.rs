@@ -32,6 +32,9 @@ pub struct BatchItem {
     pub name: String,
     pub number: String,
     pub amount_minor: i64,
+    /// Where an account abroad is, and what it is paid in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreign: Option<crate::model::ForeignAccount>,
 }
 
 /// One submission as the bank receives it.
@@ -93,6 +96,16 @@ impl Batch {
         );
         for i in &self.items {
             out.push_str(&format!("D|{}|{}|{}|{}\n", field(&i.item), field(&i.name), field(&i.number), i.amount_minor));
+            if let Some(f) = &i.foreign {
+                out.push_str(&format!(
+                    "F|{}|{}|{}|{}|{}\n",
+                    field(&i.item),
+                    field(&f.bic),
+                    field(&f.country),
+                    field(&f.currency),
+                    field(&f.address)
+                ));
+            }
         }
         out.push_str(&format!("T|{}|{}\n", self.items.len(), self.total_minor()));
         out
@@ -150,6 +163,7 @@ impl PaymentsState {
                     name: account.name.clone(),
                     number: account.number.clone(),
                     amount_minor: item.new.amount_minor,
+                    foreign: item.foreign.clone(),
                 })
             })
             .collect::<Option<Vec<_>>>()?;
@@ -199,6 +213,54 @@ pub enum BankMessage {
         closing_minor: i64,
         lines: Vec<StatementLine>,
     },
+    /// The bank's answer to a recall: it has asked the receiving bank and
+    /// the money will come back (`accepted`), or it will not.
+    RecallAnswer {
+        recall: Id,
+        accepted: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
+/// A request that the bank recall a payment it settled into the wrong
+/// account (`recall.rs`). The recall's ID is the case the bank answers
+/// under, and the reference money coming back is expected to quote.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Recall {
+    pub id: Id,
+    pub channel: Id,
+    pub account: Id,
+    /// The submission the payment went in: the batch the bank knows.
+    pub submission: Id,
+    /// The payment's end-to-end reference.
+    pub item: Id,
+    /// What the payment was for, in minor units, and what is asked back.
+    pub amount_minor: i64,
+    pub currency: Currency,
+    pub settled_on: NaiveDate,
+    /// The ISO 20022 cancellation reason code: `AC03`, wrong account.
+    pub reason: String,
+    #[serde(default, skip_serializing_if = "WireFormat::is_own")]
+    pub format: WireFormat,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ordering: Option<crate::iso20022::OrderingAccount>,
+}
+
+impl Recall {
+    /// What the bank is sent: this system's own JSON, or `camt.055`.
+    pub fn wire(&self) -> Result<String, String> {
+        match self.format {
+            WireFormat::Own => serde_json::to_string(self).map_err(|e| e.to_string()),
+            WireFormat::Iso20022 => {
+                let ordering = self
+                    .ordering
+                    .as_ref()
+                    .ok_or_else(|| format!("account {} has no bank details for ISO 20022", self.account))?;
+                crate::iso20022::recall_document(self, ordering)
+            }
+        }
+    }
 }
 
 impl BankMessage {
@@ -225,6 +287,7 @@ impl BankMessage {
                 closing_minor,
                 lines,
             },
+            BankMessage::RecallAnswer { recall, accepted, reason } => Command::RecordRecallAnswer { recall, accepted, reason },
         }
     }
 }

@@ -548,6 +548,16 @@ impl Feature {
     }
 }
 
+/// A policy's cover and premium suspended at the owner's request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuspensionOption {
+    /// The most months of suspension over the policy's whole life.
+    pub max_months: u32,
+    /// How long the policy must have been in force before the first one.
+    pub min_months_in_force: u32,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProductDefinition {
@@ -565,6 +575,10 @@ pub struct ProductDefinition {
     /// in minor units. Absent: each cover's own limit and nothing more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub event_cap_minor: Option<i64>,
+    /// The owner's right to suspend the whole policy for a time: no
+    /// premium, and no cover for anything that happens meanwhile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover_suspension: Option<SuspensionOption>,
     /// SHA-256 of the Starlark source. Filled by the loader.
     #[serde(default)]
     pub content_hash: String,

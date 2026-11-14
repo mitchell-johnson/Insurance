@@ -342,7 +342,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
         }
     }
 
-    async fn work_outbox(&self, pass: &mut Pass) -> Result<(), String> {
+    async fn work_outbox(&self, config: &Config, pass: &mut Pass) -> Result<(), String> {
         let outbox: BTreeMap<u64, OutboxEntry> = self.ask(json!({"q": "outbox"})).await?;
         for (entry, work) in outbox {
             let outcome = match work.instruction {
@@ -368,6 +368,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     self.core.match_receipt_from(payment, payer_policy).await
                 }
                 Instruction::Notify { to, subject, detail } => self.notifier.notify(to, &subject, &detail).await.map(|()| None),
+                Instruction::Recall { recall } => self.recall(config, *recall).await,
             };
             match outcome {
                 Ok(refused) => {
@@ -383,6 +384,37 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             }
         }
         Ok(())
+    }
+
+    /// Ask the bank to recall a payment, through the channel it went by,
+    /// keeping the request in the vault first. A request the bank refuses,
+    /// or that cannot be written for the channel, is the refusal recorded;
+    /// one whose outcome is unknown is asked again next pass under the same
+    /// ID, which the bank takes once.
+    async fn recall(&self, config: &Config, mut recall: ic_payments::file::Recall) -> Result<Option<String>, String> {
+        let to = self.target(config, &recall.channel)?;
+        (recall.format, recall.ordering) = config.wire(&recall.channel, &recall.account);
+        let wire = match recall.wire() {
+            Ok(wire) => wire,
+            Err(e) => return Ok(Some(e)),
+        };
+        let (name, kind) = match recall.format {
+            WireFormat::Own => ("request.json", "application/json"),
+            WireFormat::Iso20022 => ("request.xml", "application/xml"),
+        };
+        match self
+            .vault
+            .put_new(&format!("payments/recalls/{}/{name}", recall.id), kind, wire.into_bytes())
+            .await
+        {
+            Ok(()) | Err(AzureError::AlreadyExists(_)) => {}
+            Err(e) => return Err(format!("the evidence vault refused recall {}: {e}", recall.id)),
+        }
+        match self.bank.recall(&to, &recall).await {
+            Ok(()) => Ok(None),
+            Err(ChannelError::Refused(reason)) => Ok(Some(reason)),
+            Err(e) => Err(e.to_string()),
+        }
     }
 
     /// One pass. Never fails: what could not be done is in the report.
@@ -406,7 +438,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
             pass.problems.push(e);
         }
         self.collect_messages(&config, &mut pass).await;
-        if let Err(e) = self.work_outbox(&mut pass).await {
+        if let Err(e) = self.work_outbox(&config, &mut pass).await {
             pass.problems.push(e);
         }
         if let Err(e) = self.check_holds(&config, &mut pass).await {
@@ -556,6 +588,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     name: config.rules.drill_account.name.clone(),
                     number: config.rules.drill_account.number.clone(),
                     amount_minor: config.rules.drill_amount_minor,
+                    foreign: None,
                 }],
             };
             batch.ordering = config.wire(channel, &batch.account).1;

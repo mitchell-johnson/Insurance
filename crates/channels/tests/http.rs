@@ -679,6 +679,74 @@ async fn the_customer_app_reads_syncs_and_requests() {
     assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", other).await.0, StatusCode::NOT_FOUND);
 }
 
+/// Purpose: a payment the customer asks for is refused unless their enrolled device signed exactly that payment, and a refused one
+/// leaves no request behind; signed over a fresh challenge it is accepted; and a signature made for another amount is not enough.
+/// Why it matters: with no signal the app shows what the device holds but cannot get a challenge, so it cannot sign. A payment keyed
+/// in offline and sent later unsigned, or one whose amount changed after signing, must never reach the payments module as the
+/// customer's instruction.
+#[tokio::test]
+async fn a_payment_is_taken_only_signed_on_the_customers_device() {
+    use ic_channels::http::request_action;
+    let portal = portal();
+    let policy = portal.retail.clone();
+    let payload = json!({ "amount_minor": 120_00, "currency": "NZD" });
+    let payment = |id: &str| json!({ "id": id, "policy": policy, "kind": "make_payment", "module": "payments", "payload": payload });
+    let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/requests", payment("pay-1")).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::UNAUTHORIZED, Some("step_up_required")),
+        "{problem}"
+    );
+    assert_eq!(portal.get("sub-kiri", "/app/v1/requests").await.1, json!([]), "a refused payment was kept");
+
+    // Connected: the device asks for a challenge over this payment and signs it.
+    let sign = |action: Value| {
+        let portal = &portal;
+        async move {
+            let ask = json!({ "action": action }).to_string();
+            let headers = portal.proof(&portal.phone, "POST", "/app/v1/challenges", &ask);
+            let (status, challenge) = portal
+                .send("POST", "/app/v1/challenges", &headers, Some(serde_json::from_str(&ask).unwrap()))
+                .await;
+            assert_eq!(status, StatusCode::OK, "{challenge}");
+            let message = format!(
+                "{}\n{}\n{}",
+                challenge["challenge"].as_str().unwrap(),
+                challenge["nonce"].as_str().unwrap(),
+                challenge["action_hash"].as_str().unwrap()
+            );
+            json!({ "challenge": challenge["challenge"], "signature": portal.phone.sign(message.as_bytes()) })
+        }
+    };
+    // Signed for a smaller amount, then sent for this one.
+    let other = sign(request_action(
+        "pay-1",
+        Some(&policy),
+        "make_payment",
+        &json!({ "amount_minor": 1_00, "currency": "NZD" }),
+    ))
+    .await;
+    let mut altered = payment("pay-1");
+    altered["signed"] = other;
+    let (status, problem) = portal.write("POST", "sub-kiri", "/app/v1/requests", altered).await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::UNAUTHORIZED, Some("step_up_failed")),
+        "{problem}"
+    );
+
+    let mut signed = payment("pay-1");
+    signed["signed"] = sign(request_action("pay-1", Some(&policy), "make_payment", &payload)).await;
+    let (status, done) = portal.write("POST", "sub-kiri", "/app/v1/requests", signed).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{done}");
+    let mine = portal.get("sub-kiri", "/app/v1/requests").await.1;
+    assert_eq!((mine.as_array().unwrap().len(), mine[0]["status"].as_str()), (1, Some("pending")), "{mine}");
+
+    // A change that moves no money still needs no signature from the owner.
+    let plain = json!({ "id": "r-plain", "policy": policy, "kind": "decline_indexation", "module": "policy-servicing", "payload": {} });
+    assert_eq!(portal.write("POST", "sub-kiri", "/app/v1/requests", plain).await.0, StatusCode::ACCEPTED);
+}
+
 /// Purpose: the customer appoints an adviser, the adviser prepares a change, and the customer approves it only with a signature from their enrolled device over exactly that approval. Once approved, the request is routed by the customer master's answer for the customer, not the adviser.
 /// Why it matters: this is transaction signing end to end over HTTP; an approval without the device's signature, or with a signature for something else, must not release the adviser's request.
 #[tokio::test]
@@ -2461,6 +2529,13 @@ async fn serve_for_a_browser() {
         "advance_recovered_minor": 0, "payment_held": null, "payments": [], "hash": "h" }))
     .unwrap();
     portal.commission.0.lock().unwrap().0.statements.insert("fap-1.1".into(), fap);
+    // A marker that has reached its review date, and a prompt to consider one.
+    *portal.master.reviews.lock().unwrap() = vec![
+        ("rv-1".to_string(), KIRI.to_string(), "review_due".to_string()),
+        ("rv-2".to_string(), "party-7".to_string(), "death_of_partner".to_string()),
+    ];
+    let marker = json!({ "kind": "bereavement", "review_on": "2027-11-01", "adjustments": ["more_time", "plain_language"] });
+    portal.master.markers.lock().unwrap().insert(KIRI.to_string(), marker);
     // Kiri appoints the adviser, so the adviser's book has a policy in it.
     let appoint = format!("/app/v1/policies/{}/advisers", portal.retail);
     let (status, _) = portal
@@ -3129,13 +3204,235 @@ async fn staff_who_open_a_policy_see_how_to_help_and_only_a_specialist_sees_why(
 
     portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
     let officer = open("sub-sue").await.1;
-    assert_eq!(officer["approach"], json!({ "adjustments": ["plain_language"], "review_on": null }));
+    assert_eq!(
+        officer["approach"],
+        json!({ "adjustments": ["plain_language", "more_time"], "review_on": null })
+    );
     let specialist = open("sub-hcs").await.1;
     assert_eq!(specialist["approach"]["kind"], "bereavement");
-    assert_eq!(specialist["approach"]["adjustments"], json!(["plain_language"]));
+    assert_eq!(specialist["approach"]["adjustments"], json!(["plain_language", "more_time"]));
 
     portal.master.down.store(true, Ordering::SeqCst);
     assert_eq!(open("sub-sue").await.1["approach"], json!({ "unavailable": true }));
+}
+
+/// Purpose: a person trained in vulnerability support sees the markers that have reached their review date and the prompts to
+/// consider one, each with how the person is served now; renews, changes or removes a marker, or closes a prompt with none needed;
+/// the master's refusal of a kind outside its list is passed on and leaves the prompt open; and anyone else is told nothing.
+/// Why it matters: a marker nobody reviews either lapses while the person still needs care or stays for years after they stopped
+/// needing it. The review list names people who are vulnerable, so showing it to every officer would spread exactly what the
+/// marker's kind is kept from them for.
+#[tokio::test]
+async fn a_trained_person_reviews_vulnerability_markers() {
+    use ic_channels::customers::Care;
+    let portal = portal();
+    let master = &portal.master;
+    *master.reviews.lock().unwrap() = vec![
+        ("rv-1".to_string(), KIRI.to_string(), "review_due".to_string()),
+        ("rv-2".to_string(), "p-new".to_string(), "death_of_partner".to_string()),
+        ("rv-3".to_string(), "p-dup".to_string(), "duplicate".to_string()),
+    ];
+    master.markers.lock().unwrap().insert(
+        KIRI.to_string(),
+        json!({ "kind": "bereavement", "review_on": "2027-11-01", "adjustments": ["more_time"] }),
+    );
+
+    let (status, problem) = portal.get("sub-sue", "/staff/v1/care/reviews").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert!(master.care.lock().unwrap().is_empty(), "the master was asked for someone untrained");
+
+    let (status, list) = portal.get("sub-hcs", "/staff/v1/care/reviews").await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let rows = list["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 2, "a duplicate to merge is not a marker review: {list}");
+    assert_eq!(
+        rows[0]["marker"],
+        json!({ "kind": "bereavement", "review_on": "2027-11-01", "adjustments": ["more_time"] })
+    );
+    assert_eq!(
+        (rows[1]["party"].as_str(), rows[1]["reason"].as_str(), rows[1]["marker"].is_null()),
+        (Some("p-new"), Some("death_of_partner"), true)
+    );
+
+    let decide = |review: &'static str, body: Value| {
+        let portal = &portal;
+        async move { portal.write("POST", "sub-hcs", &format!("/staff/v1/care/reviews/{review}"), body).await }
+    };
+    // Renewed to a later date: the marker moves and the prompt closes.
+    let renew = json!({ "party": KIRI, "outcome": "renew", "kind": "bereavement", "review_on": "2028-05-01", "adjustments": ["more_time", "plain_language"] });
+    let (status, done) = decide("rv-1", renew).await;
+    assert_eq!((status, done["outcome"].as_str()), (StatusCode::OK, Some("renew")), "{done}");
+    assert_eq!(master.markers.lock().unwrap()[KIRI]["review_on"], "2028-05-01");
+    let sent = master.care.lock().unwrap().iter().rev().find_map(|(who, c)| match c {
+        Care::Marker { body, .. } => Some((who.clone(), body.clone())),
+        _ => None,
+    });
+    let (who, body) = sent.unwrap();
+    assert_eq!(who, "hcs-1", "the master records the trained person, not the portal");
+    assert_eq!(body["reason"], "renew at review rv-1", "the reason says nothing about the person");
+
+    // What is sent must be a whole marker, and an outcome the portal knows.
+    for bad in [
+        json!({ "party": "p-new", "outcome": "change", "review_on": "2028-01-01", "adjustments": [] }),
+        json!({ "party": "p-new", "outcome": "change", "kind": "illness", "review_on": "soon", "adjustments": [] }),
+        json!({ "party": "p-new", "outcome": "change", "kind": "illness", "review_on": "2028-01-01", "adjustments": "more_time" }),
+        json!({ "party": "p-new", "outcome": "forget" }),
+        json!({ "outcome": "remove" }),
+    ] {
+        assert_eq!(decide("rv-2", bad.clone()).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    // The master's own refusal is passed on, and the prompt stays open to decide again.
+    let (status, problem) = decide(
+        "rv-2",
+        json!({ "party": "p-new", "outcome": "change", "kind": "diagnosis", "review_on": "2028-01-01", "adjustments": [] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{problem}");
+    assert_eq!(master.reviews.lock().unwrap().iter().filter(|r| r.0 == "rv-2").count(), 1);
+
+    // A prompt looked at with no marker needed changes nothing on the person.
+    assert_eq!(decide("rv-2", json!({ "party": "p-new", "outcome": "no_marker" })).await.0, StatusCode::OK);
+    assert!(!master.markers.lock().unwrap().contains_key("p-new"));
+    assert_eq!(
+        decide("rv-2", json!({ "party": "p-new", "outcome": "no_marker" })).await.0,
+        StatusCode::NOT_FOUND,
+        "a closed prompt is gone"
+    );
+
+    // Removed: the person is served as anyone else from then on.
+    master
+        .reviews
+        .lock()
+        .unwrap()
+        .push(("rv-4".to_string(), KIRI.to_string(), "review_due".to_string()));
+    assert_eq!(decide("rv-4", json!({ "party": KIRI, "outcome": "remove" })).await.0, StatusCode::OK);
+    assert_eq!(master.markers.lock().unwrap()[KIRI], json!(false));
+    let left = portal.get("sub-hcs", "/staff/v1/care/reviews").await.1;
+    assert_eq!(left["rows"], json!([]));
+    assert_eq!((left["kinds"].as_array().unwrap().len(), left["adjustments"].as_array().unwrap().len()), (7, 9));
+
+    assert_eq!(
+        portal
+            .write("POST", "sub-sue", "/staff/v1/care/reviews/rv-9", json!({ "party": KIRI, "outcome": "remove" }))
+            .await
+            .0,
+        StatusCode::FORBIDDEN
+    );
+    master.down.store(true, Ordering::SeqCst);
+    assert_eq!(portal.get("sub-hcs", "/staff/v1/care/reviews").await.0, StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// Purpose: when someone phones about a policy, the member of staff is told to speak to an owner or to someone holding an authority
+/// from the owner, to refer the call where the master says a person must decide, and otherwise to give one set of words that confirm
+/// nothing, the same for a stranger, a relative with no authority, a caller nobody identified and a master that cannot answer; each
+/// contact is in the access log with who called and the outcome; and staff who cannot open the policy cannot check a caller on it.
+/// Why it matters: a son who phones for his mother's policy details must learn nothing, not even that she has a policy, unless she
+/// gave him authority. Words that differed between "no such policy" and "not allowed" would tell him, and a contact left unrecorded
+/// could not be shown to her or to the regulator later.
+#[tokio::test]
+async fn a_caller_with_no_authority_is_told_nothing_and_the_contact_is_recorded() {
+    let portal = portal();
+    let policy = portal.retail.to_string();
+    let path = format!("/staff/v1/policies/{policy}/caller");
+    let check = |caller: Value| {
+        let (portal, path) = (&portal, path.clone());
+        async move {
+            portal.clock.fetch_add(1, Ordering::SeqCst);
+            portal.write("POST", "sub-sue", &path, json!({ "caller": caller, "case": "case-call" })).await
+        }
+    };
+    let refused = check(json!("party-peter")).await.1;
+    assert_eq!(
+        (refused["outcome"].as_str(), refused["checked"].as_bool()),
+        (Some("refuse"), Some(true)),
+        "{refused}"
+    );
+    let words = refused["say"].as_str().unwrap().to_string();
+    assert!(words.contains("can't confirm whether we hold a policy"), "{words}");
+    assert_eq!(
+        portal.master.asked_for.lock().unwrap()[0],
+        ("sue".to_string(), KIRI.to_string(), "party-peter".to_string())
+    );
+
+    // A caller nobody identified hears the same words, and the master is not asked about no one.
+    for nobody in [Value::Null, json!("  ")] {
+        let unidentified = check(nobody).await.1;
+        assert_eq!(
+            (unidentified["outcome"].as_str(), unidentified["say"].as_str()),
+            (Some("refuse"), Some(words.as_str()))
+        );
+    }
+    assert_eq!(portal.master.asked_for.lock().unwrap().len(), 1);
+
+    // The owner, and someone the owner gave an authority to.
+    let owner = check(json!(KIRI)).await.1;
+    assert_eq!(owner["outcome"], "discuss");
+    assert!(owner["say"].as_str().unwrap().contains("policyholder"));
+    portal
+        .master
+        .authorities
+        .lock()
+        .unwrap()
+        .insert((KIRI.to_string(), "party-attorney".to_string()), "allow");
+    let attorney = check(json!("party-attorney")).await.1;
+    assert_eq!(attorney["outcome"], "discuss");
+    assert!(attorney["say"].as_str().unwrap().contains("authority"));
+    // While capacity is in question the master sends it to a person, and so does the portal.
+    portal
+        .master
+        .authorities
+        .lock()
+        .unwrap()
+        .insert((KIRI.to_string(), "party-attorney".to_string()), "route");
+    let referred = check(json!("party-attorney")).await.1;
+    assert_eq!(referred["outcome"], "refer");
+    assert!(referred["say"].as_str().unwrap().contains("legal team"));
+
+    // A master that cannot answer refuses in the same words, and staff are told it was not checked.
+    portal.master.down.store(true, Ordering::SeqCst);
+    let unknown = check(json!("party-attorney")).await.1;
+    assert_eq!(
+        (unknown["outcome"].as_str(), unknown["say"].as_str(), unknown["checked"].as_bool()),
+        (Some("refuse"), Some(words.as_str()), Some(false))
+    );
+    portal.master.down.store(false, Ordering::SeqCst);
+
+    // Every contact is in the log beside the read of the policy, with who called and what they were told.
+    let me = portal.get("sub-sue", "/staff/v1/me").await.1;
+    let contacts: Vec<&str> = me["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["action"] == "contact.caller_check")
+        .filter_map(|l| l["record"].as_str())
+        .collect();
+    assert_eq!(contacts.len(), 7, "{me}");
+    assert!(
+        contacts.contains(&format!("policy:{policy}/caller/party-peter/refuse").as_str()),
+        "{contacts:?}"
+    );
+    assert!(contacts.contains(&format!("policy:{policy}/caller/unidentified/refuse").as_str()));
+    assert!(contacts.contains(&format!("policy:{policy}/caller/party-attorney/refer").as_str()));
+    assert!(me["recent"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["action"] == "policy.view" && l["purpose"]["reference"] == "case-call"));
+
+    // No reason to open the policy, no check; a reference that is not one is refused; and a policy that is not there is 404.
+    portal.clock.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        portal.write("POST", "sub-sue", &path, json!({ "caller": "party-peter" })).await.0,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(check(json!("../admin")).await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        portal
+            .write("POST", "sub-sue", "/staff/v1/policies/nope/caller", json!({ "case": "case-call" }))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
 }
 
 /// Purpose: a request from a person the customer master routes to a person first is marked so on the request the owning module
@@ -3941,6 +4238,50 @@ async fn the_life_gives_their_own_consents() {
     assert!(shown["old_premium"]["total_minor"].as_i64().is_some_and(|total| total > 0), "{shown}");
     // It is the life's own: the adviser on the policy is told there is no such thing.
     assert_eq!(portal.get("sub-adv", &statement).await.0, StatusCode::NOT_FOUND);
+
+    // A new policy that replaces this one: what the life holds on the old policy is what they lose, and nothing is kept.
+    portal.local.with(|state| {
+        use ic_log::StateMachine;
+        let rows = json!({ "publish_rows": { "rows": [{ "key": "pol-new/underwriting/P4/L1", "policy": "pol-new", "kind": "proposal_life",
+            "subject": KIRI, "sensitive": true, "body": { "proposal": "P4", "life": "L1", "stage": "disclosure", "waiting_on": "applicant",
+                "replacement": { "cover": "life", "sum_insured_minor": 600_000_00i64, "premium_minor": 120_00, "replaced_policy": retail } } }], "remove": [] } });
+        let command: Command = serde_json::from_value(rows).unwrap();
+        let envelope = ic_channels::Envelope { key: "life-row-p4".into(), at: now, actor: module("underwriting"), command };
+        let output = state.apply(9_004, envelope);
+        assert!(output.result.is_ok(), "{:?}", output.result);
+    });
+    let (status, shown) = portal
+        .get("sub-kiri", "/app/v1/proposals/P4/lives/L1/consents/replacement_disclosure/statement")
+        .await;
+    assert_eq!(
+        (status, &shown["replaced_policy"], &shown["kept"]),
+        (StatusCode::OK, &json!(retail), &json!([])),
+        "{shown}"
+    );
+    assert_eq!(shown["lost"][0]["sum_insured_minor"], 500_000_00, "{shown}");
+    assert!(shown["old_premium"]["total_minor"].as_i64().is_some_and(|total| total > 0), "{shown}");
+
+    // A life the customer master says needs more time: underwriting is told when they come to sign, and never why.
+    let asked = |portal: &Portal| {
+        portal
+            .underwriting
+            .log()
+            .iter()
+            .filter(|e| matches!(&e.command, Uw::SetMoreTime { more_time: true, .. }))
+            .count()
+    };
+    assert_eq!(asked(portal), 0, "nobody is marked yet");
+    portal.master.vulnerable.lock().unwrap().push(KIRI.to_string());
+    assert_eq!(portal.get("sub-kiri", &format!("{base}/adviser_access/to-sign")).await.0, StatusCode::OK);
+    let sent = portal
+        .underwriting
+        .log()
+        .into_iter()
+        .rev()
+        .find(|e| matches!(&e.command, Uw::SetMoreTime { .. }))
+        .unwrap();
+    assert_eq!(sent.caller, "underwriting-console");
+    assert!(matches!(&sent.command, Uw::SetMoreTime { proposal, life, more_time: true } if proposal.to_string() == "P3" && life.to_string() == "L1"));
 }
 
 /// Purpose: group administration staff work a scheme from the group console against the group module's own state machine:
@@ -4042,6 +4383,32 @@ async fn the_group_console() {
         StatusCode::BAD_REQUEST
     );
     assert_eq!(portal.write("POST", "sub-gl1", &path("harbour"), trial).await.0, StatusCode::FORBIDDEN);
+
+    // Group administration names a scheme's first administrator, once; after that the employer's own manage the list.
+    let first = |who: &'static str, policy: String, party: &'static str| {
+        let portal = &portal;
+        async move {
+            portal
+                .write("PUT", who, &format!("/staff/v1/group/schemes/{policy}/first-admin"), json!({ "party": party }))
+                .await
+        }
+    };
+    let (status, problem) = first("sub-grp1", portal.scheme.to_string(), "hr-9").await;
+    assert_eq!(
+        (status, problem["title"].as_str()),
+        (StatusCode::CONFLICT, Some("has_administrators")),
+        "{problem}"
+    );
+    assert_eq!(first("sub-grpview", portal.retail.to_string(), "hr-9").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(first("sub-grp1", "pol-nowhere".to_string(), "hr-9").await.1["title"], "unknown_policy");
+    let (status, done) = first("sub-grp1", portal.retail.to_string(), "hr-9").await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    portal
+        .local
+        .with(|state| assert!(state.data.directory.employer_admins[&portal.retail].contains(&ic_core::PartyId::from("hr-9"))));
+    assert_eq!(first("sub-grp1", portal.retail.to_string(), "hr-10").await.0, StatusCode::CONFLICT);
+    // The candidates for a possible match are asked of the group service by scheme and employee.
+    assert_eq!(ask("sub-grp1", "possible_match?scheme=harbour").await.0, StatusCode::BAD_REQUEST);
 }
 
 /// Purpose: a refusal of the portal itself by the group service (its token lacks the `group-admin` role) is the portal's

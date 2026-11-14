@@ -172,7 +172,7 @@ fn bad_products_are_rejected() {
 /// fee, a discount over 100%) that would otherwise surface as wrong premiums in production.
 #[test]
 fn each_product_rule_refuses_the_file_that_breaks_it() {
-    let cases: [(&str, &str, &str); 17] = [
+    let cases: [(&str, &str, &str); 18] = [
         ("max_uses = 3,", "max_uses = 0,", "an insurability option is on a lump sum cover"),
         (
             "events = [\"marriage\", \"birth_or_adoption\", \"mortgage\"]",
@@ -195,6 +195,11 @@ fn each_product_rule_refuses_the_file_that_breaks_it() {
             "reinstatement_evidence_free_days is longer than reinstatement_days",
         ),
         ("version = 1,", "version = 0,", "version of at least 1"),
+        (
+            "version = 1,",
+            "version = 1, cover_suspension = cover_suspension(max_months = 0, min_months_in_force = 12),",
+            "between 1 and 60 months",
+        ),
         ("code = \"term-life\"", "code = \"\"", "needs a code"),
         ("code = \"trauma\"", "code = \"life\"", "duplicate cover code"),
         (

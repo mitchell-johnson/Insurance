@@ -133,15 +133,17 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | AUD-004 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-005 | full | `channels/tests/journeys.rs::a_childs_health_information_becomes_their_own` |
 | AUD-006 | full | `channels/tests/journeys.rs::one_person_in_three_roles_sees_each_slice` |
+| AUD-007 | part | `channels/tests/http.rs::a_payment_is_taken_only_signed_on_the_customers_device`<br>`channels/tests/http.rs::the_customer_app_reads_syncs_and_requests` |
 | AUD-008 | full | `channels/tests/journeys.rs::requests_are_asynchronous_and_owned`<br>`channels/tests/journeys.rs::replicas_agree_and_retries_are_safe`<br>`channels/tests/http.rs::a_retry_after_a_dropped_connection_is_one_request_and_the_outcome_follows` |
 | AUD-009 | full | `channels/tests/identity.rs::a_lost_phone_is_recovered_by_fresh_verification` |
-| AUD-010 | part | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy` |
+| AUD-010 | full | `readmodel/src/scope.rs::no_relationship_no_access_and_stale_data_hides_sensitive_rows`<br>`api/tests/api.rs::each_audience_sees_its_own_slice_of_the_policy`<br>`channels/tests/journeys.rs::someone_who_only_pays_the_premium_sees_nothing` |
+| AUD-012 | full | `channels/tests/http.rs::a_caller_with_no_authority_is_told_nothing_and_the_contact_is_recorded` |
 | AUD-011 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in`<br>`channels/tests/http.rs::a_relative_is_let_in_to_look_and_no_more` |
 | AUD-013 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 | AUD-014 | full | `documents/tests/channels.rs::sms_carries_a_pointer_and_asks_for_a_report` |
 | AUD-015 | full | `channels/tests/feed.rs::snapshot_then_changes`<br>`channels/tests/journeys.rs::a_receipt_moves_the_billing_row_while_the_app_is_open`<br>`channels/tests/http.rs::a_write_answers_with_the_writers_own_version_and_nobody_elses` |
 | AUD-016 | full | `channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
-| AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload` |
+| AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload`<br>`channels/tests/journeys.rs::what_the_channel_emits_carries_no_personal_or_clinical_data` |
 | AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point` |
 | AUD-019 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 
@@ -217,12 +219,13 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-019 | full | `claims/tests/suite/book.rs::reviews_fall_due_by_date_and_never_stop_the_benefit` |
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
+| CLM-022 | full | `payments/tests/recall.rs::a_refund_paid_to_the_wrong_account_is_recalled_owed_again_and_chased`<br>`payments/tests/recall.rs::a_recalled_payment_coming_back_is_recovered_not_retried`<br>`payments-service/tests/pump.rs::a_misdirected_refund_is_recalled_through_the_bank`<br>`sim/tests/payments.rs::a_payment_to_the_wrong_person_is_owed_again_and_owed_back` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
 | CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
 | CLM-026 | full | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
-| CLM-028 | part | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid` |
+| CLM-028 | full | `claims/tests/suite/book.rs::a_payee_is_verified_before_anything_is_paid`<br>`payments/tests/abroad.rs::an_account_abroad_is_checked_before_it_is_taken`<br>`payments/tests/abroad.rs::a_payment_abroad_goes_over_the_cross_border_channel` |
 | CLM-029 | full | `claims/tests/suite/book.rs::a_death_benefit_goes_to_the_nomination_in_force_on_the_date_of_death`<br>`sim/tests/claims.rs::a_death_benefit_goes_to_whoever_was_nominated_on_the_date_of_death` |
 | CLM-030 | full | `claims/tests/suite/decisions.rs::an_exclusion_stops_admission_unless_overridden_with_authority` |
 | CLM-031 | full | `claims/tests/suite/decisions.rs::a_closed_claim_reopens_under_independent_review` |
@@ -300,6 +303,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
 | GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
+| GRP-015 | part | `payments/tests/returned.rs::a_remittance_recalled_as_a_duplicate_is_given_back_and_reversed` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
 | GRP-017 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/health_menu.rs::chosen_covers_are_billed_to_whoever_pays_each_and_a_change_touches_only_what_changed` |
 | GRP-018 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |
@@ -314,11 +318,16 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-027 | full | `channels/tests/journeys.rs::employer_changes_can_need_a_second_administrator` |
 | GRP-030 | full | `group/tests/billing.rs::a_new_site_joins_with_its_own_billing_group_and_headcount` |
 | GRP-028 | full | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon` |
+| GRP-029 | full | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon`<br>`channels/tests/journeys.rs::scheme_members_and_the_employer` |
+| GRP-031 | full | `channels/tests/journeys.rs::one_person_administers_two_schemes_and_nothing_is_shared` |
+| GRP-039 | full | `channels/tests/journeys.rs::a_registered_member_asks_for_voluntary_cover_themselves`<br>`channels/tests/journeys.rs::a_member_of_a_large_scheme_holds_their_own_cover_only`<br>`channels/tests/identity.rs::first_device_needs_verification_and_a_real_key` |
+| GRP-040 | full | `channels/tests/http.rs::an_employer_administrator_hands_over_at_noon`<br>`channels/tests/http.rs::the_group_console` |
 | GRP-032 | full | `channels/tests/journeys.rs::scheme_members_and_the_employer`<br>`readmodel/src/scope.rs::adviser_and_employer_never_see_sensitive_rows`<br>`channels/tests/http.rs::advisers_and_employers_see_claim_status_and_nothing_more`<br>`claims/tests/suite/views.rs::the_policy_status_shows_an_adviser_each_claim_without_its_cause`<br>`channels/tests/http.rs::an_employer_runs_the_scheme_membership`<br>`channels/tests/group.rs::what_an_administrator_may_ask_and_send`<br>`group/tests/excess.rs::the_employers_view_of_a_member_shows_cover_and_never_health` |
 | GRP-033 | full | `group/tests/billing.rs::directors_in_different_occupation_classes_each_have_their_own_invoice_line`<br>`group/src/mapping.rs::an_occupation_class_column_is_read_onto_the_record`<br>`sim/tests/edges.rs::a_rate_row_for_an_occupation_class_prices_only_lives_in_that_class` |
-| GRP-034 | part | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends` |
+| GRP-034 | full | `group/tests/year.rs::staff_end_a_scheme_from_a_date`<br>`sim/tests/voluntary_cover.rs::a_members_money_stays_the_members_when_the_scheme_ends`<br>`sim/tests/claims.rs::claims_for_events_before_a_scheme_ends_remain_payable` |
 | GRP-035 | full | `group/tests/underwriting.rs::a_scheme_taken_over_keeps_members_cover_without_new_evidence`<br>`underwriting/tests/takeover.rs::a_taken_over_excess_is_accepted_without_evidence_up_to_what_was_accepted`<br>`group/src/benefit.rs::each_eligibility_rule_refuses_its_own_case` |
 | GRP-036 | full | `group/tests/reconcile.rs::the_schemes_record_here_matches_the_core_member_for_member`<br>`group/tests/split.rs::a_split_moves_members_with_their_cover_to_a_new_scheme` |
+| GRP-037 | full | `customers/tests/api.rs::a_member_who_leaves_the_country_is_recorded_non_resident_from_that_day`<br>`group/tests/leavers.rs::a_leaver_can_continue_their_cover_as_an_individual_policy` |
 | GRP-038 | full | `group/tests/leavers.rs::absence_past_the_limit_ends_cover_on_the_terms_date`<br>`group/tests/driver.rs::the_driver_asks_for_a_members_letter_and_reports_a_refusal`<br>`group/tests/cluster.rs::a_members_letter_is_a_command_the_documents_module_accepts`<br>`documents/tests/requested_letters.rs::group_asks_for_the_leave_of_absence_letters` |
 
 ## HLT Composable health product
@@ -470,9 +479,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-013 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-014 | full | `customers/tests/api.rs::representatives_act_only_within_their_authority` |
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
-| VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
+| VUL-017 | full | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due`<br>`channels/tests/http.rs::a_trained_person_reviews_vulnerability_markers`<br>`channels/tests/customers.rs::the_master_is_asked_about_markers_as_the_trained_person` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer`<br>`channels/tests/http.rs::the_life_gives_their_own_consents` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |

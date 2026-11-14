@@ -235,6 +235,7 @@ impl World {
                 rate_tables: vec![],
                 premium_minor: 85_00,
                 quoted_on: self.today(),
+                cover_premiums_minor: BTreeMap::new(),
             },
             lives: lives
                 .iter()
@@ -262,6 +263,7 @@ impl World {
             legacy_received_on: None,
             replacement: false,
             replaces: vec![],
+            commission_option: None,
         }
     }
 

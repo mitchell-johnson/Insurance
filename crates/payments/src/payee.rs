@@ -7,7 +7,7 @@ use chrono::{Duration, NaiveDateTime};
 
 use crate::authority::check_account;
 use crate::machine::{Event, PaymentsState, Tx};
-use crate::model::{AccountDetails, Id, NameCheck, Payee, PayeeKind, Reject, Role};
+use crate::model::{AccountDetails, ForeignAccount, Id, NameCheck, Payee, PayeeKind, Reject, Role};
 
 impl Payee {
     /// Why this account cannot be paid at `now`, if it cannot.
@@ -32,6 +32,29 @@ impl Payee {
     }
 }
 
+/// A payee's account: a New Zealand one, or one abroad with what the bank
+/// needs to reach it.
+fn check_payee_account(account: &AccountDetails, foreign: Option<&ForeignAccount>) -> Result<(), Reject> {
+    let Some(f) = foreign else { return check_account(account) };
+    let alnum = |s: &str, len: std::ops::RangeInclusive<usize>| len.contains(&s.len()) && s.bytes().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+    let upper = |s: &str, len: usize| s.len() == len && s.bytes().all(|b| b.is_ascii_uppercase());
+    let shaped = !account.name.trim().is_empty()
+        && alnum(&account.number, 5..=34)
+        && alnum(&f.bic, 8..=11)
+        && matches!(f.bic.len(), 8 | 11)
+        && upper(&f.country, 2)
+        && f.country != "NZ"
+        && upper(&f.currency, 3)
+        && !f.address.trim().is_empty();
+    if !shaped {
+        return Err(Reject::new(
+            "invalid_account",
+            "an account abroad has a name, a number (or IBAN) of 5 to 34 capitals and digits, a BIC of 8 or 11, a country other than NZ, a currency and an address",
+        ));
+    }
+    Ok(())
+}
+
 impl PaymentsState {
     fn payee_mut(&mut self, id: &str) -> Result<&mut Payee, Reject> {
         match self.payees.get_mut(id) {
@@ -53,9 +76,10 @@ impl PaymentsState {
         kind: PayeeKind,
         account: AccountDetails,
         name_check: NameCheck,
+        foreign: Option<ForeignAccount>,
     ) -> Result<(), Reject> {
         tx.need(Role::PayeeMaintainer)?;
-        check_account(&account)?;
+        check_payee_account(&account, foreign.as_ref())?;
         self.refuse_if_erased(&party)?;
         self.refuse_if_held(&party, tx.now.date())?;
         if self.payees.contains_key(&id) {
@@ -78,6 +102,7 @@ impl PaymentsState {
                 cooling_off_until,
                 suspect: false,
                 closed: false,
+                foreign,
             },
         );
         tx.emit(Event::PayeeRegistered { payee: id, kind });
@@ -86,7 +111,8 @@ impl PaymentsState {
 
     pub(crate) fn change_payee_account(&mut self, tx: &mut Tx<'_>, id: &str, account: AccountDetails, name_check: NameCheck) -> Result<(), Reject> {
         tx.need(Role::PayeeMaintainer)?;
-        check_account(&account)?;
+        let foreign = self.payees.get(id).and_then(|p| p.foreign.clone());
+        check_payee_account(&account, foreign.as_ref())?;
         let until = self.cooling_off(tx)?;
         let by = tx.actor.id.clone();
         let party = self.payee_mut(id)?.party.clone();

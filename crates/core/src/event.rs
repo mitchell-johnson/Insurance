@@ -485,6 +485,22 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// The owner suspended the policy: no premium for the days from `from`
+    /// up to `to`, and nothing that happens in them is covered. The premium
+    /// side is announced by `HardshipGranted` under the same name.
+    CoverSuspended {
+        policy: PolicyId,
+        reference: String,
+        from: NaiveDate,
+        to: NaiveDate,
+    },
+    /// A suspended policy came back on cover on `on`, ahead of `planned_to`.
+    CoverResumed {
+        policy: PolicyId,
+        reference: String,
+        on: NaiveDate,
+        planned_to: NaiveDate,
+    },
     /// A limited-pay cover was made paid up for a life: no more premium,
     /// and the reduced sum insured for life. The layers it rewrote are
     /// announced by `LayerReduced`, `LayerEnded` and `LayerAdded`.

@@ -604,4 +604,7 @@ PRODUCT = product(
         # 15 days from receiving the policy document, deemed five days after posting.
         cooling_off(days = 20),
     ],
+    # Suspension of cover: no premium and no cover for up to 12 months in
+    # all. The 12 months in force first is a best estimate until AIA confirms it.
+    cover_suspension = cover_suspension(max_months = 12, min_months_in_force = 12),
 )

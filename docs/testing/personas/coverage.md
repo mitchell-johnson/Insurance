@@ -54,13 +54,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | BIL Billing and earning | 7 | 4 | 4 | 4 |
 | COL Collection, cash matching, standing and dunning | 16 | 9 | 3 | 7 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
-| AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
+| AUD Audience scoping, customer app and identity | 14 | 5 | 0 | 3 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
-| CLM Claims and claims operations | 39 | 2 | 1 | 2 |
+| CLM Claims and claims operations | 41 | 1 | 0 | 1 |
 | RI Reinsurance | 16 | 1 | 1 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
-| GRP Group scheme administration | 31 | 3 | 6 | 1 |
+| GRP Group scheme administration | 37 | 3 | 0 | 1 |
 | JNT Joint lives, ownership, assignments and dependants | 3 | 8 | 20 | 14 |
 | ADV Advisers and commission | 45 | 0 | 0 | 0 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
@@ -68,7 +68,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | SVC Policy servicing | 6 | 5 | 15 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
-| VUL Vulnerable customers, support people and representatives | 15 | 6 | 0 | 4 |
+| VUL Vulnerable customers, support people and representatives | 16 | 5 | 0 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
 | STF Staff authorisation and permissions | 18 | 0 | 0 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **364** | **88** | **125** | **93** |
+| **Total** | **375** | **86** | **116** | **90** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
-| A | 35 | 25 | 9 |
-| B | 110 | 17 | 15 |
-| C | 217 | 43 | 86 |
+| A | 35 | 26 | 8 |
+| B | 113 | 16 | 13 |
+| C | 225 | 41 | 80 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -91,7 +91,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **BIL** (2): BIL-003, BIL-010
 - **COL** (2): COL-005, COL-023
 - **XFR** (2): XFR-007, XFR-009
-- **AUD** (1): AUD-012
 - **INV** (2): INV-018, INV-019
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
 - **SVC** (4): SVC-003, SVC-006, SVC-009, SVC-010
@@ -109,10 +108,10 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **BIL** (2): BIL-001, BIL-013
 - **COL** (5): COL-003, COL-004, COL-010, COL-024, COL-025
 - **XFR** (1): XFR-004
-- **AUD** (4): AUD-002, AUD-003, AUD-010, AUD-017
+- **AUD** (3): AUD-002, AUD-003, AUD-017
 - **RES** (5): RES-001, RES-002, RES-004, RES-005, RES-011
 - **UW** (1): UW-006
-- **CLM** (2): CLM-009, CLM-028
+- **CLM** (1): CLM-009
 - **INV** (1): INV-015
 - **GRP** (1): GRP-013
 - **JNT** (4): JNT-008, JNT-013, JNT-023, JNT-030

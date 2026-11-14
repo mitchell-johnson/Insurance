@@ -214,6 +214,90 @@ fn a_receipt_moves_the_billing_row_while_the_app_is_open() {
     assert_eq!(w.feed(KIRI).unwrap().sync(Some(now)), Sync::Changes { version: now, changes: vec![] });
 }
 
+/// Purpose: someone who pays another adult's premium and is nothing else to the policy holds no feed, sees no row when asking for
+/// the policy, is answered as if the policy did not exist when they ask for something on it, and a receipt of their money moves
+/// only the policyholder's device.
+/// Why it matters: parents who pay a daughter's premium are payers, not parties to her cover. Paying must never become a way to
+/// read her policy, her health information or even whether the policy is still in force.
+#[test]
+fn someone_who_only_pays_the_premium_sees_nothing() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let owed = w.row(KIRI, &format!("{pol}/billing")).unwrap()["outstanding_minor"].as_i64().unwrap();
+    w.core(
+        &pol,
+        "cash-matching",
+        ic_core::Command::ApplyReceipt {
+            policy: pol.clone(),
+            receipt: "rcpt-from-parents".into(),
+            amount: ic_money::Money::new(owed, ic_money::Currency::NZD),
+        },
+    );
+    assert_eq!(moved(&w.relay()), [KIRI.to_string()].into(), "only the policyholder's device moves");
+    assert!(w.feed("parent-1").is_none());
+    assert!(w.sees("parent-1", &pol).is_empty());
+    let on = w.ch.today(w.at);
+    assert!(w.ch.data.directory.relationships(&w.ch.data.view, &p("parent-1"), &pol, on).is_empty());
+    assert_eq!(
+        code(w.send(party("parent-1"), submit("pay-q", Some(&pol), "billing_question", "collections"))),
+        "not_found"
+    );
+    assert!(!w.ch.data.audiences[&pol].contains(&p("parent-1")));
+}
+
+/// Purpose: through a run that carries a customer's health facts, a loading, an exclusion and a request with clinical words in it,
+/// everything the channel emits for other services to act on names people and policies by ID only: none of the facts, codes or
+/// words appear in any effect.
+/// Why it matters: effects are what the host turns into notifications, wake-ups and log lines, and those travel to places with far
+/// wider access than the read model. One effect carrying a diagnosis or a loading code would put it in telemetry for good.
+#[test]
+fn what_the_channel_emits_carries_no_personal_or_clinical_data() {
+    let mut w = World::new();
+    let pol = retail(&mut w);
+    let mut emitted = Vec::new();
+    let secret = |key: &str, kind: &str, body: serde_json::Value| Row {
+        key: format!("{pol}/underwriting/{key}"),
+        policy: pol.clone(),
+        kind: kind.into(),
+        subject: Some(p(KIRI)),
+        sensitive: true,
+        body,
+    };
+    let rows = vec![
+        secret("loading", "loading", json!({ "code": "LOAD-ZQ150", "reason": "melanoma-zq-2019" })),
+        secret(
+            "exclusion",
+            "exclusion",
+            json!({ "code": "EXCL-ZQ77", "wording": "no cover for back-zq conditions" }),
+        ),
+    ];
+    emitted.extend(w.send(module("underwriting"), Command::PublishRows { rows, remove: vec![] }).unwrap());
+    let mut request = submit("r-77", Some(&pol), "notify_claim", "claims");
+    if let Command::SubmitRequest { payload, .. } = &mut request {
+        *payload = json!({ "note": "diagnosed with lymphoma-zq", "name": "Kiri Zqsurname", "email": "kiri-zq@example.nz" });
+    }
+    emitted.extend(w.send(party(KIRI), request).unwrap());
+    emitted.extend(
+        w.send(
+            module("claims"),
+            Command::ResolveRequest {
+                id: "r-77".into(),
+                reference: None,
+                rejected: Some(("needs_evidence".into(), "send the lymphoma-zq histology".into())),
+            },
+        )
+        .unwrap(),
+    );
+    emitted.extend(w.relay());
+    assert!(emitted.len() >= 3, "{emitted:?}");
+    // The facts did reach the person they are about.
+    assert!(w.held(KIRI).contains(&format!("{pol}/underwriting/loading")));
+    let wire = serde_json::to_string(&emitted).unwrap().to_lowercase() + &format!("{emitted:?}").to_lowercase();
+    for word in ["zq", "melanoma", "lymphoma", "load-", "excl-", "example.nz", "histology"] {
+        assert!(!wire.contains(word), "an effect carries {word}: {emitted:?}");
+    }
+}
+
 /// Purpose: the relay delivers at least once and in order; a repeat changes nothing, a hole is reported and nothing after it is applied, and redelivery heals it.
 /// Why it matters: the event stream is the only source of the views; applying across a gap would leave them silently wrong.
 #[test]
@@ -782,6 +866,97 @@ fn scheme_members_and_the_employer() {
     assert!(w
         .row("worker-3", &format!("{pol}/member/m-3/group-life"))
         .is_none_or(|b| b["in_force"] == false));
+}
+
+/// Purpose: one person named administrator of two schemes reaches both under the one sign-in, each scheme's rows come only from
+/// that scheme, an administrator of one scheme alone sees nothing of the other, and ending the person's role on one scheme leaves
+/// the other as it was.
+/// Why it matters: a treasurer or a payroll bureau often runs schemes for two employers. A second sign-in per scheme gets shared
+/// or written down, and rows crossing between schemes would show one employer another employer's staff and salaries.
+#[test]
+fn one_person_administers_two_schemes_and_nothing_is_shared() {
+    let mut w = World::new();
+    let first = w.issue(group_scheme(3, open(), vec![linked_member("m-1", "worker-1")]));
+    let second = w.issue(group_scheme(
+        4,
+        open(),
+        vec![linked_member("m-8", "worker-8"), member("m-9", d(1979, 3, 3), "staff", 80_000_00)],
+    ));
+    let admin = |policy: &PolicyId, who: &str, yes| DirectoryCommand::SetEmployerAdmin {
+        policy: policy.clone(),
+        party: p(who),
+        admin: yes,
+    };
+    w.dir(module("group-admin"), admin(&first, "treasurer", true)).unwrap();
+    w.dir(module("group-admin"), admin(&second, "treasurer", true)).unwrap();
+    w.dir(module("group-admin"), admin(&second, "hr-second", true)).unwrap();
+    assert_eq!(w.ch.data.directory.admin_policies[&p("treasurer")], [first.clone(), second.clone()].into());
+
+    let on = w.ch.today(w.at);
+    for (policy, members) in [(&first, 1), (&second, 2)] {
+        let (relationships, rows) = w.ch.visible_rows(&p("treasurer"), policy, on, true);
+        assert_eq!(relationships, [Relationship::EmployerAdmin]);
+        assert!(rows.iter().all(|r| r.key.starts_with(&format!("{policy}/"))), "a row from the other scheme");
+        assert_eq!(rows.iter().find(|r| r.kind == "scheme").unwrap().body["members"], members);
+        assert_eq!(rows.iter().filter(|r| r.kind == "member").count(), members);
+    }
+    // The other scheme's own administrator, and its members, see nothing of the first.
+    assert!(w.sees("hr-second", &first).is_empty());
+    assert!(w.sees("worker-8", &first).is_empty());
+    assert_eq!(w.held("worker-1"), [format!("{first}/member/m-1/group-life")]);
+    // An administrator of one scheme cannot name administrators of the other.
+    assert_eq!(code(w.dir(party("hr-second"), admin(&first, "hr-second", true))), "forbidden");
+
+    // The person stops running the second scheme; the first is untouched.
+    let effects = w.dir(party("hr-second"), admin(&second, "treasurer", false)).unwrap();
+    assert_eq!(revoked(&effects), ["treasurer".to_string()].into());
+    assert!(w.sees("treasurer", &second).is_empty());
+    assert_eq!(w.ch.data.directory.admin_policies[&p("treasurer")], [first.clone()].into());
+    assert!(!w.sees("treasurer", &first).is_empty());
+}
+
+/// Purpose: a scheme member who registers and is matched to their place sees their own cover and can ask to take up voluntary
+/// cover, which goes to group administration as their own request; a colleague cannot ask for them, and someone not on the scheme
+/// cannot ask at all.
+/// Why it matters: voluntary cover is the member's own purchase, deducted from their own pay. A request the employer or a colleague
+/// could raise in their name would put cover and a deduction on someone who never asked for it.
+#[test]
+fn a_registered_member_asks_for_voluntary_cover_themselves() {
+    let mut w = World::new();
+    let pol = w.issue(group_scheme(
+        3,
+        open(),
+        vec![linked_member("m-1", "worker-1"), member("m-2", d(1981, 1, 1), "staff", 90_000_00)],
+    ));
+    assert_eq!(
+        code(w.send(party("worker-2"), submit("v0", Some(&pol), "voluntary_cover", "group-admin"))),
+        "not_found"
+    );
+    w.core(
+        &pol,
+        "group-admin",
+        ic_core::Command::IdentifyMember {
+            policy: pol.clone(),
+            life: LifeId::from("m-2"),
+            party: p("worker-2"),
+        },
+    );
+    assert_eq!(moved(&w.relay()), ["worker-2".to_string()].into());
+    assert_eq!(w.held("worker-2"), [format!("{pol}/member/m-2/group-life")]);
+
+    let effects = w.send(party("worker-2"), submit("v1", Some(&pol), "voluntary_cover", "group-admin")).unwrap();
+    assert!(effects.contains(&Effect::RequestReady {
+        id: "v1".into(),
+        module: "group-admin".into()
+    }));
+    assert_eq!(w.ch.data.requests["v1"].party, p("worker-2"));
+    assert_eq!(w.row("worker-2", &format!("{pol}/request/v1")).unwrap()["state"]["status"], "pending");
+    // The request is the member's own: a colleague's device does not hold it.
+    assert!(w.row("worker-1", &format!("{pol}/request/v1")).is_none());
+    assert_eq!(
+        code(w.send(party("stranger"), submit("v2", Some(&pol), "voluntary_cover", "group-admin"))),
+        "not_found"
+    );
 }
 
 /// Purpose: a scheme can require a second administrator for named kinds of change; the one who asked cannot be the one who approves.

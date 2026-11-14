@@ -225,6 +225,7 @@ impl PaymentsState {
                     new,
                     status: ItemStatus::Pending,
                     account: None,
+                    foreign: None,
                     submission: None,
                     was_settled: false,
                     released: false,
@@ -329,6 +330,16 @@ impl PaymentsState {
             let fresh = self.config.as_ref().and_then(|c| c.rules.hold_check_max_age_minutes);
             hold = self.hold_reason(&item.new, tx.now, fresh).map(str::to_string);
         }
+        // An account abroad needs the route's cross-border channel.
+        let abroad = matches!(&item.new.counterparty, Counterparty::Payee(p) if self.payees.get(p).is_some_and(|p| p.foreign.is_some()));
+        let cross_border = self
+            .config
+            .as_ref()
+            .and_then(|c| c.routes.get(&run.run_type))
+            .and_then(|r| r.cross_border.as_ref());
+        if hold.is_none() && abroad && cross_border.is_none() {
+            hold = Some("no_cross_border_channel".to_string());
+        }
         if hold.is_none() && item.new.amount_minor > item_limit {
             hold = Some("over_item_limit".to_string());
         }
@@ -396,6 +407,10 @@ impl PaymentsState {
         if let Some(run) = self.runs.get_mut(id) {
             for (item_id, (account, hold)) in findings {
                 if let Some(item) = run.items.get_mut(&item_id) {
+                    item.foreign = match &item.new.counterparty {
+                        Counterparty::Payee(p) => self.payees.get(p).and_then(|p| p.foreign.clone()),
+                        Counterparty::Authority(_) => None,
+                    };
                     item.account = account;
                     item.status = hold.map_or(ItemStatus::Pending, ItemStatus::Held);
                 }
@@ -518,13 +533,42 @@ impl PaymentsState {
         }
     }
 
-    /// Put every pending item of an approved run in a new submission.
-    fn queue_submission(&mut self, tx: &mut Tx<'_>, id: &str, channel: Id, account: Id) {
+    /// The cross-border channel of a run's route, with the account it pays
+    /// from, when the run pays anyone abroad.
+    fn cross_border_of(&self, id: &str) -> Result<Option<(Id, Id)>, Reject> {
+        let run = self.run(id)?;
+        let abroad = run.items.values().any(|i| i.status == ItemStatus::Pending && i.foreign.is_some());
+        let channel = self.cfg()?.routes.get(&run.run_type).and_then(|r| r.cross_border.clone());
+        let Some(channel) = channel.filter(|_| abroad) else { return Ok(None) };
+        let account = self
+            .cfg()?
+            .account_for(&channel, run.run_type, &run.fund, run.currency)
+            .ok_or_else(|| Reject::new("no_account", format!("there is no account for fund {} on channel {channel}", run.fund)))?
+            .clone();
+        Ok(Some((channel, account)))
+    }
+
+    /// Put the pending items of an approved run in new submissions: the
+    /// domestic ones to the route's channel, any abroad to its cross-border
+    /// channel.
+    fn queue_submissions(&mut self, tx: &mut Tx<'_>, id: &str, channel: Id, account: Id, abroad: Option<(Id, Id)>) {
+        self.queue_submission(tx, id, channel, account, false);
+        if let Some((channel, account)) = abroad {
+            self.queue_submission(tx, id, channel, account, true);
+        }
+    }
+
+    /// Put every pending item of an approved run, at home or abroad, in a
+    /// new submission. Nothing is queued when there are none.
+    fn queue_submission(&mut self, tx: &mut Tx<'_>, id: &str, channel: Id, account: Id, abroad: bool) {
         let Some(run) = self.runs.get_mut(id) else { return };
+        if !run.items.values().any(|i| i.status == ItemStatus::Pending && i.foreign.is_some() == abroad) {
+            return;
+        }
         let submission = format!("{id}-{}", run.submissions.len() + 1);
         let mut items = Vec::new();
         for (item_id, item) in &mut run.items {
-            if item.status == ItemStatus::Pending {
+            if item.status == ItemStatus::Pending && item.foreign.is_some() == abroad {
                 item.status = ItemStatus::Submitted;
                 item.submission = Some(submission.clone());
                 items.push(item_id.clone());
@@ -576,6 +620,10 @@ impl PaymentsState {
             .get(&run.run_type)
             .ok_or_else(|| Reject::new("no_route", "the run's type has no route"))?;
         let (channel, account) = self.route_of(run.run_type, run.urgent, &run.fund, run.currency)?;
+        let abroad = self.cross_border_of(id)?;
+        if let Some((cross, _)) = abroad.as_ref().filter(|_| !run.urgent) {
+            self.in_time(tx, cross, run.value_date)?;
+        }
         let needed = if run.urgent {
             // Out of hours there is no cutoff to meet, and two people who
             // are on call must both agree.
@@ -639,7 +687,7 @@ impl PaymentsState {
                     about: None,
                 });
             }
-            self.queue_submission(tx, id, channel, account);
+            self.queue_submissions(tx, id, channel, account, abroad);
         }
         Ok(())
     }
@@ -656,13 +704,16 @@ impl PaymentsState {
             return Err(Reject::new("value_date_passed", "a run is never moved to an earlier date"));
         }
         let (channel, account) = self.route_of(run.run_type, run.urgent, &run.fund, run.currency)?;
+        let abroad = self.cross_border_of(id)?;
         if !run.urgent {
-            self.in_time(tx, &channel, value_date)?;
+            for c in std::iter::once(&channel).chain(abroad.as_ref().map(|(c, _)| c)) {
+                self.in_time(tx, c, value_date)?;
+            }
         }
         if let Some(run) = self.runs.get_mut(id) {
             run.value_date = value_date;
         }
-        self.queue_submission(tx, id, channel, account);
+        self.queue_submissions(tx, id, channel, account, abroad);
         Ok(())
     }
 
@@ -930,6 +981,13 @@ impl PaymentsState {
             .ok_or_else(|| Reject::new("unknown_item", format!("there is no item {item_id}")))?;
         if !matches!(item.status, ItemStatus::Acknowledged | ItemStatus::Settled) {
             return Err(wrong_state("only an item the bank accepted can come back"));
+        }
+        // A recalled payment coming back is money recovered from whoever
+        // had it, not a payment that failed: the right person is already
+        // owed it again.
+        if let Some(misdirection) = self.misdirection_of(item_id).cloned().filter(|_| item.status == ItemStatus::Settled) {
+            self.recalled_back(&misdirection, returned_on);
+            return Ok(());
         }
         let (n, was_settled) = (item.new.clone(), item.was_settled);
         let run = &self.runs[&run_id];

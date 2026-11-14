@@ -83,6 +83,10 @@ pub struct OpenProposal {
     /// which cover it replaces, and how much of it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replaces: Vec<crate::model::ReplacedCover>,
+    /// How the adviser is paid on this business: `upfront`, `hybrid` or
+    /// `level`. Absent, `upfront`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commission_option: Option<String>,
 }
 
 /// How a record was signed.
@@ -747,6 +751,19 @@ pub enum Effect {
         proposal: ProposalId,
         life: LifeId,
         delegate_ref: String,
+    },
+    /// Tell the commission module who wrote an adviser's new policy, so it
+    /// writes the adviser's layers itself.
+    AdviseNewBusiness {
+        key: String,
+        proposal: ProposalId,
+        policy: PolicyId,
+        adviser: String,
+        provider: String,
+        option: String,
+        replacement: bool,
+        /// Each cover's annual premium, by cover code.
+        premiums: BTreeMap<String, i64>,
     },
     /// Tell the core a new policy's cover replaces cover on another of our
     /// policies, so reinsurance carries the old cession on.

@@ -1161,6 +1161,99 @@ fn a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme() {
     days(&mut c, 2);
 }
 
+/// Purpose: when a scheme is terminated, a member's claim already open and a claim notified
+/// afterwards for an event before the termination are both checked as in force on their event
+/// dates and admitted, while an event after the termination finds no cover.
+/// Why it matters: persona test GRP-034. A scheme ending is not a reason to stop paying for a
+/// death that happened while it was in force; reading cover from today's status would decline
+/// every late-notified claim on a terminated scheme.
+#[test]
+fn claims_for_events_before_a_scheme_ends_remain_payable() {
+    let mut c = cluster();
+    let n = on_zero(&c, 0);
+    let issue = group_scheme(
+        n,
+        start(),
+        vec![
+            member("staff-1", d(1985, 1, 1), "staff", 60_000_00),
+            member("staff-2", d(1986, 1, 1), "staff", 60_000_00),
+        ],
+    );
+    let id = issue.policy.clone();
+    c.submit(0, "new-business", issue_command(issue)).unwrap();
+    let receipt = Command::ApplyReceipt {
+        policy: id.clone(),
+        receipt: "r-g".into(),
+        amount: Money::new(5_000_00, NZD),
+    };
+    c.submit(0, "cash-matching", receipt).unwrap();
+    // Past any cooling-off period, so the end is from its date and not from the start.
+    days(&mut c, 60);
+    let before = c.business_date().unwrap();
+    let member_claim = |claim: &str, life: &str, on: chrono::NaiveDate| {
+        let claims::Command::Notify(mut n) = notification(claim, &id, "group-life", ClaimType::Death, on) else {
+            unreachable!()
+        };
+        n.life = Some(life.into());
+        n.flags.group = true;
+        n.notifier = Notifier::Employer;
+        claims::Command::Notify(n)
+    };
+    let work = |c: &mut Cluster, claim: &str| {
+        for command in [
+            claims::Command::Acknowledge {
+                claim: claim.into(),
+                delivery_ref: "delivered".into(),
+            },
+            claims::Command::Assign {
+                claim: claim.into(),
+                to: "sam".into(),
+                actor: actor("sam"),
+            },
+            claims::Command::RecordCause {
+                claim: claim.into(),
+                cause_code: "CC-0001".into(),
+                actor: actor("sam"),
+            },
+        ] {
+            ok(c, command);
+        }
+    };
+    let check = |c: &mut Cluster, id: &str| {
+        ok(
+            c,
+            claims::Command::CoverCheck {
+                claim: id.into(),
+                relied_on: vec![],
+                actor: actor("sam"),
+            },
+        );
+        let facts = &claim(c, id).cover_check.as_ref().expect("checked").facts;
+        (facts.in_force, facts.sum_insured_minor)
+    };
+    // Open before the scheme ends.
+    ok(&mut c, member_claim("clm-open", "staff-1", before));
+    work(&mut c, "clm-open");
+    days(&mut c, 2);
+    c.submit(0, "group-admin", Command::CancelPolicy { policy: id.clone() }).unwrap();
+    days(&mut c, 3);
+    assert_ne!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+
+    assert_eq!(check(&mut c, "clm-open"), (true, 120_000_00));
+    ok(&mut c, decide("clm-open", admit(None, None, false)));
+    // Notified after the end, for an event before it.
+    ok(&mut c, member_claim("clm-late", "staff-2", before));
+    work(&mut c, "clm-late");
+    assert_eq!(check(&mut c, "clm-late"), (true, 120_000_00));
+    ok(&mut c, decide("clm-late", admit(None, None, false)));
+    assert_eq!(money(&c, &id).1, 240_000_00);
+    // An event after the end finds no cover.
+    let after = c.business_date().unwrap();
+    ok(&mut c, member_claim("clm-after", "staff-2", after));
+    work(&mut c, "clm-after");
+    assert!(!check(&mut c, "clm-after").0);
+}
+
 /// Purpose: the cover check reads standing as it was on the event date: in grace, suspended and
 /// lapsed each answer differently, an event before the lapse is still an event on a live
 /// policy, a cover the policy does not have is reported rather than refused, and a product that

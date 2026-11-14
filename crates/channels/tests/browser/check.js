@@ -207,6 +207,30 @@ const sees = async (page, text) => {
     await p.locator("#member-view").getByText("staff").waitFor();
     if (/loading|exclusion/i.test(await p.locator("#member-view").innerText())) throw new Error("the employer saw a loading");
   } });
+  await visit(browser, "/staff", { subject: "sub-hcs" }, { run: async (p) => {
+    await say(p, "A person trained in vulnerability support reviews the markers that are due");
+    await p.getByRole("tab", { name: "Markers to review" }).click();
+    await p.locator("#care-list").getByText("review due").waitFor();
+    await sees(p, "death of partner");
+    await say(p, "She keeps one marker and sets when it is next reviewed");
+    await p.locator("#care-list").getByRole("button", { name: "Decide" }).first().click();
+    await p.locator("#care-one:not([hidden])").waitFor();
+    await sees(p, "Marker now: bereavement");
+    await p.fill("#care-date", "2028-05-01");
+    await p.locator("#care-form button").click();
+    await p.locator("#care-msg").getByText("Recorded.").waitFor();
+    await say(p, "A prompt after a death is closed with no marker needed");
+    await p.locator("#care-list").getByRole("button", { name: "Decide" }).first().click();
+    await p.selectOption("#care-outcome", "no_marker");
+    if (await p.locator("#care-adj-box").isVisible()) throw new Error("adjustments were asked for with no marker");
+    await p.locator("#care-form button").click();
+    await p.locator("#care-list").getByText("Nothing to review").waitFor();
+  } });
+  await visit(browser, "/staff", { subject: "sub-sue" }, { expectStatus: [403], run: async (p) => {
+    await say(p, "An officer without the training is not shown who is marked");
+    await p.getByRole("tab", { name: "Markers to review" }).click();
+    await p.locator("#care-list").getByText("your role does not include it").waitFor();
+  } });
   await visit(browser, "/staff", { subject: "sub-fin1" }, { run: async (p) => {
     await say(p, "Commission held for an adviser whose licence is suspended");
     await p.getByRole("tab", { name: "Held balances" }).click();
@@ -236,6 +260,9 @@ const sees = async (page, text) => {
     await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");
     await p.locator("#lookup button").click();
     await p.locator("#pol-view:not([hidden])").waitFor();
+    await say(p, "Someone phones about the policy and cannot be identified: she is given words that confirm nothing");
+    await p.locator("#caller-form button").click();
+    await p.locator("#caller-msg").getByText("can't confirm whether we hold a policy").waitFor();
     // A change for a customer who rang, above her limit: it goes to a colleague first.
     await say(p, "A customer rang: she enters a change above her limit, so it needs a second person");
     await p.fill("#creason", "customer rang"); await p.fill("#camount", "900");
@@ -368,7 +395,7 @@ const sees = async (page, text) => {
     await say(p, "A payroll row might be an existing person: staff decide the match");
     await tab(p, "Members");
     await p.fill("#rm-scheme", "harbour"); await p.fill("#rm-emp", "E002"); await p.fill("#rm-party", "party-x");
-    await p.locator("#rm-form button").click();
+    await p.locator("#rm-form button:not([type=button])").click();
     await p.locator("#rm-msg").getByText("Recorded.").waitFor();
     await tab(p, "Work waiting");
     await p.locator("#ex-form button").click();
