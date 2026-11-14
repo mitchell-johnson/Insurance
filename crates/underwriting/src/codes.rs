@@ -40,8 +40,10 @@ pub const CAUSE_ROOTS: &[&str] = &[
     "unknown",
 ];
 
-/// The cover types an exclusion can apply to.
-pub const COVER_TYPES: &[&str] = &["life", "trauma", "income_protection", "health", "group_life"];
+/// The cover types an exclusion can apply to. "tpd" (total permanent
+/// disablement) and "accidental_injury" (specified injury lump sums) came
+/// with the AIA products (docs/aia-products.md).
+pub const COVER_TYPES: &[&str] = &["life", "trauma", "income_protection", "health", "group_life", "tpd", "accidental_injury"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

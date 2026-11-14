@@ -9,8 +9,8 @@
 # They are never matched mechanically: a claim on a cover that carries one
 # always goes to an assessor with the original wording.
 
-ALL = ["life", "trauma", "income_protection", "health"]
-LIVING = ["trauma", "income_protection", "health"]
+ALL = ["life", "trauma", "income_protection", "health", "tpd", "accidental_injury"]
+LIVING = ["trauma", "income_protection", "health", "tpd", "accidental_injury"]
 
 EXCLUSIONS = exclusion_library(
     id = "exclusions",
@@ -24,8 +24,8 @@ EXCLUSIONS = exclusion_library(
         exclusion("EX-1004", 1, "body_system", LIVING, ["musculoskeletal.hip"], "Hip", "No benefit is payable for any disorder of the named hip. Placeholder wording."),
         exclusion("EX-1009", 1, "body_system", LIVING, ["musculoskeletal"], "Musculoskeletal system", "No benefit is payable for any musculoskeletal disorder. Placeholder wording."),
         # Mental health
-        exclusion("EX-2001", 1, "mental_health", ["income_protection", "health"], ["mental"], "Mental health", "No benefit is payable for any mental health condition. Placeholder wording."),
-        exclusion("EX-2002", 1, "mental_health", ["income_protection", "health"], ["mental.stress", "mental.anxiety"], "Stress and anxiety", "No benefit is payable for stress or anxiety conditions. Placeholder wording."),
+        exclusion("EX-2001", 1, "mental_health", ["income_protection", "health", "tpd"], ["mental"], "Mental health", "No benefit is payable for any mental health condition. Placeholder wording."),
+        exclusion("EX-2002", 1, "mental_health", ["income_protection", "health", "tpd"], ["mental.stress", "mental.anxiety"], "Stress and anxiety", "No benefit is payable for stress or anxiety conditions. Placeholder wording."),
         exclusion("EX-2003", 1, "mental_health", ALL, ["mental.substance"], "Substance use", "No benefit is payable for conditions arising from substance use. Placeholder wording."),
         exclusion("EX-2004", 1, "condition", ALL, ["injury.self_inflicted"], "Self-inflicted injury", "No benefit is payable for intentional self-inflicted injury. Placeholder wording."),
         # Cardiovascular and other systems
