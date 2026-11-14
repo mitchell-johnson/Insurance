@@ -10,7 +10,10 @@
 //! 2. asks every partition of the core for each fund's units on issue and
 //!    proposes any figure that changed;
 //! 3. writes each extract that is due to the outbound container and
-//!    records it as written.
+//!    records it as written;
+//! 4. raises an alert, once, for each price that is late, each price a
+//!    partition refused and each valuation file that could not be read, as
+//!    a log line with the target [`ALERT_TARGET`] that Azure Monitor alerts on.
 //!
 //! Every proposal carries a key derived from what it is about, so a pass
 //! repeated after a crash proposes nothing new. Everything the driver needs
@@ -33,6 +36,8 @@ use crate::valuation;
 
 /// How many days of inbound folders each pass looks at.
 pub const LOOKBACK_DAYS: u64 = 7;
+/// The log target of an alert line.
+pub const ALERT_TARGET: &str = "unit_pricing.alert";
 /// The driver's name as the actor of its commands.
 pub const ACTOR: &str = "unit-pricing-driver";
 
@@ -79,6 +84,7 @@ pub struct PassReport {
     pub files_waiting: usize,
     pub units_reported: usize,
     pub extracts_written: usize,
+    pub alerts_raised: usize,
     pub errors: Vec<String>,
 }
 
@@ -92,6 +98,8 @@ pub struct Driver<M, C, I, O> {
     taken: Mutex<BTreeSet<String>>,
     /// The last units figure proposed for each fund and partition.
     reported: Mutex<BTreeMap<(FundId, PartitionId), (i64, Option<NaiveDate>)>>,
+    /// Alerts already raised by this process, by their stable ID.
+    alerted: Mutex<BTreeSet<String>>,
 }
 
 fn envelope(key: String, at: DateTime<Utc>, command: Command) -> Envelope {
@@ -121,20 +129,28 @@ impl<M: Module, C: Core, I: Inbox, O: Outbound> Driver<M, C, I, O> {
             outbound,
             taken: Mutex::new(BTreeSet::new()),
             reported: Mutex::new(BTreeMap::new()),
+            alerted: Mutex::new(BTreeSet::new()),
         }
     }
 
-    /// Record the ledger's partition count. Run once at start.
+    /// Record the ledger's partition count. Run once at start. Files
+    /// refused before this start were alerted by an earlier run and are not
+    /// raised again; late and refused prices still stand, so they are.
     pub async fn start(&self, at: DateTime<Utc>) -> Result<(), String> {
         let count = self.core.partitions();
         let out = self
             .module
             .propose(&envelope(format!("partitions:{count}"), at, Command::RecordPartitions { count }))
             .await?;
-        match refused(&out) {
-            Some(why) => Err(why),
-            None => Ok(()),
+        if let Some(why) = refused(&out) {
+            return Err(why);
         }
+        let earlier = self.module.ask(&json!({"q": "alerts", "as_at": at.date_naive()})).await?;
+        let mut alerted = self.alerted.lock().map_err(|e| e.to_string())?;
+        for item in earlier.as_array().into_iter().flatten().filter(|i| i["kind"] == "file_refused") {
+            alerted.insert(item["id"].as_str().unwrap_or_default().to_string());
+        }
+        Ok(())
     }
 
     /// One pass. A fault in one step is reported and the others still run.
@@ -149,7 +165,29 @@ impl<M: Module, C: Core, I: Inbox, O: Outbound> Driver<M, C, I, O> {
         if let Err(e) = self.extracts(at, &mut report).await {
             report.errors.push(format!("extracts: {e}"));
         }
+        if let Err(e) = self.alerts(at, &mut report).await {
+            report.errors.push(format!("alerts: {e}"));
+        }
         report
+    }
+
+    async fn alerts(&self, at: DateTime<Utc>, report: &mut PassReport) -> Result<(), String> {
+        let items = self.module.ask(&json!({"q": "alerts", "as_at": at.date_naive()})).await?;
+        let items = items.as_array().cloned().unwrap_or_default();
+        let current: BTreeSet<String> = items.iter().filter_map(|i| i["id"].as_str().map(str::to_string)).collect();
+        let mut alerted = self.alerted.lock().map_err(|e| e.to_string())?;
+        for item in &items {
+            let id = item["id"].as_str().unwrap_or_default();
+            if !alerted.insert(id.to_string()) {
+                continue;
+            }
+            let kind = item["kind"].as_str().unwrap_or_default();
+            tracing::error!(target: ALERT_TARGET, kind, id, item = %item, "unit pricing needs a person");
+            report.alerts_raised += 1;
+        }
+        // A cleared item may come back (a price refused again): raise it then.
+        alerted.retain(|id| current.contains(id) || id.starts_with("file:"));
+        Ok(())
     }
 
     async fn intake(&self, at: DateTime<Utc>, report: &mut PassReport) -> Result<(), String> {

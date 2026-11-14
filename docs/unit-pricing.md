@@ -70,7 +70,8 @@ Amounts are in the fund's currency in major units and units carry up to six deci
 
 1. lists the inbound folders of the last seven days, reads each file once Defender for Storage has tagged it clean, and proposes its valuations; a file tagged with a threat is refused unread, and an untagged one waits;
 2. asks every partition for each fund's units on issue (`Question::UnitsOnIssue`) and proposes each figure that changed;
-3. writes each extract that is due.
+3. writes each extract that is due;
+4. raises each alert that is new (see Alerts).
 
 A fault in one step is reported in the pass's log line and the others still run. Every proposal carries a key made from what it is about (`valuation-file:<name>`, `units:<fund>:<partition>:<executed through>:<units>`, `extract-written:<id>`), so a pass repeated after a crash, or two drivers at once, propose nothing new.
 
@@ -84,6 +85,19 @@ A fault in one step is reported in the pass's log line and the others still run.
 | `IC_UNIT_PRICING_CYCLE_MS` | default 30000 |
 | `IC_UNIT_PRICING_PATIENCE_MS` | how long one command looks for a leader, default 10000 |
 | `IC_CLUSTER_TOKEN_FILE` | the cluster token, mounted from Key Vault |
+
+## Alerts
+
+The `alerts { as_at }` question lists what operations must be told of, each item with a stable `id`. The driver logs each new item once as an error line with the target `unit_pricing.alert`, and `infra/unit-pricing.bicep` turns those lines into Azure Monitor alerts mailed to `alertEmails`.
+
+| Kind | Raised when | Clears when |
+| --- | --- | --- |
+| `late_price` | a fund's price for a date is past its lag with no active price and no suspension | the price is active, or the date is suspended |
+| `publication_refused` | a partition refused an approved price | the lead republishes and every partition applies it |
+| `file_refused` | a valuation file could not be read (malformed, or the scan found a threat) | not: the file stays refused; the administrator sends a new one |
+| `definition_refused` | a fund definition the core activated has terms this module refuses | a version of that fund this module accepts arrives |
+
+A restarted driver raises late and refused prices again, since they still stand, but not files refused before it started. Two more alerts watch the driver itself: **Unit pricing driver failing** when ten or more passes in fifteen minutes have errors, and **Unit pricing driver silent** when no pass is logged for fifteen minutes (every pass logs a line at info).
 
 ## On Azure
 
@@ -101,12 +115,11 @@ Staff act through the unit pricing console in the portal (`/pricing` in `ic-port
 
 ## Questions
 
-All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fund between two dates), `valuations`, `work` (prices waiting for a person and refused files), `late` (prices overdue as at a date), `errors`, `error`, `outbox`, `events`, `extracts_due`, `holding`, and `close_check`.
+All are `{"q": "..."}` to the module: `status`, `funds`, `price`, `prices` (a fund between two dates), `valuations`, `work` (prices waiting for a person and refused files), `late` (prices overdue as at a date), `errors`, `error`, `outbox`, `events`, `extracts_due`, `holding`, `close_check` and `alerts`.
 
 `close_check { as_at }` is the finance close's check: `green` when no price is late, none is waiting for a person, no price error is open and every extract due is written, otherwise the `items` that stop it.
 
 ## Known gaps
 
 - **The finance close does not ask yet.** `close_check` is built here, but the close driver has no source for it; the finance thread wires it beside `core_sources()`.
-- **A fund this module refuses.** If a definition the core accepted has pricing terms this module refuses, the refusal is recorded against the event's key and the fund cannot be priced; a corrected definition is a new version, which arrives as a new event.
 - **Not deployed.** `infra/unit-pricing.bicep` is compiled in CI but not referenced by `main.bicep`, and its Defender resource uses a preview API version. `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.

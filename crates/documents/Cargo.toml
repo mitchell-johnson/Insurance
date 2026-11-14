@@ -7,6 +7,8 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The definitions library, to serve wording text by the hash a cover holds.
+ic-product.workspace = true
 ic-core.workspace = true
 ic-log.workspace = true
 ic-raft.workspace = true
@@ -45,7 +47,6 @@ proptest.workspace = true
 rsa = "0.9"
 # A real core, to answer the documents its events require from real policies.
 ic-sim.workspace = true
-ic-product.workspace = true
 
 [lints]
 workspace = true

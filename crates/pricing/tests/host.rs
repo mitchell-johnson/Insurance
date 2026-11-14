@@ -118,7 +118,8 @@ fn hosted_module_applies_answers_and_snapshots() {
 /// the sign of its direction, a replayed order becomes a correction keyed by
 /// the order and the corrected price, a fund the core activated becomes the
 /// module's own activation under the same key on every partition and when
-/// applied twice, and any other event is ignored.
+/// applied twice, a definition the module refuses stands as an alert until
+/// an accepted version arrives, and any other event is ignored.
 /// Why it matters: holdings, the net flow and the remediation record are
 /// built only from these; a sell counted as a buy would put the
 /// administrator's register out by twice the order, and a fund the core
@@ -222,6 +223,34 @@ fn core_events_become_movements() {
     assert_eq!(state.apply_envelope(second[0].clone()), Output::Done);
     assert_eq!(state.state_hash(), hash, "the second partition's event changes nothing");
     assert_eq!(state.funds[&def.id].len(), 1);
+
+    // A definition this module refuses is kept as an alert until a version
+    // it accepts arrives.
+    let mut bad = fund("balanced");
+    bad.pricing.insert("unknown_term".into(), "1".into());
+    let refused_event = |d: &ic_core::invest::FundDefinition| ic_core::EventRecord {
+        partition: 0,
+        ..record(InvestEvent::FundActivated {
+            fund: d.id.clone(),
+            version: d.version,
+            content_hash: d.content_hash.clone(),
+            definition: Some(Box::new(d.clone())),
+        })
+    };
+    assert!(matches!(state.apply_envelope(react(&refused_event(&bad))[0].clone()), Output::Refused { .. }));
+    let alerts = answer(&state, json!({"q": "alerts", "as_at": "2026-11-03"})).unwrap();
+    assert!(
+        alerts
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["kind"] == "definition_refused" && a["definition"] == "balanced:1"),
+        "{alerts}"
+    );
+    let mut good = fund("balanced");
+    good.content_hash = "balanced-v1-fixed".into();
+    assert_eq!(state.apply_envelope(react(&refused_event(&good))[0].clone()), Output::Done);
+    assert!(state.refused_definitions.is_empty());
 }
 
 /// Purpose: the outbox carrier reads each publication as the core's

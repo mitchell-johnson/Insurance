@@ -673,6 +673,8 @@ impl ClaimsState {
             TaskKind::MedicalOpinion => self.authority.has_role(who, Role::MedicalOfficer) && vault_ref,
             // The certificate, declaration or register match is on file.
             TaskKind::ProofOfLife => owns && vault_ref,
+            // The employer's evidence of membership on the event date is kept with the claim.
+            TaskKind::MembershipEvidence => owns && vault_ref,
             TaskKind::CaseConference => (owns || profile.senior) && attendees >= 2,
             TaskKind::SeniorReview | TaskKind::ExclusionMatch => profile.senior,
             TaskKind::DeathRegisterCadence => self.leads(who),

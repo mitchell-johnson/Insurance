@@ -414,6 +414,9 @@ pub struct Period {
     pub payment_ref: String,
     pub run: String,
     pub returned: bool,
+    /// Tax kept back from the period's benefit.
+    #[serde(default)]
+    pub tax_withheld_minor: i64,
     /// The part of `gross_minor` that made good a shortfall on earlier
     /// periods. It is not benefit for this period.
     #[serde(default)]
@@ -940,11 +943,15 @@ pub struct RunItem {
     pub offset: Option<Offset>,
     /// Who is paid: the provider for a remittance advice, or the payee.
     pub payee: String,
+    /// Tax kept back from an income benefit period.
+    #[serde(default)]
+    pub tax_withheld_minor: i64,
 }
 
 impl RunItem {
+    /// What the bank pays: the benefit less any offset and tax kept back.
     pub fn net_minor(&self) -> i64 {
-        self.gross_minor - self.offset.as_ref().map_or(0, |o| o.amount_minor)
+        self.gross_minor - self.offset.as_ref().map_or(0, |o| o.amount_minor) - self.tax_withheld_minor
     }
     pub fn payment_ref(&self, run: &str) -> String {
         format!("{run}/{}/{}", self.claim, self.period_start)

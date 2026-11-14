@@ -9,6 +9,12 @@
 //   period as it is written.
 // - A managed identity for the driver, federated to its Kubernetes service
 //   account, holding exactly the rights above and the cluster token.
+// - Three log alerts on the workspace main.bicep created, which holds the
+//   driver's log through the cluster's monitoring add-on: a price that needs
+//   a person (late, refused by a partition, or a valuation file that could
+//   not be read), the driver failing passes, and the driver silent. They go
+//   to an action group that mails `alertEmails`; with no addresses the
+//   alerts still fire and show in Azure Monitor.
 // - Optionally, the administrator's own Entra service principal, allowed to
 //   write only under `valuations/` and to read only the outbound container.
 //
@@ -59,6 +65,12 @@ param extractRetentionDays int = 2555
 
 @description('Malware scanning cap per month, in GB, for the inbound account.')
 param scanCapGbPerMonth int = 100
+
+@description('The Log Analytics workspace main.bicep created, which receives the cluster\'s container logs.')
+param logAnalyticsWorkspaceName string = '${name}-logs'
+
+@description('Who is told when unit pricing needs a person: the fund operations addresses.')
+param alertEmails array = []
 
 var tags = {
   system: 'insurance-core'
@@ -278,6 +290,131 @@ resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' =
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+// --- alerts ---------------------------------------------------------------------------
+
+resource logs 'Microsoft.OperationalInsights/workspaces@2023-09-01' existing = {
+  name: logAnalyticsWorkspaceName
+}
+
+resource onCall 'Microsoft.Insights/actionGroups@2023-01-01' = if (!empty(alertEmails)) {
+  name: '${name}-unit-pricing-oncall'
+  location: 'global'
+  tags: tags
+  properties: {
+    groupShortName: 'up-oncall'
+    enabled: true
+    emailReceivers: [for (address, i) in alertEmails: {
+      name: 'oncall-${i}'
+      emailAddress: address
+      useCommonAlertSchema: true
+    }]
+  }
+}
+
+var actionGroups = empty(alertEmails) ? [] : [resourceId('Microsoft.Insights/actionGroups', '${name}-unit-pricing-oncall')]
+
+// The driver's log, whichever container log table the cluster writes. The
+// driver logs JSON lines; an alert line has the target `unit_pricing.alert`
+// and names its kind and a stable id (docs/unit-pricing.md, Alerts).
+var driverLog = '''
+union isfuzzy=true
+  (ContainerLogV2 | project TimeGenerated, Line = tostring(LogMessage)),
+  (ContainerLog | project TimeGenerated, Line = LogEntry)
+'''
+
+resource needsAPerson 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: '${name}-unit-pricing-needs-a-person'
+  location: location
+  tags: tags
+  dependsOn: [onCall]
+  properties: {
+    displayName: 'Unit pricing needs a person'
+    description: 'A price is late, a partition refused a price, or a valuation file could not be read. Open Unit pricing in the staff portal; the alert lists each kind and id.'
+    severity: 2
+    enabled: true
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT5M'
+    criteria: {
+      allOf: [
+        {
+          query: '${driverLog}| where Line has "unit_pricing.alert"\n| extend Kind = extract(@\'"kind":"([^"]+)"\', 1, Line), Id = extract(@\'"id":"([^"]+)"\', 1, Line)\n| project TimeGenerated, Kind, Id'
+          timeAggregation: 'Count'
+          dimensions: [
+            { name: 'Kind', operator: 'Include', values: ['*'] }
+          ]
+          operator: 'GreaterThan'
+          threshold: 0
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: false
+    actions: { actionGroups: actionGroups }
+  }
+}
+
+// A pass runs every thirty seconds; one with errors is a blip, ten in
+// fifteen minutes is a part of the world down for the driver.
+resource passesFailing 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: '${name}-unit-pricing-passes-failing'
+  location: location
+  tags: tags
+  dependsOn: [onCall]
+  properties: {
+    displayName: 'Unit pricing driver failing'
+    description: 'The unit pricing driver\'s passes have failed for fifteen minutes: intake, units on issue, extracts or alerts cannot reach the cluster or storage. The log line names the step. See docs/unit-pricing.md, The driver.'
+    severity: 1
+    enabled: true
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          query: '${driverLog}| where Line has "unit pricing pass with errors"'
+          timeAggregation: 'Count'
+          operator: 'GreaterThanOrEqual'
+          threshold: 10
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: actionGroups }
+  }
+}
+
+// Every pass logs a line; none for fifteen minutes means no driver is running.
+resource driverSilent 'Microsoft.Insights/scheduledQueryRules@2022-06-15' = {
+  name: '${name}-unit-pricing-driver-silent'
+  location: location
+  tags: tags
+  dependsOn: [onCall]
+  properties: {
+    displayName: 'Unit pricing driver silent'
+    description: 'No unit pricing pass has been logged for fifteen minutes: no valuation is taken in and no extract written. Check the ic-unit-pricing pods.'
+    severity: 1
+    enabled: true
+    scopes: [logs.id]
+    evaluationFrequency: 'PT5M'
+    windowSize: 'PT15M'
+    criteria: {
+      allOf: [
+        {
+          query: '${driverLog}| where Line has "unit pricing pass"'
+          timeAggregation: 'Count'
+          operator: 'LessThan'
+          threshold: 1
+          failingPeriods: { numberOfEvaluationPeriods: 1, minFailingPeriodsToAlert: 1 }
+        }
+      ]
+    }
+    autoMitigate: true
+    actions: { actionGroups: actionGroups }
   }
 }
 
