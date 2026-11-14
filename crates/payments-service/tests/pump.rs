@@ -99,6 +99,10 @@ struct SimCore {
 }
 
 impl Core for SimCore {
+    async fn send_on(&self, partition: u16, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
+        let applied = self.cluster.lock().unwrap().submit_keyed(partition, key, caller, command);
+        Ok(applied.result.err().map(|r| r.code))
+    }
     async fn send_to(&self, _policy: &PolicyId, key: &str, caller: &str, command: ic_core::Command) -> Result<Option<String>, String> {
         if self.down.load(Ordering::SeqCst) {
             return Err("the core cannot be reached".to_string());
@@ -2076,4 +2080,53 @@ async fn a_misdirected_refund_is_recalled_through_the_bank() {
         };
         assert_eq!(*read_accepted, accepted);
     }
+}
+
+/// Purpose: a command that names no policy (a share of withheld tax paid to
+/// the revenue) is carried to the partition the instruction names, and the
+/// core's refusal there (nothing withheld to discharge) is given to a
+/// person.
+/// Why it matters: each partition holds its own share of the tax; one sent
+/// nowhere, or to the wrong partition, leaves the liability standing after
+/// the revenue has been paid.
+#[tokio::test]
+async fn a_tax_share_is_carried_to_its_partition() {
+    use ic_payments::model::{About, Instruction, OutboxEntry};
+    let world = World::new().await;
+    let pump = world.pump("akl", "a");
+    {
+        let mut guard = world.module.state.lock().unwrap();
+        let state = &mut guard.0;
+        let remit = ic_core::remittance::Remittance {
+            kind: "rwt".to_string(),
+            period: "2027-11".to_string(),
+            payment: "tax-1:1".to_string(),
+            amount: Money::new(10_00, NZD),
+            bank_account: "anz-sf1-third".to_string(),
+            statutory_fund: None,
+        };
+        let entry = OutboxEntry {
+            key: "tax-remitted-tax-1:1".to_string(),
+            instruction: Instruction::CorePartition {
+                partition: 0,
+                caller: "payments".to_string(),
+                command: Box::new(ic_core::Command::RemitWithholding(Box::new(remit))),
+            },
+            about: Some(About::Item("tax-1".to_string())),
+        };
+        state.outbox.insert(state.next_outbox, entry);
+        state.next_outbox += 1;
+    }
+    let pass = pump.pass().await;
+    assert_eq!(pass.instructions, 1, "{:?}", pass.problems);
+    let state = world.state();
+    assert!(state.outbox.is_empty());
+    assert!(
+        state
+            .exceptions
+            .values()
+            .any(|e| e.kind == ExceptionKind::CoreRefused && e.reference.contains("over_remittance")),
+        "{:?}",
+        state.exceptions
+    );
 }

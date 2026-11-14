@@ -511,6 +511,12 @@ pub enum Instruction {
     },
     /// Tell people something they must act on.
     Notify { to: Role, subject: String, detail: String },
+    /// Send this command to one partition: one that names no policy.
+    CorePartition {
+        partition: u16,
+        caller: String,
+        command: Box<ic_core::Command>,
+    },
     /// Ask the bank to recall a payment it settled into the wrong account.
     Recall { recall: Box<crate::file::Recall> },
 }

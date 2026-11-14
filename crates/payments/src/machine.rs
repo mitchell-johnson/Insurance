@@ -222,6 +222,21 @@ pub enum Command {
         #[serde(default)]
         reason: String,
     },
+    /// Pay a kind of withheld tax for a closed month to the revenue's
+    /// payee (`tax.rs`).
+    RequestTaxRemittance {
+        remittance: Id,
+        kind: String,
+        period: String,
+        payee: Id,
+    },
+    /// What finance says is due, and what each partition holds of it.
+    PriceTaxRemittance {
+        remittance: Id,
+        due_minor: i64,
+        due_on: NaiveDate,
+        shares: Vec<crate::tax::Share>,
+    },
     /// Give back money received: its bank recalled it, as a duplicate say
     /// (`returned.rs`). The core reverses what cash matching applied.
     ReturnCredit {
@@ -662,6 +677,9 @@ pub enum Event {
     PayerCaseCleared {
         case: String,
     },
+    TaxRemittanceRequested {
+        remittance: Id,
+    },
     CreditReturned {
         exception: Id,
         policies: Vec<String>,
@@ -784,6 +802,9 @@ pub struct PaymentsState {
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
+    /// Withheld tax being paid to the revenue (`tax.rs`).
+    #[serde(default)]
+    pub tax_remittances: BTreeMap<Id, crate::tax::TaxRemittance>,
     /// Receipts cash matching applied, and credits given back
     /// (`returned.rs`).
     #[serde(default)]
@@ -905,6 +926,18 @@ impl PaymentsState {
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
             Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
+            Command::RequestTaxRemittance {
+                remittance,
+                kind,
+                period,
+                payee,
+            } => self.request_tax_remittance(tx, remittance, kind, period, payee),
+            Command::PriceTaxRemittance {
+                remittance,
+                due_minor,
+                due_on,
+                shares,
+            } => self.price_tax_remittance(tx, &remittance, due_minor, due_on, shares),
             Command::ReturnCredit { exception, reason } => self.return_credit(tx, &exception, reason),
             Command::ReportMisdirected {
                 misdirection,

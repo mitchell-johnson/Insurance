@@ -37,6 +37,7 @@ pub mod repay;
 pub mod returned;
 mod run;
 pub mod sweep;
+pub mod tax;
 
 pub use config::Config;
 pub use drill::Readiness;
