@@ -302,6 +302,10 @@ fn refused_partition_is_republished() {
         },
     );
     assert_eq!(h.state.work().len(), 1);
+    let alerts = |h: &Harness| ic_pricing::host::answer(&h.state, serde_json::json!({"q": "alerts", "as_at": day(2)})).unwrap();
+    let raised = alerts(&h);
+    assert_eq!(raised[0]["kind"], "publication_refused", "{raised}");
+    assert_eq!((raised[0]["partition"].as_u64(), raised[0]["code"].as_str()), (Some(1), Some("unknown_fund")));
     assert_eq!(rep(&mut h), Output::Done);
     let again: Vec<_> = h.state.outbox(10).into_iter().cloned().collect();
     assert_eq!(again.len(), 1);
@@ -310,6 +314,7 @@ fn refused_partition_is_republished() {
     h.deliver_all();
     assert_eq!(h.state.prices[&id].status, PriceStatus::Active);
     assert!(h.state.work().is_empty());
+    assert_eq!(alerts(&h), serde_json::json!([]), "no alert once every partition has applied it");
     assert!(matches!(rep(&mut h), Output::Refused { ref code, .. } if code == "wrong_status"));
 }
 
@@ -341,4 +346,33 @@ fn late_prices_are_listed() {
     let fresh = Harness::new();
     assert!(fresh.state.late(day(3)).is_empty());
     assert_eq!(fresh.state.late(day(4)), vec![(fund_id("growth"), day(2))]);
+}
+
+/// Purpose: a fund whose own calendar does not price on a day that other
+/// funds price (a US equity fund on a US market holiday, INV-005) gets no
+/// price for that day: it cannot be prepared, it is never reported late,
+/// and the next day's price follows the previous one with no gap.
+/// Why it matters: switch proceeds into such a fund wait in pending cash
+/// for the fund's next pricing day; a price struck, or demanded, for the
+/// closed day would deal at a price the fund's market never set.
+#[test]
+fn a_fund_follows_its_own_calendar() {
+    let mut h = Harness::new();
+    let mut v2 = fund("growth");
+    v2.version = 2;
+    v2.content_hash = "growth-v2-us-holiday".into();
+    v2.non_pricing_days = [day(3)].into_iter().collect();
+    h.ok(CALLER_CONFIG, "config", &[], Command::ActivateFund(Box::new(v2)));
+    h.price_day(day(2), "2000000", "0", None);
+    h.receive("F3", valuation(day(3), "2000000", UNITS, "0"));
+    assert!(
+        matches!(h.prepare(day(3)), Output::Refused { ref code, .. } if code == "not_a_pricing_day"),
+        "{:?}",
+        h.prepare(day(3))
+    );
+    assert!(!h.state.late(day(6)).iter().any(|(_, d)| *d == day(3)), "{:?}", h.state.late(day(6)));
+    h.receive("F4", valuation(day(4), "2000000", UNITS, "0"));
+    h.core_units(Some(day(2)), UNITS / 2);
+    let d4 = h.prepared_id(day(4));
+    assert_eq!(h.approve(&d4, BTreeMap::new()), Output::Done, "no gap over the closed day");
 }

@@ -224,6 +224,10 @@ pub struct PricingState {
     pub fund_activated: BTreeMap<FundId, NaiveDate>,
     pub valuations: BTreeMap<String, Vec<ValuationRecord>>,
     pub refused_files: BTreeMap<String, String>,
+    /// Fund definitions the core activated that this module refused, by
+    /// `fund:version`, until a later version of the fund is taken.
+    #[serde(default)]
+    pub refused_definitions: BTreeMap<String, String>,
     pub core_units: BTreeMap<FundId, BTreeMap<PartitionId, CoreUnits>>,
     pub prices: BTreeMap<String, Price>,
     /// Drafts prepared for each slot, for numbering.
@@ -283,6 +287,19 @@ impl PricingState {
         };
         if let Some(cutoff) = today.checked_sub_days(Days::new(KEY_RETENTION_DAYS)) {
             self.applied.retain(|_, (day, _)| *day >= cutoff);
+        }
+        if let Command::ActivateFund(def) = &envelope.command {
+            match &output {
+                Output::Refused { code, message } if envelope.caller == CALLER_EVENTS => {
+                    self.refused_definitions
+                        .insert(format!("{}:{}", def.id.0, def.version), format!("{code}: {message}"));
+                }
+                Output::Done => {
+                    let prefix = format!("{}:", def.id.0);
+                    self.refused_definitions.retain(|k, _| !k.starts_with(&prefix));
+                }
+                _ => {}
+            }
         }
         self.applied.insert(envelope.key, (today, output.clone()));
         output

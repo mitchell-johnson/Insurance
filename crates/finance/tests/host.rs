@@ -144,7 +144,7 @@ fn a_role_the_chart_does_not_place_stalls_the_feed_until_a_chart_does() {
 /// Purpose: the module the node hosts is named `finance`, reads the core's events, takes
 /// commands and events as JSON, saves and loads its whole state, and answers each question:
 /// status, dashboard, checks, trial balance, movements, sources, backdated items, a journal,
-/// conduct and a filed return. An unknown question or a missing journal or return is an
+/// conduct, a filed return and the configurations waiting for approval. An unknown question or a missing journal or return is an
 /// error, not an empty answer.
 /// Why it matters: this is the surface the finance console, the close workflow and the other
 /// modules' drivers use in production. A question that silently returned nothing, or a
@@ -182,8 +182,17 @@ fn the_hosted_module_takes_events_and_answers_questions() {
         format!("chart:{}:{}", c.version, c.content_hash),
         format!("close:{}:{}", k.version, k.content_hash),
     );
+    let ask = |module: &dyn ic_raft::ModuleState, question: Value| module.query(question);
+    let (chart_version, chart_hash) = (c.version, c.content_hash.clone());
     send(&mut module, "finance-console", Some("olive"), FinCommand::ProposeChart { chart: c });
-    send(&mut module, "finance-console", Some("lena"), FinCommand::ApproveConfig { id: chart_id });
+    // The lead sees what waits for approval without being told its ID.
+    let pending = ask(module.as_ref(), json!({"q": "proposals"})).unwrap();
+    assert_eq!(
+        pending,
+        json!([{ "id": chart_id, "kind": "chart", "version": chart_version, "hash": chart_hash, "proposer": "olive" }])
+    );
+    send(&mut module, "finance-console", Some("lena"), FinCommand::ApproveConfig { id: chart_id.clone() });
+    assert_eq!(ask(module.as_ref(), json!({"q": "proposals"})).unwrap(), json!([]));
     send(&mut module, "finance-console", Some("olive"), FinCommand::ProposeCloseConfig { config: k });
     send(&mut module, "finance-console", Some("lena"), FinCommand::ApproveConfig { id: close_id });
     let events = ten_days();
@@ -197,7 +206,6 @@ fn the_hosted_module_takes_events_and_answers_questions() {
         .unwrap_err()
         .contains("not a command of this module"));
 
-    let ask = |module: &dyn ic_raft::ModuleState, question: Value| module.query(question);
     let status = ask(module.as_ref(), json!({"q": "status"})).unwrap();
     assert_eq!(
         (status["configured"].clone(), status["chart"].clone(), status["last_date"].clone()),
