@@ -648,6 +648,9 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// What people paid by mistake owe back, by debt ID.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub payee_debts: BTreeMap<String, crate::payee_debt::PayeeDebt>,
     /// What the owner has borrowed against the policy, once they have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loan: Option<crate::loan::Loan>,

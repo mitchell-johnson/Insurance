@@ -22,6 +22,7 @@ pub mod loan;
 pub mod machine;
 pub mod nomination;
 pub mod owner_hold;
+pub mod payee_debt;
 pub mod payments;
 pub mod policy;
 pub mod premium;
