@@ -911,7 +911,7 @@ impl DocumentsState {
         if issue.recipients.iter().any(|r| r.channels.is_empty() && !proof) {
             return reject("invalid", "every recipient needs a channel");
         }
-        if let Some(policy) = &issue.policy {
+        if let Some(policy) = issue.policy.as_ref().filter(|_| issue.copy_of.is_none()) {
             let from_trigger = issue
                 .trigger_event
                 .as_ref()
@@ -952,6 +952,8 @@ impl DocumentsState {
         }
         let minimum_days = record.template.minimum_notice_days;
         let notice = match (&issue.notice, minimum_days) {
+            // A copy in another language runs no clock: the original does.
+            _ if issue.copy_of.is_some() => None,
             (None, Some(_)) => {
                 return reject(
                     "no_purpose",
@@ -1087,7 +1089,9 @@ impl DocumentsState {
                 defect.notices.insert(c.original.clone(), DefectItem::Corrected { by: issue.document.clone() });
             }
         }
-        if let Some(event) = &issue.trigger_event {
+        // A copy names the event its original answers, but the original
+        // answers it.
+        if let Some(event) = issue.trigger_event.as_ref().filter(|_| issue.copy_of.is_none()) {
             self.triggers.remove(&format!("{event}:{:?}", issue.kind));
         }
         let document = Document {

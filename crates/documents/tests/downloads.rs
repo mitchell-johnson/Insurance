@@ -114,6 +114,7 @@ fn request(id: &str, owner: &str, others: &[&str], class: DataClass) -> IssueReq
         wordings: vec![],
         components: vec![],
         notice: None,
+        copy_of: None,
     }
 }
 
