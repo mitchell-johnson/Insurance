@@ -2079,6 +2079,7 @@ dependencies = [
  "ic-core",
  "ic-ledger",
  "ic-log",
+ "ic-money",
  "ic-product",
  "ic-readmodel",
  "openraft",
