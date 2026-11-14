@@ -93,7 +93,7 @@ fn an_advisers_new_policy_is_advised_once_with_each_covers_yearly_premium() {
 
 /// Purpose: the quote's own yearly figure for each cover is used where it gives one; an
 /// adviser who names no option is on upfront; a life whose cover was declined earns nothing; a
-/// direct application is not advised; and an option that is not upfront, hybrid or level, or one
+/// direct application is not advised (nor a cover with no decision); and an option that is not upfront, hybrid or level, or one
 /// given with no adviser, is refused at the door.
 /// Why it matters: the rating engine's per-cover premium is the true one, and sharing by amount
 /// is only a fallback. Commission on a declined cover, or on a policy no adviser wrote, is money
@@ -119,6 +119,13 @@ fn quoted_cover_premiums_and_the_default_option_are_used_and_direct_business_is_
     let mut declined = w.p("P1").clone();
     declined.lives.get_mut(&LifeId::from("L2")).unwrap().stage = Stage::Declined;
     assert_eq!(accepted_premiums(&declined), BTreeMap::from([("life".to_string(), 900_00)]));
+    // A cover nobody decided earns nothing either.
+    let mut undecided = w.p("P1").clone();
+    let mut extra = undecided.covers[0].clone();
+    extra.code = "trauma".into();
+    undecided.covers.push(extra);
+    undecided.quote.cover_premiums_minor.insert("trauma".into(), 100_00);
+    assert!(!accepted_premiums(&undecided).contains_key("trauma"));
     let effects = issued(&mut w, "P1");
     let [Effect::AdviseNewBusiness { option, premiums, .. }] = &advice(&effects)[..] else {
         panic!("one advice")

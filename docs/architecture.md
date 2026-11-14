@@ -567,7 +567,7 @@ Owned by the thread "Build underwriting and new business". The full module descr
 
 **Open questions for Mitchell.** Whether an avoided policy's premiums are refunded or kept is recorded per case by the two seniors; which the law allows needs legal review against the Contracts of Insurance Act 2024 regime. The design describes a Temporal workflow per proposal; the module uses its state machine and the daily sweep instead, so timers are accurate to the day.
 
-**Checks.** At the last run on main (2026-11-12) fmt, clippy, the test-doc check and all `ic-underwriting`, `ic-core` and `ic-sim` tests passed; crate line coverage was 98.05% (cargo llvm-cov's table) when re-measured on 2026-11-14 after the AIA product conditions; all `ic-underwriting` tests pass.
+**Checks.** At the last run on main (2026-11-12) fmt, clippy, the test-doc check and all `ic-underwriting`, `ic-core` and `ic-sim` tests passed; crate line coverage was 98.01% (cargo llvm-cov's table) when re-measured on 2026-11-14 after the commission advice; all `ic-underwriting` tests pass.
 
 ## Payments and bank channels
 
