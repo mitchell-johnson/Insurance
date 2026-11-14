@@ -110,5 +110,6 @@ async function admin() {
   put($("grants"), table(["Grant", "Holder", "State", ""], view.grants.map((g) => [g.id, g.holder, words(g.state), g.state === "requested" ? h("button", { class: "quiet", on: { click: run($("admin-msg"), async () => { await api(R, "POST", "/staff/v1/access", { approve_grant: { id: g.id } }); await admin(); return "Approved."; }) } }, "Approve") : ""])));
   portal.put($("alignment"), portal.details(view.alignment)) + (view.external_source_available ? "" : "\nThe entitlement source is unavailable: nothing new is granted from it until it returns.");
 }
-signIn(R).catch(portal.refuse);
+// Someone with no staff record is refused at the door, not shown forms that will each refuse them.
+signIn(R).then(() => api(R, "GET", "/staff/v1/me")).catch(portal.refuse);
 </script></body></html>

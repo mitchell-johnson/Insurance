@@ -31,6 +31,11 @@ const C = ["claim", "Claim", "text"];
 const ACTIONS = {
   notify: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", TYPES], ["event_date", "Event date", "date"],
     ["channel", "Channel", "select", ["phone", "letter", "app", "adviser_portal", "employer_portal", "provider"]], ["notifier", "Notified by", "select", ["policyholder", "life_insured", "beneficiary", "executor", "employer", "adviser", "provider"]], ["claimant", "Claimant (optional)", "optional"]],
+  // A health invoice or receipt, or a request to pre-approve treatment, arrives as a notification with what was billed.
+  notify_a_health_invoice: [C, ["policy", "Policy", "text"], ["cover", "Cover", "text"], ["life", "Life (optional)", "optional"], ["claim_type", "Claim type", "select", ["health"]], ["event_date", "Treatment date", "date"],
+    ["channel", "Channel", "select", ["provider", "app", "phone", "letter", "adviser_portal", "employer_portal"]], ["notifier", "Sent by", "select", ["provider", "policyholder", "life_insured", "employer", "adviser"]],
+    ["health.category", "Benefit category", "text"], ["health.invoice_minor", "Invoice amount", "money"], ["health.provider", "Pay this provider directly (optional)", "optional"],
+    ["health.pre_approval_request", "Asking for pre-approval", "bool"], ["health.settles_pre_approval", "Pre-approval it settles (optional)", "optional"], ["health.service_code", "Provider's service code (optional)", "optional"], ["health.service_date", "Date of service (optional)", "optdate"]],
   assign: [C, ["to", "To (staff reference)", "text"]],
   record_contact: [C], escalate: [C], open_file: [C],
   identify_life: [C, ["party", "Life (customer reference)", "text"]],
@@ -42,6 +47,8 @@ const ACTIONS = {
   complete_task: [C, ["task", "Task reference", "text"], ["outcome", "Outcome", "text"], ["attendees", "Attendees (comma separated)", "list"], ["vault_ref", "Record in the vault (optional)", "optional"]],
   decide_reserve: [C, ["request.reserve.amount_minor", "Reserve", "money"], ["reasons", "Reason codes (comma separated)", "list"]],
   decide_admit: [C, ["request.admit.amount_minor", "Amount (blank for the sum insured)", "optmoney"], ["reasons", "Reason codes (comma separated)", "list"]],
+  decide_admit_a_benefit_in_payment: [C, ["request.admit.periodic.monthly_minor", "Monthly benefit", "money"], ["request.admit.periodic.first_period", "First day benefit is payable for", "date"],
+    ["request.admit.periodic.end", "First day no benefit is payable for", "date"], ["request.admit.periodic.expected_end", "Expected to end", "date"], ["reasons", "Reason codes (comma separated)", "list"]],
   decide_decline: [C, ["reasons", "Reason codes (comma separated)", "list"]],
   decide_withdraw: [C, ["reasons", "Reason codes (comma separated)", "list"]],
   decide_end_benefit: [C, ["request.end_benefit.end", "Ends on", "date"], ["request.end_benefit.reason", "Reason", "select", ["recovered", "benefit_period_end", "expiry_age", "death"]], ["reasons", "Reason codes (comma separated)", "list"]],
@@ -59,14 +66,14 @@ const ACTIONS = {
   approve_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
   cancel_run: [["partition", "Partition", "int"], ["run", "Run reference", "text"]],
 };
-const commandName = (action) => action.startsWith("decide_") ? "decide" : action;
+const commandName = (action) => action.startsWith("decide_") ? "decide" : action.startsWith("notify") ? "notify" : action;
 
 function fields() {
   const spec = ACTIONS[$("a-command").value] || [];
   put($("a-fields"), spec.map(([key, label, kind, options], n) => {
     const id = "f-" + n;
     const input = kind === "select" ? h("select", { id }, options.map((o) => h("option", { value: o }, words(o))))
-      : kind === "bool" ? h("select", { id }, h("option", { value: "true" }, "Yes"), h("option", { value: "false" }, "No"))
+      : kind === "bool" ? h("select", { id }, h("option", { value: "true", selected: key !== "health.pre_approval_request" }, "Yes"), h("option", { value: "false", selected: key === "health.pre_approval_request" }, "No"))
       : h("input", { id, type: kind === "date" || kind === "optdate" ? "date" : kind === "int" || kind === "money" || kind === "optmoney" ? "number" : "text",
           step: kind === "money" || kind === "optmoney" ? "0.01" : null, min: kind === "int" || kind === "money" ? "0" : null,
           required: !["optional", "optdate", "optmoney", "list"].includes(kind), value: key === "claim" ? $("c-id").value : null });
@@ -87,7 +94,7 @@ $("act").addEventListener("submit", run($("act-msg"), async () => {
     at[path[path.length - 1]] = value;
   });
   if (action === "decide_decline" || action === "decide_withdraw") inner.request = action.slice(7);
-  if (action === "notify") delete inner.reasons;
+  if (name === "notify") delete inner.reasons;
   body.command = { [name]: inner };
   const done = await send(body);
   if (inner.claim && (inner.claim === $("c-id").value || action === "notify")) { $("c-id").value = inner.claim; await show(inner.claim); }

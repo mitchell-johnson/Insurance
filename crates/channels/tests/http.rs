@@ -711,6 +711,11 @@ async fn an_advisers_request_needs_the_customers_signed_approval() {
     );
     assert_eq!(portal.get("sub-adv", "/adviser/v1/practice").await.1["advisers"], json!([]));
 
+    // A customer who is no adviser is refused the portal, not shown an empty book.
+    let (status, problem) = portal.get("sub-kiri", "/adviser/v1/book").await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{problem}");
+    assert_eq!(portal.get("sub-fap", "/adviser/v1/book").await.0, StatusCode::OK);
+
     let (status, book) = portal.get("sub-adv", "/adviser/v1/book").await;
     assert_eq!(
         (status, &book["policies"][0]["can_transact"], &book["held"]["held"]["NZD"]),
@@ -1108,6 +1113,17 @@ async fn every_staff_read_is_in_the_access_log() {
     assert_eq!(portal.get("sub-sue", &format!("/staff/v1/policies/{policy}")).await.0, StatusCode::FORBIDDEN);
     assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 2);
 
+    // An allowed read and a refused one of the same policy in the same second each keep their line.
+    portal.clock.fetch_add(1, Ordering::SeqCst);
+    assert_eq!(
+        portal.get("sub-sue", &format!("/staff/v1/policies/{policy}?case=case-8")).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(portal.get("sub-sue", &format!("/staff/v1/policies/{policy}")).await.0, StatusCode::FORBIDDEN);
+    let log = recent(&portal.get("sub-sue", "/staff/v1/me").await.1);
+    assert_eq!(log.len(), 4, "{log:?}");
+    assert_eq!(log.iter().filter(|line| line["decision"]["allowed"] == false).count(), 2);
+
     // The workbench list, one party and the proof of debt are each logged against the party read.
     for path in ["/staff/v1/workbench", "/staff/v1/workbench/adv-1", "/staff/v1/workbench/adv-1/proof-of-debt"] {
         portal.clock.fetch_add(1, Ordering::SeqCst);
@@ -1127,7 +1143,7 @@ async fn every_staff_read_is_in_the_access_log() {
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert!(problem["detail"].as_str().unwrap().contains("personal connection"));
     let log = recent(&portal.get("sub-sue", "/staff/v1/me").await.1);
-    assert_eq!((log.len(), log[0]["flag"].as_str()), (3, Some("personal")));
+    assert_eq!((log.len(), log[0]["flag"].as_str()), (5, Some("personal")));
     // She cannot take the declaration back herself.
     let end = json!({ "end_connection": { "staff": "sue", "party": KIRI } });
     assert_eq!(portal.write("POST", "sub-sue", "/staff/v1/access", end).await.0, StatusCode::FORBIDDEN);
@@ -1147,7 +1163,7 @@ async fn every_staff_read_is_in_the_access_log() {
     } });
     let (status, problem) = portal.write("POST", "sub-sue", "/staff/v1/access", forged).await;
     assert_eq!((status, problem["title"].as_str()), (StatusCode::FORBIDDEN, Some("forbidden")));
-    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 3);
+    assert_eq!(recent(&portal.get("sub-sue", "/staff/v1/me").await.1).len(), 5);
 }
 
 /// Purpose: finance staff work the held balance workbench over HTTP: the list, one party, the proof of debt, and prepare then approve by a second person; the console cannot send the commands that belong to the owning modules.
