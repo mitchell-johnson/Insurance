@@ -32,7 +32,7 @@ and a failing journey is a finding about the product to be read by a person.
 | Where | What |
 |---|---|
 | `stack/stack.js` | Starts the real binaries from `target/debug` and waits for them. |
-| `stack/seed.js` | Sets the insurer up through the system's own routes: staff and their roles, complaints timers, the finance chart, claims rules, payments banks and channels, the distribution structure. |
+| `stack/seed.js` | Sets the insurer up. Each module's configuration (complaints timers, the finance chart, claims rules, payments banks and channels) is written as a set-up file and sent by the operator's tool, `ic-admin apply`; staff, the distribution structure and a group scheme go in through the portal's own routes. |
 | `lib/cast.js` | Who signs in: each persona, what they are and the roles the insurer gave them. |
 | `lib/suite.js` | The harness: a `Journey` (the set-up a test starts from) and a `Screen` (one signed-in browser page). |
 | `lib/oracle.js` | The independent calculator (see below). |

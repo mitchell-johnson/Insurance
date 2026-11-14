@@ -1,12 +1,15 @@
 // Seeds the running system with the persona cast and the configuration an
 // insurer activates before its first day: staff roles and people, each
-// module's rules, the policies the personas hold. Everything goes in through
-// a route or a command the system offers for that purpose, as the named
-// service or person who would send it; nothing is written into a store.
+// module's rules, the policies the personas hold. Each module's configuration
+// is written as the set-up file an operator keeps and is sent by the
+// operator's own tool, `ic-admin apply`. Everything else goes in through a
+// route or a command the system offers for that purpose, as the named service
+// or person who would send it; nothing is written into a store.
 //
 // Safe to run twice: every command carries a key, and a repeat changes
 // nothing.
 "use strict";
+const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { System } = require("./cluster");
@@ -27,7 +30,7 @@ async function seed(stack) {
   const sys = new System(stack);
   const config = shipped();
   // The tests issue policies from the shipped application templates.
-  require("fs").writeFileSync(path.join(stack.run, "shipped.json"), JSON.stringify(config));
+  fs.writeFileSync(path.join(stack.run, "shipped.json"), JSON.stringify(config));
   const opening = stack.opening;
   const now = new Date().toISOString();
   const log = (line) => console.log(`seed: ${line}`);
@@ -48,23 +51,26 @@ async function seed(stack) {
   }
   log(`${staff.length} staff employed, ${partners.length} partners and customers bound`);
 
-  // --- Complaints: the timers and limits of the conduct regime.
-  await told("complaints", { key: "seed-timers-1", caller: "config", actor: "config", at: now, command: { activate_timers: {
+  // --- The insurer's own configuration, as one set-up file sent by the operator's tool, `ic-admin apply`
+  // (`docs/operations.md`, step 11): a real deployment is configured the same way, with its own file.
+  const steps = [];
+  const configure = (module, envelope) => steps.push({ module: { module, envelope, accept: [] } });
+
+  // Complaints: the timers and limits of the conduct regime.
+  configure("complaints", { key: "seed-timers-1", caller: "config", actor: "config", at: now, command: { activate_timers: {
     version: 1, acknowledge_days: 5, update_every_days: 10, decide_days: 20, deadlock_days: 40, warning_days: 2, conduct_officer_after_days: 3, complainant_response_days: 10,
     vulnerable_extra_days: 10, front_line_limit_minor: 100_00, ex_gratia_limits_minor: { 1: 500_00, 3: 5_000_00 }, regulator_notification_days: 10, retain_closed_days: 2555,
-    cause_codes: ["delay", "wrong_decision", "poor_explanation", "adviser_conduct", "billing_error", "privacy_breach"] } } }, "the timers");
-  log("complaints timers active");
+    cause_codes: ["delay", "wrong_decision", "poor_explanation", "adviser_conduct", "billing_error", "privacy_breach"] } } });
 
-  // --- Finance: the shipped chart and close configuration, proposed by one set-up person and approved by another.
-  const fin = (key, caller, actor, role, command) => told("finance", { key, caller, ...(actor ? { actor, roles: [role] } : {}), command }, key);
-  await fin("seed-configure", "operator", null, null, { configure: { partitions: stack.partitions, year_end_month: 3 } });
-  await fin("seed-chart", "finance-console", "config-author", "finance_operator", { propose_chart: { chart: config.finance.chart } });
-  await fin("seed-chart-ok", "finance-console", "config-approver", "finance_lead", { approve_config: { id: config.finance.chart_id } });
-  await fin("seed-close", "finance-console", "config-author", "finance_operator", { propose_close_config: { config: config.finance.close } });
-  await fin("seed-close-ok", "finance-console", "config-approver", "finance_lead", { approve_config: { id: config.finance.close_id } });
-  log("finance chart and close configuration active");
+  // Finance: the shipped chart and close configuration, proposed by one set-up person and approved by another.
+  const fin = (key, caller, actor, role, command) => configure("finance", { key, caller, ...(actor ? { actor, roles: [role] } : {}), command });
+  fin("seed-configure", "operator", null, null, { configure: { partitions: stack.partitions, year_end_month: 3 } });
+  fin("seed-chart", "finance-console", "config-author", "finance_operator", { propose_chart: { chart: config.finance.chart } });
+  fin("seed-chart-ok", "finance-console", "config-approver", "finance_lead", { approve_config: { id: config.finance.chart_id } });
+  fin("seed-close", "finance-console", "config-author", "finance_operator", { propose_close_config: { config: config.finance.close } });
+  fin("seed-close-ok", "finance-console", "config-approver", "finance_lead", { approve_config: { id: config.finance.close_id } });
 
-  // --- Claims: the rules and the authority book, on every partition.
+  // Claims: the rules and the authority book, on every partition.
   const all = ["reserve", "admit", "decline", "withdraw", "end_benefit"];
   const rules = {
     version: 1, escalation_days: [1, 3, 7], large_claim_minor: 1_000_000_00, two_signature_admission_minor: 250_000_00, two_signature_ex_gratia_minor: 5_000_00, two_signature_write_off_minor: 1_000_00,
@@ -95,12 +101,10 @@ async function seed(stack) {
     },
     prepared_by: "config-author", approved_by: ["config-approver", "config-second"],
   };
-  for (const [key, command] of [["seed-claims-rules", { claims: { activate_rules: { rules } } }], ["seed-claims-book", { claims: { activate_authority: { book } } }]]) {
-    const r = await sys.http("POST", stack.api, "/v1/commands", { headers: { "x-dev-subject": "svc-config", "x-dev-roles": "config", "idempotency-key": key }, body: { command } });
-    if (!r.ok || (r.data && r.data.rejected)) throw new Error(`claims configuration ${key}: ${r.status} ${JSON.stringify(r.data)}`);
-  }
-  log("claims rules and authority book active on every partition");
-  // --- Payments: the banks, channels, accounts, routes and control rules. No bank is named in the design, so these are
+  steps.push({ core: { key: "seed-claims-rules", command: { claims: { activate_rules: { rules } } } } });
+  steps.push({ core: { key: "seed-claims-book", command: { claims: { activate_authority: { book } } } } });
+
+  // Payments: the banks, channels, accounts, routes and control rules. No bank is named in the design, so these are
   // two stand-in banks; the pump that talks to a bank is not part of this stack, and tests report its part as the driver.
   const regions = ["akl", "syd", "mel"];
   const endpoint = (channel, region) => ({ url: `https://${channel}.bank.test/${region}`, credential: `${channel}-${region}-credential`, signing_key: `${channel}-${region}-signing`,
@@ -120,16 +124,22 @@ async function seed(stack) {
     rules: { cooling_off_hours: 24, duplicate_window_days: 3, dishonours_before_suspension: 2, pre_advice_threshold_minor: 250_000_00, on_call: [cast.st17.party],
       drill_max_age_days: 90, drill_account: { name: "Insurer Operating", number: "0100000001" }, drill_amount_minor: 1_00, voter_regions: regions, holidays: ["2027-12-27", "2027-12-28"] },
   };
-  await told("payments", { key: "seed-payments-config-1", actor: { id: "connectivity-admin", roles: ["connectivity_admin"] }, at: `${opening}T08:00:00`, command: { type: "activate_config", version: 1, config: payments } }, "its configuration");
+  configure("payments", { key: "seed-payments-config-1", actor: { id: "connectivity-admin", roles: ["connectivity_admin"] }, at: `${opening}T08:00:00`, command: { type: "activate_config", version: 1, config: payments } });
+
+  // Unit pricing: how many partitions report units on issue.
+  configure("unit-pricing", { key: "seed-pricing-partitions", caller: "unit-pricing-intake", actor: "unit-pricing-intake", roles: [], at: `${opening}T08:10:00Z`, command: { record_partitions: { count: stack.partitions } } });
+
+  const setup = path.join(stack.run, "setup.json");
+  fs.writeFileSync(setup, JSON.stringify({ steps }, null, 1));
+  const applied = spawnSync(path.join(bin, "ic-admin"), ["apply", setup], { encoding: "utf8",
+    env: { PATH: process.env.PATH, IC_NODES: stack.nodes.map((u) => u.replace(/^https?:\/\//, "")).join(","), IC_CLUSTER_NODES: stack.nodes.map((u) => u.replace(/^https?:\/\//, "")).join(","), IC_CLUSTER_TOKEN: stack.token, IC_LEDGER_PATIENCE_SECS: "120" } });
+  if (applied.status !== 0) throw new Error(`ic-admin apply ${setup} failed: ${applied.stderr || applied.stdout}`);
+  log(`ic-admin apply: ${applied.stdout.replace(/\s+/g, " ").trim()} (complaints timers, finance chart and close, claims rules and authority book, payments banks and routes, unit pricing partitions)`);
+
   // The bank driver reads a statement for every account each morning; without one no run can be approved, because the balance is unknown.
   for (const code of Object.keys(accounts)) await told("payments", { key: `seed-statement-${code}`, actor: { id: "bank-driver", roles: ["service"] }, at: `${opening}T08:05:00`,
     command: { type: "record_statement", account: code, date: Journey_before(opening, 3), opening_minor: 10_000_000_00, closing_minor: 10_000_000_00, lines: [] } }, `the statement of ${code}`);
-  log("payments banks, channels, routes and rules active; a statement read for every account");
-
-  // --- Unit pricing: how many partitions report units on issue. The intake driver records this once when it starts;
-  // the driver is not part of this stack, so the seed does its part.
-  await told("unit-pricing", { key: "seed-pricing-partitions", caller: "unit-pricing-intake", actor: "unit-pricing-intake", roles: [], at: `${opening}T08:10:00Z`, command: { record_partitions: { count: stack.partitions } } }, "the number of partitions");
-  log("unit pricing knows the number of partitions");
+  log("the bank driver's part: a statement read for every account");
 
   // --- Distribution: two advice providers, the advisers engaged with them, and a current licence for each provider.
   // Entered by the distribution administrator through the commission console's own route.
@@ -160,7 +170,6 @@ async function seed(stack) {
 module.exports = { seed, shipped };
 
 if (require.main === module) {
-  const fs = require("fs");
   const run = path.resolve(root, process.env.IC_E2E_RUN || "e2e/.run");
   seed(JSON.parse(fs.readFileSync(path.join(run, "stack.json"), "utf8"))).then(() => console.log("seeded")).catch((e) => { console.error(String(e.stack || e)); process.exit(1); });
 }
