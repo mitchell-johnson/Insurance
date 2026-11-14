@@ -678,6 +678,9 @@ pub(crate) fn close_out(
             l.end = Some(cover_ends.max(l.start));
         }
     }
+    // A loan the ending did not repay has nothing left to be repaid from.
+    let id = policy.id.to_string();
+    crate::loan::write_off(ledger, policy, ctx, entry_kind, &id)?;
     Ok(())
 }
 
