@@ -1551,3 +1551,55 @@ fn claims_by_cause_are_categories_with_small_rows_folded_or_withheld() {
     assert_eq!(april["control"]["claims"], 0);
     assert!(state.mart.claims_by_cause(day(3, 31), day(3, 1)).is_err());
 }
+
+/// Purpose: one policy is issued as new business and another is issued and then
+/// announced as migrated from the old system on the same day. The movement extract shows
+/// the first as `new_business` and the second as `migrated`, and both are in force.
+/// Why it matters: new business figures drive commission reviews, sales reporting and the
+/// actuary's new business strain. A book loaded from the old system on cutover day would
+/// otherwise look like a month of record sales.
+#[test]
+fn a_migrated_policy_is_not_new_business_in_the_movements() {
+    let day = |n: u32| d(2028, 3, n);
+    let mut s = Stream::new(day(1));
+    for policy in ["pol-new", "pol-old"] {
+        s.push(Event::PolicyIssued {
+            policy: PolicyId::from(policy),
+            number: policy.to_string(),
+            group: "grp".into(),
+            policyholder: "party-x".into(),
+            product_code: "term-life".to_string(),
+            product_hash: "h".to_string(),
+            inception: d(2020, 6, 1),
+            lives: vec![LifeInfo::new("life-1".into(), None)],
+            layers: vec![layer("life", 1, "life-1", 100_000_00, d(2020, 6, 1))],
+            members: vec![],
+        });
+    }
+    s.push(Event::PolicyMigrated {
+        policy: PolicyId::from("pol-old"),
+        cohort: "c1".to_string(),
+        cutover: day(1),
+        periods_billed: 93,
+        standing: None,
+        outstanding_minor: 0,
+        oldest_unpaid_due: None,
+        assumptions: vec![],
+    });
+    s.close(day(2));
+    s.close(day(3));
+    let mart = mart_of(1, &s.events);
+    let movement = mart.movement(day(1), day(1)).unwrap();
+    let kinds: BTreeSet<(String, String)> = movement.lines[1..]
+        .iter()
+        .map(|l| {
+            let cols: Vec<&str> = l.split(',').collect();
+            (cols[2].to_string(), cols[4].to_string())
+        })
+        .collect();
+    assert!(kinds.contains(&("pol-new".to_string(), "new_business".to_string())), "{kinds:?}");
+    assert!(kinds.contains(&("pol-old".to_string(), "migrated".to_string())), "{kinds:?}");
+    assert!(!kinds.contains(&("pol-old".to_string(), "new_business".to_string())), "{kinds:?}");
+    assert!(movement.reconciled);
+    assert_eq!(mart.in_force(day(1)).unwrap().control["policies"], 2);
+}

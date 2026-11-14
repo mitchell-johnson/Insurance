@@ -845,3 +845,54 @@ fn a_policy_is_placed_in_its_accounting_group_at_issue_and_never_moved() {
     twice.grouping.push(next.grouping[0].clone());
     assert!(twice.validate().unwrap_err().to_string().contains("declared twice"));
 }
+
+/// Purpose: a migration cohort is opened on 28 March and its load of 500.00 sits in
+/// migration clearing over the end of March, which is fine while the cohort is open. The
+/// cohort is abandoned on 3 April but nothing takes the load out of clearing, so April's
+/// migration control check names the clearing account and its balance. The load is
+/// taken out in May, and May is green.
+/// Why it matters: clearing is meant to be empty once a cohort is signed off or taken
+/// out. A balance left there with no cohort open is old-system money that never reached
+/// a policy, and it would otherwise sit unnoticed in an asset account.
+#[test]
+fn migration_clearing_is_empty_whenever_no_cohort_is_open() {
+    let load = |s: &mut Stream, minor: i128| {
+        s.entry(vec![
+            line("migration_clearing", AccountClass::Asset, AccountUnit::Minor(NZD), minor, Some("SF1-life")),
+            line("claim_reserve", AccountClass::Liability, AccountUnit::Minor(NZD), -minor, Some("SF1-life")),
+        ]);
+    };
+    let mut s = Stream::open(d(2028, 3, 28));
+    s.push(Event::CohortOpened {
+        cohort: "c1".to_string(),
+        cutover: d(2028, 3, 28),
+    });
+    load(&mut s, 500_00);
+    while s.date < d(2028, 4, 3) {
+        s.close();
+    }
+    s.push(Event::CohortAbandoned { cohort: "c1".to_string() });
+    while s.date < d(2028, 5, 4) {
+        s.close();
+    }
+    load(&mut s, -500_00);
+    while s.date < d(2028, 6, 2) {
+        s.close();
+    }
+    let mut b = Books::ready(1);
+    b.feed(&s.events).unwrap();
+    let check = "migration_control";
+    // 1430 is not involved; the posting is to clearing only.
+    assert_eq!(status(&b, period(2028, 3), check), CheckStatus::Green);
+    let CheckStatus::Red { items } = status(&b, period(2028, 4), check) else {
+        panic!("a load left in clearing was not noticed")
+    };
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert!(
+        items[0].starts_with(&format!("migration clearing 1445 holds {} ", 500_00 * FINE_PER_MINOR)) && items[0].contains("no cohort open"),
+        "{}",
+        items[0]
+    );
+    assert_eq!(status(&b, period(2028, 5), check), CheckStatus::Green);
+    assert_eq!(b.state.cohorts["c1"], (d(2028, 3, 28), Some(d(2028, 4, 3))));
+}
