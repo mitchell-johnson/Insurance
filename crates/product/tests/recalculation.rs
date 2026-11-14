@@ -66,18 +66,27 @@ impl Fraction {
     fn times(self, o: Fraction) -> Self {
         // Cross-reduced first, so the products stay inside 128 bits.
         let (g, h) = (gcd(self.top, o.bottom).max(1), gcd(o.top, self.bottom).max(1));
-        Fraction::new((self.top / g).checked_mul(o.top / h).unwrap(), (self.bottom / h).checked_mul(o.bottom / g).unwrap())
+        Fraction::new(
+            (self.top / g).checked_mul(o.top / h).unwrap(),
+            (self.bottom / h).checked_mul(o.bottom / g).unwrap(),
+        )
     }
     /// Over the least common denominator, so long chains of sums stay small.
     fn plus(self, o: Fraction) -> Self {
         let g = gcd(self.bottom, o.bottom);
         let (a, b) = (o.bottom / g, self.bottom / g);
-        Fraction::new(self.top.checked_mul(a).unwrap() + o.top.checked_mul(b).unwrap(), self.bottom.checked_mul(a).unwrap())
+        Fraction::new(
+            self.top.checked_mul(a).unwrap() + o.top.checked_mul(b).unwrap(),
+            self.bottom.checked_mul(a).unwrap(),
+        )
     }
     fn less(self, o: Fraction) -> Self {
         let g = gcd(self.bottom, o.bottom);
         let (a, b) = (o.bottom / g, self.bottom / g);
-        Fraction::new(self.top.checked_mul(a).unwrap() - o.top.checked_mul(b).unwrap(), self.bottom.checked_mul(a).unwrap())
+        Fraction::new(
+            self.top.checked_mul(a).unwrap() - o.top.checked_mul(b).unwrap(),
+            self.bottom.checked_mul(a).unwrap(),
+        )
     }
     fn over(self, n: i128) -> Self {
         Fraction::new(self.top, self.bottom.checked_mul(n).unwrap())
@@ -485,7 +494,6 @@ fn a_chain_of_discounts_a_levy_and_tax_equal_an_independent_recalculation() {
     assert_eq!(compared, 52 * 4 * 3);
 }
 
-
 fn less_than(a: Fraction, b: Fraction) -> bool {
     a.top * b.bottom < b.top * a.bottom
 }
@@ -531,7 +539,10 @@ fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculatio
         condition,
         max_annual: cap.map(text),
     };
-    let tiers: BTreeMap<String, DecStr> = [("bronze", "2.5"), ("silver", "5"), ("gold", "10")].into_iter().map(|(k, v)| (k.to_string(), text(v))).collect();
+    let tiers: BTreeMap<String, DecStr> = [("bronze", "2.5"), ("silver", "5"), ("gold", "10")]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), text(v)))
+        .collect();
     product.features.push(Feature::Discounts {
         chain: vec![
             DiscountStep::One {
@@ -550,7 +561,12 @@ fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculatio
             },
             DiscountStep::Additive {
                 discounts: vec![
-                    discount("staff", DiscountBasis::Percent { percent: text("10") }, DiscountCondition::Always, Some("50.00")),
+                    discount(
+                        "staff",
+                        DiscountBasis::Percent { percent: text("10") },
+                        DiscountCondition::Always,
+                        Some("50.00"),
+                    ),
                     discount("promo", DiscountBasis::Percent { percent: text("4") }, DiscountCondition::Always, None),
                 ],
             },
@@ -612,9 +628,18 @@ fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculatio
             let reach = total(&left);
             let bundle: Vec<Fraction> = left
                 .iter()
-                .map(|l| min_of(l.times(Fraction::written("60.00").times(Fraction::new(reach.bottom, reach.top)).near()).near(), *l))
+                .map(|l| {
+                    min_of(
+                        l.times(Fraction::written("60.00").times(Fraction::new(reach.bottom, reach.top)).near()).near(),
+                        *l,
+                    )
+                })
                 .collect();
-            let (code, best) = if less_than(total(&loyalty), total(&bundle)) { ("bundle", bundle) } else { ("loyalty", loyalty) };
+            let (code, best) = if less_than(total(&loyalty), total(&bundle)) {
+                ("bundle", bundle)
+            } else {
+                ("loyalty", loyalty)
+            };
             bundles += usize::from(code == "bundle");
             take(&mut left, &best);
             steps.push((code, best));
@@ -693,7 +718,11 @@ fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculatio
                     compared += 1;
                     continue;
                 }
-                assert_eq!(codes.iter().map(|c| got.gross_by_cover[*c].minor).collect::<Vec<_>>(), grosses, "before discounts: {at}");
+                assert_eq!(
+                    codes.iter().map(|c| got.gross_by_cover[*c].minor).collect::<Vec<_>>(),
+                    grosses,
+                    "before discounts: {at}"
+                );
                 let mut expected: Vec<(String, i64)> = steps.iter().map(|(code, v)| (code.to_string(), cents(total(v)))).collect();
                 // The last line takes what rounding leaves, so the lines add up to the cent.
                 let residual = grosses.iter().sum::<i64>() - nets.iter().sum::<i64>() - expected[..expected.len() - 1].iter().map(|(_, c)| c).sum::<i64>();
@@ -707,7 +736,10 @@ fn tiered_best_of_capped_and_floored_discounts_equal_an_independent_recalculatio
         }
     }
     assert_eq!(compared, 52 * 4 * 3);
-    assert!(capped > 0 && floored > 0 && bundles > 0 && staff_capped > 0, "every branch is reached: cap {capped}, floor {floored}, bundle {bundles}, staff cap {staff_capped}");
+    assert!(
+        capped > 0 && floored > 0 && bundles > 0 && staff_capped > 0,
+        "every branch is reached: cap {capped}, floor {floored}, bundle {bundles}, staff cap {staff_capped}"
+    );
 }
 
 const AIA_PRODUCTS: [(&str, &str); 8] = [
