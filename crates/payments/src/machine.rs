@@ -734,7 +734,7 @@ impl Tx<'_> {
         if self.actor.roles.contains(&role) {
             Ok(())
         } else {
-            Err(Reject::new("not_permitted", format!("this needs the {role:?} role")))
+            Err(Reject::new("not_permitted", format!("this needs the {} role", role_words(role))))
         }
     }
     pub fn emit(&mut self, event: Event) {
@@ -977,4 +977,17 @@ impl StateMachine for PaymentsState {
         self.answered.insert(envelope.key, (now.date(), output.clone()));
         output
     }
+}
+
+/// A role as a person reads it: "payee maintainer", not "PayeeMaintainer".
+pub fn role_words(role: Role) -> String {
+    let name = format!("{role:?}");
+    let mut words = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() && i > 0 {
+            words.push(' ');
+        }
+        words.push(c.to_ascii_lowercase());
+    }
+    words
 }

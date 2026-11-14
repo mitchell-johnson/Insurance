@@ -105,6 +105,8 @@ struct Sink {
     continuations: Arc<Mutex<Vec<ContinuationExcess>>>,
     continuation_answers: Arc<Mutex<std::collections::VecDeque<Result<Option<String>, String>>>>,
     continued: Arc<Mutex<Vec<(String, String, u64, String)>>>,
+    /// While set, underwriting refuses every request: the broker's authority is not in force.
+    authority_refused: Flag,
 }
 
 impl Peers for Sink {
@@ -137,6 +139,9 @@ impl Peers for Sink {
     async fn underwriting(&self, _key: &str, _today: NaiveDate, request: &UnderwritingRequest) -> Result<(), String> {
         self.down.check("underwriting")?;
         self.underwriting_down.check("underwriting")?;
+        if self.authority_refused.check("authority").is_err() {
+            return Err("underwriting refused: authority".to_string());
+        }
         self.requests.lock().unwrap().push(request.clone());
         Ok(())
     }
@@ -1842,4 +1847,49 @@ async fn the_driver_asks_underwriting_to_continue_a_leavers_cover() {
     d.peers.effects.lock().unwrap().push((50, None));
     d.collect_answers().await.unwrap();
     assert_eq!(status(&d, 7), ContinuedStatus::InPlace);
+}
+
+/// Purpose: when underwriting refuses a member's request because the broker's delegated
+/// authority is not in force, staff are told by an exception naming the request; the request
+/// stays in the outbox and is tried each pass; once it is taken the exception clears; and a
+/// refusal of another kind is retried without raising one.
+/// Why it matters: until someone puts the authority right the member's cover above the
+/// automatic amount is decided by nobody. Retried silently, it looked only like a slow
+/// outbox in the metrics.
+#[tokio::test]
+async fn a_refused_delegated_authority_is_raised_until_the_request_is_taken() {
+    use ic_group::event::ExceptionKind;
+    let d = rig();
+    d.peers.authority_refused.set(true);
+    through(&d, "nov.csv", FILE).await;
+    let raised = |d: &Rig| {
+        d.module
+            .state
+            .lock()
+            .unwrap()
+            .exceptions
+            .values()
+            .filter(|x| x.kind == ExceptionKind::DelegatedAuthorityRefused)
+            .count()
+    };
+    let waiting = |d: &Rig| {
+        let g = d.module.state.lock().unwrap();
+        g.outbox
+            .values()
+            .filter(|o| matches!(o, ic_group::event::Outbound::Underwriting { .. }))
+            .count()
+    };
+    d.deliver().await.unwrap();
+    assert!(d.peers.requests.lock().unwrap().is_empty());
+    assert_eq!((waiting(&d), raised(&d)), (1, 1), "kept, and raised once however many passes");
+
+    // Another kind of failure is tried again without an exception of this kind.
+    d.peers.authority_refused.set(false);
+    d.peers.underwriting_down.set(true);
+    d.deliver().await.unwrap();
+    assert_eq!(raised(&d), 1);
+    d.peers.underwriting_down.set(false);
+    d.deliver().await.unwrap();
+    assert_eq!(d.peers.requests.lock().unwrap().len(), 1, "taken once the authority is in force");
+    assert_eq!((waiting(&d), raised(&d)), (0, 0), "cleared when underwriting took it");
 }

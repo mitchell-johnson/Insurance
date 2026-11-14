@@ -1140,3 +1140,89 @@ fn a_joint_cover_counts_in_full_against_each_life() {
     assert!(one.treaty_ceded() > 0);
     b.assert_reconciles();
 }
+
+fn replaced(policy: &str, by: &str, amount: i64, new_amount: i64) -> Event {
+    Event::CoverReplaced {
+        policy: PolicyId::from(by),
+        cover: "life".into(),
+        life: LifeId::from("L1"),
+        replaced_policy: PolicyId::from(policy),
+        replaced_cover: "life".into(),
+        replaced_life: LifeId::from("L1"),
+        replaced_sum_insured_minor: amount,
+        sum_insured_minor: new_amount,
+    }
+}
+
+/// Purpose: cover that replaces cover on another policy, on the same life, carries on the
+/// replaced cession up to the amount replaced: the new layers within it take the treaty version
+/// and the place in the retention order of the cover they replace, a layer that crosses the
+/// amount stays new business with an exception asking a person to place the replaced part, the
+/// same announcement twice changes nothing, and a replacement of cover never ceded here is
+/// raised, not guessed.
+/// Why it matters: a replacement is not new business for the reinsurer (persona test RI-016).
+/// Ceded on the current treaty version from its own start, the cover would lose its terms and
+/// its years toward recapture, and the reinsurer's listing would show a lapse and a new risk.
+#[test]
+fn replacement_cover_carries_on_the_cession_it_replaces() {
+    let mut b = Bench::new();
+    b.issue(1, "P1", "anna", vec![layer("life", "life", 1, "L1", 800 * K, d(2027, 2, 1))]);
+    let v2 = ic_reinsurance::loader::load_treaty(
+        "t.star",
+        &RETAIL
+            .replace("version = 1", "version = 2")
+            .replace("effective_from = \"2027-01-01\"", "effective_from = \"2028-01-01\"")
+            .replace("commission = \"0.20\"", "commission = \"0.25\""),
+    )
+    .unwrap();
+    b.ok("config", Command::ActivateTreaty { treaty: Box::new(v2) });
+    let start = d(2028, 6, 1);
+    b.today = start;
+    b.issue(
+        4,
+        "P2",
+        "anna",
+        vec![layer("life", "life", 1, "L1", 600 * K, start), layer("life", "life", 2, "L1", 400 * K, start)],
+    );
+    let (first, second) = (key("P2", "life", 1, "L1"), key("P2", "life", 2, "L1"));
+    let version = |b: &Bench, k| b.ri.cession(k, start).unwrap().treaty.as_ref().unwrap().version;
+    assert_eq!((version(&b, &first), version(&b, &second)), (2, 2), "new business until told otherwise");
+
+    let applied = b.feed(4, vec![replaced("P1", "P2", 800 * K, 1000 * K)]);
+    assert_eq!(version(&b, &first), 1, "the replaced amount stays on the treaty version it was ceded on");
+    assert_eq!(version(&b, &second), 2, "a layer that crosses the amount replaced is new business");
+    let id = "replacement_part:P2/life/2/L1";
+    assert!(applied
+        .notices
+        .iter()
+        .any(|n| matches!(n, Notice::ExceptionOpened { id: opened, code, detail } if opened == id && code == "replacement_part" && detail.contains("200000"))));
+    b.assert_reconciles();
+    let again = b.feed(4, vec![replaced("P1", "P2", 800 * K, 1000 * K)]);
+    assert!(again.instructions.is_empty() && again.notices.is_empty(), "{again:?}");
+
+    // The old policy is cancelled: the carried layer fills the retention it held.
+    b.feed(1, vec![status("P1", PolicyStatus::Cancelled)]);
+    let carried = b.ri.cession(&first, d(2028, 7, 1)).unwrap();
+    assert_eq!((carried.retained_minor, carried.treaty_ceded()), (500 * K, 100 * K));
+    b.assert_reconciles();
+
+    // Ten years toward recapture run from 2027, when the replaced cover began.
+    assert_eq!(
+        b.refused(
+            "reinsurance-ops",
+            Command::Recapture {
+                treaty: retail(),
+                effective: d(2037, 1, 31),
+                keys: vec![first.clone()],
+            }
+        ),
+        "recapture_not_allowed"
+    );
+
+    // Replacing cover this module never saw is raised for a person.
+    let unknown = b.feed(4, vec![replaced("P9", "P2", 100 * K, 1000 * K)]);
+    assert!(unknown
+        .notices
+        .iter()
+        .any(|n| matches!(n, Notice::ExceptionOpened { code, .. } if code == "replacement_unknown")));
+}
