@@ -873,9 +873,10 @@ fn settings_from_an_older_snapshot_take_the_new_defaults() {
 }
 
 /// Purpose: the starter commission schedules shipped for the AIA products load as one change
-/// set the module activates, every AIA product the repository ships is named either with a
-/// schedule that exists or as earning no commission, and the cover-type override points at a
-/// real schedule. The file says plainly that its rates are placeholders.
+/// set the module activates, every AIA product the repository ships either has a schedule
+/// named for its new business or is listed as earning no commission, and income cover on AIA
+/// Living is written under the income schedule. The file says plainly that its rates are
+/// placeholders, and naming a schedule that was never activated is refused.
 /// Why it matters: a product with no schedule cannot have its layers written, so advisers
 /// could sell it and never be paid; and a placeholder rate mistaken for an agreed one is paid
 /// to every adviser until someone notices.
@@ -887,31 +888,10 @@ fn the_shipped_aia_schedules_activate_and_cover_every_aia_product() {
     let changes: Vec<Change> = serde_json::from_value(file["changes"].clone()).unwrap();
     let mut w = World::new();
     w.activate("aia-starter-schedules", changes).unwrap();
-    let on = d(2026, 6, 1);
-    let named: BTreeSet<String> = file["schedule_for_product"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .chain(
-            file["no_commission"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .filter_map(|v| v.as_str())
-                .map(|s| s.to_string())
-                .collect::<Vec<_>>()
-                .iter(),
-        )
-        .cloned()
-        .collect();
-    for target in file["schedule_for_product"]
-        .as_object()
-        .unwrap()
-        .values()
-        .chain(file["schedule_for_cover_type"].as_object().unwrap().values())
-    {
-        assert!(w.dist.config.schedule(target.as_str().unwrap(), on).is_some(), "{target}");
-    }
+    let named = &w.dist.config.product_schedules;
+    assert_eq!(named["aia-living/income_protection"], "aia-income");
+    let mut covered: BTreeSet<String> = named.keys().filter(|k| !k.contains('/')).cloned().collect();
+    covered.extend(file["no_commission"].as_array().unwrap().iter().filter_map(|v| v.as_str()).map(String::from));
     let mut shipped = BTreeSet::new();
     for entry in std::fs::read_dir(format!("{root}/products")).unwrap() {
         let path = entry.unwrap().path();
@@ -925,5 +905,19 @@ fn the_shipped_aia_schedules_activate_and_cover_every_aia_product() {
             shipped.insert(code.unwrap());
         }
     }
-    assert_eq!(named, shipped, "every AIA product has a schedule or is named as earning none");
+    assert_eq!(covered, shipped, "every AIA product has a schedule or is named as earning none");
+
+    let unknown = Change::SetProductSchedule {
+        product: "aia-living".into(),
+        cover_type: None,
+        schedule: Some("never-activated".into()),
+    };
+    assert_eq!(code(w.activate("bad", vec![unknown])), "unknown_schedule");
+    let cleared = Change::SetProductSchedule {
+        product: "aia-starter".into(),
+        cover_type: None,
+        schedule: None,
+    };
+    w.activate("clear", vec![cleared]).unwrap();
+    assert!(!w.dist.config.product_schedules.contains_key("aia-starter"));
 }
