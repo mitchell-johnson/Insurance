@@ -557,6 +557,35 @@ async fn consent_to_sign(
     ok(json!({ "message": message, "signed": crate::disclosures::SIGNED_CONSENTS.contains(&kind.as_str()) }))
 }
 
+/// What the life reads before signing the replacement disclosure: the cover
+/// they keep, the cover added, what is lost, and the premium before and
+/// after. Only the life may read it, and only for a proposal that replaces.
+async fn replacement_statement(
+    State(s): State<Shared>,
+    headers: HeaderMap,
+    method: Method,
+    uri: Uri,
+    Path((proposal, life)): Path<(String, String)>,
+) -> Answer {
+    let session = s.customer(&headers, &method, &uri, b"").await?;
+    let statement = s
+        .ask(Question::ReplacementStatement {
+            party: session.party,
+            proposal,
+            life,
+        })
+        .await?;
+    match statement["replacement"].as_bool() {
+        Some(true) => ok(statement),
+        Some(false) => Err(Problem::new(
+            StatusCode::CONFLICT,
+            "replacement",
+            "this proposal does not replace cover you hold, so there is nothing to disclose",
+        )),
+        None => Err(Problem::not_found()),
+    }
+}
+
 /// The life gives or withdraws a consent on their proposal, from a device
 /// they enrolled; one that needs their signed step carries the device's
 /// signature. The underwriting module records it, and checks the signature
@@ -2722,6 +2751,10 @@ pub fn router(state: Shared) -> Router {
         .route("/app/v1/proposals/{proposal}/lives/{life}/disclosures", post(disclosure_submit))
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}", post(consent_record))
         .route("/app/v1/proposals/{proposal}/lives/{life}/consents/{kind}/to-sign", get(consent_to_sign))
+        .route(
+            "/app/v1/proposals/{proposal}/lives/{life}/consents/replacement_disclosure/statement",
+            get(replacement_statement),
+        )
         .route("/app/v1/sync", get(sync))
         .route("/app/v1/policies/{policy}", get(policy))
         .route("/app/v1/policies/{policy}/advisers", post(appoint_adviser))
