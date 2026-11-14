@@ -300,7 +300,8 @@ fn a_cover_added_later_is_held_to_its_entry_ages() {
 /// with the built-in benefits those choices switch on marked as applying and each limit
 /// worked out from the monthly benefit; the same cover on a two-year period gives 24 months
 /// and no age limit; a health cover carries its schedule with lifetime limits; and the
-/// interim product carries its $500,000 cap for one event while other products carry none.
+/// interim product carries its $500,000 cap for one event while other products carry none,
+/// and its income cover, which offers no options, its own 24-month benefit period.
 /// Why it matters: claims decides from these facts alone and never reads a product. A term
 /// left out is a term not applied: benefit paid past 65, a mental health claim paid without
 /// limit, a built-in benefit paid to someone who did not buy it, or one accident paid in
@@ -371,11 +372,19 @@ fn the_claim_facts_carry_the_terms_of_the_option_chosen_and_the_products_limits(
         4,
         "aia-interim",
         d(1987, 6, 1),
-        &[("life", 400_000_00, None), ("accidental-tpd", 150_000_00, None)],
+        &[
+            ("life", 400_000_00, None),
+            ("accidental-tpd", 150_000_00, None),
+            ("accidental-income", 2_000_00, None),
+        ],
     );
     let id = issue(&mut c, interim).unwrap();
     for cover in ["life", "accidental-tpd"] {
         let facts = ic_core::cover_facts(c.state(0), &id.0, cover, Some("life-1"), on).unwrap();
         assert_eq!(facts.event_cap_minor, Some(500_000_00), "{cover}");
     }
+    // With no option to say otherwise, the cover's own benefit period stands. An option
+    // that ends the benefit at an age instead (to 65, above) is not cut to the cover's months.
+    let facts = ic_core::cover_facts(c.state(0), &id.0, "accidental-income", Some("life-1"), on).unwrap();
+    assert_eq!((facts.benefit_months, facts.benefit_to), (Some(24), None));
 }

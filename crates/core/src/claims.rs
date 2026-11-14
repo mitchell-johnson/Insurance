@@ -248,12 +248,14 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
     facts.premium_waiver = product.and_then(|pr| pr.cover(cover)).and_then(|def| def.premium_waiver);
     facts.shared_counter = product.and_then(|pr| pr.cover(cover)).and_then(|def| def.shared_counter.clone());
     // An income benefit's waiting period and what its wording does in custody.
+    let mut own_benefit_months = None;
     if let Some(ic_product::Benefit::MonthlyBenefit {
         waiting_days,
+        benefit_months,
         benefit_while_imprisoned,
-        ..
     }) = product.and_then(|pr| pr.cover(cover)).map(|def| &def.benefit)
     {
+        own_benefit_months = Some(*benefit_months).filter(|m| *m > 0);
         facts.waiting_days = *waiting_days;
         facts.benefit_while_imprisoned = match benefit_while_imprisoned {
             ic_product::WhileImprisoned::Suspend => ic_claims::port::Imprisonment::Suspend,
@@ -290,6 +292,11 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
                 excess_minor: Some(l.excess_minor),
             })
             .collect();
+    }
+    // Where the option sets no end to the benefit, by months or by age, the
+    // cover's own benefit period stands.
+    if facts.benefit_months.is_none() && facts.benefit_to.is_none() && chosen.as_ref().is_none_or(|o| o.terms.benefit_to_age.is_none()) {
+        facts.benefit_months = own_benefit_months;
     }
     facts.event_cap_minor = product.and_then(|pr| pr.event_cap_minor);
     let mut sum_insured: i64 = at_event.iter().map(|l| l.sum_insured_minor).sum();
