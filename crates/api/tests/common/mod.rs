@@ -140,10 +140,17 @@ pub struct Ledger {
     pub client: ClusterClient,
     pub auth: ClusterAuth,
     pub dir: PathBuf,
+    /// The modules each node hosts.
+    pub modules: fn() -> Vec<ic_raft::ModuleSpec>,
 }
 
 impl Ledger {
     pub async fn start(name: &str, size: u64, partitions: PartitionId) -> Self {
+        Self::start_hosting(name, size, partitions, Vec::new).await
+    }
+
+    /// The same, with each node hosting `modules`.
+    pub async fn start_hosting(name: &str, size: u64, partitions: PartitionId, modules: fn() -> Vec<ic_raft::ModuleSpec>) -> Self {
         let dir = scratch(name);
         let peers: BTreeMap<NodeId, String> = (1..=size).map(|id| (id, format!("127.0.0.1:{}", free_port()))).collect();
         let auth = ClusterAuth::tokens(vec![TOKEN.to_string()]).unwrap();
@@ -178,6 +185,7 @@ impl Ledger {
             client,
             auth,
             dir,
+            modules,
         };
         for id in 1..=size {
             ledger.boot(id).await;
@@ -190,7 +198,7 @@ impl Ledger {
     }
 
     pub async fn boot(&mut self, id: NodeId) {
-        let running = server::start(self.settings[&id].clone()).await.unwrap();
+        let running = server::start_with(self.settings[&id].clone(), (self.modules)()).await.unwrap();
         self.running.insert(id, running);
     }
 

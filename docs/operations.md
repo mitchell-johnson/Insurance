@@ -76,6 +76,18 @@
 
     It creates the clinical store (its own storage account with no soft delete or versioning, deliberately), the HSM wrapping key, the intake's identity, and the `underwriting-notices`, `underwriting-evidence` and `underwriting-delegates` hubs with the workers' right to send to them. Register an app for the intake with the app roles `new-business`, `underwriting-console`, `evidence` and `delegate-api`, and put its application ID URI and the outputs in `deploy/k8s/underwriting-intake.yaml`. The driver reads `IC_EVENT_HUBS_ENDPOINT` from `settings.yaml`.
 
+11. **Apply the insurer's own configuration.** The shipped products are active after step 6; what each module needs before the first day is the insurer's to decide and is kept in one set-up file: finance's ledger shape, chart and close configuration, the claims rules and authority book, the banks, channels and routes of payments, the complaints timers, the unit pricing partition count. `ic-admin apply <setup.json>` sends it, from the admin pod (`deploy/k8s/admin.yaml`) or a job:
+
+    ```json
+    { "steps": [
+      { "core":   { "key": "claims-rules-1", "command": { "claims": { "activate_rules": { "rules": { } } } } } },
+      { "module": { "module": "finance", "envelope": { "key": "configure-1", "caller": "operator", "command": { "configure": { "partitions": 64, "year_end_month": 3 } } } } },
+      { "module": { "module": "complaints", "envelope": { "key": "timers-1", "caller": "config", "actor": "config", "at": "2027-11-15T08:00:00Z", "command": { "activate_timers": { } } } } }
+    ] }
+    ```
+
+    A `core` step is a configuration command, sent as the caller `config` to every partition under its key; any other command is refused when the file is read. A `module` step is the module's own envelope, sent as written (each module's document gives its envelope and commands). Steps go in order and the run stops at the first one refused, naming it. Applying the file again changes nothing, so a run that died is simply repeated, and a later version of the file with steps added sends only what is new. A step may list `accept` words: a refusal containing one means the step is already as wanted. Keep the file under change control: it is the record of what was configured and who approved it. Where a module asks for a second person (finance's `approve_config`, the claims rules' `approved_by`), the file names the people who did approve; the tool does not stand in for them. Staff roles and the first administrator are set up through the portal service (`docs/channels.md`).
+
 ## Day to day
 
 **Is it healthy?** `GET /readyz` on the API answers 200 with the business date when every partition has a leader. For detail:

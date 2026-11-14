@@ -182,6 +182,115 @@ fn the_command_line_is_read_strictly() {
         .contains("IC_LEDGER_PATIENCE_SECS"));
 }
 
+/// Purpose: a set-up file's steps are sent in order to the core's configuration caller on
+/// every partition and to a hosted module; a step the module refuses stops the run and is
+/// named, unless the step says that refusal means it is already as wanted; the file applied
+/// again changes nothing; and a file with a step that is not configuration, has no key or
+/// names no module is refused whole before anything is sent.
+/// Why it matters: this is how an insurer's own configuration (finance's chart, claims
+/// rules, banks, timers) reaches a new deployment, and the job that does it can die half
+/// way. A step silently skipped would leave a module unconfigured on day one; a file that
+/// could carry any command would make the set-up job a way round every caller's role.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_set_up_file_is_applied_in_order_and_can_be_applied_again() {
+    use ic_api::admin::SetupFile;
+    let ledger = Ledger::start_hosting("setup", 1, 2, || vec![ic_finance::host::module_spec().unwrap()]).await;
+    let admin = admin(&ledger, Duration::from_secs(20));
+    admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
+    let chart = ic_finance::Chart::load("chart.star", include_str!("../../../config/finance/chart.star")).unwrap();
+    let chart_id = format!("chart:{}:{}", chart.version, chart.content_hash);
+    let finance = |key: &str, caller: &str, actor: Option<(&str, &str)>, command: serde_json::Value| {
+        let mut envelope = json!({ "key": key, "caller": caller, "command": command });
+        if let Some((actor, role)) = actor {
+            envelope["actor"] = json!(actor);
+            envelope["roles"] = json!([role]);
+        }
+        json!({ "module": { "module": "finance", "envelope": envelope } })
+    };
+    let rate =
+        json!({ "core": { "key": "wage-index-1", "command": { "activate_index_rate": { "code": "wage", "effective_from": "2027-01-01", "rate": "0.03" } } } });
+    let configure = finance(
+        "setup-configure",
+        "operator",
+        None,
+        json!({ "configure": { "partitions": 2, "year_end_month": 3 } }),
+    );
+    let propose = finance(
+        "setup-chart",
+        "finance-console",
+        Some(("author", "finance_operator")),
+        json!({ "propose_chart": { "chart": chart } }),
+    );
+    // The person who proposed a chart cannot approve it.
+    let own = json!({ "approve_config": { "id": chart_id } });
+    let self_approved = finance("setup-chart-self", "finance-console", Some(("author", "finance_lead")), own);
+    let approve = finance(
+        "setup-chart-ok",
+        "finance-console",
+        Some(("approver", "finance_lead")),
+        json!({ "approve_config": { "id": chart_id } }),
+    );
+
+    let file = |steps: Vec<&serde_json::Value>| SetupFile::parse(&json!({ "steps": steps }).to_string()).unwrap();
+    let error = admin
+        .apply(&file(vec![&rate, &configure, &propose, &self_approved, &approve]))
+        .await
+        .unwrap_err();
+    assert!(error.starts_with("step 4: finance refused"), "{error}");
+    // The steps before it stand; the whole file, with the refusal accepted as known, goes through.
+    let mut known = self_approved.clone();
+    known["module"]["accept"] = json!(["separation"]);
+    let report = admin.apply(&file(vec![&rate, &configure, &propose, &known, &approve])).await.unwrap();
+    assert_eq!(
+        report,
+        json!({ "steps": 5, "applied": 3, "unchanged": 2 }),
+        "the rate was already active; the refusal was accepted"
+    );
+    for partition in 0..2 {
+        let wage = json!({ "activate_index_rate": { "code": "wage", "effective_from": "2027-01-01", "rate": "0.04" } });
+        let again = SetupFile::parse(&json!({ "steps": [{ "core": { "key": "wage-index-2", "command": wage } }] }).to_string()).unwrap();
+        let error = admin.apply(&again).await.unwrap_err();
+        assert!(error.contains("refused activate_index_rate"), "partition {partition}: {error}");
+    }
+
+    // Through the command line, from a file on disk.
+    let path = ledger.dir.join("setup.json");
+    std::fs::write(&path, json!({ "steps": [rate, configure] }).to_string()).unwrap();
+    let report = admin
+        .run(AdminCommand::parse(&args(&format!("apply {}", path.display()))).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(report["steps"], 2);
+    let missing = admin
+        .run(AdminCommand::Apply {
+            file: ledger.dir.join("none.json"),
+        })
+        .await
+        .unwrap_err();
+    assert!(missing.contains("none.json"), "{missing}");
+    let unknown = json!({ "steps": [{ "module": { "module": "no-such-module", "envelope": {} } }] });
+    let impatient = self::admin(&ledger, Duration::from_secs(1));
+    let error = impatient.apply(&SetupFile::parse(&unknown.to_string()).unwrap()).await.unwrap_err();
+    assert!(error.starts_with("step 1: no-such-module"), "{error}");
+
+    let refused = |steps: serde_json::Value, why: &str| {
+        let error = SetupFile::parse(&json!({ "steps": steps }).to_string()).unwrap_err();
+        assert!(error.contains(why), "{error}");
+    };
+    refused(
+        json!([{ "core": { "key": "k", "command": { "cancel_policy": { "policy": "pol-1" } } } }]),
+        "step 1: cancel_policy is not a configuration command",
+    );
+    refused(
+        json!([rate, { "core": { "key": " ", "command": rate["core"]["command"] } }]),
+        "step 2: a core step has a key",
+    );
+    refused(json!([{ "module": { "module": "Finance", "envelope": {} } }]), "names its module");
+    refused(json!([{ "module": { "module": "finance", "envelope": "text" } }]), "names its module");
+    refused(json!([{ "shell": "rm" }]), "the set-up file");
+    assert!(SetupFile::parse("{").unwrap_err().contains("the set-up file"));
+}
+
 /// Purpose: the `ic-admin` binary itself fails with the usage on a bad command line, names
 /// a missing setting, reports an unreachable ledger, and exits non-zero each time.
 /// Why it matters: it runs inside deployment jobs, where the exit code is the only thing

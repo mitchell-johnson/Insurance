@@ -2,6 +2,14 @@
 //! job: open the book, activate the shipped configuration, look at the
 //! nodes, and change a group's members. `ic-admin` is the command.
 //!
+//! `apply` takes the insurer's own set-up file: the configuration each
+//! module is given before the first day (finance's chart, the claims rules
+//! and authority book, the banks and routes of payments, the complaints
+//! timers and so on), as an ordered list of steps. Each step is a command
+//! for the core's configuration caller or an envelope for a hosted module,
+//! sent exactly as written. The file is the insurer's decision and its
+//! record; nothing in it is invented here.
+//!
 //! Every action here is safe to repeat. The runbooks rely on that: a job
 //! that died half way is simply run again.
 
@@ -63,6 +71,8 @@ pub enum AdminCommand {
     /// Activate the products, rate tables and definitions shipped in this
     /// build on every partition.
     ActivateShipped,
+    /// Send the steps of a set-up file, in order.
+    Apply { file: std::path::PathBuf },
     /// Set the voters of one partition's group, or of every partition's.
     Members {
         partition: Option<PartitionId>,
@@ -74,6 +84,7 @@ pub const USAGE: &str = "usage: ic-admin init
        ic-admin status
        ic-admin open <YYYY-MM-DD>
        ic-admin activate-shipped
+       ic-admin apply <setup.json>
        ic-admin members <partition|all> <id=host:port,id=host:port,...>";
 
 impl AdminCommand {
@@ -87,6 +98,7 @@ impl AdminCommand {
                 date: NaiveDate::parse_from_str(date, "%Y-%m-%d").map_err(|e| format!("date: {e}"))?,
             }),
             ["activate-shipped"] => Ok(Self::ActivateShipped),
+            ["apply", file] => Ok(Self::Apply { file: file.into() }),
             ["members", partition, list] => {
                 let partition = match *partition {
                     "all" => None,
@@ -107,6 +119,73 @@ impl AdminCommand {
             }
             _ => Err(USAGE.to_string()),
         }
+    }
+}
+
+/// One step of a set-up file.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum SetupStep {
+    /// A configuration command for the core, sent as the caller `config`
+    /// to every partition under `key`.
+    Core { key: String, command: Box<Command> },
+    /// An envelope for a hosted module, sent as written. The module's own
+    /// key inside it makes a repeat safe.
+    Module {
+        module: String,
+        envelope: Value,
+        /// Refusals that mean the step is already as wanted, by a word
+        /// each contains (`already_staff`, say).
+        #[serde(default)]
+        accept: Vec<String>,
+    },
+}
+
+/// A set-up file: the steps, in the order they are sent.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupFile {
+    pub steps: Vec<SetupStep>,
+}
+
+impl SetupFile {
+    /// Read a file's text. Every step is checked before any is sent: a
+    /// core step must be one the configuration caller may send and carry
+    /// a key, and a module step names its module and carries an envelope.
+    pub fn parse(text: &str) -> Result<Self, String> {
+        let file: SetupFile = serde_json::from_str(text).map_err(|e| format!("the set-up file: {e}"))?;
+        for (n, step) in file.steps.iter().enumerate() {
+            let bad = |why: &str| Err(format!("step {}: {why}", n + 1));
+            match step {
+                SetupStep::Core { key, command } => {
+                    if key.trim().is_empty() || key.len() > 96 {
+                        return bad("a core step has a key of 1 to 96 characters");
+                    }
+                    if !command.allowed_callers().contains(&"config") {
+                        return bad(&format!("{} is not a configuration command", command.name()));
+                    }
+                }
+                SetupStep::Module { module, envelope, .. } => {
+                    let named = !module.is_empty() && module.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                    if !named || !envelope.is_object() {
+                        return bad("a module step names its module and carries the envelope as an object");
+                    }
+                }
+            }
+        }
+        Ok(file)
+    }
+}
+
+/// Why a module did not take an envelope, if it did not: the host's own
+/// refusal, or the module's answer saying so.
+fn module_refusal(result: &Result<Value, String>) -> Option<String> {
+    match result {
+        Err(e) => Some(e.clone()),
+        Ok(answer) => [&answer["refused"], &answer["result"]["Err"], &answer["Err"]]
+            .into_iter()
+            .find(|v| !v.is_null())
+            .map(Value::to_string),
     }
 }
 
@@ -266,6 +345,50 @@ impl Admin {
         Ok(json!({ "items": activations.len(), "partitions": partitions, "activated": activated, "unchanged": unchanged }))
     }
 
+    /// Send a set-up file's steps in order, stopping at the first one
+    /// refused. A core step already applied and a module refusal the step
+    /// accepts count as unchanged, so the file can be applied again after a
+    /// failure or with steps added.
+    pub async fn apply(&self, file: &SetupFile) -> Result<Value, String> {
+        let partitions = self.partitions().await?;
+        let (mut applied, mut unchanged) = (0u64, 0u64);
+        for (n, step) in file.steps.iter().enumerate() {
+            let n = n + 1;
+            match step {
+                SetupStep::Core { key, command } => {
+                    let mut fresh = false;
+                    for partition in 0..partitions {
+                        let reply = self
+                            .propose(partition, format!("setup:{key}:p{partition}"), "config", (**command).clone())
+                            .await?;
+                        if let Some(refusal) = reply.rejected {
+                            return Err(format!("step {n}: partition {partition} refused {}: {refusal}", command.name()));
+                        }
+                        fresh |= !reply.duplicate;
+                    }
+                    if fresh {
+                        applied += 1;
+                    } else {
+                        unchanged += 1;
+                    }
+                }
+                SetupStep::Module { module, envelope, accept } => {
+                    let reply = self
+                        .client
+                        .propose_module_until(module, envelope, self.patience)
+                        .await
+                        .map_err(|e| format!("step {n}: {module}: {e}"))?;
+                    match module_refusal(&reply.result) {
+                        None => applied += 1,
+                        Some(refusal) if accept.iter().any(|word| !word.is_empty() && refusal.contains(word.as_str())) => unchanged += 1,
+                        Some(refusal) => return Err(format!("step {n}: {module} refused: {refusal}")),
+                    }
+                }
+            }
+        }
+        Ok(json!({ "steps": file.steps.len(), "applied": applied, "unchanged": unchanged }))
+    }
+
     /// Set the voters of a partition's group, or of every group.
     pub async fn set_members(&self, partition: Option<PartitionId>, members: &BTreeMap<NodeId, String>) -> Result<Value, String> {
         let partitions: Vec<PartitionId> = match partition {
@@ -305,6 +428,10 @@ impl Admin {
             }
             AdminCommand::Open { date } => self.open(date).await,
             AdminCommand::ActivateShipped => self.activate_shipped().await,
+            AdminCommand::Apply { file } => {
+                let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
+                self.apply(&SetupFile::parse(&text)?).await
+            }
             AdminCommand::Members { partition, members } => self.set_members(partition, &members).await,
         }
     }
