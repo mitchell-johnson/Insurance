@@ -102,7 +102,7 @@ async function showRun() {
     has("approver") ? button("Approve", out, act("approve_run")) : null,
     has("maker") ? button("Cancel", out, act("cancel_run")) : null,
     has("maker") ? button("Close", out, act("close_run")) : null,
-    has("maker") ? button("Send what is unpaid again", out, async () => { await send({ type: "resubmit", run: id, value_date: null }); await showRun(); return "A new submission is queued."; }) : null,
+    has("maker") ? button("Send what is unpaid again", out, async () => { const value_date = await portal.ask({ title: "Send what is unpaid again", text: "Everything in this run the bank has not paid goes as a new submission.", label: "Value date", type: "date", confirm: "Send again" }); if (!value_date) return null; await send({ type: "resubmit", run: id, value_date }); await showRun(); return "A new submission is queued."; }) : null,
   ].filter(Boolean));
 }
 $("run-form").addEventListener("submit", run($("run-msg"), showRun));
@@ -154,12 +154,12 @@ async function showRec() {
   const out = $("rec-msg");
   put($("rec"), h("p", {}, `Statement of ${book.statement_date}, closing ${money(book.closing_minor)}.`),
     h("h3", {}, "Open exceptions"),
-    (book.open || []).length ? table(["Exception", "Kind", "Amount", "Owner", "Days", ""], book.open.map((e) => [e.exception, words(e.kind), money(e.amount_minor), e.owner || "", e.age_days,
+    (book.open_exceptions || []).length ? table(["Exception", "Kind", "Amount", "Owner", "Days", ""], book.open_exceptions.map((e) => [e.exception, words(e.kind), money(e.amount_minor), e.owner || "", e.age_days,
       has("reconciler") ? h("span", {}, button("Take", out, async () => { await send({ type: "assign_exception", exception: e.exception, owner: me.staff }); await showRec(); return "Yours."; }),
         button("Resolve", out, async () => { const resolution = $("rec-resolution").value.trim(); if (!resolution) throw new Error("Say how it was resolved first."); await send({ type: "resolve_exception", exception: e.exception, resolution }); await showRec(); return "Resolved."; })) : ""]))
       : h("p", { class: "muted" }, "None."),
     h("h3", {}, "Still to show on a statement"),
-    (book.outstanding || []).length ? table(["Reference", "Amount", "Days"], book.outstanding.map((o) => [o.reference, money(o.amount_minor), o.age_days])) : h("p", { class: "muted" }, "Nothing."));
+    (book.not_yet_on_statement || []).length ? table(["Reference", "Amount", "Days"], book.not_yet_on_statement.map((o) => [o.reference, money(o.amount_minor), o.age_days])) : h("p", { class: "muted" }, "Nothing."));
 }
 $("rec-form").addEventListener("submit", run($("rec-msg"), showRec));
 async function showPayerCases() {

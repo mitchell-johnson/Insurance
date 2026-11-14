@@ -762,7 +762,8 @@ fn the_module_is_hosted_as_complaints_and_takes_commands_as_json() {
 /// Purpose: each question is answered from the state, the complaint file
 /// only to someone the case has given access, and conduct cases only to
 /// the conduct function and legal; anything that is not a question is
-/// refused.
+/// refused, as is a register or report period that ends before it
+/// starts.
 /// Why it matters: queries are how every screen and report reads the
 /// register. The access check here is what keeps a complaint file, and
 /// the restricted conduct case type, away from everyone else in the
@@ -807,6 +808,12 @@ fn questions_are_answered_only_to_those_allowed_to_ask() {
     let period = (start, kit.today());
     assert_eq!(ask(h, Query::Register { from: period.0, to: period.1 }).unwrap().as_array().unwrap().len(), 4);
     assert_eq!(ask(h, Query::Report { from: period.0, to: period.1 }).unwrap()["received"], json!(4));
+    // A period that ends before it starts is refused in words, never
+    // answered with an empty register that reads as "no complaints".
+    for reversed in [Query::Register { from: period.1, to: period.0 }, Query::Report { from: period.1, to: period.0 }] {
+        assert!(ask(h, reversed).unwrap_err().contains("before it starts"));
+    }
+    assert!(ask(h, Query::Register { from: period.1, to: period.1 }).unwrap().is_array());
     assert_eq!(ask(h, Query::Timers { version: 1 }).unwrap()["decide_days"], json!(20));
     assert_eq!(ask(h, Query::Timers { version: 9 }).unwrap(), Value::Null);
     assert_eq!(ask(h, Query::PendingEvents { limit: 2 }).unwrap().as_array().unwrap().len(), 2);

@@ -115,6 +115,7 @@ pub fn answer(state: &ComplaintsState, question: Value) -> Result<Value, String>
         Query::OutcomesAwaitingDelivery { limit } => json(state.outcomes_awaiting_delivery(limit.min(MAX_ANSWER))),
         Query::Running { id } => json(state.complaints.get(&id).map(|c| state.running(c))),
         Query::ComplaintsOf { party } => json(state.complaints_of(&party)),
+        Query::Register { from, to } | Query::Report { from, to } if to < from => Err(format!("the period ends on {to}, before it starts on {from}")),
         Query::Register { from, to } => json(state.register(from, to)),
         Query::Report { from, to } => json(state.report(from, to)),
         Query::ConductCase { role, .. } | Query::OpenConductCases { role } if !role.sees_conduct() => restricted(),
