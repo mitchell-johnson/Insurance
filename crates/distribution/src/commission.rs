@@ -192,6 +192,7 @@ impl DistributionState {
                 for m in members {
                     self.scheme_layer(ctx, &policy, &m, inception, date);
                 }
+                self.attribute_new_business(ctx, &policy);
             }
             CoreEvent::LayerAdded {
                 policy,
