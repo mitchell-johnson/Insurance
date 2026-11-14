@@ -239,3 +239,12 @@ Mitchell asked on 13 Nov 2026 for open items to carry best-estimate placeholders
 - **A change of underwriting terms on cover with facultative reinsurance carries on and tells the reinsurer.** The cession continues on the new terms and the exception `facultative_terms_altered:<key>` asks operations to tell the reinsurer; it closes with `facultative_reinsurer_told`. Why: holding the customer's change until a reinsurer answers would leave the customer waiting on something they cannot see, and most facultative acceptances allow a change notified promptly. A reinsurer that declines the new terms is handled as a change of cession by operations.
 - **A continuation policy is ceded as new cover.** A policy that continues a scheme membership is ceded on its own product's treaty from its issue date, and its claims recover on that cession; the scheme's treaty and the member's history are not carried. Why: most group treaties end the reinsurer's liability when the member leaves the scheme, and the continuation option is the insurer's promise to the member, written as new individual cover. A treaty that carries continuations needs that said in its terms and built.
 - **Who gets reinsurance alerts.** The alerts in `infra/reinsurance.bicep` fire whatever the recipients, and show in Azure Monitor. Who is mailed is the deployment parameter `alertEmails`, which is empty until the insurer names its reinsurance operations mailbox; no address is guessed.
+
+## AIA Vitality is its own module that only tells the core a tier (14 Nov 2026)
+
+- The wellness module holds the programme's data (membership, statuses) and works out the AIA Vitality Discount under AIA's Premium Adjustment Rules. The core sees only `SetEntitlement` for `aia-vitality` with the discount as its tier.
+- **Why:** the core's entitlement design (13 Nov) keeps outside data out of the policy record. The rules (initial discount, first-ten-months protection, which status is read, the baseline) are AIA's programme rules, not product pricing, so they belong outside the product files.
+- **Choices made where the rules are silent:**
+  - A member with no status reported counts as Bronze, the status every member starts and resets to.
+  - An anniversary status more than a year before the decision is not read again.
+  - The Initial Discount runs from the join date, and the core adjusts a bill already raised.

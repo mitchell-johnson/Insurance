@@ -142,7 +142,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | AUD-015 | full | `channels/tests/feed.rs::snapshot_then_changes`<br>`channels/tests/journeys.rs::a_receipt_moves_the_billing_row_while_the_app_is_open`<br>`channels/tests/http.rs::a_write_answers_with_the_writers_own_version_and_nobody_elses` |
 | AUD-016 | full | `channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload` |
-| AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point` |
+| AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point`<br>`channels/tests/browser/check.js::audit` (every page, after each journey) |
 | AUD-019 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 
 ## RES Resilience, capacity and scale
@@ -470,7 +470,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | VUL-015 | full | `customers/tests/api.rs::a_death_prompts_a_person_to_consider_the_bereaved` |
 | VUL-017 | part | `customers/tests/lifecycle.rs::markers_are_reviewed_when_due` |
 | VUL-018 | part | `customers/tests/api.rs::a_capacity_question_pauses_representatives` |
-| VUL-016 | part | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not` |
+| VUL-016 | full | `complaints/tests/timers.rs::a_vulnerable_complainant_gets_longer_and_the_insurer_does_not`<br>`underwriting/tests/more_time.rs::a_customer_who_needs_more_time_gets_longer_to_answer_an_offer` |
 | VUL-019 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_post_only_customer_and_their_representative_both_get_the_notice`<br>`documents/tests/requested_letters.rs::a_representative_sees_ordinary_letters_and_never_clinical_ones` |
 | VUL-020 | full | `payments/tests/aml.rs::repeated_refunds_raise_a_restricted_case` |
 | VUL-021 | full | `customers/tests/api.rs::presentation_preferences_are_per_person`<br>`documents/tests/required_documents.rs::a_representative_gets_the_notice_in_their_own_language` |
@@ -503,6 +503,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | STF-008 | full | `channels/tests/staff.rs::maker_checker_and_separation_of_duties`<br>`underwriting/tests/special.rs::a_declared_conflict_removes_the_underwriter_from_the_case`<br>`underwriting/tests/special.rs::an_underwriter_never_acts_on_their_own_application` |
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
+| STF-011 | full | `channels/tests/staff.rs::a_policy_change_needs_a_security_approver`<br>`channels/tests/staff.rs::a_policy_change_is_measured_by_what_it_opens` |
 | STF-012 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named`<br>`channels/src/classes.rs::field` |
 | STF-013 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |

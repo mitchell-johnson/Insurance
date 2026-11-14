@@ -236,8 +236,25 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
     /// there. The bytes are stored first, so the module never knows of a
     /// file that storage does not hold. Nothing reads the file until the
     /// scan has passed it.
-    pub async fn upload(&self, caller: &str, actor: &str, scheme: &str, file: &str, bytes: Vec<u8>) -> Result<(), DriverError> {
+    /// Returns the file's status: `quarantined` for a new upload, or where
+    /// the same upload sent again has got to.
+    pub async fn upload(&self, caller: &str, actor: &str, scheme: &str, file: &str, bytes: Vec<u8>) -> Result<String, DriverError> {
         let hash = content_hash(&bytes);
+        // A name already used keeps its bytes: other content is refused
+        // before anything is stored over the file being read or kept.
+        let known = self
+            .module
+            .ask(Question::File {
+                scheme: scheme.to_string(),
+                file: file.to_string(),
+            })
+            .await;
+        if let Ok(view) = known {
+            if view["content_hash"] != json!(hash) {
+                return Err(DriverError::Refused(Reject::new("file_exists", format!("file {file} was already received"))));
+            }
+            return Ok(view["status"].as_str().unwrap_or_default().to_string());
+        }
         self.files.put(scheme, file, bytes).await.map_err(DriverError::Unavailable)?;
         let envelope = Envelope {
             // The same bytes under the same name are the same upload; other
@@ -252,7 +269,8 @@ impl<M: Module, C: Core, P: Peers, D: CustomerMaster, F: FileStore> Driver<M, C,
                 content_hash: hash,
             },
         };
-        self.module.propose(envelope).await?.result.map_err(DriverError::Refused)
+        self.module.propose(envelope).await?.result.map_err(DriverError::Refused)?;
+        Ok("quarantined".to_string())
     }
 
     /// Try a proposed mapping against a sample file: what the scheme's

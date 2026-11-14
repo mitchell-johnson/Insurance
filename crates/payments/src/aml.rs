@@ -90,7 +90,7 @@ pub const REFUND_PATTERN_COUNT: usize = 3;
 /// The payer of a refund-pattern case: not a payer at all, the pattern.
 pub const REFUND_PATTERN: &str = "refund-pattern";
 
-fn digits(number: &str) -> String {
+pub(crate) fn digits(number: &str) -> String {
     number.chars().filter(char::is_ascii_alphanumeric).collect()
 }
 

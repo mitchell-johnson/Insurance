@@ -1,0 +1,26 @@
+[package]
+name = "ic-wellness"
+description = "Wellness: AIA Vitality membership and status, and the Premium Flex discount each life holds from each policy anniversary"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-core.workspace = true
+ic-log.workspace = true
+ic-raft.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+ic-sim.workspace = true
+ic-product.workspace = true
+ic-money.workspace = true
+ic-ledger.workspace = true

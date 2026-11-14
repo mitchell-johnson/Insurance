@@ -120,6 +120,10 @@ pub fn answer(state: &PaymentsState, question: Value) -> Result<Value, String> {
         "loan_repayment_reference" => found(state.repayables.references.get(&format!("loan:{}", text(&question, "policy")?))),
         "repayment_reference" => found(state.repayables.references.get(text(&question, "overpayment")?)),
         "hold_watch" => found(Some(state.hold_watch())),
+        "erasure_watch" => {
+            let now = question.get("now").cloned().and_then(|v| serde_json::from_value(v).ok());
+            found(Some(state.erasure_watch(now)))
+        }
         "open_runs" => Ok(state.open_runs()),
         "incident" => found(state.incidents.get(text(&question, "incident")?)),
         "funding_forecast" => Ok(state.funding_forecast(date(&question, "from")?, date(&question, "to")?)),
