@@ -19,21 +19,36 @@ const SHIPPED_OTHERS: [(&str, &str); 25] = [
     // The AIA New Zealand placeholder tables (docs/aia-products.md).
     ("aia_accidental_death.star", include_str!("../../../products/rates/aia_accidental_death.star")),
     ("aia_accidental_injury.star", include_str!("../../../products/rates/aia_accidental_injury.star")),
-    ("aia_business_continuity.star", include_str!("../../../products/rates/aia_business_continuity.star")),
+    (
+        "aia_business_continuity.star",
+        include_str!("../../../products/rates/aia_business_continuity.star"),
+    ),
     ("aia_cancer_care.star", include_str!("../../../products/rates/aia_cancer_care.star")),
     ("aia_family_protection.star", include_str!("../../../products/rates/aia_family_protection.star")),
-    ("aia_group_critical_illness.star", include_str!("../../../products/rates/aia_group_critical_illness.star")),
+    (
+        "aia_group_critical_illness.star",
+        include_str!("../../../products/rates/aia_group_critical_illness.star"),
+    ),
     ("aia_group_income.star", include_str!("../../../products/rates/aia_group_income.star")),
     ("aia_group_life.star", include_str!("../../../products/rates/aia_group_life.star")),
-    ("aia_group_severe_trauma.star", include_str!("../../../products/rates/aia_group_severe_trauma.star")),
+    (
+        "aia_group_severe_trauma.star",
+        include_str!("../../../products/rates/aia_group_severe_trauma.star"),
+    ),
     ("aia_group_tpd.star", include_str!("../../../products/rates/aia_group_tpd.star")),
     ("aia_income.star", include_str!("../../../products/rates/aia_income.star")),
     ("aia_life.star", include_str!("../../../products/rates/aia_life.star")),
     ("aia_private_health.star", include_str!("../../../products/rates/aia_private_health.star")),
-    ("aia_private_health_plus.star", include_str!("../../../products/rates/aia_private_health_plus.star")),
+    (
+        "aia_private_health_plus.star",
+        include_str!("../../../products/rates/aia_private_health_plus.star"),
+    ),
     ("aia_progressive_care.star", include_str!("../../../products/rates/aia_progressive_care.star")),
     ("aia_severe_trauma.star", include_str!("../../../products/rates/aia_severe_trauma.star")),
-    ("aia_specialist_testing.star", include_str!("../../../products/rates/aia_specialist_testing.star")),
+    (
+        "aia_specialist_testing.star",
+        include_str!("../../../products/rates/aia_specialist_testing.star"),
+    ),
     ("aia_tpd.star", include_str!("../../../products/rates/aia_tpd.star")),
     ("aia_trauma.star", include_str!("../../../products/rates/aia_trauma.star")),
 ];

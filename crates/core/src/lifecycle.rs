@@ -90,8 +90,6 @@ pub(crate) fn scheme_member_covers(product: &ProductDefinition, policy: &Policy)
         .collect()
 }
 
-/// Build a policy from an application, validating it against the product.
-/// Shared by issue and by quotes, so the two can never disagree.
 /// Refuse a cover to a life outside the cover's entry ages, read as age last
 /// birthday on the day the cover starts for it. A cover with no entry ages,
 /// or a life whose date of birth is not known, is not checked here: rating
@@ -119,6 +117,8 @@ pub(crate) fn entry_age(def: &ic_product::CoverDefinition, life: &LifeRecord, on
     ))
 }
 
+/// Build a policy from an application, validating it against the product.
+/// Shared by issue and by quotes, so the two can never disagree.
 pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate, index: u64) -> Result<(Policy, ProductDefinition), Reject> {
     if cmd.inception > today
         || today
@@ -205,7 +205,10 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
             if !def.accepts_excess(spec.excess_option.as_deref()) {
                 return Err(Reject::new(
                     "excess_option",
-                    format!("cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none", spec.code),
+                    format!(
+                        "cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none",
+                        spec.code
+                    ),
                 ));
             }
             let id = cover.layers.len() as u32 + 1;

@@ -10,8 +10,7 @@ use ic_product::discount::{Held, Line, PricingState};
 use ic_product::options::{pays_premium, rating_age};
 use ic_product::rating::{cover_premium, modal_premium_by_line, RatingError, RatingFactors};
 use ic_product::{
-    load_definitions, load_product, load_rate_table, option_code, BuiltInKind, CoverDefinition, Frequency, OptionError, PremiumBasis,
-    ProductDefinition, Sex,
+    load_definitions, load_product, load_rate_table, option_code, BuiltInKind, CoverDefinition, Frequency, OptionError, PremiumBasis, ProductDefinition, Sex,
 };
 
 const PRODUCTS: [(&str, &str); 10] = [
@@ -29,21 +28,36 @@ const PRODUCTS: [(&str, &str); 10] = [
 const TABLES: [(&str, &str); 19] = [
     ("aia_accidental_death.star", include_str!("../../../products/rates/aia_accidental_death.star")),
     ("aia_accidental_injury.star", include_str!("../../../products/rates/aia_accidental_injury.star")),
-    ("aia_business_continuity.star", include_str!("../../../products/rates/aia_business_continuity.star")),
+    (
+        "aia_business_continuity.star",
+        include_str!("../../../products/rates/aia_business_continuity.star"),
+    ),
     ("aia_cancer_care.star", include_str!("../../../products/rates/aia_cancer_care.star")),
     ("aia_family_protection.star", include_str!("../../../products/rates/aia_family_protection.star")),
-    ("aia_group_critical_illness.star", include_str!("../../../products/rates/aia_group_critical_illness.star")),
+    (
+        "aia_group_critical_illness.star",
+        include_str!("../../../products/rates/aia_group_critical_illness.star"),
+    ),
     ("aia_group_income.star", include_str!("../../../products/rates/aia_group_income.star")),
     ("aia_group_life.star", include_str!("../../../products/rates/aia_group_life.star")),
-    ("aia_group_severe_trauma.star", include_str!("../../../products/rates/aia_group_severe_trauma.star")),
+    (
+        "aia_group_severe_trauma.star",
+        include_str!("../../../products/rates/aia_group_severe_trauma.star"),
+    ),
     ("aia_group_tpd.star", include_str!("../../../products/rates/aia_group_tpd.star")),
     ("aia_income.star", include_str!("../../../products/rates/aia_income.star")),
     ("aia_life.star", include_str!("../../../products/rates/aia_life.star")),
     ("aia_private_health.star", include_str!("../../../products/rates/aia_private_health.star")),
-    ("aia_private_health_plus.star", include_str!("../../../products/rates/aia_private_health_plus.star")),
+    (
+        "aia_private_health_plus.star",
+        include_str!("../../../products/rates/aia_private_health_plus.star"),
+    ),
     ("aia_progressive_care.star", include_str!("../../../products/rates/aia_progressive_care.star")),
     ("aia_severe_trauma.star", include_str!("../../../products/rates/aia_severe_trauma.star")),
-    ("aia_specialist_testing.star", include_str!("../../../products/rates/aia_specialist_testing.star")),
+    (
+        "aia_specialist_testing.star",
+        include_str!("../../../products/rates/aia_specialist_testing.star"),
+    ),
     ("aia_tpd.star", include_str!("../../../products/rates/aia_tpd.star")),
     ("aia_trauma.star", include_str!("../../../products/rates/aia_trauma.star")),
 ];
@@ -112,10 +126,16 @@ fn every_aia_product_table_and_definition_loads_and_fits_together() {
 fn an_income_selection_multiplies_factors_merges_terms_and_prices_the_cover() {
     let p = living();
     let ip = cover(&p, "income-agreed-value");
-    let premier = pick(ip, &[("waiting", "4w"), ("period", "to-65"), ("cover", "premier"), ("mental-health", "limited")]);
+    let premier = pick(
+        ip,
+        &[("waiting", "4w"), ("period", "to-65"), ("cover", "premier"), ("mental-health", "limited")],
+    );
     let o = ip.option(&premier).unwrap();
     assert_eq!(o.premium_factor, dec("1.11").unwrap() * dec("0.90").unwrap());
-    assert_eq!((o.terms.waiting_days, o.terms.benefit_to_age, o.terms.expiry_age, o.terms.benefit_months), (Some(28), Some(65), Some(65), None));
+    assert_eq!(
+        (o.terms.waiting_days, o.terms.benefit_to_age, o.terms.expiry_age, o.terms.benefit_months),
+        (Some(28), Some(65), Some(65), None)
+    );
     assert_eq!(o.terms.premium, Some(PremiumBasis::Stepped));
     assert!(o.has_feature("premier") && o.has_feature("mental-health-limit") && o.has_feature("future-insurability"));
     assert!(!o.has_feature("claim-indexation"));
@@ -132,10 +152,15 @@ fn an_income_selection_multiplies_factors_merges_terms_and_prices_the_cover() {
     assert!(matches!(ip.option(&limited_on_2y), Err(OptionError::Menu(m)) if m.contains("only with")));
 
     let mut parts: Vec<&str> = premier.split(',').collect();
-    for bad in [parts[1..].join(","), {
-        parts.swap(0, 1);
-        parts.join(",")
-    }, premier.replace("waiting=4w", "waiting=3w"), premier.replace("waiting=4w", "waiting4w")] {
+    for bad in [
+        parts[1..].join(","),
+        {
+            parts.swap(0, 1);
+            parts.join(",")
+        },
+        premier.replace("waiting=4w", "waiting=3w"),
+        premier.replace("waiting=4w", "waiting4w"),
+    ] {
         assert!(matches!(ip.option(&bad), Err(OptionError::Unknown(code)) if code == bad), "{bad}");
     }
 
@@ -178,6 +203,16 @@ fn premium_types_set_the_age_a_premium_is_read_at_and_when_it_stops() {
     let corporate = load_product(PRODUCTS[9].0, PRODUCTS[9].1).unwrap();
     assert_eq!(cover(&corporate, "group-life").premium_basis(None), None, "a scheme's unit rates have no basis");
     assert!(!cover(&corporate, "group-life").may_be_level());
+    let level = mini(&[("HEALTH_EXCESS", "")]).unwrap();
+    let mut income = cover(&level, "income").clone();
+    income.rating.premium_type = ic_product::PremiumType::Level;
+    income.rating.level_to_age = Some(65);
+    assert_eq!(
+        income.premium_basis(None),
+        Some(PremiumBasis::Level { to_age: 65 }),
+        "a level cover with no menu"
+    );
+    assert!(income.may_be_level());
 
     assert_eq!(rating_age(PremiumBasis::Stepped, 30, 47), 47);
     assert_eq!(rating_age(PremiumBasis::Level { to_age: 65 }, 30, 47), 30);
@@ -207,7 +242,11 @@ fn the_term_chosen_sets_when_the_cover_ends() {
     assert_eq!((fp.expiry_after_years_for(None), fp.expiry_age_for(None)), (None, None));
     let ip = cover(&p, "income-indemnity");
     assert_eq!(ip.expiry_age_for(Some(&pick(ip, &[("period", "to-70")]))), Some(70));
-    assert_eq!(ip.expiry_age_for(Some("not=a,code=at-all")), Some(65), "an unknown code falls back on the cover");
+    assert_eq!(
+        ip.expiry_age_for(Some("not=a,code=at-all")),
+        Some(65),
+        "an unknown code falls back on the cover"
+    );
     assert!(!cover(&p, "life").may_expire(), "AIA life cover runs for life");
 }
 
@@ -258,7 +297,9 @@ fn aia_living_cover_rules_decide_what_a_life_may_hold() {
     assert!(held(&["life", "critical-conditions-accelerated", "income-agreed-value", "retirement-protection"]).is_ok());
     assert!(held(&[]).is_ok());
     assert!(held(&["specialist-testing"]).unwrap_err().contains("at least one of"));
-    assert!(held(&["critical-conditions-accelerated", "progressive-care"]).unwrap_err().contains("held only with life"));
+    assert!(held(&["critical-conditions-accelerated", "progressive-care"])
+        .unwrap_err()
+        .contains("held only with life"));
     assert!(held(&["life", "income-indemnity", "income-agreed-value"]).unwrap_err().contains("only one of"));
     let err = held(&["mortgage-income-rent", "retirement-protection"]).unwrap_err();
     assert!(err.contains("retirement-protection is held only with one of income-agreed-value"), "{err}");
@@ -302,15 +343,28 @@ fn the_multi_benefit_discount_counts_categories_per_life_at_their_minimums() {
     let two_sums = [("a", "life", 10_000_000), ("a", "critical-conditions", 7_500_000)];
     assert_eq!(run(&two, &two_sums, &[]), at("mbd-10", 150_00));
 
-    let four = [("a", "life", "1000"), ("a", "critical-conditions", "500"), ("a", "tpd-own-occupation", "300"), ("a", "income-indemnity", "200")];
-    let four_sums = [("a", "life", 10_000_000), ("a", "critical-conditions", 7_500_000), ("a", "tpd-own-occupation", 7_500_000), ("a", "income-indemnity", 200_000)];
+    let four = [
+        ("a", "life", "1000"),
+        ("a", "critical-conditions", "500"),
+        ("a", "tpd-own-occupation", "300"),
+        ("a", "income-indemnity", "200"),
+    ];
+    let four_sums = [
+        ("a", "life", 10_000_000),
+        ("a", "critical-conditions", 7_500_000),
+        ("a", "tpd-own-occupation", 7_500_000),
+        ("a", "income-indemnity", 200_000),
+    ];
     assert_eq!(run(&four, &four_sums, &[]), at("mbd-15", 300_00));
     let three_sums = [four_sums[0], four_sums[1], four_sums[2], ("a", "income-indemnity", 199_999)];
     assert_eq!(run(&four, &three_sums, &[]), at("mbd-12-5", 250_00), "income below its minimum does not count");
 
     assert_eq!(run(&two, &[("a", "life", 9_999_999), two_sums[1]], &[]), vec![], "life cover below $100,000");
     let fp = [("a", "family-protection", "800"), ("a", "severe-trauma", "200")];
-    assert_eq!(run(&fp, &[("a", "family-protection", 100_000), ("a", "severe-trauma", 7_500_000)], &[]), at("mbd-10", 100_00));
+    assert_eq!(
+        run(&fp, &[("a", "family-protection", 100_000), ("a", "severe-trauma", 7_500_000)], &[]),
+        at("mbd-10", 100_00)
+    );
 
     let couple = [two[0], two[1], ("b", "critical-conditions", "400")];
     let couple_sums = [two_sums[0], two_sums[1], ("b", "critical-conditions", 7_500_000)];
@@ -321,7 +375,10 @@ fn the_multi_benefit_discount_counts_categories_per_life_at_their_minimums() {
         tier: "20".to_string(),
         life: Some("a".to_string()),
     }];
-    assert_eq!(run(&four, &four_sums, &vitality), vec![("mbd-15".to_string(), 300_00), ("vitality".to_string(), 340_00)]);
+    assert_eq!(
+        run(&four, &four_sums, &vitality),
+        vec![("mbd-15".to_string(), 300_00), ("vitality".to_string(), 340_00)]
+    );
 }
 
 const MINI: &str = r#"
@@ -380,24 +437,64 @@ fn the_loader_refuses_each_unsound_option_menu() {
     let axis = |choices: &str| format!(r#"[option_axis("x", "X", [{choices}])]"#);
     let ok = r#"choice("a", "A")"#;
     let cases: Vec<(&str, String, &str)> = vec![
-        ("HEALTH_EXCESS", r#"excess_options = [excess_option("nil", 0)], option_axes = [option_axis("x", "X", [choice("a", "A")])],"#.into(), "excess levels or option axes, not both"),
-        ("LIFE_AXES", format!(r#"[option_axis("X", "X", [{ok}])]"#), "axis codes are plain and distinct (X)"),
-        ("LIFE_AXES", format!(r#"[option_axis("x", "X", [{ok}]), option_axis("x", "Y", [{ok}])]"#), "plain and distinct (x)"),
+        (
+            "HEALTH_EXCESS",
+            r#"excess_options = [excess_option("nil", 0)], option_axes = [option_axis("x", "X", [choice("a", "A")])],"#.into(),
+            "excess levels or option axes, not both",
+        ),
+        (
+            "LIFE_AXES",
+            format!(r#"[option_axis("X", "X", [{ok}])]"#),
+            "axis codes are plain and distinct (X)",
+        ),
+        (
+            "LIFE_AXES",
+            format!(r#"[option_axis("x", "X", [{ok}]), option_axis("x", "Y", [{ok}])]"#),
+            "plain and distinct (x)",
+        ),
         ("LIFE_AXES", r#"[option_axis("x", "X", [])]"#.into(), "axis x offers no choice"),
         ("LIFE_AXES", axis(&format!("{ok}, {ok}")), "choice codes are plain and distinct (a)"),
         ("LIFE_AXES", axis(r#"choice("a b", "A")"#), "choice codes are plain and distinct (a b)"),
         ("LIFE_AXES", axis(r#"choice("a", "A", premium_factor = "0")"#), "premium factor above zero"),
         ("LIFE_AXES", axis(r#"choice("a", "A", expiry_age = 0)"#), "sets a term out of range"),
         ("LIFE_AXES", axis(r#"choice("a", "A", premium = level_premium(0))"#), "sets a term out of range"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", premium = level_term_premium(0))"#), "sets a term out of range"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", premium = limited_pay_premium(0))"#), "sets a term out of range"),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", premium = level_term_premium(0))"#),
+            "sets a term out of range",
+        ),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", premium = limited_pay_premium(0))"#),
+            "sets a term out of range",
+        ),
         ("LIFE_AXES", axis(r#"choice("a", "A", excess = -1)"#), "sets a term out of range"),
         ("LIFE_AXES", axis(r#"choice("a", "A", features = ["Not Plain"])"#), "sets a term out of range"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", only_with = ["x=a"])"#), "offered with x=a, which another axis does not offer"),
-        ("LIFE_AXES", format!(r#"[{PREMIUM}, option_axis("x", "X", [choice("a", "A", only_with = ["premium=monthly"])])]"#), "premium=monthly"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", only_with = ["premium"])"#), "which another axis does not offer"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", waiting_days = 28)"#), "income terms on a cover that pays no income"),
-        ("LIFE_AXES", axis(r#"choice("a", "A", benefit_to_age = 65)"#), "income terms on a cover that pays no income"),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", only_with = ["x=a"])"#),
+            "offered with x=a, which another axis does not offer",
+        ),
+        (
+            "LIFE_AXES",
+            format!(r#"[{PREMIUM}, option_axis("x", "X", [choice("a", "A", only_with = ["premium=monthly"])])]"#),
+            "premium=monthly",
+        ),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", only_with = ["premium"])"#),
+            "which another axis does not offer",
+        ),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", waiting_days = 28)"#),
+            "income terms on a cover that pays no income",
+        ),
+        (
+            "LIFE_AXES",
+            axis(r#"choice("a", "A", benefit_to_age = 65)"#),
+            "income terms on a cover that pays no income",
+        ),
         (
             "GROUP",
             format!(
@@ -427,16 +524,26 @@ fn a_selection_whose_choices_set_the_same_term_is_refused() {
     for term in ["expiry_age = 60", "expiry_after_years = 5", "excess = 100", r#"premium = stepped_premium()"#] {
         let axes = format!(r#"[option_axis("x", "X", [choice("a", "A", {term})]), option_axis("y", "Y", [choice("b", "B", {term})])]"#);
         let p = mini(&[("LIFE_AXES", &axes)]).unwrap();
-        assert!(matches!(cover(&p, "life").option("x=a,y=b"), Err(OptionError::Menu(m)) if m.contains("both set")), "{term}");
+        assert!(
+            matches!(cover(&p, "life").option("x=a,y=b"), Err(OptionError::Menu(m)) if m.contains("both set")),
+            "{term}"
+        );
     }
     for term in ["waiting_days = 7", "benefit_months = 12", "benefit_to_age = 65"] {
         let axes = format!(r#"[option_axis("x", "X", [choice("a", "A", {term})]), option_axis("y", "Y", [choice("b", "B", {term})])]"#);
         let p = mini(&[("INCOME_AXES", &axes)]).unwrap();
-        assert!(matches!(cover(&p, "income").option("x=a,y=b"), Err(OptionError::Menu(m)) if m.contains("both set")), "{term}");
+        assert!(
+            matches!(cover(&p, "income").option("x=a,y=b"), Err(OptionError::Menu(m)) if m.contains("both set")),
+            "{term}"
+        );
     }
     let features = r#"[option_axis("x", "X", [choice("a", "A", features = ["f"])]), option_axis("y", "Y", [choice("b", "B", features = ["f", "g"])])]"#;
     let p = mini(&[("LIFE_AXES", features)]).unwrap();
-    assert_eq!(cover(&p, "life").option("x=a,y=b").unwrap().terms.features, vec!["f".to_string(), "g".to_string()], "a feature twice is kept once");
+    assert_eq!(
+        cover(&p, "life").option("x=a,y=b").unwrap().terms.features,
+        vec!["f".to_string(), "g".to_string()],
+        "a feature twice is kept once"
+    );
     assert!(matches!(cover(&p, "income").option("x=a"), Err(OptionError::Unknown(_))));
     assert!(!cover(&p, "income").has_options() && cover(&p, "income").accepts_excess(None));
 
@@ -458,17 +565,45 @@ fn a_selection_whose_choices_set_the_same_term_is_refused() {
 #[test]
 fn the_loader_refuses_each_unsound_built_in_benefit() {
     let one = |b: &str| format!("[{b}]");
-    assert!(mini(&[("LIFE_BUILT_IN", &one(r#"built_in("ti", "Terminal illness", "early_payment", percent_of_cover = "100")"#))]).is_ok());
+    assert!(mini(&[(
+        "LIFE_BUILT_IN",
+        &one(r#"built_in("ti", "Terminal illness", "early_payment", percent_of_cover = "100")"#)
+    )])
+    .is_ok());
     let cases: Vec<(&str, String, &str)> = vec![
-        ("LIFE_BUILT_IN", r#"[built_in("a", "A", "facility"), built_in("a", "B", "facility")]"#.into(), "a code no other built-in"),
+        (
+            "LIFE_BUILT_IN",
+            r#"[built_in("a", "A", "facility"), built_in("a", "B", "facility")]"#.into(),
+            "a code no other built-in",
+        ),
         ("LIFE_BUILT_IN", one(r#"built_in("a", "", "facility")"#), "needs a name"),
         ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "additional")"#), "sets the most it pays"),
-        ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "premium_waiver", max = 1)"#), "pays nothing, so it sets no limit"),
+        (
+            "LIFE_BUILT_IN",
+            one(r#"built_in("a", "A", "premium_waiver", max = 1)"#),
+            "pays nothing, so it sets no limit",
+        ),
         ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "additional", max = 0)"#), "limits are above zero"),
-        ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "additional", percent_of_cover = "0")"#), "limits are above zero"),
-        ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "monthly_addition", multiple_of_cover = "1")"#), "belongs to an income cover"),
-        ("HEALTH_BUILT_IN", one(r#"built_in("a", "A", "early_payment", max = 1)"#), "belongs to a lump sum or income cover"),
-        ("LIFE_BUILT_IN", one(r#"built_in("a", "A", "facility", requires = "f")"#), "names a feature none of the cover's options"),
+        (
+            "LIFE_BUILT_IN",
+            one(r#"built_in("a", "A", "additional", percent_of_cover = "0")"#),
+            "limits are above zero",
+        ),
+        (
+            "LIFE_BUILT_IN",
+            one(r#"built_in("a", "A", "monthly_addition", multiple_of_cover = "1")"#),
+            "belongs to an income cover",
+        ),
+        (
+            "HEALTH_BUILT_IN",
+            one(r#"built_in("a", "A", "early_payment", max = 1)"#),
+            "belongs to a lump sum or income cover",
+        ),
+        (
+            "LIFE_BUILT_IN",
+            one(r#"built_in("a", "A", "facility", requires = "f")"#),
+            "names a feature none of the cover's options",
+        ),
     ];
     for (key, value, why) in &cases {
         let err = mini(&[(key, value)]).unwrap_err();
@@ -485,7 +620,9 @@ fn the_loader_refuses_each_unsound_built_in_benefit() {
 #[test]
 fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
     let mbd = |required: &str, categories: &str, count: u32| {
-        format!(r#"discounts(chain = [discount("mbd", "MBD", "multi_benefit_discount", percent_off("10"), benefit_categories({required}, {categories}, {count}))])"#)
+        format!(
+            r#"discounts(chain = [discount("mbd", "MBD", "multi_benefit_discount", percent_off("10"), benefit_categories({required}, {categories}, {count}))])"#
+        )
     };
     let life = r#"[discount_category("life", ["life"], min_sum_insured = 100)]"#;
     let income = r#"[discount_category("income", ["income"])]"#;
@@ -501,7 +638,10 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
         (mbd(life, income, 2), never),
         (r#"composition(requires_any = {"income": []})"#.to_string(), "names at least one cover"),
         (r#"composition(requires_any = {"income": ["income"]})"#.to_string(), "cannot require itself"),
-        (r#"composition(requires_any = {"income": ["nope"]})"#.to_string(), "which the product does not offer"),
+        (
+            r#"composition(requires_any = {"income": ["nope"]})"#.to_string(),
+            "which the product does not offer",
+        ),
     ];
     for (feature, why) in &cases {
         let err = mini(&[("FEATURE", feature)]).unwrap_err();

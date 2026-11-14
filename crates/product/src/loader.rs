@@ -322,7 +322,10 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                             let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
                             let sound = all.iter().all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0);
                             if !named {
-                                return Err(invalid(file, format!("discount {}: a benefit category names a cover the product does not have", d.code)));
+                                return Err(invalid(
+                                    file,
+                                    format!("discount {}: a benefit category names a cover the product does not have", d.code),
+                                ));
                             }
                             !required.is_empty() && distinct && sound && *count as usize <= categories.len()
                         }

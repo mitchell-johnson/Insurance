@@ -18,5 +18,5 @@ pub mod rating;
 pub mod schedule;
 
 pub use definition::*;
-pub use options::{option_code, CoverOption, OptionAxis, OptionChoice, OptionError, OptionTerms, PremiumBasis};
 pub use loader::{load_definitions, load_fund_source, load_product, load_rate_table, LoadError};
+pub use options::{option_code, CoverOption, OptionAxis, OptionChoice, OptionError, OptionTerms, PremiumBasis};

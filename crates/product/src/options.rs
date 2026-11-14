@@ -169,16 +169,22 @@ pub(crate) fn validate_axes(cover: &CoverDefinition) -> Result<(), OptionError> 
                 return menu(format!("axis {}: choice {} sets a term out of range", axis.code, c.code));
             }
             for pair in &c.only_with {
-                let known = pair.split_once('=').is_some_and(|(a, ch)| {
-                    a != axis.code && cover.option_axes.iter().any(|x| x.code == a && x.choices.iter().any(|y| y.code == ch))
-                });
+                let known = pair
+                    .split_once('=')
+                    .is_some_and(|(a, ch)| a != axis.code && cover.option_axes.iter().any(|x| x.code == a && x.choices.iter().any(|y| y.code == ch)));
                 if !known {
-                    return menu(format!("axis {}: choice {} is offered with {pair}, which another axis does not offer", axis.code, c.code));
+                    return menu(format!(
+                        "axis {}: choice {} is offered with {pair}, which another axis does not offer",
+                        axis.code, c.code
+                    ));
                 }
             }
             let income = matches!(cover.benefit, crate::Benefit::MonthlyBenefit { .. });
             if !income && (t.waiting_days.is_some() || t.benefit_months.is_some() || t.benefit_to_age.is_some()) {
-                return menu(format!("axis {}: choice {} sets income terms on a cover that pays no income", axis.code, c.code));
+                return menu(format!(
+                    "axis {}: choice {} sets income terms on a cover that pays no income",
+                    axis.code, c.code
+                ));
             }
             if t.premium.is_some() && cover.rating.premium_type == PremiumType::GroupUnitRate {
                 return menu(format!("axis {}: a scheme's unit rates have no premium structure to choose", axis.code));
@@ -255,7 +261,10 @@ impl CoverDefinition {
             merge(&mut resolved.terms, &c.terms, code)?;
             picked.push(c);
         }
-        if picked.iter().any(|c| !c.only_with.is_empty() && !c.only_with.iter().any(|w| parts.contains(&w.as_str()))) {
+        if picked
+            .iter()
+            .any(|c| !c.only_with.is_empty() && !c.only_with.iter().any(|w| parts.contains(&w.as_str())))
+        {
             return Err(OptionError::Menu(format!("{code}: a choice is offered only with a choice not made")));
         }
         Ok(resolved)
@@ -279,16 +288,12 @@ impl CoverDefinition {
     /// Whether any layer of this cover can be priced on a level basis.
     pub fn may_be_level(&self) -> bool {
         self.rating.premium_type == PremiumType::Level
-            || self
-                .option_axes
-                .iter()
-                .flat_map(|a| &a.choices)
-                .any(|c| {
-                    matches!(
-                        c.terms.premium,
-                        Some(PremiumBasis::Level { .. } | PremiumBasis::LevelTerm { .. } | PremiumBasis::LimitedPay { .. })
-                    )
-                })
+            || self.option_axes.iter().flat_map(|a| &a.choices).any(|c| {
+                matches!(
+                    c.terms.premium,
+                    Some(PremiumBasis::Level { .. } | PremiumBasis::LevelTerm { .. } | PremiumBasis::LimitedPay { .. })
+                )
+            })
     }
 
     /// Whether any layer of this cover can reach an end by age or term.
@@ -303,10 +308,7 @@ impl CoverDefinition {
 
     /// The age at which a layer at this choice ends, where one is set.
     pub fn expiry_age_for(&self, choice: Option<&str>) -> Option<u32> {
-        choice
-            .and_then(|c| self.option(c).ok())
-            .and_then(|o| o.terms.expiry_age)
-            .or(self.expiry_age)
+        choice.and_then(|c| self.option(c).ok()).and_then(|o| o.terms.expiry_age).or(self.expiry_age)
     }
 
     /// The years after the cover began at which a layer at this choice ends.

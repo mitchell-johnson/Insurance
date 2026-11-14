@@ -309,9 +309,7 @@ impl BuiltInBenefit {
 
     /// Whether this benefit applies to a life at this option.
     pub fn applies(&self, option: Option<&crate::options::CoverOption>) -> bool {
-        self.requires_feature
-            .as_ref()
-            .is_none_or(|f| option.is_some_and(|o| o.has_feature(f)))
+        self.requires_feature.as_ref().is_none_or(|f| option.is_some_and(|o| o.has_feature(f)))
     }
 }
 

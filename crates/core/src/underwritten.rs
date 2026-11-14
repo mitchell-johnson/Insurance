@@ -294,7 +294,10 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     if !def.accepts_excess(spec.excess_option.as_deref()) {
         return Err(Reject::new(
             "excess_option",
-            format!("cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none", spec.cover),
+            format!(
+                "cover {}: choose from the options it offers (an excess level, or one choice on each of its axes), or none where it offers none",
+                spec.cover
+            ),
         ));
     }
     let holds = |policy: &Policy, code: &str| {
