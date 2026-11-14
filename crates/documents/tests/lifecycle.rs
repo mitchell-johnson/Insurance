@@ -650,3 +650,70 @@ fn a_claim_that_reduces_cover_asks_for_one_new_schedule_a_day() {
     assert_eq!(events.len(), 1);
     assert!(kit.state.triggers.contains_key(&format!("schedule:pol-1:{tomorrow}:PolicySchedule")));
 }
+
+/// Purpose: a policy loaded from another system, issued and marked
+/// migrated together, is sent no new schedule for its issue; a change to
+/// it on a later day is.
+/// Why it matters: migrated customers are told before their cohort moves
+/// and keep the documents already issued to them; a schedule for every
+/// policy on cutover day would arrive as if each had just been bought.
+#[test]
+fn a_migrated_policy_is_not_sent_a_schedule_for_its_issue() {
+    let mut kit = Kit::ready();
+    let today = kit.today();
+    let pol = policy("pol-9");
+    let issued = core(
+        1,
+        today,
+        CoreEvent::PolicyIssued {
+            policy: pol.clone(),
+            number: "KTL9".into(),
+            group: ic_core::GroupId("g-9".into()),
+            policyholder: party("aroha"),
+            product_code: "term-life".into(),
+            product_hash: "h".into(),
+            inception: date("2015-03-01"),
+            lives: vec![],
+            layers: vec![],
+            members: vec![],
+        },
+    );
+    let migrated = core(
+        2,
+        today,
+        CoreEvent::PolicyMigrated {
+            policy: pol.clone(),
+            cohort: "cohort-1".into(),
+            cutover: today,
+            periods_billed: 140,
+            standing: Some(Standing::Paid),
+            outstanding_minor: 0,
+            oldest_unpaid_due: None,
+            assumptions: vec![],
+        },
+    );
+    let id = format!("schedule:pol-9:{today}:PolicySchedule");
+    let events = kit.ok("relay", "svc", observe(vec![issued, migrated]));
+    assert!(events.contains(&Event::TriggerDismissed { trigger: id.clone() }), "{events:?}");
+    assert!(!kit.state.triggers.contains_key(&id));
+    // The same day's later changes are in the history it brought with it.
+    let ended = |seq: u64, on: NaiveDate| {
+        core(
+            seq,
+            on,
+            CoreEvent::LayerEnded {
+                policy: pol.clone(),
+                cover: "life".into(),
+                layer: 1,
+                life: "life-1".into(),
+                effective: on,
+                sum_insured_minor: 10_000_000,
+            },
+        )
+    };
+    assert!(kit.ok("relay", "svc", observe(vec![ended(3, today)])).is_empty());
+    kit.advance_days(1);
+    let tomorrow = kit.today();
+    kit.ok("relay", "svc", observe(vec![ended(4, tomorrow)]));
+    assert!(kit.state.triggers.contains_key(&format!("schedule:pol-9:{tomorrow}:PolicySchedule")));
+}
