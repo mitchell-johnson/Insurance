@@ -588,6 +588,7 @@ impl<M: Module, C: Core, B: Bank, V: WormStore, K: Keys, S: Secrets, N: Notifier
                     name: config.rules.drill_account.name.clone(),
                     number: config.rules.drill_account.number.clone(),
                     amount_minor: config.rules.drill_amount_minor,
+                    foreign: None,
                 }],
             };
             batch.ordering = config.wire(channel, &batch.account).1;

@@ -101,6 +101,10 @@ pub struct Route {
     /// The API channel for urgent payments out of hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub urgent: Option<Id>,
+    /// The channel that pays accounts abroad (CLM-028), at the primary
+    /// channel's bank. A route without one cannot pay a foreign payee.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cross_border: Option<Id>,
     /// Distinct approvers a run needs.
     pub approvals: u8,
     pub item_limit_minor: i64,
@@ -267,7 +271,11 @@ impl Config {
             if route.item_limit_minor <= 0 || route.run_limit_minor < route.item_limit_minor || route.day_limit_minor < route.run_limit_minor {
                 return Err(bad(format!("{run_type:?} limits must rise from item to run to day")));
             }
-            for id in std::iter::once(&route.primary).chain(&route.secondary).chain(&route.urgent) {
+            for id in std::iter::once(&route.primary)
+                .chain(&route.secondary)
+                .chain(&route.urgent)
+                .chain(&route.cross_border)
+            {
                 let channel = self.channels.get(id).ok_or_else(|| bad(format!("{run_type:?} names unknown channel {id}")))?;
                 if route.urgent.as_ref() == Some(id) && channel.kind != ChannelKind::Api {
                     return Err(bad(format!("the urgent channel for {run_type:?} must be an API channel")));
@@ -289,6 +297,15 @@ impl Config {
                 .is_some_and(|s| self.channels[s].bank == self.channels[&route.primary].bank)
             {
                 return Err(bad(format!("the secondary channel for {run_type:?} must be at another bank")));
+            }
+            if route
+                .cross_border
+                .as_ref()
+                .is_some_and(|c| run_type.inbound() || self.channels[c].bank != self.channels[&route.primary].bank)
+            {
+                return Err(bad(format!(
+                    "the cross-border channel for {run_type:?} pays out, at the primary channel's bank"
+                )));
             }
         }
         if let Some(gap) = self.provisioning_gaps(today).into_iter().next() {
