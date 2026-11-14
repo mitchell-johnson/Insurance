@@ -12,22 +12,21 @@ use ic_raft::{ClusterAuth, ClusterClient};
 use temporalio_client::envconfig::LoadClientConfigProfileOptions;
 use temporalio_client::{Client, ClientOptions, Connection};
 
-async fn stop_signal() {
-    let ctrl_c = async {
-        let _ = tokio::signal::ctrl_c().await;
-    };
-    let terminate = async {
-        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-            Ok(mut signal) => {
-                signal.recv().await;
-            }
-            Err(_) => std::future::pending::<()>().await,
+/// The stop signal: SIGTERM (a pod being replaced) or SIGINT. Both handlers are
+/// installed when this is called, not when the future is first polled. The pass loop
+/// polls its stop future only between passes, so a lazily installed handler left the
+/// whole first pass exposed: a SIGTERM then took the default action and killed the
+/// process mid-pass instead of letting the pass finish and the process exit cleanly.
+fn stop_signal() -> Result<impl std::future::Future<Output = ()>, String> {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut terminate = signal(SignalKind::terminate()).map_err(|e| format!("SIGTERM handler: {e}"))?;
+    let mut interrupt = signal(SignalKind::interrupt()).map_err(|e| format!("SIGINT handler: {e}"))?;
+    Ok(async move {
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
         }
-    };
-    tokio::select! {
-        () = ctrl_c => {}
-        () = terminate => {}
-    }
+    })
 }
 
 #[tokio::main]
@@ -36,6 +35,7 @@ async fn main() -> Result<(), String> {
         .json()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
+    let stop = stop_signal()?;
     let config = Config::from_lookup(|key| std::env::var(key).ok())?;
     let credential = AzureCredential::from_env().map_err(|e| e.to_string())?;
     let auth = ClusterAuth::from_lookup(|key| std::env::var(key).ok(), |path| std::fs::read_to_string(path))?;
@@ -58,7 +58,7 @@ async fn main() -> Result<(), String> {
     };
     tracing::info!(?config, "finance close service started");
     if !config.temporal {
-        run_passes(&driver, config.pass_every, stop_signal(), |_| {}).await;
+        run_passes(&driver, config.pass_every, stop, |_| {}).await;
         return Ok(());
     }
     // The connection is read by the SDK from TEMPORAL_ADDRESS,
@@ -66,5 +66,5 @@ async fn main() -> Result<(), String> {
     let (connection, options) = ClientOptions::load_from_config(LoadClientConfigProfileOptions::default()).map_err(|e| e.to_string())?;
     let connection = Connection::connect(connection).await.map_err(|e| format!("temporal: {e}"))?;
     let temporal = Client::new(connection, options).map_err(|e| e.to_string())?;
-    run_on_temporal(temporal, Arc::new(driver), &config, stop_signal(), |_| {}).await
+    run_on_temporal(temporal, Arc::new(driver), &config, stop, |_| {}).await
 }

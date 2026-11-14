@@ -48,7 +48,9 @@ async fn core_run(client: &ClusterClient, key: &str, caller: &str, command: ic_c
 /// pump finds the policy's partition, has the core raise a refund, and the
 /// module hears the answer; a credit is offered to every partition for
 /// matching; a command about a policy nobody holds is refused as such; and
-/// signing goes through Key Vault.
+/// signing goes through Key Vault; another hosted module is told and asked
+/// through the same client; and withheld tax is read from each partition
+/// and paid on the partition named.
 /// Why it matters: everything else is tested against stand-ins for the
 /// cluster. This is the proof that the real wiring (module host, cluster
 /// client, partition lookup, idempotent proposals) carries the same flow.
@@ -219,6 +221,56 @@ async fn the_service_works_against_a_real_node() {
     assert_eq!(core.send("k1", "payments", nobody).await.unwrap().as_deref(), Some("unknown_policy"));
     let other = ic_core::Command::OpenBusinessDate { date: d(2027, 11, 16) };
     assert_eq!(core.send("k2", "payments", other).await.unwrap().as_deref(), Some("not_a_payments_command"));
+
+    // Another hosted module is told and asked in its own form; one that is
+    // not hosted cannot be asked.
+    let told = Module::tell(&client, "payments", json!(tell(&mia(), refund("rf3", 1_00)))).await;
+    assert!(told.is_ok(), "{told:?}");
+    let asked = Module::ask(&client, "payments", json!({"q": "refund", "refund": "rf3"})).await.unwrap();
+    assert_eq!(asked["policy"], json!(policy));
+    assert!(Module::ask(&client, "nobody", json!({"q": "anything"})).await.is_err());
+
+    // Tax kept back from commission is held on the partition; a share above
+    // it is refused there.
+    let earned = ic_core::counterparty::CounterpartyPosting {
+        reference: "stmt-1".into(),
+        kind: "commission_paid".into(),
+        currency: NZD,
+        value_date: None,
+        policy: None,
+        reverses: None,
+        lines: vec![
+            ic_core::counterparty::CounterpartyLine {
+                account: ic_core::counterparty::CounterpartyAccount::Party {
+                    party: ic_core::PartyId("adviser-1".into()),
+                    ledger: ic_core::counterparty::PartyLedger::CommissionPayable,
+                },
+                amount_minor: 20_00,
+            },
+            ic_core::counterparty::CounterpartyLine {
+                account: ic_core::counterparty::CounterpartyAccount::Internal(ic_core::counterparty::InternalLedger::WithholdingTax {
+                    kind: "schedular".into(),
+                }),
+                amount_minor: -20_00,
+            },
+        ],
+        detail: Default::default(),
+    };
+    core_run(&client, "earned", "distribution", ic_core::Command::PostCounterparty(Box::new(earned))).await;
+    assert_eq!(core.withholding_held("schedular").await.unwrap(), [(0, None, 20_00)]);
+    assert!(core.withholding_held("rwt").await.unwrap().is_empty());
+    let remit = ic_core::remittance::Remittance {
+        kind: "schedular".to_string(),
+        period: "2027-11".to_string(),
+        payment: "tax-1:1".to_string(),
+        amount: Money::new(30_00, NZD),
+        bank_account: "anz-sf1-third".to_string(),
+        statutory_fund: None,
+    };
+    let over = core
+        .send_on(0, "tax-1:1", "payments", ic_core::Command::RemitWithholding(Box::new(remit)))
+        .await;
+    assert_eq!(over.unwrap().as_deref(), Some("over_remittance"));
 
     // Signing goes to Key Vault under the name configured for the endpoint.
     let azure = FakeAzure::start().await;
