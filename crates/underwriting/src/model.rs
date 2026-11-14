@@ -554,6 +554,10 @@ pub struct LifeFile {
     /// evidence the core records with a replacement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replacement_signed: Option<crate::signing::SignedStep>,
+    /// The life is marked as needing more time (a vulnerability marker with
+    /// the `more_time` adjustment): the deadlines on them run longer.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub more_time: bool,
     pub existing_cover: Option<ExistingCoverRead>,
     pub disclosures: Vec<DisclosureRef>,
     pub evidence: Vec<EvidenceRequest>,
@@ -598,6 +602,7 @@ impl LifeFile {
             stage,
             consents: BTreeMap::new(),
             replacement_signed: None,
+            more_time: false,
             existing_cover: None,
             disclosures: vec![],
             evidence: vec![],

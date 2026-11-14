@@ -543,6 +543,7 @@ impl UnderwritingState {
                 crate::casework::record_interview(p, life, cx, &case, &underwriter, notes_ref, notes_hash, recording_ref, present, adviser_present)
             }),
             ConfirmInterview(d) => self.with(&d.proposal.clone(), cx, |st, p, cx| crate::casework::confirm_interview(st, p, cx, *d)),
+            SetMoreTime { proposal, life, more_time } => self.with(&proposal, cx, |st, p, cx| crate::intake::more_time(&st.config, p, cx, &life, more_time)),
             CheckOptionEvidence {
                 case,
                 underwriter,

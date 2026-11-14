@@ -539,3 +539,31 @@ pub(crate) fn adviser_lookup(st: &UnderwritingState, p: &mut Proposal, cx: &mut 
     });
     Ok(())
 }
+
+/// Mark a life as needing more time, or clear it. Marking gives the
+/// customer's open deadlines the further days once; clearing shortens
+/// nothing already given.
+pub(crate) fn more_time(cfg: &crate::config::Config, p: &mut Proposal, cx: &mut Cx, life: &LifeId, more_time: bool) -> Result<(), Reject> {
+    open_only(p)?;
+    let extra = chrono::Duration::days(cfg.settings.more_time_days);
+    let f = life_mut(p, life)?;
+    if f.more_time == more_time {
+        return Ok(());
+    }
+    f.more_time = more_time;
+    if more_time {
+        if let Some(o) = f.offers.iter_mut().find(|o| o.status == crate::model::OfferStatus::Open) {
+            o.expires_on += extra;
+        }
+        for e in f.evidence.iter_mut().filter(|e| e.outstanding()) {
+            e.deadline += extra;
+        }
+        p.expires_on += extra;
+    }
+    cx.event(Event::MoreTimeSet {
+        proposal: p.id.clone(),
+        life: life.clone(),
+        more_time,
+    });
+    Ok(())
+}
