@@ -333,7 +333,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | Matrix | Status | Built tests |
 | --- | --- | --- |
 | DSC-001 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net`<br>`sim/tests/personas_spine.rs::a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed` |
-| DSC-002 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net` |
+| DSC-002 | full | `product/tests/products.rs::discounts_stack_in_the_declared_order_and_each_is_a_line_that_sums_to_the_net`<br>`sim/tests/personas_spine.rs::a_discount_is_its_own_line_in_the_billing_entry_and_never_part_of_what_is_owed` |
 | DSC-003 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
 | DSC-004 | full | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date`<br>`documents/tests/required_documents.rs::a_lost_discount_is_noticed_before_the_bill_it_raises` |
 | DSC-005 | part | `sim/tests/edges.rs::a_wellness_tier_is_one_command_and_discounts_that_lifes_cover_from_its_date` |
