@@ -223,6 +223,10 @@ pub struct CoverDefinition {
     /// event in the life's own life. Absent: the cover has no such option.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub insurability_option: Option<InsurabilityOption>,
+    /// The right to stop paying a limited-pay premium early and keep a
+    /// reduced sum insured for life. Absent: the cover has no such option.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paid_up_option: Option<PaidUpOption>,
     /// The axes of the cover's options menu (see [`crate::options`]). Where
     /// there are any, each life's cover carries one choice on every axis.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -238,6 +242,18 @@ pub struct CoverDefinition {
     /// wording sets out. Claims and servicing read these; the core does not.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub built_in: Vec<BuiltInBenefit>,
+}
+
+/// A limited-pay cover made paid up: no more premium, and a sum insured
+/// reduced to the share of the premium term paid for, times a factor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PaidUpOption {
+    /// The least share of the premium term that must have been paid for,
+    /// as a fraction: `0.5` is half the term.
+    pub min_share_of_term: DecStr,
+    /// What the proportionate sum insured is multiplied by, `0.95` say.
+    pub factor: DecStr,
 }
 
 /// How a built-in benefit relates to the cover's sum insured.

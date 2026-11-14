@@ -106,7 +106,7 @@ fn billed_window(policy: &Policy, effective: NaiveDate) -> Option<(NaiveDate, Na
 /// Bill or hand back the difference a change of cover today makes to the
 /// premium already billed for the days from today. `before` is the policy
 /// as it stood.
-fn adjust(ledger: &mut Ledger, catalog: &Catalog, before: &Policy, policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId) -> Result<(), Reject> {
+pub(crate) fn adjust(ledger: &mut Ledger, catalog: &Catalog, before: &Policy, policy: &mut Policy, ctx: &mut Ctx<'_>, life: &LifeId) -> Result<(), Reject> {
     let effective = ctx.date.max(policy.inception);
     let (Some((start, next)), Some(product)) = (billed_window(policy, effective), catalog.product(&policy.product_hash).cloned()) else {
         return Ok(());

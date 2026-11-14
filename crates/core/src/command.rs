@@ -436,6 +436,8 @@ pub enum Command {
     AddUnderwrittenLayer(Box<UnderwrittenLayer>),
     /// A life uses its cover's future insurability option.
     ExerciseOption(Box<OptionExercise>),
+    /// Stop paying for a limited-pay cover and keep it at a reduced sum insured.
+    MakePaidUp(Box<crate::paid_up::MakePaidUp>),
     /// Record that cover on this policy replaces cover on another.
     RecordReplacement(Box<Replacement>),
     /// Give a life a cover from the product's menu that it does not hold.
@@ -703,7 +705,7 @@ impl Command {
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
-            Command::ChangeExcess(_) => &["policy-servicing"],
+            Command::ChangeExcess(_) | Command::MakePaidUp(_) => &["policy-servicing"],
             Command::RecordReplacement(_) => &["underwriting", "new-business"],
             Command::ApplyReceipt { .. } | Command::ReverseReceipt { .. } => &["cash-matching"],
             Command::Claims(command) => command.allowed_callers(),
@@ -761,6 +763,7 @@ impl Command {
             Command::AddCover(_) => "add_cover",
             Command::ExerciseOption(_) => "exercise_option",
             Command::ChangeExcess(_) => "change_excess",
+            Command::MakePaidUp(_) => "make_paid_up",
             Command::RecordReplacement(_) => "record_replacement",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",
             Command::ApproveReinstatement(_) => "approve_reinstatement",

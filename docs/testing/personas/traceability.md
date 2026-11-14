@@ -142,7 +142,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | AUD-015 | full | `channels/tests/feed.rs::snapshot_then_changes`<br>`channels/tests/journeys.rs::a_receipt_moves_the_billing_row_while_the_app_is_open`<br>`channels/tests/http.rs::a_write_answers_with_the_writers_own_version_and_nobody_elses` |
 | AUD-016 | full | `channels/tests/feed.rs::lost_access_purges_and_a_gone_row_deletes` |
 | AUD-017 | part | `raft/tests/store.rs::log_lines_name_a_command_without_its_payload` |
-| AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point`<br>`channels/tests/browser/check.js::audit` (every page, after each journey) |
+| AUD-018 | part | `documents/tests/pdf.rs::large_print_is_set_at_eighteen_point` |
 | AUD-019 | full | `channels/tests/journeys.rs::people_the_policyholder_lets_in` |
 
 ## RES Resilience, capacity and scale

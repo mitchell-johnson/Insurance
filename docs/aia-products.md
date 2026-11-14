@@ -122,7 +122,7 @@ Two limits on what these journeys show:
 - **Underwriting (`ic-underwriting`):** done on 14 November (9f9394e; `src/eligibility.rs`, docs/underwriting.md). An AIA application outside these conditions is refused `eligibility`: occupation class required for TPD, income and accidental injury; TPD entry to 55, or 60 in class 1; income to 70 only in classes 1 and 2; Family Protection to an age at least 15 years from entry; trauma at most $250,000 under 16; Essentials at most $500,000 from 61 to 70. Proposals carry the option code to the core, and AIA Living proposals get `aia-interim` interim cover. The class mapping is a placeholder until AIA's occupation guide is mapped (class 1 clerical, managerial and professional).
 - **Wellness:** built on 14 November (`crates/wellness`, docs/wellness.md). It gives the 10% Initial Discount on joining, applies Premium Flex two weeks after each policy anniversary from the anniversary, and removes the discount from the next premium due on leaving. Still missing: the intake from AIA's Vitality programme (its format is AIA's to give) and the notice to the policy owner before a change.
 - **The core:**
-  - Paid-up alteration for Cover for Life after half the premium term.
+  - Paid-up alteration for Cover for Life after half the premium term: built for the owner's request (`MakePaidUp`, 14 Nov). The automatic conversion when a premium is overdue after the paid-up date is not built.
   - Premium suspension (up to 12 months).
   - Multi-Benefit Discount counting of cover a life holds on another policy.
   - Special events increases capped in money in total, which is approximated by two uses.
