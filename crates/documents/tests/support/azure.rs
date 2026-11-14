@@ -34,6 +34,8 @@ pub struct Inner {
     pub events: Vec<Value>,
     pub contacts: BTreeMap<String, Value>,
     pub contact_queries: Vec<BTreeMap<String, String>>,
+    /// `target` (`party:<id>`) to the customer master's answer.
+    pub relationships: BTreeMap<String, Value>,
     pub calls: Vec<String>,
 }
 
@@ -60,6 +62,7 @@ impl Fake {
             .route("/sms", post(sms))
             .route("/eh/{hub}/partitions/{partition}/messages", post(events))
             .route("/v1/parties/{party}/contact-points", get(contact))
+            .route("/v1/relationships", get(relationships))
             .with_state(fake.clone());
         tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -217,4 +220,11 @@ async fn contact(State(f): State<Fake>, Path(party): Path<String>, Query(query):
     let mut inner = f.lock();
     inner.contact_queries.push(query);
     inner.contacts.get(&key).cloned().map(Json).ok_or(StatusCode::NOT_FOUND)
+}
+
+async fn relationships(State(f): State<Fake>, Query(query): Query<BTreeMap<String, String>>, headers: HeaderMap) -> Reply {
+    f.gate("directory", &headers)?;
+    let target = query.get("target").cloned().unwrap_or_default();
+    let answer = f.lock().relationships.get(&target).cloned();
+    Ok(Json(answer.unwrap_or_else(|| json!({ "target": target, "relationships": [] }))))
 }

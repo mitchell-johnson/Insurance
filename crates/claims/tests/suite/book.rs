@@ -2138,3 +2138,35 @@ fn tax_is_kept_back_from_an_income_benefit_where_the_rules_set_a_rate() {
     assert_eq!(w.refused(pay("ip-0", "ana", "again-1", 3_000, Some(payment))), "reissue_amount");
     w.ok(pay("ip-0", "ana", "again-1", 2_475, Some(payment)));
 }
+
+/// Purpose: a living benefit for a policyholder who has a guardian is paid to the payee the
+/// owner verified, the policyholder on their own account, and the payment names that party and
+/// account and no other.
+/// Why it matters: persona test VUL-012. Michael's money is his; payments pays whoever claims
+/// releases, so the claim must name him and his account, and a guardian can be paid only as a
+/// payee the owner checked and recorded in their own right.
+#[test]
+fn a_benefit_is_paid_to_the_payee_verified_and_their_own_account() {
+    let mut w = World::new();
+    admitted(&mut w, "t-1", 10_000);
+    w.ok(Command::VerifyPayee {
+        claim: "t-1".into(),
+        party: "party-holder".into(),
+        kind: PayeeKind::Policyholder,
+        account_ref: "acct-michael".into(),
+        name_check_ref: "name-michael".into(),
+        screening_ref: "screen-michael".into(),
+        authority_doc: None,
+        actor: actor("ana"),
+    });
+    w.ok(pay("t-1", "ana", "p-1", 10_000, None));
+    assert!(matches!(
+        w.core.instructions.last(),
+        Some(Instruction::Pay { payee, .. }) if payee == "party-holder"
+    ));
+    let paid = w.core.noticed("claim_paid");
+    let paid = paid.last().expect("published");
+    assert_eq!((paid["payee"].as_str(), paid["account_ref"].as_str()), ("party-holder", "acct-michael"));
+    let payee = w.claim("t-1").payee.clone().expect("verified");
+    assert_eq!((payee.name_check_ref.as_str(), payee.verified_by.as_str()), ("name-michael", "ana"));
+}

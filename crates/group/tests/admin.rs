@@ -131,7 +131,7 @@ fn a_scheme_is_registered_once_and_only_if_it_holds_together() {
     assert!(h.saw(|e| matches!(e, GroupEvent::TermsAmended { terms_version: 2, .. })));
     assert!(matches!(h.notices.last().unwrap(), ReinsuranceNotice::SetSchemeTerms { sites, .. } if sites.len() == 2));
 
-    // A mapping is replaced only by a later, sealed version.
+    // A mapping is replaced only by a later, sealed version that passed a trial.
     let set = |h: &mut Harness, m| {
         h.staff(GroupCommand::SetMapping {
             scheme: SCHEME.into(),
@@ -142,8 +142,25 @@ fn a_scheme_is_registered_once_and_only_if_it_holds_together() {
     let mut tampered = mapping(2);
     tampered.date_format = "%m/%d/%Y".into();
     assert_eq!(code(set(&mut h, tampered)), "mapping_not_sealed");
+    // And only by one that read a sample of the employer's file whole.
+    assert_eq!(code(set(&mut h, mapping(2))), "mapping_not_tried");
+    let trial = GroupCommand::RecordMappingTrial {
+        scheme: SCHEME.into(),
+        content_hash: mapping(2).content_hash,
+    };
+    assert_eq!(code(h.staff(trial.clone())), "caller_not_allowed");
+    h.driver(trial).unwrap();
     set(&mut h, mapping(2)).unwrap();
     assert_eq!(h.scheme().mapping.as_ref().unwrap().version, 2);
+    assert!(h.scheme().tried_mappings.is_empty(), "a trial is used once");
+    for n in 0..20 {
+        h.driver(GroupCommand::RecordMappingTrial {
+            scheme: SCHEME.into(),
+            content_hash: format!("hash-{n}"),
+        })
+        .unwrap();
+    }
+    assert_eq!(h.scheme().tried_mappings.len(), 16, "only the latest trials are kept");
 }
 
 /// Purpose: a frozen scheme takes and approves no files until staff unfreeze it, and a

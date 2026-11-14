@@ -131,6 +131,12 @@ pub struct Issue {
     pub components: Vec<String>,
     #[serde(default)]
     pub notice: Option<NoticeSpec>,
+    /// A copy of another document, sent to someone who sees what its owner
+    /// is sent (a representative) in their own language. It carries no
+    /// notice clock and clears no trigger, and the copies a notice owes
+    /// are the original's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy_of: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
