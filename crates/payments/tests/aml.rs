@@ -207,3 +207,61 @@ fn a_recorded_relationship_stops_the_rule() {
     assert_eq!(desk.state.payer_checks.cases[case].policies, ["pol-1", "pol-2"]);
     assert!(answer(&desk.state, json!({"q": "payer_cases"})).unwrap().as_array().unwrap().is_empty());
 }
+
+/// Purpose: the third refund an owner asks for within sixty days opens one
+/// restricted case for compliance; the party question then shows staff only
+/// a support prompt, not the case; further refunds in the window raise
+/// nothing more; a refund on a policy whose owner is not known is not
+/// counted; once cleared, a new pattern after the window
+/// is raised again.
+/// Why it matters: overpaying and asking for the money back is a known way
+/// to pass money through an insurer, and it also describes a confused or
+/// exploited customer. Compliance must see it; front-line staff must only
+/// know to offer help, so the case is not tipped off.
+#[test]
+fn repeated_refunds_raise_a_restricted_case() {
+    use ic_payments::model::{PayeeKind, RefundDestination};
+    let mut desk = Desk::new();
+    issued(&mut desk, "pol-1", "party-p1");
+    desk.payee("p1", PayeeKind::Customer, "0101234567");
+    let refund = |desk: &mut Desk, id: &str, policy_id: &str, on: chrono::NaiveDateTime| {
+        desk.at(on);
+        desk.ok(
+            &mia(),
+            Command::RequestRefund {
+                refund: id.into(),
+                policy: policy(policy_id),
+                amount_minor: 50_00,
+                currency: ic_money::Currency::NZD,
+                destination: RefundDestination::Payee { payee: "p1".into() },
+            },
+        )
+    };
+    refund(&mut desk, "rf0", "pol-unknown", t(2027, 11, 1, 9, 0));
+    refund(&mut desk, "rf1", "pol-1", t(2027, 11, 1, 9, 0));
+    refund(&mut desk, "rf2", "pol-1", t(2027, 11, 20, 9, 0));
+    let party = |desk: &Desk| answer(&desk.state, json!({"q": "party", "party": "party-p1"})).unwrap();
+    assert_eq!(party(&desk)["support_prompt"], false);
+    let events = refund(&mut desk, "rf3", "pol-1", t(2027, 12, 20, 9, 0));
+    let case = "party-p1|refund-pattern";
+    assert!(events.contains(&Event::PayerCaseOpened { case: case.into() }));
+    assert_eq!(compliance_notices(&desk), 1);
+    assert_eq!(party(&desk)["support_prompt"], true);
+    assert!(party(&desk).get("payer_cases").is_none(), "staff are not shown the case");
+    refund(&mut desk, "rf4", "pol-1", t(2027, 12, 21, 9, 0));
+    assert_eq!(compliance_notices(&desk), 1);
+
+    desk.ok(
+        &carla(),
+        Command::ClearPayer {
+            case: case.into(),
+            relationship: None,
+            note: "explained: premium paid twice by mistake each time".into(),
+        },
+    );
+    assert_eq!(party(&desk)["support_prompt"], false);
+    for (n, day) in [(5, 1), (6, 10), (7, 20)] {
+        refund(&mut desk, &format!("rf{n}"), "pol-1", t(2028, 3, day, 9, 0));
+    }
+    assert_eq!(compliance_notices(&desk), 2, "a new pattern after the clearance is raised");
+}

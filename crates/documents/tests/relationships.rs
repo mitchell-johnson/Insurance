@@ -88,6 +88,7 @@ fn request(id: &str, template: &str, pol: &str, owner: &str, to: &[(&str, Option
         wordings: vec![],
         components: vec![],
         notice: None,
+        copy_of: None,
     }
 }
 

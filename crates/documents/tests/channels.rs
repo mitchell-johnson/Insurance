@@ -9,8 +9,8 @@ use azure::Fake;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ic_documents::channels::{
-    delivery_reports, mask, subscription_validation, AzureChannels, Channels, Contact, ContactDirectory, DirectoryError, HttpDirectory, MemoryDirectory,
-    Outbound, SendError,
+    delivery_reports, mask, representatives_in, subscription_validation, AzureChannels, Channels, Contact, ContactDirectory, DirectoryError, HttpDirectory,
+    MemoryDirectory, Outbound, SendError,
 };
 use ic_documents::kinds::DataClass;
 use ic_documents::model::{AttemptOutcome, Channel};
@@ -18,8 +18,8 @@ use ic_documents::pdf::{layout, pdf, Fonts, Letter};
 use ic_documents::template::AlternateFormat;
 use ic_documents::vault::MemoryStore;
 use ic_documents::DocumentKind;
-use serde_json::json;
-use support::party;
+use serde_json::{json, Value};
+use support::{date, party};
 
 fn message(channel: Channel, destination: &str) -> Outbound {
     Outbound {
@@ -229,7 +229,8 @@ async fn post_is_a_print_file_and_the_inbox_needs_no_send() {
 
 /// Purpose: the contact point is asked of the customer master for the
 /// relationship and channel of this send, a missing one is `None`, and an
-/// outage is an error.
+/// outage is an error; the representatives who see what a party is sent
+/// are those in force that day with a scope of `view` or `all`.
 /// Why it matters: a notice sent to the contact point of the wrong
 /// relationship reaches the wrong person. And "no contact point" moves a
 /// notice on to post, so an outage mistaken for it would abandon email for
@@ -276,9 +277,33 @@ async fn contact_points_come_from_the_customer_master() {
         directory.contact(&party("aroha"), None, Channel::Post).await,
         Err(DirectoryError::Unavailable(_))
     ));
+    // Representatives: attorneys, guardians and authorised representatives
+    // in force on the day whose scope lets them see what is sent.
+    let rel = |party: &str, kind: &str, from: &str, to: Value, scope: Value| {
+        json!({ "party": party, "id": "r", "kind": kind, "target": { "kind": "party", "id": "aroha" }, "valid_from": from, "valid_to": to,
+                "recorded_at": "2027-01-01T00:00:00Z", "attributes": { "scope": scope } })
+    };
+    fake.lock().relationships.insert(
+        "party:aroha".into(),
+        json!({ "relationships": [
+            rel("hemi", "attorney", "2027-01-01", Value::Null, json!(["view"])),
+            rel("mere", "guardian", "2027-01-01", Value::Null, json!(["all"])),
+            rel("hemi", "authorised_representative", "2027-01-01", Value::Null, json!(["all"])),
+            rel("tama", "attorney", "2027-01-01", Value::Null, json!(["pay_premiums"])),
+            rel("wiremu", "attorney", "2027-01-01", json!("2027-06-01"), json!(["all"])),
+            rel("ana", "attorney", "2028-01-01", Value::Null, json!(["all"])),
+            rel("rangi", "employer", "2027-01-01", Value::Null, json!(["all"])),
+        ] }),
+    );
+    let on = date("2027-11-15");
+    assert_eq!(directory.representatives(&party("aroha"), on).await.unwrap(), [party("hemi"), party("mere")]);
+    assert_eq!(directory.representatives(&party("ben"), on).await.unwrap(), vec![]);
+    assert_eq!(representatives_in(&json!({}), on), vec![]);
     fake.force("directory", 500);
     assert!(matches!(directory.contact(&party("aroha"), None, Channel::Email).await, Err(DirectoryError::Unavailable(m)) if m.contains("500")));
+    assert!(directory.representatives(&party("aroha"), date("2027-11-15")).await.is_err());
     let nowhere = HttpDirectory::new("http://127.0.0.1:1", "s", Fake::credential());
+    assert!(nowhere.representatives(&party("aroha"), on).await.is_err());
     assert!(nowhere.contact(&party("aroha"), None, Channel::InApp).await.is_err());
     assert!(nowhere.contact(&party("aroha"), None, Channel::Push).await.is_err());
 
@@ -289,6 +314,7 @@ async fn contact_points_come_from_the_customer_master() {
     assert_eq!(memory.contact(&party("aroha"), None, Channel::Email).await.unwrap(), None);
     memory.set_down(true);
     assert!(memory.contact(&party("aroha"), None, Channel::Email).await.is_err());
+    assert!(memory.representatives(&party("aroha"), date("2027-11-15")).await.is_err());
 }
 
 /// Purpose: provider delivery reports from Event Grid are read into

@@ -272,6 +272,19 @@ impl PaymentsState {
             .remove(&entry)
             .ok_or_else(|| Reject::new("unknown_instruction", format!("outbox entry {entry} is not waiting")))?;
         match (done.about, refused) {
+            // A part of a receipt a person applied by hand.
+            (Some(About::Exception(id)), refused) if done.key.starts_with(crate::manual::PART) => {
+                if self.part_done(&id, &done.key, refused.as_deref()) {
+                    let resolution = "applied by hand to the policies proposed";
+                    if let Some(e) = self.exceptions.get_mut(&id) {
+                        e.resolution = Some(resolution.to_string());
+                    }
+                    tx.emit(Event::ExceptionResolved {
+                        exception: id,
+                        resolution: resolution.to_string(),
+                    });
+                }
+            }
             (Some(About::RefundRaise(id)), refused) => self.refund_raised(tx, &id, refused),
             (Some(About::RefundRelease(id)), None) => self.refund_released(tx, &id),
             // Cash matching applied the receipt: it is identified.

@@ -100,6 +100,7 @@ fn request(id: &str, policies: &[&str], class: DataClass) -> IssueRequest {
         wordings: vec![],
         components: vec![],
         notice: None,
+        copy_of: None,
     }
 }
 
