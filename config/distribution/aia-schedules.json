@@ -1,20 +1,6 @@
 {
   "placeholder": true,
-  "note": "Starter commission schedules for the AIA products. Every rate here is a best estimate of New Zealand adviser market terms, not AIA's or the insurer's agreed terms; replace each by a new version through the commission console once the distribution agreements are signed. A schedule says how much; the distribution rules say who is paid.",
-  "schedule_for_product": {
-    "aia-living": "aia-risk",
-    "aia-living-business": "aia-risk",
-    "aia-cover-for-life": "aia-risk",
-    "aia-starter": "aia-risk",
-    "aia-start-up-income": "aia-income",
-    "aia-essentials-life": "aia-simplified",
-    "aia-private-health": "aia-health",
-    "aia-cancer-care": "aia-health",
-    "aia-corporate": "aia-group"
-  },
-  "schedule_for_cover_type": {
-    "income_protection": "aia-income"
-  },
+  "note": "Starter commission schedules for the AIA products. Every rate here is a best estimate of New Zealand adviser market terms, not AIA's or the insurer's agreed terms; replace each by a new version through the commission console once the distribution agreements are signed. A schedule says how much; the distribution rules say who is paid. New business is written under the schedule set for its product, or for its product and cover type where one is set (income cover on AIA Living).",
   "no_commission": [
     "aia-interim"
   ],
@@ -179,6 +165,74 @@
         "initial_on_indexation": false,
         "replacement_carries_clawback": true,
         "earns_on_waived_premium": true
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-living",
+        "schedule": "aia-risk"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-living-business",
+        "schedule": "aia-risk"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-cover-for-life",
+        "schedule": "aia-risk"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-starter",
+        "schedule": "aia-risk"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-start-up-income",
+        "schedule": "aia-income"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-essentials-life",
+        "schedule": "aia-simplified"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-private-health",
+        "schedule": "aia-health"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-cancer-care",
+        "schedule": "aia-health"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-corporate",
+        "schedule": "aia-group"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-living",
+        "cover_type": "income_protection",
+        "schedule": "aia-income"
+      }
+    },
+    {
+      "set_product_schedule": {
+        "product": "aia-living-business",
+        "cover_type": "income_protection",
+        "schedule": "aia-income"
       }
     }
   ]
