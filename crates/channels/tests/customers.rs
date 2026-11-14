@@ -125,7 +125,7 @@ async fn the_master_is_asked_about_markers_as_the_trained_person() {
     ] {
         assert_eq!(master.care(&staff, call).await.unwrap().0, 200);
     }
-    let seen = seen.lock().unwrap();
+    let seen = seen.lock().unwrap().clone();
     let routes: Vec<_> = seen.iter().map(|(m, p, _)| format!("{m} {p}")).collect();
     assert_eq!(
         routes,
@@ -148,6 +148,27 @@ async fn the_master_is_asked_about_markers_as_the_trained_person() {
         );
     }
     assert_eq!(header(&seen[2].2, "idempotency-key"), Some("k9"));
+
+    // Whether a caller may be told about someone: asked as staff too, for the act `view`.
+    let (master, seen) = self::master().await;
+    assert_eq!(
+        master
+            .speaks_for(&staff, &PartyId("party-1".into()), &PartyId("party/2".into()))
+            .await
+            .unwrap()
+            .0,
+        200
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].1, "/v1/parties/party-1/authority?actor=party2&act=view");
+    assert_eq!(
+        (
+            header(&seen[0].2, "x-ic-caller"),
+            header(&seen[0].2, "x-ic-purpose"),
+            header(&seen[0].2, "x-ic-actor")
+        ),
+        (Some("staff"), Some("caller_check"), Some("hcs-1"))
+    );
 }
 
 /// Purpose: a party ID cannot steer the request elsewhere on the master; a 503 is an error to retry; a body that is not JSON is

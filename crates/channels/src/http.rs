@@ -2679,6 +2679,92 @@ async fn staff_policy(State(s): State<Shared>, headers: HeaderMap, method: Metho
     ok(view)
 }
 
+#[derive(Deserialize)]
+struct CallerCheck {
+    /// The caller's customer reference, where they are a customer and
+    /// have been identified. Absent for anyone else.
+    #[serde(default)]
+    caller: Option<String>,
+    /// The case or task the call is handled under.
+    #[serde(default)]
+    case: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+}
+
+/// What every refused caller is told, whoever they are and whatever is held.
+const CALLER_REFUSED: &str = "I'm sorry, I can't confirm whether we hold a policy for anyone, or talk about one, with someone who isn't named on it. If you are helping someone with their insurance, they can call us themselves or give us a written authority for you.";
+
+/// Someone has phoned about a policy: may the member of staff talk to them
+/// about it? The member of staff must be able to open the policy, and that
+/// is logged as any read is. The caller is spoken to if they own it or
+/// hold an authority from every owner. Everyone else gets the same words,
+/// which neither confirm nor deny anything, and the contact is written to
+/// the access log either way with who called, where known, and the outcome.
+async fn staff_caller(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path(policy): Path<String>, body: Bytes) -> Answer {
+    let session = s.staff(&headers, &method, &uri, &body).await?;
+    let check: CallerCheck = parse(&body)?;
+    let caller = check.caller.as_deref().map(str::trim).filter(|c| !c.is_empty());
+    if caller.is_some_and(|c| c.len() > 64 || !c.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+        return Err(Problem::bad_request("the caller is given by their customer reference"));
+    }
+    let view = s
+        .ask(Question::StaffPolicy {
+            staff: session.party.clone(),
+            policy: PolicyId::from(policy.as_str()),
+            scopes: check
+                .scope
+                .iter()
+                .flat_map(|s| s.split(','))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect(),
+            purpose: check.case.map(|reference| Purpose {
+                kind: PurposeKind::Task,
+                reference,
+            }),
+            at: session.at,
+        })
+        .await?;
+    let view = s.logged(view).await?;
+    if view["found"] != true {
+        return Err(Problem::not_found());
+    }
+    let holders: Vec<&str> = view["policyholders"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let owner = caller.is_some_and(|c| holders.contains(&c));
+    let mut answers = Vec::new();
+    if let (Some(caller), false) = (caller, owner) {
+        for holder in &holders {
+            answers.push(match &s.master {
+                Some(master) => Some(master.speaks_for(&session.party, &PartyId::from(*holder), &PartyId::from(caller)).await),
+                None => None,
+            });
+        }
+    }
+    let unchecked = answers.iter().any(|a| !matches!(a, Some(Ok((200, _)))));
+    let outcome = crate::customers::caller_outcome(owner, &answers);
+    // The contact, beside the read: who called (where known) and what they were told.
+    let (mut request, decision): (AccessRequest, Decision) = serde_json::from_value(json!([view["request"], view["decision"]]))
+        .map_err(|_| Problem::new(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "the access log cannot be written yet"))?;
+    request.action = "contact.caller_check".to_string();
+    request.record = Some(format!("policy:{policy}/caller/{}/{outcome}", caller.unwrap_or("unidentified")));
+    let key = format!("contact:{}:{}:{}", request.staff, request.at, request.record.as_deref().unwrap_or_default());
+    s.propose(
+        key,
+        Actor::Staff(request.staff.clone()),
+        Command::Staff(StaffCommand::Record { request, decision }),
+    )
+    .await?;
+    let say = match outcome {
+        "discuss" if owner => "This is the policyholder. Confirm who they are in the usual way before you discuss the policy.",
+        "discuss" => "This caller holds an authority to be told about this policy. Confirm who they are in the usual way first.",
+        "refer" => "Do not discuss the policy on this call. A decision about who may act for this customer is with the legal team. Take the caller's details and pass the call to them.",
+        _ => CALLER_REFUSED,
+    };
+    ok(json!({ "outcome": outcome, "say": say, "checked": !(unchecked && caller.is_some() && !owner) }))
+}
+
 /// How to serve the policyholder, for staff who opened their policy: the
 /// adjustments in effect and when they are next reviewed, with no label; why
 /// only for those whose role needs it. Nothing when nothing is in effect; a
@@ -2946,6 +3032,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/admin", get(staff_admin))
         .route("/staff/v1/access", post(staff_command))
         .route("/staff/v1/policies/{policy}", get(staff_policy))
+        .route("/staff/v1/policies/{policy}/caller", post(staff_caller))
         .route("/staff/v1/requests", post(staff_request))
         .route("/staff/v1/requests/{id}/second-approval", post(staff_second_approval))
         .route("/staff/v1/care/reviews", get(care_reviews))

@@ -24,6 +24,9 @@ fn open_only(p: &Proposal) -> Result<(), Reject> {
     }
 }
 
+/// The ways an adviser may be paid on new business.
+const COMMISSION_OPTIONS: [&str; 3] = ["upfront", "hybrid", "level"];
+
 impl UnderwritingState {
     pub(crate) fn open_proposal(&mut self, cx: &mut Cx, open: OpenProposal) -> Result<(), Reject> {
         if self.proposals.contains_key(&open.proposal) {
@@ -86,6 +89,11 @@ impl UnderwritingState {
             );
         }
         crate::option::door(&open, cx)?;
+        let commission_option = open.commission_option.as_deref().unwrap_or("upfront");
+        if !COMMISSION_OPTIONS.contains(&commission_option) || (open.commission_option.is_some() && open.adviser.is_none()) {
+            return reject("commission_option", "an adviser's commission option is upfront, hybrid or level");
+        }
+        let advised_option = open.adviser.as_ref().map(|_| commission_option.to_string());
         crate::eligibility::check(&self.config.settings.eligibility, &open, cx.today)?;
         let continued = crate::continuation::earlier_terms(self, &open)?;
         if let crate::model::Entry::GroupExcess {
@@ -155,6 +163,7 @@ impl UnderwritingState {
             reoffers: vec![],
             replacement: open.replacement,
             replaces: open.replaces,
+            commission_option: advised_option,
             delegated_to: None,
         };
         cx.event(Event::ProposalReceived {

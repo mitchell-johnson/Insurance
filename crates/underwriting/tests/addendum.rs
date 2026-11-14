@@ -132,7 +132,7 @@ fn adviser_proposal(w: &mut World) {
 /// Purpose: what an adviser can see. Consent is per life, per application, given with a signed
 /// step. With it the adviser sees where that life's answers are and how evidence is coming
 /// along; without it only the stage. Never reasons, notes or reports. Access ends when the
-/// decision is made or consent is withdrawn, and does not come back once the policy is issued or
+/// decision is made (and cannot be given after it) or consent is withdrawn, and does not come back once the policy is issued or
 /// when a claim later opens the file; answers the adviser typed are allowed only under
 /// consent; every look is logged with its purpose; another adviser sees nothing.
 /// Why it matters: one partner's health answers must not reach the couple's adviser, or the
@@ -203,6 +203,20 @@ fn an_adviser_sees_a_lifes_answers_only_with_that_lifes_consent() {
     let Some(View::Adviser { lives, .. }) = &seen.view else { panic!("no view") };
     assert_eq!(lives[1].outcome, Some(vec![("life".to_string(), "standard".to_string())]));
     assert_eq!(lives[0].outcome, None);
+    // Consent given once a life is decided shares nothing: there are no answers left to help with.
+    assert_eq!(
+        w.err(
+            "new-business",
+            Command::RecordConsent {
+                proposal: "P1".into(),
+                life: "L2".into(),
+                kind: ConsentKind::AdviserAccess,
+                granted: true,
+                signed: Some(signed("consent", &["P1", "L2", "adviser_access"])),
+            }
+        ),
+        "decided"
+    );
 
     // L1 withdraws consent: access ends at once, and comes back only with a new signed consent.
     let withdrawn = w.ok(

@@ -46,6 +46,37 @@ pub trait Master: Send + Sync {
     /// master is asked as `staff` with that person as the actor and the
     /// purpose `vulnerability_support`, and decides by its own policy.
     fn care(&self, staff: &PartyId, call: Care) -> Asked<'_>;
+    /// Whether `caller` holds an authority to be told about `party`'s
+    /// affairs (an attorney, a guardian, a written authority that covers
+    /// `view`): the master's `allow`, `refuse` or `route`. Asked as `staff`
+    /// for the member of staff who took the call, and logged there.
+    fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_>;
+}
+
+/// What a member of staff may do with someone who has called about a
+/// policy, from who owns it and the master's answers about the caller for
+/// each owner. An owner is spoken to. Someone else is spoken to only with
+/// an authority from every owner, since what is said about a joint policy
+/// is said about each of them. Where the master says a person must decide
+/// (capacity in question), the call is referred. Anything else, a caller
+/// nobody identified, and a master that could not answer are all refused
+/// alike, so that the refusal itself tells the caller nothing.
+pub fn caller_outcome(owner: bool, answers: &[Option<Result<Answered, String>>]) -> &'static str {
+    if owner {
+        return "discuss";
+    }
+    let decision = |a: &Option<Result<Answered, String>>| match a {
+        Some(Ok((200, body))) => body["decision"].as_str().unwrap_or("refuse").to_string(),
+        _ => "refuse".to_string(),
+    };
+    let decisions: Vec<String> = answers.iter().map(decision).collect();
+    if decisions.is_empty() || decisions.iter().any(|d| d != "allow" && d != "route") {
+        "refuse"
+    } else if decisions.iter().any(|d| d == "route") {
+        "refer"
+    } else {
+        "discuss"
+    }
 }
 
 /// What a trained member of staff asks of the master about markers.
@@ -313,6 +344,17 @@ impl Master for Hosted {
                 ),
             };
             self.call_as("staff", None, &staff, method, path, "vulnerability_support", extra, body).await
+        })
+    }
+
+    fn speaks_for(&self, staff: &PartyId, party: &PartyId, caller: &PartyId) -> Asked<'_> {
+        let (staff, path) = (
+            staff.clone(),
+            format!("/v1/parties/{}/authority?actor={}&act=view", encode(party), encode(caller)),
+        );
+        Box::pin(async move {
+            self.call_as("staff", None, &staff, reqwest::Method::GET, path, "caller_check", vec![], None)
+                .await
         })
     }
 }

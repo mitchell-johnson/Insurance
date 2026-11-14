@@ -260,6 +260,9 @@ const sees = async (page, text) => {
     await p.fill("#pol", process.env.POLICY || "missing"); await p.fill("#case", "case-1");
     await p.locator("#lookup button").click();
     await p.locator("#pol-view:not([hidden])").waitFor();
+    await say(p, "Someone phones about the policy and cannot be identified: she is given words that confirm nothing");
+    await p.locator("#caller-form button").click();
+    await p.locator("#caller-msg").getByText("can't confirm whether we hold a policy").waitFor();
     // A change for a customer who rang, above her limit: it goes to a colleague first.
     await say(p, "A customer rang: she enters a change above her limit, so it needs a second person");
     await p.fill("#creason", "customer rang"); await p.fill("#camount", "900");
