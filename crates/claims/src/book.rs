@@ -1132,7 +1132,7 @@ impl ClaimsState {
                 offset: item.offset.clone(),
             })?;
             if let Some(o) = &item.offset {
-                self.take_offset(claim, o);
+                self.take_offset(cx, claim, o);
             }
             claim.payments.push(Payment {
                 payment_ref: payment_ref.clone(),
@@ -1181,7 +1181,7 @@ impl ClaimsState {
                     let life = claim.life_party.clone();
                     self.take_remote(cx, &claim.id, life.as_deref(), o, &payment_ref);
                 }
-                Some(o) => self.take_offset(claim, o),
+                Some(o) => self.take_offset(cx, claim, o),
                 None => {}
             }
             if let Some(s) = claim.schedule.as_mut() {
@@ -1230,19 +1230,28 @@ impl ClaimsState {
 
     /// Count an offset against the overpayment it recovers, which may be on
     /// this claim or on another claim of the same person.
-    fn take_offset(&mut self, claim: &mut Claim, offset: &Offset) {
-        let apply = |c: &mut Claim| {
+    fn take_offset(&mut self, cx: &mut Cx<'_>, claim: &mut Claim, offset: &Offset) {
+        // Published for the overpayment's own claim, so reinsurers share in what came back.
+        let apply = |cx: &mut Cx<'_>, c: &mut Claim| {
             if let Some(o) = c.overpayments.iter_mut().find(|o| o.id == offset.overpayment) {
                 o.recovered_minor += offset.amount_minor;
                 if o.outstanding_minor() <= 0 {
                     o.status = RecoveryStatus::Recovered;
                 }
+                let o = o.clone();
+                crate::overpay::publish(
+                    cx,
+                    "overpayment_recovered",
+                    c,
+                    &o,
+                    &[("amount_minor", offset.amount_minor.to_string()), ("source", "offset".into())],
+                );
             }
         };
         if offset.claim == claim.id {
-            apply(claim);
+            apply(cx, claim);
         } else if let Ok(mut other) = self.claim(&offset.claim) {
-            apply(&mut other);
+            apply(cx, &mut other);
             self.commit(other);
         }
     }
