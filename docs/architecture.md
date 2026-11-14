@@ -226,7 +226,7 @@ Owned by the thread "Build portal and app services". Full description: [channels
 
 Checked against the persona matrix, other threads' requests and this list on 14 November. Everything the portal can build on its own is built. What is left waits on another owner or on Mitchell.
 
-1. **Cover options on the policy screens** (AIA waiting period, benefit period, premium basis, health excess). The read model's `LifeIndexRow` does not carry the layer's option code. Asked of the core thread on 14 November (an optional `option` field). When it lands: add it to the cover and member row bodies in `src/state.rs` and word it on the adviser, staff and employer pages.
+1. **Cover options on the policy screens**: built on 14 November. A cover row carries `options` (each axis of the menu with the choice made, or `level` for a flat list such as a health excess) from the read model's `LifeIndexRow.option` (core 843e6e6); `chosen` in `src/state.rs`. The pages show it with the rest of the row. It shows the choice codes; the choice labels live in the product files and could be published by the core later.
 2. **Family counter on a claim (AUD-002)**: claims must publish it; the portal shows whatever rows arrive.
 3. **Cause and reason codes in the claims console**: evidence, definitions and cover readings are shown. The clinical cause is not in the claims module's `work` answer, by that module's design. If it adds a question answered only after `open_file`, show it.
 4. **`AttributeAlteration`** (commission clawback attribution) belongs with whoever carries out a reduction (policy servicing). The portal records the adviser's request only.
