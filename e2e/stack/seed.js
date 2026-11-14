@@ -125,6 +125,23 @@ async function seed(stack) {
   for (const code of Object.keys(accounts)) await told("payments", { key: `seed-statement-${code}`, actor: { id: "bank-driver", roles: ["service"] }, at: `${opening}T08:05:00`,
     command: { type: "record_statement", account: code, date: Journey_before(opening, 3), opening_minor: 10_000_000_00, closing_minor: 10_000_000_00, lines: [] } }, `the statement of ${code}`);
   log("payments banks, channels, routes and rules active; a statement read for every account");
+
+  // --- Distribution: two advice providers, the advisers engaged with them, and a current licence for each provider.
+  // Entered by the distribution administrator through the commission console's own route.
+  const structured = async (command, what) => {
+    const r = await sys.portal("POST", "/staff/v1/commission/commands", cast.dist, { command, purpose: "setting up the distribution structure" });
+    // A party or engagement already in the structure (the seed run again on a live stack) is as wanted.
+    if (!r.ok && r.status !== 409) throw new Error(`${what}: ${r.status} ${JSON.stringify(r.data)}`);
+  };
+  for (const [provider, register, advisers] of [[cast.d6, "FSPR-6", [cast.d1, cast.d2]], [cast.d9, "FSPR-9", [cast.d9a]]]) {
+    await structured({ add_party: { party: provider.party, kind: "fap" } }, `provider ${provider.key}`);
+    await structured({ record_licence: { party: provider.party, state: "active", effective: "2020-01-01", source_ref: register } }, `licence of ${provider.key}`);
+    for (const adviser of advisers) {
+      await structured({ add_party: { party: adviser.party, kind: "adviser" } }, `adviser ${adviser.key}`);
+      await structured({ start_engagement: { id: `eng-${adviser.key}`, engagement: { adviser: adviser.party, with: provider.party, from: "2025-01-01", to: null, accreditations: ["life"] } } }, `engagement of ${adviser.key}`);
+    }
+  }
+  log("two advice providers licensed, three advisers engaged");
 }
 
 

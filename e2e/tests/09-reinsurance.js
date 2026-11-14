@@ -112,6 +112,7 @@ test({ id: "E2E-262", area: A, persona: "Reinsurance", story: "US-R01-1", title:
   const s = await t.open("/reinsurance", cast.ri1);
   await s.tab("Notices and abandoned");
   await s.sees("Abandoned");
-  const text = await s.text("#abandoned");
+  let text = "";
+  for (let i = 0; i < 40 && !text; i++) { text = await s.text("#abandoned"); if (!text) await new Promise((r) => setTimeout(r, 250)); }
   if (!/Instructions\s*None\./i.test(text.replace(/\n/g, " ")) || !/Notices\s*None\./i.test(text.replace(/\n/g, " "))) throw new Error(`the abandoned list reads "${text}"`);
 });
