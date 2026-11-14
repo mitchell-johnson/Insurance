@@ -1,0 +1,30 @@
+[package]
+name = "ic-entra"
+description = "Microsoft Entra ID and External ID access tokens: one validator for every service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ic-azure.workspace = true
+axum.workspace = true
+jsonwebtoken.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+# The stand-in tenant for other crates' tests (feature `testing`).
+rsa = { version = "0.9", optional = true }
+rand = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+
+[features]
+testing = ["dep:rsa", "dep:rand", "dep:base64"]
+
+[dev-dependencies]
+ic-entra = { path = ".", features = ["testing"] }
+
+[lints]
+workspace = true
