@@ -158,6 +158,8 @@ pub enum DecisionKind {
     ResumeBenefit,
     /// Part of a death benefit advanced before the claim is decided.
     FuneralAdvance,
+    /// A benefit built into the cover, within its own limit.
+    AdmitBuiltIn,
 }
 
 /// What a second signer must be.
@@ -460,9 +462,23 @@ pub struct Schedule {
     /// the suspension is open).
     #[serde(default)]
     pub suspended: BTreeMap<NaiveDate, NaiveDate>,
+    /// The cover raises the benefit by the price index at each anniversary
+    /// of the first period.
+    #[serde(default)]
+    pub indexed: bool,
+    /// The monthly benefit after each indexation, by the first day it is
+    /// payable for. Before the first, `monthly_minor`.
+    #[serde(default)]
+    pub index_steps: BTreeMap<NaiveDate, i64>,
 }
 
 impl Schedule {
+    /// The monthly benefit for a period starting on `start`: the latest
+    /// indexation on or before it, or the benefit as admitted.
+    pub fn monthly_on(&self, start: NaiveDate) -> i64 {
+        self.index_steps.range(..=start).next_back().map_or(self.monthly_minor, |(_, v)| *v)
+    }
+
     /// The suspension still open, by the day it began.
     pub fn open_suspension(&self) -> Option<NaiveDate> {
         self.suspended.iter().find(|(_, until)| **until == NaiveDate::MAX).map(|(from, _)| *from)
@@ -665,6 +681,8 @@ pub enum Due {
     PreApprovalExpiry,
     /// The daily look for premiums to waive while a waiver runs.
     Waiver,
+    /// A claim anniversary: the benefit rises by the price index.
+    Indexation,
 }
 
 /// A line of the claim's own history: who did what, when and why.
@@ -718,6 +736,10 @@ pub struct Claim {
     /// The admission counts it as part of the benefit.
     #[serde(default)]
     pub advanced_minor: i64,
+    /// Of what was admitted, what was admitted under each benefit built
+    /// into the cover, by its code.
+    #[serde(default)]
+    pub built_in: BTreeMap<String, i64>,
     /// Admitted and not yet paid: mirrors the claim's share of benefit payable.
     pub payable_minor: i64,
     /// The part of `payable_minor` that is a handling cost the bank sent

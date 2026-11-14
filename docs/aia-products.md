@@ -83,12 +83,8 @@ Every AIA wording is at `https://documents.aia.co.nz/<slug>/`. Versions current 
 
 ## Not built yet, and who owns it
 
-- **Claims (`ic-claims`):**
-  - Enforce the benefit period and to-age an income option sets (`benefit_months`, `benefit_to_age`).
-  - Pay built-in benefits within their limits, and only where their feature is chosen.
-  - Apply lifetime limits (`per_lifetime_minor`) and the Interim Cover cap of $500,000 across benefits for one event.
-  - Apply the mental health two-year limit and claim indexation.
-  - The core already passes the chosen waiting period and excess in the claim facts.
+- **Claims (`ic-claims`):** built on 14 November (docs/claims.md, "What the chosen option sets"): the benefit period and to-age, built-in benefits within their limits and only where their feature is chosen, product lifetime limits, a per-event cap, the mental health limit in all and claim indexation. What is left is the core's part below.
+- **The core, for claims:** fill the new `CoverFacts` fields from the product and the option the life chose: `benefit_months`; `benefit_to` (the first day past `benefit_to_age`, from the life's date of birth); `mental_health_months` (24 where `mental-health-limit` applies); `claim_indexation` (where `claim-indexation` applies); `health_limits` (each `BenefitLimit`, with `per_lifetime_minor`); `event_cap_minor` (500,000 for `aia-interim`, which needs the product to declare it rather than leave it in a comment); and `built_in` (each built-in with `limit_minor(sum_insured)` and `applies(option)`).
 - **Underwriting (`ic-underwriting`):**
   - Apply the occupation tests: TPD entry to 55 for most occupations and 60 for professional ones, income to 70 only for accepted occupations, and occupation class as a required rating factor for TPD, income, SAIC and business continuity.
   - Apply Family Protection's 15-year minimum for a term to an age.

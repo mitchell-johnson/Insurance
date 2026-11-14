@@ -254,6 +254,40 @@ fn the_yearly_limit_resets_at_the_anniversary_and_the_lifetime_limit_does_not() 
     assert_eq!(w.state.health_used["pol-3/life-1/health/dental"], 5_000);
 }
 
+/// Purpose: the product's own limits for a health category replace the claims rules' for it,
+/// field by field, keeping the rules' member share; a category only the product names is paid
+/// within the product's limits with no share.
+/// Why it matters: the AIA health products set their own lifetime and per-event limits. One
+/// schedule for every product would pay one product's members by another's limits.
+#[test]
+fn a_products_health_limits_replace_the_rules_for_their_category() {
+    use ic_claims::port::HealthLimit;
+    let mut w = World::new();
+    let limit = |category: &str, per_event: Option<i64>, lifetime: Option<i64>, excess: Option<i64>| HealthLimit {
+        category: category.into(),
+        per_event_minor: per_event,
+        per_year_minor: None,
+        per_lifetime_minor: lifetime,
+        excess_minor: excess,
+    };
+    w.core.cover(
+        "pol-3",
+        "health",
+        CoverFacts {
+            health_limits: vec![limit("dental", None, Some(1_200), Some(0)), limit("optical", Some(400), None, None)],
+            ..health(d(2027, 1, 1), None)
+        },
+    );
+    // 900 with no excess, less the rules' 20% share, inside the rules' 1,000 per event.
+    w.ok(dental("h-1", 900));
+    assert_eq!(w.claim("h-1").admitted_minor, 720);
+    // The product's lifetime 1,200 leaves 480.
+    w.ok(dental("h-2", 900));
+    assert_eq!(w.claim("h-2").admitted_minor, 480);
+    w.ok(line("h-3", "health", "optical", 900));
+    assert_eq!(w.claim("h-3").admitted_minor, 400);
+}
+
 fn line(id: &str, cover: &str, category: &str, invoice: i64) -> Command {
     let mut n = World::notification(id, "pol-3", cover, ClaimType::Health);
     n.health = Some(HealthItem {

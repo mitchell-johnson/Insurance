@@ -371,7 +371,7 @@ impl ClaimsState {
                 .map(|p| (p.payment_ref.clone(), p.sent_minor(), p.paid_on, p.returned))
                 .collect(),
             benefit: c.schedule.as_ref().map(|s| WorkBenefit {
-                monthly_minor: s.monthly_minor,
+                monthly_minor: s.monthly_on(s.next_period),
                 next_period: s.next_period,
                 end: s.end,
                 reviews: s.reviews.clone(),
@@ -481,7 +481,7 @@ impl ClaimsState {
         for c in self.in_payment.iter().filter_map(|id| self.claims.get(id)) {
             let Some(s) = c.schedule.as_ref() else { continue };
             book.in_payment += 1;
-            book.monthly_minor += s.monthly_minor;
+            book.monthly_minor += s.monthly_on(today);
             book.reserve_minor += c.reserve_minor;
             let since = c.admission().map_or(c.notified_on, |d| d.decided_on);
             let band = match (today - since).num_days() {

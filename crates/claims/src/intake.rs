@@ -36,7 +36,30 @@ impl ClaimsState {
     /// lifetime, less what is already used or held for a pre-approval.
     pub(crate) fn health_amount(&self, claim: &Claim, facts: &CoverFacts) -> Option<HealthAmount> {
         let item = claim.health.as_ref()?;
-        let benefit = self.rules.health_benefits.get(&item.category)?;
+        // The product's own limits for the category replace the rules' where
+        // it names them; a category only the product names has no co-payment.
+        let product = facts.health_limits.iter().find(|l| l.category == item.category);
+        let schedule = self.rules.health_benefits.get(&item.category).copied();
+        let benefit = match (schedule, product) {
+            (schedule, None) => schedule?,
+            (schedule, Some(l)) => {
+                let base = schedule.unwrap_or(crate::config::HealthBenefit {
+                    per_event_minor: i64::MAX,
+                    per_year_minor: i64::MAX,
+                    lifetime_minor: i64::MAX,
+                    copay_pct: 0,
+                    excess_minor: 0,
+                });
+                crate::config::HealthBenefit {
+                    per_event_minor: l.per_event_minor.unwrap_or(base.per_event_minor),
+                    per_year_minor: l.per_year_minor.unwrap_or(base.per_year_minor),
+                    lifetime_minor: l.per_lifetime_minor.unwrap_or(base.lifetime_minor),
+                    copay_pct: base.copay_pct,
+                    excess_minor: l.excess_minor.unwrap_or(base.excess_minor),
+                }
+            }
+        };
+        let benefit = &benefit;
         let life = claim.life.clone().unwrap_or_default();
         // Each cover counts on its own, unless the product's shell declares
         // a counter that covers share.
@@ -167,6 +190,7 @@ impl ClaimsState {
             admitted_minor: 0,
             loan_repaid_minor: 0,
             advanced_minor: 0,
+            built_in: BTreeMap::new(),
             interest_offer: None,
             interest_declined: None,
             interest_owed_again_minor: 0,

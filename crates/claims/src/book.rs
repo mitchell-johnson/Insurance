@@ -21,7 +21,7 @@ pub const MAX_RUN_ITEMS: usize = 250;
 /// benefit less other income declared for the period, by days for a part month.
 pub(crate) fn period_gross(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i64 {
     let income = s.income.range(..=start).next_back().map_or(0, |(_, v)| *v);
-    let monthly = (s.monthly_minor - income).max(0);
+    let monthly = (s.monthly_on(start) - income).max(0);
     let full = plus_months(start, 1);
     let gross = if end >= full {
         monthly
@@ -63,7 +63,8 @@ pub(crate) fn period_income(s: &Schedule, start: NaiveDate, end: NaiveDate) -> i
             monthly * (end - start).num_days() / (full - start).num_days().max(1)
         }
     };
-    (prorate(s.monthly_minor) - prorate((s.monthly_minor - income).max(0))).max(0)
+    let monthly = s.monthly_on(start);
+    (prorate(monthly) - prorate((monthly - income).max(0))).max(0)
 }
 
 /// What was paid for days on or after `end`: the replay of the paid periods
@@ -139,7 +140,19 @@ impl ClaimsState {
             ended: None,
             arrears_minor: 0,
             suspended: BTreeMap::new(),
+            indexed: false,
+            index_steps: BTreeMap::new(),
         });
+        let indexed = claim.cover_check.as_ref().is_some_and(|c| c.facts.claim_indexation);
+        if indexed && claim.claim_type != crate::ClaimType::PremiumWaiver {
+            let first = plus_months(terms.first_period, 12);
+            if let Some(s) = claim.schedule.as_mut() {
+                s.indexed = true;
+            }
+            if first < terms.end {
+                claim.due.insert((first, Due::Indexation));
+            }
+        }
         claim.status = Status::InPayment;
         if claim.queue == crate::Queue::IncomeProtectionNew {
             claim.queue = crate::Queue::IncomeProtectionOngoing;

@@ -113,6 +113,73 @@ pub struct CoverFacts {
     /// the wording.
     #[serde(default)]
     pub premium_waiver: Option<bool>,
+    /// The most months an income benefit is paid for one claim, from the
+    /// option the life chose. Absent: the schedule the assessor sets.
+    #[serde(default)]
+    pub benefit_months: Option<u32>,
+    /// The first day no income benefit is payable for because of the life's
+    /// age, from the option's `benefit_to_age` and the life's date of birth.
+    #[serde(default)]
+    pub benefit_to: Option<NaiveDate>,
+    /// The most months an income benefit is paid in all for mental health
+    /// causes on this cover for this life, where the chosen option carries
+    /// such a limit.
+    #[serde(default)]
+    pub mental_health_months: Option<u32>,
+    /// The chosen option raises a benefit in payment at each anniversary of
+    /// the claim by the consumer price index.
+    #[serde(default)]
+    pub claim_indexation: bool,
+    /// The product's own limits for health benefit categories. Where a
+    /// category is named here, its limits replace the claims rules' for it.
+    #[serde(default)]
+    pub health_limits: Vec<HealthLimit>,
+    /// The most the policy pays for one event across all its benefits, such
+    /// as the interim cover's cap. Absent: each cover's own limit.
+    #[serde(default)]
+    pub event_cap_minor: Option<i64>,
+    /// The benefits built into the cover, with their limits resolved
+    /// against the sum insured on the event date.
+    #[serde(default)]
+    pub built_in: Vec<BuiltIn>,
+}
+
+/// A product's limits for one health benefit category. Absent fields keep
+/// the claims rules' limit for the category.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthLimit {
+    pub category: String,
+    #[serde(default)]
+    pub per_event_minor: Option<i64>,
+    #[serde(default)]
+    pub per_year_minor: Option<i64>,
+    #[serde(default)]
+    pub per_lifetime_minor: Option<i64>,
+    #[serde(default)]
+    pub excess_minor: Option<i64>,
+}
+
+/// A benefit built into a cover.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuiltIn {
+    pub code: String,
+    /// `early_payment`, `additional`, `reimbursement`, `monthly_addition`,
+    /// `facility` or `premium_waiver`, as the product names it.
+    pub kind: String,
+    /// The most it pays for the life over the policy. Absent: no limit of
+    /// its own beyond the cover's.
+    #[serde(default)]
+    pub limit_minor: Option<i64>,
+    /// The feature it needs was chosen, or it needs none.
+    pub applies: bool,
+}
+
+impl BuiltIn {
+    /// An early payment is part of the cover's own sum insured: paying it
+    /// takes it off the cover. Other kinds are paid on top.
+    pub fn reduces_cover(&self) -> bool {
+        self.kind == "early_payment"
+    }
 }
 
 /// The product setting `benefit_while_imprisoned`.
