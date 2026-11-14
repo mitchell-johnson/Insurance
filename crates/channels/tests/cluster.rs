@@ -162,6 +162,7 @@ async fn the_portal_service_on_real_nodes() {
     .unwrap();
     let live = Live::new(nodes.client.clone(), regions);
     let app = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: channel.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -324,6 +325,7 @@ async fn the_portal_service_on_real_nodes() {
     let another = *nodes.running.keys().next().unwrap();
     nodes.running.remove(&another).unwrap().kill().await;
     let impatient = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: nodes.hosted(Duration::from_millis(300)),
         customers: Auth::Dev,
         workforce: Auth::Dev,

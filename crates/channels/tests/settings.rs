@@ -13,6 +13,8 @@ fn load(vars: &[(&str, &str)]) -> Result<PortalSettings, String> {
         |path| {
             if path == "/token" {
                 Ok("file-token-0123456789abcdef0123456789\n".into())
+            } else if path == "/config/own.star" {
+                Ok("DEFINITIONS = []".into())
             } else {
                 Err(std::io::ErrorKind::NotFound.into())
             }
@@ -124,6 +126,13 @@ fn bad_values_are_refused_at_start() {
     );
     assert_eq!(load(&[NODES, OPEN, DEV]).unwrap().partitions, 64);
     assert_eq!(load(&[NODES, OPEN, DEV, ("IC_PARTITIONS", "8")]).unwrap().partitions, 8);
+    // Extra definition libraries are read at start; one that cannot be read stops the service.
+    assert!(load(&[NODES, OPEN, DEV]).unwrap().definitions.is_empty());
+    let own = load(&[NODES, OPEN, DEV, ("IC_DEFINITIONS", "/config/own.star, ")]).unwrap().definitions;
+    assert_eq!(own, vec![("/config/own.star".to_string(), "DEFINITIONS = []".to_string())]);
+    assert!(load(&[NODES, OPEN, DEV, ("IC_DEFINITIONS", "/config/missing.star")])
+        .unwrap_err()
+        .starts_with("IC_DEFINITIONS: /config/missing.star"));
     for bad in ["0", "65", "many"] {
         assert!(
             load(&[NODES, OPEN, DEV, ("IC_PARTITIONS", bad)]).unwrap_err().contains("IC_PARTITIONS"),

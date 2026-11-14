@@ -90,6 +90,12 @@ fn portal_with(group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Ar
     portal_signed_in_by(group_service, Auth::Dev, Auth::Dev)
 }
 
+/// The shipped definition libraries, loaded once for every test.
+fn shipped_wordings() -> Arc<ic_channels::wordings::Wordings> {
+    static LOADED: std::sync::OnceLock<Arc<ic_channels::wordings::Wordings>> = std::sync::OnceLock::new();
+    LOADED.get_or_init(|| Arc::new(ic_channels::wordings::Wordings::shipped().unwrap())).clone()
+}
+
 /// The portal, checking callers with `customers` and `workforce`.
 fn portal_signed_in_by(
     group_service: impl FnOnce(Arc<common::group::GroupDouble>) -> Arc<dyn ic_channels::group::Group>,
@@ -399,6 +405,7 @@ fn portal_signed_in_by(
     let regions = Arc::new(Fixed(Mutex::new(healthy())));
     let tick = clock.clone();
     let app = router(Arc::new(AppState {
+        wordings: shipped_wordings(),
         channel: local.clone(),
         customers,
         workforce,
@@ -1611,6 +1618,7 @@ async fn the_unit_pricing_console() {
     // That module has no leader: the console says so, for a question and for a command.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -1824,6 +1832,7 @@ async fn the_complaints_and_conduct_workbench() {
     // That module has no leader.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -1923,6 +1932,7 @@ async fn the_reinsurance_exceptions_console() {
     // The partitions' module has no leader when the second person signs: it stays signed, and signing again finishes it.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2029,6 +2039,25 @@ async fn the_claims_console() {
     assert_eq!(ask("sub-gl1", "me").await.0, StatusCode::FORBIDDEN);
     let (status, me) = ask("sub-cl1", "me").await;
     assert_eq!((status, &me["staff"], &me["partitions"]), (StatusCode::OK, &json!("cl-1"), &json!(2)));
+
+    // An assessor reads the wording a cover is bound to, at the version it was bound to; others do not.
+    let (status, listed) = ask("sub-cl1", "definitions").await;
+    let rows = listed["rows"].as_array().unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert!(rows.iter().any(|r| r["id"] == "cancer" && r["version"] == 2 && r["text"].is_null()), "{listed}");
+    let (status, first) = ask("sub-cl1", "definitions/cancer/1").await;
+    let (_, second) = ask("sub-cl1", "definitions/cancer/2").await;
+    assert_eq!((status, &first["versions"]), (StatusCode::OK, &json!([1, 2])));
+    assert!(first["text"].as_str().unwrap().ends_with("version 1."), "{first}");
+    assert!(second["text"].as_str().unwrap().ends_with("version 2."), "{second}");
+    assert_ne!(first["text_hash"], second["text_hash"]);
+    let (_, umbrella) = ask("sub-cl1", "definitions/aia-wording-1100-al-umb/1").await;
+    assert!(umbrella["text"].as_str().unwrap().contains("AIA Living Umbrella Policy Wording"));
+    for missing in ["definitions/cancer/9", "definitions/cancer/one", "definitions/no-such/1"] {
+        assert_eq!(ask("sub-cl1", missing).await.0, StatusCode::NOT_FOUND, "{missing}");
+    }
+    assert_eq!(ask("sub-gl1", "definitions/cancer/1").await.0, StatusCode::FORBIDDEN);
+    assert_eq!(ask("sub-gl1", "definitions").await.0, StatusCode::FORBIDDEN);
 
     // A phone notification goes to the partition holding the policy.
     let notify = json!({ "notify": { "claim": "c-1", "policy": "pol-c1", "cover": "trauma", "life": "life-1", "claim_type": "trauma",
@@ -2139,6 +2168,7 @@ async fn the_claims_console() {
     // The partitions have no leader.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2332,6 +2362,7 @@ async fn the_finance_console() {
     // The ledger has no leader.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2516,6 +2547,7 @@ async fn a_person_keeps_their_own_customer_record() {
     // And a portal deployed without one says so.
     let now = portal.now();
     let bare = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2574,6 +2606,7 @@ async fn the_conduct_officer_decides_disputed_replacements() {
     // A commission module that cannot be reached is said plainly.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2841,6 +2874,7 @@ async fn the_person_insured_signs_their_disclosure() {
 
     // A portal with no intake configured.
     let bare = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -2936,6 +2970,7 @@ async fn documents_are_downloaded_by_their_owner_or_by_staff_with_a_purpose() {
 
     let now = portal.now();
     let bare = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3219,6 +3254,7 @@ async fn an_employer_runs_the_scheme_membership() {
     // A portal deployed without one says so.
     let now = portal.now();
     let bare = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3501,6 +3537,7 @@ async fn the_underwriting_console() {
     // The module unreachable, and no intake: the console says so.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,
@@ -3664,6 +3701,7 @@ async fn the_payments_console() {
     // The module unreachable: the console says so.
     let now = portal.now();
     let down = router(Arc::new(AppState {
+        wordings: Arc::default(),
         channel: portal.local.clone(),
         customers: Auth::Dev,
         workforce: Auth::Dev,

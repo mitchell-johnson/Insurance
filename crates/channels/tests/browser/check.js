@@ -371,6 +371,17 @@ const sees = async (page, text) => {
     await tab(p, "Investigations");
     await p.locator("#inv-show").click();
     await p.locator("#inv").getByText("No cases are open to you.").waitFor();
+    await say(p, "She reads the wording a cover is bound to, at the version it was bound to");
+    await tab(p, "Wordings");
+    await p.fill("#w-filter", "cancer");
+    await p.locator("#w-list tbody tr").filter({ has: p.getByRole("cell", { name: "cancer", exact: true }) }).first().getByRole("button", { name: "Read" }).click();
+    await p.locator("#w-title").getByText("Cancer, version 1").waitFor();
+    await p.locator("#w-text").getByText("wording version 1").waitFor();
+    await p.getByRole("button", { name: "Version 2" }).click();
+    await p.locator("#w-text").getByText("wording version 2").waitFor();
+    await p.fill("#w-filter", "umbrella");
+    await p.locator("#w-list").getByRole("button", { name: "Read" }).first().click();
+    await p.locator("#w-text").getByText("Page 1 of").first().waitFor();
     await say(p, "A trauma claim is notified");
     await tab(p, "Claim");
     await p.selectOption("#a-command", "notify");

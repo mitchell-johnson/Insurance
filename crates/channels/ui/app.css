@@ -195,6 +195,11 @@ td.num, th.num { white-space: nowrap; }
 td .scroll { margin: 0; }
 td dl.details { font-size: var(--t-s); }
 .empty { color: var(--muted); text-align: center; padding: var(--s5) var(--s4); font-size: .875rem; }
+.wording { white-space: pre-wrap; overflow-wrap: break-word; max-width: 72ch; line-height: 1.6; color: var(--ink); }
+.page-mark { margin: var(--s5) 0 var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); color: var(--muted); font-size: var(--t-xs); font-weight: 600; letter-spacing: .04em; text-transform: uppercase; max-width: none; }
+.page-mark:first-child { margin-top: 0; padding-top: 0; border-top: 0; }
+td code { overflow-wrap: anywhere; }
+.versions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); max-width: none; }
 p.empty, div.empty { border: 1px dashed var(--line-strong); border-radius: var(--r-s); max-width: none; }
 
 /* Pill: a state, in words. The dot repeats the tone for those who cannot tell the colours apart. */

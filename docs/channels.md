@@ -226,6 +226,8 @@ Claims live inside the core on the partition of each claim's policy (`docs/claim
 | --- | --- |
 | `GET /staff/v1/claims/me` | Your staff ID and how many partitions the ledger has (`IC_PARTITIONS`). |
 | `GET /staff/v1/claims/{question}` | `queue?queue=`, `claim?claim=` (the claimant's view), `work?claim=` (the staff view: tasks, evidence, the decision waiting for a signature, payee, payments, benefit, overpayments, timers), `book`, `report`, `remittance?run=&partition=`. |
+| `GET /staff/v1/claims/definitions` | Every definition and version a cover can be bound to: ID, version, title, in force from and the hash of its text. |
+| `GET /staff/v1/claims/definitions/{id}/{version}` | The wording of one definition at one version, with its hash and the versions that exist. A claim names the definitions its cover is bound to as `id@version`, so an old claim opens the words it was bound to. The portal holds the libraries shipped in `products/definitions/` and any others named in `IC_DEFINITIONS` (comma-separated paths); it refuses to start if two libraries give one ID and version different words. |
 | `POST /staff/v1/claims/commands` | `{ "purpose", "partition"?, "command" }`, the command in the claims module's own JSON, with an `Idempotency-Key`. |
 
 `503 claims_unavailable` when the partitions have no leader. `tests/http.rs` runs the console against the claims module's own state machine on two partitions.

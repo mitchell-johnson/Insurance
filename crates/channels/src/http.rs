@@ -163,6 +163,8 @@ pub struct AppState {
     pub group: Option<Arc<dyn crate::group::Group>>,
     /// The commission module, for replacement matches.
     pub commission: Arc<dyn crate::forward::Source>,
+    /// The wording of each definition a cover can be bound to, for assessors.
+    pub wordings: Arc<crate::wordings::Wordings>,
 }
 
 pub type Shared = Arc<AppState>;
@@ -2201,6 +2203,14 @@ fn claims_down(reason: String) -> Problem {
 /// One of the console's questions about claims: a queue across every
 /// partition, a claim, the book and report by partition, or a run's
 /// remittance on its partition. `me` answers from here.
+/// The wording of one definition at one version: what a cover bound to it
+/// promised, whatever the definition says today.
+async fn claims_definition(State(s): State<Shared>, headers: HeaderMap, method: Method, uri: Uri, Path((id, version)): Path<(String, String)>) -> Answer {
+    s.claims_standing(&headers, &method, &uri, b"").await?;
+    let found = version.parse::<u32>().ok().and_then(|v| s.wordings.get(&id, v));
+    ok(found.ok_or_else(Problem::not_found)?)
+}
+
 async fn claims_question(
     State(s): State<Shared>,
     headers: HeaderMap,
@@ -2213,6 +2223,9 @@ async fn claims_question(
     let session = s.claims_standing(&headers, &method, &uri, b"").await?;
     if name == "me" {
         return ok(json!({ "staff": session.party, "partitions": s.claims.count() }));
+    }
+    if name == "definitions" {
+        return ok(json!({ "rows": s.wordings.list() }));
     }
     let field = |f: &str| fields.get(f).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
     let mut question = crate::claims::question(&name, field).map_err(Problem::bad_request)?;
@@ -2813,6 +2826,7 @@ pub fn router(state: Shared) -> Router {
         .route("/staff/v1/reinsurance/{verb}/{id}", post(reinsurance_decide))
         .route("/staff/v1/reinsurance/{question}", get(reinsurance_question))
         .route("/staff/v1/claims/{question}", get(claims_question))
+        .route("/staff/v1/claims/definitions/{id}/{version}", get(claims_definition))
         .route("/staff/v1/finance/commands", post(finance_command))
         .route("/staff/v1/finance/{question}", get(finance_question))
         .route("/staff/v1/unit-pricing/commands", post(pricing_command))

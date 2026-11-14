@@ -83,7 +83,11 @@ async fn main() -> Result<(), String> {
         })),
         None => None,
     };
+    let libraries = ic_channels::wordings::SHIPPED
+        .into_iter()
+        .chain(settings.definitions.iter().map(|(file, source)| (file.as_str(), source.as_str())));
     let state = Arc::new(AppState {
+        wordings: Arc::new(ic_channels::wordings::Wordings::load(libraries).map_err(|e| format!("definition libraries: {e}"))?),
         documents,
         group,
         master,

@@ -60,6 +60,8 @@ pub struct PortalSettings {
     pub intake: Option<(String, String)>,
     /// The group service's base URL and token scope, for the employer's files and invoices.
     pub group: Option<(String, String)>,
+    /// Definition libraries beyond the shipped ones: each file's name and source.
+    pub definitions: Vec<(String, String)>,
 }
 
 impl PortalSettings {
@@ -100,6 +102,9 @@ impl PortalSettings {
     /// - `IC_CUSTOMERS_URL` and `IC_CUSTOMERS_SCOPE`: the customer master and
     ///   the scope of its token (`api://<its application>/.default`), set
     ///   together; without them a person's own record answers 503.
+    /// - `IC_DEFINITIONS`: comma-separated paths of definition libraries
+    ///   activated in the core beyond those shipped in the repository, so the
+    ///   claims console can show their wording.
     /// - `IC_PARTITIONS`: how many partitions the ledger has, as the core
     ///   gateway is told; default 64.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>, read: impl Fn(&str) -> std::io::Result<String>) -> Result<Self, String> {
@@ -173,8 +178,13 @@ impl PortalSettings {
             (None, None) => Regions::single(nodes.clone()),
             _ => return Err("set IC_REGIONS and IC_HOME_REGION together".to_string()),
         };
+        let mut definitions = Vec::new();
+        for path in get("IC_DEFINITIONS").iter().flat_map(|v| v.split(',')).map(str::trim).filter(|p| !p.is_empty()) {
+            definitions.push((path.to_string(), read(path).map_err(|e| format!("IC_DEFINITIONS: {path}: {e}"))?));
+        }
         Ok(Self {
             listen,
+            definitions,
             customers,
             workforce,
             cluster_auth: ClusterAuth::from_lookup(raw, read)?,

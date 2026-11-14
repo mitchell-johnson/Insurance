@@ -15,6 +15,7 @@
 //! - [`staff`]: role templates, authority profiles, grants and the four
 //!   questions asked of every staff action.
 //! - [`classes`]: data classes and masking.
+//! - [`wordings`]: the text of each definition a cover is bound to, by version.
 //! - [`feed`]: audience-scoped rows and the per-party device sync feed.
 
 pub mod claims;
@@ -44,6 +45,7 @@ pub mod staff;
 pub mod state;
 pub mod ui;
 pub mod underwriting;
+pub mod wordings;
 pub mod workbench;
 
 pub use directory::Actor;

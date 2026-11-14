@@ -4,11 +4,14 @@
 <main><header class="page"><div><h1>Claims console</h1><p>Work queues, a claim, and acting on it as yourself.</p></div><p id="me" class="chip"></p></header><div id="msg" aria-live="polite"></div>
 <section data-view="Queue"><h2>Work queue</h2><form id="queue"><div class="row"><div><label for="q-name">Queue</label><select id="q-name"></select></div><button>Show</button></div></form><div id="q-msg" aria-live="polite"></div><div id="q-rows"></div></section>
 <section data-view="Claim"><h2>A claim</h2><form id="lookup"><div class="row"><div><label for="c-id">Claim reference</label><input id="c-id" required></div><button>Show</button></div></form><div id="c-msg" aria-live="polite"></div>
-<div id="claim" hidden><h2 id="c-title"></h2><div id="c-summary"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div></div></section>
+<div id="claim" hidden><h2 id="c-title"></h2><div id="c-summary"></div><div id="c-support"></div><div id="c-waiting"></div><h2>Tasks</h2><div id="c-tasks"></div><h2>Evidence</h2><div id="c-evidence"></div><h2>Payments and benefit</h2><div id="c-money"></div><h2>Overpayments</h2><div id="c-over"></div><h2>Service timers</h2><div id="c-timers"></div><h2 id="c-defs-head" hidden>Wording the cover is bound to</h2><div id="c-defs" hidden></div></div></section>
 <section data-view="Claim"><h2>Act</h2><form id="act"><div class="row"><div><label for="a-purpose">Why you are doing this (recorded with it)</label><input id="a-purpose" size="40"></div><div><label for="a-command">Action</label><select id="a-command"></select></div></div><div class="row" id="a-fields"></div><p><button>Send</button></p>
 <p class="muted">You act as yourself: the claims module records you and your purpose, and your authority there decides what you may do. A decision above your limits waits for a second signature.</p></form><div id="act-msg" aria-live="polite"></div></section>
 <section data-view="Investigations"><h2>Investigations</h2><p class="muted">Restricted cases referred for investigation, shown only to investigators: the claims on each case and the same service billed on other partitions.</p>
 <button type="button" id="inv-show">Show my cases</button><div id="inv-msg" aria-live="polite"></div><div id="inv"></div></section>
+<section data-view="Wordings"><h2>Policy wordings and definitions</h2><p class="muted">The words a cover is bound to, kept by version. A claim is assessed against the version its cover holds, never a later one.</p>
+<div class="row"><div><label for="w-filter">Find by name or reference</label><input id="w-filter" type="search" size="32"></div></div><div id="w-msg" aria-live="polite"></div><div id="w-list"></div></section>
+<section data-view="Wordings" id="wording" hidden><h2 id="w-title" tabindex="-1"></h2><div id="w-facts"></div><div id="w-text"></div></section>
 <section data-view="Reports"><h2>Book, report and payment runs</h2><form id="books"><div class="row"><div><label for="b-what">Show</label><select id="b-what"><option value="book">Claims in payment</option><option value="report">Management report</option><option value="remittance">A run's remittance</option></select></div><div><label for="b-run">Run (for a remittance)</label><input id="b-run"></div><div><label for="b-part">Partition (for a run)</label><input id="b-part" type="number" min="0"></div><button>Show</button></div></form><div id="b-msg" aria-live="polite"></div><div id="b-out"></div></section>
 </main>
 <script src="/ui/app.js"></script>
@@ -119,9 +122,44 @@ async function show(id) {
     (w.payments || []).length ? table(["Payment", "Amount", "Released", "Returned"], w.payments.map(([ref, amount, on, returned]) => [ref, money(amount), on, returned ? "yes" : ""])) : none("Nothing paid."),
     w.waiver_from ? h("p", {}, `Premium waived from ${w.waiver_from}.`) : null);
   put($("c-over"), (w.overpayments || []).length ? table(["Overpayment", "Outstanding", "Recovery status"], w.overpayments.map(([o, out, status]) => [o, money(out), words(status)])) : none("None."));
+  // Each definition is named with the version the cover was bound to, and opens at that version.
+  const bound = Array.isArray(w.definitions) ? w.definitions : null;
+  $("c-defs-head").hidden = $("c-defs").hidden = !bound;
+  put($("c-defs"), !bound ? null : !bound.length ? none("This cover is bound to no definitions.") : table(["Definition", "Version", ""], bound.map((d) => {
+    const at = d.lastIndexOf("@"), id = d.slice(0, at), version = d.slice(at + 1);
+    return [(known.find((k) => k.id === id) || {}).title || id, version, h("button", { class: "quiet", type: "button", on: { click: run($("c-msg"), () => read(id, version)) } }, "Read the wording")];
+  })));
   put($("c-timers"), table(["Timer", "Due", "Met", "Escalated"], Object.entries(w.timers || {}).map(([kind, [due, met, escalated]]) => [words(kind), due, met || "", cell(escalated)])));
   fields();
 }
+// The wording library: every definition and version, and one text at a time.
+let known = [];
+const pages = (text) => {
+  const out = []; let lines = [];
+  const flush = () => { if (lines.length) out.push(h("div", { class: "wording" }, lines.join("\n"))); lines = []; };
+  for (const line of String(text).split("\n")) {
+    const mark = /^\[page (\d+) of (\d+)\]$/.exec(line);
+    if (mark) { flush(); out.push(h("p", { class: "page-mark" }, `Page ${mark[1]} of ${mark[2]}`)); } else lines.push(line);
+  }
+  flush(); return out;
+};
+async function read(id, version) {
+  const d = await ask(`definitions/${encodeURIComponent(id)}/${encodeURIComponent(version)}`);
+  $("wording").hidden = false; $("w-title").textContent = `${d.title}, version ${d.version}`;
+  const others = d.versions.filter((v) => v !== d.version);
+  put($("w-facts"), table(["Reference", "Version", "In force from", "Fingerprint of this text"], [[d.id, d.version, d.effective_from, h("code", {}, d.text_hash)]]),
+    h("p", { class: "muted" }, "A cover holds the fingerprint of the text it was bound to. The same fingerprint means the same words."),
+    others.length ? h("p", { class: "versions" }, "Other versions:", others.map((v) => h("button", { class: "quiet", type: "button", on: { click: run($("w-msg"), () => read(d.id, v)) } }, `Version ${v}`))) : null);
+  put($("w-text"), pages(d.text));
+  portal.view("wordings"); $("w-title").focus();
+}
+function listed() {
+  const want = $("w-filter").value.trim().toLowerCase();
+  const rows = known.filter((d) => !want || `${d.id} ${d.title}`.toLowerCase().includes(want));
+  put($("w-list"), rows.length ? table(["Title", "Reference", "Version", "In force from", ""], rows.map((d) => [d.title, d.id, d.version, d.effective_from,
+    h("button", { class: "quiet", type: "button", on: { click: run($("w-msg"), () => read(d.id, d.version)) } }, "Read")])) : portal.empty(known.length ? "Nothing matches that." : "No definitions are loaded."));
+}
+$("w-filter").addEventListener("input", listed);
 const cell = (v) => v == null ? "" : typeof v === "object" ? portal.text(v) : v;
 $("lookup").addEventListener("submit", run($("c-msg"), () => show($("c-id").value)));
 $("queue").addEventListener("submit", run($("q-msg"), async () => {
@@ -147,5 +185,6 @@ signIn(R).then(async () => {
   const me = await ask("me");
   $("me").textContent = `You act as ${me.staff}. The ledger has ${me.partitions} partitions; a claim's actions go to the one holding it.`;
   fields();
+  known = (await ask("definitions")).rows; listed();
 }).catch(portal.refuse);
 </script></body></html>
