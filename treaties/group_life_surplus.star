@@ -9,7 +9,7 @@ TREATY = treaty(
     version = 1,
     effective_from = "2027-01-01",
     currency = "NZD",
-    scope = [scope("group-life", ["group_life"])],
+    scope = [scope("group-life", ["group_life"]), scope("aia-corporate", ["group_life"])],
     retention_group = "life",
     basis = surplus(retention = dollars(500000), automatic_limit = dollars(2000000)),
     panel = [reinsurer("reinsurer-north", "1")],
