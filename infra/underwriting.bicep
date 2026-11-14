@@ -158,12 +158,16 @@ resource storeWrap 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
 }
 
 // The intake (deploy/k8s/underwriting-intake.yaml) runs under the clinical
-// identity and reads the cluster token, as every process that talks to the
-// ledger nodes does. Granted on the vault, as main.bicep grants the others:
-// the secret is set by hand after the vault exists.
+// identity and reads its own cluster token, cluster-token-ic-underwriting-intake,
+// which deploy/cluster-access/issue.sh makes before this is deployed.
+resource readClusterTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-underwriting-intake'
+}
+
 resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, identity.id, roles.keyVaultSecretsUser)
+  scope: readClusterTokenSecret
+  name: guid(readClusterTokenSecret.id, identity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'

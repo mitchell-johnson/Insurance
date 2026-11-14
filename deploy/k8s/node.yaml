@@ -79,6 +79,11 @@ spec:
                   fieldPath: metadata.labels['apps.kubernetes.io/pod-index']
             - name: IC_NODE_DATA_DIR
               value: /var/lib/ic/data
+            # Each workload's own token and what it may do here
+            # (deploy/cluster-access/issue.sh writes it). Read again every
+            # 30 seconds, so a change needs no restart.
+            - name: IC_CLUSTER_ACCESS_FILE
+              value: /mnt/cluster-access/access.json
           ports:
             - name: raft
               containerPort: 7000
@@ -113,7 +118,13 @@ spec:
             - name: cluster-token
               mountPath: /mnt/cluster-token
               readOnly: true
+            - name: cluster-access
+              mountPath: /mnt/cluster-access
+              readOnly: true
       volumes:
+        - name: cluster-access
+          configMap:
+            name: ic-cluster-access
         - name: cluster-token
           csi:
             driver: secrets-store.csi.k8s.io

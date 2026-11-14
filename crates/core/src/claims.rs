@@ -1704,4 +1704,52 @@ mod tests {
         )));
         assert_eq!(cover_facts(&state, "pol-1", "life", None, today).unwrap().policy_loan_minor, 0);
     }
+
+    /// Purpose: where a claim ends the policy and its admission repaid only part of the
+    /// loan, the rest is written off to the product's loan loss account in its own entry,
+    /// with an event, as the policy ends; the loan account is left at nothing.
+    /// Why it matters: once the policy has ended there is no value and no benefit left to
+    /// repay a loan from. Left on the books it is an asset that will never be collected,
+    /// and the daily reconciliation of loan accounts would carry it for ever.
+    #[test]
+    fn a_loan_the_claim_did_not_repay_is_written_off_when_the_claim_ends_the_policy() {
+        let (mut state, today) = book();
+        let mut ctx = Ctx { date: today, ..ctx() };
+        let pol = PolicyId("pol-1".to_string());
+        let c = ic_money::Currency::NZD;
+        let policy = state.policies[&pol].clone();
+        let mut set = PostingSet::new();
+        set.debit(accounts::policy_loan(&pol, c), 3_000_00, Dimensions::default());
+        set.credit(accounts::settlement(c), 3_000_00, Dimensions::default());
+        let postings = set.into_postings(&mut state.ledger).unwrap();
+        ctx.post(&mut state.ledger, "fixture", Some(&policy), today, postings, Default::default())
+            .unwrap();
+        state.policies.get_mut(&pol).unwrap().loan = Some(crate::loan::Loan {
+            principal_minor: 3_000_00,
+            ..Default::default()
+        });
+        let admit = Instruction::Admit {
+            life: None,
+            claim: "clm-1".into(),
+            policy: "pol-1".into(),
+            cover: "life".into(),
+            amount_minor: 10_000_00,
+            release_reserve: false,
+            deduct_premium_minor: 0,
+            terminate: Some(Termination {
+                event_date: today,
+                payer_deceased: false,
+            }),
+            repay_loan_minor: 1_000_00,
+        };
+        execute(&mut state, &mut ctx, admit).unwrap();
+        assert_eq!(state.policies[&pol].status, PolicyStatus::Terminated);
+        assert_eq!(state.ledger.balance(&accounts::policy_loan(&pol, c).id), 0);
+        assert_eq!(state.ledger.natural_balance(&accounts::policy_loan_written_off("term-life", c).id), 2_000_00);
+        assert_eq!(state.policies[&pol].loan.as_ref().map(crate::loan::Loan::outstanding_minor), Some(0));
+        assert!(ctx.events.iter().any(|e| matches!(
+            e,
+            Event::PolicyLoanWrittenOff { amount_minor: 2_000_00, cause, .. } if cause == "terminated_on_claim"
+        )));
+    }
 }

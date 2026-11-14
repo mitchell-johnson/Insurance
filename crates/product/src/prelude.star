@@ -59,7 +59,7 @@ def benefit_category(code, salary_multiple, max_sum_insured):
 def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, levies = [],
           expiry_age = None, min_sum_insured = 0, max_sum_insured = None, categories = [],
           automatic_acceptance_limit = None, excess_options = [], premium_waiver = None,
-          shared_counter = None, reduces = [], joint_first_event = False):
+          shared_counter = None, reduces = [], joint_first_event = False, insurability_option = None):
     return {
         "code": code,
         "cover_type": cover_type,
@@ -78,6 +78,18 @@ def cover(code, cover_type, benefit, rating, definitions = [], gst_rate = None, 
         "shared_counter": shared_counter,
         "reduces": reduces,
         "joint_first_event": joint_first_event,
+        "insurability_option": insurability_option,
+    }
+
+def insurability_option(events, max_percent_of_original, max_increase, max_uses, within_days, to_age):
+    """More of a lump sum cover without evidence of health, after an event in the life's own life."""
+    return {
+        "events": events,
+        "max_percent_of_original": max_percent_of_original,
+        "max_increase_minor": max_increase,
+        "max_uses": max_uses,
+        "within_days": within_days,
+        "to_age": to_age,
     }
 
 def excess_option(code, excess, premium_factor = "1"):

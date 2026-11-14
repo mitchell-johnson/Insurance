@@ -221,7 +221,7 @@ resource readIndexSecret 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
 // Deaths are told to claims through the ledger cluster.
 resource clusterToken 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
   parent: vault
-  name: 'cluster-token'
+  name: 'cluster-token-ic-customers'
 }
 
 resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

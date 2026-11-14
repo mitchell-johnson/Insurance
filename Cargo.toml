@@ -22,6 +22,7 @@ ic-cashmatch = { path = "crates/cashmatch" }
 ic-sim = { path = "crates/sim" }
 ic-azure = { path = "crates/azure" }
 ic-raft = { path = "crates/raft" }
+ic-entra = { path = "crates/entra" }
 
 fastnum = { version = "=0.7.5", features = ["serde"] }
 starlark = "=0.14.2"

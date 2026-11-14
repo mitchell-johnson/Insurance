@@ -24,19 +24,25 @@ pub const MIN_TOKEN_LEN: usize = 32;
 pub struct ClusterAuth {
     /// Tokens accepted from callers. Empty means callers are not checked.
     accept: Vec<String>,
+    /// On a node: the access map that holds each workload to its grant
+    /// (`crate::access`). `None`: every accepted token may do everything.
+    access_file: Option<String>,
 }
 
 impl std::fmt::Debug for ClusterAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Never the tokens themselves.
-        write!(f, "ClusterAuth({} tokens)", self.accept.len())
+        write!(f, "ClusterAuth({} tokens, access map {:?})", self.accept.len(), self.access_file)
     }
 }
 
 impl ClusterAuth {
     /// No checking at all. For tests and a cluster on one developer's machine.
     pub fn open() -> Self {
-        Self { accept: vec![] }
+        Self {
+            accept: vec![],
+            access_file: None,
+        }
     }
 
     /// Accept these tokens; send the first.
@@ -50,7 +56,10 @@ impl ClusterAuth {
                 short.len()
             ));
         }
-        Ok(Self { accept: tokens })
+        Ok(Self {
+            accept: tokens,
+            access_file: None,
+        })
     }
 
     /// Read through `get`, which is `std::env::var` in production, and
@@ -84,6 +93,18 @@ impl ClusterAuth {
             (None, None | Some("token")) => Err("set IC_CLUSTER_TOKEN_FILE (or IC_CLUSTER_TOKEN), or IC_CLUSTER_AUTH=open for a local cluster".to_string()),
             (_, Some(other)) => Err(format!("IC_CLUSTER_AUTH must be token or open, not {other:?}")),
         }
+    }
+
+    /// On a node: hold each workload to its grant in the access map at
+    /// `path` (`IC_CLUSTER_ACCESS_FILE`; see `crate::access`).
+    pub fn with_access_file(mut self, path: impl Into<String>) -> Self {
+        self.access_file = Some(path.into());
+        self
+    }
+
+    /// The access map's file, where one is set.
+    pub fn access_file(&self) -> Option<&str> {
+        self.access_file.as_deref()
     }
 
     pub fn is_open(&self) -> bool {

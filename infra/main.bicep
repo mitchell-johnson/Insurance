@@ -26,6 +26,9 @@ param workloadNamespace string = 'insurance-core'
 @description('Days a Merkle root or sealed segment cannot be changed or deleted. Seven years plus a margin by default.')
 param retentionDays int = 2920
 
+@description('The workloads\' cluster tokens exist in Key Vault (deploy/cluster-access/issue.sh has run). Until then no identity is granted one.')
+param clusterTokensIssued bool = false
+
 @description('Node size and count for the workload pool.')
 param nodeVmSize string = 'Standard_D4ds_v5'
 param nodeCount int = 3
@@ -155,7 +158,7 @@ resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' = {
 
 // --- compute ------------------------------------------------------------------
 
-resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
+resource aks 'Microsoft.ContainerService/managedClusters@2026-08-01' = {
   name: '${name}-aks'
   location: location
   tags: tags
@@ -181,6 +184,24 @@ resource aks 'Microsoft.ContainerService/managedClusters@2024-05-01' = {
       networkPluginMode: 'overlay'
       networkPolicy: 'cilium'
       networkDataplane: 'cilium'
+      // Pod-to-pod traffic that leaves a node is encrypted with WireGuard
+      // (Advanced Container Networking Services). The services talk plain
+      // HTTP inside the cluster and carry bearer tokens, so this is what
+      // keeps those tokens and the ledger's commands off the wire in the
+      // clear. Traffic between two pods on one node never leaves it.
+      // WireGuard uses UDP 51871 between nodes; nothing here blocks it.
+      // As `az aks create --enable-acns --acns-transit-encryption-type
+      // wireguard` sets it (docs: aks/how-to-apply-wireguard). Check after
+      // deploying: `kubectl -n kube-system exec ds/cilium -- cilium-dbg
+      // encrypt status` shows WireGuard with one peer per other node.
+      advancedNetworking: {
+        enabled: true
+        observability: { enabled: true }
+        security: {
+          enabled: true
+          transitEncryption: { type: 'WireGuard' }
+        }
+      }
     }
     agentPoolProfiles: [
       {
@@ -379,16 +400,22 @@ resource workerSigning 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-// The cluster token: the shared secret every caller of a ledger node
-// presents. Its value is set by an operator, never by this template, so it
-// is in no deployment history:
-//   az keyvault secret set --vault-name <vault> --name cluster-token --value "$(openssl rand -hex 32)"
-// To rotate, store the new and the old token on separate lines, new first;
-// see docs/runbooks.md. Each process may read this one secret and no other.
-// The vault holds this secret and the signing key and nothing else.
-resource nodeToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, nodeIdentity.id, roles.keyVaultSecretsUser)
+// The cluster tokens: each workload's own secret, cluster-token-<workload>,
+// presented to the ledger nodes, which hold it to its grant in the access map
+// (deploy/cluster-access). Their values are made by
+// deploy/cluster-access/issue.sh, never by this template, so they are in no
+// deployment history. Each identity may read its own token and no other
+// secret: granted on the secret, not the vault, so it exists first. Deploy
+// once with clusterTokensIssued false, run issue.sh, then deploy again with
+// it true (docs/operations.md).
+resource nodeTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-node'
+}
+
+resource nodeToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: nodeTokenSecret
+  name: guid(nodeTokenSecret.id, nodeIdentity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: nodeIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -396,9 +423,14 @@ resource nodeToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource workerToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, workerIdentity.id, roles.keyVaultSecretsUser)
+resource workerTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-worker'
+}
+
+resource workerToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: workerTokenSecret
+  name: guid(workerTokenSecret.id, workerIdentity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: workerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -416,9 +448,14 @@ resource portalFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/fede
   }
 }
 
-resource portalToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, portalIdentity.id, roles.keyVaultSecretsUser)
+resource portalTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-portal'
+}
+
+resource portalToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: portalTokenSecret
+  name: guid(portalTokenSecret.id, portalIdentity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: portalIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -426,9 +463,14 @@ resource portalToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource apiToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, apiIdentity.id, roles.keyVaultSecretsUser)
+resource apiTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-api'
+}
+
+resource apiToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: apiTokenSecret
+  name: guid(apiTokenSecret.id, apiIdentity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: apiIdentity.properties.principalId
     principalType: 'ServicePrincipal'
@@ -528,9 +570,14 @@ resource paymentsFederation 'Microsoft.ManagedIdentity/userAssignedIdentities/fe
   }
 }
 
-resource paymentsToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, paymentsIdentity.id, roles.keyVaultSecretsUser)
+resource paymentsTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-payments'
+}
+
+resource paymentsToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (clusterTokensIssued) {
+  scope: paymentsTokenSecret
+  name: guid(paymentsTokenSecret.id, paymentsIdentity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: paymentsIdentity.properties.principalId
     principalType: 'ServicePrincipal'

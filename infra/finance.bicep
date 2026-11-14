@@ -153,9 +153,14 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
+resource serviceSecretsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-finance-close'
+}
+
 resource serviceSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, identity.id, roles.keyVaultSecretsUser)
+  scope: serviceSecretsSecret
+  name: guid(serviceSecretsSecret.id, identity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'

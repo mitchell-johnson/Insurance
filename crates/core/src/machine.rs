@@ -564,6 +564,12 @@ impl CoreState {
                     underwritten::change_excess(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::ExerciseOption(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    underwritten::exercise_option(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
             Command::AddUnderwrittenLayer(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {

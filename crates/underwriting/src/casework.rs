@@ -19,7 +19,7 @@ use crate::model::{
 };
 
 /// The case, which the underwriter must hold.
-fn held<'a>(p: &'a mut Proposal, life: &LifeId, case: &str, underwriter: &str) -> Result<&'a mut Case, Reject> {
+pub(crate) fn held<'a>(p: &'a mut Proposal, life: &LifeId, case: &str, underwriter: &str) -> Result<&'a mut Case, Reject> {
     let c = life_mut(p, life)?
         .cases
         .iter_mut()

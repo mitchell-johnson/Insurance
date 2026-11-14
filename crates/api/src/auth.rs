@@ -9,24 +9,24 @@
 //! Development: with no tenant configured, identity comes from headers. That
 //! mode refuses to start outside the insurance in a box.
 
-use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
 use axum::http::HeaderMap;
+use ic_entra::Validator;
 use ic_readmodel::scope::Relationship;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
-use serde::Deserialize;
-use tokio::sync::RwLock;
+
+pub use ic_entra::{AuthError, ENTRA_AUTHORITY};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Caller {
     /// Opaque subject: the Entra object ID, which the customer master maps to a party.
     pub subject: String,
     pub roles: Vec<String>,
-    /// Relationships asserted in development mode only. In production they
-    /// come from the gateway's read model of the customer master.
+    /// Relationships asserted in development mode only. In production this
+    /// API serves staff and services, and people reach their policies through
+    /// the portal, which holds the customer master's relationships.
     pub dev_relationships: Vec<Relationship>,
+    /// When the verified token was issued (`iat`), in seconds since the
+    /// epoch. `None` in development mode and for a token that does not say.
+    pub issued: Option<i64>,
 }
 
 impl Caller {
@@ -35,55 +35,12 @@ impl Caller {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-pub enum AuthError {
-    #[error("missing bearer token")]
-    Missing,
-    #[error("invalid token: {0}")]
-    Invalid(String),
-    #[error("signing keys unavailable: {0}")]
-    Keys(String),
-}
-
-#[derive(Debug, Deserialize)]
-struct Claims {
-    #[serde(default)]
-    oid: Option<String>,
-    sub: String,
-    #[serde(default)]
-    roles: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Jwks {
-    keys: Vec<Jwk>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Jwk {
-    kid: String,
-    #[serde(default)]
-    n: String,
-    #[serde(default)]
-    e: String,
-}
-
-/// Where Entra ID issues tokens and publishes its signing keys.
-pub const ENTRA_AUTHORITY: &str = "https://login.microsoftonline.com";
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Auth {
     /// Identity from `x-dev-subject`, `x-dev-roles` and `x-dev-relationships`.
     Dev,
-    Entra(Arc<Entra>),
-}
-
-pub struct Entra {
-    issuer: String,
-    audience: String,
-    jwks_url: String,
-    http: reqwest::Client,
-    keys: RwLock<(BTreeMap<String, DecodingKey>, Option<Instant>)>,
+    /// Tokens checked by the shared validator (`crates/entra`).
+    Entra(Validator),
 }
 
 impl Auth {
@@ -95,14 +52,7 @@ impl Auth {
     /// Validate tokens issued by `tenant` at another authority: a sovereign
     /// cloud's, such as `https://login.microsoftonline.us`.
     pub fn entra_at(authority: &str, tenant: &str, audience: &str) -> Self {
-        let authority = authority.trim_end_matches('/');
-        Auth::Entra(Arc::new(Entra {
-            issuer: format!("{authority}/{tenant}/v2.0"),
-            audience: audience.to_string(),
-            jwks_url: format!("{authority}/{tenant}/discovery/v2.0/keys"),
-            http: ic_azure::http_client(),
-            keys: RwLock::new((BTreeMap::new(), None)),
-        }))
+        Auth::Entra(Validator::new(authority, tenant, audience))
     }
 
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<Caller, AuthError> {
@@ -123,66 +73,18 @@ impl Auth {
                     subject,
                     roles: list("x-dev-roles"),
                     dev_relationships,
+                    issued: None,
                 })
             }
-            Auth::Entra(e) => {
-                let token = header("authorization")
-                    .and_then(|v| v.strip_prefix("Bearer ").map(str::to_string))
-                    .ok_or(AuthError::Missing)?;
-                let kid = decode_header(&token)
-                    .map_err(|e| AuthError::Invalid(e.to_string()))?
-                    .kid
-                    .ok_or_else(|| AuthError::Invalid("no key id".to_string()))?;
-                let key = e.key(&kid).await?;
-                let mut validation = Validation::new(Algorithm::RS256);
-                validation.set_audience(&[&e.audience]);
-                validation.set_issuer(&[&e.issuer]);
-                let claims = decode::<Claims>(&token, &key, &validation)
-                    .map_err(|e| AuthError::Invalid(e.to_string()))?
-                    .claims;
+            Auth::Entra(validator) => {
+                let claims = validator.validate(headers).await?;
                 Ok(Caller {
-                    subject: claims.oid.unwrap_or(claims.sub),
+                    subject: claims.subject,
                     roles: claims.roles,
                     dev_relationships: vec![],
+                    issued: claims.issued,
                 })
             }
         }
-    }
-}
-
-impl Entra {
-    /// The signing key for a key ID. Keys are cached for an hour and
-    /// refetched once if an unknown key ID appears (Entra rotates keys).
-    async fn key(&self, kid: &str) -> Result<DecodingKey, AuthError> {
-        {
-            let cache = self.keys.read().await;
-            let fresh = cache.1.is_some_and(|t| t.elapsed() < Duration::from_secs(3600));
-            if let (Some(k), true) = (cache.0.get(kid), fresh) {
-                return Ok(k.clone());
-            }
-        }
-        let mut cache = self.keys.write().await;
-        if cache.1.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) || cache.0.is_empty() {
-            let jwks: Jwks = self
-                .http
-                .get(&self.jwks_url)
-                .send()
-                .await
-                .map_err(|e| AuthError::Keys(e.to_string()))?
-                .json()
-                .await
-                .map_err(|e| AuthError::Keys(e.to_string()))?;
-            cache.0 = jwks
-                .keys
-                .iter()
-                .filter_map(|k| DecodingKey::from_rsa_components(&k.n, &k.e).ok().map(|d| (k.kid.clone(), d)))
-                .collect();
-            cache.1 = Some(Instant::now());
-        }
-        cache
-            .0
-            .get(kid)
-            .cloned()
-            .ok_or_else(|| AuthError::Invalid("token signed by an unknown key".to_string()))
     }
 }

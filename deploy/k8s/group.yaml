@@ -25,7 +25,8 @@ spec:
     objects: |
       array:
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-group
+          objectAlias: cluster-token
           objectType: secret
         - |
           objectName: group-fingerprint-salt

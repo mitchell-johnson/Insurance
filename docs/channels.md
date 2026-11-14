@@ -397,7 +397,7 @@ The core's own events (issue, billing, lapse, cancellation, cover changes) arriv
 | `IC_GROUP_URL`, `IC_GROUP_SCOPE` | The group service and its app registration's scope, for employers' membership files, invoices and member records. Set together. |
 | `IC_AUTH=dev` | Trust `x-dev-subject` and `x-dev-roles` headers. For a laptop. The service refuses to start with it in Kubernetes. |
 
-**On AKS.** `deploy/k8s/portal.yaml` holds the service account, the settings, the deployment and its network policy; the identity is the `portalClientId` output of `infra/main.bicep`. In Entra, register:
+**On AKS.** `deploy/k8s/portal.yaml` holds the service account, the settings, the deployment and its network policy; the identity is the `portalClientId` output of `infra/main.bicep`. `deploy/entra/apps.sh workforce` and `apps.sh customers` make these registrations (docs/operations.md, step 4); what they make:
 
 1. In the workforce tenant: an app registration for the portal service, with the app roles `operations` and one per module that calls `/internal/v1`; and a single-page application for the consoles with redirect URIs `https://<host>/staff` and `https://<host>/ops`.
 2. In the External ID tenant: an app registration for the customer-facing API, and a single-page application with redirect URIs `https://<host>/adviser` and `https://<host>/employer`. The mobile app has its own registration there.

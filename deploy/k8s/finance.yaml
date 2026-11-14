@@ -25,7 +25,8 @@ spec:
     objects: |
       array:
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-finance-close
+          objectAlias: cluster-token
           objectType: secret
 ---
 apiVersion: v1

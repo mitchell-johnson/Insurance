@@ -1,0 +1,175 @@
+{
+  "mode": "report",
+  "shared_token": "refuse",
+  "workloads": {
+    "ic-node": {
+      "peer": true
+    },
+    "ic-api": {
+      "read_partitions": true,
+      "callers": [
+        "new-business",
+        "policy-servicing",
+        "cash-matching",
+        "group-admin",
+        "claims",
+        "collections",
+        "config",
+        "remediation",
+        "transfer",
+        "migration",
+        "underwriting",
+        "reinsurance",
+        "payments",
+        "finance",
+        "documents",
+        "distribution",
+        "counterparty-finance"
+      ]
+    },
+    "ic-worker": {
+      "read_partitions": true,
+      "callers": [
+        "end-of-day",
+        "leader",
+        "collections",
+        "cash-matching",
+        "underwriting",
+        "new-business",
+        "unit-pricing",
+        "unit-orders"
+      ],
+      "write_modules": [
+        "underwriting",
+        "collections",
+        "finance",
+        "unit-pricing"
+      ]
+    },
+    "ic-portal": {
+      "read_partitions": true,
+      "callers": [
+        "claims",
+        "policy-servicing"
+      ],
+      "write_modules": [
+        "channels",
+        "complaints",
+        "distribution",
+        "finance",
+        "payments",
+        "reinsurance",
+        "underwriting",
+        "unit-pricing",
+        "documents"
+      ],
+      "read_modules": [
+        "collections",
+        "group"
+      ]
+    },
+    "ic-customers": {
+      "read_partitions": true,
+      "callers": [
+        "claims",
+        "customer-master"
+      ],
+      "write_modules": [
+        "channels"
+      ]
+    },
+    "ic-documents": {
+      "read_partitions": true,
+      "callers": [
+        "documents"
+      ],
+      "write_modules": [
+        "documents",
+        "channels",
+        "complaints",
+        "underwriting"
+      ],
+      "read_modules": [
+        "payments",
+        "distribution",
+        "reinsurance",
+        "group"
+      ]
+    },
+    "ic-finance-close": {
+      "read_partitions": true,
+      "callers": [
+        "finance"
+      ],
+      "write_modules": [
+        "finance"
+      ],
+      "read_modules": [
+        "distribution",
+        "payments",
+        "reinsurance",
+        "unit-pricing",
+        "collections"
+      ]
+    },
+    "ic-group": {
+      "read_partitions": true,
+      "callers": [
+        "group-admin",
+        "underwriting"
+      ],
+      "write_modules": [
+        "group",
+        "distribution",
+        "documents",
+        "reinsurance",
+        "underwriting"
+      ]
+    },
+    "ic-payments": {
+      "read_partitions": true,
+      "callers": [
+        "payments",
+        "cash-matching"
+      ],
+      "write_modules": [
+        "payments",
+        "finance"
+      ],
+      "read_modules": [
+        "collections"
+      ]
+    },
+    "ic-reinsurance": {
+      "read_partitions": true,
+      "callers": [
+        "reinsurance"
+      ],
+      "write_modules": [
+        "reinsurance",
+        "documents"
+      ]
+    },
+    "ic-underwriting-intake": {
+      "read_partitions": true,
+      "callers": [
+        "underwriting",
+        "new-business"
+      ],
+      "write_modules": [
+        "underwriting"
+      ]
+    },
+    "ic-unit-pricing": {
+      "read_partitions": true,
+      "callers": [
+        "unit-pricing",
+        "config",
+        "unit-orders"
+      ],
+      "write_modules": [
+        "unit-pricing"
+      ]
+    }
+  }
+}

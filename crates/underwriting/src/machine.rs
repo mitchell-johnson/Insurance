@@ -543,6 +543,14 @@ impl UnderwritingState {
                 crate::casework::record_interview(p, life, cx, &case, &underwriter, notes_ref, notes_hash, recording_ref, present, adviser_present)
             }),
             ConfirmInterview(d) => self.with(&d.proposal.clone(), cx, |st, p, cx| crate::casework::confirm_interview(st, p, cx, *d)),
+            CheckOptionEvidence {
+                case,
+                underwriter,
+                accepted,
+                note,
+            } => self.with_case(&case, cx, |st, p, life, cx| {
+                crate::option::check(st, p, life, cx, &case, &underwriter, accepted, &note)
+            }),
             ProposeDecision {
                 case,
                 underwriter,

@@ -60,11 +60,17 @@ class Demo {
     return l;
   }
   async click(target) { const l = await this.ring(target, 700); await l.click(); await this.page.waitForTimeout(500); }
-  async type(target, text) { const l = await this.ring(target, 350); await l.fill(""); await l.pressSequentially(String(text), { delay: 28 }); await this.page.waitForTimeout(250); }
+  async type(target, text) {
+    const l = await this.ring(target, 350);
+    // A date or number field takes its value whole; typing it key by key garbles it.
+    if (["date", "number", "file"].includes(await l.getAttribute("type"))) await l.fill(String(text));
+    else { await l.fill(""); await l.pressSequentially(String(text), { delay: 28 }); }
+    await this.page.waitForTimeout(250);
+  }
   async pick(target, value) { const l = await this.ring(target, 350); await l.selectOption(value); await this.page.waitForTimeout(350); }
   // Wait for a result, bring it into view and let it be read.
   async see(target, hold = 1800) { await this.ring(typeof target === "string" && !/^[#.\[]/.test(target) ? this.page.getByText(target, { exact: false }).first() : target, hold); }
-  async intro(kicker, title, lines, hold = 5000) { await this.page.setContent(card(kicker, title, lines)); await this.page.waitForTimeout(hold); }
+  async intro(kicker, title, lines, hold = 5000) { await this.page.goto("about:blank"); await this.page.setContent(card(kicker, title, lines)); await this.page.waitForTimeout(hold); }
   // Move to one of a page's views by its tab.
   async tab(name) { await this.click(this.page.getByRole("tab", { name, exact: true })); }
   // Answer a question the page asks in a dialog.
@@ -120,8 +126,10 @@ async function video(name, persona, title, lines, run) {
     d.allowed = [404];
     await d.open("/adviser", "sub-adv");
     await d.say("Tessa signs in. Her engagement with her advice provider is active");
+    await d.tab("Engagements");
     await d.see("#engagements");
     await d.say("Commission held from her, with the amount and the reason");
+    await d.tab("Commission");
     await d.see("#held", 2600);
     await d.say("A new policy she wrote was matched as replacing older cover, which earns no initial commission");
     await d.see(p.locator("#matches"));
@@ -131,6 +139,7 @@ async function video(name, persona, title, lines, run) {
     await d.click(p.locator("#dispute button").first());
     await d.see("Disputed. The commission");
     await d.say("She opens a client's policy");
+    await d.tab("Your book");
     await d.click(p.getByRole("button", { name: "Open" }).first());
     await p.locator("#detail:not([hidden])").waitFor();
     await d.see(p.locator("#rows"), 2600);
@@ -156,6 +165,7 @@ async function video(name, persona, title, lines, run) {
     await d.see(p.locator("#practice"), 2600);
     await d.say("Health details and claims stay with the adviser and the customer: the provider sees the book only");
     await d.say("Its commission statement, line by line, with totals by what earned it");
+    await d.tab("Commission");
     await d.type("#st-number", "1");
     await d.click(p.locator("#st-form button"));
     await p.locator("#statement").getByText("Override (group)").waitFor();
@@ -175,6 +185,7 @@ async function video(name, persona, title, lines, run) {
     await d.see("#billing", 2600);
     await d.say("Claims show a status only. What a claim is about never reaches the employer");
     await d.see("#claims");
+    await d.tab("Files and members");
     await p.locator("#group:not([hidden])").waitFor();
     await d.say("This month's payroll file is uploaded. It is checked for viruses before anything reads it");
     await d.ring("#file");
@@ -212,12 +223,14 @@ async function video(name, persona, title, lines, run) {
     }
     if (!taken) throw new Error("no case was waiting");
     await d.say("She proposes standard acceptance of the life cover, with a reason code and her notes");
+    await d.tab("Cases");
     await d.pick("#c-what", "propose");
     await d.type("#cf-cover", "life"); await d.pick("#cf-outcome", "accept");
     await d.type("#cf-reasons", "RC-0101"); await d.type("#cf-notes", "vault://notes");
     await d.click(p.locator("#c-form button"));
     await d.see(p.locator("#c-msg").getByText("Done."));
     await d.say("The proposal she is working on");
+    await d.tab("Proposals");
     await d.type("#p-id", "P2"); await d.click(p.locator("#p-form button").first());
     await p.locator("#proposal").getByText("P2:").waitFor();
     await d.see("#proposal", 2600);
@@ -239,6 +252,7 @@ async function video(name, persona, title, lines, run) {
     await d.click(p.locator("#queue").getByRole("button", { name: "Take" }).first());
     await d.see("You hold");
     await d.say("He varies the cover: a 50% loading instead of avoiding the policy");
+    await d.tab("Remedies and review");
     await d.type("#n-review", "ndr/CLM-1/L1"); await d.pick("#n-outcome", "vary");
     await d.type("#n-reasons", "RC-0980"); await d.type("#n-cover", "life"); await d.type("#n-loading", "50");
     await d.click(p.locator("#n-form button"));
@@ -247,6 +261,7 @@ async function video(name, persona, title, lines, run) {
     await d.intro("Next", "The second senior underwriter", ["Cat signs in separately and sees what is waiting for her"], 3000);
     await d.open("/underwriting", "sub-cat");
     await d.say("Cat sees the remedy Sam prepared, waiting for a second senior");
+    await d.tab("Remedies and review");
     await d.see(p.getByRole("button", { name: "Sign and send" }));
     await d.click(p.getByRole("button", { name: "Sign and send" }));
     await d.see("Signed and sent.");
@@ -260,6 +275,7 @@ async function video(name, persona, title, lines, run) {
     await d.say("The claims lead signs in. Every action is taken in her own name");
     await d.see("You act as cl-lead");
     await d.say("A trauma claim is notified against a policy");
+    await d.tab("Claim");
     await d.pick("#a-command", "notify");
     await d.type("#f-0", "c-b1"); await d.type("#f-1", "pol-c1"); await d.type("#f-2", "trauma");
     await d.pick("#f-4", "trauma"); await d.type("#f-5", "2027-02-20");
@@ -267,9 +283,11 @@ async function video(name, persona, title, lines, run) {
     await d.see("Done: notify.");
     await d.see("c-b1: trauma");
     await d.say("It is waiting in the lump sum queue, oldest and most urgent first");
+    await d.tab("Queue");
     await d.pick("#q-name", "lump_sum"); await d.click(p.locator("#queue button"));
     await d.see(p.locator("#q-rows").getByText("c-b1"));
     await d.say("She assigns it to an assessor, saying why she is acting");
+    await d.tab("Claim");
     await d.type("#a-purpose", "allocating lump sum work");
     await d.pick("#a-command", "assign"); await d.type("#f-1", "cl-1");
     await d.click(p.locator("#act button"));
@@ -316,13 +334,16 @@ async function video(name, persona, title, lines, run) {
     await d.say("The exceptions queue: everything about schemes that needs a person");
     await d.see(p.locator("#ex").getByText("possible match"), 2600);
     await d.say("A payroll row might be someone the insurer already knows. She confirms the match");
+    await d.tab("Members");
     await d.type("#rm-scheme", "harbour"); await d.type("#rm-emp", "E002"); await d.type("#rm-party", "party-x");
     await d.click(p.locator("#rm-form button"));
     await d.see(p.locator("#rm-msg").getByText("Recorded."));
     await d.say("The queue is now clear");
+    await d.tab("Work waiting");
     await d.click(p.locator("#ex-form button"));
     await d.see(p.locator("#ex").getByText("Nothing is waiting."));
     await d.say("The employer's file layout changed this year. She looks at the mapping in use");
+    await d.tab("Files");
     await d.type("#mp-scheme", "harbour");
     await d.click(p.getByRole("button", { name: "Show the mappings in use" }));
     await p.locator("#mp").getByText("harbour-freight").first().waitFor();
@@ -342,17 +363,20 @@ async function video(name, persona, title, lines, run) {
     await d.say("The maker signs in. Valuation files the administrator sent are listed, including one that failed its checks");
     await d.see("valuations/bad.csv");
     await d.say("He opens the growth fund's valuation for the day");
+    await d.tab("Prices");
     await d.pick("#pfund", "growth"); await d.type("#pdate", "2027-11-12");
     await d.click("#show-val");
     await d.see("#valuation", 2600);
     await d.say("And prepares the unit price from it");
     await d.click(p.locator("#prepare button").first());
     await d.see("Someone else approves it.");
+    await d.tab("Work waiting");
     await d.see(p.locator("#work").getByText("growth:2027-11-12.1"));
     await d.click(p.getByRole("button", { name: "Details" }).first());
     await p.locator("#detail:not([hidden])").waitFor();
     await d.see("#detail", 3000);
     await d.say("He tries to approve it himself");
+    await d.tab("Work waiting");
     await d.click(p.getByRole("button", { name: "Approve", exact: true }));
     await p.locator("#work-msg .banner.bad").waitFor();
     await d.ring("#work-msg");
@@ -361,6 +385,7 @@ async function video(name, persona, title, lines, run) {
     d.allowed = [];
     await d.open("/pricing", "sub-lead");
     await d.say("The lead suspends the cash fund from a date, with the reason");
+    await d.tab("Funds");
     await d.pick("#sfund", "cash"); await d.type("#sfrom", "2027-11-15"); await d.type("#sreason", "administrator outage");
     await d.click(p.locator("#suspend button"));
     await d.see("Suspended.");
@@ -445,10 +470,12 @@ async function video(name, persona, title, lines, run) {
     await d.type("#r-id", "rb1"); await d.pick("#r-type", "provider_payments"); await p.fill("#r-date", "2027-11-16");
     await d.click(p.locator("#prep button"));
     await d.see("Prepared. Add items");
+    await d.tab("Controls");
     await p.fill("#raw-cmd", JSON.stringify({ type: "add_run_items", run: "rb1", items: [{ item: "ib1", source: "browser", counterparty: { payee: "p1" }, amount_minor: 1000, policy: null, payable: null, refund: null, represents: null }] }));
     await p.locator("#raw-form button").click();
     await p.locator("#raw-msg").getByText("Done.").waitFor();
     await d.say("A payment to a provider is added to the run");
+    await d.tab("Runs");
     await d.click(p.locator("#run-form button"));
     await d.see(p.locator("#run").getByText("ib1"), 2400);
     await d.say("She checks the run: totals, payees and holds");
@@ -459,15 +486,18 @@ async function video(name, persona, title, lines, run) {
     await d.intro("Next", "The treasury approver", ["A different person signs in", "They reconcile the bank account and approve the run"], 3000);
     await d.open("/payments", "sub-payap");
     await d.say("Treasury first reconciles the claims bank account");
+    await d.tab("Reconciliation");
     await d.type("#rec-account", "anz-sf1-claims"); await d.click(p.locator("#rec-form button"));
     await d.see("closing 10000000.00", 2400);
     await d.say("The run the maker checked is waiting");
+    await d.tab("Runs");
     await d.see(p.locator("#runs").getByText("rb1"));
     await d.click(p.locator("#runs").getByRole("button", { name: "Open" }).first());
     await d.see("#run", 2400);
     await d.click(p.getByRole("button", { name: "Approve" }));
     await d.see(p.locator("#run-msg").getByText("Done: approve run."), 2600);
     await d.say("A payee is shown without account details. Those stay with the payee maintainer");
+    await d.tab("Payees and refunds");
     await d.type("#party-id", "party-p1"); await d.click(p.locator("#party-form button"));
     await d.see(p.locator("#party"), 3000);
   });
@@ -553,9 +583,11 @@ async function video(name, persona, title, lines, run) {
     await d.open("/finance", "sub-gllead");
     await d.click(p.getByRole("tab", { name: "Aged items and set-up" }));
     await d.say("Each policy falls in an accounting group for reporting. The lead classifies those not yet placed");
+    await d.tab("Books");
     await d.click("#ag-classify");
     await d.see("Classified.", 2400);
     await d.say("At migration, the old system's total is recorded against a control account");
+    await d.tab("Aged items and set-up");
     await d.type("#co-account", "1999"); await d.type("#co-currency", "NZD");
     await d.type("#co-total", "100000"); await d.type("#co-evidence", "legacy TB");
     await d.click("#co-send");

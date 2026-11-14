@@ -27,7 +27,8 @@ spec:
     objects: |
       array:
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-documents
+          objectAlias: cluster-token
           objectType: secret
         - |
           objectName: documents-webhook-key

@@ -12,11 +12,14 @@
 
    Keep the outputs: they fill in the manifests.
 
-2. **Set the cluster token.** It is the shared secret between the API, the workers and the ledger nodes. Nobody needs to know it.
+2. **Issue the cluster tokens.** Each workload that talks to the ledger nodes has its own token, the Key Vault secret `cluster-token-<workload>`, and the nodes hold each to its grant in `deploy/cluster-access/grants.json` (see "Cluster access" below). Nobody needs to know a token.
 
    ```sh
-   az keyvault secret set --vault-name <keyVaultName> --name cluster-token --value "$(openssl rand -hex 32)"
+   deploy/cluster-access/issue.sh <keyVaultName>
+   az deployment group create -g <rg> -f infra/main.bicep -p infra/main.bicepparam -p clusterTokensIssued=true
    ```
+
+   The script makes any token that is missing and writes `deploy/cluster-access/access.json`, the map of their digests; it is applied with the manifests in step 6. Each identity is granted its own token's secret and no other secret, so the tokens must exist before the grants are made: hence the second deployment. The module templates (steps 9, 10 and the others' "Running it") are deployed after this step.
 
 3. **Build and push the image.**
 
@@ -24,7 +27,21 @@
    az acr build -r <registry> -t insurance-core:$(git rev-parse --short HEAD) .
    ```
 
-4. **Register the API with Entra ID.** Create an app registration for the API, define the app roles callers will hold (`new-business`, `policy-servicing`, `cash-matching`, `group-admin`, `claims`, `collections`, `config`, `operations`), and note its application ID URI.
+4. **Register the applications with Entra ID.** One script makes every registration, its app roles (fixed IDs, so a rerun changes nothing that is assigned) and version 2 access tokens, and prints the values the manifests need:
+
+   ```sh
+   deploy/entra/apps.sh workforce <name> <portal host>      # in the insurer's tenant
+   az login --tenant <external tenant> --allow-no-subscriptions
+   deploy/entra/apps.sh customers <name> <portal host>      # in the External ID tenant
+   ```
+
+   The workforce run makes the core API, the portal service and the staff consoles' single-page application, the customer master, documents, the underwriting intake and the reinsurer API; the customers run makes the customer-facing API and the adviser and employer portals' single-page application. Group schemes has its own script, `deploy/entra/group-app.sh`. Then give each workload's managed identity the roles it calls with, and staff the roles they work under (to a group, not to people one by one):
+
+   ```sh
+   deploy/entra/apps.sh grant api://<name>-customers portal <portal identity principal id>
+   ```
+
+   Each reinsurer that reads its statements by API sends a certificate and gets its own application: `deploy/entra/apps.sh reinsurer <name> <reinsurer id> <certificate.pem>` prints the entry for `IC_REINSURANCE_API_CLIENTS`.
 
 5. **Fill in `deploy/k8s`.** Deploy underwriting's resources first (step 10): its manifests are in the kustomization and need that template's outputs. Replace every `REPLACE-` value in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml`, and in `underwriting-intake.yaml` from step 10. The first business date in `bootstrap.yaml` is set once and can never be changed.
 
@@ -32,6 +49,9 @@
 
    ```sh
    az aks get-credentials -g <rg> -n <aksName>
+   kubectl create namespace insurance-core --dry-run=client -o yaml | kubectl apply -f -
+   kubectl -n insurance-core create configmap ic-cluster-access \
+     --from-file=deploy/cluster-access/access.json --dry-run=client -o yaml | kubectl apply -f -
    kubectl apply -k deploy/k8s
    kubectl -n insurance-core wait --for=condition=complete job/ic-bootstrap --timeout=15m
    kubectl -n insurance-core logs job/ic-bootstrap -c status
@@ -123,15 +143,31 @@ The old pod (`ic-node-3` here) stays in the StatefulSet, shut out and idle, beca
 
 Azure managed disks are replicated three times within their zone, so this is a rare event. The failure drill (`deploy/compose/chaos.sh`) rehearses it on every push to main, in its own workflow (`.github/workflows/drill.yml`).
 
-## Rotating the cluster token
+## Cluster access
 
-Nodes accept any token in a comma-separated list; callers send the first.
+Every caller of a ledger node presents its own token: the secret `cluster-token-<workload>` in Key Vault, mounted only into that workload's pods. The nodes read the access map (`IC_CLUSTER_ACCESS_FILE`, the ConfigMap `ic-cluster-access`) and hold each workload to its grant: the caller names it may put on a core command, the modules it may write and read, whether it may read the partitions, and whether it may administer the cluster. Only the nodes themselves are peers, reaching Raft and everything else. The map holds the tokens' SHA-256 digests, not the tokens. The code is `crates/raft/src/access.rs`; the grants are `deploy/cluster-access/grants.json`.
 
-1. Set the Key Vault secret to `new,old` and restart the ledger nodes (`kubectl rollout restart statefulset/ic-node`). Nodes now accept both.
-2. Restart the API and the workers. They now send `new`.
-3. Set the secret to `new` and restart the ledger nodes again.
+The nodes read the map again every 30 seconds; a map that does not parse is logged and the last good one stays. A node does not start if its map is unreadable or its own token is not a peer in it.
 
-Each restart is a rolling one and the cluster stays writable throughout.
+**Report, then enforce.** The shipped grants are in `report` mode: nothing is refused, and every call a grant does not cover is logged by the nodes as `would be refused` (target `cluster.access`, with the workload, the path and what it lacked). After the first deployment, run the failure drill and a business day, and read those lines:
+
+```sh
+kubectl -n insurance-core logs statefulset/ic-node --since=24h | grep '"cluster.access"' | grep 'would be refused'
+```
+
+Add each missing right to `grants.json` (or fix the caller, if it should not need it), run `issue.sh` and apply the ConfigMap. When a full day passes with none, set `"mode": "enforce"` and apply it. From then on such a call is answered 403 and logged as `refused`.
+
+**Rotating a workload's token.** No restart of a node.
+
+1. `deploy/cluster-access/issue.sh <vault> rotate <workload>` puts a new token first in the workload's secret and keeps the old second, and writes the map with both digests. Apply the ConfigMap; within a minute the nodes accept both.
+2. Restart the workload (`kubectl rollout restart deployment/<workload>`) once the CSI driver has the new secret (two minutes). It now sends the new token.
+3. `issue.sh <vault> retire <workload>` drops the old token. Apply the ConfigMap.
+
+**A workload that may no longer call.** Remove it from `grants.json`, run `issue.sh` and apply: its token is refused within a minute.
+
+**Moving a live cluster from the shared token.** No cluster has run on the shared token in production, so this is only for one that did. With `"shared_token": "accept"` in the map, a token the node accepts that is in no grant works with full access, with a warning on each use. Run `issue.sh` first, then add the old shared token as the last line of `cluster-token-ic-node` by hand (were `issue.sh` run again it would list that line as the node's own, making it a peer, so do not run it until the move is done). Move the workloads to their own secrets one by one, then remove the line, set `refuse`, delete the `cluster-token` secret, and delete the old vault-wide `Key Vault Secrets User` assignments, which an incremental deployment leaves in place (`az role assignment list --scope <vault id>`).
+
+Without an access map (the compose cycle, the drill and the tests), every holder of the one cluster token may do everything, as before.
 
 ## Proving a closed day
 

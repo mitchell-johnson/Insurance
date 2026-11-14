@@ -679,6 +679,74 @@ async fn an_accepted_increase_becomes_a_layer_on_the_policy_in_force() {
     );
 }
 
+/// Purpose: a future insurability option, once a person accepts the proof of the life event,
+/// reaches the real core as an option exercise on the policy in force: the core writes a layer
+/// on the original cover's terms, counts the use, and the proposal ends issued. A second use
+/// on the same event, which the product does not allow, comes back as the core's refusal and
+/// the proposal waits for a person as issue failed.
+/// Why it matters: the core holds the option's limits and its uses, so the module must carry
+/// the request to it rather than write an increase that skips them, and a refused use must
+/// not be lost or written anyway (UW-030).
+#[tokio::test]
+async fn an_accepted_option_is_exercised_on_the_policy_in_force() {
+    let b = bench(TakesAll::default());
+    b.open("P1", 500_000_00);
+    b.module.with(|w| w.disclose("P1", "L1", &clean()));
+    b.pass().await;
+    let (policy, number, group) = b
+        .module
+        .with(|w| (w.p("P1").policy.clone(), w.p("P1").policy_number.clone(), w.p("P1").group.clone()));
+    let exercise = |id: &str| {
+        let hash = b.product_hash.clone();
+        b.module.with(|w| {
+            let mut open = w.open_command(id, &["L1"], &[("L1", "life", "life", 100_000_00)], false);
+            open.quote.product_hash = hash;
+            open.entry = Entry::InsurabilityOption {
+                policy: policy.clone(),
+                event: "marriage".into(),
+                event_date: w.today(),
+                evidence: "vault://PTY-L1/certificate/1".into(),
+            };
+            open.policy = policy.clone();
+            open.policy_number = number.clone();
+            open.group = group.clone();
+            w.ok("new-business", Command::OpenProposal(Box::new(open)));
+            let case = w.take(id, "L1", "amy");
+            w.ok(
+                "underwriting-console",
+                Command::CheckOptionEvidence {
+                    case,
+                    underwriter: "amy".into(),
+                    accepted: true,
+                    note: String::new(),
+                },
+            );
+        })
+    };
+
+    exercise("O1");
+    let pass = b.pass().await;
+    assert!(pass.parked.is_empty(), "{pass:?}");
+    assert!(matches!(b.status("O1"), ProposalStatus::Issued { .. }), "{:?}", b.status("O1"));
+    {
+        let cluster = b.ledger.cluster.lock().unwrap();
+        let held = &cluster.state(0).policies[&policy];
+        let layers = &held.covers["life"].layers;
+        assert_eq!((layers.len(), layers[1].sum_insured_minor), (2, 100_000_00));
+        assert!(cluster.reconcile().is_empty());
+    }
+
+    exercise("O2");
+    b.pass().await;
+    assert!(
+        matches!(b.status("O2"), ProposalStatus::IssueFailed { code } if code == "option_used"),
+        "{:?}",
+        b.status("O2")
+    );
+    let cluster = b.ledger.cluster.lock().unwrap();
+    assert_eq!(cluster.state(0).policies[&policy].covers["life"].layers.len(), 2, "one use for the event");
+}
+
 /// Purpose: a customer's new adviser replaces their cover and tops it up. The application is
 /// the increase alone, advised as a replacement: once the customer confirms the replacement
 /// disclosure, only the increase is underwritten and the core writes it as a second layer on the

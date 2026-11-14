@@ -10,7 +10,7 @@ The daily close needs a Temporal service. The choices are Temporal Cloud (least 
 
 ### Encryption in transit inside the cluster
 
-Traffic between the API, the workers and the ledger nodes is HTTP carrying the cluster token. Network policies restrict who can connect, but do not encrypt. Before production the cluster needs pod-to-pod encryption: a service mesh with mutual TLS (Istio add-on for AKS) or transparent encryption in the CNI (Cilium WireGuard). This is a platform choice, so it is not baked into the manifests.
+Traffic between the services inside the cluster is HTTP carrying bearer tokens (the cluster token, Entra tokens). Network policies restrict who can connect; WireGuard encrypts. `infra/main.bicep` turns on Advanced Container Networking Services with `transitEncryption: WireGuard` on the Cilium dataplane, so every pod-to-pod packet that leaves a node is encrypted. Traffic between two pods on the same node never leaves it and is not encrypted; traffic from host-network pods and the nodes themselves is not covered (none of ours run on the host network). WireGuard needs UDP 51871 open between nodes. Turning it on for a running cluster restarts the Cilium agent on every node: do it in a quiet hour. Check it with `kubectl -n kube-system exec ds/cilium -- cilium-dbg encrypt status` (WireGuard, peers = nodes - 1). WireGuard was chosen over a service mesh because it needs nothing in the manifests and adds no sidecar to the ledger's latency path.
 
 ### A second region
 
@@ -36,13 +36,19 @@ The design posts tax on claim payments and investment earnings at the event, at 
 
 ## Known gaps
 
-### Callers have roles but no relationships
+### The core API is for staff and services; people come through the portal
 
-The API takes the caller's roles from the Entra ID token. What a customer or adviser may see depends also on their relationship to a policy (policyholder, life insured, adviser of record), which belongs to a customer master that is not part of this system. Until one is connected, a caller with no staff role sees nothing. Staff roles work fully.
+Decided 14 Nov 2026, replacing "Callers have roles but no relationships", which was written before the customer master and the portal existed.
 
-### Rotating the cluster token needs a rolling restart
+What a customer, adviser or employer may see depends on their relationship to a policy (policyholder, life insured, member, adviser of record, administrator). Those relationships are held by the customer master (`crates/customers`) and relayed to the portal's directory (`crates/channels/src/directory.rs`), which also knows which sign-in is which party, follows the core's own events, and applies a revocation ahead of everything else. The portal checks every row it shows against the same audience policy the core API uses (`ic_readmodel::scope::AudienceScope`).
 
-Nodes accept a list of tokens, so rotation is safe: add the new token, restart, switch callers, remove the old one. But processes read the token when they start, so each step is a rolling restart. See the runbook.
+The core API (`crates/api`) therefore does not ask the customer master about anybody. It takes roles from the Entra ID token and serves staff and services. A token with no staff role sees nothing there, and a policy it may not see answers exactly as one that does not exist. That is the intended behaviour in production and not a gap to fill: a second place deciding who is related to whom would have to be kept in step with the directory, and its revocations would lag the portal's.
+
+Development mode (`Auth::Dev`) can assert relationships in a header, so the audience policy can be exercised through the core API without a portal. Entra mode never reads that header.
+
+### Each workload has its own cluster token
+
+Every caller of a ledger node used to present one shared token, which let any of a dozen workloads send any command to any module under any caller name; the core's check of who may send a command trusted that name. Now each workload has its own token and the nodes hold it to a grant (`crates/raft/src/access.rs`, docs/operations.md "Cluster access"): the caller names it may use on core commands, the modules it may write and read, partition reads, administration. Within a module, the person a command names (an approver, an actor) is still the calling workload's word; the module's own rules (two different people, authority limits) are applied to it. Tokens, not Entra workload identity, because the nodes must keep running when Entra cannot be reached, and a token check needs nothing outside the node. The shipped grants start in report mode and are enforced once a day's logs show nothing they would refuse.
 
 ### Policy-number lookups ask every partition
 

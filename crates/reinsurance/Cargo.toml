@@ -14,6 +14,7 @@ ic-product.workspace = true
 ic-core.workspace = true
 ic-raft.workspace = true
 ic-azure.workspace = true
+ic-entra.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true

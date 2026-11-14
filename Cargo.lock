@@ -2055,6 +2055,7 @@ dependencies = [
  "ic-azure",
  "ic-cashmatch",
  "ic-core",
+ "ic-entra",
  "ic-finance",
  "ic-ledger",
  "ic-log",
@@ -2129,6 +2130,7 @@ dependencies = [
  "ic-complaints",
  "ic-core",
  "ic-distribution",
+ "ic-entra",
  "ic-finance",
  "ic-group",
  "ic-ledger",
@@ -2231,6 +2233,7 @@ dependencies = [
  "ic-channels",
  "ic-claims",
  "ic-core",
+ "ic-entra",
  "ic-raft",
  "jsonwebtoken",
  "proptest",
@@ -2292,6 +2295,7 @@ dependencies = [
  "ic-collections",
  "ic-complaints",
  "ic-core",
+ "ic-entra",
  "ic-log",
  "ic-product",
  "ic-raft",
@@ -2311,6 +2315,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ttf-parser",
+]
+
+[[package]]
+name = "ic-entra"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "ic-azure",
+ "ic-entra",
+ "jsonwebtoken",
+ "rand 0.8.8",
+ "reqwest 0.12.28",
+ "rsa",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -2359,6 +2381,7 @@ dependencies = [
  "ic-customers",
  "ic-distribution",
  "ic-documents",
+ "ic-entra",
  "ic-ledger",
  "ic-log",
  "ic-money",
@@ -2536,6 +2559,7 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "futures",
+ "hex",
  "ic-azure",
  "ic-cashmatch",
  "ic-core",
@@ -2580,6 +2604,7 @@ dependencies = [
  "hex",
  "ic-azure",
  "ic-core",
+ "ic-entra",
  "ic-ledger",
  "ic-log",
  "ic-money",

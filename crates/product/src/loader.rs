@@ -160,6 +160,27 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 return Err(invalid(file, format!("cover {}: investment account needs a fund menu", c.code)));
             }
         }
+        if let Some(option) = &c.insurability_option {
+            let plain = |e: &String| !e.is_empty() && e.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_');
+            let share = option.max_percent_of_original.get();
+            let sound = !option.events.is_empty()
+                && option.events.iter().all(plain)
+                && option.events.iter().collect::<BTreeSet<_>>().len() == option.events.len()
+                && share > ic_money::Dec::from(0i64)
+                && option.max_increase_minor > 0
+                && option.max_uses > 0
+                && option.within_days > 0
+                && option.to_age > 0;
+            if !sound || !lump_sum(&c.code) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: an insurability option is on a lump sum cover, names its events once each, and has limits above zero",
+                        c.code
+                    ),
+                ));
+            }
+        }
     }
     let mut kinds = BTreeSet::new();
     for f in &p.features {

@@ -25,7 +25,8 @@ spec:
     objects: |
       array:
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-portal
+          objectAlias: cluster-token
           objectType: secret
 ---
 # Who signs in, and where. None of these is a secret: the pages are public

@@ -127,6 +127,20 @@ impl LifeRecord {
     }
 }
 
+/// One use of a cover's insurability option by a life.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OptionUse {
+    pub cover: String,
+    pub life: LifeId,
+    pub event: String,
+    pub event_date: NaiveDate,
+    pub sum_insured_minor: i64,
+    pub used_on: NaiveDate,
+    /// The layer the use wrote.
+    pub layer: u32,
+}
+
+/// Where a layer of cover came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LayerOrigin {
@@ -621,6 +635,9 @@ pub struct Policy {
     /// bank has settled it.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub payouts: BTreeMap<String, crate::invest::Payout>,
+    /// Each use of a cover's insurability option, by its reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub option_uses: BTreeMap<String, OptionUse>,
     /// What the owner has borrowed against the policy, once they have.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loan: Option<crate::loan::Loan>,

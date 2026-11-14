@@ -17,10 +17,10 @@ use ic_product::schedule::period_start;
 use crate::billing::{raise_receivable, Bill};
 use crate::cash;
 use crate::catalog::Catalog;
-use crate::command::{AddedCover, AlteredTerms, ChangedExcess, ReinstatementTerms, UnderwrittenLayer};
+use crate::command::{AddedCover, AlteredTerms, ChangedExcess, OptionExercise, ReinstatementTerms, UnderwrittenLayer};
 use crate::event::{Event, LayerInfo};
 use crate::machine::{Ctx, Reject};
-use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
+use crate::policy::{CoverStatus, Layer, LayerOrigin, LayerTerms, MemberPays, OptionUse, Policy, PolicyStatus, ReceivableKind, ReinstatementApproval};
 use crate::premium::{retail_period_premium, retail_premium_with, Layers};
 use crate::LifeId;
 
@@ -131,6 +131,133 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
         crate::reduce::adjust_billed(ledger, catalog, &before, policy, ctx, &spec.life, (effective, None))?;
         cash::apply_suspense(ledger, policy, ctx)?;
     }
+    Ok(())
+}
+
+/// A life uses its cover's insurability option: a new layer from today on
+/// the terms of the cover the life started with, with no underwriting,
+/// inside the product's limits for the option.
+pub(crate) fn exercise_option(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut Ctx<'_>, spec: OptionExercise) -> Result<(), Reject> {
+    let plain = crate::interest::plain;
+    if !plain(&spec.reference) || spec.evidence.is_empty() || spec.evidence.len() > 200 || spec.sum_insured_minor <= 0 {
+        return Err(Reject::new(
+            "invalid_option",
+            "an option is used under a plain reference, with evidence of the event and an amount above zero",
+        ));
+    }
+    if let Some(used) = policy.option_uses.get(&spec.reference) {
+        let same = used.cover == spec.cover
+            && used.life == spec.life
+            && used.event == spec.event
+            && used.event_date == spec.event_date
+            && used.sum_insured_minor == spec.sum_insured_minor;
+        return if same {
+            Ok(())
+        } else {
+            Err(Reject::new("duplicate_option", format!("{} was used for something else", spec.reference)))
+        };
+    }
+    let product = catalog
+        .product(&policy.product_hash)
+        .ok_or_else(|| Reject::new("unknown_product", "product version not active"))?;
+    let Some(option) = product.cover(&spec.cover).and_then(|c| c.insurability_option.clone()) else {
+        return Err(Reject::new("no_option", format!("cover {} has no insurability option", spec.cover)));
+    };
+    if !option.events.contains(&spec.event) {
+        return Err(Reject::new(
+            "event_not_covered",
+            format!("{} is not an event the option is given for", spec.event),
+        ));
+    }
+    if spec.event_date > ctx.date || (ctx.date - spec.event_date).num_days() > i64::from(option.within_days) {
+        return Err(Reject::new(
+            "option_window",
+            format!("the option is used within {} days of the event", option.within_days),
+        ));
+    }
+    let Some(born) = policy
+        .lives
+        .get(&spec.life)
+        .filter(|l| l.in_force_on(ctx.date))
+        .and_then(|l| l.factors.as_of(ctx.date))
+        .and_then(|f| f.date_of_birth)
+    else {
+        return Err(Reject::new("unknown_life", format!("life {} is not on the policy", spec.life)));
+    };
+    if ic_product::schedule::age_on(born, ctx.date) >= option.to_age {
+        return Err(Reject::new("option_age", format!("the option ends at age {}", option.to_age)));
+    }
+    let theirs = |u: &&OptionUse| u.cover == spec.cover && u.life == spec.life;
+    if policy
+        .option_uses
+        .values()
+        .filter(theirs)
+        .any(|u| u.event == spec.event && u.event_date == spec.event_date)
+    {
+        return Err(Reject::new("option_used", "the option has already been used for this event"));
+    }
+    let uses = policy.option_uses.values().filter(theirs).count() as u32;
+    if uses >= option.max_uses {
+        return Err(Reject::new("options_exhausted", format!("the option can be used {} times", option.max_uses)));
+    }
+    // The terms and the measure are the cover the life started with.
+    let original: Vec<&Layer> = policy
+        .covers
+        .get(&spec.cover)
+        .map(|c| c.layers.iter().filter(|l| l.life == spec.life && l.origin == LayerOrigin::Original).collect())
+        .unwrap_or_default();
+    let Some(first) = original.iter().find(|l| l.in_force_on(ctx.date)) else {
+        return Err(Reject::new(
+            "unknown_cover",
+            format!("life {} does not hold cover {} from the start", spec.life, spec.cover),
+        ));
+    };
+    let began: i128 = original.iter().map(|l| i128::from(l.sum_insured_minor)).sum();
+    let scale = ic_money::dec_i128(10i128.pow(policy.currency.minor_digits()));
+    let share = ic_money::dec_i128(began) * option.max_percent_of_original.get() / ic_money::Dec::from(100i64) / scale;
+    let by_share = ic_money::round_to_money(share, policy.currency, ic_money::RoundingMode::Down)?.minor;
+    let most = i128::from(by_share.min(option.max_increase_minor));
+    if i128::from(spec.sum_insured_minor) > most {
+        return Err(Reject::new(
+            "option_limit",
+            format!("the most one use of the option adds is {most} in minor units"),
+        ));
+    }
+    let layer = UnderwrittenLayer {
+        policy: spec.policy.clone(),
+        cover: spec.cover.clone(),
+        life: spec.life.clone(),
+        sum_insured_minor: spec.sum_insured_minor,
+        loadings: first.loadings.clone(),
+        exclusions: first.exclusions.clone(),
+        reference: spec.reference.clone(),
+        start: None,
+    };
+    add_layer(ledger, catalog, policy, ctx, layer)?;
+    let id = policy.covers.get(&spec.cover).and_then(|c| c.layers.iter().map(|l| l.id).max()).unwrap_or(0);
+    ctx.emit(Event::InsurabilityOptionExercised {
+        policy: policy.id.clone(),
+        cover: spec.cover.clone(),
+        life: spec.life.clone(),
+        event: spec.event.clone(),
+        event_date: spec.event_date,
+        layer: id,
+        sum_insured_minor: spec.sum_insured_minor,
+        uses: uses + 1,
+        reference: spec.reference.clone(),
+    });
+    policy.option_uses.insert(
+        spec.reference,
+        OptionUse {
+            cover: spec.cover,
+            life: spec.life,
+            event: spec.event,
+            event_date: spec.event_date,
+            sum_insured_minor: spec.sum_insured_minor,
+            used_on: ctx.date,
+            layer: id,
+        },
+    );
     Ok(())
 }
 

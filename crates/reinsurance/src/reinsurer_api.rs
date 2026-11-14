@@ -18,7 +18,6 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query as Params, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -26,18 +25,16 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
 use ic_azure::blob::WormStore;
-use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use tokio::sync::RwLock;
 
 use crate::driver::{DriverError, Module};
 use crate::host::{Query, MAX_ANSWER};
 use crate::ReinsurerId;
 
 /// Where Entra ID issues tokens and publishes its signing keys.
-pub const ENTRA_AUTHORITY: &str = "https://login.microsoftonline.com";
+pub use ic_entra::ENTRA_AUTHORITY;
 
 /// The app role a reinsurer's client must hold.
 pub const READ_ROLE: &str = "Reinsurer.Statements.Read";
@@ -113,109 +110,34 @@ pub enum Denied {
     Keys(String),
 }
 
-#[derive(Debug, Deserialize)]
-struct Claims {
-    #[serde(default)]
-    azp: Option<String>,
-    #[serde(default)]
-    appid: Option<String>,
-    #[serde(default)]
-    roles: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Jwks {
-    keys: Vec<Jwk>,
-}
-
-#[derive(Debug, Deserialize)]
-struct Jwk {
-    kid: String,
-    #[serde(default)]
-    n: String,
-    #[serde(default)]
-    e: String,
-}
-
-type KeyCache = (BTreeMap<String, DecodingKey>, Option<Instant>);
-
-/// Who a token says is calling.
+/// Checks reinsurers' tokens with the shared validator (`crates/entra`)
+/// and knows which client is which reinsurer.
 #[derive(Clone)]
 pub struct ReinsurerAuth {
-    issuer: String,
-    audience: String,
-    jwks_url: String,
+    validator: ic_entra::Validator,
     clients: BTreeMap<String, ReinsurerId>,
-    http: reqwest::Client,
-    keys: Arc<RwLock<KeyCache>>,
 }
 
 impl ReinsurerAuth {
     pub fn new(config: &ApiConfig) -> Self {
-        let authority = config.authority.trim_end_matches('/');
         Self {
-            issuer: format!("{authority}/{}/v2.0", config.tenant),
-            audience: config.audience.clone(),
-            jwks_url: format!("{authority}/{}/discovery/v2.0/keys", config.tenant),
+            validator: ic_entra::Validator::new(&config.authority, &config.tenant, &config.audience),
             clients: config.clients.clone(),
-            http: ic_azure::http_client(),
-            keys: Arc::new(RwLock::new((BTreeMap::new(), None))),
         }
     }
 
-    /// The reinsurer and the client it called with.
     pub async fn authenticate(&self, headers: &HeaderMap) -> Result<(ReinsurerId, String), Denied> {
-        let token = headers
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().strip_prefix("Bearer "))
-            .map(str::trim)
-            .filter(|t| !t.is_empty())
-            .ok_or(Denied::Missing)?;
-        let kid = decode_header(token)
-            .map_err(|e| Denied::Invalid(e.to_string()))?
-            .kid
-            .ok_or_else(|| Denied::Invalid("no key id".into()))?;
-        let key = self.key(&kid).await?;
-        let mut validation = Validation::new(Algorithm::RS256);
-        validation.set_audience(&[&self.audience]);
-        validation.set_issuer(&[&self.issuer]);
-        let claims = decode::<Claims>(token, &key, &validation).map_err(|e| Denied::Invalid(e.to_string()))?.claims;
-        let client = claims.azp.or(claims.appid).ok_or_else(|| Denied::Invalid("the token names no client".into()))?;
+        let claims = self.validator.validate(headers).await.map_err(|e| match e {
+            ic_entra::AuthError::Missing => Denied::Missing,
+            ic_entra::AuthError::Invalid(why) => Denied::Invalid(why),
+            ic_entra::AuthError::Keys(why) => Denied::Keys(why),
+        })?;
+        let client = claims.client.ok_or_else(|| Denied::Invalid("the token names no client".into()))?;
         let reinsurer = self.clients.get(&client).cloned().ok_or_else(|| Denied::UnknownClient(client.clone()))?;
         if !claims.roles.iter().any(|r| r == READ_ROLE) {
             return Err(Denied::NoRole);
         }
         Ok((reinsurer, client))
-    }
-
-    /// The signing key for a key ID. Keys are cached for an hour and
-    /// fetched again, at most once a minute, when an unknown key ID appears
-    /// (Entra rotates its keys).
-    async fn key(&self, kid: &str) -> Result<DecodingKey, Denied> {
-        {
-            let cache = self.keys.read().await;
-            let fresh = cache.1.is_some_and(|t| t.elapsed() < Duration::from_secs(3600));
-            if let (Some(k), true) = (cache.0.get(kid), fresh) {
-                return Ok(k.clone());
-            }
-        }
-        let mut cache = self.keys.write().await;
-        if cache.1.is_none_or(|t| t.elapsed() > Duration::from_secs(60)) || cache.0.is_empty() {
-            let resp = self.http.get(&self.jwks_url).send().await.map_err(|e| Denied::Keys(e.to_string()))?;
-            let jwks: Jwks = resp.json().await.map_err(|e| Denied::Keys(e.to_string()))?;
-            cache.0 = jwks
-                .keys
-                .iter()
-                .filter_map(|k| DecodingKey::from_rsa_components(&k.n, &k.e).ok().map(|d| (k.kid.clone(), d)))
-                .collect();
-            cache.1 = Some(Instant::now());
-        }
-        cache
-            .0
-            .get(kid)
-            .cloned()
-            .ok_or_else(|| Denied::Invalid("token signed by an unknown key".into()))
     }
 }
 

@@ -30,7 +30,8 @@ spec:
           objectName: customers-index-key
           objectType: secret
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-customers
+          objectAlias: cluster-token
           objectType: secret
 ---
 apiVersion: v1

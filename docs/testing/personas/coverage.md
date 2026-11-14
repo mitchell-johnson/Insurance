@@ -56,7 +56,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
-| UW Underwriting, underwriting operations and delegated authority | 28 | 1 | 1 | 2 |
+| UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
 | CLM Claims and claims operations | 34 | 7 | 1 | 5 |
 | RI Reinsurance | 15 | 0 | 3 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 4 | 9 | 3 |
@@ -65,7 +65,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ADV Advisers and commission | 44 | 1 | 0 | 1 |
 | HLT Composable health product | 5 | 3 | 3 | 0 |
 | DSC Discounts and pricing components | 9 | 2 | 0 | 1 |
-| SVC Policy servicing | 5 | 5 | 16 | 5 |
+| SVC Policy servicing | 6 | 5 | 15 | 4 |
 | ANV The anniversary window | 3 | 2 | 14 | 3 |
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 10 | 10 | 1 | 4 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **339** | **99** | **139** | **103** |
+| **Total** | **341** | **99** | **137** | **101** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 34 | 25 | 10 |
 | B | 107 | 19 | 16 |
-| C | 196 | 52 | 98 |
+| C | 198 | 52 | 96 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -92,11 +92,10 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **COL** (2): COL-005, COL-023
 - **XFR** (2): XFR-007, XFR-009
 - **AUD** (1): AUD-012
-- **UW** (1): UW-030
 - **INV** (2): INV-018, INV-019
 - **GRP** (1): GRP-017
 - **JNT** (10): JNT-002, JNT-003, JNT-004, JNT-005, JNT-006, JNT-014, JNT-016, JNT-018, JNT-019, JNT-022
-- **SVC** (5): SVC-003, SVC-006, SVC-009, SVC-010, SVC-026
+- **SVC** (4): SVC-003, SVC-006, SVC-009, SVC-010
 - **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
 - **STF** (1): STF-013

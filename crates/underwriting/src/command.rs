@@ -390,6 +390,16 @@ pub enum Command {
     },
     /// The life confirms the recorded interview answers: now they are disclosure.
     ConfirmInterview(Box<SubmitDisclosure>),
+    /// The person holding an insurability option's case accepts the proof
+    /// of the life event, or does not (with why). Accepted, the extra cover
+    /// goes to the core with no underwriting; not accepted, the request ends.
+    CheckOptionEvidence {
+        case: String,
+        underwriter: String,
+        accepted: bool,
+        #[serde(default)]
+        note: String,
+    },
     ProposeDecision {
         case: String,
         underwriter: String,
@@ -596,6 +606,7 @@ impl Command {
             | RecordOpinion { .. }
             | RecordInterview { .. }
             | ProposeDecision { .. }
+            | CheckOptionEvidence { .. }
             | Countersign { .. }
             | ReleaseToReinsurer { .. }
             | RetryIssue { .. }
@@ -990,6 +1001,13 @@ pub enum Event {
     },
     ProposalWithdrawn {
         proposal: ProposalId,
+    },
+    /// A person checked the proof of the life event for an insurability option.
+    OptionEvidenceChecked {
+        proposal: ProposalId,
+        life: LifeId,
+        accepted: bool,
+        by: String,
     },
     IssueRequested {
         proposal: ProposalId,

@@ -268,8 +268,9 @@ async fn policy(State(s): State<Shared>, headers: HeaderMap, Path(number): Path<
     let today = found.business_date.unwrap_or(p.inception);
 
     // Staff servicing sees the whole policy. Everyone else sees what their
-    // relationship to it allows. Relationships come from the customer master;
-    // until that module exists only development mode can assert them.
+    // relationship to it allows, and this API knows of none outside
+    // development mode: people are served by the portal, whose directory is
+    // fed by the customer master (docs/decisions.md).
     let staff = caller.has_role("policy-servicing");
     let relationships: &[Relationship] = &caller.dev_relationships;
     let may = |kind: &str, subject: Option<&PartyId>, sensitive: bool| -> Result<bool, Problem> {
