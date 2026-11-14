@@ -780,6 +780,10 @@ pub struct FinanceState {
     /// The old system's figure for each migration control account and unit.
     #[serde(default, with = "crate::pairs")]
     pub cutover_totals: BTreeMap<(String, BalanceFamily), CutoverTotal>,
+    /// Each migration cohort: the business date it was opened and the one
+    /// it was signed off or abandoned, while its load sits in clearing.
+    #[serde(default)]
+    pub cohorts: BTreeMap<String, (NaiveDate, Option<NaiveDate>)>,
     idempotency: BTreeMap<String, StoredResult>,
 }
 
@@ -907,6 +911,7 @@ impl FinanceState {
             accounting_groups: BTreeMap::new(),
             ungrouped: BTreeMap::new(),
             cutover_totals: BTreeMap::new(),
+            cohorts: BTreeMap::new(),
             idempotency: BTreeMap::new(),
         }
     }
@@ -1079,6 +1084,7 @@ impl FinanceState {
                 // The mart takes the event as it arrives: it needs no chart.
                 self.mart.apply(&record).map_err(|e| Reject::new("mart", e.to_string()))?;
                 self.group_on_issue(&record);
+                self.track_cohort(&record);
                 self.inbox.entry(partition).or_default().push(*record);
                 // While stalled, events queue until the cause is fixed.
                 if !self.stalled.contains_key(&partition) {
@@ -1096,6 +1102,7 @@ impl FinanceState {
                     // In step with the feed just checked: the order cannot be wrong here.
                     self.mart.apply(record).ok();
                     self.group_on_issue(record);
+                    self.track_cohort(record);
                 }
                 Ok(())
             }
@@ -1380,6 +1387,21 @@ impl FinanceState {
             rule_version: config.version,
             assigned_on: today,
         })
+    }
+
+    /// Note when a migration cohort opens and when its load leaves clearing.
+    fn track_cohort(&mut self, record: &EventRecord) {
+        match &record.event {
+            Event::CohortOpened { cohort, .. } => {
+                self.cohorts.entry(cohort.clone()).or_insert((record.business_date, None));
+            }
+            Event::CohortSignedOff { cohort, .. } | Event::CohortAbandoned { cohort } => {
+                if let Some((_, done)) = self.cohorts.get_mut(cohort) {
+                    done.get_or_insert(record.business_date);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Place a policy in its accounting group on the event that issues it.

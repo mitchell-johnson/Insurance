@@ -912,6 +912,15 @@ impl Mart {
                 }
             }
             Event::Module { module, kind, subject, detail } if module == CLAIMS_MODULE => self.claim_fact(partition, date, kind, subject, detail),
+            // A policy brought over from the old system is not new business:
+            // its issue, recorded just before, is relabelled.
+            Event::PolicyMigrated { policy, .. } => {
+                for m in self.movements.iter_mut().rev().take_while(|m| m.business_date == date) {
+                    if m.partition == partition && &m.policy == policy && m.kind == "new_business" {
+                        m.kind = "migrated".to_string();
+                    }
+                }
+            }
             _ => {}
         }
         Ok(())

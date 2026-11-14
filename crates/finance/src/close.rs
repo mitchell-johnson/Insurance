@@ -127,6 +127,10 @@ pub struct CloseConfig {
     /// moves in the period the old system is loaded and must then stay still.
     #[serde(default)]
     pub migration_control: Vec<String>,
+    /// The accounts a migration cohort's load passes through. Each must be
+    /// at zero at the end of a period in which no cohort is still open.
+    #[serde(default)]
+    pub migration_clearing: Vec<String>,
     /// The tax accounts and the posting types the core may move each with.
     #[serde(default)]
     pub tax: Vec<TaxDecl>,
@@ -539,7 +543,7 @@ impl FinanceState {
     /// a movement in any later period means something was loaded, or
     /// reversed, after the balances were agreed with the old system.
     fn migration_moves(&self, period: PeriodId) -> Vec<String> {
-        let mut items = Vec::new();
+        let mut items = self.clearing_left(period);
         let accounts = self.close_config.as_ref().map(|c| c.migration_control.as_slice()).unwrap_or_default();
         for code in accounts {
             let Some(account) = self.chart.as_ref().and_then(|c| c.account(code)) else {
@@ -561,6 +565,37 @@ impl FinanceState {
                     "{code} {} had {amount} posted through it in {unit:?} in {period}; it was loaded in {cutover} and should be still",
                     account.name
                 ));
+            }
+        }
+        items
+    }
+
+    /// A migration clearing account with a balance at the end of a period
+    /// when every cohort opened by then had been signed off or abandoned.
+    fn clearing_left(&self, period: PeriodId) -> Vec<String> {
+        if period.is_adjustment() {
+            return Vec::new();
+        }
+        let end = period.end();
+        let open: Vec<&String> = self
+            .cohorts
+            .iter()
+            .filter(|(_, (opened, done))| *opened <= end && done.is_none_or(|d| d > end))
+            .map(|(c, _)| c)
+            .collect();
+        let accounts = self.close_config.as_ref().map(|c| c.migration_clearing.as_slice()).unwrap_or_default();
+        let mut items = Vec::new();
+        for code in accounts {
+            let mut held: std::collections::BTreeMap<ic_ledger::BalanceFamily, i128> = Default::default();
+            for row in self.trial_balance(period, None).into_iter().filter(|r| &r.account == code) {
+                *held.entry(row.unit).or_insert(0) += row.balance;
+            }
+            for (unit, balance) in held.into_iter().filter(|(_, b)| *b != 0) {
+                if open.is_empty() {
+                    items.push(format!(
+                        "migration clearing {code} holds {balance} in {unit:?} at the end of {period} with no cohort open: a signed-off or abandoned load did not clear"
+                    ));
+                }
             }
         }
         items
