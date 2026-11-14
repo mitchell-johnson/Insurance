@@ -84,7 +84,7 @@ pub async fn run_passes<M: Module, C: Core, I: Inbox, O: Outbound>(
     loop {
         let report = driver.pass(Utc::now()).await;
         if report.errors.is_empty() {
-            tracing::debug!(?report, "unit pricing pass");
+            tracing::info!(?report, "unit pricing pass");
         } else {
             tracing::warn!(?report, "unit pricing pass with errors");
         }

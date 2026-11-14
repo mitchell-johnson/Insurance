@@ -265,7 +265,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | INV-002 | full | `pricing/src/fund.rs::pricing_date_follows_cutoff_and_calendar` |
 | INV-003 | full | `sim/tests/investment.rs::orders_that_cannot_be_honoured_are_refused_when_placed` |
 | INV-004 | full | `sim/tests/investment.rs::a_switch_sells_then_buys_and_a_failed_order_does_not_stop_the_run` |
-| INV-005 | part | `pricing/tests/prices.rs::a_fund_follows_its_own_calendar` (pricing side; the switch's wait in pending cash is the core's) |
+| INV-005 | part | `pricing/tests/prices.rs::a_fund_follows_its_own_calendar` |
 | INV-006 | full | `pricing/src/strike.rs::units_on_issue_difference_blocks` |
 | INV-007 | full | `pricing/src/strike.rs::failed_checks_hold_the_price`<br>`pricing/tests/prices.rs::held_and_blocked_prices` |
 | INV-008 | full | `pricing/tests/prices.rs::price_runs_from_valuation_to_every_partition`<br>`pricing/tests/recalculation.rs::struck_prices_equal_an_exact_recalculation` |
