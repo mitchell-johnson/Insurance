@@ -444,7 +444,7 @@ fn a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid() {
     assert_eq!(p.paid_up["pu-1"].paid_up_minor, 47_500_47);
     // All but the first days of the third year's premium came back as credit.
     let credit = p.receivables.iter().map(|r| r.total_minor).filter(|t| *t < 0).sum::<i64>();
-    let third_year = p.receivables.iter().map(|r| r.total_minor).filter(|t| *t > 0).next_back().unwrap();
+    let third_year = p.receivables.iter().map(|r| r.total_minor).rfind(|t| *t > 0).unwrap();
     assert!(
         credit < 0 && -credit < third_year && -credit > third_year * 360 / 366,
         "{credit} of {third_year}"
