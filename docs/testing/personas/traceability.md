@@ -257,6 +257,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | RI-013 | full | `reinsurance/tests/replay.rs::reconciliation_notices_damage` |
 | RI-014 | full | `reinsurance/tests/claims.rs::large_claims_are_notified_and_consent_is_tracked`<br>`claims/tests/suite/controls.rs::a_reinsurers_consent_holds_admission_and_a_refusal_goes_to_a_senior` |
 | RI-015 | full | `reinsurance/tests/claims.rs::periodic_and_ex_gratia_payments_follow_the_treaty` |
+| RI-016 | full | `reinsurance/tests/accumulation.rs::replacement_cover_carries_on_the_cession_it_replaces` |
 | RI-017 | full | `reinsurance/tests/statements.rs::a_treaty_comparison_looks_only_at_cover_on_that_treaty`<br>`reinsurance/tests/statements.rs::recapture_and_a_negotiated_move_change_cover_from_a_date` |
 
 ## INV Unit pricing and the investment ledger
