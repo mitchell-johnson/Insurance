@@ -182,6 +182,7 @@ impl DistributionState {
         self.allocations_by_date.retain(|_, v| !v.is_empty());
         self.receipts.retain(|k, _| !k.starts_with(&prefix));
         self.premiums.remove(policy);
+        self.migrations.remove(policy);
         self.history.policies_let_go.insert(policy.clone());
     }
 }

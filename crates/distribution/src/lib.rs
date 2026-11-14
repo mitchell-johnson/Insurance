@@ -26,6 +26,7 @@ pub mod workbench;
 
 mod commission;
 pub mod config;
+pub mod migration;
 pub mod newbusiness;
 mod replacement;
 mod statement;

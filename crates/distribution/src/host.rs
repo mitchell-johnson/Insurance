@@ -102,6 +102,11 @@ pub enum Question {
         from: NaiveDate,
         to: NaiveDate,
     },
+    /// What the migration load did for a migrated policy: the agent code,
+    /// the assumption recorded and the check against what was last paid.
+    Migration {
+        policy: PolicyId,
+    },
     /// Every dated link in the structure: who sits under, is licensed by or
     /// is paid for whom, and from when to when.
     Relations,
@@ -191,6 +196,7 @@ pub fn ask(state: &DistributionState, question: Question) -> Result<Value, Strin
                 .collect();
             Ok(Value::Array(rows))
         }
+        Question::Migration { policy } => value(&state.migrations.get(&policy)),
         Question::ConductFacts { from, to } => Ok(json!(state.conduct_facts(from, to))),
         Question::ConductCases => {
             let structure = &state.config.structure;

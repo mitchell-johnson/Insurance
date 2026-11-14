@@ -317,6 +317,10 @@ pub struct PolicyRecord {
     /// business date it was submitted on. Read by clawback by cause.
     #[serde(default)]
     pub altered_by: Option<(EngagementId, NaiveDate)>,
+    /// Loaded from another system, with its cutover date: not a new sale,
+    /// so its layers earn no initial commission and start no clawback.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

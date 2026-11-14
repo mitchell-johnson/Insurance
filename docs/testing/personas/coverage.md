@@ -76,15 +76,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CFG Configuration operations and the actuary's interface | 8 | 3 | 3 | 1 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
-| MIG Migration | 7 | 3 | 8 | 8 |
-| **Total** | **390** | **85** | **102** | **83** |
+| MIG Migration | 8 | 3 | 7 | 8 |
+| **Total** | **391** | **85** | **101** | **83** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 37 | 26 | 6 |
 | B | 115 | 15 | 12 |
 | C | 231 | 41 | 74 |
-| D | 7 | 3 | 10 |
+| D | 8 | 3 | 9 |
 
 ### Still to build, by owner
 
@@ -92,14 +92,14 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 
 | Owner | Rows left | Priority 1 |
 | --- | ---: | ---: |
-| Core | 174 | 78 |
+| Core | 173 | 78 |
 | Portal and app services | 5 | 3 |
 | Unit pricing | 5 | 1 |
 | Reinsurance | 2 | 0 |
 | Underwriting and new business | 1 | 1 |
-| **Total** | **187** | **83** |
+| **Total** | **186** | **83** |
 
-##### Core (174)
+##### Core (173)
 
 | Row | Built | Priority | Scenario |
 | --- | --- | ---: | --- |
@@ -233,7 +233,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | LED-015 | part | 2 | Receipt logged at 23:59:58 and another at 00:00:02 around the cutoff |
 | LED-017 | none | 2 | Premium received in EUR for an NZD policy |
 | LED-018 | none | 2 | Build with a function in the state machine that reads the clock |
-| MIG-010 | none | 2 | Legacy single agent code |
 | MIG-016 | none | 2 | Surrender basis held in a workbook |
 | POL-011 | part | 2 | Date of birth corrected with a past effective date |
 | PRD-009 | none | 2 | Family health rating with five children where the product charges for the first three |

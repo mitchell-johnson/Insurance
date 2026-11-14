@@ -184,6 +184,7 @@ impl DistributionState {
                     last_clawback: None,
                     adviser_change_setting: None,
                     altered_by: None,
+                    migrated: None,
                     lives: lives.into_iter().filter_map(|l| l.party.map(|p| (l.life.0, p))).collect(),
                 });
                 for info in layers {
@@ -194,6 +195,7 @@ impl DistributionState {
                 }
                 self.attribute_new_business(ctx, &policy);
             }
+            CoreEvent::PolicyMigrated { policy, cutover, .. } => self.policy_migrated(&policy, cutover),
             CoreEvent::LayerAdded {
                 policy,
                 layer,
