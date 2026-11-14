@@ -11,6 +11,19 @@ That one idea gives the properties an insurer's core needs:
 - **Everything is explainable.** The ledger is append-only and hash-chained. Policy state can be rebuilt by replaying the log.
 - **Tampering shows.** Each day's ledger heads are folded into a Merkle root, signed with a Key Vault key and written to immutable storage.
 
+### Diagrams
+
+Each is drawn from the code, manifests and templates on main; the source is the HTML file beside the picture, rendered with `node tools/render_diagrams.js`. Edit the HTML, never the PNG, and redraw when a process, module or Azure resource is added or removed.
+
+- [How the system is put together](architecture/system-overview.png): the front doors, the people master as a separate system, the ledger cluster with its partitions and the twelve module groups, the drivers and the close, Azure services and partners.
+- [The Azure deployment](architecture/azure-deployment.png): what `infra/main.bicep` and each module template create, and the workloads on AKS.
+- [How a command is applied, and how a day is closed](architecture/command-path.png): one command from caller to ledger, what the leader does after, and the steps of the daily close.
+- [Integrating the core with an existing estate](integration/integration-map.png): what can be swapped, and the seams (`integration.md`).
+
+**Designed, built, deployed.** Everything drawn solid is built and tested on main. Nothing has been deployed to Azure: the templates compile and the manifests render in CI, and the whole arrangement runs on one machine under Docker Compose (`deploy/compose`). Temporal hosting, the bank, the AIA Vitality feed and a second and third region are designed and not connected; `decisions.md` has each.
+
+![How the system is put together](architecture/system-overview.png)
+
 ## State of the build and hand-over
 
 This document is shared by every area of the build. The sections above the line "Modules beside the core" describe how the core works. Below it, each area has one section of its own, headed with the area's name, that says what is built and where, what is not, and what a person would need to finish it. An area edits only its own section. `docs/decisions.md` is the list of known gaps and open decisions, one entry per subject, and wins where the two disagree on detail.

@@ -1,0 +1,119 @@
+<!doctype html><html><head><meta charset="utf-8"><title>System overview</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;font:14px/1.35 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1d2330}
+.page{width:1640px;padding:28px 32px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14px}
+.band{border-radius:12px;padding:12px 14px}
+.bl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#5a6372;font-weight:700;margin-bottom:8px}
+.row{display:flex;gap:10px}
+.b{border-radius:9px;padding:9px 11px;background:#fff;border:1.5px solid #c9ced8;flex:1}
+.b h3{margin:0 0 3px;font-size:14.5px}.b h3 code{font-size:13px}.b p{margin:0;font-size:12px;color:#454d5c}
+.b code,.conn code,.bus code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;border-radius:3px}
+.core{background:#26303f;border-color:#26303f;color:#fff}.core p{color:#d5dbe6}.core code{background:#3a4556;color:#fff}
+.svc{background:#e6efff;border-color:#4f7fd9}
+.mod{background:#e5f6ec;border-color:#2f9d62}
+.az{background:#fff3df;border-color:#d68a1a}
+.ext{background:#fff;border-color:#9aa3b2}
+.nb{border-style:dashed}
+.tag{display:inline-block;font-size:10.5px;font-weight:700;border-radius:4px;padding:1px 5px;margin-left:4px;vertical-align:1px}
+.tn{background:#fff;color:#b23b3b;border:1px dashed #b23b3b}
+.conn{display:flex;justify-content:center;gap:60px;padding:6px 0;color:#3b4454;font-size:12.5px}
+.conn span{display:flex;align-items:center;gap:6px}.arr{font-size:18px;color:#7a8394}
+.cluster{border:2px solid #26303f;background:#eceff4;border-radius:14px;padding:12px 14px}
+.grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.grid4{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.legend{display:flex;gap:18px;margin-top:16px;font-size:12.5px;align-items:center;flex-wrap:wrap}
+.sw{display:inline-block;width:16px;height:12px;border-radius:3px;border:1.5px solid;vertical-align:-1px;margin-right:5px}
+.bus{background:#fff;border:1.5px solid #26303f;border-radius:9px;padding:7px 11px;margin:9px 0;font-size:12.5px;display:flex;justify-content:space-between}
+.banner{background:#fff4f4;border:1.5px dashed #b23b3b;color:#7a2424;border-radius:9px;padding:8px 12px;font-size:13px;margin-bottom:14px}
+</style></head><body><div class="page">
+<h1>The insurance core: how the system is put together</h1>
+<p class="sub">Read from the code, manifests and templates on main, 14 Nov 2026. Every process and module drawn solid is built and tested on main. Dashed means designed but not built or not connected.</p>
+<div class="banner"><b>Nothing is deployed.</b> The Azure templates (<code>infra/*.bicep</code>) and Kubernetes manifests (<code>deploy/k8s</code>) compile in CI, and the whole arrangement runs on one machine under Docker Compose, but no Azure subscription has been deployed to yet.</div>
+
+<div class="band"><div class="bl">People and their systems</div><div class="row">
+<div class="b ext"><h3>Customers</h3><p>The bank's app calls <code>/app/v1</code> (API and offline sync). The native app is not in this repository.</p></div>
+<div class="b ext"><h3>Advisers and employers</h3><p>Web pages <code>/adviser</code>, <code>/employer</code>; adviser platforms on <code>/adviser/v1</code>. Employer member files to group schemes.</p></div>
+<div class="b ext"><h3>Staff and operations</h3><p>Servicing console and one console per module, <code>/ops</code>, public <code>/status</code>.</p></div>
+<div class="b ext"><h3>Insurer's own systems</h3><p><code>POST /v1/commands</code> on the core API under an Entra app role that is the caller name.</p></div>
+<div class="b az"><h3>Microsoft Entra ID</h3><p>Workforce tenant for staff and workloads; External ID tenant for customers, advisers and employers. Registrations made by <code>deploy/entra/apps.sh</code>.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>HTTPS with Entra tokens, through the ingress controller</span></div>
+
+<div class="band"><div class="bl">Front doors (stateless Deployments on AKS)</div><div class="row">
+<div class="b svc"><h3>Portal service <code>ic-portal</code></h3><p>Every web page and app API (<code>crates/channels</code>). Maps a sign-in to a party ID, checks it with Cedar policies, forwards to the module or service that owns the work.</p></div>
+<div class="b svc"><h3>Core API <code>ic-api</code></h3><p>Checks the Entra token and role, finds the partition, proposes the command to its leader with the caller's idempotency key. Asks the people master before value leaves a policy.</p></div>
+<div class="b svc"><h3>Intake <code>ic-underwriting-intake</code></h3><p>Takes health disclosures and evidence into the clinical store, each person's record under a key of their own.</p></div>
+<div class="b svc"><h3>Reinsurer API <code>ic-reinsurance</code></h3><p>Statements and listings to reinsurers by client credentials, beside SFTP collection.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>Every process below names a person only by party ID (<code>pty_…</code>) and asks the people master for anything personal</span></div>
+
+<div class="band" style="background:#e5f6ec;border:2.5px solid #2f9d62">
+<div class="bl" style="color:#1f6e44">People master: a separate system, not on the ledger (customer master, <code>ic-customers</code>, <code>crates/customers</code>)</div>
+<div class="row">
+<div class="b mod" style="flex:1.3;background:#fff"><h3>Customer master <code>ic-customers</code></h3><p>Parties, relationships, contact points, vulnerability, representatives, due diligence, the person's own spending hold, retention and erasure. Its own PostgreSQL with per-party encryption keys wrapped in Key Vault, because personal data must be erasable and the ledger never forgets.</p></div>
+<div class="b mod" style="background:#fff"><h3>Asked by</h3><p>group (<code>/v1/parties/match</code>), documents (<code>contact-points</code>), payments (<code>spending-hold</code>), core API (<code>routing</code>, <code>authority</code>), portal, new business (<code>due-diligence</code>).</p></div>
+<div class="b mod" style="background:#fff"><h3>Tells</h3><p>Deaths to every partition (<code>RecordDeath</code>), holds (<code>SetOwnerHold</code>), owners and dependants to the channels module, changes on <code>customer-events</code> and <code>customer-priority</code>.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">↓</span>Commands: a named caller, a stable idempotency key, the workload's own cluster token</span><span><span class="arr">↑</span>Events: gapless per partition, no personal data</span></div>
+
+<div class="cluster"><div class="bl" style="color:#26303f">Ledger cluster: <code>ic-node</code> StatefulSet × 3, one per availability zone of New Zealand North. Raft (openraft) replicates every group; a majority must have an entry on disk before it is acknowledged.</div>
+<div class="row" style="gap:9px">
+<div class="b core" style="flex:1.4"><h3>64 partitions: the policy engine and the ledger</h3><p>Each partition is its own Raft group, log, business date and double-entry hash-chained ledger: policies, products and rates as Starlark data, billing, arrears, lapses, loans, the investment ledger, cohort migration. The only writer of policies and money.</p></div>
+<div class="b core"><h3>Claims engine</h3><p><code>crates/claims</code> inside each partition, so a decision and its postings commit together. Cross-partition offsets go as messages.</p></div>
+<div class="b core"><h3>Read models</h3><p><code>crates/readmodel</code>: policy directory, life index, billing view, audience scope, inside replicated state.</p></div>
+<div class="b core"><h3>Housekeeping by each leader</h3><p>Seals journal segments to Blob, publishes events to Event Hubs, delivers cross-partition messages, hands leadership back after a region returns (fail-back).</p></div>
+</div>
+<div class="bus"><b>Module host <code>ic_raft::module</code></b><span>each module is its own Raft group on the same nodes</span><span>reads the core's events, posts to the core through an outbox</span><span>listed in <code>ic_node::modules()</code></span></div>
+<div class="grid">
+<div class="b mod"><h3>reinsurance</h3><p>Per-life accumulation, cessions, recoveries, reinsurer accounts.</p></div>
+<div class="b mod"><h3>underwriting</h3><p>Proposals, rules, cases and authority, offers, issue.</p></div>
+<div class="b mod"><h3>group</h3><p>Schemes, members, files, billing groups, leavers.</p></div>
+<div class="b mod"><h3>distribution</h3><p>Advisers, commission, clawback, held balances.</p></div>
+<div class="b mod"><h3>payments</h3><p>Debits, payees, runs, refunds, reconciliation (<code>payments-service</code>).</p></div>
+<div class="b mod"><h3>collections</h3><p>Dunning, arrangements, hardship.</p></div>
+<div class="b mod"><h3>finance</h3><p>Subledger, journals, month-end close, returns.</p></div>
+<div class="b mod"><h3>unit-pricing</h3><p>Valuations, price checks, approval, price errors.</p></div>
+<div class="b mod"><h3>documents</h3><p>Templates, vault, delivery proof, notice clocks.</p></div>
+<div class="b mod"><h3>complaints</h3><p>Register, timers, forums, conduct cases.</p></div>
+<div class="b mod"><h3>channels</h3><p>Who relates to which policy, devices, staff authorisation.</p></div>
+<div class="b mod"><h3>wellness</h3><p>AIA Vitality discount per member.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>Drivers: stateless processes that carry a module's work to and from the outside world, each under its own managed identity</span></div>
+
+<div class="band"><div class="bl">Drivers and the daily close (stateless Deployments and CronJobs on AKS)</div><div class="grid4">
+<div class="b svc"><h3><code>ic-worker</code> on Temporal</h3><p>The end-of-day close (CronJob <code>ic-close</code>, 00:05 NZ) and unit orders (<code>ic-unit-orders</code>, every 15 min). Signs the day's Merkle root with Key Vault.</p></div>
+<div class="b svc"><h3><code>ic-payments-pump</code></h3><p>Bank channels (ISO 20022 over mTLS), payment evidence, the weekly evacuation drill.</p></div>
+<div class="b svc"><h3><code>ic-documents</code></h3><p>Rendering, the encrypted vault, email and SMS by Communication Services, print outbox.</p></div>
+<div class="b svc"><h3><code>ic-group</code></h3><p>Employer files through a scanned quarantine, matching joiners with the people master.</p></div>
+<div class="b svc"><h3><code>ic-underwriting</code></h3><p>Carries underwriting's effects to reinsurance, the core and group; daily sweep; notice hubs.</p></div>
+<div class="b svc"><h3><code>ic-reinsurance</code></h3><p>Cessions to partitions, statements to write-once Blob and SFTP, exceptions to a hub.</p></div>
+<div class="b svc"><h3><code>ic-unit-pricing</code></h3><p>Scanned valuation files in, prices to every partition, holdings extract out.</p></div>
+<div class="b svc"><h3><code>ic-finance-close</code></h3><p>Valuation and experience extracts to write-once Blob, checked against signed roots.</p></div>
+</div></div>
+<div class="conn"><span><span class="arr">⇅</span>Azure services and partners</span></div>
+
+<div class="band"><div class="bl">Azure platform (templates in <code>infra/</code>, one region: New Zealand North)</div><div class="row">
+<div class="b az"><h3>Key Vault</h3><p>Merkle-root signing key, bank signing keys, cluster tokens, wrapping keys (HSM for clinical).</p></div>
+<div class="b az"><h3>Blob Storage</h3><p>Write-once: Merkle roots, sealed segments, payment evidence, reinsurance records, extracts, document vault. Clinical store erasable.</p></div>
+<div class="b az"><h3>Event Hubs</h3><p><code>policy-events</code> plus customer, documents, complaints, group, reinsurance and underwriting hubs.</p></div>
+<div class="b az"><h3>PostgreSQL</h3><p>The customer master's own server. A second, optional, for a self-hosted Temporal.</p></div>
+<div class="b az"><h3>AKS, ACR, Monitor</h3><p>Workload ID per process, WireGuard between pods, Log Analytics, App Insights, log alerts.</p></div>
+<div class="b az nb"><h3>Temporal <span class="tag tn">UNDECIDED</span></h3><p>Temporal Cloud or self-hosted on AKS: the insurer's choice (<code>docs/decisions.md</code>).</p></div>
+</div></div>
+<div class="row" style="margin-top:10px;padding:0 14px">
+<div class="b ext nb"><h3>Bank</h3><p>pain.001/008 out, pain.002, camt.053/054 in. A fake bank only so far.</p></div>
+<div class="b ext"><h3>Reinsurers</h3><p>SFTP on Azure Storage and the reinsurer API.</p></div>
+<div class="b ext"><h3>Fund administrator</h3><p>Valuations over HTTPS under its own Entra identity. Not onboarded.</p></div>
+<div class="b ext nb"><h3>AIA Vitality feed</h3><p>Intake not built; format not known.</p></div>
+<div class="b ext"><h3>Inland Revenue, print house</h3><p>Withheld tax paid through payments; print collected from an outbox container.</p></div>
+<div class="b ext nb"><h3>Second and third region</h3><p>Fail-back is built; voters elsewhere are not provisioned.</p></div>
+</div>
+
+<div class="legend"><b>Key</b>
+<span><span class="sw" style="background:#26303f;border-color:#26303f"></span>Core, inside every partition</span>
+<span><span class="sw" style="background:#e5f6ec;border-color:#2f9d62"></span>Module group on the ledger nodes, or the people master</span>
+<span><span class="sw" style="background:#e6efff;border-color:#4f7fd9"></span>Stateless process on AKS</span>
+<span><span class="sw" style="background:#fff3df;border-color:#d68a1a"></span>Azure service</span>
+<span><span class="sw" style="background:#fff;border-color:#9aa3b2;border-style:dashed"></span>Designed, not built or not connected</span>
+</div>
+</div></body></html>

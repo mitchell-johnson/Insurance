@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Command path</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;font:14px/1.35 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1d2330}
+.page{width:1640px;padding:28px 32px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 18px;font-size:14px}
+h2{font-size:15px;margin:18px 0 8px;letter-spacing:.02em}
+.flow{display:flex;align-items:stretch;gap:0}
+.b{border-radius:9px;padding:9px 11px;background:#fff;border:1.5px solid #c9ced8;flex:1;position:relative}
+.b h3{margin:0 0 4px;font-size:14px}.b h3 code{font-size:13px}.b p{margin:0;font-size:12px;color:#454d5c}
+.n{display:inline-block;width:20px;height:20px;border-radius:50%;background:#26303f;color:#fff;font-size:11.5px;font-weight:700;text-align:center;line-height:20px;margin-right:5px;vertical-align:1px}
+code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;border-radius:3px}
+.core{background:#26303f;border-color:#26303f;color:#fff}.core p{color:#d5dbe6}.core code{background:#3a4556;color:#fff}.core .n{background:#fff;color:#26303f}
+.svc{background:#e6efff;border-color:#4f7fd9}
+.mod{background:#e5f6ec;border-color:#2f9d62}
+.az{background:#fff3df;border-color:#d68a1a}
+.ext{background:#fff;border-color:#9aa3b2}
+.ar{display:flex;align-items:center;justify-content:center;width:34px;color:#7a8394;font-size:22px;flex:none}
+.note{font-size:12.5px;color:#3b4454;background:#fff;border:1.5px solid #c9ced8;border-radius:9px;padding:8px 12px;margin-top:9px}
+</style></head><body><div class="page">
+<h1>How a command is applied, and how a day is closed</h1>
+<p class="sub">Read from the code on main, 14 Nov 2026 (<code>crates/api</code>, <code>crates/raft</code>, <code>crates/core</code>, <code>crates/workflows</code>). The same path serves every caller: a person through the portal, the insurer's own systems, a module's outbox, the close.</p>
+
+<h2>One command, from caller to ledger</h2>
+<div class="flow">
+<div class="b ext"><h3><span class="n">1</span>Caller</h3><p>Sends a typed command with an idempotency key it derives from its own state, so a retry after a timeout applies once.</p></div>
+<div class="ar">→</div>
+<div class="b svc"><h3><span class="n">2</span><code>ic-api</code></h3><p>Checks the Entra token and that the role may send this command (<code>allowed_callers()</code>). Value leaving a policy is put to the people master first.</p></div>
+<div class="ar">→</div>
+<div class="b svc"><h3><span class="n">3</span>Route</h3><p>Finds the partition: by group (a fixed hash of its ID, 64 partitions), by policy, or by asking every partition for a policy number.</p></div>
+<div class="ar">→</div>
+<div class="b core"><h3><span class="n">4</span>Partition leader</h3><p>Appends to its Raft log. A majority of the three nodes must <code>fsync</code> the entry before it commits. A leader change mid-way is retried with the same key.</p></div>
+<div class="ar">→</div>
+<div class="b core"><h3><span class="n">5</span>State machine</h3><p>Applies the entry on every replica: policy state, double-entry postings on the hash chain, claims, read models. No clock, no randomness, bounded work. Same log, same state hash.</p></div>
+<div class="ar">→</div>
+<div class="b ext"><h3><span class="n">6</span>Reply</h3><p>The result, or the original result for a repeated key. <code>503</code> with <code>Retry-After</code> if there is no majority; nothing acknowledged is ever lost.</p></div>
+</div>
+
+<h2>What the partition leader then does, at least once and resumed by the next leader</h2>
+<div class="flow">
+<div class="b core"><h3><span class="n">7</span>Events</h3><p>A gapless stream <code>EventRecord {partition, seq}</code>, no personal data, published to Event Hubs <code>policy-events</code>.</p></div>
+<div class="ar">→</div>
+<div class="b mod"><h3><span class="n">8</span>Modules read them</h3><p>Each module group on the nodes turns events into its own commands, keeps a checkpoint per partition and asks for gaps.</p></div>
+<div class="ar">→</div>
+<div class="b mod"><h3><span class="n">9</span>Module outbox</h3><p>Commands a module owes the core (commission, payments settled, prices, discounts) leave through its outbox and re-enter at step 4 as a named caller.</p></div>
+<div class="ar">→</div>
+<div class="b svc"><h3><span class="n">10</span>Drivers</h3><p>Stateless processes act on a module's outbox outside: the bank, letters, files to reinsurers, extracts. Each result comes back as a command.</p></div>
+<div class="ar">→</div>
+<div class="b core"><h3><span class="n">11</span>Cross-partition</h3><p>Policy transfers and claims offsets go as messages retried until acknowledged, with money held in transit and checked daily.</p></div>
+<div class="ar">→</div>
+<div class="b az"><h3><span class="n">12</span>Sealing</h3><p>Finished stretches of the journal sealed to write-once Blob Storage (<code>cold-segments</code>).</p></div>
+</div>
+
+<h2>The daily close (CronJob <code>ic-close</code> at 00:05 New Zealand time, a Temporal workflow on <code>ic-worker</code>)</h2>
+<div class="flow">
+<div class="b svc"><h3><span class="n">A</span>Cutoff</h3><p>Each partition stops taking the day, for every business day whose midnight has passed, oldest first. The date moves only here; nothing reads the wall clock.</p></div>
+<div class="ar">→</div>
+<div class="b core"><h3><span class="n">B</span>Rounds, in chunks</h3><p>Policy work per partition in bounded chunks: billing, arrears and lapses (held until a proven lapse notice allows), earning, anniversaries. Then unit orders at struck prices.</p></div>
+<div class="ar">→</div>
+<div class="b core"><h3><span class="n">C</span>Reconciliation</h3><p>Each partition's books are checked. A break fails the close, the day stays open and the next is not started.</p></div>
+<div class="ar">→</div>
+<div class="b az"><h3><span class="n">D</span>Signed Merkle root</h3><p>Every partition's ledger head folded into a root, signed with the Key Vault key, written to write-once <code>merkle-roots</code>.</p></div>
+<div class="ar">→</div>
+<div class="b svc"><h3><span class="n">E</span>Next day open</h3><p>Each step is safe to repeat by any worker; a worker that dies is replaced from Temporal's record of the last finished step.</p></div>
+</div>
+<div class="note">Proving a day later: recompute the root from the ledger heads at that date and check the signature against the key version named in the blob (<code>docs/operations.md</code>, "Proving a closed day"). Finance's month-end close is a separate module process (<code>ic-finance-close</code>) that reads these signed roots.</div>
+</div></body></html>

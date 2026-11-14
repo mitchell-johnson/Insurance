@@ -1,0 +1,108 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Azure deployment</title><style>
+*{box-sizing:border-box}body{margin:0;background:#f6f7f9;font:14px/1.35 -apple-system,"Segoe UI",Helvetica,Arial,sans-serif;color:#1d2330}
+.page{width:1640px;padding:28px 32px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:#5a6372;margin:0 0 14px;font-size:14px}
+.bl{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#5a6372;font-weight:700;margin-bottom:8px}
+.row{display:flex;gap:10px}
+.b{border-radius:9px;padding:8px 10px;background:#fff;border:1.5px solid #c9ced8;flex:1}
+.b h3{margin:0 0 3px;font-size:14px}.b h3 code{font-size:13px}.b p{margin:0;font-size:12px;color:#454d5c}
+code{font:11.5px ui-monospace,Menlo,monospace;background:#eef0f4;padding:0 3px;border-radius:3px}
+.k8s{background:#e6efff;border-color:#4f7fd9}
+.node{background:#26303f;border-color:#26303f;color:#fff}.node p{color:#d5dbe6}.node code{background:#3a4556;color:#fff}
+.az{background:#fff3df;border-color:#d68a1a}
+.ext{background:#fff;border-color:#9aa3b2}
+.nb{border-style:dashed}
+.rg{border:2px solid #d68a1a;border-radius:14px;padding:12px 14px;background:#fffaf2}
+.aks{border:2px solid #4f7fd9;border-radius:12px;padding:10px 12px;background:#f3f7ff;margin-bottom:12px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+.tpl{border:1.5px solid #d68a1a;border-radius:10px;background:#fff;padding:8px 10px}
+.tpl h4{margin:0 0 5px;font-size:13px}.tpl h4 code{font-size:12px}
+.tpl ul{margin:0;padding-left:16px;font-size:11.8px;color:#454d5c}.tpl li{margin:1px 0}
+.who{font-size:11.5px;color:#1f4fa3;margin-top:5px}
+.banner{background:#fff4f4;border:1.5px dashed #b23b3b;color:#7a2424;border-radius:9px;padding:8px 12px;font-size:13px;margin-bottom:14px}
+.legend{display:flex;gap:18px;margin-top:14px;font-size:12.5px;align-items:center;flex-wrap:wrap}
+.sw{display:inline-block;width:16px;height:12px;border-radius:3px;border:1.5px solid;vertical-align:-1px;margin-right:5px}
+.zones{display:flex;gap:9px;margin-bottom:9px}
+</style></head><body><div class="page">
+<h1>The insurance core on Azure: what the templates create</h1>
+<p class="sub">Read from <code>infra/*.bicep</code> and <code>deploy/k8s</code> on main, 14 Nov 2026. Workloads sign in with managed identities federated to their Kubernetes service accounts (Workload ID) and reach the ledger nodes with their own cluster token; there are no account keys or connection strings. Two exceptions: <code>ic-underwriting</code> runs as <code>ic-worker</code>'s service account and token, and <code>ic-admin</code> and <code>ic-bootstrap</code> run as <code>ic-node</code>'s.</p>
+<div class="banner"><b>Designed and templated, not deployed.</b> CI compiles every template and renders the manifests on each push. No subscription has been deployed to, so nothing here has run on Azure. <code>main.bicep</code> is deployed first; each module template is deployed on its own into the same resource group (<code>docs/operations.md</code>, "First deployment").</div>
+
+<div class="rg"><div class="bl" style="color:#9a5b05">Resource group, New Zealand North (one region; voters in a second and third region are not provisioned)</div>
+
+<div class="aks"><div class="bl" style="color:#1f4fa3">AKS cluster (<code>main.bicep</code>): system pool across zones 1, 2, 3; namespace <code>insurance-core</code>; WireGuard between pods; network policy admits the ingress namespace only to front doors</div>
+<div class="zones">
+<div class="b node"><h3><code>ic-node-1</code> · zone 1</h3><p>StatefulSet pod with a managed disk: replicas of all 64 partitions and the 12 module groups.</p></div>
+<div class="b node"><h3><code>ic-node-2</code> · zone 2</h3><p>Same. A disruption budget keeps two of three up during upgrades.</p></div>
+<div class="b node"><h3><code>ic-node-3</code> · zone 3</h3><p>Same. A node that loses its disk is replaced under a new number.</p></div>
+</div>
+<div class="grid">
+<div class="b k8s"><h3>Deployments</h3><p><code>ic-api</code>, <code>ic-portal</code>, <code>ic-worker</code>, <code>ic-customers</code>, <code>ic-documents</code>, <code>ic-group</code>, <code>ic-payments-pump</code>, <code>ic-reinsurance</code>, <code>ic-underwriting</code>, <code>ic-underwriting-intake</code>, <code>ic-unit-pricing</code>, <code>ic-finance-close</code>; each with a disruption budget.</p></div>
+<div class="b k8s"><h3>CronJobs</h3><p><code>ic-close</code> 00:05 NZ · <code>ic-unit-orders</code> every 15 min · <code>ic-payments-drill</code> Tuesday 09:30 · <code>ic-admin</code> suspended, run by hand.</p></div>
+<div class="b k8s"><h3>Job and access</h3><p><code>ic-bootstrap</code> forms the groups, opens the first date, activates products. ConfigMap <code>ic-cluster-access</code>: each workload's grant (report mode until enforced).</p></div>
+<div class="b k8s nb"><h3>Temporal (undecided)</h3><p>Temporal Cloud, or self-hosted here with the optional PostgreSQL (<code>deployPostgres</code>). The manifests hold a placeholder address.</p></div>
+</div></div>
+
+<div class="grid">
+<div class="tpl"><h4><code>main.bicep</code>: the core platform</h4><ul>
+<li>Container Registry; Log Analytics and Application Insights</li>
+<li>Storage: <code>merkle-roots</code>, <code>cold-segments</code> (write-once, cool tier), <code>payments-evidence</code> (write-once)</li>
+<li>Key Vault (premium): <code>merkle-root-signing</code>, cluster tokens</li>
+<li>Payments vault: bank signing key and bank credentials</li>
+<li>Event Hubs namespace, hub <code>policy-events</code></li>
+<li>PostgreSQL for Temporal, off by default</li></ul>
+<div class="who">Identities: ic-node, ic-worker (also ic-underwriting), ic-api, ic-portal, ic-payments</div></div>
+<div class="tpl"><h4><code>customers.bicep</code>: the people master</h4><ul>
+<li>PostgreSQL Flexible Server of its own, Entra sign-in only, TLS required, zone-redundant in prod</li>
+<li>Key Vault key <code>customers-kek</code>; secret <code>customers-index-key</code></li>
+<li>Hubs <code>customer-events</code>, <code>customer-priority</code></li>
+<li>Write-once <code>customers-erasures</code> register (10-year lock at first prod deploy)</li></ul>
+<div class="who">Identity: ic-customers</div></div>
+<div class="tpl"><h4><code>documents.bicep</code></h4><ul>
+<li>Storage: <code>documents-vault</code> (version-level immutability), <code>print-outbox</code></li>
+<li>Key Vault key <code>documents-kek</code>, webhook key</li>
+<li>Communication Services (email, SMS) and Event Grid delivery reports</li>
+<li>Hubs <code>documents-events</code>, <code>complaints-events</code></li></ul>
+<div class="who">Identity: ic-documents</div></div>
+<div class="tpl"><h4><code>underwriting.bicep</code></h4><ul>
+<li>Clinical store: own storage, no soft delete or versioning, on purpose (erasure)</li>
+<li>HSM key <code>clinical-key-wrap</code>, wrap and unwrap only</li>
+<li>Hubs <code>underwriting-notices</code>, <code>-evidence</code>, <code>-delegates</code></li></ul>
+<div class="who">Identity: ic-underwriting-intake (clinical)</div></div>
+<div class="tpl"><h4><code>reinsurance.bicep</code></h4><ul>
+<li>Write-once <code>reinsurance-records</code> in the ledger account</li>
+<li>Hub <code>reinsurance-events</code></li>
+<li>SFTP storage account, one local user per reinsurer</li>
+<li>Log alerts and an on-call action group</li></ul>
+<div class="who">Identity: ic-reinsurance</div></div>
+<div class="tpl"><h4><code>group.bicep</code></h4><ul>
+<li>Quarantine storage for employer files, deleted after weeks</li>
+<li>Defender for Storage malware scanning on upload</li>
+<li>Hub <code>group-events</code>; secret <code>group-fingerprint-salt</code></li></ul>
+<div class="who">Identity: ic-group</div></div>
+<div class="tpl"><h4><code>unit-pricing.bicep</code></h4><ul>
+<li>Inbound valuations account, scanned by Defender; the fund administrator writes under its own identity</li>
+<li>Outbound holdings extract, write-once</li>
+<li>Three log alerts and an on-call action group</li></ul>
+<div class="who">Identity: ic-unit-pricing</div></div>
+<div class="tpl"><h4><code>finance.bicep</code></h4><ul>
+<li>Storage <code>finance-extracts</code>, write-once</li>
+<li>Read on <code>merkle-roots</code></li>
+<li>The finance ledger itself is a module on the nodes and needs nothing here</li></ul>
+<div class="who">Identity: ic-finance-close</div></div>
+</div></div>
+
+<div class="row" style="margin-top:12px">
+<div class="b az"><h3>Microsoft Entra ID</h3><p>App registrations and roles by <code>deploy/entra/apps.sh</code> (workforce and External ID tenants) and <code>group-app.sh</code>; one per reinsurer for the API.</p></div>
+<div class="b ext nb"><h3>Ingress controller</h3><p>The insurer's own; exposes <code>ic-api</code>, <code>ic-portal</code> and the reinsurer API. Not in the templates.</p></div>
+<div class="b ext nb"><h3>Bank</h3><p>mTLS channel from <code>ic-payments-pump</code>; credentials in the payments vault. No real bank chosen.</p></div>
+<div class="b ext nb"><h3>Second and third region</h3><p>Five voters across three regions would survive a region loss; not written, and a data residency decision.</p></div>
+</div>
+
+<div class="legend"><b>Key</b>
+<span><span class="sw" style="background:#26303f;border-color:#26303f"></span>Ledger node</span>
+<span><span class="sw" style="background:#e6efff;border-color:#4f7fd9"></span>Kubernetes workload</span>
+<span><span class="sw" style="background:#fff;border-color:#d68a1a"></span>Azure resources created by one template</span>
+<span><span class="sw" style="background:#fff;border-color:#9aa3b2;border-style:dashed"></span>Not in the templates, or not decided</span>
+</div>
+</div></body></html>
