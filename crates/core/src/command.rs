@@ -312,6 +312,10 @@ pub enum Command {
     ActivateDefinitions {
         definitions: Vec<Definition>,
     },
+    /// Take a product or rate table version out of use: the kill switch
+    /// after a bad activation (the version before it is used again from
+    /// now), or retiring a product version nothing refers to.
+    WithdrawConfig(Box<crate::catalog::Withdrawal>),
     ActivateIndexRate {
         code: String,
         effective_from: NaiveDate,
@@ -702,6 +706,7 @@ impl Command {
                 &["config"]
             }
             Command::RecordRateTableValidation(_) => &["config", "finance"],
+            Command::WithdrawConfig(_) => &["config"],
             Command::OpenBusinessDate { .. } | Command::AdvanceBusinessDate { .. } => &["leader"],
             Command::RunEndOfDay { .. } => &["end-of-day"],
             // Group administration issues the retail policy of a continuation
@@ -763,6 +768,7 @@ impl Command {
             Command::ActivateProduct { .. } => "activate_product",
             Command::ActivateRateTable { .. } => "activate_rate_table",
             Command::RecordRateTableValidation(_) => "record_rate_table_validation",
+            Command::WithdrawConfig(_) => "withdraw_config",
             Command::ActivateDefinitions { .. } => "activate_definitions",
             Command::ActivateIndexRate { .. } => "activate_index_rate",
             Command::OpenBusinessDate { .. } => "open_business_date",

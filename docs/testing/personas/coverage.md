@@ -73,17 +73,17 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | STF Staff authorisation and permissions | 18 | 0 | 0 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 18 | 0 | 0 | 0 |
-| CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
+| CFG Configuration operations and the actuary's interface | 8 | 3 | 3 | 1 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 7 | 3 | 8 | 8 |
-| **Total** | **388** | **84** | **105** | **84** |
+| **Total** | **390** | **85** | **102** | **83** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 37 | 26 | 6 |
 | B | 115 | 15 | 12 |
-| C | 229 | 40 | 77 |
+| C | 231 | 41 | 74 |
 | D | 7 | 3 | 10 |
 
 ### Still to build, by owner
@@ -92,14 +92,14 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 
 | Owner | Rows left | Priority 1 |
 | --- | ---: | ---: |
-| Core | 181 | 81 |
+| Core | 174 | 78 |
 | Portal and app services | 5 | 3 |
 | Unit pricing | 5 | 1 |
 | Reinsurance | 2 | 0 |
 | Underwriting and new business | 1 | 1 |
-| **Total** | **194** | **86** |
+| **Total** | **187** | **83** |
 
-##### Core (181)
+##### Core (174)
 
 | Row | Built | Priority | Scenario |
 | --- | --- | ---: | --- |
@@ -113,7 +113,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | BIL-001 | part | 1 | Fortnightly billing over a simulated year |
 | BIL-013 | part | 1 | Sum of daily earned postings for any fully earned period |
 | CFG-005 | part | 1 | Actuary signs the dry-run report |
-| CFG-009 | none | 1 | Kill switch after a bad activation |
 | COL-003 | part | 1 | Direct credit with reference "HEMI DAIRY" and no policy number |
 | COL-004 | part | 1 | Same payment from a new account, amount within tolerance |
 | COL-005 | none | 1 | S14: Chloe quotes another customer's policy number |
@@ -152,16 +151,14 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | LED-007 | part | 1 | Receipt with an unmatched reference |
 | LED-013 | part | 1 | A correction is needed to a posted premium |
 | LED-016 | part | 1 | Daylight saving ends on 4 Apr 2027 and starts on 26 Sep 2027 |
-| MIG-001 | none | 1 | 1974 policy with paper underwriting file |
+| MIG-001 | part | 1 | 1974 policy with paper underwriting file |
 | MIG-003 | none | 1 | Legacy exclusion clause with no clean code |
-| MIG-004 | part | 1 | Policy mid-grace at cutover |
 | MIG-007 | none | 1 | Joint cover held as one record with two names and a paper assignment |
-| MIG-008 | part | 1 | Cohort load |
 | MIG-009 | none | 1 | Parallel run for one billing cycle |
 | MIG-011 | part | 1 | Per-life accumulation after load |
 | MIG-012 | none | 1 | Annuity in payment |
 | MIG-014 | none | 1 | Unit-linked cohort |
-| MIG-017 | none | 1 | S26: trial load of the synthetic legacy book |
+| MIG-017 | part | 1 | S26: trial load of the synthetic legacy book |
 | POL-001 | part | 1 | Issue TERM0 for $100,000 on 4 Jan 2027, fortnightly |
 | POL-002 | part | 1 | One LIFE1 policy with two single covers, one per life |
 | POL-003 | part | 1 | Cover with original layer, an increase and two indexation steps |
@@ -203,8 +200,7 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | BIL-015 | part | 2 | 150,000 billings on a popular billing day across 64 partitions |
 | CFG-007 | none | 2 | Global change staged through canary partitions |
 | CFG-008 | none | 2 | Activation attempted on a billing peak day or during close |
-| CFG-010 | none | 2 | Register query |
-| CFG-011 | none | 2 | Retire a product version still referenced by an in-force policy |
+| CFG-010 | part | 2 | Register query |
 | CFG-012 | part | 2 | Change skips the synthetic insurer run |
 | COL-006 | part | 2 | Payment covers a policy fee, a reinstatement charge and part of two premiums |
 | COL-013 | part | 2 | S3: call task on day 17 reaches Kath, the other owner |
@@ -237,10 +233,7 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 | LED-015 | part | 2 | Receipt logged at 23:59:58 and another at 00:00:02 around the cutoff |
 | LED-017 | none | 2 | Premium received in EUR for an NZD policy |
 | LED-018 | none | 2 | Build with a function in the state machine that reads the clock |
-| MIG-005 | none | 2 | Premium holiday granted in 2020 |
-| MIG-006 | none | 2 | Legacy holds only a current sum insured |
 | MIG-010 | none | 2 | Legacy single agent code |
-| MIG-015 | none | 2 | Abandon a cohort before the directory flips |
 | MIG-016 | none | 2 | Surrender basis held in a workbook |
 | POL-011 | part | 2 | Date of birth corrected with a past effective date |
 | PRD-009 | none | 2 | Family health rating with five children where the product charges for the first three |
@@ -327,7 +320,6 @@ Every row not yet fully built, with the area that finishes it. The same list is 
 - **SVC** (4): SVC-003, SVC-006, SVC-009, SVC-010
 - **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
-- **CFG** (1): CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
 - **MIG** (5): MIG-003, MIG-007, MIG-009, MIG-012, MIG-014
 

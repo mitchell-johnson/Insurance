@@ -581,6 +581,9 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CFG-004 | full | `finance/tests/tables.rs::a_cell_out_by_a_factor_of_ten_fails_the_adjacent_age_checks`<br>`finance/tests/tables.rs::a_new_version_is_compared_cell_by_cell_with_the_one_it_replaces` |
 | CFG-005 | part | `sim/tests/edges.rs::a_rate_table_validation_is_recorded_against_the_content_it_was_run_on` |
 | CFG-006 | full | `sim/tests/scenarios.rs::a_scoped_rate_table_applies_only_to_its_scheme` |
+| CFG-009 | full | `sim/tests/config_control.rs::the_kill_switch_takes_a_bad_rate_table_out_of_use` |
+| CFG-010 | part | `sim/tests/config_control.rs::the_kill_switch_takes_a_bad_rate_table_out_of_use`<br>`api/tests/admin.rs::the_register_shows_what_is_in_use_and_where_partitions_differ` |
+| CFG-011 | full | `sim/tests/config_control.rs::a_product_version_still_in_force_cannot_be_retired` |
 | CFG-012 | part | `finance/tests/edges.rs::a_rate_table_activated_without_a_validation_shows_at_the_close` |
 | CFG-013 | full | `claims/tests/suite/book.rs::the_actuarys_valuation_sets_the_reserve_for_claims_in_payment`<br>`sim/tests/claims.rs::a_valuation_sets_the_reserve_of_a_claim_in_payment_on_the_ledger` |
 

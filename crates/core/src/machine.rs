@@ -458,6 +458,55 @@ impl CoreState {
                 self.catalog.activate_rate_table(*table);
                 Ok(())
             }
+            Command::WithdrawConfig(w) => {
+                let mut w = *w;
+                let plain = |s: &str| !s.trim().is_empty() && s.len() <= 256;
+                let named =
+                    |s: &String| !s.is_empty() && s.len() <= 64 && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' || c == '@');
+                if !plain(&w.reason) || !plain(&w.change) || w.approved_by.is_empty() || !w.approved_by.iter().all(named) {
+                    return Err(Reject::new(
+                        "invalid_withdrawal",
+                        "a withdrawal gives its reason, its change record and who approved it",
+                    ));
+                }
+                w.on = Some(ctx.date);
+                if let Some(done) = self.catalog.withdrawal(w.kind, &w.id, w.version) {
+                    // The same request again; a retirement may follow a withdrawal.
+                    if done.retire || !w.retire {
+                        return Ok(());
+                    }
+                }
+                self.catalog.check_withdrawal(&w).map_err(config_conflict)?;
+                if w.retire {
+                    let hash = self.catalog.product_hash(&w.id, w.version).unwrap_or_default().to_string();
+                    let users = self
+                        .policies
+                        .values()
+                        .filter(|p| {
+                            p.product_hash == hash
+                                && !matches!(
+                                    p.status,
+                                    PolicyStatus::Cancelled
+                                        | PolicyStatus::Terminated
+                                        | PolicyStatus::Transferred
+                                        | PolicyStatus::Avoided
+                                        | PolicyStatus::Surrendered
+                                        | PolicyStatus::Matured
+                                        | PolicyStatus::Expired
+                                )
+                        })
+                        .count();
+                    if users > 0 {
+                        return Err(Reject::new(
+                            "version_in_use",
+                            format!("product {} version {} is held by {users} policies on this partition", w.id, w.version),
+                        ));
+                    }
+                }
+                ctx.emit(Event::ConfigWithdrawn(Box::new(w.clone())));
+                self.catalog.withdraw(w);
+                Ok(())
+            }
             Command::RecordRateTableValidation(v) => {
                 let plain = |s: &str| !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_graphic());
                 if !plain(&v.id) || !plain(&v.content_hash) || !plain(&v.report_hash) || !plain(&v.by) || v.schema_version == 0 {

@@ -73,6 +73,9 @@ pub enum AdminCommand {
     ActivateShipped,
     /// Send the steps of a set-up file, in order.
     Apply { file: std::path::PathBuf },
+    /// The configuration register: every product and rate table version on
+    /// each partition, and every difference between partitions.
+    Register,
     /// Load, look at, sign off or abandon a migration cohort.
     Migrate(crate::migrate::MigrateCommand),
     /// Set the voters of one partition's group, or of every partition's.
@@ -88,6 +91,7 @@ pub const USAGE: &str = "usage: ic-admin init
        ic-admin activate-shipped
        ic-admin apply <setup.json>
        ic-admin members <partition|all> <id=host:port,id=host:port,...>
+       ic-admin register
        ic-admin migrate load <cohort.json>
        ic-admin migrate status <cohort>
        ic-admin migrate sign-off <cohort> <finance> <business-owner> <evidence> [actuary]
@@ -105,6 +109,7 @@ impl AdminCommand {
             }),
             ["activate-shipped"] => Ok(Self::ActivateShipped),
             ["apply", file] => Ok(Self::Apply { file: file.into() }),
+            ["register"] => Ok(Self::Register),
             ["migrate", rest @ ..] => crate::migrate::MigrateCommand::parse(rest).map(Self::Migrate).ok_or_else(|| USAGE.to_string()),
             ["members", partition, list] => {
                 let partition = match *partition {
@@ -408,6 +413,62 @@ impl Admin {
         Ok(json!({ "steps": file.steps.len(), "applied": applied, "unchanged": unchanged }))
     }
 
+    /// The register of every partition, and the drift between them: each
+    /// global version that is not the same on every partition. A table
+    /// scoped to schemes lives only where those schemes do, so it is listed
+    /// and not counted as drift.
+    pub async fn register(&self) -> Result<Value, String> {
+        use ic_core::catalog::RegisterRow;
+        let partitions = self.partitions().await?;
+        let mut by_partition: BTreeMap<PartitionId, Vec<RegisterRow>> = BTreeMap::new();
+        for partition in 0..partitions {
+            let deadline = tokio::time::Instant::now() + self.patience;
+            let rows = loop {
+                match self.client.register(partition).await {
+                    Ok(rows) => break rows,
+                    Err(e) if tokio::time::Instant::now() >= deadline => return Err(format!("partition {partition}: {e}")),
+                    Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+                }
+            };
+            by_partition.insert(partition, rows);
+        }
+        // Each global version, as each partition has it.
+        let key = |r: &RegisterRow| {
+            format!(
+                "{}/{}/{}",
+                serde_json::to_value(r.kind).unwrap_or_default().as_str().unwrap_or(""),
+                r.id,
+                r.version
+            )
+        };
+        let mut seen: BTreeMap<String, BTreeMap<PartitionId, &RegisterRow>> = BTreeMap::new();
+        for (partition, rows) in &by_partition {
+            for row in rows.iter().filter(|r| r.scope.is_none()) {
+                seen.entry(key(row)).or_default().insert(*partition, row);
+            }
+        }
+        let mut drift = Vec::new();
+        for (item, held) in &seen {
+            let missing: Vec<PartitionId> = (0..partitions).filter(|p| !held.contains_key(p)).collect();
+            // Whether a version is in use follows from the rest, so it is not compared.
+            let same =
+                |a: &RegisterRow, b: &RegisterRow| (&a.content_hash, a.effective_from, &a.withdrawn) == (&b.content_hash, b.effective_from, &b.withdrawn);
+            let first = held.values().next();
+            let differs = held.values().any(|r| first.is_some_and(|f| !same(r, f)));
+            if !missing.is_empty() || differs {
+                drift.push(json!({ "item": item, "missing_on": missing, "differs": differs, "as_held": held }));
+            }
+        }
+        let first = by_partition.get(&0).cloned().unwrap_or_default();
+        let scoped: Vec<_> = by_partition
+            .iter()
+            .flat_map(|(p, rows)| rows.iter().filter(|r| r.scope.is_some()).map(move |r| json!({ "partition": p, "row": r })))
+            .collect();
+        Ok(
+            json!({ "partitions": partitions, "register": first.into_iter().filter(|r| r.scope.is_none()).collect::<Vec<_>>(), "scoped": scoped, "drift": drift }),
+        )
+    }
+
     /// Set the voters of a partition's group, or of every group.
     pub async fn set_members(&self, partition: Option<PartitionId>, members: &BTreeMap<NodeId, String>) -> Result<Value, String> {
         let partitions: Vec<PartitionId> = match partition {
@@ -452,6 +513,7 @@ impl Admin {
                 self.apply(&SetupFile::parse(&text)?).await
             }
             AdminCommand::Migrate(command) => self.migrate(command).await,
+            AdminCommand::Register => self.register().await,
             AdminCommand::Members { partition, members } => self.set_members(partition, &members).await,
         }
     }

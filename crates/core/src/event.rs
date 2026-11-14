@@ -152,6 +152,9 @@ pub enum Event {
         content_hash: String,
         scoped: bool,
     },
+    /// A product or rate table version was taken out of use. What it already
+    /// priced is not changed by this: remediation is by replay.
+    ConfigWithdrawn(Box<crate::catalog::Withdrawal>),
     /// A version of a rate table was recorded as having passed validation.
     RateTableValidated {
         id: String,

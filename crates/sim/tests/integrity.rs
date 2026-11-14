@@ -701,6 +701,16 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             from: NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(),
             to: NaiveDate::from_ymd_opt(2028, 4, 1).unwrap(),
         })),
+        Command::WithdrawConfig(Box::new(ic_core::catalog::Withdrawal {
+            kind: ic_core::catalog::ConfigKind::RateTable,
+            id: "life-base".into(),
+            version: 1,
+            on: None,
+            reason: "wrong rates".into(),
+            change: "CHG-1".into(),
+            approved_by: vec!["ops-ann".into()],
+            retire: false,
+        })),
         Command::Migration(Box::new(ic_core::migration::MigrationCommand::Release {
             cohort: "retail-1".into(),
             limit: 10,
@@ -784,7 +794,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 65, "{names:?}");
+    assert_eq!(names.len(), 66, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

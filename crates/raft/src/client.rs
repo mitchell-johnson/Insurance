@@ -436,6 +436,11 @@ impl ClusterClient {
         self.ask(partition, &query).await
     }
 
+    /// The configuration register of a partition.
+    pub async fn register(&self, partition: PartitionId) -> Result<Vec<ic_core::catalog::RegisterRow>, ClientError> {
+        self.ask(partition, &Query::Register).await
+    }
+
     /// A migration cohort on a partition, if it was opened there.
     pub async fn cohort(&self, partition: PartitionId, cohort: &str) -> Result<Option<ic_core::migration::Cohort>, ClientError> {
         self.ask(partition, &Query::Cohort { cohort: cohort.to_string() }).await

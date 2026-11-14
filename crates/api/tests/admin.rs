@@ -450,3 +450,41 @@ async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
     assert!(MigrateCommand::parse(&["sign-off", "c2", "a"]).is_none());
     assert!(AdminCommand::parse(&args("migrate nothing")).is_err());
 }
+
+/// Purpose: matrix CFG-010. `ic-admin register` lists every product and rate table version with
+/// its effective date and whether it is in use, and reports drift: a global version active on
+/// one partition and not another is named with the partitions it is missing from, and once
+/// every partition has it the drift is gone.
+/// Why it matters: configuration is activated partition by partition. A version that reached
+/// only some of them prices the same customer differently depending on which group they are
+/// in, and nothing else would show it until a complaint did.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn the_register_shows_what_is_in_use_and_where_partitions_differ() {
+    let ledger = Ledger::start("register", 1, 2).await;
+    let admin = admin(&ledger, Duration::from_secs(20));
+    admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
+    admin.run(AdminCommand::ActivateShipped).await.unwrap();
+    let clean = admin.run(AdminCommand::parse(&args("register")).unwrap()).await.unwrap();
+    assert_eq!(clean["drift"], json!([]), "{}", clean["drift"]);
+    let rows = clean["register"].as_array().unwrap();
+    assert!(rows
+        .iter()
+        .any(|r| r["id"] == "term-life" && r["kind"] == "product" && r["in_use"] == true && r["effective_from"] == "2027-01-01"));
+
+    let source = include_str!("../../../products/rates/life_base.star").replace("version = 1,", "version = 2,");
+    let table = ic_product::load_rate_table("life_base_v2.star", &source).unwrap();
+    let envelope = ic_core::Envelope {
+        key: "life-base-2".into(),
+        caller: "config".into(),
+        salt: ic_raft::client::fresh_salt(),
+        traceparent: None,
+        command: ic_core::Command::ActivateRateTable { table: Box::new(table) },
+    };
+    ledger.client.propose_until(1, &envelope, Duration::from_secs(20)).await.unwrap();
+    let drifted = admin.register().await.unwrap();
+    assert_eq!(drifted["drift"].as_array().unwrap().len(), 1, "{}", drifted["drift"]);
+    assert_eq!(drifted["drift"][0]["item"], json!("rate_table/life-base/2"));
+    assert_eq!(drifted["drift"][0]["missing_on"], json!([0]));
+    ledger.client.propose_until(0, &envelope, Duration::from_secs(20)).await.unwrap();
+    assert_eq!(admin.register().await.unwrap()["drift"], json!([]));
+}
