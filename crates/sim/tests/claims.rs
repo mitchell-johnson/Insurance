@@ -2768,3 +2768,49 @@ fn a_funeral_advance_is_posted_once_and_the_admission_pays_the_rest() {
     assert_eq!(module_events(&c, "claim_admitted")[0]["admitted_minor"], "50000000");
     days(&mut c, 2);
 }
+
+/// Purpose: matrix POL-009. A trauma claim admitted for the whole sum insured leaves no trauma
+/// cover in force for the life from the next day, while the life cover on the same policy is
+/// untouched, the policy itself stays in force, and the next bill is smaller because it charges
+/// for the life cover alone.
+/// Why it matters: a cover and its policy end separately. If a paid-out trauma cover ended the
+/// policy, a family would lose life cover they are still paying for; if it stayed on the policy,
+/// they would go on being billed for cover that has already been paid in full.
+#[test]
+fn a_trauma_cover_paid_in_full_ends_and_the_life_cover_carries_on() {
+    let mut c = cluster();
+    let id = policy(&mut c, 0, true);
+    days(&mut c, 20);
+    let today = c.business_date().unwrap();
+    let held = |c: &Cluster, cover: &str, on: NaiveDate| -> i64 {
+        c.state(0).policies[&id].covers[cover]
+            .layers
+            .iter()
+            .filter(|l| l.in_force_on(on))
+            .map(|l| l.sum_insured_minor)
+            .sum()
+    };
+    let bills = |c: &mut Cluster| -> Vec<i64> {
+        c.take_events()
+            .into_iter()
+            .filter_map(|e| match e.event {
+                Event::PremiumDue { policy, total_minor, .. } if policy == id => Some(total_minor),
+                _ => None,
+            })
+            .collect()
+    };
+    let before = *bills(&mut c).last().expect("the policy was billed at issue");
+
+    open_claim(&mut c, "clm-1", &id, "trauma", ClaimType::Trauma, today);
+    ok(&mut c, decide("clm-1", admit(Some(100_000_00), None, false)));
+    clean(&c);
+    let tomorrow = today.succ_opt().unwrap();
+    assert_eq!((held(&c, "trauma", tomorrow), held(&c, "life", tomorrow)), (0, 500_000_00));
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+
+    days(&mut c, 35);
+    let after = *bills(&mut c).last().expect("the policy is still billed");
+    assert!(after > 0 && after < before, "billed {after} after the claim and {before} before it");
+    assert_eq!(c.state(0).policies[&id].status, PolicyStatus::InForce);
+    assert_eq!(held(&c, "life", c.business_date().unwrap()), 500_000_00);
+}

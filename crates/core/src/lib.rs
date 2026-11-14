@@ -35,6 +35,7 @@ pub mod suspension;
 pub mod arrangement;
 mod arrears;
 mod billing;
+pub mod billing_change;
 mod cash;
 mod claims;
 pub use claims::cover_facts;

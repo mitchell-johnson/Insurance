@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use chrono::{Days, NaiveDate};
 use ic_ledger::{Ledger, Posting, Side};
 use ic_money::Money;
-use ic_product::schedule::{anniversary, period_start};
+use ic_product::schedule::anniversary;
 use ic_product::ProductDefinition;
 
 use crate::accounts::{self, dims};
@@ -334,7 +334,7 @@ fn carry_on(
     from: NaiveDate,
     until: NaiveDate,
 ) -> Result<(), Reject> {
-    while period_start(policy.inception, policy.frequency, policy.periods_billed).is_some_and(|s| s <= ctx.date) {
+    while policy.period_start(policy.periods_billed).is_some_and(|s| s <= ctx.date) {
         if !billing::bill_due_periods(ledger, catalog, product, policy, ctx)? {
             break;
         }

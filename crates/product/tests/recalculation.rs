@@ -142,6 +142,7 @@ fn billing(product: &ProductDefinition) -> Billing {
                 frequencies,
                 policy_fee_annual,
                 modal_loading,
+                ..
             } => {
                 out = Some((
                     frequencies.clone(),

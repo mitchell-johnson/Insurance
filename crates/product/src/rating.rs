@@ -214,6 +214,7 @@ pub fn modal_premium_by_line(product: &ProductDefinition, annual: &BTreeMap<Line
                 frequencies,
                 policy_fee_annual,
                 modal_loading,
+                ..
             } => Some(if frequencies.contains(&frequency) {
                 Ok((policy_fee_annual.get(), modal_loading.get(frequency.key()).map_or(Dec::from(0i64), DecStr::get)))
             } else {

@@ -17,7 +17,7 @@ use std::collections::BTreeMap;
 
 use chrono::{Days, NaiveDate};
 use ic_ledger::{Dimensions, Ledger};
-use ic_product::schedule::{anniversary, period_start};
+use ic_product::schedule::anniversary;
 
 use crate::accounts::{self, dims};
 use crate::catalog::Catalog;
@@ -105,7 +105,7 @@ pub(crate) fn reverse_billing_after(
         });
     }
     policy.periods_billed = (0..policy.periods_billed)
-        .take_while(|n| period_start(policy.inception, policy.frequency, *n).is_some_and(|start| start <= after))
+        .take_while(|n| policy.period_start(*n).is_some_and(|start| start <= after))
         .count() as u32;
     Ok(reversed)
 }

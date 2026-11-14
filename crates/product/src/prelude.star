@@ -194,8 +194,17 @@ def levy(code, rate):
 # Lifecycle features. They run in the order the engine defines, not the order
 # they are listed in.
 
-def billing(frequencies, policy_fee_annual = "0", modal_loading = {}):
-    return {"kind": "billing", "frequencies": frequencies, "policy_fee_annual": policy_fee_annual, "modal_loading": modal_loading}
+def billing(frequencies, policy_fee_annual = "0", modal_loading = {}, frequency_change = None, billing_day_change = False):
+    """How premium is billed. frequency_change says when a change of frequency the owner asks for
+    takes effect: "anniversary" (the first period on or after the next policy anniversary) or
+    "next_period"; left out, the frequency cannot change. billing_day_change lets the owner move
+    the day of the month premium falls due."""
+    b = {"kind": "billing", "frequencies": frequencies, "policy_fee_annual": policy_fee_annual, "modal_loading": modal_loading}
+    if frequency_change != None:
+        b["frequency_change"] = frequency_change
+    if billing_day_change:
+        b["billing_day_change"] = True
+    return b
 
 def earning(day_count = "actual"):
     return {"kind": "earning", "day_count": day_count}

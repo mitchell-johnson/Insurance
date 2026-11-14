@@ -437,6 +437,16 @@ pub enum DayCount {
     Actual,
 }
 
+/// When a change of billing frequency takes effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrequencyChange {
+    /// From the first billing period on or after the next policy anniversary.
+    Anniversary,
+    /// From the next period not yet billed.
+    NextPeriod,
+}
+
 /// Lifecycle features. Each is an enum variant with typed parameters, so the
 /// compiler forces every part of the engine to handle every feature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -448,6 +458,14 @@ pub enum Feature {
         /// Loading by frequency key for paying more often than yearly.
         #[serde(default)]
         modal_loading: BTreeMap<String, DecStr>,
+        /// When a change of frequency the owner asks for takes effect.
+        /// Absent: the frequency chosen at issue cannot be changed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frequency_change: Option<FrequencyChange>,
+        /// Whether the owner may move the day of the month premium falls
+        /// due on.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        billing_day_change: bool,
     },
     Earning {
         day_count: DayCount,
@@ -690,6 +708,22 @@ impl ProductDefinition {
                 }
             )
         })
+    }
+    /// What the product lets the owner change about billing after issue:
+    /// when a new frequency takes effect, if it may change at all, and
+    /// whether the day premium falls due may move.
+    pub fn billing_changes(&self) -> (Option<FrequencyChange>, bool) {
+        self.features
+            .iter()
+            .find_map(|f| match f {
+                Feature::Billing {
+                    frequency_change,
+                    billing_day_change,
+                    ..
+                } => Some((*frequency_change, *billing_day_change)),
+                _ => None,
+            })
+            .unwrap_or((None, false))
     }
     pub fn allows_frequency(&self, f: Frequency) -> bool {
         self.features

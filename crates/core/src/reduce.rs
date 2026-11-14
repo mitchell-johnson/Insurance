@@ -10,7 +10,6 @@
 
 use chrono::NaiveDate;
 use ic_ledger::Ledger;
-use ic_product::schedule::period_start;
 
 use crate::billing::{raise_receivable, Bill};
 use crate::catalog::Catalog;
@@ -96,12 +95,9 @@ fn cut_layers(policy: &mut Policy, ctx: &mut Ctx<'_>, code: &str, life: &LifeId,
 /// The billed period today falls in, where premium for the days from today
 /// has already been billed: its first day and the next period's.
 fn billed_window(policy: &Policy, effective: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
-    let next = period_start(policy.inception, policy.frequency, policy.periods_billed)?;
+    let next = policy.period_start(policy.periods_billed)?;
     let last = policy.periods_billed.checked_sub(1)?;
-    (effective < next)
-        .then(|| period_start(policy.inception, policy.frequency, last))
-        .flatten()
-        .map(|start| (start, next))
+    (effective < next).then(|| policy.period_start(last)).flatten().map(|start| (start, next))
 }
 
 /// Bill or hand back the difference a change of cover today makes to the
@@ -157,10 +153,7 @@ pub(crate) fn adjust_billed(
         return Ok(());
     };
     for n in 0..policy.periods_billed {
-        let (Some(start), Some(end)) = (
-            period_start(policy.inception, policy.frequency, n),
-            period_start(policy.inception, policy.frequency, n + 1),
-        ) else {
+        let (Some(start), Some(end)) = (policy.period_start(n), policy.period_start(n + 1)) else {
             break;
         };
         let (first, last) = (from.max(start), until.map_or(end, |u| u.min(end)));
@@ -395,12 +388,12 @@ fn apply(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
     // As for an increase: the days between the last bill and today cannot be
     // priced until billing has caught up.
     let date = || Reject::new("date", "billing period out of range");
-    let next = period_start(policy.inception, policy.frequency, policy.periods_billed).ok_or_else(date)?;
+    let next = policy.period_start(policy.periods_billed).ok_or_else(date)?;
     if effective > next {
         return Err(Reject::new("billing_behind", "billing has not caught up to today; retry after the end of day"));
     }
     let billed_from = match policy.periods_billed.checked_sub(1) {
-        Some(n) if effective < next => Some(period_start(policy.inception, policy.frequency, n).ok_or_else(date)?),
+        Some(n) if effective < next => Some(policy.period_start(n).ok_or_else(date)?),
         _ => None,
     };
     let before = match billed_from {

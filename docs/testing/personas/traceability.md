@@ -21,6 +21,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | POL-006 | full | `sim/tests/group_cover.rs::a_pool_is_billed_on_its_declared_aggregate` |
 | POL-007 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/claims.rs::the_cover_check_reads_the_policy_as_it_was_on_the_event_date`<br>`sim/tests/personas_spine.rs::paying_the_arrears_while_suspended_restores_the_standing_at_once` |
 | POL-008 | full | `sim/tests/scenarios.rs::unpaid_premium_moves_through_grace_suspension_and_lapse_then_reinstates`<br>`sim/tests/scenarios.rs::reinstatement_window_closes` |
+| POL-009 | full | `sim/tests/claims.rs::a_trauma_cover_paid_in_full_ends_and_the_life_cover_carries_on` |
 | POL-010 | full | `core/src/bitemporal.rs::backdated_change_is_visible_on_both_timelines`<br>`sim/tests/scenarios.rs::group_scheme_bills_in_chunks_and_adjusts_for_a_backdated_leaver` |
 | POL-011 | part | `core/src/bitemporal.rs::correction_from_the_start_supersedes` |
 | POL-012 | full | `sim/tests/edges.rs::lifecycle_commands_refuse_a_policy_in_the_wrong_state` |
@@ -71,10 +72,13 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | --- | --- | --- |
 | BIL-001 | part | `sim/tests/year.rs::the_synthetic_insurer_runs_a_year_with_every_reconciliation_clean`<br>`product/src/schedule.rs::every_frequency_steps_by_its_own_period`<br>`e2e/tests/08-lifecycle.js::E2E-236` |
 | BIL-002 | full | `documents/tests/required_documents.rs::a_bill_gets_a_premium_notice_with_its_discount_lines`<br>`documents/tests/render.rs::a_template_renders_values_lists_and_conditions`<br>`documents/tests/render.rs::money_and_dates_are_written_for_people` |
+| BIL-003 | full | `sim/tests/billing_change.rs::a_new_billing_day_bills_the_days_between_as_a_short_period`<br>`sim/tests/billing_change.rs::changes_from_the_next_period_follow_one_another_without_a_gap` |
+| BIL-004 | full | `sim/tests/billing_change.rs::a_change_of_frequency_waits_for_the_anniversary`<br>`sim/tests/billing_change.rs::a_change_of_billing_the_product_does_not_allow_is_refused` |
 | BIL-005 | full | `sim/tests/underwriting_door.rs::an_accepted_increase_is_a_layer_from_today_billed_for_the_days_left` |
 | BIL-007 | full | `sim/tests/scenarios.rs::money_paid_ahead_waits_in_suspense_and_is_consumed_by_billing` |
 | BIL-008 | full | `sim/tests/scenarios.rs::cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part`<br>`distribution/tests/commission.rs::cancelling_in_cooling_off_reverses_all_commission_from_whoever_received_it` |
 | BIL-009 | full | `sim/tests/scenarios.rs::cooling_off_refunds_everything_and_mid_term_refunds_the_unearned_part` |
+| BIL-010 | full | `sim/tests/hardship.rs::a_premium_holiday_bills_nothing_and_one_ended_before_it_starts_never_applies`<br>`distribution/tests/personas.rs::premium_paused_in_hardship_earns_nothing_until_billing_resumes` |
 | BIL-011 | full | `sim/tests/claims.rs::a_waived_premium_is_billed_and_paid_from_claims_expense` |
 | BIL-012 | full | `product/src/schedule.rs::leap_day_anniversary` |
 | BIL-013 | part | `sim/tests/scenarios.rs::issue_bills_the_first_period_and_earns_it_exactly`<br>`money/src/lib.rs::round_to_money_remainder_is_exact` |
@@ -433,6 +437,8 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | SVC-002 | full | `sim/tests/reduce_cover.rs::a_reduction_takes_the_newest_layer_first`<br>`sim/tests/reduce_cover.rs::a_reduction_ends_layers_from_today_and_credits_the_days_left` |
 | SVC-005 | part | `documents/tests/rules.rs::changes_to_cover_require_a_new_schedule` |
 | SVC-008 | full | `sim/tests/investment.rs::a_full_surrender_sells_everything_pays_the_value_and_closes_the_policy` |
+| SVC-012 | full | `sim/tests/policy_loans.rs::a_loan_is_lent_within_the_products_share_of_the_value_and_paid_like_any_payout`<br>`sim/tests/policy_loans.rs::interest_accrues_daily_is_capitalised_on_the_anniversary_and_a_repayment_meets_interest_first` |
+| SVC-014 | full | `sim/tests/aia.rs::a_limited_pay_cover_is_made_paid_up_for_the_share_of_the_term_paid` |
 | SVC-015 | part | `sim/tests/edges.rs::a_cover_expires_at_its_age_limit_and_the_rest_of_the_policy_continues` |
 | SVC-017 | part | `customers/tests/api.rs::a_name_change_reaches_every_relationship_and_groups_stay_apart` |
 | SVC-018 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/journeys.rs::a_change_entered_for_a_caller_carries_who_why_and_a_second_person` |
