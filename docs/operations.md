@@ -21,6 +21,20 @@
 
    The script makes any token that is missing and writes `deploy/cluster-access/access.json`, the map of their digests; it is applied with the manifests in step 6. Each identity is granted its own token's secret and no other secret, so the tokens must exist before the grants are made: hence the second deployment. The module templates (steps 9, 10 and the others' "Running it") are deployed after this step.
 
+   **Then deploy each module's template** into the same resource group. Each one is deployed on its own (`main.bicep` does not reference them), after the tokens exist, and before step 6, because every module's manifest is in the kustomization and needs that template's outputs. Every template takes `name`, `keyVaultName` and `aksOidcIssuer` from the main deployment's outputs; the other parameters and what each creates are in the comment at the top of the file and in the module's document.
+
+   | Template | Further parameters | Fills | Described in |
+   | --- | --- | --- | --- |
+   | `infra/customers.bicep` | `eventHubsNamespaceName`, `aksOutboundIp`, `postgresAdminGroupObjectId`, `postgresAdminGroupName`, `indexKey` | `deploy/k8s/customers.yaml` | `docs/customers.md`; then create the service's database role with `pgaadauth_create_principal`, and in prod lock the erasure register once (`tools/lock-erasure-register.sh`) |
+   | `infra/documents.bicep` | `eventHubsNamespaceName`, `webhookKey` | `deploy/k8s/documents.yaml` | `docs/documents.md`, "Deploying": deployed twice, the second time with `deliveryReportsUrl` once the service is reachable |
+   | `infra/underwriting.bicep` | `eventHubsNamespaceName` | `deploy/k8s/underwriting-intake.yaml` | step 10 below |
+   | `infra/reinsurance.bicep` | `storageAccountName`, `eventHubsNamespaceName`, `alertEmails`, `sftpReinsurers` | `deploy/k8s/reinsurance.yaml` | `docs/reinsurance.md`, "Hosting and the driver" |
+   | `infra/group.bicep` | `eventHubsNamespaceName` | `deploy/k8s/group.yaml` | `docs/group.md`, "On Azure" |
+   | `infra/unit-pricing.bicep` | `administratorPrincipalId`, `alertEmails` | `deploy/k8s/unit-pricing.yaml` | `docs/unit-pricing.md`, "On Azure" |
+   | `infra/finance.bicep` | `ledgerStorageName` | `deploy/k8s/finance.yaml` | `docs/finance.md` |
+
+   Payments needs no template of its own: `main.bicep` creates its vault and evidence container (step 9).
+
 3. **Build and push the image.**
 
    ```sh
@@ -43,7 +57,7 @@
 
    Each reinsurer that reads its statements by API sends a certificate and gets its own application: `deploy/entra/apps.sh reinsurer <name> <reinsurer id> <certificate.pem>` prints the entry for `IC_REINSURANCE_API_CLIENTS`.
 
-5. **Fill in `deploy/k8s`.** Deploy underwriting's resources first (step 10): its manifests are in the kustomization and need that template's outputs. Replace every `REPLACE-` value in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml`, and in `underwriting-intake.yaml` from step 10. The first business date in `bootstrap.yaml` is set once and can never be changed.
+5. **Fill in `deploy/k8s`.** Replace every `REPLACE-` value: in `kustomization.yaml`, `identities.yaml`, `settings.yaml` and `bootstrap.yaml` from the main deployment; in `api.yaml` with the customer master's address and app scope; in `portal.yaml` and `payments.yaml` from the main deployment and steps 4, 8 and 9; and in each module's manifest from its template above. `grep -l REPLACE- deploy/k8s/*.yaml` lists what is left; `kubectl kustomize deploy/k8s` must show none. The Temporal address in `settings.yaml` waits on the Temporal decision (`docs/decisions.md`). The first business date in `bootstrap.yaml` is set once and can never be changed.
 
 6. **Apply.**
 
@@ -65,7 +79,7 @@
 
 9. **Set up payments** (`ic-payments-pump`: the bank channels and the evacuation drill). The payments vault, the bank keys and credentials, and the values in `deploy/k8s/payments.yaml` are described in `docs/payments.md`, "Running it".
 
-10. **Set up underwriting** (the driver `ic-underwriting` and the intake `ic-underwriting-intake`; `docs/underwriting.md`). Before step 6, deploy its template into the same resource group, with the main deployment's Key Vault, AKS OIDC issuer and Event Hubs namespace:
+10. **Set up underwriting** (the driver `ic-underwriting` and the intake `ic-underwriting-intake`; `docs/underwriting.md`). Before step 6, with the other module templates after step 2, deploy its template into the same resource group, with the main deployment's Key Vault, AKS OIDC issuer and Event Hubs namespace:
 
     ```sh
     az deployment group create -g <rg> -f infra/underwriting.bicep \
@@ -110,6 +124,10 @@ To run a close by hand: `kubectl -n insurance-core create job close-now --from=c
 **Unit orders** execute from the `ic-unit-orders` CronJob every fifteen minutes, once the unit pricing module has activated the price for their date, and the same job replays orders standing on a corrected price. The close does the same work as one of its steps, so a missed run is caught up at midnight. The job's log prints how many orders it could not move on each partition (`left`), and the close's report carries the same figure as `unit_orders_left`; anything other than zero there is for a person to look at. To run it now: `kubectl -n insurance-core create job unit-orders-now --from=cronjob/ic-unit-orders`.
 
 **Reconciliation at any time:** `GET /v1/admin/reconciliation` (role `operations`).
+
+**Is every partition on the same configuration?** `ic-admin register` lists each product and rate table version with its effective date, hash and whether a policy holds it, on every partition, and reports drift: a global version missing or different on some partition. Run it after any activation and after `ic-admin apply`; anything under `drift` is for a person to look at.
+
+**Taking a bad product or rate table version out of use (kill switch).** Send `withdraw_config` as caller `config` (a `core` step in the set-up file, or through the API): the kind (`product` or `rate_table`), the ID and version, the reason, the change reference and who approved it. From the business date the version before it prices the next bill and new business; what it already priced stays posted, for remediation by replay. With `retire` set, a product version is also retired, which is refused (`version_in_use`) while any policy on a partition still holds it. Event `ConfigWithdrawn`; `docs/architecture.md`, core item 6j, has the detail.
 
 ## Upgrades
 

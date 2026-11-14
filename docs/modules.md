@@ -1,6 +1,6 @@
 # Building a module beside the core
 
-The core (ledger, policy model, servicing, billing, the Raft nodes, the daily close, the Azure adapters) is one part of the system. Claims, reinsurance, group administration, commission, payments, underwriting, documents, finance and the portal services are modules built beside it. This page is the contract between them.
+The core (ledger, policy model, servicing, billing, the Raft nodes, the daily close, the Azure adapters) is one part of the system. Claims, reinsurance, underwriting, group administration, commission, payments, collections, finance, unit pricing, documents, complaints, the portal services (channels) and wellness are modules built beside it. Claims lives inside each partition; the other twelve each run as their own replicated group on the ledger nodes, listed in `ic_node::modules()`. The customer master (`crates/customers`) is not a module: it is a separate service with its own PostgreSQL, because personal data must be erasable, and modules reach it over HTTP by party ID. This page is the contract between them.
 
 ## Layout
 
