@@ -6,8 +6,7 @@
 # Multi-Benefit Discount without receiving it, so it declares no discounts.
 # After half the premium term the owner may stop paying and keep a reduced
 # sum assured (paid up): the proportion of the term paid, times the sum
-# assured, times 0.95. The core has no paid-up alteration yet; it is listed
-# in docs/aia-products.md.
+# assured, times 0.95 (`paid_up_option` below; the core's MakePaidUp).
 #
 # Built from AIA's published wording and product page as at November 2026.
 # Rates and factors are placeholders marked PH.
@@ -54,6 +53,7 @@ PRODUCT = product(
                     for age in sorted(PAY_TO.keys())
                 ]),
             ],
+            paid_up_option = paid_up_option(min_share_of_term = "0.5", factor = "0.95"),
             insurability_option = insurability_option(
                 events = ["marriage", "birth_or_adoption", "separation", "death_of_partner", "child_secondary_school",
                           "child_tertiary", "mortgage", "salary_increase"],
@@ -84,7 +84,8 @@ PRODUCT = product(
         ),
         earning(),
         # A premium 31 days overdue: before the paid-up date AIA may cancel;
-        # after it the policy is made paid up (not built: see the header).
+        # after it the policy is made paid up (the automatic conversion is not
+        # built; the owner's request is).
         arrears(grace_days = 30, lapse_days = 31, reinstatement_days = 180, reinstatement_evidence_free_days = 60),  # PH
         cooling_off(days = 20),
     ],

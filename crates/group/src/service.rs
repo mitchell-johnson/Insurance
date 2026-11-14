@@ -321,7 +321,7 @@ where
         return refused(StatusCode::BAD_REQUEST, "empty_file", "the file is empty");
     }
     match web.driver.upload(who, actor, &scheme, &file, body.to_vec()).await {
-        Ok(()) => (StatusCode::ACCEPTED, Json(json!({ "scheme": scheme, "file": file, "status": "quarantined" }))),
+        Ok(status) => (StatusCode::ACCEPTED, Json(json!({ "scheme": scheme, "file": file, "status": status }))),
         Err(DriverError::Unavailable(e)) if e.contains("names are") => refused(StatusCode::BAD_REQUEST, "invalid_name", &e),
         Err(e) => failed(e),
     }
@@ -432,15 +432,23 @@ where
 {
     // Any caller this service knows may ask; what a person may see is the
     // calling service's to decide.
-    match web.authorised(&headers).await {
-        Ok(service) if OUTSIDE_CALLERS.iter().any(|name| service.may_act_as(name)) => {}
+    let staff = match web.authorised(&headers).await {
+        Ok(service) if OUTSIDE_CALLERS.iter().any(|name| service.may_act_as(name)) => service.may_act_as(caller::STAFF),
         Ok(_) => return refused(StatusCode::FORBIDDEN, "role_not_held", "the token carries no role this service takes"),
         Err(answer) => return answer,
-    }
+    };
     let question: Question = match serde_json::from_slice(&body) {
         Ok(q) => q,
         Err(e) => return refused(StatusCode::BAD_REQUEST, "invalid_question", &e.to_string()),
     };
+    // Who else a member might be is for staff deciding it, never the employer.
+    if matches!(question, Question::PossibleMatch { .. }) && !staff {
+        return refused(
+            StatusCode::FORBIDDEN,
+            "role_not_held",
+            "possible matches are decided by group administration staff",
+        );
+    }
     // The outbox carries commands with underwriting terms: it is the driver's alone.
     if matches!(question, Question::Outbox { .. }) {
         return refused(StatusCode::FORBIDDEN, "not_available", "the outbox is not served here");

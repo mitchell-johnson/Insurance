@@ -646,7 +646,8 @@ fn the_loader_refuses_each_unsound_built_in_benefit() {
 
 /// Purpose: the loader refuses a multi-benefit condition that names a cover the product does
 /// not have, has no required category, repeats a category, has an empty one, or asks for more
-/// categories than it lists; and a one-of-a-set cover rule that names no cover or the cover
+/// categories than it lists, or names cover held elsewhere other than as `product/cover`; and a
+/// one-of-a-set cover rule that names no cover or the cover
 /// itself.
 /// Why it matters: such a discount either never applies or applies to covers that do not
 /// exist, and such a rule either blocks every sale or none; both must fail at load.
@@ -660,6 +661,8 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
     let life = r#"[discount_category("life", ["life"], min_sum_insured = 100)]"#;
     let income = r#"[discount_category("income", ["income"])]"#;
     assert!(mini(&[("FEATURE", &mbd(life, income, 1))]).is_ok());
+    let elsewhere = r#"[discount_category("income", ["income"], elsewhere = ["aia-start-up-income/start-up-income"])]"#;
+    assert!(mini(&[("FEATURE", &mbd(life, elsewhere, 1))]).is_ok());
     let never = "can never be told apart from none";
     let cases = [
         (mbd(life, r#"[discount_category("x", ["nope"])]"#, 1), "names a cover the product does not have"),
@@ -669,6 +672,10 @@ fn the_loader_refuses_unsound_benefit_categories_and_one_of_a_set_rules() {
         (mbd(life, r#"[discount_category("", ["income"])]"#, 0), never),
         (mbd(life, r#"[discount_category("income", ["income"], min_sum_insured = -1)]"#, 0), never),
         (mbd(life, income, 2), never),
+        // Cover held elsewhere is named `product/cover`.
+        (mbd(life, r#"[discount_category("income", ["income"], elsewhere = ["income"])]"#, 1), never),
+        (mbd(life, r#"[discount_category("income", ["income"], elsewhere = ["/income"])]"#, 1), never),
+        (mbd(life, r#"[discount_category("income", ["income"], elsewhere = ["a/b/c"])]"#, 1), never),
         (r#"composition(requires_any = {"income": []})"#.to_string(), "names at least one cover"),
         (r#"composition(requires_any = {"income": ["income"]})"#.to_string(), "cannot require itself"),
         (

@@ -359,6 +359,10 @@ async fn an_uploaded_file_goes_from_quarantine_to_the_core() {
     approve(&d, "nov.csv").await;
     settle(&d).await;
     assert_eq!(file_status(&d, "nov.csv"), FileStatus::Applied);
+    // The same upload again says where the file has got to and changes nothing.
+    let again = d.upload(caller::EMPLOYER, "admin-bo", SCHEME, "nov.csv", FILE.as_bytes().to_vec()).await;
+    assert_eq!(again.unwrap(), "applied");
+    assert_eq!(file_status(&d, "nov.csv"), FileStatus::Applied);
     let asked: Vec<String> = d
         .directory
         .asked
@@ -456,8 +460,10 @@ async fn a_bad_file_is_refused_with_its_reason() {
         .await
         .unwrap();
     assert_eq!(file_status(&d, "virus.csv"), FileStatus::Refused);
+    let stored = d.files.blobs.lock().unwrap().clone();
     let other = d.upload(caller::EMPLOYER, "admin-bo", SCHEME, "virus.csv", b"Emp No\nE1\n".to_vec()).await;
     assert!(matches!(other, Err(DriverError::Refused(r)) if r.code == "file_exists"));
+    assert!(*d.files.blobs.lock().unwrap() == stored, "the file under that name keeps its bytes");
     let nowhere = d.upload(caller::EMPLOYER, "admin-bo", "nowhere", "a.csv", vec![1]).await;
     assert!(matches!(nowhere, Err(DriverError::Refused(r)) if r.code == "unknown_scheme"));
     assert_eq!(content_hash(b"abc").len(), 64);
@@ -1042,6 +1048,23 @@ async fn the_service_routes_admit_only_what_a_portal_may_do() {
             .0,
         404
     );
+    // Who a member might be is for staff alone, never the employer.
+    let ask_match = br#"{"ask":"possible_match","scheme":"harbour","employee":"E001"}"#;
+    assert_eq!(post("/v1/questions", Some(all.as_str()), &[], ask_match.to_vec()).await.0, 404, "none waiting");
+    d.module
+        .state
+        .lock()
+        .unwrap()
+        .schemes
+        .get_mut(SCHEME)
+        .unwrap()
+        .possible
+        .insert("E001".into(), vec![party("party-x")]);
+    let (status, found) = post("/v1/questions", Some(all.as_str()), &[], ask_match.to_vec()).await;
+    assert_eq!((status, found["candidates"].clone()), (200, serde_json::json!(["party-x"])));
+    let employer_only = token(&["employer-portal"]);
+    assert_eq!(post("/v1/questions", Some(employer_only.as_str()), &[], ask_match.to_vec()).await.0, 403);
+    d.module.state.lock().unwrap().schemes.get_mut(SCHEME).unwrap().possible.clear();
     assert_eq!(
         post("/v1/questions", Some(all.as_str()), &[], br#"{"ask":"outbox","limit":10}"#.to_vec())
             .await
