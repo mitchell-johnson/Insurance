@@ -57,7 +57,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
 | UW Underwriting, underwriting operations and delegated authority | 29 | 1 | 0 | 1 |
-| CLM Claims and claims operations | 34 | 7 | 1 | 5 |
+| CLM Claims and claims operations | 36 | 5 | 1 | 5 |
 | RI Reinsurance | 15 | 1 | 2 | 0 |
 | INV Unit pricing and the investment ledger | 12 | 5 | 8 | 3 |
 | GRP Group scheme administration | 27 | 5 | 8 | 2 |
@@ -70,20 +70,20 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | ANN Annuities | 2 | 2 | 9 | 4 |
 | VUL Vulnerable customers, support people and representatives | 10 | 10 | 1 | 4 |
 | CMP Complaints and disputes | 9 | 0 | 0 | 0 |
-| STF Staff authorisation and permissions | 16 | 0 | 2 | 1 |
+| STF Staff authorisation and permissions | 17 | 0 | 1 | 0 |
 | PAY Payment runs and bank connectivity | 14 | 0 | 0 | 0 |
 | FIN Finance close, statutory funds and regulatory reporting | 18 | 0 | 0 | 0 |
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **344** | **100** | **133** | **99** |
+| **Total** | **347** | **98** | **132** | **98** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 35 | 25 | 9 |
 | B | 107 | 19 | 16 |
-| C | 200 | 53 | 93 |
+| C | 203 | 51 | 92 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
@@ -98,7 +98,6 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **SVC** (4): SVC-003, SVC-006, SVC-009, SVC-010
 - **ANV** (2): ANV-001, ANV-006
 - **ANN** (2): ANN-001, ANN-002
-- **STF** (1): STF-013
 - **CFG** (1): CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
 - **MIG** (7): MIG-001, MIG-003, MIG-007, MIG-009, MIG-012, MIG-014, MIG-017

@@ -1071,3 +1071,41 @@ fn a_communication_marker_gives_one_owner_a_said_handover_and_more_time() {
     w.ok(Command::DrainDue);
     assert_eq!(w.core.noticed("review_overdue").len(), 1, "the medical review has 24 days too");
 }
+
+/// Purpose: a trauma event overseas is registered at once, routed to the complex queue with a
+/// case conference opened, cannot be admitted until the conference is held, and its evidence is
+/// asked for through the evidence request that the documents adapters deliver.
+/// Why it matters: persona test CLM-041. An overseas event needs foreign records and a senior's
+/// eye; one left on the ordinary queue would be decided on thin evidence, and one waiting to
+/// be registered until the claimant is home would miss the service timers.
+#[test]
+fn a_trauma_event_overseas_goes_to_the_complex_queue_with_a_case_conference() {
+    let mut w = World::new();
+    let mut n = World::notification("t-1", "pol-1", "trauma", ClaimType::Trauma);
+    n.flags = Flags {
+        overseas_event: true,
+        ..Flags::default()
+    };
+    w.ok(Command::Notify(Box::new(n)));
+    let c = w.claim("t-1");
+    assert_eq!((c.status, c.queue, c.notified_on), (Status::Open, Queue::ComplexLarge, d(2027, 3, 1)));
+    assert_eq!(c.task(TaskKind::CaseConference).filter(|t| t.completed_on.is_none()).count(), 1);
+    w.ok(Command::Acknowledge {
+        claim: "t-1".into(),
+        delivery_ref: "delivered-1".into(),
+    });
+    w.assign("t-1", "sam");
+    w.ok(Command::RequestEvidence {
+        claim: "t-1".into(),
+        evidence: "e-1".into(),
+        kind: "hospital_record".into(),
+        from: "overseas-hospital".into(),
+        actor: actor("sam"),
+    });
+    assert_eq!(w.core.noticed("evidence_requested")[0]["evidence"], "e-1");
+    w.assess("t-1", "CC-0003");
+    assert_eq!(w.undecided("t-1", "sam", World::admit_lump(Some(100_000)), "R-OK"), "case_conference_required");
+    w.conference("t-1", "sam");
+    w.decided("t-1", "sam", World::admit_lump(Some(100_000)), "R-OK");
+    assert_eq!(w.claim("t-1").status, Status::Admitted);
+}

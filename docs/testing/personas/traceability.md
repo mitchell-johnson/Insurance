@@ -216,7 +216,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-020 | full | `claims/tests/suite/book.rs::a_benefit_ends_closes_and_can_recur` |
 | CLM-021 | full | `claims/tests/suite/book.rs::declared_income_replays_the_periods_already_paid`<br>`sim/tests/claims.rs::an_offset_recovers_an_overpayment_across_policies` |
 | CLM-023 | full | `claims/tests/suite/intake.rs::escalation_and_identification`<br>`sim/tests/claims.rs::a_scheme_members_claim_is_checked_identified_and_does_not_end_the_scheme` |
-| CLM-024 | part | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts` |
+| CLM-024 | full | `claims/tests/suite/decisions.rs::admission_follows_the_cover_facts`<br>`claims/tests/suite/decisions.rs::a_pool_cover_claim_is_admitted_on_the_employers_evidence_kept_with_it` |
 | CLM-025 | full | `sim/tests/personas_lines.rs::a_pilots_claim_is_checked_on_the_automatic_amount_plus_any_underwritten_layer`<br>`sim/tests/claims.rs::a_member_above_the_automatic_limit_is_paid_the_excess_only_where_it_was_underwritten` |
 | CLM-026 | part | `claims/tests/suite/views.rs::a_continuation_policy_claim_carries_the_scheme_history`<br>`sim/tests/claims.rs::a_continuation_policy_carries_its_scheme_membership_to_the_claim` |
 | CLM-027 | full | `claims/tests/suite/views.rs::a_company_owned_income_claim_pays_the_company_and_is_about_the_life` |
@@ -233,7 +233,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | CLM-038 | full | `claims/tests/suite/views.rs::totals_by_policy_are_what_the_ledger_must_agree_with`<br>`sim/tests/claims.rs::the_core_refuses_instructions_its_own_record_does_not_support` |
 | CLM-039 | full | `claims/tests/suite/book.rs::recorded_interests_are_paid_before_the_claimant`<br>`claims/tests/suite/book.rs::a_whole_interest_takes_all_of_the_proceeds`<br>`claims/tests/suite/covers.rs::a_policy_loan_is_repaid_from_a_death_benefit_before_any_interest`<br>`claims/tests/suite/covers.rs::a_loan_takes_no_more_than_the_benefit_and_only_on_death`<br>`core/src/claims.rs::an_admission_repays_the_policy_loan_out_of_the_benefit` |
 | CLM-040 | full | `claims/tests/suite/book.rs::a_benefit_is_suspended_in_custody_and_resumes_on_release`<br>`product/tests/products.rs::income_protection_prices_a_monthly_benefit_and_carries_its_custody_setting`<br>`sim/tests/claims.rs::the_cover_check_reports_an_income_benefits_waiting_period_and_custody_setting` |
-| CLM-041 | part | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency` |
+| CLM-041 | full | `claims/tests/suite/intake.rs::triage_routes_by_skill_and_ranks_by_urgency`<br>`claims/tests/suite/intake.rs::a_trauma_event_overseas_goes_to_the_complex_queue_with_a_case_conference` |
 | CLM-042 | full | `claims/tests/suite/intake.rs::a_communication_marker_gives_one_owner_a_said_handover_and_more_time` |
 
 ## RI Reinsurance
@@ -243,7 +243,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | RI-001 | full | `reinsurance/tests/treaties.rs::shipped_treaties_load_and_their_scenarios_pass`<br>`reinsurance/tests/replay.rs::cessions_balance_and_never_over_retain` |
 | RI-002 | full | `reinsurance/tests/accumulation.rs::one_life_on_two_partitions_fills_one_retention`<br>`reinsurance/tests/core.rs::a_life_on_two_partitions_is_ceded_once_and_recorded_on_both` |
 | RI-003 | full | `reinsurance/tests/premiums.rs::a_period_charges_each_reinsurer_its_share_at_its_rate`<br>`reinsurance/tests/core.rs::ceded_premium_reaches_the_ledger_and_the_two_balances_agree` |
-| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid` |
+| RI-004 | full | `reinsurance/tests/claims.rs::a_claim_recovers_each_reinsurers_share_as_it_is_paid`<br>`reinsurance/tests/claims.rs::money_got_back_on_an_overpaid_claim_reduces_what_the_reinsurers_pay` |
 | RI-005 | full | `reinsurance/tests/accumulation.rs::a_lapse_suspends_the_cession_and_reinstatement_restores_it`<br>`reinsurance/tests/premiums.rs::lapse_and_unwind_take_ceded_premium_back` |
 | RI-006 | full | `reinsurance/tests/accumulation.rs::layers_are_ceded_one_by_one_and_over_limit_cover_is_never_silent`<br>`reinsurance/tests/premiums.rs::a_backdated_change_posts_only_the_difference` |
 | RI-007 | full | `reinsurance/tests/capacity.rs::facultative_terms_follow_the_proposal_to_the_issued_layer`<br>`reinsurance/tests/claims.rs::a_claim_on_facultative_cover_recovers_the_facultative_share` |
@@ -500,6 +500,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | STF-009 | full | `channels/tests/staff.rs::break_glass_is_immediate_loud_short_and_reviewed` |
 | STF-010 | full | `channels/tests/staff.rs::leaving_and_recertification` |
 | STF-012 | full | `channels/src/classes.rs::fields_above_the_callers_classes_are_masked_and_named`<br>`channels/src/classes.rs::field` |
+| STF-013 | full | `claims/tests/suite/investigate.rs::a_service_billed_twice_is_investigated_quietly_and_recovered_from_the_provider` |
 | STF-014 | full | `channels/tests/http.rs::the_staff_console_asks_the_four_questions`<br>`channels/tests/http.rs::every_staff_read_is_in_the_access_log` |
 | STF-015 | full | `channels/tests/staff.rs::external_elevation_is_capped_and_fails_closed` |
 | STF-016 | full | `channels/tests/staff.rs::external_source_drives_templates` |
