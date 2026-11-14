@@ -304,6 +304,8 @@ Line coverage was 98.3% at hand-over.
 - **Outbound container.** It is immutable for seven years. The driver writes `extracts/<fund>/<date>.csv` once.
 - **Driver pass.** It runs every 30 seconds and has three steps: intake over the last seven days of folders, units on issue, and extracts. A fault in one step does not stop the others. Every proposal is keyed (`valuation-file:<name>`, `units:<fund>:<p>:<through>:<units>`, `extract-written:<id>`), so two drivers or a restart propose nothing new.
 
+**Alerts.** The `alerts` question lists late prices, prices a partition refused, valuation files that could not be read and fund definitions this module refused. The driver logs each new one once under the target `unit_pricing.alert`, and three Azure Monitor log alerts in `infra/unit-pricing.bicep` mail `alertEmails`: needs a person (by kind), driver failing, and driver silent. Details in [unit-pricing.md](unit-pricing.md), Alerts.
+
 **Handed to other areas, and their state at hand-over.**
 
 - **Finance close.** Done by the finance thread. `ic_finance::driver::unit_pricing_sources()` asks `{"q":"close_check","as_at":…}`. The answer is `{green, items}`, and the item kinds are `late_price`, `price_awaiting_action`, `open_price_error` and `extract_not_written`. `ic-finance-close` reports it as the close check `unit_pricing`. Aged pending investment cash comes from the core, not from this module.
@@ -317,9 +319,7 @@ Line coverage was 98.3% at hand-over.
 - `infra/unit-pricing.bicep` compiles in CI but is not referenced by `main.bicep`. It has not been deployed, and its Defender resource uses a preview API. The ABAC condition string has not been tested against a live account.
 - `deploy/k8s/unit-pricing.yaml` has not been applied to a cluster.
 - No real administrator is onboarded. That needs its service principal's object ID (`administratorPrincipalId`) and an agreed file layout; the current layout is our own.
-- A definition the core accepts but this module refuses (bad pricing terms) is recorded as a refusal on the event's key, and the fund cannot be priced until a corrected version is activated. Nothing alerts on this yet.
 - A movement that arrives for a date whose extract was already written still updates holdings. Its flow entry is never consumed, so the next extract's holdings are right but the earlier date's flows stay short. The core's `executed_through` rule should prevent this.
-- Nothing alerts on a price that is late or a publication that was refused. Both show only in the `late`, `work` and `close_check` questions and in the driver's warn log.
 
 ## Privacy
 
