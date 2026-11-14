@@ -95,6 +95,7 @@ pub(crate) fn add_layer(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     }
     if let Some(cover) = policy.covers.get_mut(&spec.cover) {
         cover.layers.push(Layer {
+            paid_up: false,
             excess_option,
             id,
             life: spec.life.clone(),
@@ -347,6 +348,7 @@ pub(crate) fn add_cover(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Pol
     let cover_type = cover.cover_type.clone();
     let id = cover.layers.iter().map(|l| l.id).max().unwrap_or(0) + 1;
     cover.layers.push(Layer {
+        paid_up: false,
         id,
         life: spec.life.clone(),
         start: effective,
@@ -553,6 +555,7 @@ fn alter(ledger: &mut Ledger, catalog: &Catalog, policy: &mut Policy, ctx: &mut 
                 l.end = Some(effective);
             }
             cover.layers.push(Layer {
+                paid_up: false,
                 id,
                 life: old.life.clone(),
                 start: effective,

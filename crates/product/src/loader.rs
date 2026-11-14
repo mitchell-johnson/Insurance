@@ -209,6 +209,24 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                 return Err(invalid(file, format!("cover {}: investment account needs a fund menu", c.code)));
             }
         }
+        if let Some(option) = &c.paid_up_option {
+            let (zero, one) = (ic_money::Dec::from(0i64), ic_money::Dec::from(1i64));
+            let within = |d: ic_money::Dec| d > zero && d <= one;
+            let limited_pay = c
+                .option_axes
+                .iter()
+                .flat_map(|a| &a.choices)
+                .any(|ch| matches!(ch.terms.premium, Some(crate::options::PremiumBasis::LimitedPay { .. })));
+            if !within(option.min_share_of_term.get()) || !within(option.factor.get()) || !limited_pay || !lump_sum(&c.code) {
+                return Err(invalid(
+                    file,
+                    format!(
+                        "cover {}: a paid-up option is on a lump sum cover with a limited-pay premium choice, and its share and factor are above zero and at most one",
+                        c.code
+                    ),
+                ));
+            }
+        }
         if let Some(option) = &c.insurability_option {
             let plain = |e: &String| !e.is_empty() && e.chars().all(|ch| ch.is_ascii_lowercase() || ch == '_');
             let share = option.max_percent_of_original.get();
@@ -320,7 +338,10 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                             let all: Vec<_> = required.iter().chain(categories).collect();
                             let named = all.iter().flat_map(|c| &c.covers).all(|c| p.covers.iter().any(|o| &o.code == c));
                             let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
-                            let sound = all.iter().all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0);
+                            let elsewhere = |e: &String| e.split_once('/').is_some_and(|(product, cover)| !product.is_empty() && !cover.is_empty() && !cover.contains('/'));
+                            let sound = all
+                                .iter()
+                                .all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0 && c.elsewhere.iter().all(elsewhere));
                             if !named {
                                 return Err(invalid(
                                     file,

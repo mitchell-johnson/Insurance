@@ -2461,6 +2461,7 @@ dependencies = [
  "ic-raft",
  "ic-reinsurance",
  "ic-underwriting",
+ "ic-wellness",
  "serde_json",
  "tokio",
 ]
@@ -2686,6 +2687,24 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "ic-wellness"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "ic-core",
+ "ic-ledger",
+ "ic-log",
+ "ic-money",
+ "ic-product",
+ "ic-raft",
+ "ic-sim",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
 ]
 
 [[package]]

@@ -485,6 +485,18 @@ pub enum Event {
         life: LifeId,
         amount_minor: i64,
     },
+    /// A limited-pay cover was made paid up for a life: no more premium,
+    /// and the reduced sum insured for life. The layers it rewrote are
+    /// announced by `LayerReduced`, `LayerEnded` and `LayerAdded`.
+    CoverMadePaidUp {
+        policy: PolicyId,
+        cover: String,
+        life: LifeId,
+        reference: String,
+        effective: NaiveDate,
+        sum_insured_minor: i64,
+        paid_up_minor: i64,
+    },
     /// A settled payment went to the wrong person. The payable it paid is
     /// owed again and the holder owes the amount back.
     PayeeDebtRaised {
