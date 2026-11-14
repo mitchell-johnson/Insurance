@@ -317,14 +317,14 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
                         DiscountCondition::Entitlement { code } => !code.is_empty(),
                         DiscountCondition::Always => true,
                         DiscountCondition::BenefitCategories { required, categories, count } => {
-                            let all: Vec<_> = std::iter::once(required).chain(categories).collect();
+                            let all: Vec<_> = required.iter().chain(categories).collect();
                             let named = all.iter().flat_map(|c| &c.covers).all(|c| p.covers.iter().any(|o| &o.code == c));
                             let distinct = all.iter().map(|c| c.code.as_str()).collect::<BTreeSet<_>>().len() == all.len();
                             let sound = all.iter().all(|c| !c.code.is_empty() && !c.covers.is_empty() && c.min_sum_insured_minor >= 0);
                             if !named {
                                 return Err(invalid(file, format!("discount {}: a benefit category names a cover the product does not have", d.code)));
                             }
-                            distinct && sound && *count as usize <= categories.len()
+                            !required.is_empty() && distinct && sound && *count as usize <= categories.len()
                         }
                     };
                     if !counted {

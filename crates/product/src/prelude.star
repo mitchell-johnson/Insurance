@@ -237,7 +237,7 @@ def discount_category(code, covers, min_sum_insured = 0):
     return {"code": code, "covers": covers, "min_sum_insured_minor": min_sum_insured}
 
 def benefit_categories(required, categories, count):
-    """Each life holds a required cover and covers from at least `count` other categories."""
+    """Each life holds a cover from one of the required categories and covers from at least `count` others."""
     return {"kind": "benefit_categories", "required": required, "categories": categories, "count": count}
 
 def entitled(code):

@@ -79,11 +79,11 @@ pub enum DiscountCondition {
         code: String,
     },
     /// Judged for each life on its own covers: the life holds a cover from
-    /// the required category, and covers from at least `count` of the other
-    /// categories. A cover counts only where the life's sum insured on it is
-    /// at least its category's minimum.
+    /// one of the required categories, and covers from at least `count` of
+    /// the other categories. A cover counts only where the life's sum
+    /// insured on it is at least its category's minimum.
     BenefitCategories {
-        required: BenefitCategory,
+        required: Vec<BenefitCategory>,
         categories: Vec<BenefitCategory>,
         count: u32,
     },
@@ -233,7 +233,7 @@ fn rate(d: &Discount, state: &PricingState<'_>, line: &Line, only: Option<&Strin
         DiscountCondition::Frequency { frequencies } => frequencies.contains(&state.frequency),
         DiscountCondition::Entitlement { code } => held(code).is_some(),
         DiscountCondition::BenefitCategories { required, categories, count } => {
-            required.held_by(state.sums_insured, &line.life)
+            required.iter().any(|c| c.held_by(state.sums_insured, &line.life))
                 && categories.iter().filter(|c| c.held_by(state.sums_insured, &line.life)).count() >= *count as usize
         }
     };
