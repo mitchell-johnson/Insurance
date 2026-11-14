@@ -123,7 +123,7 @@ Two limits on what these journeys show:
 - **Wellness:** built on 14 November (`crates/wellness`, docs/wellness.md). It gives the 10% Initial Discount on joining, applies Premium Flex two weeks after each policy anniversary from the anniversary, and removes the discount from the next premium due on leaving. Still missing: the intake from AIA's Vitality programme (its format is AIA's to give) and the notice to the policy owner before a change.
 - **The core:**
   - Paid-up alteration for Cover for Life after half the premium term: built for the owner's request (`MakePaidUp`, 14 Nov). The automatic conversion when a premium is overdue after the paid-up date is not built.
-  - Premium suspension (up to 12 months).
+  - Suspension of cover (up to 12 months in all): built 14 Nov on AIA Living (`cover_suspension`, `SuspendCover`, `ResumeCover`). No premium and no cover for the days; an early return counts only the days used. The 12 months in force before the first suspension is a placeholder, and the other AIA products do not declare the right until AIA says which carry it.
   - Multi-Benefit Discount counting of cover a life holds on another policy.
   - Special events increases capped in money in total, which is approximated by two uses.
   - The Life Future Insurability anniversary option, which is declared only as a facility.

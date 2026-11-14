@@ -574,6 +574,15 @@ impl CoreState {
                     crate::paid_up::make_paid_up(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::SuspendCover(spec) => {
+                let policy = spec.policy.clone();
+                self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                    crate::suspension::suspend(&mut s.ledger, &s.catalog, p, ctx, *spec)
+                })
+            }
+            Command::ResumeCover { policy, reference } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                crate::suspension::resume(&mut s.ledger, &s.catalog, p, ctx, &reference)
+            }),
             Command::ExerciseOption(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
@@ -625,6 +634,9 @@ impl CoreState {
                 crate::hardship::grant(&mut s.ledger, &s.catalog, p, ctx, hardship, from, to, share_bps)
             }),
             Command::EndHardship { policy, hardship } => self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| {
+                if p.suspensions.contains_key(&hardship) {
+                    return Err(Reject::new("cover_suspended", "that is a suspension of cover; it ends by resuming cover"));
+                }
                 crate::hardship::end(&mut s.ledger, &s.catalog, p, ctx, &hardship)
             }),
             Command::RefundMemberCredit { policy, life, amount } => {

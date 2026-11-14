@@ -287,6 +287,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         replaces: Vec::new(),
         payee_debts: BTreeMap::new(),
         paid_up: BTreeMap::new(),
+        suspensions: BTreeMap::new(),
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),

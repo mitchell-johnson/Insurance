@@ -205,6 +205,8 @@ pub fn cover_facts(state: &CoreState, policy: &str, cover: &str, life: Option<&s
             "suspended"
         }
     });
+    // Suspended at the owner's request on the day: not covered, whatever is paid.
+    let standing = if p.suspended_on(on) { Some("suspended") } else { standing };
     let policy_live = match p.status {
         PolicyStatus::Lapsed => p.lapse.as_ref().is_some_and(|l| l.lapsed_on > on),
         PolicyStatus::Quoted | PolicyStatus::Proposed => false,

@@ -653,6 +653,9 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// Each suspension of the policy at the owner's request, by its reference.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub suspensions: BTreeMap<String, crate::suspension::CoverSuspension>,
     /// Each cover made paid up, by the request's reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub paid_up: BTreeMap<String, crate::paid_up::PaidUpRecord>,

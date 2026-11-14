@@ -141,6 +141,9 @@ fn validate_product(file: &str, p: &mut ProductDefinition) -> Result<(), LoadErr
     if p.covers.is_empty() {
         return Err(invalid(file, "product offers no covers"));
     }
+    if p.cover_suspension.is_some_and(|s| s.max_months == 0 || s.max_months > 60) {
+        return Err(invalid(file, "a cover suspension allows between 1 and 60 months in all"));
+    }
     let mut codes = BTreeSet::new();
     for c in &p.covers {
         if !codes.insert(c.code.as_str()) {
