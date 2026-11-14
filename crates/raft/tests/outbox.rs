@@ -262,10 +262,7 @@ async fn a_modules_core_commands_are_carried_and_their_outcomes_reported() {
     // core would have refused it. A proposal whose answer was slow on a loaded machine is
     // proposed again and then reported as a repeat: applied once either way.
     for (id, outcome) in &outcomes {
-        assert!(
-            matches!(outcome[..], [CoreOutcome::Applied { partition: 0, .. }]),
-            "{id}: {outcome:?}"
-        );
+        assert!(matches!(outcome[..], [CoreOutcome::Applied { partition: 0, .. }]), "{id}: {outcome:?}");
     }
     assert!(outcomes.contains_key("issue-1"));
 

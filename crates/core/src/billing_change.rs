@@ -257,10 +257,16 @@ mod tests {
     /// billing day, and a billing day put a month late would leave a month unbilled.
     #[test]
     fn a_new_billing_day_and_the_period_it_is_measured_against() {
-        let lengths: Vec<Option<u32>> = [Frequency::Fortnightly, Frequency::Monthly, Frequency::Quarterly, Frequency::HalfYearly, Frequency::Yearly]
-            .into_iter()
-            .map(months)
-            .collect();
+        let lengths: Vec<Option<u32>> = [
+            Frequency::Fortnightly,
+            Frequency::Monthly,
+            Frequency::Quarterly,
+            Frequency::HalfYearly,
+            Frequency::Yearly,
+        ]
+        .into_iter()
+        .map(months)
+        .collect();
         assert_eq!(lengths, vec![None, Some(1), Some(3), Some(6), Some(12)]);
         assert_eq!(next_on_day(d(2027, 11, 10), 20), Some(d(2027, 11, 20)), "later this month");
         assert_eq!(next_on_day(d(2027, 11, 10), 10), Some(d(2027, 11, 10)), "today is on the day");
