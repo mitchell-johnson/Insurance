@@ -23,7 +23,11 @@
 //   - billing periods run from the inception day of the month to the same
 //     day of the next; an unpaid premium suspends cover after the grace days
 //     and lapses the policy after the lapse days, both counted from its due
-//     date.
+//     date;
+//   - a fund's price is its net assets over its units on issue: the mid price
+//     is that rounded half-even to the fund's decimals, the buy price is it
+//     plus the buy spread rounded up, and the sell price is it less the sell
+//     spread rounded down (`products/funds/*.star`, `docs/unit-pricing.md`).
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -96,7 +100,7 @@ function age(born, on) {
 function addDays(date, n) { return new Date(Date.parse(`${date}T00:00:00Z`) + n * 86400000).toISOString().slice(0, 10); }
 /// The same day of the month `n` months on, counted from the inception date (a 31st falls back to the month's last day).
 function addMonths(date, n) {
-  const a = day(date), total = a.m - 1 + n, y = a.y + Math.floor(total / 12), m = (total % 12) + 1;
+  const a = day(date), total = a.m - 1 + n, y = a.y + Math.floor(total / 12), m = (((total % 12) + 12) % 12) + 1;
   return iso({ y, m, d: Math.min(a.d, daysIn(y, m)) });
 }
 const PERIODS = { monthly: 12n, fortnightly: 26n, yearly: 1n };
@@ -157,29 +161,21 @@ function arrears(productCode, due) {
   return { graceEnds: addDays(due, p.graceDays), suspends: p.suspends, lapses: addDays(due, p.lapseDays), reinstateBy: p.reinstatementDays ? addDays(addDays(due, p.lapseDays), p.reinstatementDays) : null };
 }
 
-// --- Health claims. ---------------------------------------------------------------------------------------------
-/// What is payable on one invoice under a benefit's rules (cents): the excess comes off first, the customer's
-/// co-payment share of the rest next, and the result is capped at what is left of each limit.
-function healthPayable(invoice, { excess = 0, copayPct = 0, perEvent = Infinity, yearLeft = Infinity, lifetimeLeft = Infinity }) {
-  const afterExcess = Math.max(0, invoice - excess);
-  const share = Number(halfEven(BigInt(afterExcess) * BigInt(100 - copayPct), 100n));
-  return Math.max(0, Math.min(share, perEvent, yearLeft, lifetimeLeft));
-}
-
 // --- Units. -----------------------------------------------------------------------------------------------------
-/// A fund's buy and sell prices from its mid price and spreads (basis points), to the fund's decimals, half-even.
-function prices(mid, buyBps, sellBps, decimals = 4) {
-  const m = dec(mid), unit = 10n ** BigInt(decimals);
-  const scaled = m.n * unit; // mid x 10^decimals x 10^scale
-  const one = (bps) => halfEven(scaled * BigInt(10000 + bps), 10000n * 10n ** BigInt(m.scale));
-  const show = (n) => `${n / unit}.${String(n % unit).padStart(decimals, "0")}`;
-  return { buy: show(one(buyBps)), sell: show(one(-sellBps)) };
-}
-/// Units bought for an amount of cents at a price, in micro-units, rounded down (the fund never issues a fraction it was not paid for).
-function unitsBought(cents, price) {
-  const p = dec(price);
-  return Number((BigInt(cents) * 10n ** BigInt(p.scale) * 1_000_000n) / (p.n * 100n));
+/// A fund's prices for a day, from its net asset value (dollars and cents) and its units on issue (micro-units). The
+/// unrounded price is net assets over units. The mid price is that rounded half-even to the fund's decimals; the buy
+/// price is it plus the buy spread, rounded up; the sell price is it less the sell spread, rounded down (a customer
+/// never buys below, or sells above, the exact price). Spreads (basis points) and decimals come from the fund's file.
+function prices(fundCode, nav, unitsMicro) {
+  const text = read(`funds/${fundCode}.star`);
+  const num = (name) => BigInt(new RegExp(`${name} = (\\d+)`).exec(text)[1]);
+  const decimals = Number(num("price_decimals")), unit = 10n ** BigInt(decimals), a = dec(nav);
+  // price x 10^decimals = n / d, exactly.
+  const n = a.n * 1_000_000n * unit, d = 10n ** BigInt(a.scale) * BigInt(unitsMicro);
+  const up = (x, y) => (x % y === 0n ? x / y : x / y + 1n), down = (x, y) => x / y;
+  const show = (v) => `${v / unit}.${String(v % unit).padStart(decimals, "0")}`;
+  return { mid: show(halfEven(n, d)), buy: show(up(n * (10000n + num("buy_spread_bps")), d * 10000n)), sell: show(down(n * (10000n - num("sell_spread_bps")), d * 10000n)) };
 }
 
 const money = (cents) => (cents / 100).toFixed(2);
-module.exports = { premium, age, addDays, addMonths, period, arrears, healthPayable, prices, unitsBought, product, rateTable, money, halfEven, dec };
+module.exports = { premium, age, addDays, addMonths, period, arrears, prices, product, rateTable, money, halfEven, dec };

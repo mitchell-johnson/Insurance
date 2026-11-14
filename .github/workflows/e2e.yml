@@ -1,0 +1,59 @@
+name: e2e
+
+# The persona end-to-end suite: 300 journeys through the web pages of a real
+# stack (three ledger nodes, the API, the portal). It is started by hand and
+# is not part of `ci.yml`: it tests the system as a person uses it rather than
+# gating a commit, it needs a browser, and its policy lifecycle area closes
+# several years of business days. See e2e/README.md.
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: "One area to run (for example Claims), or empty for all"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e
+  cancel-in-progress: false
+
+jobs:
+  personas:
+    name: persona journeys
+    runs-on: [self-hosted, insurance-ci]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the system and the suite's tools
+        run: |
+          cargo build --bins
+          CARGO_TARGET_DIR=target cargo build --manifest-path e2e/seed/Cargo.toml
+      - name: Browser
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Start the stack
+        run: |
+          nohup node e2e/stack/stack.js > e2e-stack.log 2>&1 &
+          for i in $(seq 1 120); do grep -q "ready http" e2e-stack.log && exit 0; sleep 2; done
+          cat e2e-stack.log; exit 1
+      - name: Run the journeys
+        env:
+          AREA: ${{ inputs.area }}
+        run: node e2e/run.js
+      - name: Results
+        if: always()
+        run: cat e2e/.run/results/results.md >> "$GITHUB_STEP_SUMMARY" || true
+      - name: Stack log
+        if: failure()
+        run: tail -n 200 e2e-stack.log || true
+      - name: Stop the stack
+        if: always()
+        run: pkill -f "e2e/stack/stack.js" || true; pkill -f "target/debug/ic-" || true

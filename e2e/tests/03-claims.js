@@ -3,6 +3,7 @@
 "use strict";
 const { test, Journey } = require("../lib/suite");
 const { cast } = require("../lib/cast");
+const oracle = require("../lib/oracle");
 
 const A = "Claims";
 const COMMANDS = "/staff/v1/claims/commands";
@@ -157,8 +158,10 @@ test({ id: "E2E-078", area: A, persona: "ST4", story: "US-ST03-1", title: "An ad
   await s.sees(`${c.claim}: trauma, admitted`, "#c-title");
   const row = await summary(s);
   if (row.Admitted !== "100000.00" || row.Reserve !== "0.00") throw new Error(`after admission the claim reads ${JSON.stringify(row)}`);
-  const payable = Number(row.Payable);
-  if (!(payable < 100000 && payable > 99000)) throw new Error(`payable is ${row.Payable}; the unpaid premium should have been taken from the sum insured`);
+  // The policy's first premium is unpaid: what is payable is the sum insured less that premium, worked out independently.
+  const unpaid = oracle.premium(c.policy.application).total;
+  const worked = oracle.money(100_000_00 - unpaid);
+  if (row.Payable !== worked) throw new Error(`payable is ${row.Payable}; the sum insured less the unpaid premium of ${oracle.money(unpaid)} is ${worked}`);
   await s.sees("payment", "#c-timers");
 });
 
@@ -616,7 +619,7 @@ test({ id: "E2E-111", area: A, persona: "ST4", story: "US-ST12-2", title: "The b
   await s.sees("Reviews overdue", "#b-out");
 });
 
-test({ id: "E2E-112", area: A, persona: "ST10", story: "US-ST13-1", title: "A finance operator is refused the claims console", matrix: ["SEC-004"],
+test({ id: "E2E-112", area: A, persona: "ST10", story: "US-ST13-1", title: "A finance operator is refused the claims console", matrix: [],
   purpose: "Sign in to the claims console as the finance operator.",
   why: "Claims files hold health information; staff without the claims role must see a refusal and nothing behind it." }, async (t) => {
   const s = await t.open("/claims", cast.st10, 403);

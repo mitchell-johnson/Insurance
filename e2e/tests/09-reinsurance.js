@@ -18,7 +18,7 @@ async function prepared(t, reason) {
 }
 const withdraw = (t, id) => t.sys.portal("POST", BASE + "withdraw/" + encodeURIComponent(id), cast.ri1);
 
-test({ id: "E2E-253", area: A, persona: "Reinsurance", story: "US-R01-1", title: "Reinsurance operations arrive able to act on exceptions but not to sign abandonments", matrix: ["RI-011"],
+test({ id: "E2E-253", area: A, persona: "Reinsurance", story: "US-R01-1", title: "Reinsurance operations arrive able to act on exceptions but not to sign abandonments", matrix: [],
   purpose: "Sign in to the reinsurance console as a member of reinsurance operations.",
   why: "The console must say which half of the two-person rule this person holds, and the date their commands will carry." }, async (t) => {
   const s = await t.open("/reinsurance", cast.ri1);
@@ -27,14 +27,14 @@ test({ id: "E2E-253", area: A, persona: "Reinsurance", story: "US-R01-1", title:
   await s.sees("Commands are made on 20", "#me");
 });
 
-test({ id: "E2E-254", area: A, persona: "Reinsurance", story: "US-R01-1", title: "The reinsurance lead both acts on exceptions and signs abandonments", matrix: ["RI-011"],
+test({ id: "E2E-254", area: A, persona: "Reinsurance", story: "US-R01-1", title: "The reinsurance lead both acts on exceptions and signs abandonments", matrix: [],
   purpose: "Sign in as the reinsurance lead.",
   why: "Someone must be able to sign; the page must show that this person can." }, async (t) => {
   const s = await t.open("/reinsurance", cast.ri2);
   await s.sees("you act on exceptions, you sign abandonments", "#me");
 });
 
-test({ id: "E2E-255", area: A, persona: "Auditor", story: "US-R01-1", title: "The auditor reads the reinsurance exceptions and cannot act on one", matrix: ["RI-011"],
+test({ id: "E2E-255", area: A, persona: "Auditor", story: "US-R01-1", title: "The auditor reads the reinsurance exceptions and cannot act on one", matrix: [],
   purpose: "Sign in as the read-only auditor, then send a command by hand.",
   why: "Audit reads everything and changes nothing; the module must refuse the command, not only hide the buttons." }, async (t) => {
   const s = await t.open("/reinsurance", cast.auditor);
@@ -44,7 +44,7 @@ test({ id: "E2E-255", area: A, persona: "Auditor", story: "US-R01-1", title: "Th
   if (r.status !== 403 || !String(r.data.detail).includes("hold no role to act")) throw new Error(`the command answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 
-test({ id: "E2E-256", area: A, persona: "ST5", story: "US-R01-1", title: "Staff with no reinsurance role are refused the console", matrix: ["RI-011"],
+test({ id: "E2E-256", area: A, persona: "ST5", story: "US-R01-1", title: "Staff with no reinsurance role are refused the console", matrix: [],
   purpose: "Open the reinsurance console as a service officer.",
   why: "Treaty positions and reinsurer settlements are commercially sensitive; only the roles that work them see them." }, async (t) => {
   const s = await t.open("/reinsurance", cast.st5b, 403);
@@ -94,7 +94,7 @@ test({ id: "E2E-260", area: A, persona: "Reinsurance", story: "US-R01-1", title:
   await s.stopped("#p-msg", "has not been refused", 409);
 });
 
-test({ id: "E2E-261", area: A, persona: "ST11", story: "US-ST11-1", title: "The month-end check says what in reinsurance stops the close", matrix: ["RI-011", "FIN-001"],
+test({ id: "E2E-261", area: A, persona: "ST11", story: "US-ST11-1", title: "The month-end check says what in reinsurance stops the close", matrix: ["FIN-001"],
   purpose: "Run the month-end check for the current period on a system whose reinsurance instructions have not been delivered.",
   why: "The finance close asks reinsurance whether it is clean; the answer must name what is outstanding, not just say no." }, async (t) => {
   await t.policy("term_life", `cust-${t.ref("ri").toLowerCase()}`);
@@ -106,7 +106,7 @@ test({ id: "E2E-261", area: A, persona: "ST11", story: "US-ST11-1", title: "The 
   await s.sees("instructions not delivered", "#s-out");
 });
 
-test({ id: "E2E-262", area: A, persona: "Reinsurance", story: "US-R01-1", title: "Nothing is listed as abandoned on a system where nothing has been", matrix: ["RI-013"],
+test({ id: "E2E-262", area: A, persona: "Reinsurance", story: "US-R01-1", title: "Nothing is listed as abandoned on a system where nothing has been", matrix: [],
   purpose: "Read the Notices and abandoned view.",
   why: "The abandoned list is the permanent record of what was written off between the ledgers; it must be empty until two people have signed something into it." }, async (t) => {
   const s = await t.open("/reinsurance", cast.ri1);

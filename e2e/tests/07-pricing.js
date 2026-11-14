@@ -15,6 +15,7 @@
 "use strict";
 const { test, Journey } = require("../lib/suite");
 const { cast } = require("../lib/cast");
+const oracle = require("../lib/oracle");
 
 const A = "Unit pricing";
 const UNITS = 1_000_000_000_000; // a million units, in micro-units
@@ -443,7 +444,7 @@ test({ id: "E2E-231", area: A, persona: "ST9", story: "US-ST09-1", title: "A che
   if (r.status !== 403) throw new Error(`the suspension answered ${r.status} ${JSON.stringify(r.data)}`);
 });
 
-test({ id: "E2E-232", area: A, persona: "ST8", story: "US-P03-1", title: "Prices in force are listed for a range of dates, each with its buy and sell either side of the mid", matrix: ["INV-001", "INV-024"], ...growth,
+test({ id: "E2E-232", area: A, persona: "ST8", story: "US-P03-1", title: "Prices in force are listed for a range of dates, and each mid, buy and sell equals the independent calculation", matrix: ["INV-001", "INV-024"], ...growth,
   purpose: "With two prices in force on consecutive dates, look up the range and read the list.",
   why: "Every unit trade takes its price from this list; the spread and the four-decimal rounding are what customers are charged." }, async (t) => {
   const one = await priced(t, "growth"), two = await priced(t, "growth");
@@ -458,6 +459,7 @@ test({ id: "E2E-232", area: A, persona: "ST8", story: "US-P03-1", title: "Prices
   if (rows.length !== 2) throw new Error(`the list reads ${JSON.stringify(rows)}`);
   for (const r of rows) {
     if (![r[3], r[4], r[5]].every((p) => /^\d+\.\d{4}$/.test(p))) throw new Error(`a price is not to four decimals: ${JSON.stringify(r)}`);
-    if (!(Number(r[4]) > Number(r[3]) && Number(r[3]) > Number(r[5]))) throw new Error(`buy, mid and sell are out of order: ${JSON.stringify(r)}`);
+    const worked = oracle.prices("growth", (r[0] === one.price ? one : two).nav.toFixed(2), UNITS);
+    if (r[3] !== worked.mid || r[4] !== worked.buy || r[5] !== worked.sell) throw new Error(`the list shows mid ${r[3]}, buy ${r[4]} and sell ${r[5]}; from net assets of ${(r[0] === one.price ? one : two).nav.toFixed(2)} over a million units the independent calculation gives ${worked.mid}, ${worked.buy} (rounded up) and ${worked.sell} (rounded down)`);
   }
 });

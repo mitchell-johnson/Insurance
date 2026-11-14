@@ -578,7 +578,7 @@ test({ id: "E2E-068", area: A, persona: "Conduct", story: "US-ST16-1", title: "A
   await s.stopped("#act-msg", "there is no complaint CMP-never", 409);
 });
 
-test({ id: "E2E-069", area: A, persona: "ST10", story: "US-ST13-1", title: "A finance operator is refused the complaints workbench", matrix: ["SEC-004"],
+test({ id: "E2E-069", area: A, persona: "ST10", story: "US-ST13-1", title: "A finance operator is refused the complaints workbench", matrix: [],
   purpose: "Sign in to the complaints workbench as the finance operator.",
   why: "Complaint files are need-to-know; a member of staff with no complaints role must see a refusal and no form." }, async (t) => {
   const s = await t.open("/complaints", cast.st10, 403);

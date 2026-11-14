@@ -31,7 +31,7 @@ test({ id: "E2E-002", area: A, persona: "Anyone", story: "US-ST16-1", title: "A 
   await s.sees("Whether everything is working, in plain words.");
 });
 
-test({ id: "E2E-003", area: A, persona: "P1", story: "US-ST16-2", title: "The public status page says in plain words that the service is working", matrix: ["OPS-031"],
+test({ id: "E2E-003", area: A, persona: "P1", story: "US-ST16-2", title: "The public status page says in plain words that the service is working", matrix: [],
   purpose: "Open the status page as a member of the public while every region is healthy.",
   why: "Customers and advisers read this page during an incident; it must answer without a sign-in and state the real health of the running cluster." }, async (t) => {
   const s = await t.open("/status", null);
@@ -42,7 +42,7 @@ test({ id: "E2E-003", area: A, persona: "P1", story: "US-ST16-2", title: "The pu
   if (!kind.includes("ok")) throw new Error(`the status banner is "${kind}", expected the healthy one`);
 });
 
-test({ id: "E2E-004", area: A, persona: "ST16", story: "US-ST16-1", title: "The platform engineer sees every region, its nodes and its leaders", matrix: ["OPS-030"],
+test({ id: "E2E-004", area: A, persona: "ST16", story: "US-ST16-1", title: "The platform engineer sees every region, its nodes and its leaders", matrix: [],
   purpose: "Sign in to the operations console with the operations role and read the regions table of the running three-node cluster.",
   why: "During a region loss this is the screen the incident commander steers by; it must show the real leaders and reachability, not a canned picture." }, async (t) => {
   const s = await t.open("/ops", cast.st16);
@@ -77,7 +77,7 @@ test({ id: "E2E-006", area: A, persona: "ST16", story: "US-ST16-1", title: "The 
   if (!/^[0-9a-f]{16}$/.test(row[5])) throw new Error(`state hash reads "${row[5]}"`);
 });
 
-test({ id: "E2E-007", area: A, persona: "ST3", story: "US-ST16-1", title: "A claims assessor cannot open the operations console", matrix: ["SEC-004"],
+test({ id: "E2E-007", area: A, persona: "ST3", story: "US-ST16-1", title: "A claims assessor cannot open the operations console", matrix: [],
   purpose: "Sign in to the operations console as a member of staff who does not hold the operations role.",
   why: "Region and leader detail is for the platform team; the refusal must be whole-page and say which role is needed." }, async (t) => {
   const s = await t.open("/ops", cast.st3, 403);

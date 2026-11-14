@@ -126,6 +126,11 @@ async function seed(stack) {
     command: { type: "record_statement", account: code, date: Journey_before(opening, 3), opening_minor: 10_000_000_00, closing_minor: 10_000_000_00, lines: [] } }, `the statement of ${code}`);
   log("payments banks, channels, routes and rules active; a statement read for every account");
 
+  // --- Unit pricing: how many partitions report units on issue. The intake driver records this once when it starts;
+  // the driver is not part of this stack, so the seed does its part.
+  await told("unit-pricing", { key: "seed-pricing-partitions", caller: "unit-pricing-intake", actor: "unit-pricing-intake", roles: [], at: `${opening}T08:10:00Z`, command: { record_partitions: { count: stack.partitions } } }, "the number of partitions");
+  log("unit pricing knows the number of partitions");
+
   // --- Distribution: two advice providers, the advisers engaged with them, and a current licence for each provider.
   // Entered by the distribution administrator through the commission console's own route.
   const structured = async (command, what) => {

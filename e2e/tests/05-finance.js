@@ -176,11 +176,18 @@ test({ id: "E2E-157", area: A, persona: "ST12", story: "US-ST12-2", title: "Ever
   await t.policy("term_life", "cust-p18");
   const s = await t.open("/finance", cast.st10);
   await s.tab("Books");
-  await s.press("Classify policies");
-  await s.done("#ag-msg", "Classified.");
-  await s.sees("individual-life/FY2028/other", "#ag-out");
-  const text = await s.text("#ag-out");
-  if (!/ungrouped/i.test(text) || !/(^|\s)0\s*$/.test(text.trim())) throw new Error(`the groups read "${text.slice(0, 200)}"`);
+  // Other journeys issue policies while this one runs, and a policy issued after a classification waits for the next:
+  // the classification is asked for again until one of them leaves nothing over.
+  let text = "";
+  for (let n = 0; n < 6; n++) {
+    await s.press("Classify policies");
+    await s.done("#ag-msg", "Classified.");
+    await s.sees("individual-life/FY2028/other", "#ag-out");
+    text = await s.text("#ag-out");
+    if (/ungrouped/i.test(text) && /(^|\s)0\s*$/.test(text.trim())) return;
+    await s.wait(500);
+  }
+  throw new Error(`after six classifications the groups read "${text.slice(0, 200)}"`);
 });
 
 test({ id: "E2E-158", area: A, persona: "ST12", story: "US-ST12-2", title: "The actuary can read the accounting groups but cannot reclassify policies",
@@ -260,7 +267,7 @@ test({ id: "E2E-164", area: A, persona: "ST10", story: "US-ST10-1", title: "A re
   await s.stopped("#tb-msg", "return RET-2027-Q3 has not been filed", 400);
 });
 
-test({ id: "E2E-165", area: A, persona: "ST5", story: "US-ST13-1", title: "A collections officer is refused the finance console", matrix: ["SEC-004"],
+test({ id: "E2E-165", area: A, persona: "ST5", story: "US-ST13-1", title: "A collections officer is refused the finance console", matrix: [],
   purpose: "Sign in to the finance console as the collections officer.",
   why: "The ledger and the close are finance's; other staff see a refusal and no figures." }, async (t) => {
   const s = await t.open("/finance", cast.st5, 403);

@@ -326,10 +326,13 @@ test({ id: "E2E-252", area: A, persona: "P29", story: "US-P29-1", title: "At the
   t.note(`calculated: ${oracle.money(p.premium.total)} a month in year one, ${oracle.money(after.total)} from ${anniversary}; cover ${indexed.covers.map((c) => `${c.code} ${oracle.money(c.sum_insured_minor)}`).join(", ")}`);
   await t.pays(p.number, p.premium.total * 12 + after.total);
   await t.closesTo(oracle.addDays(anniversary, 1));
-  await known(t, p.id, (v) => v.notices.length === 13, "thirteen notices");
+  const thirteenth = oracle.period(p.inception, "monthly", 13);
+  await known(t, p.id, (v) => v.notices.some((n) => n.period_start === thirteenth.start), "its thirteenth notice");
   const seen = await onScreen(t, p.id);
-  same("the twelfth notice (the last of year one)", seen.notices[11], notice(p, 12));
-  same("the thirteenth notice (the first of year two)", seen.notices[12], { ...oracle.period(p.inception, "monthly", 13), total: after.total });
+  // The console keeps the latest notices, not all thirteen: the two either side of the anniversary are found by their dates.
+  const at = (start) => seen.notices.find((n) => n.start === start) || null;
+  same("the twelfth notice (the last of year one)", at(notice(p, 12).start), notice(p, 12));
+  same("the thirteenth notice (the first of year two)", at(thirteenth.start), { ...thirteenth, total: after.total });
   same("cover after indexation", Object.fromEntries(Object.entries(seen.covers).map(([code, c]) => [code, c.sum])), Object.fromEntries(indexed.covers.map((c) => [c.code, c.sum_insured_minor])));
   same("what is owed, having paid thirteen months ahead", seen.outstanding, 0);
 });
