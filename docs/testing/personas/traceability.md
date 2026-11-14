@@ -301,6 +301,7 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 | GRP-012 | full | `group/tests/billing.rs::the_invoice_view_agrees_with_the_core_by_billing_group` |
 | GRP-013 | part | `group/tests/billing.rs::a_short_payment_is_brought_forward_on_the_next_invoice_and_falls_on_no_member` |
 | GRP-014 | full | `group/tests/billing.rs::persistent_short_payment_suspends_joiners_until_paid` |
+| GRP-015 | part | `payments/tests/returned.rs::a_remittance_recalled_as_a_duplicate_is_given_back_and_reversed` |
 | GRP-016 | full | `sim/tests/voluntary_cover.rs::a_member_who_does_not_pay_loses_only_the_cover_they_pay_for`<br>`group/tests/excess.rs::a_member_who_stops_paying_their_loading_loses_only_that_cover` |
 | GRP-017 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/health_menu.rs::chosen_covers_are_billed_to_whoever_pays_each_and_a_change_touches_only_what_changed` |
 | GRP-018 | full | `group/tests/health.rs::a_members_choice_puts_their_plan_and_dependants_into_force`<br>`sim/tests/voluntary_cover.rs::cover_the_member_pays_for_is_billed_and_paid_apart_from_the_scheme`<br>`group/tests/excess.rs::a_member_who_pays_their_loading_keeps_the_cover` |

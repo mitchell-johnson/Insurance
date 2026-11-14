@@ -222,6 +222,12 @@ pub enum Command {
         #[serde(default)]
         reason: String,
     },
+    /// Give back money received: its bank recalled it, as a duplicate say
+    /// (`returned.rs`). The core reverses what cash matching applied.
+    ReturnCredit {
+        exception: Id,
+        reason: String,
+    },
     /// A settled payment, or part of it, went into the wrong account
     /// (`recall.rs`): the bank is asked to recall it, the core holds what
     /// the holder owes, and the right person is owed again.
@@ -656,6 +662,10 @@ pub enum Event {
     PayerCaseCleared {
         case: String,
     },
+    CreditReturned {
+        exception: Id,
+        policies: Vec<String>,
+    },
     MisdirectionReported {
         misdirection: Id,
         item: Id,
@@ -774,6 +784,10 @@ pub struct PaymentsState {
     /// Policy owners with insolvency interests recorded by the core.
     #[serde(default)]
     pub insolvencies: BTreeMap<String, crate::insolvency::Insolvency>,
+    /// Receipts cash matching applied, and credits given back
+    /// (`returned.rs`).
+    #[serde(default)]
+    pub applied: crate::returned::Applied,
     /// Payments that went to the wrong account (`recall.rs`).
     #[serde(default)]
     pub misdirections: BTreeMap<Id, crate::recall::Misdirection>,
@@ -891,6 +905,7 @@ impl PaymentsState {
             Command::PremiumApplied { policy, receipt } => self.premium_applied(tx, &policy, &receipt),
             Command::ClearPayer { case, relationship, note } => self.clear_payer(tx, &case, relationship, note),
             Command::ConfirmRelationship { case, confirmed, reason } => self.confirm_relationship(tx, &case, confirmed, reason),
+            Command::ReturnCredit { exception, reason } => self.return_credit(tx, &exception, reason),
             Command::ReportMisdirected {
                 misdirection,
                 item,
