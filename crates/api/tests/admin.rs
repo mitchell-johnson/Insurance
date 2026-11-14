@@ -348,3 +348,105 @@ fn every_shipped_rate_table_is_validated_before_it_is_activated() {
     let validations = commands.iter().filter(|c| matches!(c, Command::RecordRateTableValidation(_))).count();
     assert_eq!(validations, tables);
 }
+
+/// A migrated term life policy on the shipped product, monthly from 15 Mar 2027, with the
+/// October bill of NZD 60 unpaid where `owing` says so; and the old system's figures for it,
+/// whose monthly premium of NZD 73.55 is what this system prices the policy at.
+fn migrated(n: u64, owing: i64) -> serde_json::Value {
+    let mut issue = ic_sim::persona::term_life(
+        n,
+        d(2027, 3, 15),
+        d(1980, 5, 5),
+        ic_product::Sex::Female,
+        false,
+        300_000_00,
+        None,
+        ic_product::Frequency::Monthly,
+        None,
+    );
+    issue.migrated = true;
+    // A paid bill whose period has ended is history and is not loaded.
+    let bills = if owing == 0 {
+        json!([])
+    } else {
+        json!([{
+            "period_start": "2027-10-15", "period_end": "2027-11-15", "due": "2027-11-05",
+            "net": { "life": 54_00, "policy_fee": 6_00 }, "outstanding_minor": owing
+        }])
+    };
+    json!({
+        "issue": issue,
+        "opening": {
+            "periods_billed": 8,
+            "bills": bills,
+            "assumptions": ["single_layer"]
+        },
+        "legacy": { "sum_insured_minor": 300_000_00, "period_premium_minor": 73_55, "receivable_minor": owing }
+    })
+}
+
+/// Purpose: `ic-admin migrate` loads a cohort file across partitions. A file whose rows do not
+/// add up to its own control totals is refused before anything is sent. A load with one policy
+/// the core refuses reports the refusal by reason and loads the rest, so a trial load counts
+/// every exception; that cohort does not reconcile, so sign-off sends nothing, and abandon takes
+/// the load out on every partition. A clean file loads, reconciles, signs off and releases, and
+/// running each step again changes nothing.
+/// Why it matters: this is the tool the cutover runbook runs, against production, under a clock.
+/// Signing a cohort that did not reconcile would bring an unexplained difference onto the books
+/// for good, and a tool that stopped at the first bad policy would hide how many more there are.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_cohort_file_is_loaded_reconciled_signed_off_and_released() {
+    use ic_api::migrate::{CohortFile, MigrateCommand};
+    let ledger = Ledger::start("migrate", 1, 2).await;
+    let admin = admin(&ledger, Duration::from_secs(20));
+    admin.run(AdminCommand::Open { date: d(2027, 11, 15) }).await.unwrap();
+    admin.run(AdminCommand::ActivateShipped).await.unwrap();
+
+    let policies: Vec<_> = (1..=6u64).map(|n| migrated(n, if n % 2 == 0 { 60_00 } else { 0 })).collect();
+    let control = |count: u32, owing: i64| json!({ "policies": count, "lives": count, "layers": count, "sum_insured_minor": count as i64 * 300_000_00, "period_premium_minor": count as i64 * 73_55, "receivable_minor": owing, "unearned_minor": 0, "suspense_minor": 0 });
+    let file = |name: &str, policies: &[serde_json::Value], control: serde_json::Value| {
+        json!({ "cohort": name, "currency": "NZD", "cutover": "2027-11-15", "control": control, "policies": policies }).to_string()
+    };
+    let error = CohortFile::parse(&file("c1", &policies, control(6, 0))).unwrap_err();
+    assert!(error.contains("receivable_minor"), "{error}");
+
+    // One policy is for a product that does not exist: refused, and the rest load.
+    let mut faulty = policies.clone();
+    faulty[0]["issue"]["product_code"] = json!("no-such-product");
+    let report = admin
+        .migrate_load(&CohortFile::parse(&file("c1", &faulty, control(6, 180_00))).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(
+        (report["loaded"].clone(), report["refused"].clone()),
+        (json!(5), json!({ "unknown_product": 1 }))
+    );
+    assert_eq!(report["reconciled"], json!(false));
+    let sign = |cohort: &str| MigrateCommand::parse(&["sign-off", cohort, "fin-ana", "life-ben", "sha256:pack"]).unwrap();
+    let error = admin.migrate(sign("c1")).await.unwrap_err();
+    assert!(error.contains("nothing was signed"), "{error}");
+    let abandoned = admin.migrate(MigrateCommand::parse(&["abandon", "c1"]).unwrap()).await.unwrap();
+    assert_eq!(abandoned["abandoned"].as_array().unwrap().len(), 2, "{abandoned}");
+    admin.migrate(MigrateCommand::parse(&["abandon", "c1"]).unwrap()).await.unwrap();
+
+    // The clean file, through the command line.
+    let path = ledger.dir.join("cohort.json");
+    std::fs::write(&path, file("c2", &policies, control(6, 180_00))).unwrap();
+    let load = AdminCommand::parse(&args(&format!("migrate load {}", path.display()))).unwrap();
+    let report = admin.run(load.clone()).await.unwrap();
+    assert_eq!((report["loaded"].clone(), report["reconciled"].clone()), (json!(6), json!(true)), "{report}");
+    let again = admin.run(load).await.unwrap();
+    assert_eq!(again["refused"], json!({}), "a repeated load is the same load: {again}");
+    let status = admin.migrate(MigrateCommand::parse(&["status", "c2"]).unwrap()).await.unwrap();
+    assert_eq!(status["reconciled"], json!(true));
+    let done = admin.migrate(sign("c2")).await.unwrap();
+    assert_eq!(done["released"], json!(6), "{done}");
+    let again = admin.migrate(sign("c2")).await.unwrap();
+    assert_eq!(again["released"], json!(0), "signing again changes nothing: {again}");
+    for partition in 0..2 {
+        let c = ledger.client.cohort(partition, "c2").await.unwrap().unwrap();
+        assert_eq!((c.status, c.waiting.len()), (ic_core::migration::CohortStatus::Released, 0));
+    }
+    assert!(MigrateCommand::parse(&["sign-off", "c2", "a"]).is_none());
+    assert!(AdminCommand::parse(&args("migrate nothing")).is_err());
+}

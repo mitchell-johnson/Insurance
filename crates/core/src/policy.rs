@@ -662,6 +662,10 @@ pub struct Policy {
     /// Each use of a cover's insurability option, by its reference.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub option_uses: BTreeMap<String, OptionUse>,
+    /// The cohort the policy was loaded in, where it was written on another
+    /// system and came with an opening position.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migration: Option<crate::migration::MigrationRecord>,
     /// Changes to the billing frequency or day, in the order they take
     /// effect. `frequency` is the one of the period last billed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

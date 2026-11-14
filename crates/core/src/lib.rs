@@ -20,6 +20,7 @@ pub mod invest;
 pub mod loadings;
 pub mod loan;
 pub mod machine;
+pub mod migration;
 pub mod nomination;
 pub mod owner_hold;
 pub mod paid_up;

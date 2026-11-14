@@ -1133,6 +1133,7 @@ pub(crate) fn split(
                 paid_up: Default::default(),
                 suspensions: Default::default(),
                 billing_changes: Vec::new(),
+                migration: None,
                 member_accounts: Default::default(),
                 member_standing: Default::default(),
                 interests: Default::default(),

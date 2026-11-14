@@ -355,6 +355,20 @@ fn the_chart_of_accounts_is_frozen() {
             AccountClass::Asset,
             role::REINSURANCE_MIGRATION_CONTROL,
         ),
+        (
+            accounts::migration_clearing("retail-1", NZD),
+            "int/migration_clearing/retail-1/NZD",
+            &minor,
+            AccountClass::Asset,
+            role::MIGRATION_CLEARING,
+        ),
+        (
+            accounts::policy_migration_control(NZD),
+            "int/policy_migration_control/NZD",
+            &minor,
+            AccountClass::Asset,
+            role::POLICY_MIGRATION_CONTROL,
+        ),
     ];
     for (account, id, unit, class, role) in chart {
         assert_eq!(account.id.0, id);
@@ -687,6 +701,10 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
             from: NaiveDate::from_ymd_opt(2028, 1, 1).unwrap(),
             to: NaiveDate::from_ymd_opt(2028, 4, 1).unwrap(),
         })),
+        Command::Migration(Box::new(ic_core::migration::MigrationCommand::Release {
+            cohort: "retail-1".into(),
+            limit: 10,
+        })),
         Command::ChangeBilling(Box::new(ic_core::billing_change::ChangeBilling {
             policy: p.clone(),
             reference: "bill-1".into(),
@@ -766,7 +784,7 @@ fn every_command_has_a_name_an_owner_and_a_matching_wire_tag() {
         assert_eq!(serde_json::to_value(&back).unwrap(), json, "{name} does not survive the log's encoding");
     }
     // land_transfer needs a real record and is exercised by the transfer tests.
-    assert_eq!(names.len(), 64, "{names:?}");
+    assert_eq!(names.len(), 65, "{names:?}");
 }
 
 /// Purpose: a quote returns exactly the amounts the policy is then billed, for a retail

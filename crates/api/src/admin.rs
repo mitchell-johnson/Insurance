@@ -73,6 +73,8 @@ pub enum AdminCommand {
     ActivateShipped,
     /// Send the steps of a set-up file, in order.
     Apply { file: std::path::PathBuf },
+    /// Load, look at, sign off or abandon a migration cohort.
+    Migrate(crate::migrate::MigrateCommand),
     /// Set the voters of one partition's group, or of every partition's.
     Members {
         partition: Option<PartitionId>,
@@ -85,7 +87,11 @@ pub const USAGE: &str = "usage: ic-admin init
        ic-admin open <YYYY-MM-DD>
        ic-admin activate-shipped
        ic-admin apply <setup.json>
-       ic-admin members <partition|all> <id=host:port,id=host:port,...>";
+       ic-admin members <partition|all> <id=host:port,id=host:port,...>
+       ic-admin migrate load <cohort.json>
+       ic-admin migrate status <cohort>
+       ic-admin migrate sign-off <cohort> <finance> <business-owner> <evidence> [actuary]
+       ic-admin migrate abandon <cohort>";
 
 impl AdminCommand {
     /// Read a command line, without the program name.
@@ -99,6 +105,7 @@ impl AdminCommand {
             }),
             ["activate-shipped"] => Ok(Self::ActivateShipped),
             ["apply", file] => Ok(Self::Apply { file: file.into() }),
+            ["migrate", rest @ ..] => crate::migrate::MigrateCommand::parse(rest).map(Self::Migrate).ok_or_else(|| USAGE.to_string()),
             ["members", partition, list] => {
                 let partition = match *partition {
                     "all" => None,
@@ -268,7 +275,7 @@ impl Admin {
         }
     }
 
-    async fn propose(&self, partition: PartitionId, key: String, caller: &str, command: Command) -> Result<ic_raft::Reply, String> {
+    pub(crate) async fn propose(&self, partition: PartitionId, key: String, caller: &str, command: Command) -> Result<ic_raft::Reply, String> {
         let envelope = Envelope {
             key,
             caller: caller.to_string(),
@@ -277,6 +284,18 @@ impl Admin {
             command,
         };
         self.client.propose_until(partition, &envelope, self.patience).await.map_err(|e| e.to_string())
+    }
+
+    /// A partition's record of a migration cohort, if it has one.
+    pub(crate) async fn cohort_on(&self, partition: PartitionId, cohort: &str) -> Result<Option<ic_core::migration::Cohort>, String> {
+        let deadline = tokio::time::Instant::now() + self.patience;
+        loop {
+            match self.client.cohort(partition, cohort).await {
+                Ok(found) => return Ok(found),
+                Err(e) if tokio::time::Instant::now() >= deadline => return Err(e.to_string()),
+                Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
+            }
+        }
     }
 
     async fn business_date(&self, partition: PartitionId) -> Result<Option<NaiveDate>, String> {
@@ -432,6 +451,7 @@ impl Admin {
                 let text = std::fs::read_to_string(&file).map_err(|e| format!("{}: {e}", file.display()))?;
                 self.apply(&SetupFile::parse(&text)?).await
             }
+            AdminCommand::Migrate(command) => self.migrate(command).await,
             AdminCommand::Members { partition, members } => self.set_members(partition, &members).await,
         }
     }

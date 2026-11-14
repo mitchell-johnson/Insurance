@@ -13,6 +13,7 @@ pub mod admin;
 pub mod auth;
 pub mod backend;
 pub mod engine;
+pub mod migrate;
 pub mod routes;
 pub mod servicing;
 pub mod settings;

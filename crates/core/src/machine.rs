@@ -218,6 +218,9 @@ pub struct CoreState {
     /// payer of the tax needs each fund's share.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub withheld: crate::remittance::Withheld,
+    /// Cohorts of policies loaded from another system.
+    #[serde(default, skip_serializing_if = "crate::migration::MigrationBook::is_empty")]
+    pub migration: crate::migration::MigrationBook,
     /// Funds, unit prices and unit orders. Unit holdings are ledger balances.
     #[serde(default)]
     pub investment: crate::invest::InvestmentBook,
@@ -260,6 +263,7 @@ impl CoreState {
             counterparty: Default::default(),
             remittances: BTreeMap::new(),
             withheld: BTreeMap::new(),
+            migration: Default::default(),
             investment: Default::default(),
             table_validations: BTreeMap::new(),
             holders: BTreeMap::new(),
@@ -273,6 +277,18 @@ impl CoreState {
 
     /// Record a policy that has just been put on this partition against its
     /// policyholder.
+    /// Take a policy out of the holder indexes: a migration load taken out.
+    pub(crate) fn forget_holder(&mut self, policy: &Policy) {
+        if let Some(set) = self.holders.get_mut(&Self::holder_key(policy)) {
+            set.remove(&policy.id);
+        }
+        for party in Self::named_parties(policy) {
+            if let Some(set) = self.life_parties.get_mut(&format!("{}|{}", policy.group.0, party.0)) {
+                set.remove(&policy.id);
+            }
+        }
+    }
+
     pub(crate) fn note_holder(&mut self, policy: &Policy) {
         self.holders.entry(Self::holder_key(policy)).or_default().insert(policy.id.clone());
         for party in Self::named_parties(policy) {
@@ -380,6 +396,8 @@ impl CoreState {
             &self.counterparty,
             &self.investment,
             &self.table_validations,
+            &self.remittances,
+            &self.migration,
         );
         // Every type in the state has string or integer map keys, so this
         // cannot fail; a test holds that true by proving the hash moves with
@@ -498,6 +516,13 @@ impl CoreState {
                         format!("the business date is {from}; it can only advance one day"),
                     ));
                 }
+                // A cutover is finished or taken out on its own day.
+                if let Some(cohort) = self.migration.open_cohort() {
+                    return Err(Reject::new(
+                        "cohort_open",
+                        format!("migration cohort {cohort} is neither released nor abandoned; the day does not advance over it"),
+                    ));
+                }
                 self.business_date = Some(to);
                 let closing_head = self.ledger.head();
                 self.last_close = Some(ClosedDay { date: from, closing_head });
@@ -519,6 +544,11 @@ impl CoreState {
                     return Err(Reject::new("apply_budget", format!("at most {MAX_EOD_CHUNK} policies per end-of-day command")));
                 }
                 for id in policies {
+                    // A policy still held in a migration cohort is run once
+                    // it is released; the day does not advance before then.
+                    if self.policies.get(&id).is_some_and(|p| self.migration.holding(p).is_some()) {
+                        continue;
+                    }
                     // One policy's failure must not stop the chunk: it becomes
                     // an exception item and the rest of the book carries on.
                     if let Err(e) = self.with_policy_tracked(ctx, &id, false, |s, ctx, p| s.end_of_day(ctx, p)) {
@@ -656,6 +686,7 @@ impl CoreState {
                     crate::suspension::suspend(&mut s.ledger, &s.catalog, p, ctx, *spec)
                 })
             }
+            Command::Migration(step) => crate::migration::execute(self, ctx, *step),
             Command::ChangeBilling(spec) => {
                 let policy = spec.policy.clone();
                 self.with_policy_tracked(ctx, &policy, true, |s, ctx, p| crate::billing_change::change(&s.catalog, p, ctx, *spec))
@@ -1154,7 +1185,12 @@ impl CoreState {
             .policies
             .remove(id)
             .ok_or_else(|| Reject::new("unknown_policy", format!("policy {id} is not on this partition")))?;
-        let r = if refuse_if_frozen && policy.is_frozen() {
+        let r = if let Some(cohort) = self.migration.holding(&policy).map(str::to_string) {
+            Err(Reject::new(
+                "cohort_loading",
+                format!("policy {id} is in migration cohort {cohort}, which is not yet released"),
+            ))
+        } else if refuse_if_frozen && policy.is_frozen() {
             Err(Reject::new(
                 "policy_transferring",
                 format!("policy {id} is being transferred; retry after it lands"),

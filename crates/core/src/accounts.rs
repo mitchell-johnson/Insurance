@@ -70,6 +70,10 @@ pub mod role {
     /// Statement balances on their way to or from a reinsurer's bank.
     pub const REINSURANCE_SETTLEMENT_CLEARING: &str = "reinsurance_settlement_clearing";
     pub const REINSURANCE_MIGRATION_CONTROL: &str = "reinsurance_migration_control";
+    /// A cohort's opening balances on their way in. Zero once it is signed off.
+    pub const MIGRATION_CLEARING: &str = "migration_clearing";
+    /// The other side of policy balances loaded from another system.
+    pub const POLICY_MIGRATION_CONTROL: &str = "policy_migration_control";
 }
 
 fn acct(id: String, unit: AccountUnit, class: AccountClass, role: &str) -> Account {
@@ -467,6 +471,27 @@ pub fn claims_migration_control(c: Currency) -> Account {
         AccountUnit::Minor(c),
         AccountClass::Asset,
         role::CLAIMS_MIGRATION_CONTROL,
+    )
+}
+/// One cohort's opening balances between being loaded and being agreed to
+/// the old system's control totals. It must be zero at sign-off.
+pub fn migration_clearing(cohort: &str, c: Currency) -> Account {
+    acct(
+        format!("int/migration_clearing/{cohort}/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::MIGRATION_CLEARING,
+    )
+}
+/// The other side of the policy balances every signed-off cohort brought
+/// in: unearned premium and money held, less premium owed. Finance sets it
+/// against the old system's ledger.
+pub fn policy_migration_control(c: Currency) -> Account {
+    acct(
+        format!("int/policy_migration_control/{c}"),
+        AccountUnit::Minor(c),
+        AccountClass::Asset,
+        role::POLICY_MIGRATION_CONTROL,
     )
 }
 pub fn reinsurance_migration_control(c: Currency) -> Account {

@@ -128,10 +128,13 @@ pub(crate) fn entry_age(def: &ic_product::CoverDefinition, life: &LifeRecord, on
 /// Build a policy from an application, validating it against the product.
 /// Shared by issue and by quotes, so the two can never disagree.
 pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate, index: u64) -> Result<(Policy, ProductDefinition), Reject> {
+    // A policy written on another system keeps its original inception,
+    // however long ago.
     if cmd.inception > today
-        || today
-            .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))
-            .is_some_and(|limit| cmd.inception < limit)
+        || (!cmd.migrated
+            && today
+                .checked_sub_days(Days::new(BACKDATING_LIMIT_DAYS))
+                .is_some_and(|limit| cmd.inception < limit))
     {
         return Err(Reject::new(
             "inception",
@@ -298,6 +301,7 @@ pub(crate) fn build_policy(catalog: &Catalog, cmd: IssuePolicy, today: NaiveDate
         paid_up: BTreeMap::new(),
         suspensions: BTreeMap::new(),
         billing_changes: Vec::new(),
+        migration: None,
         member_accounts: BTreeSet::new(),
         member_standing: BTreeMap::new(),
         interests: BTreeMap::new(),

@@ -76,15 +76,15 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | CFG Configuration operations and the actuary's interface | 6 | 2 | 6 | 2 |
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
-| MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **383** | **84** | **110** | **86** |
+| MIG Migration | 7 | 3 | 8 | 8 |
+| **Total** | **388** | **84** | **105** | **84** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 37 | 26 | 6 |
 | B | 115 | 15 | 12 |
 | C | 229 | 40 | 77 |
-| D | 2 | 3 | 15 |
+| D | 7 | 3 | 10 |
 
 ### Priority 1 tests with no built test, by area
 
@@ -97,7 +97,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **ANN** (2): ANN-001, ANN-002
 - **CFG** (1): CFG-009
 - **INC** (7): INC-001, INC-002, INC-006, INC-010, INC-011, INC-012, INC-015
-- **MIG** (7): MIG-001, MIG-003, MIG-007, MIG-009, MIG-012, MIG-014, MIG-017
+- **MIG** (5): MIG-003, MIG-007, MIG-009, MIG-012, MIG-014
 
 ### Priority 1 tests only partly built, by area
 
@@ -119,7 +119,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 - **VUL** (3): VUL-003, VUL-005, VUL-007
 - **CFG** (1): CFG-005
 - **INC** (2): INC-003, INC-009
-- **MIG** (3): MIG-004, MIG-008, MIG-011
+- **MIG** (3): MIG-001, MIG-011, MIG-017
 
 ## Tests by type
 

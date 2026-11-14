@@ -442,6 +442,9 @@ pub enum Command {
     /// Suspend the whole policy for a dated period where the product
     /// allows it: no premium, and no cover for what happens meanwhile.
     SuspendCover(Box<crate::suspension::SuspendCover>),
+    /// A step of a migration cohort: open it, load a policy, sign it off,
+    /// release it or abandon it.
+    Migration(Box<crate::migration::MigrationCommand>),
     /// The owner changes the billing frequency, the billing day, or both.
     ChangeBilling(Box<crate::billing_change::ChangeBilling>),
     /// Bring a suspended policy back on cover today, ahead of the day agreed.
@@ -723,6 +726,7 @@ impl Command {
             | Command::AvoidPolicy { .. }
             | Command::VaryForNonDisclosure { .. } => &["underwriting"],
             Command::ReduceCover(_) => &["policy-servicing"],
+            Command::Migration(_) => &["migration"],
             Command::AddCover(_) | Command::ExerciseOption(_) => &["underwriting", "policy-servicing"],
             Command::ChangeExcess(_) | Command::MakePaidUp(_) | Command::SuspendCover(_) | Command::ResumeCover { .. } | Command::ChangeBilling(_) => {
                 &["policy-servicing"]
@@ -787,6 +791,7 @@ impl Command {
             Command::MakePaidUp(_) => "make_paid_up",
             Command::SuspendCover(_) => "suspend_cover",
             Command::ChangeBilling(_) => "change_billing",
+            Command::Migration(_) => "migration",
             Command::ResumeCover { .. } => "resume_cover",
             Command::RecordReplacement(_) => "record_replacement",
             Command::AlterUnderwrittenTerms(_) => "alter_underwritten_terms",

@@ -508,6 +508,45 @@ pub enum Event {
         bank_account: String,
         outstanding_minor: i128,
     },
+    /// A migration cohort was opened for loading on its cutover day.
+    CohortOpened {
+        cohort: String,
+        cutover: NaiveDate,
+    },
+    /// A cohort reconciled to the old system's control totals and was
+    /// signed off. Its policies are announced next.
+    CohortSignedOff {
+        cohort: String,
+        cutover: NaiveDate,
+        policies: u32,
+        control: crate::migration::ControlTotals,
+        sign_off: crate::migration::SignOff,
+    },
+    /// Every policy of a signed-off cohort has been announced.
+    CohortReleased {
+        cohort: String,
+    },
+    /// A cohort's load was taken out before sign-off. None of its policies
+    /// was ever announced.
+    CohortAbandoned {
+        cohort: String,
+    },
+    /// A policy written on another system is now run here. It follows the
+    /// policy's `PolicyIssued`: readers that treat an issue as new business
+    /// (commission, welcome documents, new business reporting) must not
+    /// for this policy. What the old system billed is not billed again;
+    /// `outstanding_minor` is what was still owed on its bills.
+    PolicyMigrated {
+        policy: PolicyId,
+        cohort: String,
+        cutover: NaiveDate,
+        periods_billed: u32,
+        standing: Option<Standing>,
+        outstanding_minor: i64,
+        oldest_unpaid_due: Option<NaiveDate>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        assumptions: Vec<String>,
+    },
     /// The owner changed how often or on which day premium falls due. The
     /// new schedule starts on `first_day`; where the billing day moved, the
     /// days up to `first_full_period` are one short period billed for its

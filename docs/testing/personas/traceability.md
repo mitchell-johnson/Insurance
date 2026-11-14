@@ -615,8 +615,13 @@ Hand-maintained. Each row says which built tests carry out a persona test from t
 
 | Matrix | Status | Built tests |
 | --- | --- | --- |
+| MIG-001 | part | `sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released` |
 | MIG-002 | full | `underwriting/tests/special.rs::migrated_terms_are_carried_as_data_and_never_defaulted` |
-| MIG-004 | part | `sim/tests/underwriting_door.rs::only_the_migration_load_issues_a_migrated_policy` |
-| MIG-008 | part | `finance/tests/edges.rs::a_migration_control_account_must_stay_still_after_cutover` |
+| MIG-004 | full | `sim/tests/underwriting_door.rs::only_the_migration_load_issues_a_migrated_policy`<br>`sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released`<br>`sim/tests/migration.rs::a_released_cohort_carries_on_from_where_the_old_system_stopped` |
+| MIG-005 | full | `sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released` |
+| MIG-006 | full | `sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released`<br>`sim/tests/migration.rs::a_load_that_breaks_a_rule_is_refused_whole` |
+| MIG-008 | full | `finance/tests/edges.rs::a_migration_control_account_must_stay_still_after_cutover`<br>`sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released`<br>`api/tests/admin.rs::a_cohort_file_is_loaded_reconciled_signed_off_and_released` |
 | MIG-011 | part | `reinsurance/tests/statements.rs::migrated_cessions_and_balances_are_taken_as_data` |
 | MIG-013 | full | `claims/tests/suite/intake.rs::a_migrated_claim_in_payment_carries_on_where_it_was`<br>`sim/tests/claims.rs::a_migrated_claim_opens_against_the_migration_control_account` |
+| MIG-015 | full | `sim/tests/migration.rs::a_cohort_is_loaded_reconciled_signed_off_and_released`<br>`api/tests/admin.rs::a_cohort_file_is_loaded_reconciled_signed_off_and_released` |
+| MIG-017 | part | `api/tests/admin.rs::a_cohort_file_is_loaded_reconciled_signed_off_and_released` |

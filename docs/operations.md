@@ -205,3 +205,10 @@ Set the frozen periods from the freeze calendar: end-of-day and the close, the b
 - **Move a leader by hand, or reverse a fail-back:** pause first, then `POST /v1/partitions/{n}/leader` with `{"to": <node>}` to any node.
 - **When it stops itself:** the log line `fail-back stopped on this node` carries the reason. Too slow: check the link to the preferred region before resuming. A different state hash at the same log entry: do not resume; that replica must be replaced as a new member and the difference investigated.
 
+## Moving a cohort of policies from another system
+
+1. The mapping code writes the cohort file: `cohort`, `currency`, `cutover` (the business date of the cutover), `control` (the old system's totals, taken independently of the rows) and `policies`, each with `issue` (marked `migrated`), `opening` and `legacy` (that policy's own figures). See `crates/api/src/migrate.rs`.
+2. On the cutover day, after the close and before any billing: `ic-admin migrate load cohort.json`. The report lists refusals by reason with the first 200 exceptions, and each partition's figures beside its control totals. The business date will not advance while the cohort is open.
+3. Clear what does not reconcile, or abandon: `ic-admin migrate abandon <cohort>` takes the load out on every partition; correct the file and load it again under a new cohort name.
+4. Sign off once it reconciles: `ic-admin migrate sign-off <cohort> <finance> <business-owner> <evidence> [actuary]`. Nothing is signed unless every partition reconciles. Sign-off releases the policies, and only then do they appear to other modules.
+

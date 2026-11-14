@@ -36,6 +36,9 @@ pub enum Query {
     Investment { question: ic_core::invest::Question },
     /// Withheld tax of one kind this partition still holds, fund by fund.
     WithholdingHeld { kind: String, currency: ic_money::Currency },
+    /// A migration cohort on this partition: its control totals, what has
+    /// been loaded and where it has got to.
+    Cohort { cohort: String },
     /// Underwriting loadings, a page of policies at a time. Sensitive: the
     /// caller is finance, and access is decided where the question enters.
     Loadings {
@@ -73,6 +76,7 @@ pub enum Answer {
     Investment(ic_core::invest::Reply),
     Loadings(ic_core::loadings::LoadingsPage),
     WithholdingHeld(Vec<ic_core::remittance::HeldByFund>),
+    Cohort(Option<Box<ic_core::migration::Cohort>>),
 }
 
 /// Answer a query from a partition's state and read models.
@@ -94,6 +98,7 @@ pub fn answer(core: &CoreState, view: &Projections, query: Query) -> Answer {
         Query::Claims { question } => Answer::Claims(core.business_date.map(|today| core.claims.answer(&question, today))),
         Query::Investment { question } => Answer::Investment(core.investment.answer(&core.ledger, &core.policies, &question)),
         Query::WithholdingHeld { kind, currency } => Answer::WithholdingHeld(ic_core::remittance::held(&core.withheld, &kind, currency)),
+        Query::Cohort { cohort } => Answer::Cohort(core.migration.cohorts.get(&cohort).cloned().map(Box::new)),
         Query::Loadings { after, limit, as_at } => Answer::Loadings(ic_core::loadings::page(&core.policies, after.as_ref(), limit, as_at)),
     }
 }
