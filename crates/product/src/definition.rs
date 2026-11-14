@@ -495,6 +495,10 @@ pub struct ProductDefinition {
     pub rounding: RoundingMode,
     pub covers: Vec<CoverDefinition>,
     pub features: Vec<Feature>,
+    /// The most the policy pays for one claim event across all its covers,
+    /// in minor units. Absent: each cover's own limit and nothing more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_cap_minor: Option<i64>,
     /// SHA-256 of the Starlark source. Filled by the loader.
     #[serde(default)]
     pub content_hash: String,

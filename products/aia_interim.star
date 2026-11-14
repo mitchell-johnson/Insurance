@@ -4,7 +4,7 @@
 # and ends it when the policy is issued, the application is withdrawn or 60
 # days pass. Each benefit pays the lower of the amount applied for and the
 # maximum below; across all benefits for one claim event at most $500,000
-# (claims applies that cap, see docs/aia-products.md). Claim events other
+# (`event_cap` below, which claims applies). Claim events other
 # than death must result from accidental, violent, external and visible
 # injury. Definitions are those of the AIA Living appendices.
 
@@ -17,6 +17,7 @@ PRODUCT = product(
     currency = "NZD",
     statutory_fund = "SF1-life",
     rounding = "half_even",
+    event_cap = dollars(500000),
     covers = [
         cover(
             code = "life",
