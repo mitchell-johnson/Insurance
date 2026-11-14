@@ -712,3 +712,40 @@ fn the_aia_multi_benefit_discount_equals_an_independent_recalculation() {
     }
     assert_eq!(compared, 43 * 2 * 3 * 2 * 5);
 }
+
+/// Purpose: for every yearly premium from one cent to $300 and every frequency of every
+/// shipped retail product, the period's premium equals the integer recalculation, and the run
+/// includes over a thousand premiums that come out at exactly half a cent, which must go to
+/// the even cent.
+/// Why it matters: a grid of real rates and sums insured almost never lands on an exact half
+/// cent, so it could not see that the engine divided by the number of periods before
+/// multiplying: the rounded 1/26 pushed an exact tie upward and billed $10.99 where half-even
+/// gives $10.98. Ties are where rounding rules differ, so they are swept here on purpose.
+#[test]
+fn premiums_that_land_on_exactly_half_a_cent_go_to_the_even_cent() {
+    let (mut ties, mut compared) = (0u32, 0u32);
+    for (file, source) in PRODUCTS {
+        let product = load_product(file, source).unwrap();
+        let bill = billing(&product);
+        let cover = product.covers[0].code.clone();
+        for cents in 1i128..=30_000 {
+            let year = Fraction::new(cents, 100);
+            let engine_year = ic_money::dec_i128(cents) / Dec::from(100i64);
+            for &frequency in &bill.frequencies {
+                let period = year.times(modal(&bill, frequency));
+                // In cents the amount is a whole number and a half exactly.
+                let in_cents = Fraction::new(period.top * 100, period.bottom);
+                ties += u32::from(in_cents.bottom == 2);
+                let engine = modal_premium(&product, &BTreeMap::from([(cover.clone(), engine_year)]), frequency).unwrap();
+                assert_eq!(
+                    engine.by_cover[&cover].minor,
+                    period.cents(product.rounding),
+                    "{} {cents} cents a year {frequency:?}",
+                    product.code
+                );
+                compared += 1;
+            }
+        }
+    }
+    assert!(ties >= 1_000 && compared == 360_000, "{ties} ties in {compared} premiums");
+}
