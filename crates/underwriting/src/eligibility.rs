@@ -66,10 +66,9 @@ fn set(items: &[&str]) -> BTreeSet<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
-/// The checks the AIA products came with (docs/aia-products.md). The class
-/// lists are placeholders until the occupation guide is mapped: class 1 is
-/// taken as clerical, managerial and professional work, and classes 1 and 2
-/// as the occupations accepted for income cover to 70.
+/// The checks the AIA products came with (docs/aia-products.md). Class 1 is
+/// clerical, managerial and professional work, and classes 1 and 2 are the
+/// occupations accepted for income cover to 70 (confirmed 14 Nov 2026).
 pub fn shipped() -> Vec<Eligibility> {
     let occupational = set(&["aia-living", "aia-living-business", "aia-start-up-income", "aia-starter"]);
     vec![
