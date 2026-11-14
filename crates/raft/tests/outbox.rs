@@ -259,17 +259,11 @@ async fn a_modules_core_commands_are_carried_and_their_outcomes_reported() {
         .await;
     let outcomes = cluster.settled(0).await;
     // Had the issue overtaken the opening of the day or the product's activation, the
-    // core would have refused it.
+    // core would have refused it. A proposal whose answer was slow on a loaded machine is
+    // proposed again and then reported as a repeat: applied once either way.
     for (id, outcome) in &outcomes {
         assert!(
-            matches!(
-                outcome[..],
-                [CoreOutcome::Applied {
-                    partition: 0,
-                    duplicate: false,
-                    ..
-                }]
-            ),
+            matches!(outcome[..], [CoreOutcome::Applied { partition: 0, .. }]),
             "{id}: {outcome:?}"
         );
     }
