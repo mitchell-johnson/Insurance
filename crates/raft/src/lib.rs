@@ -28,6 +28,7 @@
 //! has sealed, published or delivered them. Each member also keeps its
 //! partition's read models, fed from the same events.
 
+pub mod access;
 pub mod auth;
 pub mod client;
 pub mod failback;

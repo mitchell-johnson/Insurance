@@ -2559,6 +2559,7 @@ dependencies = [
  "chrono",
  "chrono-tz 0.10.4",
  "futures",
+ "hex",
  "ic-azure",
  "ic-cashmatch",
  "ic-core",

@@ -22,6 +22,7 @@ use ic_ledger::PartitionId;
 use openraft::raft::ReadPolicy;
 use openraft::BasicNode;
 
+use crate::access::Guard;
 use crate::auth::ClusterAuth;
 use crate::client::{BreakView, ClusterClient, Consumed, EndOfDayView, EventPage, MoveLeader, Refusal};
 use crate::failback::{Failback, FailbackSettings, FailbackStatus};
@@ -96,9 +97,16 @@ impl Settings {
     /// - `IC_RAFT_SNAPSHOT_EVERY`: default 5000 log entries.
     /// - `IC_CLUSTER_TOKEN_FILE`, `IC_CLUSTER_TOKEN`, `IC_CLUSTER_AUTH`: see
     ///   [`ClusterAuth::from_lookup`]. One of them is required.
+    /// - `IC_CLUSTER_ACCESS_FILE`: the access map that gives each workload
+    ///   its own token and grant ([`crate::access`]). Without it every
+    ///   accepted token may do everything.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
         let auth = ClusterAuth::from_lookup(&get, |path| std::fs::read_to_string(path))?;
         let get = |key: &str| get(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let auth = match get("IC_CLUSTER_ACCESS_FILE") {
+            Some(path) => auth.with_access_file(path),
+            None => auth,
+        };
         let required = |key: &str| get(key).ok_or_else(|| format!("{key} is required"));
         let id: NodeId = required("IC_NODE_ID")?.parse().map_err(|e| format!("IC_NODE_ID: {e}"))?;
         let mut peers = BTreeMap::new();
@@ -179,7 +187,8 @@ pub struct Host {
     readers: Vec<String>,
     partitions: PartitionId,
     peers: BTreeMap<NodeId, String>,
-    auth: ClusterAuth,
+    /// Who may call this node, and what each caller may do there.
+    guard: Guard,
     cold: Cold,
     sink: Sink,
     segment_entries: u64,
@@ -223,6 +232,9 @@ impl Host {
     /// the same modules. `failback` turns on automatic fail-back to
     /// preferred nodes.
     pub async fn start_full(settings: &Settings, specs: &[ModuleSpec], failback: Option<FailbackSettings>) -> Result<Arc<Self>, String> {
+        // Checked before anything is opened: a node with a bad access map does not start.
+        let guard = Guard::for_node(&settings.auth, |path| std::fs::read_to_string(path))?;
+        let _ = guard.watch();
         let mut modules = BTreeMap::new();
         for spec in specs {
             let group = ModuleGroup::group_name(&spec.name);
@@ -269,7 +281,7 @@ impl Host {
             outboxes: specs.iter().filter_map(|s| s.outbox.map(|o| (s.name.clone(), o))).collect(),
             partitions: settings.partitions,
             peers: settings.peers.clone(),
-            auth: settings.auth.clone(),
+            guard,
         }))
     }
 
@@ -743,7 +755,7 @@ pub fn router(host: Arc<Host>) -> Router {
     // Everything above needs the cluster token. The probe does not: the
     // kubelet has no token, and the probe says nothing about the ledger.
     router
-        .layer(axum::middleware::from_fn_with_state(host.auth.clone(), crate::auth::require))
+        .layer(axum::middleware::from_fn_with_state(host.guard.clone(), crate::access::require))
         .route("/healthz", get(|| async { "ok" }))
 }
 

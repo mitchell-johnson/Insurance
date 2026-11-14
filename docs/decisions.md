@@ -46,9 +46,9 @@ The core API (`crates/api`) therefore does not ask the customer master about any
 
 Development mode (`Auth::Dev`) can assert relationships in a header, so the audience policy can be exercised through the core API without a portal. Entra mode never reads that header.
 
-### Rotating the cluster token needs a rolling restart
+### Each workload has its own cluster token
 
-Nodes accept a list of tokens, so rotation is safe: add the new token, restart, switch callers, remove the old one. But processes read the token when they start, so each step is a rolling restart. See the runbook.
+Every caller of a ledger node used to present one shared token, which let any of a dozen workloads send any command to any module under any caller name; the core's check of who may send a command trusted that name. Now each workload has its own token and the nodes hold it to a grant (`crates/raft/src/access.rs`, docs/operations.md "Cluster access"): the caller names it may use on core commands, the modules it may write and read, partition reads, administration. Within a module, the person a command names (an approver, an actor) is still the calling workload's word; the module's own rules (two different people, authority limits) are applied to it. Tokens, not Entra workload identity, because the nodes must keep running when Entra cannot be reached, and a token check needs nothing outside the node. The shipped grants start in report mode and are enforced once a day's logs show nothing they would refuse.
 
 ### Policy-number lookups ask every partition
 

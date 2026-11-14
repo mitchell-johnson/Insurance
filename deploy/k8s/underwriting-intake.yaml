@@ -28,7 +28,8 @@ spec:
     objects: |
       array:
         - |
-          objectName: cluster-token
+          objectName: cluster-token-ic-underwriting-intake
+          objectAlias: cluster-token
           objectType: secret
 ---
 apiVersion: v1

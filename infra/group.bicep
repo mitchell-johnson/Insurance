@@ -34,7 +34,7 @@ param environment string = 'dev'
 @description('The Event Hubs namespace main.bicep created.')
 param eventHubsNamespaceName string
 
-@description('The Key Vault main.bicep created. It holds cluster-token and group-fingerprint-salt.')
+@description('The Key Vault main.bicep created. It holds cluster-token-ic-group and group-fingerprint-salt; this service may read those two and no other secret.')
 param keyVaultName string
 
 @description('The OIDC issuer URL of the AKS cluster, for workload identity.')
@@ -199,9 +199,29 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
+resource serviceSecretsSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-group'
+}
+
 resource serviceSecrets 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, identity.id, roles.keyVaultSecretsUser)
+  scope: serviceSecretsSecret
+  name: guid(serviceSecretsSecret.id, identity.id, roles.keyVaultSecretsUser)
+  properties: {
+    principalId: identity.properties.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultSecretsUser)
+  }
+}
+
+resource fingerprintSalt 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'group-fingerprint-salt'
+}
+
+resource saltReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  scope: fingerprintSalt
+  name: guid(fingerprintSalt.id, identity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'

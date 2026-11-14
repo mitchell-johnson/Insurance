@@ -239,7 +239,7 @@ resource readWebhookSecret 'Microsoft.Authorization/roleAssignments@2022-04-01' 
 
 resource clusterToken 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
   parent: vault
-  name: 'cluster-token'
+  name: 'cluster-token-ic-documents'
 }
 
 resource readClusterToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {

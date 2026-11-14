@@ -61,7 +61,7 @@ A node holds a replica of every partition. Three nodes, one per availability zon
 - **Identity.** A node's number is bound to an identity created on its disk the first time it starts. A node that comes back with an empty disk under its old number is refused by its peers, because it might vote again in a term it already voted in. It is replaced under a new number instead.
 - **Housekeeping.** The leader of each partition seals finished stretches of the journal to immutable Blob Storage, publishes events to Event Hubs and delivers cross-partition messages. Each is at-least-once, recorded in the log when done, and resumed by the next leader if the leader dies.
 - **Read models.** Each node keeps its partitions' read models (the policy directory, the life index used for sum-at-risk, the billing view) inside the replicated state, so a query answered by a node is consistent with the ledger it sits beside.
-- **Authentication.** Every caller of a node presents the cluster token. The token lives in Key Vault.
+- **Authentication.** Every caller of a node presents its own workload's token (Key Vault secret `cluster-token-<workload>`). With an access map the node holds each workload to its grant: core caller names, modules written and read, partition reads, administration; only the nodes are peers (`crates/raft/src/access.rs`, operations.md "Cluster access"). Pod-to-pod traffic is encrypted by WireGuard (`infra/main.bicep`).
 
 ## The API (`ic-api`)
 
@@ -135,6 +135,12 @@ Owned by the thread "Implement insurance core system". What the core is and how 
 - **Nodes and close**: `crates/raft` (openraft groups, the module host), `crates/node` (`ic-node`, hosts the partitions and every module), `crates/api` (`ic-api`, `ic-admin`), `crates/workflows` (`ic-worker`: the Temporal end of day, the unit order run), `crates/azure` (Key Vault signing, Blob, Service Bus, Entra ID), `crates/readmodel`, `crates/cashmatch`.
 - **Simulation and tests**: `crates/sim` runs real partitions in memory; `crates/sim/tests/*.rs` are the core's behaviour tests, one file per subject.
 - **Deployment**: `infra/main.bicep` and one Bicep file per module, `deploy/k8s` (kustomize), `deploy/compose` (one machine and the failure drill), `Dockerfile` (`ARG CARGO_PROFILE`).
+
+### Added on 14 Nov 2026: sign-in and access (thread "Fix sign-in and access gaps")
+
+- **Per-workload cluster tokens and access map**: `crates/raft/src/access.rs` (`Guard`, layered on every node route; `IC_CLUSTER_ACCESS_FILE`, reloaded every 30 s), `deploy/cluster-access/grants.json` and `issue.sh`, node mount in `deploy/k8s/node.yaml`, each SecretProviderClass reading `cluster-token-<workload>`, and every Key Vault grant scoped to the one secret (`clusterTokensIssued` in `infra/main.bicep`). Tests `crates/raft/tests/access.rs`. The grants ship in report mode; enforcing is the last step in operations.md "Cluster access". Without a map (compose, drill, tests) nothing changes.
+- **WireGuard** pod-to-pod encryption: `infra/main.bicep` (managedClusters API 2026-08-01, `advancedNetworking`).
+- **One Entra token check**: `crates/entra` (`ic-entra`), used by `ic-api`, group, customer master, documents and the reinsurer API; External ID issuers are worked out from the ciamlogin.com authority.
 
 ### Added on 12 Nov 2026, with the area that asked
 

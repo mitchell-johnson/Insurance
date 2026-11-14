@@ -172,11 +172,15 @@ resource vault 'Microsoft.KeyVault/vaults@2023-07-01' existing = {
   name: keyVaultName
 }
 
-// On the vault, as for the other processes in main.bicep: the secret's value is
-// set by an operator and may not exist yet when this is deployed.
+// Its own cluster token only (deploy/cluster-access/issue.sh makes it first).
+resource driverTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' existing = {
+  parent: vault
+  name: 'cluster-token-ic-reinsurance'
+}
+
 resource driverToken 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  scope: vault
-  name: guid(vault.id, identity.id, roles.keyVaultSecretsUser)
+  scope: driverTokenSecret
+  name: guid(driverTokenSecret.id, identity.id, roles.keyVaultSecretsUser)
   properties: {
     principalId: identity.properties.principalId
     principalType: 'ServicePrincipal'
