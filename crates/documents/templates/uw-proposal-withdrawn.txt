@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+As asked, we have withdrawn your application ({{reference}}). You are not covered under it. If you paid anything for it, we will refund it.
+
+If you did not ask for this, please call us straight away.
+
+Yours sincerely,
+New Business

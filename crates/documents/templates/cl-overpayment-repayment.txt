@@ -1,0 +1,12 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We paid you more than we should have on claim {{reference}}. The amount you need to repay is ${{amount}}.
+
+Please pay this into our account and use the reference {{repayment_reference}}, so we can match your payment.
+
+If you cannot pay it all at once, please call us. We can set up a plan that suits you. If you think we have this wrong, tell us and we will look again. You can also make a complaint.
+
+Yours sincerely,
+Claims

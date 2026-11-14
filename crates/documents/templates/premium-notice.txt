@@ -1,0 +1,16 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Premium notice for policy {{policy}}
+
+Dear {{name}},
+
+Period: {{period_start|date}} to {{period_end|date}}
+Premium before discounts: {{base|money}}{{#each discounts}}
+Less {{name}}: {{amount|money}}{{/each}}
+Premium: {{net_premium|money}}
+Fees and levies: {{charges|money}}
+Total due: {{total|money}}
+
+Please pay by the due date to keep your cover.
+
+Customer Care

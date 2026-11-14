@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+Your cover under policy {{policy}} is suspended because premiums are unpaid{{#if oldest_unpaid_due}} since {{oldest_unpaid_due|date}}{{/if}}.{{#if outstanding}} The amount owed is {{outstanding|money}}.{{/if}}
+
+While it is suspended, we will not pay claims for events that happen. Pay what is owed to restart your cover. Call us if you need help.
+
+Yours sincerely,
+Customer Care

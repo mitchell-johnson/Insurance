@@ -341,7 +341,14 @@ Owner thread: "Build documents and correspondence". Detail lives in [documents.m
 
 ### Not built
 
-- **Letter wording.** The three templates above, and every other template, are content for legal, product and compliance to write and approve; until a template is active its letters are left for people and the pass logs it.
+- **Letter wording: placeholders written, real wording not.** Best-estimate placeholder wording for all 27 templates the service issues from is in `crates/documents/templates/<id>.txt` (`src/placeholders.rs`, 14 November 2026). Each placeholder starts with "[Placeholder wording for legal review. Not for issue.]", and the module refuses to activate any template that still carries it (`placeholder_wording`). To use one, legal, product and compliance rewrite it, remove that line, bind it to its products and submit it as a new version. Until a template is active its letters wait and the pass logs it. The placeholders are:
+  - Underwriting: `uw-offer-made`, `uw-declined` (gives the reasons the person may be told, says how to ask for a review within 30 days, and offers to send untold reasons to their doctor), `uw-proposal-lapsed`, `uw-proposal-withdrawn`, `uw-policy-issued` (15-day free look, an estimate), `uw-adviser-unavailable`, `uw-interview-to-confirm`.
+  - Replacement disclosure (ADV-028): `uw-replacement-disclosure`, the text the life signs. Underwriting has not sent it any data yet. It expects `replaced_policy`, `kept`, `gained`, `lost`, `old_premium` and `new_premium`.
+  - Other modules: `ri-reinsurance-statement`, `grp-absence-started`, `grp-absence-limit-reached`, `cl-overpayment-repayment`.
+  - Complaints: `complaint-acknowledgement`, `complaint-deadlock-notice` (the scheme's name and contact details are left as a gap), `complaint-update`, `licence-event-notice`.
+  - Collections: `collections/reminder`, `collections/suspension_notice`, `collections/final_notice`. Collections gives no amount, so these letters don't state one.
+  - Core events: `policy-schedule`, `lapse-notice` (14 days' notice, an estimate), `suspension-notice` (14 days, an estimate), `policy-ended`, `avoidance-notice`, `premium-receipt`, `premium-notice`, `premium-change-notice` (30 days, an estimate).
+  - Not written: the policy wordings themselves, which are product contracts.
 - **Documents in the channels.** Built 2026-11-13 with the portal thread: each document on a policy is a channel row (`listing.rs`), removed on destruction.
 - **Collections dunning notices.** Built 2026-11-13 with the payments thread: notices issued, reported sent, and their delivery reported back (`collections_notices.rs`). Template wording `collections/<step>` is not written.
 - **Letters other modules ask for.** Built 2026-11-13 (`requested_letters.rs`, `Command::RequestLetter`, agreed with underwriting and reinsurance): kinds and templates in `model::REQUESTED_KINDS`, contract in `docs/documents.md`. Not done: the wording of every template, and the callers' driver sides (theirs). Decided by Mitchell: listings go by SFTP and an API in the reinsurance service, never by email.

@@ -1,0 +1,10 @@
+[Placeholder wording for legal review. Not for issue.]
+
+Dear {{name}},
+
+We are writing about the adviser on your policy. Their licence status changed to {{status}} on {{effective|date}}.
+
+Your cover does not change. You can choose a new adviser, or deal with us directly. Please call us if you have questions or want to choose a new adviser.
+
+Yours sincerely,
+Customer Care
