@@ -52,7 +52,7 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | LED Ledger mapping and invariants | 11 | 5 | 2 | 4 |
 | PRD Products, rating and quotes | 7 | 4 | 1 | 2 |
 | BIL Billing and earning | 7 | 4 | 4 | 4 |
-| COL Collection, cash matching, standing and dunning | 13 | 8 | 7 | 8 |
+| COL Collection, cash matching, standing and dunning | 15 | 8 | 5 | 8 |
 | XFR Policy transfer between groups | 5 | 2 | 3 | 3 |
 | AUD Audience scoping, customer app and identity | 12 | 5 | 2 | 5 |
 | RES Resilience, capacity and scale | 2 | 5 | 4 | 5 |
@@ -77,13 +77,13 @@ How many persona tests the built test suite carries out, from `traceability.md`.
 | INC Insurance incident runbooks | 5 | 2 | 9 | 9 |
 | DOC Policy documents and correspondence | 10 | 0 | 0 | 0 |
 | MIG Migration | 2 | 3 | 13 | 10 |
-| **Total** | **342** | **99** | **136** | **100** |
+| **Total** | **344** | **99** | **134** | **100** |
 
 | Phase | Full | Part | None |
 | --- | ---: | ---: | ---: |
 | A | 34 | 25 | 10 |
 | B | 107 | 19 | 16 |
-| C | 199 | 52 | 95 |
+| C | 201 | 52 | 93 |
 | D | 2 | 3 | 15 |
 
 ### Priority 1 tests with no built test, by area
