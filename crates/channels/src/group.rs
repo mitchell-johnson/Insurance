@@ -202,6 +202,8 @@ pub fn staff_question(name: &str, given: impl Fn(&str) -> Option<String>) -> Res
         "scheme" | "invoices" | "mapping" => json!({ "ask": name, "scheme": named("scheme")? }),
         "file" => json!({ "ask": "file", "scheme": named("scheme")?, "file": named("file")? }),
         "member" => json!({ "ask": "member", "scheme": named("scheme")?, "employee": named("employee")? }),
+        // The people the customer master found a member might be, for deciding the match.
+        "possible_match" => json!({ "ask": "possible_match", "scheme": named("scheme")?, "employee": named("employee")? }),
         "scheme_of" => json!({ "ask": "scheme_of", "policy": named("policy")? }),
         _ => return Err(format!("{name} is not a question the group console asks")),
     })
